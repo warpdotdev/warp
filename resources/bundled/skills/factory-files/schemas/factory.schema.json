@@ -1,0 +1,105 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://warp.dev/schemas/factory-files/v1alpha1/factory.schema.json",
+  "title": "factory.yaml (v1alpha1)",
+  "description": "The Factory root document. Exactly one factory.yaml must exist at the registered Factory root.",
+  "type": "object",
+  "required": ["schemaVersion", "name", "repositories", "agentDefaults"],
+  "additionalProperties": false,
+  "properties": {
+    "schemaVersion": {
+      "const": "v1alpha1",
+      "description": "The only registered tree schema version."
+    },
+    "name": {
+      "$ref": "common.schema.json#/$defs/nonEmptyString",
+      "description": "Factory name."
+    },
+    "description": {
+      "type": ["string", "null"]
+    },
+    "alias": { "$ref": "common.schema.json#/$defs/alias" },
+    "credentialStrategy": { "$ref": "common.schema.json#/$defs/credentialStrategy" },
+    "repositories": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "description": "GitHub repositories in the Factory's scope.",
+      "items": {
+        "type": "object",
+        "required": ["owner", "name"],
+        "additionalProperties": false,
+        "properties": {
+          "owner": { "$ref": "common.schema.json#/$defs/nonEmptyString" },
+          "name": { "$ref": "common.schema.json#/$defs/nonEmptyString" }
+        }
+      }
+    },
+    "secrets": { "$ref": "common.schema.json#/$defs/uniqueSecrets" },
+    "mcpServers": { "$ref": "common.schema.json#/$defs/mcpServers" },
+    "providers": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Cloud provider identity federation used by agent runs.",
+      "properties": {
+        "gcp": {
+          "type": "object",
+          "required": [
+            "projectNumber",
+            "workloadIdentityFederationPoolId",
+            "workloadIdentityFederationProviderId"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "projectNumber": {
+              "$ref": "common.schema.json#/$defs/nonEmptyString",
+              "description": "Quote the value so YAML keeps it a string rather than an integer."
+            },
+            "workloadIdentityFederationPoolId": { "$ref": "common.schema.json#/$defs/nonEmptyString" },
+            "workloadIdentityFederationProviderId": { "$ref": "common.schema.json#/$defs/nonEmptyString" },
+            "serviceAccountEmail": { "$ref": "common.schema.json#/$defs/nonEmptyString" }
+          }
+        },
+        "aws": {
+          "type": "object",
+          "required": ["roleArn"],
+          "additionalProperties": false,
+          "properties": {
+            "roleArn": { "$ref": "common.schema.json#/$defs/nonEmptyString" }
+          }
+        }
+      }
+    },
+    "integrations": {
+      "type": "array",
+      "uniqueItems": true,
+      "description": "Integration providers attached to the Factory. An empty list explicitly detaches every provider. github is not declarable here: repository access comes from repositories.",
+      "items": {
+        "type": "object",
+        "required": ["type"],
+        "additionalProperties": false,
+        "properties": {
+          "type": {
+            "enum": ["jira", "linear", "slack"],
+            "description": "Provider slug. The server lowercases and trims the value; author it lowercase."
+          }
+        }
+      }
+    },
+    "agentDefaults": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Execution defaults every Agent inherits. Exactly one of model or harness is required.",
+      "properties": {
+        "model": { "$ref": "common.schema.json#/$defs/ozModelShorthand" },
+        "harness": { "$ref": "common.schema.json#/$defs/harnessDefault" },
+        "runner": { "$ref": "common.schema.json#/$defs/runnerRef" },
+        "environmentId": { "$ref": "common.schema.json#/$defs/environmentId" },
+        "secrets": { "$ref": "common.schema.json#/$defs/secrets" },
+        "mcpServers": { "$ref": "common.schema.json#/$defs/mcpServers" },
+        "workerHost": { "$ref": "common.schema.json#/$defs/workerHost" }
+      },
+      "allOf": [{ "$ref": "common.schema.json#/$defs/modelXorHarnessRequired" }]
+    }
+  }
+}

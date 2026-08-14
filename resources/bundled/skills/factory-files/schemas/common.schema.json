@@ -1,0 +1,176 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://warp.dev/schemas/factory-files/v1alpha1/common.schema.json",
+  "title": "Shared Factory file definitions (v1alpha1)",
+  "description": "Definitions shared by factory.yaml, agent frontmatter, automation frontmatter, and runner YAML.",
+  "$defs": {
+    "nonEmptyString": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "\\S",
+      "description": "A string that is non-empty after trimming surrounding whitespace."
+    },
+    "clearableString": {
+      "type": ["string", "null"],
+      "description": "A string override. Null or empty explicitly clears an inherited value; omitting the field inherits it."
+    },
+    "alias": {
+      "type": ["string", "null"],
+      "maxLength": 60,
+      "not": {
+        "pattern": "[\\u0000-\\u001F\\u0021-\\u002C\\u002F\\u003A-\\u0040\\u005B-\\u005E\\u0060\\u007B-\\u007F]"
+      },
+      "description": "Factory display handle, used as the @-mention name on integrated platforms. Letters, digits, spaces, '-', '_', and '.' only, at most 60 characters. Case is preserved; uniqueness is compared case-insensitively across the workspace."
+    },
+    "credentialStrategy": {
+      "enum": ["EXECUTOR", "CREATOR"],
+      "description": "Whose credentials a run executes with. Omit to leave the value already stored on the server untouched."
+    },
+    "agentType": {
+      "enum": [
+        "CUSTOM",
+        "MAIN",
+        "FOREMAN",
+        "TRIAGE",
+        "SPEC",
+        "IMPLEMENT",
+        "REVIEW",
+        "VERIFY"
+      ],
+      "description": "MAIN is an authoring alias for FOREMAN. Exactly one Agent in the tree must declare MAIN or FOREMAN. Omitting agentType resolves to CUSTOM."
+    },
+    "secretName": {
+      "$ref": "#/$defs/nonEmptyString",
+      "description": "Name of a managed secret already registered for the team."
+    },
+    "secrets": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/secretName" },
+      "description": "Managed secret names. Declaring the field at Agent or Automation level replaces the inherited list rather than adding to it."
+    },
+    "uniqueSecrets": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/secretName" },
+      "uniqueItems": true,
+      "description": "Managed secret names. Duplicates are rejected in factory.yaml."
+    },
+    "mcpServers": {
+      "type": "object",
+      "propertyNames": { "$ref": "#/$defs/nonEmptyString" },
+      "additionalProperties": {
+        "type": "object",
+        "required": ["warpId"],
+        "additionalProperties": false,
+        "properties": {
+          "warpId": {
+            "$ref": "#/$defs/nonEmptyString",
+            "description": "Warp-managed MCP server ID. This is the only key an entry may carry."
+          }
+        }
+      },
+      "description": "Managed MCP servers keyed by the name the agent sees. Declaring the field at Agent or Automation level replaces the inherited map."
+    },
+    "harnessAuth": {
+      "type": ["object", "null"],
+      "description": "Credentials for a non-Oz harness. Null explicitly clears inherited auth.",
+      "additionalProperties": false,
+      "properties": {
+        "source": {
+          "enum": ["managedSecret", "workerEnvironment"]
+        },
+        "secretName": { "$ref": "#/$defs/nonEmptyString" }
+      },
+      "if": { "type": "object" },
+      "then": {
+        "required": ["source"],
+        "oneOf": [
+          {
+            "properties": { "source": { "const": "managedSecret" } },
+            "required": ["source", "secretName"]
+          },
+          {
+            "properties": { "source": { "const": "workerEnvironment" } },
+            "required": ["source"],
+            "not": { "required": ["secretName"] }
+          }
+        ]
+      }
+    },
+    "harnessCommonProperties": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "$ref": "#/$defs/nonEmptyString",
+          "description": "Harness config name: oz, claude (claude-code is also accepted), codex, or gemini."
+        },
+        "model": { "$ref": "#/$defs/clearableString" },
+        "reasoningLevel": {
+          "$ref": "#/$defs/clearableString",
+          "description": "Not supported by the oz harness."
+        },
+        "auth": { "$ref": "#/$defs/harnessAuth" }
+      },
+      "allOf": [
+        {
+          "if": {
+            "required": ["type"],
+            "properties": { "type": { "const": "oz" } }
+          },
+          "then": {
+            "not": { "required": ["reasoningLevel"] },
+            "properties": { "auth": { "type": "null" } }
+          }
+        }
+      ]
+    },
+    "harnessOverride": {
+      "allOf": [
+        { "$ref": "#/$defs/harnessCommonProperties" },
+        {
+          "anyOf": [
+            { "required": ["type"] },
+            { "required": ["model"] },
+            { "required": ["reasoningLevel"] },
+            { "required": ["auth"] }
+          ]
+        }
+      ],
+      "description": "Sparse harness override. Must declare at least one of type, model, reasoningLevel, or auth."
+    },
+    "harnessDefault": {
+      "allOf": [
+        { "$ref": "#/$defs/harnessCommonProperties" },
+        { "required": ["type", "model"] }
+      ],
+      "description": "Factory-level harness default. Both type and model are required."
+    },
+    "modelXorHarnessRequired": {
+      "oneOf": [
+        { "required": ["model"] },
+        { "required": ["harness"] }
+      ],
+      "description": "Declare exactly one of model (Oz harness shorthand) or harness (explicit harness block)."
+    },
+    "modelXorHarnessOptional": {
+      "not": { "required": ["model", "harness"] },
+      "description": "model and harness are mutually exclusive."
+    },
+    "ozModelShorthand": {
+      "$ref": "#/$defs/nonEmptyString",
+      "description": "Oz model ID. Shorthand for harness: {type: oz, model: <id>}. Mutually exclusive with harness."
+    },
+    "runnerRef": {
+      "$ref": "#/$defs/nonEmptyString",
+      "description": "Name of a runner declared under runners/<name>.yaml."
+    },
+    "environmentId": {
+      "$ref": "#/$defs/nonEmptyString",
+      "description": "Cloud environment ID the run executes in."
+    },
+    "workerHost": {
+      "$ref": "#/$defs/clearableString",
+      "description": "Self-hosted worker host. Null or empty clears an inherited host and defers to the workspace default."
+    }
+  }
+}

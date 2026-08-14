@@ -42,6 +42,94 @@ fn factory_mcp_bundled_skill_bootstraps_canonical_mcp_resource() {
     assert!(!skill.contains("references/factory-mcp-tools.md"));
 }
 
+/// The Factory files skill is always bundled, so a stale trigger description
+/// or a broken reference silently reaches every GUI, TUI, and Oz agent.
+#[test]
+fn factory_files_bundled_skill_is_always_active_and_scoped_to_authoring() {
+    let skills_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../resources/bundled/skills")
+        .canonicalize()
+        .expect("bundled skills directory");
+    let skill_dir = skills_dir.join("factory-files");
+    let skill = parse_bundled_skill(&skill_dir.join("SKILL.md")).expect("factory-files parses");
+
+    assert_eq!(skill.name, "factory-files");
+    let description = skill.description.to_lowercase();
+    for intent in ["create", "edit", "factory.yaml", "runner"] {
+        assert!(
+            description.contains(intent),
+            "trigger description should mention {intent}: {description}"
+        );
+    }
+    assert!(
+        description.contains("factory mcp"),
+        "trigger description should exclude Factory MCP operation: {description}"
+    );
+
+    assert!(matches!(
+        activation_for_bundled_skill("factory-files", &skills_dir),
+        BundledSkillActivation::Always
+    ));
+
+    for reference in [
+        "references/schema.md",
+        "references/triggers.md",
+        "references/examples.md",
+        "references/validation.md",
+        "scripts/validate_factory_files.py",
+    ] {
+        assert!(
+            skill.content.contains(reference),
+            "SKILL.md should point at {reference}"
+        );
+        assert!(
+            skill_dir.join(reference).is_file(),
+            "{reference} should exist"
+        );
+    }
+}
+
+/// The schemas are the contract the skill tells agents to author against, so
+/// they have to stay parseable and keep the entry points the skill names.
+#[test]
+fn factory_files_schemas_are_parseable_and_reference_each_other() {
+    let schemas_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../resources/bundled/skills/factory-files/schemas");
+
+    for name in [
+        "common.schema.json",
+        "factory.schema.json",
+        "agent.schema.json",
+        "automation.schema.json",
+        "runner.schema.json",
+    ] {
+        let raw = std::fs::read_to_string(schemas_dir.join(name))
+            .unwrap_or_else(|error| panic!("read {name}: {error}"));
+        let schema: serde_json::Value = serde_json::from_str(&raw)
+            .unwrap_or_else(|error| panic!("{name} should be valid JSON: {error}"));
+        assert!(schema.get("$id").is_some(), "{name} should declare $id");
+    }
+
+    let factory: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(schemas_dir.join("factory.schema.json")).unwrap(),
+    )
+    .unwrap();
+    let required: Vec<&str> = factory["required"]
+        .as_array()
+        .expect("factory schema declares required fields")
+        .iter()
+        .map(|value| value.as_str().expect("required entries are strings"))
+        .collect();
+    assert_eq!(
+        required,
+        ["schemaVersion", "name", "repositories", "agentDefaults"]
+    );
+    assert_eq!(
+        factory["additionalProperties"],
+        serde_json::Value::Bool(false)
+    );
+}
+
 #[test]
 fn local_and_remote_catalogs_are_isolated() {
     let first_host_id = HostId::new("first-host".to_string());

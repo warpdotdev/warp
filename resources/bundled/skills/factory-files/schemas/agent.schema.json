@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://warp.dev/schemas/factory-files/v1alpha1/agent.schema.json",
+  "title": "agents/<name>/agent.md frontmatter (v1alpha1)",
+  "description": "YAML frontmatter of an Agent file. The Agent's name comes from its directory, never from a field. The Markdown body after the closing fence is the Agent's prompt.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "description": {
+      "type": ["string", "null"]
+    },
+    "agentType": { "$ref": "common.schema.json#/$defs/agentType" },
+    "credentialStrategy": { "$ref": "common.schema.json#/$defs/credentialStrategy" },
+    "model": { "$ref": "common.schema.json#/$defs/ozModelShorthand" },
+    "harness": { "$ref": "common.schema.json#/$defs/harnessOverride" },
+    "runner": { "$ref": "common.schema.json#/$defs/runnerRef" },
+    "environmentId": { "$ref": "common.schema.json#/$defs/environmentId" },
+    "secrets": { "$ref": "common.schema.json#/$defs/secrets" },
+    "mcpServers": { "$ref": "common.schema.json#/$defs/mcpServers" },
+    "workerHost": { "$ref": "common.schema.json#/$defs/workerHost" }
+  },
+  "allOf": [{ "$ref": "common.schema.json#/$defs/modelXorHarnessOptional" }]
+}

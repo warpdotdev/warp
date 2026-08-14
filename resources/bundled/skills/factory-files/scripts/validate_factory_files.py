@@ -1,0 +1,795 @@
+#!/usr/bin/env python3
+"""Validate a Factory file tree against the bundled v1alpha1 JSON Schemas.
+
+Usage:
+    python3 validate_factory_files.py [FACTORY_ROOT] [--json] [--schemas DIR]
+
+FACTORY_ROOT defaults to the current directory and must contain factory.yaml.
+
+The script is intentionally dependency-free: it ships a restricted YAML reader
+that accepts exactly the subset the Factory file parser accepts (no anchors,
+aliases, explicit tags, or multiple documents) and a JSON Schema evaluator
+covering the keywords the bundled schemas use. Anything it cannot read
+confidently is reported rather than guessed at.
+
+It does not replace server-side validation. Provider catalogues, model IDs,
+environment IDs, secret names, and runner references are resolved by the
+server; this checks structure, field names, enums, and cross-file references.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import re
+import sys
+from pathlib import Path
+from typing import Any
+
+SCHEMA_BY_KIND = {
+    "factory": "factory.schema.json",
+    "agent": "agent.schema.json",
+    "automation": "automation.schema.json",
+    "runner": "runner.schema.json",
+}
+
+MAIN_AGENT_TYPES = {"MAIN", "FOREMAN"}
+
+
+class Problem:
+    """One validation failure, located as precisely as the input allows."""
+
+    def __init__(self, path: str, message: str, line: int | None = None, pointer: str = ""):
+        self.path = path
+        self.message = message
+        self.line = line
+        self.pointer = pointer
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "path": self.path,
+            "line": self.line,
+            "pointer": self.pointer,
+            "message": self.message,
+        }
+
+    def render(self) -> str:
+        location = self.path
+        if self.line is not None:
+            location += f":{self.line}"
+        if self.pointer:
+            return f"{location}: {self.pointer}: {self.message}"
+        return f"{location}: {self.message}"
+
+
+# ---------------------------------------------------------------------------
+# Restricted YAML reader
+# ---------------------------------------------------------------------------
+
+
+class YamlError(Exception):
+    def __init__(self, message: str, line: int):
+        super().__init__(message)
+        self.message = message
+        self.line = line
+
+
+class _Line:
+    __slots__ = ("number", "indent", "content")
+
+    def __init__(self, number: int, indent: int, content: str):
+        self.number = number
+        self.indent = indent
+        self.content = content
+
+
+def _strip_comment(raw: str, line_number: int) -> str:
+    """Remove a trailing comment, honoring quotes."""
+    out = []
+    quote: str | None = None
+    index = 0
+    while index < len(raw):
+        char = raw[index]
+        if quote:
+            out.append(char)
+            if char == "\\" and quote == '"' and index + 1 < len(raw):
+                out.append(raw[index + 1])
+                index += 2
+                continue
+            if char == quote:
+                if quote == "'" and index + 1 < len(raw) and raw[index + 1] == "'":
+                    out.append("'")
+                    index += 2
+                    continue
+                quote = None
+            index += 1
+            continue
+        if char in "\"'":
+            quote = char
+            out.append(char)
+            index += 1
+            continue
+        if char == "#" and (index == 0 or raw[index - 1] in " \t"):
+            break
+        out.append(char)
+        index += 1
+    if quote:
+        raise YamlError("unterminated quoted string", line_number)
+    return "".join(out).rstrip()
+
+
+def _reject_unsupported(content: str, line_number: int) -> None:
+    if content.strip() in ("---", "..."):
+        raise YamlError("multiple YAML documents are not permitted", line_number)
+    if re.search(r"(^|[\s:\-\[{,])&[^\s]", content):
+        raise YamlError("yaml anchors are not permitted", line_number)
+    if re.search(r"(^|[\s:\-\[{,])\*[^\s*]", content):
+        raise YamlError("yaml aliases are not permitted", line_number)
+    if re.search(r"(^|[\s:\-\[{,])!!?[A-Za-z]", content):
+        raise YamlError("explicit yaml tags are not permitted", line_number)
+    if re.match(r"^\s*<<\s*:", content):
+        raise YamlError("yaml merge keys are not permitted", line_number)
+
+
+def _read_lines(text: str) -> list[_Line]:
+    lines: list[_Line] = []
+    for offset, raw in enumerate(text.replace("\r\n", "\n").replace("\r", "\n").split("\n")):
+        number = offset + 1
+        if "\t" in raw[: len(raw) - len(raw.lstrip(" \t"))]:
+            raise YamlError("tabs are not permitted for indentation", number)
+        content = _strip_comment(raw, number)
+        if not content.strip():
+            continue
+        _reject_unsupported(content, number)
+        indent = len(content) - len(content.lstrip(" "))
+        lines.append(_Line(number, indent, content.strip()))
+    return lines
+
+
+_INT_RE = re.compile(r"^[-+]?[0-9]+$")
+_HEX_RE = re.compile(r"^[-+]?0x[0-9a-fA-F]+$")
+_OCT_RE = re.compile(r"^[-+]?0o[0-7]+$")
+_FLOAT_RE = re.compile(r"^[-+]?(\.[0-9]+|[0-9]+(\.[0-9]*)?)([eE][-+]?[0-9]+)?$")
+
+
+def _parse_scalar(token: str, line_number: int) -> Any:
+    token = token.strip()
+    if token == "" or token == "~" or token in ("null", "Null", "NULL"):
+        return None
+    if token.startswith("'") and token.endswith("'") and len(token) >= 2:
+        return token[1:-1].replace("''", "'")
+    if token.startswith('"') and token.endswith('"') and len(token) >= 2:
+        try:
+            return json.loads(token)
+        except json.JSONDecodeError as error:
+            raise YamlError(f"invalid double-quoted string: {error.msg}", line_number) from error
+    if token in ("true", "True", "TRUE"):
+        return True
+    if token in ("false", "False", "FALSE"):
+        return False
+    if _INT_RE.match(token):
+        return int(token, 10)
+    if _HEX_RE.match(token):
+        return int(token, 16)
+    if _OCT_RE.match(token):
+        return int(token, 8)
+    if _FLOAT_RE.match(token):
+        return float(token)
+    return token
+
+
+def _split_key(content: str, line_number: int) -> tuple[str, str] | None:
+    """Split `key: value`, honoring quoted keys. Returns None when absent."""
+    quote: str | None = None
+    index = 0
+    while index < len(content):
+        char = content[index]
+        if quote:
+            if char == "\\" and quote == '"' and index + 1 < len(content):
+                index += 2
+                continue
+            if char == quote:
+                if quote == "'" and index + 1 < len(content) and content[index + 1] == "'":
+                    index += 2
+                    continue
+                quote = None
+            index += 1
+            continue
+        if char in "\"'":
+            quote = char
+            index += 1
+            continue
+        if char in "[{":
+            return None
+        if char == ":" and (index + 1 == len(content) or content[index + 1] in " \t"):
+            key_token = content[:index].strip()
+            key = _parse_scalar(key_token, line_number)
+            if not isinstance(key, str):
+                key = key_token
+            return key, content[index + 1 :].strip()
+        index += 1
+    return None
+
+
+def _parse_flow(text: str, line_number: int) -> Any:
+    value, rest = _parse_flow_value(text.strip(), line_number)
+    if rest.strip():
+        raise YamlError("unexpected trailing content after flow collection", line_number)
+    return value
+
+
+def _parse_flow_value(text: str, line_number: int) -> tuple[Any, str]:
+    text = text.lstrip()
+    if not text:
+        raise YamlError("unexpected end of flow collection", line_number)
+    if text[0] == "[":
+        items: list[Any] = []
+        rest = text[1:].lstrip()
+        if rest.startswith("]"):
+            return items, rest[1:]
+        while True:
+            item, rest = _parse_flow_value(rest, line_number)
+            items.append(item)
+            rest = rest.lstrip()
+            if rest.startswith(","):
+                rest = rest[1:].lstrip()
+                if rest.startswith("]"):
+                    return items, rest[1:]
+                continue
+            if rest.startswith("]"):
+                return items, rest[1:]
+            raise YamlError("unterminated flow sequence", line_number)
+    if text[0] == "{":
+        mapping: dict[str, Any] = {}
+        rest = text[1:].lstrip()
+        if rest.startswith("}"):
+            return mapping, rest[1:]
+        while True:
+            key_text, rest = _read_flow_scalar(rest, line_number)
+            rest = rest.lstrip()
+            if not rest.startswith(":"):
+                raise YamlError("flow mapping entry is missing ':'", line_number)
+            value, rest = _parse_flow_value(rest[1:], line_number)
+            key = _parse_scalar(key_text, line_number)
+            if not isinstance(key, str):
+                key = key_text.strip()
+            if key in mapping:
+                raise YamlError(f'duplicate key "{key}"', line_number)
+            mapping[key] = value
+            rest = rest.lstrip()
+            if rest.startswith(","):
+                rest = rest[1:].lstrip()
+                if rest.startswith("}"):
+                    return mapping, rest[1:]
+                continue
+            if rest.startswith("}"):
+                return mapping, rest[1:]
+            raise YamlError("unterminated flow mapping", line_number)
+    token, rest = _read_flow_scalar(text, line_number)
+    return _parse_scalar(token, line_number), rest
+
+
+def _read_flow_scalar(text: str, line_number: int) -> tuple[str, str]:
+    text = text.lstrip()
+    if text[:1] in ("'", '"'):
+        quote = text[0]
+        index = 1
+        while index < len(text):
+            if text[index] == "\\" and quote == '"':
+                index += 2
+                continue
+            if text[index] == quote:
+                if quote == "'" and text[index + 1 : index + 2] == "'":
+                    index += 2
+                    continue
+                return text[: index + 1], text[index + 1 :]
+            index += 1
+        raise YamlError("unterminated quoted string in flow collection", line_number)
+    index = 0
+    while index < len(text) and text[index] not in ",]}:":
+        index += 1
+    return text[:index].strip(), text[index:]
+
+
+class _Reader:
+    def __init__(self, lines: list[_Line], raw_lines: list[str]):
+        self.lines = lines
+        self.raw_lines = raw_lines
+        self.index = 0
+
+    def peek(self) -> _Line | None:
+        return self.lines[self.index] if self.index < len(self.lines) else None
+
+    def parse_block(self, indent: int) -> Any:
+        line = self.peek()
+        if line is None or line.indent < indent:
+            return None
+        if line.content.startswith("- ") or line.content == "-":
+            return self._parse_sequence(line.indent)
+        return self._parse_mapping(line.indent)
+
+    def _parse_sequence(self, indent: int) -> list[Any]:
+        items: list[Any] = []
+        while True:
+            line = self.peek()
+            if line is None or line.indent != indent:
+                break
+            if not (line.content.startswith("- ") or line.content == "-"):
+                break
+            self.index += 1
+            remainder = line.content[1:].strip()
+            if remainder == "":
+                items.append(self.parse_block(indent + 1))
+                continue
+            entry = _split_key(remainder, line.number)
+            if entry is not None:
+                # An inline mapping entry opens a mapping whose remaining keys
+                # are indented to the column the first key started at.
+                after_dash = line.content[1:]
+                lead = len(after_dash) - len(after_dash.lstrip(" "))
+                inline_indent = indent + 1 + lead
+                items.append(self._parse_inline_mapping(entry, line.number, inline_indent))
+                continue
+            items.append(self._parse_value(remainder, line.number, indent))
+        return items
+
+    def _parse_inline_mapping(
+        self, entry: tuple[str, str], line_number: int, indent: int
+    ) -> dict[str, Any]:
+        key, value_token = entry
+        mapping: dict[str, Any] = {key: self._parse_value(value_token, line_number, indent)}
+        rest = self._parse_mapping(indent, existing=mapping)
+        return rest
+
+    def _parse_mapping(self, indent: int, existing: dict[str, Any] | None = None) -> dict[str, Any]:
+        mapping: dict[str, Any] = existing if existing is not None else {}
+        while True:
+            line = self.peek()
+            if line is None or line.indent != indent:
+                break
+            if line.content.startswith("- "):
+                break
+            entry = _split_key(line.content, line.number)
+            if entry is None:
+                raise YamlError(f"expected 'key: value', found {line.content!r}", line.number)
+            self.index += 1
+            key, value_token = entry
+            if key in mapping:
+                raise YamlError(f'duplicate key "{key}"', line.number)
+            mapping[key] = self._parse_value(value_token, line.number, indent)
+        return mapping
+
+    def _parse_value(self, token: str, line_number: int, indent: int) -> Any:
+        if token.startswith("|") or token.startswith(">"):
+            return self._parse_block_scalar(token, line_number, indent)
+        if token.startswith("[") or token.startswith("{"):
+            return _parse_flow(token, line_number)
+        if token != "":
+            return _parse_scalar(token, line_number)
+        nested = self.peek()
+        if nested is None or nested.indent <= indent:
+            return None
+        return self.parse_block(nested.indent)
+
+    def _parse_block_scalar(self, header: str, line_number: int, indent: int) -> str:
+        style = header[0]
+        chomp = "clip"
+        if "-" in header[1:]:
+            chomp = "strip"
+        elif "+" in header[1:]:
+            chomp = "keep"
+        collected: list[str] = []
+        cursor = line_number  # raw_lines is 1-based via index arithmetic below
+        block_indent: int | None = None
+        while cursor < len(self.raw_lines):
+            raw = self.raw_lines[cursor]
+            if raw.strip() == "":
+                collected.append("")
+                cursor += 1
+                continue
+            current_indent = len(raw) - len(raw.lstrip(" "))
+            if current_indent <= indent:
+                break
+            if block_indent is None:
+                block_indent = current_indent
+            collected.append(raw[block_indent:])
+            cursor += 1
+        # Skip the structural lines consumed by the block scalar.
+        while self.index < len(self.lines) and self.lines[self.index].number <= cursor:
+            self.index += 1
+        while collected and collected[-1] == "":
+            collected.pop()
+        if style == "|":
+            text = "\n".join(collected)
+        else:
+            text = " ".join(part.strip() for part in collected if part.strip())
+        if chomp == "strip":
+            return text
+        return text + "\n" if text else text
+
+
+def load_yaml(text: str) -> Any:
+    """Parse the restricted YAML subset the Factory file format accepts."""
+    raw_lines = text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    lines = _read_lines(text)
+    if not lines:
+        return None
+    reader = _Reader(lines, raw_lines)
+    value = reader.parse_block(lines[0].indent)
+    remaining = reader.peek()
+    if remaining is not None:
+        raise YamlError(f"unexpected content {remaining.content!r}", remaining.number)
+    return value
+
+
+def split_frontmatter(text: str) -> tuple[str, int]:
+    """Return an Agent or Automation file's frontmatter and its line offset."""
+    normalized = text.replace("\r\n", "\n").replace("\r", "\n")
+    lines = normalized.split("\n")
+    if not lines or lines[0].rstrip() != "---":
+        raise YamlError("resource file must start with a frontmatter fence (---)", 1)
+    for index in range(1, len(lines)):
+        if lines[index].rstrip() == "---":
+            return "\n".join(lines[1:index]), 1
+    raise YamlError("frontmatter is missing a closing fence (---)", 1)
+
+
+# ---------------------------------------------------------------------------
+# JSON Schema evaluator
+# ---------------------------------------------------------------------------
+
+_TYPE_CHECKS = {
+    "object": lambda value: isinstance(value, dict),
+    "array": lambda value: isinstance(value, list),
+    "string": lambda value: isinstance(value, str),
+    "integer": lambda value: isinstance(value, int) and not isinstance(value, bool),
+    "number": lambda value: isinstance(value, (int, float)) and not isinstance(value, bool),
+    "boolean": lambda value: isinstance(value, bool),
+    "null": lambda value: value is None,
+}
+
+
+class SchemaStore:
+    """Loads sibling schema files and resolves local and relative $refs."""
+
+    def __init__(self, directory: Path):
+        self.directory = directory
+        self._cache: dict[str, Any] = {}
+
+    def document(self, filename: str) -> Any:
+        if filename not in self._cache:
+            path = self.directory / filename
+            self._cache[filename] = json.loads(path.read_text(encoding="utf-8"))
+        return self._cache[filename]
+
+    def resolve(self, ref: str, current: str) -> tuple[Any, str]:
+        filename, _, pointer = ref.partition("#")
+        target = filename or current
+        document = self.document(target)
+        node = document
+        for token in [segment for segment in pointer.split("/") if segment]:
+            token = token.replace("~1", "/").replace("~0", "~")
+            node = node[token]
+        return node, target
+
+
+def _describe(value: Any) -> str:
+    for name, check in _TYPE_CHECKS.items():
+        if name != "number" and check(value):
+            return name
+    return type(value).__name__
+
+
+def validate_instance(
+    instance: Any,
+    schema: Any,
+    store: SchemaStore,
+    document: str,
+    pointer: str = "",
+) -> list[str]:
+    """Evaluate the JSON Schema keywords used by the bundled schemas."""
+    if schema is True or schema == {}:
+        return []
+    if schema is False:
+        return [f"{pointer or '/'}: no value is allowed here"]
+
+    errors: list[str] = []
+
+    if "$ref" in schema:
+        target, target_document = store.resolve(schema["$ref"], document)
+        errors.extend(validate_instance(instance, target, store, target_document, pointer))
+
+    if "type" in schema:
+        declared = schema["type"]
+        names = declared if isinstance(declared, list) else [declared]
+        if not any(_TYPE_CHECKS[name](instance) for name in names):
+            errors.append(
+                f"{pointer or '/'}: expected {' or '.join(names)}, found {_describe(instance)}"
+            )
+            return errors
+
+    if "const" in schema and instance != schema["const"]:
+        errors.append(f"{pointer or '/'}: must be {json.dumps(schema['const'])}")
+    if "enum" in schema and instance not in schema["enum"]:
+        allowed = ", ".join(json.dumps(option) for option in schema["enum"])
+        errors.append(f"{pointer or '/'}: {json.dumps(instance)} must be one of {allowed}")
+
+    if isinstance(instance, str):
+        if "minLength" in schema and len(instance) < schema["minLength"]:
+            errors.append(f"{pointer or '/'}: must not be empty")
+        if "maxLength" in schema and len(instance) > schema["maxLength"]:
+            errors.append(f"{pointer or '/'}: must be at most {schema['maxLength']} characters")
+        if "pattern" in schema and not re.search(schema["pattern"], instance):
+            errors.append(f"{pointer or '/'}: {json.dumps(instance)} does not match the required format")
+
+    if isinstance(instance, (int, float)) and not isinstance(instance, bool):
+        if "minimum" in schema and instance < schema["minimum"]:
+            errors.append(f"{pointer or '/'}: must be at least {schema['minimum']}")
+        if "maximum" in schema and instance > schema["maximum"]:
+            errors.append(f"{pointer or '/'}: must be at most {schema['maximum']}")
+
+    if isinstance(instance, list):
+        if "minItems" in schema and len(instance) < schema["minItems"]:
+            errors.append(f"{pointer or '/'}: must contain at least {schema['minItems']} entries")
+        if schema.get("uniqueItems") and _has_duplicates(instance):
+            errors.append(f"{pointer or '/'}: entries must be unique")
+        if "items" in schema:
+            for index, item in enumerate(instance):
+                errors.extend(
+                    validate_instance(item, schema["items"], store, document, f"{pointer}/{index}")
+                )
+
+    if isinstance(instance, dict):
+        for name in schema.get("required", []):
+            if name not in instance:
+                errors.append(f"{pointer or '/'}: {name} is required")
+        if "minProperties" in schema and len(instance) < schema["minProperties"]:
+            errors.append(f"{pointer or '/'}: must declare at least {schema['minProperties']} field")
+        properties = schema.get("properties", {})
+        for name, value in instance.items():
+            if name in properties:
+                errors.extend(
+                    validate_instance(value, properties[name], store, document, f"{pointer}/{name}")
+                )
+            elif "additionalProperties" in schema:
+                additional = schema["additionalProperties"]
+                if additional is False:
+                    known = ", ".join(sorted(properties)) or "none"
+                    errors.append(
+                        f"{pointer or '/'}: unknown field {json.dumps(name)} (accepted: {known})"
+                    )
+                else:
+                    errors.extend(
+                        validate_instance(value, additional, store, document, f"{pointer}/{name}")
+                    )
+        if "propertyNames" in schema:
+            for name in instance:
+                errors.extend(
+                    validate_instance(
+                        name, schema["propertyNames"], store, document, f"{pointer}/{name}"
+                    )
+                )
+
+    for subschema in schema.get("allOf", []):
+        errors.extend(validate_instance(instance, subschema, store, document, pointer))
+
+    if "anyOf" in schema:
+        branches = [
+            validate_instance(instance, subschema, store, document, pointer)
+            for subschema in schema["anyOf"]
+        ]
+        if all(branch for branch in branches):
+            errors.append(_combine(pointer, schema, branches, "does not match any accepted form"))
+
+    if "oneOf" in schema:
+        branches = [
+            validate_instance(instance, subschema, store, document, pointer)
+            for subschema in schema["oneOf"]
+        ]
+        matched = [index for index, branch in enumerate(branches) if not branch]
+        if len(matched) == 0:
+            errors.append(_combine(pointer, schema, branches, "does not match any accepted form"))
+        elif len(matched) > 1:
+            errors.append(
+                f"{pointer or '/'}: matches more than one mutually exclusive form"
+                + (f" ({schema['description']})" if "description" in schema else "")
+            )
+
+    if "not" in schema and not validate_instance(instance, schema["not"], store, document, pointer):
+        errors.append(
+            f"{pointer or '/'}: "
+            + (schema.get("description") or "this form is not allowed here")
+        )
+
+    if "if" in schema:
+        matched = not validate_instance(instance, schema["if"], store, document, pointer)
+        branch = schema.get("then") if matched else schema.get("else")
+        if branch is not None:
+            errors.extend(validate_instance(instance, branch, store, document, pointer))
+
+    return errors
+
+
+def _combine(pointer: str, schema: Any, branches: list[list[str]], summary: str) -> str:
+    detail = schema.get("description")
+    head = f"{pointer or '/'}: {detail or summary}"
+    nested = sorted({message for branch in branches for message in branch})
+    if not nested:
+        return head
+    return head + " — " + "; ".join(nested[:4])
+
+
+def _has_duplicates(items: list[Any]) -> bool:
+    seen: list[str] = []
+    for item in items:
+        key = json.dumps(item, sort_keys=True)
+        if key in seen:
+            return True
+        seen.append(key)
+    return False
+
+
+# ---------------------------------------------------------------------------
+# Factory tree traversal
+# ---------------------------------------------------------------------------
+
+
+def classify(relative: str) -> tuple[str, str]:
+    """Mirror the server's path classification. Returns (kind, name)."""
+    if relative == "factory.yaml":
+        return "factory", ""
+    segments = relative.split("/")
+    if len(segments) >= 2 and segments[0] == "skills":
+        return "skill", ""
+    if len(segments) >= 4 and segments[0] == "agents" and segments[2] == "skills":
+        return "skill", ""
+    if len(segments) == 3 and segments[0] == "agents" and segments[2] == "agent.md":
+        return ("agent", segments[1]) if _valid_name(segments[1]) else ("invalid", "")
+    if len(segments) == 3 and segments[0] == "automations" and segments[2] == "automation.md":
+        return ("automation", segments[1]) if _valid_name(segments[1]) else ("invalid", "")
+    if len(segments) == 2 and segments[0] == "automations" and segments[1].endswith(".md"):
+        name = segments[1][: -len(".md")]
+        return ("automation", name) if _valid_name(name) else ("invalid", "")
+    if len(segments) == 2 and segments[0] == "runners" and segments[1].endswith(".yaml"):
+        name = segments[1][: -len(".yaml")]
+        return ("runner", name) if _valid_name(name) else ("invalid", "")
+    base = segments[-1]
+    if segments[0] == "agents" and base == "agent.md":
+        return "invalid", ""
+    if segments[0] == "automations" and base == "automation.md":
+        return "invalid", ""
+    if segments[0] == "runners" and base.endswith(".yaml"):
+        return "invalid", ""
+    return "unrelated", ""
+
+
+def _valid_name(name: str) -> bool:
+    return name not in ("", ".", "..") and "/" not in name
+
+
+def validate_tree(root: Path, store: SchemaStore) -> list[Problem]:
+    problems: list[Problem] = []
+    documents: dict[str, tuple[str, str, Any]] = {}
+    seen_names: dict[tuple[str, str], str] = {}
+
+    if not (root / "factory.yaml").is_file():
+        return [Problem("factory.yaml", "factory.yaml is required at the Factory root")]
+
+    for absolute in sorted(root.rglob("*")):
+        if not absolute.is_file():
+            continue
+        relative = absolute.relative_to(root).as_posix()
+        kind, name = classify(relative)
+        if kind in ("unrelated", "skill"):
+            continue
+        if kind == "invalid":
+            problems.append(
+                Problem(
+                    relative,
+                    "resource files must use factory.yaml, agents/<name>/agent.md, "
+                    "automations/<name>/automation.md, or runners/<name>.yaml",
+                )
+            )
+            continue
+        if kind in ("automation", "runner"):
+            previous = seen_names.get((kind, name))
+            if previous is not None:
+                problems.append(
+                    Problem(relative, f'{kind} "{name}" is also declared by {previous}')
+                )
+                continue
+            seen_names[(kind, name)] = relative
+
+        text = absolute.read_text(encoding="utf-8")
+        offset = 0
+        try:
+            if kind in ("agent", "automation"):
+                frontmatter, offset = split_frontmatter(text)
+                parsed = load_yaml(frontmatter) if frontmatter.strip() else {}
+            else:
+                parsed = load_yaml(text)
+        except YamlError as error:
+            problems.append(Problem(relative, error.message, error.line + offset))
+            continue
+
+        if parsed is None:
+            parsed = {}
+        if not isinstance(parsed, dict):
+            problems.append(Problem(relative, "document root must be a YAML mapping"))
+            continue
+
+        documents[relative] = (kind, name, parsed)
+        schema = store.document(SCHEMA_BY_KIND[kind])
+        for message in validate_instance(parsed, schema, store, SCHEMA_BY_KIND[kind]):
+            pointer, _, detail = message.partition(": ")
+            problems.append(Problem(relative, detail, pointer=pointer.lstrip("/").replace("/", ".")))
+
+    problems.extend(_validate_cross_file(documents))
+    return problems
+
+
+def _validate_cross_file(documents: dict[str, tuple[str, str, Any]]) -> list[Problem]:
+    """Check the tree-level rules that no single-document schema can express.
+
+    Runner references are deliberately not checked: a name the tree does not
+    declare legitimately resolves to an existing team runner on the server.
+    """
+    problems: list[Problem] = []
+    agent_names: set[str] = set()
+    main_agents: list[str] = []
+
+    for relative, (kind, name, parsed) in documents.items():
+        if kind == "agent":
+            agent_names.add(name)
+            if str(parsed.get("agentType", "")) in MAIN_AGENT_TYPES:
+                main_agents.append(relative)
+
+    if not main_agents:
+        problems.append(
+            Problem("factory.yaml", "exactly one Agent must declare agentType MAIN or FOREMAN")
+        )
+    elif len(main_agents) > 1:
+        for relative in sorted(main_agents):
+            problems.append(
+                Problem(relative, "only one Agent may declare agentType MAIN or FOREMAN")
+            )
+
+    for relative, (kind, _, parsed) in documents.items():
+        if kind != "automation":
+            continue
+        agent = parsed.get("agent")
+        if isinstance(agent, str) and agent not in agent_names:
+            problems.append(
+                Problem(relative, f'agent "{agent}" must name a declared Agent', pointer="agent")
+            )
+    return problems
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("root", nargs="?", default=".", help="Factory root containing factory.yaml")
+    parser.add_argument("--json", action="store_true", help="emit machine-readable output")
+    parser.add_argument(
+        "--schemas",
+        default=str(Path(__file__).resolve().parent.parent / "schemas"),
+        help="directory holding the bundled JSON Schemas",
+    )
+    args = parser.parse_args()
+
+    root = Path(args.root).resolve()
+    store = SchemaStore(Path(args.schemas).resolve())
+    problems = validate_tree(root, store)
+
+    if args.json:
+        print(json.dumps({"valid": not problems, "problems": [p.as_dict() for p in problems]}, indent=2))
+    elif problems:
+        print(f"{len(problems)} problem(s) in {root}:", file=sys.stderr)
+        for problem in problems:
+            print(f"  {problem.render()}", file=sys.stderr)
+    else:
+        print(f"{root}: factory files are valid against the v1alpha1 schemas")
+    return 1 if problems else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

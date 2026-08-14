@@ -1,0 +1,146 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://warp.dev/schemas/factory-files/v1alpha1/runner.schema.json",
+  "title": "runners/<name>.yaml (v1alpha1)",
+  "description": "A Runner document. The Runner's name comes from the file name, never from a field. Platform and instance-shape rules are enforced when the plan is applied, not by the file parser.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "description": {
+      "type": ["string", "null"]
+    },
+    "setupCommands": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Shell commands run while preparing the sandbox."
+    },
+    "instanceShape": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "vcpus": { "type": "integer", "minimum": 1 },
+        "memoryGb": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "platform": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "os": {
+          "enum": ["linux", "macos"],
+          "description": "Defaults to linux when omitted."
+        },
+        "arch": {
+          "enum": ["x86_64", "aarch64"],
+          "description": "Defaults to x86_64 on linux and aarch64 on macos. Supported pairs: linux/x86_64, linux/aarch64, macos/aarch64."
+        },
+        "linux": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "dockerImage": {
+              "$ref": "common.schema.json#/$defs/nonEmptyString",
+              "description": "Container image the Linux sandbox boots. Required for every Linux runner."
+            }
+          }
+        },
+        "mac": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "version": {
+              "enum": ["14", "15", "26", "27"],
+              "description": "Quote the value so YAML keeps it a string. Defaults to 26 when the mac section is omitted."
+            }
+          }
+        }
+      }
+    }
+  },
+  "if": { "$ref": "#/$defs/declaresMacOS" },
+  "then": {
+    "properties": {
+      "platform": {
+        "not": { "required": ["linux"] },
+        "properties": { "arch": { "const": "aarch64" } }
+      },
+      "instanceShape": { "$ref": "#/$defs/macOSInstanceShape" }
+    }
+  },
+  "else": {
+    "required": ["platform"],
+    "properties": {
+      "platform": {
+        "required": ["linux"],
+        "not": { "required": ["mac"] },
+        "properties": {
+          "linux": { "required": ["dockerImage"] }
+        }
+      },
+      "instanceShape": { "$ref": "#/$defs/linuxInstanceShape" }
+    }
+  },
+  "$defs": {
+    "declaresMacOS": {
+      "type": "object",
+      "required": ["platform"],
+      "properties": {
+        "platform": {
+          "type": "object",
+          "required": ["os"],
+          "properties": { "os": { "const": "macos" } }
+        }
+      }
+    },
+    "powerOfTwo": {
+      "enum": [1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024],
+      "description": "Linux runners require vcpus and memoryGb to be powers of two."
+    },
+    "linuxInstanceShape": {
+      "properties": {
+        "vcpus": { "$ref": "#/$defs/powerOfTwo" },
+        "memoryGb": { "$ref": "#/$defs/powerOfTwo" }
+      }
+    },
+    "macOSInstanceShape": {
+      "description": "Supported macOS shapes, as vcpus/memoryGb: 4/7, 6/14, 8/14, 12/28, 12/56.",
+      "oneOf": [
+        {
+          "properties": {
+            "vcpus": { "const": 4 },
+            "memoryGb": { "const": 7 }
+          },
+          "required": ["vcpus", "memoryGb"]
+        },
+        {
+          "properties": {
+            "vcpus": { "const": 6 },
+            "memoryGb": { "const": 14 }
+          },
+          "required": ["vcpus", "memoryGb"]
+        },
+        {
+          "properties": {
+            "vcpus": { "const": 8 },
+            "memoryGb": { "const": 14 }
+          },
+          "required": ["vcpus", "memoryGb"]
+        },
+        {
+          "properties": {
+            "vcpus": { "const": 12 },
+            "memoryGb": { "const": 28 }
+          },
+          "required": ["vcpus", "memoryGb"]
+        },
+        {
+          "properties": {
+            "vcpus": { "const": 12 },
+            "memoryGb": { "const": 56 }
+          },
+          "required": ["vcpus", "memoryGb"]
+        }
+      ]
+    }
+  }
+}
