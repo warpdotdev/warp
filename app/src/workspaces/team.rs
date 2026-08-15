@@ -2,9 +2,7 @@ use std::cmp::Ordering;
 
 use serde::{Deserialize, Serialize};
 
-use super::workspace::{
-    BillingMetadata, EmailInvite, InviteLinkDomainRestriction, TeamSettings, WorkspaceInviteCode,
-};
+use super::workspace::{BillingMetadata, EmailInvite, InviteLinkDomainRestriction, TeamSettings};
 use crate::auth::UserUid;
 use crate::server::ids::ServerId;
 
@@ -81,7 +79,10 @@ pub struct Team {
     pub name: String,
     /// The team's brand color as a hex string (e.g. "#7c3aed"), if set by the team admin.
     pub color: Option<String>,
-    pub invite_code: Option<WorkspaceInviteCode>,
+    /// The server-owned invite-by-link URL for this team, or `None` when
+    /// invite links are unavailable for this team (see `Team.inviteLink` in
+    /// the GraphQL schema for the conditions).
+    pub invite_link: Option<String>,
     pub members: Vec<TeamMember>,
     pub pending_email_invites: Vec<EmailInvite>,
     pub invite_link_domain_restrictions: Vec<InviteLinkDomainRestriction>,
@@ -106,7 +107,7 @@ impl Team {
             uid,
             name,
             color: None,
-            invite_code: Default::default(),
+            invite_link: Default::default(),
             members: members.unwrap_or_default(),
             pending_email_invites: Default::default(),
             invite_link_domain_restrictions: Default::default(),

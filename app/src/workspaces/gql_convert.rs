@@ -63,9 +63,8 @@ use super::workspace::{
     TeamSandboxedAgentSettings, TeamSecretRedactionSettings, TeamSettings,
     TelemetryDataCollectionPolicy, TelemetrySettings, Tier, UgcCollectionEnablementSetting,
     UgcCollectionSettings, UgcDataCollectionPolicy, UsageBasedPricingPolicy,
-    UsageVisibilityGranularity, UsageVisibilityPolicy, WarpAiPolicy, Workspace,
-    WorkspaceInviteCode, WorkspaceMember, WorkspaceMemberUsageInfo, WorkspaceSettings,
-    WorkspaceSizePolicy,
+    UsageVisibilityGranularity, UsageVisibilityPolicy, WarpAiPolicy, Workspace, WorkspaceMember,
+    WorkspaceMemberUsageInfo, WorkspaceSettings, WorkspaceSizePolicy,
 };
 use crate::ai::blocklist::usage::conversation_usage_view::ConversationUsageInfo;
 use crate::ai::execution_profiles::{
@@ -1310,14 +1309,14 @@ impl Team {
                 .map(|gql_member| gql_member.into())
                 .collect(),
 
+            // The server-owned invite-by-link URL, sourced directly from this
+            // team's own payload (unlike the workspace-derived fields below).
+            invite_link: gql_team.invite_link.clone(),
+
             // WORKSPACE FIELDS
             // TODO(skambashi): The fields below are derived from the workspace. We should
             // remove these from the Team rust type and use the values in the parent
             // Workspace instead.
-            invite_code: gql_workspace
-                .invite_code
-                .clone()
-                .map(|code| WorkspaceInviteCode { code: code.clone() }),
             pending_email_invites: gql_workspace
                 .pending_email_invites
                 .clone()
@@ -1375,10 +1374,6 @@ impl From<GqlWorkspace> for Workspace {
                 .map(convert_billing_cycle_usage),
             has_billing_history: gql_workspace.has_billing_history,
             settings: gql_workspace.settings.clone().into(),
-            invite_code: gql_workspace
-                .invite_code
-                .clone()
-                .map(|code| WorkspaceInviteCode { code: code.clone() }),
             invite_link_domain_restrictions: gql_workspace
                 .invite_link_domain_restrictions
                 .clone()

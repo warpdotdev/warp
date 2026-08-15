@@ -39,6 +39,7 @@ query GetWorkspacesMetadataForUser($requestContext: RequestContext!) {
           teams {
             uid
             name
+            inviteLink
             members {
               uid
               email
@@ -167,7 +168,6 @@ query GetWorkspacesMetadataForUser($requestContext: RequestContext!) {
             }
           }
           hasBillingHistory
-          inviteCode
           pendingEmailInvites {
             email
             expired

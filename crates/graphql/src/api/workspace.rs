@@ -13,7 +13,6 @@ pub struct Workspace {
     pub billing_cycle_usage_history: Option<BillingCycleUsageHistory>,
     pub settings: WorkspaceSettings,
     pub has_billing_history: bool,
-    pub invite_code: Option<String>,
     pub pending_email_invites: Vec<EmailInvite>,
     pub invite_link_domain_restrictions: Vec<InviteLinkDomainRestriction>,
     pub is_eligible_for_discovery: bool,
@@ -301,6 +300,7 @@ pub struct Team {
     pub members: Vec<TeamMember>,
     pub settings: TeamSettings,
     pub color: Option<String>,
+    pub invite_link: Option<String>,
 }
 
 /// The effective settings that apply to a team, combining the workspace layer

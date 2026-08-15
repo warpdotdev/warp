@@ -3777,6 +3777,13 @@ type Team {
   Required for features that key off the team's domain (e.g. domain capture, SSO).
   """
   domain: String
+
+  """
+  inviteLink is the server-owned invite-by-link URL for this team, or null when
+  invite links are unavailable (e.g. invite links disabled, non-native
+  workspace not yet supported, or the caller lacks visibility).
+  """
+  inviteLink: String
   managedSecrets: ManagedSecretConfig
   memberSpendLimits: [MemberSpendLimit!]
   members: [TeamMember!]!
@@ -4723,13 +4730,6 @@ type Workspace {
   hasBillingHistory is the equivalent of the v1 hasBillingHistory field in the Team type.
   """
   hasBillingHistory: Boolean!
-
-  """
-  inviteCode is equivalent to inviteCode field in the v1 Team type. Unlike v1, inviteCode
-  is a string instead of a nested object since the only value actually used by the client
-  is the code itself.
-  """
-  inviteCode: String
   inviteLinkDomainRestrictions: [InviteLinkDomainRestriction!]!
   isEligibleForDiscovery: Boolean!
   memberSpendLimits: [MemberSpendLimit!]

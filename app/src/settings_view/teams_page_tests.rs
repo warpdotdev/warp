@@ -18,7 +18,7 @@ fn team_with_members(members: Vec<TeamMember>, multi_admin_enabled: bool) -> Tea
         uid: 1.into(),
         name: "Test Team".to_string(),
         color: None,
-        invite_code: None,
+        invite_link: None,
         members,
         pending_email_invites: vec![],
         invite_link_domain_restrictions: vec![],
