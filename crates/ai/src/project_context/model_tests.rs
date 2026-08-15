@@ -685,10 +685,6 @@ fn test_superseding_refresh_coalesces_without_overlapping_reads() {
         })
     }
 
-    /// `StandardizedPath` infers its encoding from the string, and a Unix-encoded path has no
-    /// local `PathBuf` on Windows — `refresh_project_rules_for_repo` would return early and
-    /// never spawn the read this test is about. Deriving every path from one root also keeps
-    /// the separators consistent with the key the model stores rules under.
     fn repo_root() -> StandardizedPath {
         let root = if cfg!(windows) { "C:/repo" } else { "/repo" };
         StandardizedPath::try_new(root).unwrap()
