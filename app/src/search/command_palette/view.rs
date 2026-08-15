@@ -336,6 +336,14 @@ impl View {
             .map(|item| &item.search_result)
     }
 
+    #[cfg(feature = "integration_tests")]
+    pub fn selected_search_result<'a>(
+        &'a self,
+        app: &'a AppContext,
+    ) -> Option<&'a QueryResult<CommandPaletteItemAction>> {
+        self.search_bar_state.as_ref(app).selected_result()
+    }
+
     /// Set the active query filter in the search bar to be `filter`.
     pub fn set_active_query_filter(&mut self, filter: QueryFilter, ctx: &mut ViewContext<Self>) {
         self.search_bar.update(ctx, |view, ctx| {

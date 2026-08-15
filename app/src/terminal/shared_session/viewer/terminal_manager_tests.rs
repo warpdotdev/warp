@@ -98,6 +98,7 @@ fn build_manager_with_registered_ovm(app: &mut App) -> (TerminalManager, Ambient
         outbound_handlers_registered: false,
         orchestration_viewer_model: Arc::new(FairMutex::new(Some(ovm_handle))),
         enable_orchestration_polling: true,
+        orchestration_child_conversation_id: None,
     };
     (manager, parent)
 }

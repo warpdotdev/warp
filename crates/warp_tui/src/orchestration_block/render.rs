@@ -6,6 +6,7 @@ use warp::tui_export::{
     empty_env_recommendation_message, environment_snapshot, model_snapshot,
     should_show_auth_secret_picker,
 };
+use warp_core::features::FeatureFlag;
 use warpui::SingletonEntity;
 use warpui_core::AppContext;
 use warpui_core::elements::CrossAxisAlignment;
@@ -168,6 +169,17 @@ impl TuiOrchestrationBlock {
             .finish(),
         );
         column.add_child(self.render_agent_identity_line(builder));
+        // Multi-level orchestration: the server may grant launched children
+        // the run_agents tool, so tell the approver up front. Same gate as
+        // the GUI card; copy per design review (trailing period, no glyph).
+        if FeatureFlag::MultiLevelOrchestration.is_enabled() {
+            column.add_child(
+                TuiText::new("These agents may start their own child agents.")
+                    .with_style(builder.muted_text_style())
+                    .truncate()
+                    .finish(),
+            );
+        }
         column.add_child(TuiText::new(" ").finish());
         column.add_child(self.render_metadata_line(app, builder));
 

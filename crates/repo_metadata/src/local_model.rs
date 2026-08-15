@@ -1267,7 +1267,8 @@ impl LocalRepoMetadataModel {
             }
             _ => None,
         };
-        let mut gitignores = state.gitignores.clone();
+        // Tree building mutates the gitignore stack as it descends, so this needs an owned Vec.
+        let mut gitignores = state.gitignores.as_ref().clone();
         let dir_path_for_build = dir_path.to_local_path_lossy();
         let repo_root_for_build = repo_root.clone();
         let dir_path_for_completion = dir_path.clone();

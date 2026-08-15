@@ -2,6 +2,7 @@ use warp::tui_export::{
     AIConversationId, BlocklistAIHistoryModel, ConversationStatus, ReceivedMessageDisplay,
     register_tui_session_view_test_singletons,
 };
+use warp_core::features::FeatureFlag;
 use warpui::SingletonEntity;
 use warpui_core::elements::tui::{Modifier, TuiBufferExt, TuiRect};
 use warpui_core::presenter::tui::TuiPresenter;
@@ -14,6 +15,7 @@ use crate::tui_builder::TuiUiBuilder;
 const INFRA_RUN_ID: &str = "00000000-0000-0000-0000-000000000001";
 const UI_RUN_ID: &str = "00000000-0000-0000-0000-000000000002";
 const PARENT_RUN_ID: &str = "00000000-0000-0000-0000-000000000003";
+const GRANDCHILD_RUN_ID: &str = "00000000-0000-0000-0000-000000000004";
 
 /// Registers the appearance and history models needed by the renderer.
 fn register_models(app: &mut App) {
@@ -108,6 +110,124 @@ fn message(sender: &str, subject: &str, body: &str) -> ReceivedMessageDisplay {
         subject: subject.to_owned(),
         message_body: body.to_owned(),
     }
+}
+
+#[test]
+fn grandchild_sender_header_is_prefixed_with_its_parent_name() {
+    let _flag = FeatureFlag::MultiLevelOrchestration.override_enabled(true);
+    App::test((), |mut app| async move {
+        register_models(&mut app);
+        let parent_id = add_parent(&mut app);
+        let child_id = add_child(
+            &mut app,
+            parent_id,
+            "researcher",
+            INFRA_RUN_ID,
+            ConversationStatus::InProgress,
+        );
+        let _grandchild_id = add_child(
+            &mut app,
+            child_id,
+            "crawler",
+            GRANDCHILD_RUN_ID,
+            ConversationStatus::InProgress,
+        );
+
+        app.read(|ctx| {
+            let states = CollapsibleSectionStates::default();
+            let mut presenter = TuiPresenter::new();
+            // A grandchild is not a direct relation of the root conversation:
+            // its header names the parent (`researcher › crawler`).
+            let received = message(GRANDCHILD_RUN_ID, "progress", "Fetched 214 pages");
+            let frame = presenter.present_element(
+                render_agent_message(&states, &received, parent_id, ctx),
+                TuiRect::new(0, 0, 80, 2),
+                ctx,
+            );
+            let header = frame.buffer.to_lines()[0].clone();
+            assert!(header.contains("researcher › crawler"), "{header}");
+
+            // A direct child keeps its unprefixed header.
+            let direct = message(INFRA_RUN_ID, "progress", "Working");
+            let frame = presenter.present_element(
+                render_agent_message(&states, &direct, parent_id, ctx),
+                TuiRect::new(0, 0, 80, 2),
+                ctx,
+            );
+            let header = frame.buffer.to_lines()[0].clone();
+            assert!(header.contains("researcher"), "{header}");
+            assert!(!header.contains('›'), "{header}");
+
+            // The child's own children are direct relations in the child's
+            // transcript, so no prefix there either.
+            let frame = presenter.present_element(
+                render_agent_message(&states, &received, child_id, ctx),
+                TuiRect::new(0, 0, 80, 2),
+                ctx,
+            );
+            let header = frame.buffer.to_lines()[0].clone();
+            assert!(header.contains("crawler"), "{header}");
+            assert!(!header.contains('›'), "{header}");
+        });
+    });
+}
+
+#[test]
+fn unnamed_parent_prefix_uses_orchestrator_only_for_the_tree_root() {
+    let _flag = FeatureFlag::MultiLevelOrchestration.override_enabled(true);
+    App::test((), |mut app| async move {
+        register_models(&mut app);
+        let parent_id = add_parent(&mut app);
+        // An unnamed mid-tree parent (agent_name empty).
+        let unnamed_child_id = add_child(
+            &mut app,
+            parent_id,
+            "",
+            INFRA_RUN_ID,
+            ConversationStatus::InProgress,
+        );
+        let _grandchild_id = add_child(
+            &mut app,
+            unnamed_child_id,
+            "crawler",
+            GRANDCHILD_RUN_ID,
+            ConversationStatus::InProgress,
+        );
+        let sibling_id = add_child(
+            &mut app,
+            parent_id,
+            "ui-implementer",
+            UI_RUN_ID,
+            ConversationStatus::InProgress,
+        );
+
+        app.read(|ctx| {
+            let states = CollapsibleSectionStates::default();
+            let mut presenter = TuiPresenter::new();
+            // A grandchild under the unnamed mid-tree parent: the prefix
+            // falls back to the shared "Agent" label, not "orchestrator".
+            let received = message(GRANDCHILD_RUN_ID, "progress", "Fetched");
+            let frame = presenter.present_element(
+                render_agent_message(&states, &received, parent_id, ctx),
+                TuiRect::new(0, 0, 80, 2),
+                ctx,
+            );
+            let header = frame.buffer.to_lines()[0].clone();
+            assert!(header.contains("Agent › crawler"), "{header}");
+            assert!(!header.contains("orchestrator ›"), "{header}");
+
+            // A sibling's message viewed from another child: its parent IS
+            // the tree root, so the prefix uses the orchestrator label.
+            let sibling_message = message(INFRA_RUN_ID, "progress", "Working");
+            let frame = presenter.present_element(
+                render_agent_message(&states, &sibling_message, sibling_id, ctx),
+                TuiRect::new(0, 0, 80, 2),
+                ctx,
+            );
+            let header = frame.buffer.to_lines()[0].clone();
+            assert!(header.contains("orchestrator ›"), "{header}");
+        });
+    });
 }
 
 #[test]

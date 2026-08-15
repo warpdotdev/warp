@@ -3238,7 +3238,12 @@ impl Input {
         current_prompt.update(ctx, |prompt_type, ctx| {
             if let PromptType::Dynamic { prompt } = prompt_type {
                 prompt.update(ctx, |current_prompt, ctx| {
-                    current_prompt.subscribe_to_input_editor(editor.clone(), ctx);
+                    current_prompt.subscribe_to_input_editor(
+                        editor.clone(),
+                        agent_view_controller.clone(),
+                        terminal_view_id,
+                        ctx,
+                    );
                 });
             }
         });
@@ -16412,8 +16417,7 @@ impl View for Input {
             .last_non_hidden_ai_block_handle(app)
             .is_some_and(|ai_block| {
                 let block = ai_block.as_ref(app);
-                block.is_passive_conversation(app)
-                    && block.find_undismissed_code_diff(app).is_some()
+                block.is_passive_conversation() && block.find_undismissed_code_diff(app).is_some()
             });
         if has_undismissed_passive_code_diff {
             ctx.set.insert(flags::PASSIVE_CODE_DIFF_KEYBINDINGS_ENABLED);
