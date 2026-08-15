@@ -7,6 +7,7 @@ use ai::LLMProvider;
 use ai::api_keys::ApiKeyManager;
 use chrono::NaiveDate;
 use instant::Instant;
+use string_offset::CharOffset;
 use tempfile::TempDir;
 use warp::appearance::Appearance;
 #[cfg(feature = "voice_input")]
@@ -84,7 +85,9 @@ use super::{
 };
 use crate::agent_block::{TuiAIBlock, upgrade_url};
 use crate::autoupdate::TuiAutoupdater;
+use crate::editor_element::TuiEditorAction;
 use crate::inline_menu::MAX_INLINE_MENU_ROWS;
+use crate::input::view::TuiInputAction;
 use crate::input_mode_policy::{AI_LOCKED_CONFIG, AI_UNLOCKED_CONFIG};
 use crate::input_suggestions_mode::TuiInputSuggestionsMode;
 use crate::keybindings::{
@@ -4891,11 +4894,11 @@ fn footer_usage_entry_is_hidden_until_the_conversation_reports_usage() {
 /// still renders the usage entry — `Cost unavailable` in cost mode, never
 /// `$0.00` — even when credits happen to be zero. Cost mode is only reachable
 /// while the credits⇄dollars toggle is enabled, so this exercises the
-/// `TuiCostTransparency`-on path.
+/// `PricingTransparency`-on path.
 #[test]
 fn footer_usage_entry_shows_unknown_cost_even_with_zero_credits() {
     App::test((), |mut app| async move {
-        let _cost_transparency = FeatureFlag::TuiCostTransparency.override_enabled(true);
+        let _cost_transparency = FeatureFlag::PricingTransparency.override_enabled(true);
         app.update(|ctx| {
             ctx.add_singleton_model(|_| Appearance::mock());
             let builder = TuiUiBuilder::from_app(ctx);
@@ -5631,6 +5634,37 @@ fn terminal_wakeup_redraws_only_the_focused_session() {
         assert!(!background.update(&mut app, |view, ctx| { view.handle_terminal_wakeup(ctx) }));
     });
 }
+
+#[test]
+fn terminal_wakeup_focuses_a_new_long_running_command() {
+    App::test((), |mut app| async move {
+        let fixture = focus_test_fixture(&mut app);
+        let (view, _) = add_focus_test_session(&mut app, &fixture, true);
+        let input_id = view.read(&app, |view, _| view.input_view.id());
+
+        view.update(&mut app, |view, ctx| {
+            view.terminal_model
+                .lock()
+                .simulate_long_running_block("cat", "");
+            assert!(view.input_target().pty_owns_input());
+            assert_eq!(
+                ctx.focused_view_id(fixture.window_id),
+                Some(input_id),
+                "the composer remains focused until the delayed terminal wakeup"
+            );
+
+            assert!(view.handle_terminal_wakeup(ctx));
+        });
+
+        app.read(|ctx| {
+            assert_eq!(
+                ctx.focused_view_id(fixture.window_id),
+                Some(view.id()),
+                "the PTY-owning session must receive input after the wakeup"
+            );
+        });
+    });
+}
 #[test]
 fn background_focus_reconciliation_does_not_steal_foreground_focus() {
     App::test((), |mut app| async move {
@@ -5653,6 +5687,81 @@ fn background_focus_reconciliation_does_not_steal_foreground_focus() {
     });
 }
 
+#[test]
+fn empty_background_attachment_update_does_not_steal_foreground_focus() {
+    App::test((), |mut app| async move {
+        let fixture = focus_test_fixture(&mut app);
+        let (foreground, _) = add_focus_test_session(&mut app, &fixture, true);
+        let (background, _) = add_focus_test_session(&mut app, &fixture, false);
+        let foreground_input_id = foreground.read(&app, |view, _| view.input_view.id());
+
+        background.update(&mut app, |view, ctx| {
+            assert!(!view.attachment_bar.as_ref(ctx).should_render(ctx));
+            view.attachment_bar
+                .update(ctx, |bar, ctx| bar.emit_model_updated_for_test(ctx));
+        });
+
+        app.read(|ctx| {
+            assert_eq!(
+                ctx.focused_view_id(fixture.window_id),
+                Some(foreground_input_id),
+                "an empty background context update must not focus its hidden input"
+            );
+        });
+    });
+}
+
+#[test]
+fn foreground_input_pointer_action_recovers_focus_from_background_session() {
+    App::test((), |mut app| async move {
+        let fixture = focus_test_fixture(&mut app);
+        let (foreground, _) = add_focus_test_session(&mut app, &fixture, true);
+        let (background, _) = add_focus_test_session(&mut app, &fixture, false);
+        let foreground_input = foreground.read(&app, |view, _| view.input_view.clone());
+        let background_input = background.read(&app, |view, _| view.input_view.clone());
+
+        background_input.update(&mut app, |_, ctx| ctx.focus_self());
+        foreground_input.update(&mut app, |input, ctx| {
+            input.handle_action(
+                &TuiInputAction::Editor(TuiEditorAction::SelectionStartAt {
+                    offset: CharOffset::from(1),
+                }),
+                ctx,
+            );
+        });
+
+        assert!(app.read(|ctx| foreground_input.is_focused(ctx)));
+    });
+}
+
+#[test]
+fn stale_foreground_input_pointer_action_preserves_new_pty_owner() {
+    App::test((), |mut app| async move {
+        let fixture = focus_test_fixture(&mut app);
+        let (foreground, _) = add_focus_test_session(&mut app, &fixture, true);
+        let (background, _) = add_focus_test_session(&mut app, &fixture, false);
+        let foreground_input = foreground.read(&app, |view, _| view.input_view.clone());
+        let background_input = background.read(&app, |view, _| view.input_view.clone());
+
+        foreground.update(&mut app, |view, _| {
+            view.terminal_model
+                .lock()
+                .simulate_long_running_block("cat", "");
+            assert!(view.input_target().pty_owns_input());
+        });
+        background_input.update(&mut app, |_, ctx| ctx.focus_self());
+        foreground_input.update(&mut app, |input, ctx| {
+            input.handle_action(
+                &TuiInputAction::Editor(TuiEditorAction::SelectionStartAt {
+                    offset: CharOffset::from(1),
+                }),
+                ctx,
+            );
+        });
+
+        assert!(app.read(|ctx| foreground.is_focused(ctx)));
+    });
+}
 struct LateMaterializationBlockModel {
     conversation_id: AIConversationId,
     status: AIBlockOutputStatus,
@@ -5900,9 +6009,9 @@ fn orchestration_tab_navigation_bindings_remain_scoped_to_tab_context() {
             let input_context = input_only_context();
             for (name, key) in [
                 ("tui:orchestration_tabs:previous", "left"),
-                ("tui:orchestration_tabs:previous", "shift-tab"),
                 ("tui:orchestration_tabs:next", "right"),
-                ("tui:orchestration_tabs:next", "tab"),
+                ("tui:orchestration_tabs:tree_previous", "shift-tab"),
+                ("tui:orchestration_tabs:tree_next", "tab"),
                 ("tui:orchestration_tabs:first_child", "shift-left"),
                 ("tui:orchestration_tabs:last_child", "shift-right"),
             ] {
@@ -5995,6 +6104,7 @@ fn add_orchestration_child(
                 name.to_owned(),
                 parent_conversation_id,
                 Some(Harness::Oz),
+                false,
                 ctx,
             );
             history.set_active_conversation_id(conversation_id, session_id.surface_id(), ctx);
@@ -6081,9 +6191,9 @@ fn escape_from_child_tab_switches_to_root_and_clears_tab_focus() {
                     .as_ref(ctx)
                     .orchestration_tab_bar
                     .as_ref(ctx)
-                    .main_tab_key(),
+                    .tree_root_key(),
                 Some(parent_conversation_id.to_string()),
-                "tab bar should expose the parent as the main tab"
+                "tab bar should expose the parent as the tree root"
             );
         });
 
@@ -6142,9 +6252,9 @@ fn escape_with_root_selected_clears_tab_focus_without_switching() {
                     .as_ref(ctx)
                     .orchestration_tab_bar
                     .as_ref(ctx)
-                    .main_tab_key(),
+                    .tree_root_key(),
                 Some(parent_conversation_id.to_string()),
-                "root tab bar should expose the root as the main tab"
+                "root tab bar should expose the root as the tree root"
             );
         });
 
@@ -6480,7 +6590,7 @@ fn orchestration_child_selected_footer_shows_kill_hint() {
             ctx.add_singleton_model(|_| Appearance::mock());
             let builder = TuiUiBuilder::from_app(ctx);
             let buffer = render_element(
-                render_orchestration_child_selected_tab_footer(&builder),
+                render_orchestration_child_selected_tab_footer(&builder, 0),
                 ctx,
                 120,
             );
@@ -6492,6 +6602,20 @@ fn orchestration_child_selected_footer_shows_kill_hint() {
             assert!(
                 footer.contains("kill sub-agent"),
                 "child-selected footer should describe the kill action: {footer}"
+            );
+            assert!(
+                !footer.contains("nested"),
+                "leaf footer must not name a nested blast radius: {footer}"
+            );
+            let group_buffer = render_element(
+                render_orchestration_child_selected_tab_footer(&builder, 2),
+                ctx,
+                120,
+            );
+            let group_footer = group_buffer.to_lines().join("\n");
+            assert!(
+                group_footer.contains("kill sub-agent +2 nested"),
+                "group footer should name the blast radius: {group_footer}"
             );
             assert!(
                 footer.contains('\u{2193}'),
@@ -6568,6 +6692,78 @@ fn ctrl_c_on_child_tab_with_tabs_focused_kills_immediately() {
                 TuiSessions::as_ref(ctx).focused_session_id(),
                 Some(parent_session_id),
                 "focus should return to the root/main agent after kill"
+            );
+        });
+    });
+}
+
+#[test]
+fn ctrl_c_on_drilled_anchor_with_tabs_focused_kills_the_subtree() {
+    let _flag = FeatureFlag::MultiLevelOrchestration.override_enabled(true);
+    App::test((), |mut app| async move {
+        let fixture = focus_test_fixture(&mut app);
+        let (_parent_view, parent_session_id, parent_conversation_id) =
+            add_orchestration_session(&mut app, &fixture, true);
+        let (child_view, child_session_id, child_conversation_id) =
+            add_orchestration_child(&mut app, &fixture, parent_conversation_id, "child");
+        let (_grandchild_view, _grandchild_session_id, grandchild_conversation_id) =
+            add_orchestration_child(&mut app, &fixture, child_conversation_id, "grandchild");
+
+        // Select the group child: it re-anchors the bar, occupying the
+        // main-tab slot (selected == anchor != root).
+        app.update(|ctx| {
+            TuiSessions::handle(ctx).update(ctx, |sessions, ctx| {
+                sessions.focus_session(child_session_id, ctx);
+            });
+        });
+        child_view.update(&mut app, |view, ctx| {
+            view.conversation_selection.update(ctx, |selection, ctx| {
+                selection.select_existing_conversation(
+                    child_conversation_id,
+                    AgentViewEntryOrigin::Tui,
+                    ctx,
+                );
+            });
+            view.refresh_orchestration_tab_state(ctx);
+            view.orchestration_tabs_focused = true;
+            view.refresh_orchestration_tab_bar(ctx);
+        });
+        app.read(|ctx| {
+            assert_eq!(
+                child_view.as_ref(ctx).bar_focused_kill_target(ctx),
+                Some((child_conversation_id, 1)),
+                "the drilled-in anchor must be the kill target with its blast radius"
+            );
+        });
+
+        // A single ctrl-c kills the anchor and its subtree — it must not
+        // cancel the conversation and arm the app-exit window.
+        child_view.update(&mut app, |view, ctx| {
+            view.handle_action(&TuiTerminalSessionAction::Interrupt, ctx);
+        });
+
+        app.read(|ctx| {
+            assert!(
+                !child_view.as_ref(ctx).exit_confirmation.is_armed(),
+                "the drilled-anchor kill must not arm the exit confirmation window"
+            );
+            let history = BlocklistAIHistoryModel::as_ref(ctx);
+            assert!(
+                history.conversation(&child_conversation_id).is_none(),
+                "the anchor conversation must be deleted"
+            );
+            assert!(
+                history.conversation(&grandchild_conversation_id).is_none(),
+                "the anchor's subtree must be deleted with it"
+            );
+            assert!(
+                history.conversation(&parent_conversation_id).is_some(),
+                "the root must survive"
+            );
+            assert_eq!(
+                TuiSessions::as_ref(ctx).focused_session_id(),
+                Some(parent_session_id),
+                "focus should return to the root agent after the subtree kill"
             );
         });
     });

@@ -30,6 +30,7 @@ fn participant_resolution_uses_the_direct_parent_as_orchestrator() {
                 "child".to_string(),
                 root_id,
                 None,
+                false,
                 ctx,
             );
             history.assign_run_id_for_conversation(
@@ -44,6 +45,7 @@ fn participant_resolution_uses_the_direct_parent_as_orchestrator() {
                 "grandchild".to_string(),
                 child_id,
                 None,
+                false,
                 ctx,
             );
             history.assign_run_id_for_conversation(
@@ -128,6 +130,7 @@ fn descendant_conversation_ids_in_spawn_order_flattens_nested_children_preorder(
                 "oz-env-check".to_string(),
                 orchestrator_id,
                 None,
+                false,
                 ctx,
             )
         });
@@ -137,6 +140,7 @@ fn descendant_conversation_ids_in_spawn_order_flattens_nested_children_preorder(
                 "sibling-agent".to_string(),
                 orchestrator_id,
                 None,
+                false,
                 ctx,
             )
         });
@@ -146,6 +150,7 @@ fn descendant_conversation_ids_in_spawn_order_flattens_nested_children_preorder(
                 "codex-child".to_string(),
                 child_a,
                 None,
+                false,
                 ctx,
             )
         });
@@ -155,6 +160,7 @@ fn descendant_conversation_ids_in_spawn_order_flattens_nested_children_preorder(
                 "follow-up-child".to_string(),
                 child_a,
                 None,
+                false,
                 ctx,
             )
         });
@@ -164,6 +170,7 @@ fn descendant_conversation_ids_in_spawn_order_flattens_nested_children_preorder(
                 "sibling-grandchild".to_string(),
                 child_b,
                 None,
+                false,
                 ctx,
             )
         });
@@ -199,6 +206,7 @@ fn adjacent_orchestration_child_navigation_uses_pinned_first_order() {
                 "child-a".to_string(),
                 orchestrator_id,
                 None,
+                false,
                 ctx,
             )
         });
@@ -208,6 +216,7 @@ fn adjacent_orchestration_child_navigation_uses_pinned_first_order() {
                 "child-b".to_string(),
                 orchestrator_id,
                 None,
+                false,
                 ctx,
             )
         });
@@ -217,6 +226,7 @@ fn adjacent_orchestration_child_navigation_uses_pinned_first_order() {
                 "child-c".to_string(),
                 orchestrator_id,
                 None,
+                false,
                 ctx,
             )
         });
@@ -357,6 +367,7 @@ fn has_local_orchestrated_children_detects_active_local_children() {
                 "local-child".to_string(),
                 orchestrator_id,
                 None,
+                false,
                 ctx,
             )
         });
@@ -411,6 +422,7 @@ fn has_local_orchestrated_children_ignores_remote_children() {
                 "remote-child".to_string(),
                 orchestrator_id,
                 None,
+                false,
                 ctx,
             )
         });
@@ -531,6 +543,7 @@ fn adjacent_orchestration_child_navigation_cycles_whole_tree_from_grandchild() {
                 "mid".to_string(),
                 root_id,
                 None,
+                false,
                 ctx,
             )
         });
@@ -540,6 +553,7 @@ fn adjacent_orchestration_child_navigation_cycles_whole_tree_from_grandchild() {
                 "grandchild".to_string(),
                 mid_id,
                 None,
+                false,
                 ctx,
             )
         });
@@ -591,6 +605,7 @@ fn child_conversations_in_pill_order_returns_direct_children_only() {
                 "mid".to_string(),
                 root_id,
                 None,
+                false,
                 ctx,
             )
         });
@@ -600,6 +615,7 @@ fn child_conversations_in_pill_order_returns_direct_children_only() {
                 "grandchild".to_string(),
                 mid_id,
                 None,
+                false,
                 ctx,
             )
         });
@@ -635,6 +651,7 @@ fn adjacent_orchestration_child_navigation_noops_for_single_child() {
                 "child".to_string(),
                 orchestrator_id,
                 None,
+                false,
                 ctx,
             )
         });
@@ -689,6 +706,7 @@ fn build_orchestrator_with_two_children(
             "child-a".to_string(),
             orchestrator_id,
             None,
+            false,
             ctx,
         )
     });
@@ -698,6 +716,7 @@ fn build_orchestrator_with_two_children(
             "child-b".to_string(),
             orchestrator_id,
             None,
+            false,
             ctx,
         )
     });

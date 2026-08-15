@@ -44,10 +44,10 @@ use warp::tui_export::{
     TuiSlashCommandDataSourceArgs, TuiUpArrowHistoryItemKind, TuiUserInfoManager,
     TuiUserInfoManagerEvent, TuiZeroStateDataSource, UserTakeOverReason, WAKEUP_THROTTLE_PERIOD,
     WarpConfig, WarpConfigUpdateEvent, block_context_from_terminal_model,
-    build_slash_command_mixer, detect_possible_git_repo, export_conversation_markdown, log_out_tui,
-    maybe_build_ai_query_upsert_event, prepare_conversation_block_restoration,
-    record_autodetection_toggle_from_slash_command, record_saved_prompt_accepted,
-    record_static_slash_command_accepted, saved_prompt_text_for_id,
+    build_slash_command_mixer, detect_possible_git_repo, export_conversation_markdown,
+    loaded_subtree_rollup, log_out_tui, maybe_build_ai_query_upsert_event,
+    prepare_conversation_block_restoration, record_autodetection_toggle_from_slash_command,
+    record_saved_prompt_accepted, record_static_slash_command_accepted, saved_prompt_text_for_id,
     slash_command_selection_behavior, throttle,
 };
 use warp_core::channel::{Channel, ChannelState};
@@ -1900,6 +1900,7 @@ impl TuiTerminalSessionView {
         });
 
         ctx.subscribe_to_view(&input_view, |view, _, event, ctx| match event {
+            TuiInputViewEvent::FocusRequested => view.reconcile_focus(ctx),
             TuiInputViewEvent::Submitted(text) => view.handle_submitted(text.clone(), None, ctx),
             TuiInputViewEvent::Pasted(text) => view.handle_pasted(text.clone(), ctx),
             TuiInputViewEvent::BackspaceAtEmptyInput => {
@@ -1952,8 +1953,14 @@ impl TuiTerminalSessionView {
                 let Ok(page_anchor) = AIConversationId::try_from(page_anchor.clone()) else {
                     return;
                 };
+                let Some(level_anchor) = view
+                    .compute_orchestration_tab_snapshot(ctx)
+                    .map(|snapshot| snapshot.anchor_conversation_id)
+                else {
+                    return;
+                };
                 TuiOrchestrationModel::handle(ctx).update(ctx, |model, ctx| {
-                    model.set_explicit_page(page_anchor, ctx);
+                    model.set_explicit_page(level_anchor, page_anchor, ctx);
                 });
             }
         });
@@ -2488,9 +2495,7 @@ impl TuiTerminalSessionView {
                     pill_kind,
                     total_pills: snapshot.children.len() + 1,
                     total_pinned: 0,
-                    // The TUI tab bar is root-anchored (no drill-down), so
-                    // the anchor and the tree root coincide.
-                    source_conversation_id: snapshot.root_conversation_id,
+                    source_conversation_id: snapshot.anchor_conversation_id,
                     root_conversation_id: snapshot.root_conversation_id,
                     target_conversation_id: conversation_id,
                     switch_outcome: Some(PillSwitchOutcome::SwitchedInPlace),
@@ -2541,18 +2546,51 @@ impl TuiTerminalSessionView {
         }
     }
 
-    /// If the orchestration snapshot shows a child tab selected (not the root),
-    /// returns that child's conversation id. Used to decide between the kill
-    /// path and the normal exit path on a ctrl-c press.
+    /// If the orchestration snapshot shows a child conversation selected (not
+    /// the tree root), returns that child's conversation id. Used by the
+    /// unfocused-bar armed-kill window while viewing a child conversation.
     fn is_child_conversation_selected(&self, ctx: &AppContext) -> Option<AIConversationId> {
         let snapshot = self.compute_orchestration_tab_snapshot(ctx)?;
         (snapshot.selected_conversation_id != snapshot.root_conversation_id)
             .then_some(snapshot.selected_conversation_id)
     }
 
-    /// Kills a child agent: tombstones late events, deletes the conversation
-    /// from history, removes its retained TUI session, and returns focus to the
-    /// root/main orchestration agent. Equivalent to the GUI's Kill agent path.
+    /// The kill target while the bar is focused, with its loaded-descendant
+    /// count: a selected child tab of the rendered level, or the drilled-in
+    /// anchor itself when it occupies the main-tab slot (anchor ≠ root). The
+    /// root tab is never a kill target. Drives the bar-focused single-press
+    /// kill path and its footer.
+    fn bar_focused_kill_target(&self, ctx: &AppContext) -> Option<(AIConversationId, usize)> {
+        let snapshot = self.compute_orchestration_tab_snapshot(ctx)?;
+        if snapshot.selected_conversation_id != snapshot.anchor_conversation_id {
+            let nested_descendants = snapshot
+                .children
+                .iter()
+                .find(|child| child.conversation_id == snapshot.selected_conversation_id)
+                .and_then(|child| child.subtree_rollup.as_ref())
+                .map(|rollup| rollup.descendant_count)
+                .unwrap_or_default();
+            return Some((snapshot.selected_conversation_id, nested_descendants));
+        }
+        // A drilled-in anchor only exists under multi-level orchestration
+        // (flag off keeps anchor == root), so single-press subtree kill
+        // cannot reach flag-off trees.
+        if snapshot.anchor_conversation_id == snapshot.root_conversation_id {
+            return None;
+        }
+        let nested_descendants = loaded_subtree_rollup(
+            BlocklistAIHistoryModel::as_ref(ctx),
+            snapshot.anchor_conversation_id,
+        )
+        .map(|rollup| rollup.descendant_count)
+        .unwrap_or_default();
+        Some((snapshot.anchor_conversation_id, nested_descendants))
+    }
+
+    /// Kills a child agent and (with multi-level orchestration enabled) its
+    /// entire loaded subtree, deepest-first: tombstones late events, deletes
+    /// the conversations from history, removes their retained TUI sessions,
+    /// and returns focus to the root orchestration agent.
     fn kill_child_agent(&mut self, conversation_id: AIConversationId, ctx: &mut ViewContext<Self>) {
         if let Some(snapshot) = self.compute_orchestration_tab_snapshot(ctx) {
             warp::send_telemetry_from_ctx!(
@@ -2561,9 +2599,7 @@ impl TuiTerminalSessionView {
                     pill_kind: PillBarPillKind::Child,
                     total_pills: snapshot.children.len() + 1,
                     total_pinned: 0,
-                    // The TUI tab bar is root-anchored (no drill-down), so
-                    // the anchor and the tree root coincide.
-                    source_conversation_id: snapshot.root_conversation_id,
+                    source_conversation_id: snapshot.anchor_conversation_id,
                     root_conversation_id: snapshot.root_conversation_id,
                     target_conversation_id: conversation_id,
                     switch_outcome: None,
@@ -2590,9 +2626,9 @@ impl TuiTerminalSessionView {
                     .get(&snap.root_conversation_id)
                     .copied()
             });
-        // Tombstone + delete + remove session via the orchestration model.
+        // Tombstone + delete + remove sessions via the orchestration model.
         TuiOrchestrationModel::handle(ctx).update(ctx, |model, ctx| {
-            model.kill_child_agent(conversation_id, ctx);
+            model.kill_child_agent_subtree(conversation_id, ctx);
         });
         // Focus the root session directly using the pre-kill resolved id.
         if let Some(session_id) = root_session_id {
@@ -2610,10 +2646,12 @@ impl TuiTerminalSessionView {
         builder: &TuiUiBuilder,
         ctx: &AppContext,
     ) -> Box<dyn TuiElement> {
-        // Show the kill hint when a child tab is selected so the user knows
-        // that a single ctrl-c will terminate that agent.
-        if self.is_child_conversation_selected(ctx).is_some() {
-            render_orchestration_child_selected_tab_footer(builder)
+        // Show the kill hint when a killable tab is selected — a level child
+        // or the drilled-in anchor — so the user knows that a single ctrl-c
+        // will terminate that agent (naming its nested blast radius when it
+        // orchestrates a subtree).
+        if let Some((_, nested_descendants)) = self.bar_focused_kill_target(ctx) {
+            render_orchestration_child_selected_tab_footer(builder, nested_descendants)
         } else {
             render_orchestration_tab_footer(builder)
         }
@@ -3203,6 +3241,12 @@ impl TuiTerminalSessionView {
         }
         let is_focused = self.is_focused_session(ctx);
         if is_focused {
+            let pty_owns_input = self
+                .session_state(ctx)
+                .is_ok_and(|state| state.input_target().pty_owns_input());
+            if pty_owns_input && self.input_view.is_focused(ctx) {
+                self.focus_current_owner(ctx);
+            }
             ctx.notify();
         }
         is_focused
@@ -3357,7 +3401,7 @@ impl TuiTerminalSessionView {
             TuiAttachmentBarEvent::ShowHint(text) => {
                 self.show_transient_hint(text.clone(), ctx);
             }
-            TuiAttachmentBarEvent::ReturnFocus => ctx.focus(&self.input_view),
+            TuiAttachmentBarEvent::ReturnFocus => self.reconcile_focus(ctx),
         }
         ctx.notify();
     }
@@ -3441,9 +3485,12 @@ impl TuiTerminalSessionView {
             return;
         }
 
-        // Path 1: tab-bar focused + child tab selected → single ctrl-c kills.
+        // Path 1: tab-bar focused + killable tab selected (a level child, or
+        // the drilled-in anchor occupying the main-tab slot) → single ctrl-c
+        // kills that agent and its loaded subtree, per kill_child_agent. The
+        // root tab is never a kill target, matching the footers.
         if self.orchestration_tabs_focused
-            && let Some(child_id) = self.is_child_conversation_selected(ctx)
+            && let Some((child_id, _)) = self.bar_focused_kill_target(ctx)
         {
             self.kill_child_agent(child_id, ctx);
             return;
@@ -5492,15 +5539,15 @@ impl TypedActionView for TuiTerminalSessionView {
                 self.set_orchestration_tab_focus(false, ctx)
             }
             TuiTerminalSessionAction::FocusMainOrchestrationTab => {
-                let main_tab_key = self.orchestration_tab_bar.as_ref(ctx).main_tab_key();
-                if let Some(key) = main_tab_key {
+                let root_key = self.orchestration_tab_bar.as_ref(ctx).tree_root_key();
+                if let Some(key) = root_key {
                     self.switch_to_orchestration_tab(Some(key), false, ctx);
                 } else {
                     self.set_orchestration_tab_focus(false, ctx);
                 }
             }
             TuiTerminalSessionAction::NavigateOrchestrationTabs(action) => {
-                let key = action.target(self.orchestration_tab_bar.as_ref(ctx));
+                let key = action.target(self.orchestration_tab_bar.as_ref(ctx), ctx);
                 self.switch_to_orchestration_tab(key, true, ctx);
             }
             TuiTerminalSessionAction::ForwardUserPtyBytes(bytes) => {

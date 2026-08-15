@@ -530,9 +530,12 @@ impl TuiOrchestrationBlock {
 
     /// Returns from configuration to the interactive acceptance card.
     fn return_to_acceptance(&mut self, ctx: &mut ViewContext<Self>) {
+        let retain_focus = ctx.is_self_or_child_focused();
         self.mode = CardMode::Acceptance;
         self.pending_page_navigation = None;
-        ctx.focus_self();
+        if retain_focus {
+            ctx.focus_self();
+        }
         ctx.emit(TuiOrchestrationBlockEvent::LayoutInvalidated);
         ctx.notify();
     }

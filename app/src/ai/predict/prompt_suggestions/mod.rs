@@ -45,7 +45,7 @@ pub fn has_pending_code_or_unit_test_prompt_suggestion(
         .last_non_hidden_ai_block_handle(app)
         .is_some_and(|ai_block| {
             let block = ai_block.as_ref(app);
-            if !block.is_passive_conversation(app) || block.is_hidden(app) {
+            if !block.is_passive_conversation() || block.is_hidden(app) {
                 return false;
             }
             // Check for pending passive code diff

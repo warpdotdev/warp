@@ -20,8 +20,8 @@ use crate::ActiveAgentViewsModel;
 use crate::ai::agent::conversation::{AIConversation, ConversationStatus};
 use crate::ai::agent::task::TaskId;
 use crate::ai::agent::{
-    AIAgentActionId, AIAgentExchange, AIAgentExchangeId, AIAgentInput, AIAgentOutputStatus,
-    AgentReviewCommentBatch, UserQueryMode,
+    AIAgentActionId, AIAgentExchange, AIAgentExchangeId, AIAgentInput, AIAgentOutput,
+    AIAgentOutputStatus, AgentReviewCommentBatch, UserQueryMode,
 };
 use crate::ai::agent_conversations_model::AgentConversationsModel;
 use crate::ai::ambient_agents::task::TaskPrincipalInfo;
@@ -33,8 +33,8 @@ use crate::ai::blocklist::agent_view::{
 };
 use crate::ai::blocklist::block::cli_controller::UserTakeOverReason;
 use crate::ai::blocklist::{
-    BlocklistAIHistoryEvent, BlocklistAIHistoryModel, InputConfig, InputType, ResponseStream,
-    ResponseStreamId,
+    BlocklistAIHistoryEvent, BlocklistAIHistoryModel, FakeAIBlockModel, InputConfig, InputType,
+    ResponseStream, ResponseStreamId,
 };
 use crate::ai::cloud_environments::{
     AmbientAgentEnvironment, CloudAmbientAgentEnvironment, CloudAmbientAgentEnvironmentModel,
@@ -1007,6 +1007,148 @@ fn set_active_block_agent_driving(view: &mut TerminalView, conversation_id: AICo
         .block_list_mut()
         .active_block_mut()
         .set_agent_interaction_mode_for_requested_command(action_id, None, conversation_id);
+}
+
+fn auto_code_diff_query_input(query: &str) -> AIAgentInput {
+    AIAgentInput::AutoCodeDiffQuery {
+        query: query.to_owned(),
+        context: Default::default(),
+    }
+}
+
+#[test]
+fn is_passive_conversation_reflects_request_type_at_construction() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+
+        terminal.update(&mut app, |view, ctx| {
+            append_exchange_and_handle_event(view, auto_code_diff_query_input("diff"), ctx);
+        });
+
+        terminal.read(&app, |view, ctx| {
+            let ai_block = view.last_ai_block().expect("AI block should exist");
+            assert!(ai_block.as_ref(ctx).is_passive_conversation());
+        });
+    })
+}
+
+#[test]
+fn is_passive_conversation_is_false_for_a_directly_issued_user_query() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+
+        terminal.update(&mut app, |view, ctx| {
+            append_exchange_and_handle_event(view, agent_view_user_query_input("hi"), ctx);
+        });
+
+        terminal.read(&app, |view, ctx| {
+            let ai_block = view.last_ai_block().expect("AI block should exist");
+            assert!(!ai_block.as_ref(ctx).is_passive_conversation());
+        });
+    })
+}
+
+#[test]
+fn is_passive_conversation_is_recomputed_on_conversation_reassignment() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+
+        let (old_conversation_id, _task_id, exchange_id, _stream_id) =
+            terminal.update(&mut app, |view, ctx| {
+                append_exchange_and_handle_event(view, auto_code_diff_query_input("diff"), ctx)
+            });
+
+        terminal.read(&app, |view, ctx| {
+            let ai_block = view.last_ai_block().expect("AI block should exist");
+            assert!(ai_block.as_ref(ctx).is_passive_conversation());
+        });
+
+        // Move the exchange to a new conversation, as happens on a conversation split. This is
+        // a separate app update from the manual reset below so the `ReassignedExchange` event
+        // emitted by `append_reassigned_exchange` (which would rebuild a real, still-passive
+        // `AIBlockModelImpl` and reassert the cache) is fully processed first.
+        let new_conversation_id = terminal.update(&mut app, |view, ctx| {
+            let history_model = BlocklistAIHistoryModel::handle(ctx);
+            history_model.update(ctx, |history_model, ctx| {
+                let new_conversation_id =
+                    history_model.start_new_conversation(view.view_id, false, false, false, ctx);
+                let exchange = history_model
+                    .conversation_mut(&old_conversation_id)
+                    .expect("old conversation should exist")
+                    .remove_exchange(exchange_id)
+                    .expect("exchange should exist");
+                let response_stream_id = ResponseStreamId::new_for_test();
+                history_model
+                    .conversation_mut(&new_conversation_id)
+                    .expect("new conversation should exist")
+                    .append_reassigned_exchange(&response_stream_id, exchange, view.view_id, ctx)
+                    .expect("exchange should reassign");
+                new_conversation_id
+            })
+        });
+
+        // Now reset the block directly onto a model that classifies as `Active` — the opposite
+        // of what's currently cached. A `reset_conversation_id` that forgot to refresh
+        // `is_passive` would keep reporting the stale, now-incorrect cached value instead of the
+        // new model's.
+        terminal.update(&mut app, |view, ctx| {
+            let ai_block = view.last_ai_block().expect("AI block should exist");
+            let active_model = Rc::new(FakeAIBlockModel::new(
+                vec![agent_view_user_query_input("hi")],
+                AIAgentOutput::default(),
+            ));
+            ai_block.update(ctx, |block, ctx| {
+                block.reset_conversation_id(new_conversation_id, active_model, ctx);
+            });
+        });
+
+        terminal.read(&app, |view, ctx| {
+            let ai_block = view.last_ai_block().expect("AI block should exist");
+            assert!(!ai_block.as_ref(ctx).is_passive_conversation());
+            assert_eq!(
+                BlocklistAIHistoryModel::as_ref(ctx)
+                    .conversation(&new_conversation_id)
+                    .and_then(|c| c.exchange_with_id(exchange_id))
+                    .map(|e| e.id),
+                Some(exchange_id)
+            );
+        });
+    })
+}
+
+#[test]
+fn is_passive_conversation_does_not_re_derive_from_history_after_construction() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+
+        let (conversation_id, _task_id, exchange_id, _stream_id) =
+            terminal.update(&mut app, |view, ctx| {
+                append_exchange_and_handle_event(view, auto_code_diff_query_input("diff"), ctx)
+            });
+
+        // Strip the backing exchange out of history after construction. A live re-derivation
+        // (`AIBlockModelImpl::request_type` failing to find the exchange) falls back to
+        // `AIRequestType::Active`, so this only keeps returning `true` if the value was cached
+        // at construction time rather than looked up on every call.
+        terminal.update(&mut app, |_view, ctx| {
+            BlocklistAIHistoryModel::handle(ctx).update(ctx, |history_model, _ctx| {
+                history_model
+                    .conversation_mut(&conversation_id)
+                    .expect("conversation should exist")
+                    .remove_exchange(exchange_id)
+                    .expect("exchange should exist");
+            });
+        });
+
+        terminal.read(&app, |view, ctx| {
+            let ai_block = view.last_ai_block().expect("AI block should exist");
+            assert!(ai_block.as_ref(ctx).is_passive_conversation());
+        });
+    })
 }
 
 #[test]
@@ -5795,6 +5937,19 @@ fn agent_footer_updates_chip_groups_when_side_assignment_changes() {
         FeatureFlag::AgentView.set_enabled(true);
 
         let terminal = add_window_with_terminal(&mut app, None);
+        terminal.update(&mut app, |view, ctx| {
+            view.agent_view_controller().update(ctx, |controller, ctx| {
+                controller
+                    .try_enter_agent_view(
+                        None,
+                        AgentViewEntryOrigin::Input {
+                            was_prompt_autodetected: false,
+                        },
+                        ctx,
+                    )
+                    .expect("Should be able to enter agent view");
+            });
+        });
 
         terminal.update(&mut app, |view, ctx| {
             let model = view.model.lock();
@@ -7644,6 +7799,7 @@ fn cli_session_status_updates_active_child_conversation() {
                         "Agent 2".to_string(),
                         parent_conversation_id,
                         None,
+                        false,
                         ctx,
                     )
                 });
@@ -7796,6 +7952,7 @@ fn cli_session_status_updates_single_child_conversation_without_agent_view() {
                         "Agent 2".to_string(),
                         parent_conversation_id,
                         None,
+                        false,
                         ctx,
                     )
                 });
@@ -9079,6 +9236,7 @@ fn back_button_label_names_the_direct_parent_at_depth() {
                 "api-refactor".to_string(),
                 root_id,
                 None,
+                false,
                 ctx,
             );
             let grandchild_id = history.start_new_child_conversation(
@@ -9086,6 +9244,7 @@ fn back_button_label_names_the_direct_parent_at_depth() {
                 "grandchild".to_string(),
                 mid_id,
                 None,
+                false,
                 ctx,
             );
             (root_id, mid_id, grandchild_id)
@@ -9100,6 +9259,7 @@ fn back_button_label_names_the_direct_parent_at_depth() {
                     String::new(),
                     root_id,
                     None,
+                    false,
                     ctx,
                 );
                 let nested_id = history.start_new_child_conversation(
@@ -9107,6 +9267,7 @@ fn back_button_label_names_the_direct_parent_at_depth() {
                     "nested".to_string(),
                     unnamed_mid_id,
                     None,
+                    false,
                     ctx,
                 );
                 (unnamed_mid_id, nested_id)

@@ -49,6 +49,7 @@ pub enum AgentSource {
     GitHubAction,
     GitHubWebhook,
     CloudMode,
+    Orchestration,
 }
 
 impl AgentSource {
@@ -66,6 +67,7 @@ impl AgentSource {
             AgentSource::GitHubAction => "GITHUB_ACTION",
             AgentSource::GitHubWebhook => "GITHUB_WEBHOOK",
             AgentSource::CloudMode => "CLOUD_MODE",
+            AgentSource::Orchestration => "ORCHESTRATION",
         }
     }
 
@@ -80,6 +82,7 @@ impl AgentSource {
             AgentSource::WebApp => "Oz Web",
             AgentSource::GitHubAction => "GitHub Action",
             AgentSource::GitHubWebhook => "GitHub",
+            AgentSource::Orchestration => "Orchestration",
         }
     }
 
@@ -94,7 +97,8 @@ impl AgentSource {
             | AgentSource::ScheduledAgent
             | AgentSource::Interactive
             | AgentSource::WebApp
-            | AgentSource::CloudMode => false,
+            | AgentSource::CloudMode
+            | AgentSource::Orchestration => false,
         }
     }
 
@@ -111,7 +115,8 @@ impl AgentSource {
             | AgentSource::ScheduledAgent
             | AgentSource::AgentWebhook
             | AgentSource::GitHubAction
-            | AgentSource::GitHubWebhook => false,
+            | AgentSource::GitHubWebhook
+            | AgentSource::Orchestration => false,
         }
     }
 }
@@ -152,6 +157,7 @@ where
             "GITHUB_ACTION" => Some(AgentSource::GitHubAction),
             "GITHUB_WEBHOOK" => Some(AgentSource::GitHubWebhook),
             "CLOUD_MODE" => Some(AgentSource::CloudMode),
+            "ORCHESTRATION" => Some(AgentSource::Orchestration),
             _ => {
                 report_error!(anyhow!("Unknown AmbientAgentSource: {}", s));
                 None

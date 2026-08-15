@@ -1965,15 +1965,19 @@ jobs:
           fi
 
       - name: Send Slack notification if unsuccessful
-        uses: slackapi/slack-github-action@410ae57cff5c6b682b106440be0e6c7eb8c98c9d # v1.16.0
+        uses: slackapi/slack-github-action@0d95c9a7becc1e6e297d76df9bc735c44f4cbcbc # v3.0.5
         if: ${{ steps.failed_releases.outputs.failed != '' }}
         with:
-          channel-id: "#oncall-client"
-          # Follows https://api.slack.com/reference/surfaces/formatting#mentioning-users.
-          # S06N82RS7FA is the user group ID for @oncall-client-eng.
-          slack-message: "Failed to create ${{ steps.failed_releases.outputs.failed }} release artifacts for ${{ inputs.channel }}. See https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}. cc: <!subteam^S06N82RS7FA>"
-        env:
-          SLACK_BOT_TOKEN: ${{ secrets.ACTION_MONITORING_SLACK }}
+          # Fail the step when Slack rejects the message.
+          errors: true
+          method: chat.postMessage
+          token: ${{ secrets.ACTION_MONITORING_SLACK }}
+          payload: |
+            channel: "#oncall-client"
+            # Follows https://api.slack.com/reference/surfaces/formatting#mentioning-users.
+            # S06N82RS7FA is the user group ID for @oncall-client-eng.
+            text: "Failed to create ${{ steps.failed_releases.outputs.failed }} release artifacts for ${{ inputs.channel }}. See https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}. cc: <!subteam^S06N82RS7FA>"
+
   gate_tui_release_artifacts:
     name: Gate changelog publication on TUI release artifacts
     runs-on: ubuntu-latest
@@ -2129,6 +2133,7 @@ jobs:
           CHANGELOG_JSON: ${{ steps.generate_changelog.outputs.changelog }}
           RELEASE_TAG: ${{ needs.prepare_release.outputs.release_tag }}
           MARKDOWN_ARTIFACT_URL: ${{ steps.upload_changelog_draft_markdown.outputs.artifact-url }}
+          SLACK_CHANNEL: ${{ steps.get-config.outputs.changelog_slack_channel }}
         run: |
           CHANGELOG_INPUT="${{ runner.temp }}/slack-changelog-input.json"
           SLACK_PAYLOAD="${{ runner.temp }}/slack-changelog-payload.json"
@@ -2144,23 +2149,30 @@ jobs:
           fi
           echo "has_content=true" >> $GITHUB_OUTPUT
 
+          # chat.postMessage takes the destination channel as one of its
+          # arguments, so fold it into the payload the Slack step sends.
+          jq -c --arg channel "$SLACK_CHANNEL" '. + {channel: $channel}' "$SLACK_PAYLOAD" > "$SLACK_PAYLOAD.tmp"
+          mv "$SLACK_PAYLOAD.tmp" "$SLACK_PAYLOAD"
+
           echo "payload<<SLACK_PAYLOAD_EOF" >> $GITHUB_OUTPUT
           cat "$SLACK_PAYLOAD" >> $GITHUB_OUTPUT
           echo "SLACK_PAYLOAD_EOF" >> $GITHUB_OUTPUT
 
       - name: Post to a Slack channel
         id: slack
-        uses: slackapi/slack-github-action@410ae57cff5c6b682b106440be0e6c7eb8c98c9d # v1.16.0
+        uses: slackapi/slack-github-action@0d95c9a7becc1e6e297d76df9bc735c44f4cbcbc # v3.0.5
         if: ${{ steps.build_slack_payload.outputs.has_content == 'true' }}
         # Continue on with the rest of the workflow, even if we fail to send the
         # changelog info to Slack.  (We still want to stick the changelog JSON
         # in Cloud Storage.)
         continue-on-error: true
         with:
-          channel-id: ${{ steps.get-config.outputs.changelog_slack_channel }}
+          # Fail the step when Slack rejects the message; continue-on-error
+          # above still lets the rest of the job run.
+          errors: true
+          method: chat.postMessage
+          token: ${{ secrets.SLACK_CHANGELOG_BOT }}
           payload: ${{ steps.build_slack_payload.outputs.payload }}
-        env:
-          SLACK_BOT_TOKEN: ${{ secrets.SLACK_CHANGELOG_BOT }}
 
       - name: Generate changelog.json
         id: changelog_json

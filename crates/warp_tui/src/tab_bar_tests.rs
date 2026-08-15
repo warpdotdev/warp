@@ -5,10 +5,10 @@ use warpui_core::presenter::tui::TuiPresenter;
 use warpui_core::{App, AppContext, TuiView};
 
 use super::{
-    TuiTab, TuiTabBarConfig, TuiTabBarConfigError, TuiTabBarNavigationDirection,
-    TuiTabBarPagingState, TuiTabBarSecondaryEdge, TuiTabBarStyles, TuiTabBarView,
-    deterministic_pages_at_width, minimum_label_width, minimum_row_width, page_variant_at_width,
-    validated_live_keys,
+    TuiTab, TuiTabBarConfig, TuiTabBarConfigError, TuiTabBarNarrowVariant,
+    TuiTabBarNavigationDirection, TuiTabBarPagingState, TuiTabBarSecondaryEdge, TuiTabBarStyles,
+    TuiTabBarView, deterministic_pages_at_width, fixed_prefix_width, minimum_label_width,
+    minimum_row_width, natural_tab_width, page_variant_at_width, validated_live_keys,
 };
 
 fn key(key: u8) -> String {
@@ -67,8 +67,7 @@ fn paging_state_preserves_only_a_valid_explicit_anchor() {
     assert_eq!(invalid.page_anchor, Some(key(1)));
     assert!(invalid.reveal_selected);
 
-    state.clear_explicit_anchor();
-    let cleared = state.resolve(Some(key(1)), |_| true);
+    let cleared = TuiTabBarPagingState::<String>::default().resolve(Some(key(1)), |_| true);
     assert_eq!(cleared.page_anchor, Some(key(1)));
     assert!(cleared.reveal_selected);
 }
@@ -219,14 +218,183 @@ fn view_navigation_uses_semantic_order() {
 }
 
 #[test]
-fn main_tab_key_returns_the_configured_main_tab_key() {
+fn view_navigation_includes_breadcrumbs_in_row_order() {
+    let mut config = config(vec![tab(3, "child-a"), tab(4, "child-b")]);
+    config.breadcrumb_tabs = vec![tab(1, "orchestrator")];
+    config.main_tab = Some(tab(2, "anchor"));
+    config.selected_key = Some(key(2));
+    let view = view(config);
+
+    // Row order is breadcrumb, anchor, children — wrapping across the ends.
+    assert_eq!(
+        view.navigation_target(TuiTabBarNavigationDirection::Previous),
+        Some(key(1))
+    );
+    assert_eq!(
+        view.navigation_target(TuiTabBarNavigationDirection::Next),
+        Some(key(3))
+    );
+    // Shift-edges stay scoped to the level's children.
+    assert_eq!(
+        view.secondary_edge_target(TuiTabBarSecondaryEdge::First),
+        Some(key(3))
+    );
+    assert_eq!(
+        view.secondary_edge_target(TuiTabBarSecondaryEdge::Last),
+        Some(key(4))
+    );
+}
+
+#[test]
+fn view_navigation_skips_non_selectable_tabs_in_both_directions() {
+    let non_selectable_anchor_config = |selected: String| {
+        let mut config = config(vec![tab(3, "child-a"), tab(4, "child-b")]);
+        config.breadcrumb_tabs = vec![tab(1, "orchestrator")];
+        // A sessionless drilled-down anchor renders but cannot be selected.
+        config.main_tab = Some(tab(2, "anchor").with_selectable(false));
+        config.selected_key = Some(selected);
+        config
+    };
+
+    // Previous from the first child skips the anchor and lands on the
+    // breadcrumb; Next from the breadcrumb skips it in the other direction.
+    let from_child = view(non_selectable_anchor_config(key(3)));
+    assert_eq!(
+        from_child.navigation_target(TuiTabBarNavigationDirection::Previous),
+        Some(key(1))
+    );
+    let from_breadcrumb = view(non_selectable_anchor_config(key(1)));
+    assert_eq!(
+        from_breadcrumb.navigation_target(TuiTabBarNavigationDirection::Next),
+        Some(key(3))
+    );
+}
+
+#[test]
+fn tree_root_key_prefers_the_first_breadcrumb() {
     let mut cfg = config(vec![tab(2, "two"), tab(3, "three")]);
     cfg.main_tab = Some(tab(1, "main"));
     let bar = view(cfg);
-    assert_eq!(bar.main_tab_key(), Some(key(1)));
+    assert_eq!(bar.tree_root_key(), Some(key(1)));
+
+    let mut drilled = config(vec![tab(3, "child")]);
+    drilled.breadcrumb_tabs = vec![tab(1, "orchestrator")];
+    drilled.main_tab = Some(tab(2, "anchor"));
+    let drilled_bar = view(drilled);
+    assert_eq!(drilled_bar.tree_root_key(), Some(key(1)));
 
     let no_main = view(config(vec![tab(1, "one")]));
-    assert_eq!(no_main.main_tab_key(), None);
+    assert_eq!(no_main.tree_root_key(), None);
+}
+
+#[test]
+fn breadcrumbs_render_in_the_fixed_prefix_and_reserve_width() {
+    App::test((), |app| async move {
+        app.read(|app| {
+            let mut cfg = config(vec![tab(3, "crawler"), tab(4, "indexer")]);
+            cfg.leading = Some("   Agents:   ".to_owned());
+            cfg.breadcrumb_tabs =
+                vec![tab(1, "orchestrator").with_leading_text("‹", TuiStyle::default())];
+            cfg.main_tab = Some(tab(2, "researcher").with_leading_text("●", TuiStyle::default()));
+            cfg.secondary_gap_columns = 3;
+
+            // The fixed prefix accounts for the breadcrumb chip plus its gap.
+            let breadcrumb_width = natural_tab_width(&cfg.breadcrumb_tabs[0], &cfg);
+            let mut without_breadcrumbs = cfg.clone();
+            without_breadcrumbs.breadcrumb_tabs.clear();
+            assert_eq!(
+                fixed_prefix_width(&cfg),
+                fixed_prefix_width(&without_breadcrumbs) + breadcrumb_width + 1
+            );
+
+            let line = render(&view(cfg), 100, app).buffer.to_lines().remove(0);
+            assert!(
+                line.contains("‹ orchestrator   ● researcher"),
+                "breadcrumb chip should precede the anchor with a one-cell gap: {line}"
+            );
+            assert!(line.contains('|'), "divider still renders: {line}");
+        });
+    });
+}
+
+#[test]
+fn trailing_badge_renders_after_the_label_and_reserves_width() {
+    App::test((), |app| async move {
+        app.read(|app| {
+            let plain = tab(1, "researcher");
+            let badged = tab(1, "researcher").with_trailing_text("▸3", TuiStyle::default());
+            let cfg = config(vec![badged.clone()]);
+            assert_eq!(
+                natural_tab_width(&badged, &cfg),
+                // Badge text (2 cells) plus its separating space.
+                natural_tab_width(&plain, &cfg) + 3
+            );
+
+            let line = render(&view(cfg), 40, app).buffer.to_lines().remove(0);
+            assert!(
+                line.contains("researcher ▸3"),
+                "badge should trail the label: {line}"
+            );
+        });
+    });
+}
+
+#[test]
+fn narrow_variants_swap_presentation_below_their_width_bounds() {
+    App::test((), |app| async move {
+        app.read(|app| {
+            let mut base = config(vec![
+                tab(2, "crawler").with_trailing_text("▸2", TuiStyle::default()),
+                tab(3, "indexer"),
+            ]);
+            base.leading = Some("   Agents:   ".to_owned());
+            base.main_tab = Some(tab(1, "researcher").with_leading_text("●", TuiStyle::default()));
+            base.secondary_gap_columns = 3;
+
+            let mut narrow = base.clone();
+            narrow.leading = Some("  ".to_owned());
+            narrow.main_tab =
+                Some(TuiTab::new(key(1), "").with_leading_text("●", TuiStyle::default()));
+            narrow.tabs = vec![
+                tab(2, "crawler").with_trailing_text("▸", TuiStyle::default()),
+                tab(3, "indexer"),
+            ];
+            base.narrow_variants = vec![TuiTabBarNarrowVariant {
+                max_width_exclusive: 64,
+                config: narrow,
+            }];
+
+            let bar = view(base);
+            let wide = render(&bar, 100, app).buffer.to_lines().remove(0);
+            assert!(
+                wide.contains("Agents:"),
+                "wide row keeps the leading: {wide}"
+            );
+            assert!(
+                wide.contains("researcher"),
+                "wide row keeps the anchor label: {wide}"
+            );
+            assert!(wide.contains("▸2"), "wide row keeps the full badge: {wide}");
+
+            let narrow_line = render(&bar, 60, app).buffer.to_lines().remove(0);
+            assert!(
+                !narrow_line.contains("Agents:"),
+                "narrow row sheds the leading: {narrow_line}"
+            );
+            assert!(
+                !narrow_line.contains("researcher"),
+                "narrow row collapses the anchor to its glyph: {narrow_line}"
+            );
+            assert!(
+                narrow_line.contains('●'),
+                "the anchor glyph survives every tier: {narrow_line}"
+            );
+            assert!(
+                narrow_line.contains("crawler ▸") && !narrow_line.contains("▸2"),
+                "the badge collapses to its marker: {narrow_line}"
+            );
+        });
+    });
 }
 
 #[test]
