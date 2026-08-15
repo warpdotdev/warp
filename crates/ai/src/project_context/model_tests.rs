@@ -685,6 +685,19 @@ fn test_superseding_refresh_coalesces_without_overlapping_reads() {
         })
     }
 
+    /// `StandardizedPath` infers its encoding from the string, and a Unix-encoded path has no
+    /// local `PathBuf` on Windows — `refresh_project_rules_for_repo` would return early and
+    /// never spawn the read this test is about. Deriving every path from one root also keeps
+    /// the separators consistent with the key the model stores rules under.
+    fn repo_root() -> StandardizedPath {
+        let root = if cfg!(windows) { "C:/repo" } else { "/repo" };
+        StandardizedPath::try_new(root).unwrap()
+    }
+
+    fn path_in_repo(name: &str) -> LocalOrRemotePath {
+        local_path(repo_root().join(name).as_str())
+    }
+
     // The first round reports a rule; the coalesced second round reports none, so the test can
     // confirm the latest (empty) result wins instead of leaving stale content behind.
     fn controlled_content_reader(
@@ -705,7 +718,7 @@ fn test_superseding_refresh_coalesces_without_overlapping_reads() {
             coordinator.active_readers.fetch_sub(1, Ordering::SeqCst);
             let round = coordinator.completed_rounds.fetch_add(1, Ordering::SeqCst);
             let contents = if round == 0 {
-                vec![(local_path("/repo/WARP.md"), "stale-round".to_string())]
+                vec![(path_in_repo("WARP.md"), "stale-round".to_string())]
             } else {
                 Vec::new()
             };
@@ -717,7 +730,7 @@ fn test_superseding_refresh_coalesces_without_overlapping_reads() {
         app.add_singleton_model(|_| DetectedRepositories::default());
         app.add_singleton_model(RepoMetadataModel::new);
         let model = app.add_model(|_| ProjectContextModel::default());
-        let repo_id = RepositoryIdentifier::Local(StandardizedPath::try_new("/repo").unwrap());
+        let repo_id = RepositoryIdentifier::Local(repo_root());
         let coordinator = coordinator();
 
         // First refresh: its read blocks on `coordinator.release` until we let it proceed
@@ -768,7 +781,7 @@ fn test_superseding_refresh_coalesces_without_overlapping_reads() {
             }
             has_stale_rule = model.read(&app, |model, _ctx| {
                 model
-                    .find_applicable_project_rules(&local_path("/repo/main.rs"))
+                    .find_applicable_project_rules(&path_in_repo("main.rs"))
                     .is_some()
             });
             if observed_two_rounds && !has_stale_rule {
