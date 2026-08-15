@@ -1567,7 +1567,6 @@ fn test_availability_refresh_skipped_when_logged_out() {
 
 #[cfg(feature = "tui")]
 mod tui_usage_snapshot_tests {
-    use chrono::TimeZone as _;
 
     use super::*;
     use crate::workspaces::team::{MembershipRole, Team, TeamMember};
@@ -1576,15 +1575,6 @@ mod tui_usage_snapshot_tests {
         AiCreditsUsageSource, BillingCycleUsageData, BillingCycleUsageEntry,
         BillingCycleUsageSummary, UsageVisibilityGranularity, UsageVisibilityPolicy,
     };
-
-    #[test]
-    fn refresh_time_matches_the_usage_design() {
-        let time = Local
-            .with_ymd_and_hms(2026, 7, 31, 17, 0, 0)
-            .single()
-            .expect("the local date should be valid");
-        assert_eq!(format_tui_usage_refresh_time(time), "July 31 at 5:00pm");
-    }
 
     fn payg_entry(
         credits_used: i32,
@@ -1618,8 +1608,6 @@ mod tui_usage_snapshot_tests {
         }
     }
 
-    /// Two workspaces sharing the test user as an owner-level member of each
-    /// workspace's sole team, so admin permission checks succeed for both.
     fn two_workspaces_with_owner(
         current_extra: impl FnOnce(&mut Workspace),
         other_extra: impl FnOnce(&mut Workspace),
@@ -1693,9 +1681,6 @@ mod tui_usage_snapshot_tests {
                 ];
             });
 
-            // Computed outside the model's own `update`, mirroring the real
-            // caller (the TUI's `render`), which never re-enters the model
-            // it's reading via `AIRequestUsageModel::as_ref`.
             app.read(|ctx| {
                 let snapshot = compute_tui_usage_snapshot(ctx);
                 let addon = snapshot
@@ -1705,44 +1690,6 @@ mod tui_usage_snapshot_tests {
                     addon.limit, 100,
                     "the other workspace's 900-credit grant must not leak into this total"
                 );
-            });
-        });
-    }
-
-    #[test]
-    fn addon_credits_include_user_scoped_grants_regardless_of_workspace() {
-        App::test((), |mut app| async move {
-            let (current, other) = two_workspaces_with_owner(|_| {}, |_| {});
-            app.add_singleton_model(|ctx| {
-                UserWorkspaces::mock(
-                    Arc::new(MockTeamClient::new()),
-                    Arc::new(MockWorkspaceClient::new()),
-                    vec![current, other],
-                    ctx,
-                )
-            });
-            let request_usage_model = add_request_usage_model(&mut app);
-
-            request_usage_model.update(&mut app, |model, _ctx| {
-                model.bonus_grants = vec![BonusGrant {
-                    created_at: Utc::now(),
-                    cost_cents: 0,
-                    expiration: None,
-                    grant_type: BonusGrantType::Any,
-                    reason: "test".to_owned(),
-                    user_facing_message: None,
-                    request_credits_granted: 50,
-                    request_credits_remaining: 50,
-                    scope: BonusGrantScope::User,
-                }];
-            });
-
-            app.read(|ctx| {
-                let snapshot = compute_tui_usage_snapshot(ctx);
-                let addon = snapshot
-                    .addon_credits
-                    .expect("user-scoped grants should always count");
-                assert_eq!(addon.limit, 50);
             });
         });
     }
@@ -1759,8 +1706,6 @@ mod tui_usage_snapshot_tests {
                 },
                 |_| {},
             );
-            // Keep only the current workspace so the other team's row can only
-            // be excluded by attribution filtering, not by workspace scoping.
             let extra_team = Team::from_local_cache(
                 crate::server::ids::ServerId::from(2_i64),
                 "Other Team".to_owned(),

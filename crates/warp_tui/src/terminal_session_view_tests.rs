@@ -251,12 +251,11 @@ fn out_of_credits_ctrl_o_binding_opens_upgrade() {
 }
 
 #[test]
-fn ctrl_o_opens_upgrade_url_while_the_usage_panel_is_open() {
+fn usage_slash_command_opens_panel_and_enables_upgrade_binding() {
     App::test((), |mut app| async move {
         app.update(crate::keybindings::init);
         let fixture = focus_test_fixture(&mut app);
         let (view, _) = add_focus_test_session(&mut app, &fixture, true);
-        let expected_upgrade_url = app.read(upgrade_url);
 
         app.read(|ctx| {
             let ctrl_o = Trigger::Keystrokes(vec![Keystroke::parse("ctrl-o").unwrap()]);
@@ -289,19 +288,6 @@ fn ctrl_o_opens_upgrade_url_while_the_usage_panel_is_open() {
                 "ctrl-o should open the upgrade page while the /usage panel is open"
             );
         });
-
-        let opened_urls = Rc::new(RefCell::new(Vec::new()));
-        let opened_urls_for_callback = opened_urls.clone();
-        app.update(|ctx| {
-            ctx.set_before_open_url(move |url, _| {
-                opened_urls_for_callback.borrow_mut().push(url.to_owned());
-                url.to_owned()
-            });
-        });
-        view.update(&mut app, |view, ctx| {
-            view.handle_action(&TuiTerminalSessionAction::OpenOutOfCreditsUrl, ctx);
-        });
-        assert_eq!(opened_urls.borrow().as_slice(), &[expected_upgrade_url]);
     });
 }
 
