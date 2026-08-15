@@ -83,10 +83,17 @@ class _Line:
         self.content = content
 
 
+# Characters after which a quote opens a quoted scalar. Anywhere else a quote
+# is an ordinary character, so "It's a thing" stays a plain scalar rather than
+# an unterminated string.
+_VALUE_START_CHARS = ":,[{-"
+
+
 def _strip_comment(raw: str, line_number: int) -> str:
-    """Remove a trailing comment, honoring quotes."""
-    out = []
+    """Remove a trailing comment, honoring quoted scalars."""
+    out: list[str] = []
     quote: str | None = None
+    previous = ""
     index = 0
     while index < len(raw):
         char = raw[index]
@@ -104,14 +111,17 @@ def _strip_comment(raw: str, line_number: int) -> str:
                 quote = None
             index += 1
             continue
-        if char in "\"'":
+        if char in "\"'" and (previous == "" or previous in _VALUE_START_CHARS):
             quote = char
             out.append(char)
+            previous = char
             index += 1
             continue
         if char == "#" and (index == 0 or raw[index - 1] in " \t"):
             break
         out.append(char)
+        if char not in " \t":
+            previous = char
         index += 1
     if quote:
         raise YamlError("unterminated quoted string", line_number)
@@ -119,22 +129,47 @@ def _strip_comment(raw: str, line_number: int) -> str:
 
 
 def _reject_unsupported(content: str, line_number: int) -> None:
+    """Reject line-level constructs the Factory file parser does not accept.
+
+    Anchors, aliases, and tags are checked in [_parse_scalar] instead, because
+    they are only meaningful where a node begins; scanning the whole line
+    rejects ordinary prose such as "A & B" or "see *this*".
+    """
     if content.strip() in ("---", "..."):
         raise YamlError("multiple YAML documents are not permitted", line_number)
-    if re.search(r"(^|[\s:\-\[{,])&[^\s]", content):
-        raise YamlError("yaml anchors are not permitted", line_number)
-    if re.search(r"(^|[\s:\-\[{,])\*[^\s*]", content):
-        raise YamlError("yaml aliases are not permitted", line_number)
-    if re.search(r"(^|[\s:\-\[{,])!!?[A-Za-z]", content):
-        raise YamlError("explicit yaml tags are not permitted", line_number)
     if re.match(r"^\s*<<\s*:", content):
         raise YamlError("yaml merge keys are not permitted", line_number)
 
 
+def _opens_block_scalar(content: str, line_number: int) -> bool:
+    while content.startswith("- "):
+        content = content[2:].lstrip()
+    entry = _split_key(content, line_number)
+    value = entry[1] if entry is not None else content
+    return value[:1] in ("|", ">")
+
+
+def _skip_block_scalar_body(raw_lines: list[str], index: int, header_indent: int) -> int:
+    """Return the index of the first line after a block scalar's body."""
+    while index < len(raw_lines):
+        raw = raw_lines[index]
+        if raw.strip() == "":
+            index += 1
+            continue
+        if len(raw) - len(raw.lstrip(" ")) <= header_indent:
+            break
+        index += 1
+    return index
+
+
 def _read_lines(text: str) -> list[_Line]:
+    raw_lines = text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
     lines: list[_Line] = []
-    for offset, raw in enumerate(text.replace("\r\n", "\n").replace("\r", "\n").split("\n")):
-        number = offset + 1
+    index = 0
+    while index < len(raw_lines):
+        raw = raw_lines[index]
+        number = index + 1
+        index += 1
         if "\t" in raw[: len(raw) - len(raw.lstrip(" \t"))]:
             raise YamlError("tabs are not permitted for indentation", number)
         content = _strip_comment(raw, number)
@@ -142,7 +177,12 @@ def _read_lines(text: str) -> list[_Line]:
             continue
         _reject_unsupported(content, number)
         indent = len(content) - len(content.lstrip(" "))
-        lines.append(_Line(number, indent, content.strip()))
+        stripped = content.strip()
+        lines.append(_Line(number, indent, stripped))
+        # A block scalar's body is opaque text. Leaving it out of the
+        # structural line list keeps its content from being read as YAML.
+        if _opens_block_scalar(stripped, number):
+            index = _skip_block_scalar_body(raw_lines, index, indent)
     return lines
 
 
@@ -163,6 +203,10 @@ def _parse_scalar(token: str, line_number: int) -> Any:
             return json.loads(token)
         except json.JSONDecodeError as error:
             raise YamlError(f"invalid double-quoted string: {error.msg}", line_number) from error
+    if token[0] in "&*":
+        raise YamlError("yaml anchors and aliases are not permitted", line_number)
+    if token[0] == "!":
+        raise YamlError("explicit yaml tags are not permitted", line_number)
     if token in ("true", "True", "TRUE"):
         return True
     if token in ("false", "False", "FALSE"):
@@ -338,8 +382,7 @@ class _Reader:
     ) -> dict[str, Any]:
         key, value_token = entry
         mapping: dict[str, Any] = {key: self._parse_value(value_token, line_number, indent)}
-        rest = self._parse_mapping(indent, existing=mapping)
-        return rest
+        return self._parse_mapping(indent, existing=mapping)
 
     def _parse_mapping(self, indent: int, existing: dict[str, Any] | None = None) -> dict[str, Any]:
         mapping: dict[str, Any] = existing if existing is not None else {}
@@ -379,7 +422,8 @@ class _Reader:
         elif "+" in header[1:]:
             chomp = "keep"
         collected: list[str] = []
-        cursor = line_number  # raw_lines is 1-based via index arithmetic below
+        # line_number is 1-based, so it indexes the line after the header.
+        cursor = line_number
         block_indent: int | None = None
         while cursor < len(self.raw_lines):
             raw = self.raw_lines[cursor]
@@ -394,18 +438,16 @@ class _Reader:
                 block_indent = current_indent
             collected.append(raw[block_indent:])
             cursor += 1
-        # Skip the structural lines consumed by the block scalar.
-        while self.index < len(self.lines) and self.lines[self.index].number <= cursor:
-            self.index += 1
-        while collected and collected[-1] == "":
-            collected.pop()
+        if chomp != "keep":
+            while collected and collected[-1] == "":
+                collected.pop()
         if style == "|":
             text = "\n".join(collected)
         else:
             text = " ".join(part.strip() for part in collected if part.strip())
-        if chomp == "strip":
+        if chomp == "strip" or not text:
             return text
-        return text + "\n" if text else text
+        return text + "\n"
 
 
 def load_yaml(text: str) -> Any:
@@ -723,8 +765,47 @@ def validate_tree(root: Path, store: SchemaStore) -> list[Problem]:
         for message in validate_instance(parsed, schema, store, SCHEMA_BY_KIND[kind]):
             pointer, _, detail = message.partition(": ")
             problems.append(Problem(relative, detail, pointer=pointer.lstrip("/").replace("/", ".")))
+        if kind == "automation":
+            problems.extend(_matcher_conflicts(relative, parsed))
 
     problems.extend(_validate_cross_file(documents))
+    return problems
+
+
+def _matcher_conflicts(relative: str, parsed: dict[str, Any]) -> list[Problem]:
+    """Report filter values listed in both in and not_in.
+
+    Such a filter can never match, so the server rejects it rather than
+    persisting a silently dead subscription. JSON Schema cannot compare two
+    sibling arrays, so the check lives here.
+    """
+    problems: list[Problem] = []
+    triggers = parsed.get("triggers")
+    if not isinstance(triggers, list):
+        return problems
+    for index, trigger in enumerate(triggers):
+        if not isinstance(trigger, dict):
+            continue
+        declared = trigger.get("filter")
+        if not isinstance(declared, dict):
+            continue
+        for field, matcher in declared.items():
+            if not isinstance(matcher, dict):
+                continue
+            included = matcher.get("in")
+            excluded = matcher.get("not_in")
+            if not isinstance(included, list) or not isinstance(excluded, list):
+                continue
+            for value in included:
+                if value in excluded:
+                    problems.append(
+                        Problem(
+                            relative,
+                            f"{json.dumps(value)} is present in both in and not_in, "
+                            "so this filter can never match",
+                            pointer=f"triggers.{index}.filter.{field}",
+                        )
+                    )
     return problems
 
 

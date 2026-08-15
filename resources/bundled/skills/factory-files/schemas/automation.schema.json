@@ -31,13 +31,13 @@
   "allOf": [{ "$ref": "common.schema.json#/$defs/modelXorHarnessOptional" }],
   "$defs": {
     "stringMatcher": {
-      "description": "A bare array is sugar for {in: [...]}. Within a field, in matches ANY-of and not_in excludes ANY-of.",
+      "description": "A bare array is sugar for {in: [...]}. Within a field, in matches ANY-of and not_in excludes ANY-of. Null and an empty matcher impose nothing.",
       "anyOf": [
+        { "type": "null" },
         { "type": "array", "items": { "type": "string" } },
         {
           "type": "object",
           "additionalProperties": false,
-          "minProperties": 1,
           "properties": {
             "in": { "type": "array", "items": { "type": "string" } },
             "not_in": { "type": "array", "items": { "type": "string" } }
@@ -47,11 +47,11 @@
     },
     "intMatcher": {
       "anyOf": [
+        { "type": "null" },
         { "type": "array", "items": { "type": "integer" } },
         {
           "type": "object",
           "additionalProperties": false,
-          "minProperties": 1,
           "properties": {
             "in": { "type": "array", "items": { "type": "integer" } },
             "not_in": { "type": "array", "items": { "type": "integer" } }
@@ -62,11 +62,11 @@
     "scheduleIdsMatcher": {
       "description": "schedule_ids supports only the in operator: an exclusion would match every other schedule in scope.",
       "anyOf": [
+        { "type": "null" },
         { "type": "array", "items": { "type": "string" } },
         {
           "type": "object",
           "additionalProperties": false,
-          "required": ["in"],
           "properties": {
             "in": { "type": "array", "items": { "type": "string" } }
           }
@@ -117,7 +117,9 @@
       "required": ["provider", "event"],
       "additionalProperties": false,
       "properties": {
-        "provider": { "enum": ["github", "linear", "jira", "slack", "schedule"] },
+        "provider": {
+          "enum": ["github", "gitlab", "linear", "jira", "slack", "schedule", "factory"]
+        },
         "event": { "type": "string" },
         "filter": {
           "type": "object",
@@ -157,6 +159,28 @@
                   "workflow_run_completed"
                 ]
               }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": ["provider"],
+            "properties": { "provider": { "const": "gitlab" } }
+          },
+          "then": {
+            "properties": {
+              "event": { "enum": ["merge_request", "bot_mentioned"] }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": ["provider"],
+            "properties": { "provider": { "const": "factory" } }
+          },
+          "then": {
+            "properties": {
+              "event": { "enum": ["work_item_stage_changed"] }
             }
           }
         },
@@ -454,6 +478,69 @@
                 "additionalProperties": false,
                 "properties": {
                   "repos": { "$ref": "#/$defs/stringMatcher" }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": ["provider", "event"],
+            "properties": {
+              "provider": { "const": "gitlab" },
+              "event": { "const": "merge_request" }
+            }
+          },
+          "then": {
+            "properties": {
+              "filter": {
+                "additionalProperties": false,
+                "properties": {
+                  "repos": { "$ref": "#/$defs/stringMatcher" },
+                  "actions": { "$ref": "#/$defs/stringMatcher" },
+                  "base_branches": { "$ref": "#/$defs/stringMatcher" }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": ["provider", "event"],
+            "properties": {
+              "provider": { "const": "gitlab" },
+              "event": { "const": "bot_mentioned" }
+            }
+          },
+          "then": {
+            "properties": {
+              "filter": {
+                "additionalProperties": false,
+                "properties": {
+                  "repos": { "$ref": "#/$defs/stringMatcher" },
+                  "mentioned": {
+                    "$ref": "#/$defs/stringMatcher",
+                    "description": "Server-seeded. Declaring it has no effect."
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": ["provider", "event"],
+            "properties": {
+              "provider": { "const": "factory" },
+              "event": { "const": "work_item_stage_changed" }
+            }
+          },
+          "then": {
+            "properties": {
+              "filter": {
+                "additionalProperties": false,
+                "properties": {
+                  "stages": { "$ref": "#/$defs/stringMatcher" }
                 }
               }
             }

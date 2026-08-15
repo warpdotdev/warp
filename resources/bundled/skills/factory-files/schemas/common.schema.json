@@ -17,10 +17,15 @@
     "alias": {
       "type": ["string", "null"],
       "maxLength": 60,
-      "not": {
-        "pattern": "[\\u0000-\\u001F\\u0021-\\u002C\\u002F\\u003A-\\u0040\\u005B-\\u005E\\u0060\\u007B-\\u007F]"
-      },
-      "description": "Factory display handle, used as the @-mention name on integrated platforms. Letters, digits, spaces, '-', '_', and '.' only, at most 60 characters. Case is preserved; uniqueness is compared case-insensitively across the workspace."
+      "description": "Factory display handle, used as the @-mention name on integrated platforms. Letters, digits, spaces, '-', '_', and '.' only, at most 60 characters. Case is preserved; uniqueness is compared case-insensitively across the workspace.",
+      "allOf": [
+        {
+          "description": "alias may only contain letters, digits, spaces, '-', '_', and '.'",
+          "not": {
+            "pattern": "[\\u0000-\\u001F\\u0021-\\u002C\\u002F\\u003A-\\u0040\\u005B-\\u005E\\u0060\\u007B-\\u007F]"
+          }
+        }
+      ]
     },
     "credentialStrategy": {
       "enum": ["EXECUTOR", "CREATOR"],

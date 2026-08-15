@@ -90,9 +90,9 @@ fn factory_files_bundled_skill_is_always_active_and_scoped_to_authoring() {
 }
 
 /// The schemas are the contract the skill tells agents to author against, so
-/// they have to stay parseable and keep the entry points the skill names.
+/// they have to stay parseable and keep the Factory document's shape.
 #[test]
-fn factory_files_schemas_are_parseable_and_reference_each_other() {
+fn factory_files_schemas_are_parseable_and_keep_the_factory_contract() {
     let schemas_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../resources/bundled/skills/factory-files/schemas");
 

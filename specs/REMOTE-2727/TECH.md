@@ -109,7 +109,7 @@ Ship machine-readable JSON Schemas and a validator that runs them. This reverses
 
 The validator is `scripts/validate_factory_files.py` and depends on nothing but Python 3. Neither PyYAML nor `jsonschema` is reliably present in agent sandboxes, so the script carries two small readers of its own:
 
-- A restricted YAML reader accepting exactly the subset the Factory file parser accepts. Anchors, aliases, explicit tags, merge keys, duplicate keys, and multiple documents are rejected rather than interpreted, which matches the parser instead of limiting the tool. Anything it cannot read confidently is reported, never guessed.
+- A restricted YAML reader accepting exactly the subset the Factory file parser accepts. Anchors, aliases, explicit tags, merge keys, duplicate keys, and multiple documents are rejected rather than interpreted, which matches the parser instead of limiting the tool. Anything it cannot read confidently is reported, never guessed. Those constructs are recognized only where a YAML node begins, and a block scalar's body is treated as opaque text, so ordinary prose such as `It's a thing`, `A & B`, or `*emphasis*` inside a description is not mistaken for syntax.
 - A JSON Schema evaluator covering only the keywords the bundled schemas use. The schemas remain ordinary JSON Schema 2020-12 documents, so `check-jsonschema`, `ajv`, or `jsonschema` also work when available.
 
 The schemas encode what the schema language can express. Three tree-level rules cannot be expressed in a single-document schema and are implemented in the script: exactly one `MAIN`/`FOREMAN` agent, automation `agent` references resolving to a declared agent, and duplicate resource names across the flat and directory automation forms.
@@ -125,12 +125,14 @@ Eng-Platform FA owns the Factory file format, so it owns the bundled schemas. A 
 
 The schemas are hand-derived from `logic/factoryfile`, `model/types/triggers`, `model/types/runner.go`, `logic/factoryalias`, and `logic/cronspec`. They were verified against the real Go implementation: every accepted and rejected construct in the parity corpus produced the same verdict from the validator and from `factoryfile.ParseTree`, and the filter catalogue was checked against `triggers.ValidateFilter`.
 
-Nothing enforces that agreement continuously, which is the main residual risk. Generating the schemas from the Go packages is not possible in one repository: the schemas live in `warp`, the authority lives in `warp-server`. Two follow-ups close the gap, in preference order:
+Nothing enforces that agreement continuously, which is the main residual risk, and it is not theoretical. Between first drafting these schemas and self-reviewing them days later, `warp-server` had added two trigger providers (`gitlab` with `merge_request` and `bot_mentioned`, and `factory` with `work_item_stage_changed`). The schemas would have rejected valid automations until they were refreshed by re-dumping the catalogue from `triggers.EventsForProvider`.
+
+Generating the schemas from the Go packages is not possible in one repository: the schemas live in `warp`, the authority lives in `warp-server`. Two follow-ups close the gap, in preference order:
 
 1. Emit the JSON Schemas from `logic/factoryfile` in `warp-server` behind a golden test, and vendor the generated output into `warp` through a companion PR. This makes drift a build failure on the side that owns the format.
 2. Failing that, add a scheduled job that runs the bundled validator against a corpus of trees whose expected verdicts are recorded in `warp-server`, and fails when the two disagree.
 
-Until one exists, every schema-changing `warp-server` PR must link a companion `warp` PR that refreshes the schemas, or state why the change has no authoring-visible effect. This belongs in the Factory file code-owner checklist, not in an unowned reminder inside the skill.
+Until one exists, the interim mitigation is a set of notes in `warp-server` at every source the schemas mirror: the `logic/factoryfile` package doc and its field sets, `logic/factoryalias`, `logic/cronspec`, `model/types/triggers`, and the runner platform rules in `model/types/runner.go`. Each says the schemas are hand-derived, that nothing fails when they fall behind, and what to update. Every schema-changing `warp-server` PR must link a companion `warp` PR that refreshes the schemas, or state why the change has no authoring-visible effect. This belongs in the Factory file code-owner checklist too, not only in comments.
 
 The skill instructs the agent to trust the server and report a stale schema rather than work around the validator, so drift degrades to a stale warning instead of a wrong edit.
 
@@ -200,7 +202,7 @@ The schemas and validator were checked against the authoritative Go implementati
 
 - The canonical `logic/factoryfile/testdata/schema_contract` tree validates clean.
 - Every tree under `logic/factoryfile/testdata/invalid` is rejected, each with a message naming the same defect the parser reports.
-- A 61-case positive/negative corpus covering harness blocks, auth sources, inline schedules, runner platforms, alias characters, integrations, and filter keys produced the expected verdict in every case. It is committed as `script/test_factory_files_skill.py` and runs in `script/presubmit`.
+- A 68-case positive/negative corpus covering harness blocks, auth sources, inline schedules, runner platforms, alias characters, integrations, filter keys, and author prose produced the expected verdict in every case. It is committed as `script/test_factory_files_skill.py` and runs in `script/presubmit`.
 - For every parser-level case in that corpus, `factoryfile.ParseTree` produced the matching verdict.
 - Filter keys and matcher shapes were checked directly against `triggers.ValidateFilter`, including the `schedule_ids` in-only restriction.
 

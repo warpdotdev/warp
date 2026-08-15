@@ -56,6 +56,19 @@ All values are strings except `pr_numbers`, which takes integers.
 `repos` values are `owner/name`. Branch values may be written with or without a
 `refs/heads/` prefix.
 
+## gitlab
+- `merge_request` — `repos`, `actions`, `base_branches`
+- `bot_mentioned` — `repos`
+
+`mentioned` is accepted on `bot_mentioned` but the server seeds it, so declaring
+it has no effect.
+
+## factory
+- `work_item_stage_changed` — `stages`
+
+A Factory delivery is already scoped to one factory, so the stage the work item
+moved into is the only dimension worth constraining.
+
 ## linear
 - `issue_created`, `issue_labeled`, `issue_state_changed`, `issue_assigned` —
   `team_ids`, `project_ids`, `labels`, `state_ids`, `assignee_ids`,

@@ -212,6 +212,46 @@ VALID_CASES: list[tuple[str, dict[str, str]]] = [
             }
         ),
     ),
+    # Prose in a plain scalar is not a quoted string, so an apostrophe must not
+    # read as an unterminated quote.
+    (
+        "apostrophe-in-prose",
+        tree(**{"factory.yaml": FACTORY + "description: It's Warp's factory\n"}),
+    ),
+    # A block scalar's body is opaque text: emphasis, a document marker, and an
+    # ampersand are all literal there.
+    (
+        "block-scalar-prose",
+        tree(
+            **{
+                "factory.yaml": "schemaVersion: v1alpha1\nname: demo\ndescription: |\n"
+                "  It's a summary with *emphasis*\n  ---\n  A & B\n"
+                "repositories:\n  - owner: warpdotdev\n    name: warp\n"
+                "agentDefaults:\n  model: auto\n"
+            }
+        ),
+    ),
+    (
+        "gitlab-and-factory-providers",
+        tree(
+            **{
+                "automations/n/automation.md": "---\ntriggers:\n  - provider: gitlab\n"
+                "    event: merge_request\n    filter:\n      repos: [acme/platform]\n"
+                "      actions: [open]\n  - provider: factory\n"
+                "    event: work_item_stage_changed\n    filter:\n      stages: [REVIEW]\n---\nrun\n"
+            }
+        ),
+    ),
+    (
+        "empty-and-null-matchers",
+        tree(
+            **{
+                "automations/n/automation.md": "---\ntriggers:\n  - provider: github\n"
+                "    event: pull_request_opened\n    filter:\n      labels: {}\n"
+                "      authors: null\n---\nrun\n"
+            }
+        ),
+    ),
 ]
 
 INVALID_CASES: list[tuple[str, dict[str, str]]] = [
@@ -439,6 +479,33 @@ INVALID_CASES: list[tuple[str, dict[str, str]]] = [
                 "automations/dup.md": "---\ntriggers:\n  - provider: github\n    event: push\n---\nrun\n",
                 "automations/dup/automation.md": "---\ntriggers:\n  - provider: github\n"
                 "    event: push\n---\nrun\n",
+            }
+        ),
+    ),
+    (
+        "yaml-anchor",
+        tree(
+            **{
+                "factory.yaml": "schemaVersion: v1alpha1\nname: demo\nrepositories:\n  - &base\n"
+                "    owner: warpdotdev\n    name: warp\nagentDefaults:\n  model: auto\n"
+            }
+        ),
+    ),
+    (
+        "yaml-alias",
+        tree(**{"agents/main/agent.md": "---\nagentType: MAIN\nrunner: *base\n---\nx\n"}),
+    ),
+    (
+        "yaml-tag",
+        tree(**{"agents/main/agent.md": "---\nagentType: MAIN\nrunner: !!str lin\n---\nx\n"}),
+    ),
+    (
+        "matcher-in-and-not-in-conflict",
+        tree(
+            **{
+                "automations/n/automation.md": "---\ntriggers:\n  - provider: github\n"
+                "    event: pull_request_opened\n    filter:\n      labels:\n"
+                "        in: [ready]\n        not_in: [ready]\n---\nrun\n"
             }
         ),
     ),
