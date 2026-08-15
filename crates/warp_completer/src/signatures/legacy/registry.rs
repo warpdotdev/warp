@@ -18,21 +18,24 @@ pub enum SignatureResult<'a> {
 
 type SignatureLookupFn = dyn 'static + Send + Sync + Fn(&str) -> Option<Signature>;
 
-/// The longest a command name can be before we refuse to cache a lookup for it.
+/// The longest a command name can be before `get` skips resolving it against the (uncached)
+/// `lookup_fn` and instead falls back to a linear scan of already-cached signatures.
 ///
 /// `SignatureCache::get` is called with arbitrary tokens taken from the terminal input line (see
 /// `CommandRegistry::signature_from_tokens` and friends), not just tokens we already know to be
-/// real command names. Since `SignatureCache::signatures` is append-only (see its doc comment for
-/// why), every distinct token ever looked up would otherwise be cached forever, which lets a
-/// single pathologically large token (e.g. a large blob of text pasted into the terminal input
-/// line) permanently retain an equally large `String` for the lifetime of the process. See
+/// real command names. `SignatureCache::signatures` only caches successful lookups (see its doc
+/// comment for why), so a single pathologically large token (e.g. a large blob of text pasted
+/// into the terminal input line) can't grow the cache -- but lowercasing such a token on every
+/// keystroke would still be wasted work, so `get` avoids that too for tokens this long. See
 /// APP-5431.
 ///
 /// Real command names are executable names, which common filesystems cap at 255 bytes/characters
-/// (e.g. Linux `NAME_MAX`, macOS APFS/HFS+, and Windows NTFS all use this limit). No legitimate
-/// command name can exceed this, so a token longer than this cannot resolve to a real signature
-/// and is safe to skip caching (and looking up) entirely. As a sanity check, the longest name in
-/// the current embedded signature corpus is 43 characters, well under this cap.
+/// (e.g. Linux `NAME_MAX`, macOS APFS/HFS+, and Windows NTFS all use this limit), so no
+/// legitimate *dynamically resolved* command name can exceed this. An explicitly `insert`-ed
+/// signature is not subject to that constraint, which is why `get` falls back to a scan instead
+/// of simply refusing to resolve tokens this long -- that keeps such a signature retrievable. As
+/// a sanity check, the longest name in the current embedded signature corpus is 43 characters,
+/// well under this cap.
 const MAX_CACHEABLE_COMMAND_LEN: usize = 255;
 
 /// A simple structure to cache parsed command signatures.  These are stored as
@@ -44,12 +47,14 @@ struct SignatureCache {
     /// for it.  Should return None if there is no signature available for the
     /// given command.
     lookup_fn: Box<SignatureLookupFn>,
-    /// A map from command name to the signature for the command, if any.  The
-    /// use of [`MemoMap`] here allows us to safely return references to the
-    /// contained signatures (as the map internally is an append-only
-    /// structure).  This stores an `Option<Signature>` in order to also store
-    /// our knowledge of commands for which we do _not_ have a signature.
-    signatures: MemoMap<String, Option<Signature>>,
+    /// A map from (lowercased) command name to its signature. The use of [`MemoMap`] here allows
+    /// us to safely return references to the contained signatures (as the map internally is an
+    /// append-only structure). Only lookups that actually resolve to a signature are stored (see
+    /// `get`), which keeps this bounded by the number of distinct command names that can ever
+    /// resolve to something -- the fixed embedded corpus, plus any explicitly `insert`-ed
+    /// signatures -- rather than by every distinct token a user has ever typed or pasted. See
+    /// APP-5431.
+    signatures: MemoMap<String, Signature>,
 }
 
 impl SignatureCache {
@@ -66,25 +71,37 @@ impl SignatureCache {
         } else {
             command
         };
+
         if command.len() > MAX_CACHEABLE_COMMAND_LEN {
-            // No real command name can be this long (see `MAX_CACHEABLE_COMMAND_LEN`), so this
-            // can't resolve to a signature. Bail out before caching (or even looking up) it to
-            // keep the cache bounded; see APP-5431.
-            return None;
+            // Avoid allocating a lowercase copy of a pathologically large token (see
+            // `MAX_CACHEABLE_COMMAND_LEN`) by scanning the cache directly instead of hashing into
+            // it. The length comparison short-circuits before any case folding, so this stays
+            // cheap even though `command` may be huge, and it keeps an `insert`-ed signature
+            // whose name happens to exceed the cap retrievable.
+            return self
+                .signatures
+                .iter()
+                .find(|(key, _)| key.len() == command.len() && key.eq_ignore_ascii_case(command))
+                .map(|(_, signature)| signature);
         }
+
         let command = command.to_lowercase();
+        // Only cache a lookup that actually resolves to a signature. `lookup_fn` probes the
+        // embedded, already-compiled signature corpus, which is cheap even on a miss (JSON
+        // parsing only happens once we know there's a hit), so there's no need to memoize a miss
+        // just to avoid redoing that work -- and doing so is what let every distinct token a user
+        // has ever typed grow this cache forever. See APP-5431.
         self.signatures
-            .get_or_insert(&command, || (self.lookup_fn)(&command))
-            .as_ref()
+            .get_or_try_insert(command.as_str(), || (self.lookup_fn)(&command).ok_or(()))
+            .ok()
     }
 
     /// Inserts the given `Signature` into the underlying map, keyed by `Signature::name`.
     ///
-    /// If there is already a cached value for the given `Signature::name`, this is a no-op (even
-    /// if the cached value is `None`).
+    /// If there is already a cached value for the given `Signature::name`, this is a no-op.
     fn insert(&self, signature: Signature) {
         self.signatures
-            .insert(signature.name.to_lowercase(), Some(signature));
+            .insert(signature.name.to_lowercase(), signature);
     }
 }
 
@@ -149,12 +166,13 @@ impl CommandRegistry {
     pub fn registered_commands(&self) -> impl Iterator<Item = &str> {
         // Note we need to collect the keys because MemoMap uses a mutex under the hood to control
         // access to the underlying signature data. This means the mutex is locked as long as the
-        // iterator returned from `keys()` lives, which means we need to collect keys into a vec
-        // and return an owned iterator.
+        // iterator returned from `iter()` lives, which means we need to collect keys into a vec
+        // and return an owned iterator. Every entry in `signatures` corresponds to a real
+        // signature (see its doc comment), so no filtering is needed here.
         self.signatures
             .signatures
             .iter()
-            .filter_map(|(key, signature)| signature.as_ref().map(|_| key.as_str()))
+            .map(|(key, _)| key.as_str())
             .collect::<Vec<_>>()
             .into_iter()
     }

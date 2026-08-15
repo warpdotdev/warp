@@ -1,7 +1,24 @@
+use warp_command_signatures::{Priority, Signature};
+
 use crate::completer::testing::FakeCompletionContext;
 use crate::completer::{CompletionContext, TopLevelCommandCaseSensitivity};
 use crate::signatures::registry::{MAX_CACHEABLE_COMMAND_LEN, SignatureResult};
 use crate::signatures::testing::{create_test_command_registry, test_signature};
+
+/// A minimal signature with the given `name`, for exercising `SignatureCache` boundary
+/// conditions that don't care about arguments, subcommands, or options.
+fn signature_with_name(name: &str) -> Signature {
+    Signature {
+        name: name.to_string(),
+        alias_generator: None,
+        description: None,
+        arguments: None,
+        subcommands: None,
+        options: None,
+        priority: Priority::default(),
+        parser_directives: Default::default(),
+    }
+}
 
 #[test]
 fn test_find_command_from_a_top_level_signature() {
@@ -208,7 +225,7 @@ fn test_alias_expansion_path_skips_flag_with_value_before_subcommand() {
 fn test_oversized_command_is_not_cached_and_resolves_to_none() {
     // Regression test for APP-5431: a pathologically large single "command" token (e.g. a large
     // blob of text pasted into the terminal input line) must not grow the (append-only)
-    // SignatureCache.
+    // SignatureCache, and doesn't match any registered signature.
     let registry = create_test_command_registry([test_signature()]);
     let len_before = registry.signatures.signatures.len();
 
@@ -219,52 +236,63 @@ fn test_oversized_command_is_not_cached_and_resolves_to_none() {
         len_before,
         "looking up an oversized command should not add an entry to the cache"
     );
+}
 
-    // A command name right at the cap is still a legitimate lookup and should be cached as usual
-    // (as a negative-cache entry here, since it doesn't match any registered signature).
-    let max_length_command = "a".repeat(MAX_CACHEABLE_COMMAND_LEN);
-    assert_eq!(registry.signature(&max_length_command), None);
-    assert_eq!(registry.signatures.signatures.len(), len_before + 1);
+#[test]
+fn test_misses_are_never_cached() {
+    // Regression test for APP-5431: the cache only grows via successful lookups (see
+    // `SignatureCache::signatures`'s doc comment), so a command that never resolves to a
+    // signature must not add an entry, however many times it's looked up.
+    let registry = create_test_command_registry([test_signature()]);
+    let len_before = registry.signatures.signatures.len();
+
+    assert_eq!(registry.signature("not-a-real-command"), None);
+    assert_eq!(registry.signature("not-a-real-command"), None);
+    assert_eq!(registry.signatures.signatures.len(), len_before);
 }
 
 #[test]
 fn test_ordinary_commands_still_resolve_and_are_cached() {
     let registry = create_test_command_registry([test_signature()]);
 
-    // A registered command resolves correctly, case-insensitively, and repeated lookups hit the
-    // same cached entry rather than growing the cache.
+    // A registered command resolves correctly, case-insensitively.
     let found = registry.signature("TEST");
     assert_eq!(found.map(|s| s.name.as_str()), Some("test"));
-    let len_after_positive_lookup = registry.signatures.signatures.len();
-    assert_eq!(registry.signature("test"), found);
-    assert_eq!(
-        registry.signatures.signatures.len(),
-        len_after_positive_lookup
-    );
 
-    // Negative lookups are cached too, as before: the first miss adds an entry, and repeating it
-    // hits that cached entry rather than growing the cache further.
-    let len_before_negative_lookup = registry.signatures.signatures.len();
-    assert_eq!(registry.signature("not-a-real-command"), None);
+    // Repeated lookups hit the same cached entry rather than growing the cache.
+    let len_after_first_lookup = registry.signatures.signatures.len();
+    assert_eq!(registry.signature("test"), found);
+    assert_eq!(registry.signatures.signatures.len(), len_after_first_lookup);
+}
+
+#[test]
+fn test_registered_signature_longer_than_the_cap_still_resolves() {
+    // Regression test for APP-5431 (review finding): an explicitly registered signature must
+    // stay retrievable through `signature()` even if its name exceeds `MAX_CACHEABLE_COMMAND_LEN`
+    // -- the cap only governs whether a *dynamic* (uncached) lookup is attempted, not whether an
+    // already-registered signature can be found.
+    let long_name = "a".repeat(MAX_CACHEABLE_COMMAND_LEN + 1);
+    let registry = create_test_command_registry([signature_with_name(&long_name)]);
+
     assert_eq!(
-        registry.signatures.signatures.len(),
-        len_before_negative_lookup + 1
-    );
-    assert_eq!(registry.signature("not-a-real-command"), None);
-    assert_eq!(
-        registry.signatures.signatures.len(),
-        len_before_negative_lookup + 1
+        registry.signature(&long_name).map(|s| s.name.as_str()),
+        Some(long_name.as_str())
     );
 }
 
 #[cfg(windows)]
 #[test]
 fn test_exe_suffix_is_trimmed_before_the_length_check() {
-    let registry = create_test_command_registry([test_signature()]);
+    // Regression test for APP-5431 (review finding): the ".exe" suffix must be trimmed *before*
+    // the length check runs. A command name exactly at the cap, looked up with ".exe" appended
+    // (so the raw token exceeds the cap), must still resolve via the normal lookup path.
+    let max_length_name = "a".repeat(MAX_CACHEABLE_COMMAND_LEN);
+    let registry = create_test_command_registry([signature_with_name(&max_length_name)]);
 
+    let token = format!("{max_length_name}.exe");
     assert_eq!(
-        registry.signature("test.exe").map(|s| s.name.as_str()),
-        Some("test")
+        registry.signature(&token).map(|s| s.name.as_str()),
+        Some(max_length_name.as_str())
     );
 }
 
