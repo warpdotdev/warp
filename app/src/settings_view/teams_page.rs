@@ -113,6 +113,11 @@ const INVALID_DOMAINS_INSTRUCTIONS: &str =
 const INVITE_LINK_TOGGLE_INSTRUCTIONS: &str = "As an admin, you can choose whether to enable or disable the ability for team members to invite others by invitation link.";
 const INVITE_LINK_DOMAIN_RESTRICTIONS_INSTRUCTIONS: &str = "Restrict by domain — only allow users with emails at specific domains to join your team through the invite link.";
 
+// `Team.inviteLink` is null exactly when invite links are disabled for the team
+// (a distinct, non-error state from a failed request), so the copy names that
+// directly rather than reading as a generic failure.
+const INVITE_LINK_DISABLED_TEXT: &str = "Invite links are turned off for this team.";
+
 const INVITE_BY_EMAIL_EXPIRY_INSTRUCTIONS: &str = "Email invitations are valid for 7 days.";
 const INVALID_EMAILS_INSTRUCTIONS: &str =
     "Some of the provided email addresses are invalid, already invited, or members of the team.";
@@ -3746,7 +3751,7 @@ impl TeamsWidget {
 
         let (link_text, button_enabled) = match &team_metadata.invite_link {
             Some(invite_link) => (invite_link.clone(), true),
-            None => ("Failed to load invite link.".into(), false),
+            None => (INVITE_LINK_DISABLED_TEXT.into(), false),
         };
         let theme = appearance.theme();
 
