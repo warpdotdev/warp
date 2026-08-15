@@ -559,6 +559,23 @@ pub struct RunCloudArgs {
     #[arg(long = "name", short = 'n')]
     pub name: Option<String>,
 
+    /// Title for this agent task and its conversation.
+    ///
+    /// Unlike `--name`, which sets the agent configuration name, `--title`
+    /// controls the task and conversation title shown for the run. When
+    /// spawning a factory sibling, pass the child task title here.
+    #[arg(long = "title", value_name = "TITLE")]
+    pub title: Option<String>,
+
+    /// Run ID of the parent run that is spawning this run.
+    ///
+    /// Setting this makes the new run an orchestration child of the given
+    /// parent: it inherits the parent's lineage (depth, root run) and scope,
+    /// is attributed to the ORCHESTRATION source, and is tracked on the parent
+    /// run. Pass the current run ID when a factory foreman spawns a sibling.
+    #[arg(long = "parent-run-id", value_name = "RUN_ID")]
+    pub parent_run_id: Option<String>,
+
     /// MCP servers to start before executing the agent.
     ///
     /// Can be specified as:
