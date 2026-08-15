@@ -7,10 +7,10 @@ Usage:
 FACTORY_ROOT defaults to the current directory and must contain factory.yaml.
 
 The script is intentionally dependency-free: it ships a restricted YAML reader
-that accepts exactly the subset the Factory file parser accepts (no anchors,
-aliases, explicit tags, or multiple documents) and a JSON Schema evaluator
-covering the keywords the bundled schemas use. Anything it cannot read
-confidently is reported rather than guessed at.
+for the canonical forms this skill emits (no anchors, aliases, explicit tags,
+or multiple documents) and a JSON Schema evaluator covering the keywords the
+bundled schemas use. It is not a general-purpose YAML implementation. Anything
+it cannot read confidently is reported rather than guessed at.
 
 It does not replace server-side validation. Provider catalogues, model IDs,
 environment IDs, secret names, and runner references are resolved by the
@@ -21,10 +21,12 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import sys
+import unicodedata
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 SCHEMA_BY_KIND = {
     "factory": "factory.schema.json",
@@ -39,7 +41,7 @@ MAIN_AGENT_TYPES = {"MAIN", "FOREMAN"}
 class Problem:
     """One validation failure, located as precisely as the input allows."""
 
-    def __init__(self, path: str, message: str, line: int | None = None, pointer: str = ""):
+    def __init__(self, path: str, message: str, line: Optional[int] = None, pointer: str = ""):
         self.path = path
         self.message = message
         self.line = line
@@ -92,7 +94,7 @@ _VALUE_START_CHARS = ":,[{-"
 def _strip_comment(raw: str, line_number: int) -> str:
     """Remove a trailing comment, honoring quoted scalars."""
     out: list[str] = []
-    quote: str | None = None
+    quote: Optional[str] = None
     previous = ""
     index = 0
     while index < len(raw):
@@ -190,15 +192,18 @@ _INT_RE = re.compile(r"^[-+]?[0-9]+$")
 _HEX_RE = re.compile(r"^[-+]?0x[0-9a-fA-F]+$")
 _OCT_RE = re.compile(r"^[-+]?0o[0-7]+$")
 _FLOAT_RE = re.compile(r"^[-+]?(\.[0-9]+|[0-9]+(\.[0-9]*)?)([eE][-+]?[0-9]+)?$")
+_YAML_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:[ \t]*(?:Z|[-+]\d{1,2}(?::\d{2})?))?)?$")
 
 
 def _parse_scalar(token: str, line_number: int) -> Any:
     token = token.strip()
     if token == "" or token == "~" or token in ("null", "Null", "NULL"):
         return None
-    if token.startswith("'") and token.endswith("'") and len(token) >= 2:
+    if token.startswith("'"):
+        if not token.endswith("'") or len(token) < 2:
+            raise YamlError("invalid single-quoted string", line_number)
         return token[1:-1].replace("''", "'")
-    if token.startswith('"') and token.endswith('"') and len(token) >= 2:
+    if token.startswith('"'):
         try:
             return json.loads(token)
         except json.JSONDecodeError as error:
@@ -219,12 +224,16 @@ def _parse_scalar(token: str, line_number: int) -> Any:
         return int(token, 8)
     if _FLOAT_RE.match(token):
         return float(token)
+    if _YAML_DATE_RE.match(token):
+        raise YamlError("timestamps must be quoted so YAML keeps them as strings", line_number)
+    if token.lower() in {".inf", "+.inf", "-.inf", ".nan"}:
+        raise YamlError("non-finite YAML numbers are not permitted", line_number)
     return token
 
 
-def _split_key(content: str, line_number: int) -> tuple[str, str] | None:
+def _split_key(content: str, line_number: int) -> Optional[tuple[str, str]]:
     """Split `key: value`, honoring quoted keys. Returns None when absent."""
-    quote: str | None = None
+    quote: Optional[str] = None
     index = 0
     while index < len(content):
         char = content[index]
@@ -341,7 +350,7 @@ class _Reader:
         self.raw_lines = raw_lines
         self.index = 0
 
-    def peek(self) -> _Line | None:
+    def peek(self) -> Optional[_Line]:
         return self.lines[self.index] if self.index < len(self.lines) else None
 
     def parse_block(self, indent: int) -> Any:
@@ -384,7 +393,9 @@ class _Reader:
         mapping: dict[str, Any] = {key: self._parse_value(value_token, line_number, indent)}
         return self._parse_mapping(indent, existing=mapping)
 
-    def _parse_mapping(self, indent: int, existing: dict[str, Any] | None = None) -> dict[str, Any]:
+    def _parse_mapping(
+        self, indent: int, existing: Optional[dict[str, Any]] = None
+    ) -> dict[str, Any]:
         mapping: dict[str, Any] = existing if existing is not None else {}
         while True:
             line = self.peek()
@@ -424,7 +435,7 @@ class _Reader:
         collected: list[str] = []
         # line_number is 1-based, so it indexes the line after the header.
         cursor = line_number
-        block_indent: int | None = None
+        block_indent: Optional[int] = None
         while cursor < len(self.raw_lines):
             raw = self.raw_lines[cursor]
             if raw.strip() == "":
@@ -546,7 +557,23 @@ _SUPPORTED_KEYWORDS = frozenset(
         "else",
     }
 )
-_ANNOTATION_KEYWORDS = frozenset({"$schema", "$id", "$defs", "$comment", "title", "description"})
+_ANNOTATION_KEYWORDS = frozenset(
+    {
+        "$schema",
+        "$id",
+        "$defs",
+        "$comment",
+        "title",
+        "description",
+        "x-warp-character-class",
+        "x-warp-max-trimmed-runes",
+    }
+)
+
+
+
+def _matches_pattern(pattern: str, value: str) -> bool:
+    return re.search(pattern, value) is not None
 
 
 def _describe(value: Any) -> str:
@@ -605,7 +632,7 @@ def validate_instance(
             errors.append(f"{pointer or '/'}: {detail}")
         if "maxLength" in schema and len(instance) > schema["maxLength"]:
             errors.append(f"{pointer or '/'}: must be at most {schema['maxLength']} characters")
-        if "pattern" in schema and not re.search(schema["pattern"], instance):
+        if "pattern" in schema and not _matches_pattern(schema["pattern"], instance):
             errors.append(f"{pointer or '/'}: {json.dumps(instance)} does not match the required format")
 
     if isinstance(instance, (int, float)) and not isinstance(instance, bool):
@@ -752,6 +779,20 @@ def classify(relative: str) -> tuple[str, str]:
 def _valid_name(name: str) -> bool:
     return name not in ("", ".", "..") and "/" not in name
 
+def _resource_files(root: Path) -> list[Path]:
+    files = [root / "factory.yaml"]
+    for directory_name in ("agents", "automations", "runners"):
+        resource_root = root / directory_name
+        if not resource_root.is_dir():
+            continue
+        for directory, child_directories, filenames in os.walk(resource_root):
+            relative_directory = Path(directory).relative_to(root)
+            parts = relative_directory.parts
+            if directory_name == "agents" and len(parts) == 2:
+                child_directories[:] = [name for name in child_directories if name != "skills"]
+            files.extend(Path(directory) / filename for filename in filenames)
+    return sorted(files)
+
 
 def validate_tree(root: Path, store: SchemaStore) -> list[Problem]:
     problems: list[Problem] = []
@@ -761,9 +802,7 @@ def validate_tree(root: Path, store: SchemaStore) -> list[Problem]:
     if not (root / "factory.yaml").is_file():
         return [Problem("factory.yaml", "factory.yaml is required at the Factory root")]
 
-    for absolute in sorted(root.rglob("*")):
-        if not absolute.is_file():
-            continue
+    for absolute in _resource_files(root):
         relative = absolute.relative_to(root).as_posix()
         kind, name = classify(relative)
         if kind in ("unrelated", "skill"):
@@ -786,7 +825,11 @@ def validate_tree(root: Path, store: SchemaStore) -> list[Problem]:
                 continue
             seen_names[(kind, name)] = relative
 
-        text = absolute.read_text(encoding="utf-8")
+        try:
+            text = absolute.read_text(encoding="utf-8")
+        except (OSError, UnicodeError) as error:
+            problems.append(Problem(relative, f"could not read UTF-8 resource: {error}"))
+            continue
         offset = 0
         try:
             if kind in ("agent", "automation"):
@@ -810,13 +853,169 @@ def validate_tree(root: Path, store: SchemaStore) -> list[Problem]:
             pointer, _, detail = message.partition(": ")
             problems.append(Problem(relative, detail, pointer=pointer.lstrip("/").replace("/", ".")))
         if kind == "automation":
-            problems.extend(_matcher_conflicts(relative, parsed))
+            problems.extend(_automation_semantics(relative, parsed))
+        elif kind == "factory":
+            problems.extend(_factory_semantics(relative, parsed))
+        elif kind == "runner":
+            problems.extend(_runner_semantics(relative, parsed))
 
     problems.extend(_validate_cross_file(documents))
     return problems
 
 
-def _matcher_conflicts(relative: str, parsed: dict[str, Any]) -> list[Problem]:
+def _factory_semantics(relative: str, parsed: dict[str, Any]) -> list[Problem]:
+    problems: list[Problem] = []
+    alias = parsed.get("alias")
+    if isinstance(alias, str):
+        normalized_alias = alias.strip()
+        if len(normalized_alias) > 60:
+            problems.append(Problem(relative, "alias must not exceed 60 characters", pointer="alias"))
+        if any(
+            unicodedata.category(character)[:1] not in {"L", "N"} and character not in " _.-"
+            for character in normalized_alias
+        ):
+            problems.append(
+                Problem(
+                    relative,
+                    "alias may only contain letters, digits, spaces, '-', '_', and '.'",
+                    pointer="alias",
+                )
+            )
+
+    secrets = parsed.get("secrets")
+    if isinstance(secrets, list):
+        normalized = [value.strip() for value in secrets if isinstance(value, str)]
+        if len(set(normalized)) != len(normalized):
+            problems.append(
+                Problem(relative, "secret names must be unique after trimming", pointer="secrets")
+            )
+
+    repositories = parsed.get("repositories")
+    if isinstance(repositories, list):
+        seen: set[tuple[str, str]] = set()
+        for index, repository in enumerate(repositories):
+            if not isinstance(repository, dict):
+                continue
+            owner, name = repository.get("owner"), repository.get("name")
+            if not isinstance(owner, str) or not isinstance(name, str):
+                continue
+            key = (owner.strip(), name.strip())
+            if key in seen:
+                problems.append(
+                    Problem(
+                        relative,
+                        f"duplicate repository {key[0]}/{key[1]} after trimming",
+                        pointer=f"repositories.{index}",
+                    )
+                )
+            seen.add(key)
+    return problems
+
+
+def _runner_semantics(relative: str, parsed: dict[str, Any]) -> list[Problem]:
+    shape = parsed.get("instanceShape")
+    platform = parsed.get("platform")
+    os_name = platform.get("os", "linux") if isinstance(platform, dict) else "linux"
+    if os_name != "linux" or not isinstance(shape, dict):
+        return []
+    problems: list[Problem] = []
+    for field in ("vcpus", "memoryGb"):
+        value = shape.get(field)
+        if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+            if value & (value - 1):
+                problems.append(
+                    Problem(
+                        relative,
+                        f"{field} must be a power of two for Linux runners",
+                        pointer=f"instanceShape.{field}",
+                    )
+                )
+    return problems
+
+
+_CRON_DESCRIPTORS = {
+    "@yearly",
+    "@annually",
+    "@monthly",
+    "@weekly",
+    "@daily",
+    "@midnight",
+    "@hourly",
+}
+_DURATION_RE = re.compile(
+    r"^[+-]?(?:0|(?:(?:\d+(?:\.\d*)?|\.\d+)(?:ns|us|µs|μs|ms|s|m|h))+)$"
+)
+_MONTH_NAMES = {
+    "jan": 1,
+    "feb": 2,
+    "mar": 3,
+    "apr": 4,
+    "may": 5,
+    "jun": 6,
+    "jul": 7,
+    "aug": 8,
+    "sep": 9,
+    "oct": 10,
+    "nov": 11,
+    "dec": 12,
+}
+_DAY_NAMES = {"sun": 0, "mon": 1, "tue": 2, "wed": 3, "thu": 4, "fri": 5, "sat": 6}
+
+
+def _cron_number(value: str, names: Optional[dict[str, int]]) -> Optional[int]:
+    if names is not None and value.lower() in names:
+        return names[value.lower()]
+    if not re.fullmatch(r"\d+", value):
+        return None
+    return int(value)
+
+
+def _valid_cron_field(
+    field: str, minimum: int, maximum: int, names: Optional[dict[str, int]] = None
+) -> bool:
+    for expression in filter(None, field.split(",")):
+        parts = expression.split("/")
+        if len(parts) > 2:
+            return False
+        base = parts[0]
+        if len(parts) == 2 and (not parts[1].isdigit() or int(parts[1]) == 0):
+            return False
+        if base in {"*", "?"}:
+            continue
+        bounds = base.split("-")
+        if len(bounds) > 2:
+            return False
+        start = _cron_number(bounds[0], names)
+        end = _cron_number(bounds[-1], names)
+        if start is None or end is None:
+            return False
+        if start < minimum or end > maximum or start > end:
+            return False
+    return bool(field)
+
+
+def _valid_cron(expression: str) -> bool:
+    expression = expression.strip()
+    if expression in _CRON_DESCRIPTORS:
+        return True
+    if expression.startswith("@every "):
+        return _DURATION_RE.fullmatch(expression[len("@every ") :]) is not None
+    fields = expression.split()
+    if len(fields) != 5:
+        return False
+    return all(
+        validator
+        for validator in (
+            _valid_cron_field(fields[0], 0, 59),
+            _valid_cron_field(fields[1], 0, 23),
+            _valid_cron_field(fields[2], 1, 31),
+            _valid_cron_field(fields[3], 1, 12, _MONTH_NAMES),
+            _valid_cron_field(fields[4], 0, 6, _DAY_NAMES),
+        )
+    )
+
+
+def _automation_semantics(relative: str, parsed: dict[str, Any]) -> list[Problem]:
     """Report filter values listed in both in and not_in.
 
     Such a filter can never match, so the server rejects it rather than
@@ -827,12 +1026,39 @@ def _matcher_conflicts(relative: str, parsed: dict[str, Any]) -> list[Problem]:
     triggers = parsed.get("triggers")
     if not isinstance(triggers, list):
         return problems
+    schedule_keys: set[str] = set()
     for index, trigger in enumerate(triggers):
         if not isinstance(trigger, dict):
             continue
+        schedule = trigger.get("schedule")
+        if isinstance(schedule, dict):
+            name = schedule.get("name")
+            normalized_name = name.strip() if isinstance(name, str) else ""
+            key = f"name:{normalized_name}" if normalized_name else "unnamed"
+            if key in schedule_keys:
+                detail = (
+                    f'duplicate inline schedule name "{normalized_name}"'
+                    if normalized_name
+                    else "at most one inline schedule may omit name"
+                )
+                problems.append(
+                    Problem(relative, detail, pointer=f"triggers.{index}.schedule")
+                )
+            schedule_keys.add(key)
+            cron = schedule.get("cron")
+            if isinstance(cron, str) and not _valid_cron(cron):
+                problems.append(
+                    Problem(
+                        relative,
+                        f"invalid cron expression {json.dumps(cron)}",
+                        pointer=f"triggers.{index}.schedule.cron",
+                    )
+                )
+
         declared = trigger.get("filter")
         if not isinstance(declared, dict):
             continue
+        provider, event = trigger.get("provider"), trigger.get("event")
         for field, matcher in declared.items():
             if not isinstance(matcher, dict):
                 continue
@@ -840,17 +1066,57 @@ def _matcher_conflicts(relative: str, parsed: dict[str, Any]) -> list[Problem]:
             excluded = matcher.get("not_in")
             if not isinstance(included, list) or not isinstance(excluded, list):
                 continue
+            normalize = _matcher_normalizer(provider, event, field)
+            excluded_keys = {normalize(value) for value in excluded}
             for value in included:
-                if value in excluded:
+                if normalize(value) in excluded_keys:
                     problems.append(
                         Problem(
                             relative,
-                            f"{json.dumps(value)} is present in both in and not_in, "
+                            f"{json.dumps(value)} is present in, or equivalent to a value in, "
+                            "both in and not_in, "
                             "so this filter can never match",
                             pointer=f"triggers.{index}.filter.{field}",
                         )
                     )
     return problems
+
+
+def _matcher_normalizer(provider: Any, event: Any, field: str):
+    lowercase_fields: set[tuple[str, str]] = {
+        ("github", "assignees"),
+        ("github", "authors"),
+        ("github", "mentioned"),
+        ("github", "reviewers"),
+        ("github", "reviewer_teams"),
+        ("github", "review_states"),
+        ("github", "conclusions"),
+        ("github", "workflows"),
+        ("gitlab", "repos"),
+        ("gitlab", "actions"),
+        ("gitlab", "mentioned"),
+        ("linear", "mentioned_user_ids"),
+        ("linear", "labels"),
+    }
+
+    def normalize(value: Any) -> Any:
+        if not isinstance(value, str):
+            return value
+        if provider == "github" and event == "push" and field == "branches":
+            return value[len("refs/heads/") :] if value.startswith("refs/heads/") else value
+        if provider == "slack" and field == "emojis":
+            emoji = value.strip().strip(":")
+            skin_tone = emoji.find("::skin-tone-")
+            if skin_tone >= 0:
+                emoji = emoji[:skin_tone]
+            return emoji.lower()
+        if field == "keywords" and provider in {"linear", "slack", "jira"}:
+            return value.strip().lower()
+        if (provider, field) in lowercase_fields:
+            return value.lower()
+        return value
+
+    return normalize
 
 
 def _validate_cross_file(documents: dict[str, tuple[str, str, Any]]) -> list[Problem]:

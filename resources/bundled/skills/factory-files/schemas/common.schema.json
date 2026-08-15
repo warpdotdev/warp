@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://warp.dev/schemas/factory-files/v1alpha1/common.schema.json",
+  "$id": "common.schema.json",
   "title": "Shared Factory file definitions (v1alpha1)",
   "description": "Definitions shared by factory.yaml, agent frontmatter, automation frontmatter, and runner YAML.",
   "$defs": {
@@ -10,29 +10,32 @@
       "pattern": "\\S",
       "description": "A string that is non-empty after trimming surrounding whitespace."
     },
+    "nullableNonEmptyString": {
+      "type": ["string", "null"],
+      "if": { "type": "string" },
+      "then": {
+        "minLength": 1,
+        "pattern": "\\S"
+      },
+      "description": "A non-empty string override, or null to inherit."
+    },
     "clearableString": {
       "type": ["string", "null"],
       "description": "A string override. Null or empty explicitly clears an inherited value; omitting the field inherits it."
     },
     "alias": {
       "type": ["string", "null"],
-      "maxLength": 60,
       "description": "Factory display handle, used as the @-mention name on integrated platforms. Letters, digits, spaces, '-', '_', and '.' only, at most 60 characters. Case is preserved; uniqueness is compared case-insensitively across the workspace.",
-      "allOf": [
-        {
-          "description": "alias may only contain letters, digits, spaces, '-', '_', and '.'",
-          "not": {
-            "pattern": "[\\u0000-\\u001F\\u0021-\\u002C\\u002F\\u003A-\\u0040\\u005B-\\u005E\\u0060\\u007B-\\u007F]"
-          }
-        }
-      ]
+      "x-warp-character-class": "unicode-letters-numbers-space-dot-underscore-hyphen",
+      "x-warp-max-trimmed-runes": 60
     },
     "credentialStrategy": {
-      "enum": ["EXECUTOR", "CREATOR"],
+      "enum": [null, "EXECUTOR", "CREATOR"],
       "description": "Whose credentials a run executes with. Omit to leave the value already stored on the server untouched."
     },
     "agentType": {
       "enum": [
+        null,
         "CUSTOM",
         "MAIN",
         "FOREMAN",
@@ -106,10 +109,10 @@
       "additionalProperties": false,
       "properties": {
         "type": {
-          "enum": ["oz", "claude", "claude-code", "codex", "gemini"],
+          "enum": [null, "oz", "claude", "claude-code", "codex", "gemini"],
           "description": "Harness config name. claude-code is an accepted alias for claude."
         },
-        "model": { "$ref": "#/$defs/clearableString" },
+        "model": { "$ref": "#/$defs/nullableNonEmptyString" },
         "reasoningLevel": {
           "$ref": "#/$defs/clearableString",
           "description": "Not supported by the oz harness."
@@ -134,8 +137,14 @@
         { "$ref": "#/$defs/harnessCommonProperties" },
         {
           "anyOf": [
-            { "required": ["type"] },
-            { "required": ["model"] },
+            {
+              "required": ["type"],
+              "properties": { "type": { "type": "string" } }
+            },
+            {
+              "required": ["model"],
+              "properties": { "model": { "type": "string" } }
+            },
             { "required": ["reasoningLevel"] },
             { "required": ["auth"] }
           ]
@@ -146,7 +155,15 @@
     "harnessDefault": {
       "allOf": [
         { "$ref": "#/$defs/harnessCommonProperties" },
-        { "required": ["type", "model"] }
+        {
+          "required": ["type", "model"],
+          "properties": {
+            "type": {
+              "enum": ["oz", "claude", "claude-code", "codex", "gemini"]
+            },
+            "model": { "$ref": "#/$defs/nonEmptyString" }
+          }
+        }
       ],
       "description": "Factory-level harness default. Both type and model are required."
     },
@@ -161,17 +178,21 @@
       "not": { "required": ["model", "harness"] },
       "description": "model and harness are mutually exclusive."
     },
-    "ozModelShorthand": {
+    "ozModelDefault": {
       "$ref": "#/$defs/nonEmptyString",
       "description": "Oz model ID. Shorthand for harness: {type: oz, model: <id>}. Mutually exclusive with harness."
     },
+    "ozModelOverride": {
+      "$ref": "#/$defs/nullableNonEmptyString",
+      "description": "Oz model ID, or null to inherit. Shorthand for harness: {type: oz, model: <id>}. Mutually exclusive with harness."
+    },
     "runnerRef": {
-      "$ref": "#/$defs/nonEmptyString",
-      "description": "Name of a runner declared under runners/<name>.yaml."
+      "$ref": "#/$defs/nullableNonEmptyString",
+      "description": "Name of a runner declared under runners/<name>.yaml, or null to inherit."
     },
     "environmentId": {
-      "$ref": "#/$defs/nonEmptyString",
-      "description": "Cloud environment ID the run executes in."
+      "$ref": "#/$defs/nullableNonEmptyString",
+      "description": "Cloud environment ID the run executes in, or null to inherit."
     },
     "workerHost": {
       "$ref": "#/$defs/clearableString",

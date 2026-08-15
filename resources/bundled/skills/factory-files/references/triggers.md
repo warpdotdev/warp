@@ -30,8 +30,10 @@ labels:
 ```
 
 A value present in both `in` and `not_in` is rejected: the filter could never
-match. `schedule_ids` supports only `in`, because excluding one schedule would
-match every other schedule in scope.
+match. Some fields compare canonical forms too — for example, case-insensitive
+usernames or emoji names — so equivalent values can conflict even when their
+source spelling differs. `schedule_ids` supports only `in`, because excluding
+one schedule would match every other schedule in scope.
 
 All values are strings except `pr_numbers`, which takes integers.
 
@@ -129,7 +131,8 @@ to every schedule delivery for the team.
 ### Inline schedules
 - `cron` — a standard five-field expression or a descriptor (`@daily`,
   `@hourly`, `@every 1h`). Always interpreted in UTC, so a `CRON_TZ=` or `TZ=`
-  prefix is rejected, as is the six-field form carrying seconds.
+  prefix is rejected, as is the six-field form carrying seconds. Field ranges,
+  lists, steps, and month/day names follow the server's robfig/cron grammar.
 - `name` — the declaration's stable identity within its automation. Editing
   `cron` under an unchanged `name` updates the running schedule in place;
   changing `name` replaces it. At most one inline schedule per automation may

@@ -17,10 +17,12 @@ Required: `schemaVersion`, `name`, `repositories`, `agentDefaults`.
 - `description` — free text.
 - `alias` — display handle, used as the factory's @-mention name on integrated
   platforms. Letters, digits, spaces, `-`, `_`, `.`; at most 60 characters.
+  The server trims surrounding whitespace before counting and storing it.
   Case is preserved; uniqueness is compared case-insensitively across the
   workspace. There is no lowercase or hyphenation requirement.
 - `credentialStrategy` — `EXECUTOR` or `CREATOR`. Omitting it leaves the value
   already stored on the server untouched; it does not reset to a default.
+  Explicit null has the same undeclared meaning.
 - `repositories` — at least one `{owner, name}` pair, no other keys, no
   duplicates.
 - `secrets` — list of managed secret names. Duplicates are rejected here.
@@ -49,10 +51,10 @@ file with empty frontmatter is valid. The Markdown body is the agent's prompt.
   `REVIEW`, `VERIFY`. `MAIN` is an authoring alias for `FOREMAN`. Omitting it
   resolves to `CUSTOM`. Exactly one agent in the tree must be `MAIN`/`FOREMAN`.
 - `credentialStrategy` — as above.
-- `model` / `harness` — mutually exclusive override.
+- `model` / `harness` — mutually exclusive override. Null `model` inherits.
 - `runner` — a runner name. It may name a runner declared under `runners/`, or
-  an existing team runner that the tree does not declare.
-- `environmentId`
+  an existing team runner that the tree does not declare. Null inherits.
+- `environmentId` — null inherits.
 - `secrets` — replaces the inherited list.
 - `mcpServers` — replaces the inherited map.
 - `workerHost` — self-hosted worker host. Null or empty clears an inherited
@@ -74,16 +76,19 @@ apply-time platform validation makes some effectively required.
 
 - `description`
 - `setupCommands` — list of shell commands.
-- `instanceShape` — `{vcpus, memoryGb}`. Linux requires both to be powers of
-  two. macOS accepts only `4/7`, `6/14`, `8/14`, `12/28`, and `12/56`.
+- `instanceShape` — when present, both `vcpus` and `memoryGb` are required.
+  Linux requires both to be positive powers of two, with no format-level upper
+  bound. macOS accepts only `4/7`, `6/14`, `8/14`, `12/28`, and `12/56`.
 - `platform.os` — `linux` or `macos`, defaulting to `linux`.
 - `platform.arch` — `x86_64` or `aarch64`, defaulting to `x86_64` on Linux and
   `aarch64` on macOS. Supported pairs are `linux/x86_64`, `linux/aarch64`, and
   `macos/aarch64`.
 - `platform.linux.dockerImage` — required for every Linux runner, including one
   that only defaults to Linux by omitting `platform.os`.
-- `platform.mac.version` — `14`, `15`, `26`, or `27`, defaulting to `26`. Quote
-  it so YAML keeps it a string. Only valid on macOS.
+- `platform.mac.version` — `14`, `15`, `26`, or `27`. The whole `mac` section
+  may be omitted, which defaults the version to `26`; if the section is
+  present, `version` is required. Quote it so YAML keeps it a string. Only
+  valid on macOS.
 
 ## The harness block
 `model: <id>` is shorthand for `harness: {type: oz, model: <id>}`. Declaring
@@ -91,7 +96,8 @@ both `model` and `harness` is an error at every level.
 
 - `harness.type` — `oz`, `claude` (`claude-code` is also accepted), `codex`,
   or `gemini`.
-- `harness.model` — a model ID valid for that harness.
+- `harness.model` — a model ID valid for that harness. On an override, null
+  inherits; an empty string is invalid.
 - `harness.reasoningLevel` — not supported by the `oz` harness.
 - `harness.auth` — not supported by the `oz` harness. Null explicitly clears
   inherited auth.
@@ -111,8 +117,10 @@ declares `secrets: []` gets no factory secrets. Additional secrets and MCP
 servers the server requires (for example those backing a declared integration)
 are merged in on top during resolution.
 
-`workerHost`, `harness.model`, and `harness.reasoningLevel` are three-state:
-omitted inherits, null or empty clears, and a non-empty value overrides.
+`workerHost` and `harness.reasoningLevel` are three-state: omitted inherits,
+null or empty clears, and a non-empty value overrides. `harness.model`,
+top-level `model`, `runner`, and `environmentId` inherit when omitted or null;
+their empty-string form is invalid.
 
 ## YAML restrictions
 Each file is a single YAML document. The parser rejects anchors (`&name`),

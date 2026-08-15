@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://warp.dev/schemas/factory-files/v1alpha1/factory.schema.json",
+  "$id": "factory.schema.json",
   "title": "factory.yaml (v1alpha1)",
   "description": "The Factory root document. Exactly one factory.yaml must exist at the registered Factory root.",
   "type": "object",
@@ -80,8 +80,9 @@
         "additionalProperties": false,
         "properties": {
           "type": {
-            "enum": ["jira", "linear", "slack"],
-            "description": "Provider slug. The server lowercases and trims the value; author it lowercase."
+            "type": "string",
+            "pattern": "^\\s*(?:[Jj][Ii][Rr][Aa]|[Ll][Ii][Nn][Ee][Aa][Rr]|[Ss][Ll][Aa][Cc][Kk])\\s*$",
+            "description": "Provider slug. The server lowercases and trims the value; author the canonical jira, linear, or slack spelling."
           }
         }
       }
@@ -91,7 +92,7 @@
       "additionalProperties": false,
       "description": "Execution defaults every Agent inherits. Exactly one of model or harness is required.",
       "properties": {
-        "model": { "$ref": "common.schema.json#/$defs/ozModelShorthand" },
+        "model": { "$ref": "common.schema.json#/$defs/ozModelDefault" },
         "harness": { "$ref": "common.schema.json#/$defs/harnessDefault" },
         "runner": { "$ref": "common.schema.json#/$defs/runnerRef" },
         "environmentId": { "$ref": "common.schema.json#/$defs/environmentId" },

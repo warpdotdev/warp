@@ -1,6 +1,6 @@
 ---
 name: factory-files
-description: Create and edit file-based Warp software factory definitions, in a repository tree rooted at a factory.yaml. Use when authoring or changing that factory.yaml, the agent.md, automation.md, or runner YAML files beside it, or its factory and agent skill trees, and when fixing Factory file diagnostics. Do not use for agent-definition Markdown that belongs to another tool, for a tree with no factory.yaml, or to operate a live factory or hand work to one through Factory MCP.
+description: Create and edit file-based Warp software factory definitions, in a repository tree rooted at a factory.yaml. Use when authoring or changing that factory.yaml, the agent.md, automation.md, or runner YAML files under that root, or its factory and agent skill trees, and when fixing Factory file diagnostics. Do not use for agent-definition Markdown that belongs to another tool, for a tree with no factory.yaml, or to operate a live factory or hand work to one through Factory MCP.
 ---
 
 # Factory Files
@@ -70,14 +70,21 @@ the parser does not catch a wrong one. Read `references/examples.md` for
 worked examples of each resource.
 
 ## Validate before opening a pull request
-Run the bundled validator. It needs nothing beyond Python 3.
+Run the bundled validator with Python 3.8 or newer, using the host's command (`python3`,
+`python`, or `py -3`). Quote both paths because an app-bundle path can contain
+spaces.
 
 ```bash
-python3 {{skill_dir}}/scripts/validate_factory_files.py <factory-root>
+python3 "{{skill_dir}}/scripts/validate_factory_files.py" "<factory-root>"
 ```
 
 Add `--json` for machine-readable output. A non-zero exit means at least one
 problem; fix every reported problem and re-run until it is clean.
+
+If no Python 3 interpreter is available, do not install one or claim the tree
+was validated without the user's approval. Check the changed document against
+the corresponding JSON Schema manually and report that automated validation
+was unavailable.
 
 The validator checks structure, field names, enums, mutual exclusions, trigger
 filter keys, cron syntax, runner platform rules, and the tree-level rules

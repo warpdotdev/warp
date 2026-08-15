@@ -22,12 +22,14 @@ The parser also accepts the legacy flat path `automations/<name>.md`, but render
 
 The current schema is `v1alpha1`. The parser rejects unknown fields, duplicate keys, YAML anchors, aliases, explicit tags, malformed frontmatter, invalid paths, invalid references, and invalid field values. It also requires exactly one `MAIN` or `FOREMAN` agent. The following sources are authoritative:
 
-- [`logic/factoryfile/v1alpha1.go (17-149) @ 7cddb925`](https://github.com/warpdotdev/warp-server/blob/7cddb92584ae4164c3fe34b0a88ed5ab5c75a24f/logic/factoryfile/v1alpha1.go#L17-L149) defines the schema version, allowed field sets, whole-tree parsing, and the main-agent rule.
-- [`logic/factoryfile/path.go (5-50) @ 7cddb925`](https://github.com/warpdotdev/warp-server/blob/7cddb92584ae4164c3fe34b0a88ed5ab5c75a24f/logic/factoryfile/path.go#L5-L50) defines canonical resource and skill paths.
-- [`logic/factoryfile/agenttype.go (10-43) @ 7cddb925`](https://github.com/warpdotdev/warp-server/blob/7cddb92584ae4164c3fe34b0a88ed5ab5c75a24f/logic/factoryfile/agenttype.go#L10-L43) defines accepted agent types and the `MAIN` alias.
-- [`logic/factoryfile/credentialstrategy.go (11-31) @ 7cddb925`](https://github.com/warpdotdev/warp-server/blob/7cddb92584ae4164c3fe34b0a88ed5ab5c75a24f/logic/factoryfile/credentialstrategy.go#L11-L31) defines credential strategies.
-- [`logic/factoryfile/parsetree.go (26-208) @ 7cddb925`](https://github.com/warpdotdev/warp-server/blob/7cddb92584ae4164c3fe34b0a88ed5ab5c75a24f/logic/factoryfile/parsetree.go#L26-L208) selects the adapter and classifies resource paths.
-- [`logic/factoryfile/parsetree_test.go (13-77) @ 7cddb925`](https://github.com/warpdotdev/warp-server/blob/7cddb92584ae4164c3fe34b0a88ed5ab5c75a24f/logic/factoryfile/parsetree_test.go#L13-L77) holds the existing parse/render schema-contract golden test.
+- [`logic/factoryfile/v1alpha1.go @ 57033405`](https://github.com/warpdotdev/warp-server/blob/57033405e261cee9c049fc4c46cda7a3804443bf/logic/factoryfile/v1alpha1.go) defines the schema version, allowed field sets, document decoding, and tree-level rules.
+- [`logic/factoryfile/path.go @ 57033405`](https://github.com/warpdotdev/warp-server/blob/57033405e261cee9c049fc4c46cda7a3804443bf/logic/factoryfile/path.go) defines canonical resource and skill paths.
+- [`logic/factoryfile/agenttype.go @ 57033405`](https://github.com/warpdotdev/warp-server/blob/57033405e261cee9c049fc4c46cda7a3804443bf/logic/factoryfile/agenttype.go) defines accepted agent types and the `MAIN` alias.
+- [`logic/factoryfile/credentialstrategy.go @ 57033405`](https://github.com/warpdotdev/warp-server/blob/57033405e261cee9c049fc4c46cda7a3804443bf/logic/factoryfile/credentialstrategy.go) defines credential strategies.
+- [`logic/factoryfile/parsetree.go @ 57033405`](https://github.com/warpdotdev/warp-server/blob/57033405e261cee9c049fc4c46cda7a3804443bf/logic/factoryfile/parsetree.go) selects the adapter and classifies resource paths.
+- [`model/types/triggers @ 57033405`](https://github.com/warpdotdev/warp-server/tree/57033405e261cee9c049fc4c46cda7a3804443bf/model/types/triggers) defines providers, events, filter fields, matcher forms, and canonical overlap checks.
+- [`model/types/runner.go @ 57033405`](https://github.com/warpdotdev/warp-server/blob/57033405e261cee9c049fc4c46cda7a3804443bf/model/types/runner.go) defines runner platforms, macOS versions, defaults, and instance-shape validation.
+- [`logic/factoryalias/alias.go @ 57033405`](https://github.com/warpdotdev/warp-server/blob/57033405e261cee9c049fc4c46cda7a3804443bf/logic/factoryalias/alias.go) and [`logic/cronspec/cronspec.go @ 57033405`](https://github.com/warpdotdev/warp-server/blob/57033405e261cee9c049fc4c46cda7a3804443bf/logic/cronspec/cronspec.go) define alias and inline schedule syntax.
 
 The schema is still changing. For example, `integrations` is already accepted by the current `factoryFields` set even though older summaries of the format omit it. A manually copied field table will become stale.
 
@@ -53,7 +55,7 @@ Use:
 - User-facing title: `Factory Files`
 - Trigger description:
 
-  > Create and edit file-based Warp software factory definitions, in a repository tree rooted at a factory.yaml. Use when authoring or changing that factory.yaml, the agent.md, automation.md, or runner YAML files beside it, or its factory and agent skill trees, and when fixing Factory file diagnostics. Do not use for agent-definition Markdown that belongs to another tool, for a tree with no factory.yaml, or to operate a live factory or hand work to one through Factory MCP.
+  > Create and edit file-based Warp software factory definitions, in a repository tree rooted at a factory.yaml. Use when authoring or changing that factory.yaml, the agent.md, automation.md, or runner YAML files under that root, or its factory and agent skill trees, and when fixing Factory file diagnostics. Do not use for agent-definition Markdown that belongs to another tool, for a tree with no factory.yaml, or to operate a live factory or hand work to one through Factory MCP.
 
 `factory-files` names the artifact instead of the deployment model. `factory-as-code` is broader and can imply sync, deployment, or live operations.
 
@@ -129,12 +131,12 @@ Keep `SKILL.md` workflow-oriented. Do not repeat complete field tables in it.
 ### JSON Schema and validation helper
 Ship machine-readable JSON Schemas and a validator that runs them. This reverses the original recommendation, at the requester's direction and on bug-bash evidence: the recurring failures are frontmatter metadata mistakes, and prose alone does not stop an agent from inventing a field.
 
-The validator is `scripts/validate_factory_files.py` and depends on nothing but Python 3. Neither PyYAML nor `jsonschema` is reliably present in agent sandboxes, so the script carries two small readers of its own:
+The validator is `scripts/validate_factory_files.py` and depends on nothing but Python 3.8 or newer. Neither PyYAML nor `jsonschema` is reliably present in agent sandboxes, so the script carries two small readers of its own:
 
-- A restricted YAML reader accepting exactly the subset the Factory file parser accepts. Anchors, aliases, explicit tags, merge keys, duplicate keys, and multiple documents are rejected rather than interpreted, which matches the parser instead of limiting the tool. Anything it cannot read confidently is reported, never guessed. Those constructs are recognized only where a YAML node begins, and a block scalar's body is treated as opaque text, so ordinary prose such as `It's a thing`, `A & B`, or `*emphasis*` inside a description is not mistaken for syntax.
+- A restricted YAML reader for the canonical forms the skill emits. Anchors, aliases, explicit tags, merge keys, duplicate keys, and multiple documents are rejected rather than interpreted, which matches the parser. It is deliberately not described as a complete YAML implementation: anything outside the canonical subset is reported rather than guessed, and the skill tells the agent not to normalize an existing server-accepted file merely for this reader. YAML syntax constructs are recognized only where a node begins, and a block scalar's body is treated as opaque text, so ordinary prose such as `It's a thing`, `A & B`, or `*emphasis*` inside a description is not mistaken for syntax.
 - A JSON Schema evaluator covering only the keywords the bundled schemas use. The schemas remain ordinary JSON Schema 2020-12 documents, so `check-jsonschema`, `ajv`, or `jsonschema` also work when available. A keyword the evaluator does not implement is reported rather than skipped, so adding one to a schema fails loudly instead of quietly under-validating.
 
-The schemas encode what the schema language can express. Three tree-level rules cannot be expressed in a single-document schema and are implemented in the script: exactly one `MAIN`/`FOREMAN` agent, automation `agent` references resolving to a declared agent, and duplicate resource names across the flat and directory automation forms.
+The schemas encode what the schema language can express. The script owns the remaining state-independent rules: exactly one `MAIN`/`FOREMAN` agent, automation `agent` references resolving to a declared agent, duplicate resource names across the flat and directory automation forms, trimmed alias length, normalized repository and secret duplicates, Linux power-of-two shapes, full cron grammar, duplicate inline schedule identities, and matcher `in`/`not_in` conflicts.
 
 Two rules are deliberately not checked, because the server accepts them and a check would produce false failures: a `runner` name may resolve to an existing team runner the tree does not declare, and every server-resolved value (model IDs, environment IDs, secret names, MCP IDs) needs state the validator does not have. `SKILL.md` and `references/validation.md` both state this boundary so the agent does not overstate what a clean run proves.
 
@@ -225,10 +227,11 @@ The schema-generation follow-up in `warp-server` is tracked separately; it is no
 The schemas and validator were checked against the authoritative Go implementation:
 
 - The canonical `logic/factoryfile/testdata/schema_contract` tree validates clean.
+- All three Factory roots currently in `warpdotdev/factory-dev` (`v1`, `frank`, and `dan-factory`) pass both the bundled validator and `factoryfile.ParseTree`.
 - Every tree under `logic/factoryfile/testdata/invalid` is rejected, each with a message naming the same defect the parser reports.
-- A 73-case positive/negative corpus covering harness blocks, auth sources, inline schedules, runner platforms, alias characters, integrations, filter keys, and author prose produced the expected verdict in every case. It is committed as `script/test_factory_files_skill.py` and runs in `script/presubmit`.
+- A 93-case positive/negative corpus covering harness blocks, null inheritance, auth sources, inline schedules, cron grammar, runner platforms and shapes, Unicode aliases, integration normalization, canonical filter conflicts, YAML edge cases, and author prose produced the expected verdict in every case. It is committed as `script/test_factory_files_skill.py` and runs in `script/presubmit`.
 - Every example in `references/examples.md` is assembled into a tree and validated by that same corpus, so a reference that teaches invalid configuration fails the build.
-- Every field set, enum, path helper, and trigger filter key in the schemas was diffed mechanically against a contract dumped from `develop`, covering 78 comparisons with no mismatch. That comparator is the prototype for follow-up 1 below.
+- Every field set, path helper, provider/event pair, and trigger filter key was diffed mechanically against a contract dumped from `develop`; nullable override behavior and apply-time runner constraints are covered separately in the corpus. That comparator is the prototype for follow-up 1 below.
 - For every parser-level case in that corpus, `factoryfile.ParseTree` produced the matching verdict.
 - Filter keys and matcher shapes were checked directly against `triggers.ValidateFilter`, including the `schedule_ids` in-only restriction.
 
@@ -245,14 +248,13 @@ Focused tests under the existing bundled-skill test module:
 - `activation_for_bundled_skill("factory-files", ...)` returns `Always`.
 - The trigger description anchors the skill to a `factory.yaml` root, so it cannot be loosened into matching unrelated `agents/<name>/agent.md` files.
 - Every reference and script `SKILL.md` names exists on disk.
-- Every schema file parses as JSON, declares `$id`, and `factory.schema.json` keeps its required-field set and closed property set.
-- `sync-manifest.json` matches all canonical skill files. Pending; lands with the manifest in sequence step 2.
+- Every schema file parses as JSON, uses a relative `$id`, every local `$ref` resolves to a packaged file and JSON pointer, and `factory.schema.json` keeps its required-field set and closed property set.
+- `script/test_factory_files_skill.py` runs `prepare_bundled_resources` and verifies the packaged `factory-files` tree has the same files and bytes as the canonical source.
 
 Run:
 
 - `cargo test -p warp --lib ai::skills::bundled`
-- `SKIP_SETTINGS_SCHEMA=1 NO_LICENSES=1 script/prepare_bundled_resources <temp-dir> stable`
-- Assert `<temp-dir>/bundled/skills/factory-files/` contains `SKILL.md`, all references, all schemas, and the validator, and that the packaged validator resolves its schemas from the copied location.
+- `./script/test_factory_files_skill.py`
 
 ### Skill behavior
 Create deterministic eval prompts and compare the skill-assisted output with a baseline:

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Regression corpus for the bundled factory-files validator.
+"""Regression and packaging checks for the bundled factory-files skill.
 
 Each case builds a throwaway Factory tree and asserts whether
 resources/bundled/skills/factory-files/scripts/validate_factory_files.py
@@ -8,11 +8,15 @@ implementation in warp-server (factoryfile.ParseTree and
 triggers.ValidateFilter), so a change here should be made only alongside a
 matching change to the Factory file format.
 
+The final check runs prepare_bundled_resources and compares the packaged skill
+tree byte-for-byte with the canonical source.
+
 Run directly, or via script/presubmit.
 """
 
 from __future__ import annotations
 
+import os
 import re
 import shutil
 import subprocess
@@ -164,6 +168,10 @@ VALID_CASES: list[tuple[str, dict[str, str]]] = [
     ),
     ("integrations-empty", tree(**{"factory.yaml": FACTORY + "integrations: []\n"})),
     (
+        "integrations-normalize-case-and-space",
+        tree(**{"factory.yaml": FACTORY + "integrations:\n  - type: ' Slack '\n"}),
+    ),
+    (
         "workerhost-clear",
         tree(**{"agents/main/agent.md": "---\nagentType: MAIN\nworkerHost: null\n---\nx\n"}),
     ),
@@ -253,6 +261,51 @@ VALID_CASES: list[tuple[str, dict[str, str]]] = [
                 "automations/n/automation.md": "---\ntriggers:\n  - provider: github\n"
                 "    event: pull_request_opened\n    filter:\n      labels: {}\n"
                 "      authors: null\n---\nrun\n"
+            }
+        ),
+    ),
+    (
+        "nullable-overrides",
+        tree(
+            **{
+                "factory.yaml": FACTORY + "credentialStrategy: null\n",
+                "agents/main/agent.md": "---\nagentType: MAIN\nmodel: null\n"
+                "credentialStrategy: null\nrunner: null\nenvironmentId: null\n---\nx\n",
+            }
+        ),
+    ),
+    (
+        "sparse-harness-null-fields",
+        tree(
+            **{
+                "agents/main/agent.md": "---\nagentType: MAIN\nharness:\n  type: claude\n"
+                "  model: null\n  auth: null\n---\nx\n",
+            }
+        ),
+    ),
+    (
+        "unicode-and-padded-alias",
+        tree(**{"factory.yaml": FACTORY + "alias: '                                                            café '\n"}),
+    ),
+    (
+        "large-linux-power-of-two-shape",
+        tree(
+            **{
+                "runners/large.yaml": "instanceShape:\n  vcpus: 2048\n  memoryGb: 2048\n"
+                "platform:\n  os: linux\n  linux:\n    dockerImage: ubuntu:24.04\n"
+            }
+        ),
+    ),
+    (
+        "macos-default-version",
+        tree(**{"runners/mac.yaml": "platform:\n  os: macos\n  arch: aarch64\n"}),
+    ),
+    (
+        "named-cron-fields",
+        tree(
+            **{
+                "automations/monthly/automation.md": "---\ntriggers:\n  - provider: schedule\n"
+                "    event: cron_fired\n    schedule:\n      cron: 0 3 1 JAN MON-FRI\n---\nx\n"
             }
         ),
     ),
@@ -522,6 +575,95 @@ INVALID_CASES: list[tuple[str, dict[str, str]]] = [
             }
         ),
     ),
+    (
+        "canonical-matcher-conflict",
+        tree(
+            **{
+                "automations/n/automation.md": "---\ntriggers:\n  - provider: slack\n"
+                "    event: reaction_added\n    filter:\n      emojis:\n"
+                "        in: [':eyes:']\n        not_in: [eyes]\n---\nrun\n"
+            }
+        ),
+    ),
+    ("alias-emoji", tree(**{"factory.yaml": FACTORY + "alias: factory🚀\n"})),
+    (
+        "trimmed-alias-too-long",
+        tree(**{"factory.yaml": FACTORY + "alias: ' " + "a" * 61 + " '\n"}),
+    ),
+    (
+        "empty-harness-model",
+        tree(
+            **{
+                "agents/main/agent.md": "---\nagentType: MAIN\nharness:\n"
+                "  type: claude\n  model: ''\n---\nx\n"
+            }
+        ),
+    ),
+    (
+        "partial-runner-shape",
+        tree(
+            **{
+                "runners/partial.yaml": "instanceShape:\n  vcpus: 4\nplatform:\n  os: linux\n"
+                "  linux:\n    dockerImage: ubuntu:24.04\n"
+            }
+        ),
+    ),
+    (
+        "empty-macos-config",
+        tree(**{"runners/mac.yaml": "platform:\n  os: macos\n  arch: aarch64\n  mac: {}\n"}),
+    ),
+    (
+        "cron-field-out-of-range",
+        tree(
+            **{
+                "automations/bad/automation.md": "---\ntriggers:\n  - provider: schedule\n"
+                "    event: cron_fired\n    schedule:\n      cron: 99 25 32 13 8\n---\nx\n"
+            }
+        ),
+    ),
+    (
+        "cron-invalid-every-duration",
+        tree(
+            **{
+                "automations/bad/automation.md": "---\ntriggers:\n  - provider: schedule\n"
+                "    event: cron_fired\n    schedule:\n      cron: '@every someday'\n---\nx\n"
+            }
+        ),
+    ),
+    (
+        "duplicate-inline-schedule-name",
+        tree(
+            **{
+                "automations/dup/automation.md": "---\ntriggers:\n"
+                "  - provider: schedule\n    event: cron_fired\n    schedule:\n"
+                "      name: same\n      cron: 0 1 * * *\n"
+                "  - provider: schedule\n    event: cron_fired\n    schedule:\n"
+                "      name: same\n      cron: 0 2 * * *\n---\nx\n"
+            }
+        ),
+    ),
+    (
+        "duplicate-trimmed-secrets",
+        tree(**{"factory.yaml": FACTORY + "secrets: [' A ', A]\n"}),
+    ),
+    (
+        "duplicate-trimmed-repositories",
+        tree(
+            **{
+                "factory.yaml": "schemaVersion: v1alpha1\nname: demo\nrepositories:\n"
+                "  - owner: ' warp '\n    name: repo\n"
+                "  - owner: warp\n    name: repo\nagentDefaults:\n  model: auto\n"
+            }
+        ),
+    ),
+    (
+        "quoted-scalar-with-trailing-junk",
+        tree(**{"factory.yaml": FACTORY + 'description: "quoted" junk\n'}),
+    ),
+    (
+        "unquoted-yaml-timestamp",
+        tree(**{"factory.yaml": FACTORY + "description: 2026-08-15\n"}),
+    ),
 ]
 
 
@@ -557,7 +699,10 @@ def documented_example_cases() -> list[tuple[str, bool, dict[str, str]]]:
     reordering a block in the reference means updating this mapping.
     """
     blocks = [
-        body for _, body in re.findall(r"```(yaml|markdown)\n(.*?)```", EXAMPLES.read_text(), re.S)
+        body
+        for _, body in re.findall(
+            r"```(yaml|markdown)\n(.*?)```", EXAMPLES.read_text(encoding="utf-8"), re.S
+        )
     ]
     expected_blocks = 10
     if len(blocks) != expected_blocks:
@@ -583,6 +728,38 @@ def documented_example_cases() -> list[tuple[str, bool, dict[str, str]]]:
     ]
 
 
+def assert_packaged_skill_matches() -> None:
+    with tempfile.TemporaryDirectory(prefix="factory-files-bundle-") as destination:
+        environment = os.environ.copy()
+        environment.update({"SKIP_SETTINGS_SCHEMA": "1", "NO_LICENSES": "1"})
+        subprocess.run(
+            [str(REPO_ROOT / "script" / "prepare_bundled_resources"), destination, "stable"],
+            cwd=REPO_ROOT,
+            env=environment,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        packaged = Path(destination) / "bundled" / "skills" / "factory-files"
+        source_files = {
+            path.relative_to(SKILL)
+            for path in SKILL.rglob("*")
+            if path.is_file()
+        }
+        packaged_files = {
+            path.relative_to(packaged)
+            for path in packaged.rglob("*")
+            if path.is_file()
+        }
+        if source_files != packaged_files:
+            raise RuntimeError(
+                f"packaged file set differs: missing={source_files - packaged_files}, "
+                f"extra={packaged_files - source_files}"
+            )
+        for relative in source_files:
+            if (SKILL / relative).read_bytes() != (packaged / relative).read_bytes():
+                raise RuntimeError(f"packaged content differs for {relative}")
+
 def main() -> int:
     cases = [(name, True, files) for name, files in VALID_CASES]
     cases += [(name, False, files) for name, files in INVALID_CASES]
@@ -591,7 +768,9 @@ def main() -> int:
     if failures:
         print(f"{len(failures)}/{len(cases)} factory-files validator cases failed", file=sys.stderr)
         return 1
+    assert_packaged_skill_matches()
     print(f"factory-files validator: {len(cases)}/{len(cases)} cases passed")
+    print("factory-files packaging: source and bundled trees match")
     return 0
 
 

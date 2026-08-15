@@ -109,6 +109,33 @@ fn factory_files_bundled_skill_is_always_active_and_scoped_to_authoring() {
 fn factory_files_schemas_are_parseable_and_keep_the_factory_contract() {
     let schemas_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../resources/bundled/skills/factory-files/schemas");
+    fn assert_refs_resolve(value: &serde_json::Value, current_name: &str, schemas_dir: &Path) {
+        match value {
+            serde_json::Value::Object(object) => {
+                if let Some(reference) = object.get("$ref").and_then(serde_json::Value::as_str) {
+                    let (name, fragment) = reference.split_once('#').unwrap_or((reference, ""));
+                    let target_name = if name.is_empty() { current_name } else { name };
+                    let raw = std::fs::read_to_string(schemas_dir.join(target_name))
+                        .unwrap_or_else(|error| panic!("read $ref target {target_name}: {error}"));
+                    let target: serde_json::Value = serde_json::from_str(&raw)
+                        .unwrap_or_else(|error| panic!("parse $ref target {target_name}: {error}"));
+                    assert!(
+                        fragment.is_empty() || target.pointer(fragment).is_some(),
+                        "{current_name} contains unresolved $ref {reference}"
+                    );
+                }
+                for child in object.values() {
+                    assert_refs_resolve(child, current_name, schemas_dir);
+                }
+            }
+            serde_json::Value::Array(values) => {
+                for child in values {
+                    assert_refs_resolve(child, current_name, schemas_dir);
+                }
+            }
+            _ => {}
+        }
+    }
 
     for name in [
         "common.schema.json",
@@ -121,7 +148,12 @@ fn factory_files_schemas_are_parseable_and_keep_the_factory_contract() {
             .unwrap_or_else(|error| panic!("read {name}: {error}"));
         let schema: serde_json::Value = serde_json::from_str(&raw)
             .unwrap_or_else(|error| panic!("{name} should be valid JSON: {error}"));
-        assert!(schema.get("$id").is_some(), "{name} should declare $id");
+        assert_eq!(
+            schema.get("$id").and_then(serde_json::Value::as_str),
+            Some(name),
+            "{name} should use a relative $id so sibling $refs resolve locally"
+        );
+        assert_refs_resolve(&schema, name, &schemas_dir);
     }
 
     let factory: serde_json::Value = serde_json::from_str(

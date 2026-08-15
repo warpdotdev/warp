@@ -12,24 +12,38 @@
    integration providers, harness model catalogues, worker-host entitlement,
    and runner platform and instance-shape rules.
 
-A clean validator run means the files are structurally correct. It does not
-mean the plan will apply. Say so rather than overstating what was checked.
+A clean validator run means the files pass the bundled structural and
+state-independent semantic checks. It does not mean the plan will apply. Say
+so rather than overstating what was checked.
 
 ## Running the validator
 The script lives at `scripts/validate_factory_files.py` inside this skill's
 directory; `SKILL.md` shows its resolved path.
 
 ```bash
-python3 <skill-dir>/scripts/validate_factory_files.py <factory-root>
-python3 <skill-dir>/scripts/validate_factory_files.py <factory-root> --json
+python3 "<skill-dir>/scripts/validate_factory_files.py" "<factory-root>"
+python3 "<skill-dir>/scripts/validate_factory_files.py" "<factory-root>" --json
 ```
+
+Use Python 3.8 or newer via the host's command (`python3`, `python`, or `py -3`). If none is
+available, do not install an interpreter or claim automated validation without
+the user's approval; inspect the changed document against its JSON Schema and
+report the validation gap.
 
 Exit code 0 means no problems. Each problem reports the file, the field path,
 and what is wrong. Fix them all and re-run; do not stop at the first one, since
 one wrong field often produces several messages.
+The bundled reader handles the canonical YAML forms this skill emits, not every
+piece of YAML syntax accepted by `gopkg.in/yaml.v3`. If it cannot read an
+existing file that the server accepts, do not normalize or rewrite the file
+merely for the reader; report that local validation was unavailable and use a
+server plan when possible.
 
 The schemas are ordinary JSON Schema 2020-12 documents, so any standard
-validator works too if the tree is already converted to JSON.
+validator works too if the tree is already converted to JSON. `x-warp-*`
+annotations carry constraints JSON Schema cannot express portably, such as
+trimmed Unicode alias rules; only the bundled validator enforces those
+annotations.
 
 ## Diagnostic codes
 The server reports these when a plan is run against a registered Factory.

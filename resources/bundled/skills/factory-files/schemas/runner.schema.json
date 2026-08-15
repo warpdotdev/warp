@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://warp.dev/schemas/factory-files/v1alpha1/runner.schema.json",
+  "$id": "runner.schema.json",
   "title": "runners/<name>.yaml (v1alpha1)",
   "description": "A Runner document. The Runner's name comes from the file name, never from a field. Platform and instance-shape rules are enforced when the plan is applied, not by the file parser.",
   "type": "object",
@@ -16,6 +16,7 @@
     },
     "instanceShape": {
       "type": "object",
+      "required": ["vcpus", "memoryGb"],
       "additionalProperties": false,
       "properties": {
         "vcpus": { "type": "integer", "minimum": 1 },
@@ -46,6 +47,7 @@
         },
         "mac": {
           "type": "object",
+          "required": ["version"],
           "additionalProperties": false,
           "properties": {
             "version": {
@@ -92,15 +94,13 @@
         }
       }
     },
-    "powerOfTwo": {
-      "enum": [1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024],
-      "description": "Linux runners require vcpus and memoryGb to be powers of two."
-    },
     "linuxInstanceShape": {
+      "required": ["vcpus", "memoryGb"],
       "properties": {
-        "vcpus": { "$ref": "#/$defs/powerOfTwo" },
-        "memoryGb": { "$ref": "#/$defs/powerOfTwo" }
-      }
+        "vcpus": { "type": "integer", "minimum": 1 },
+        "memoryGb": { "type": "integer", "minimum": 1 }
+      },
+      "description": "Both values must be powers of two; the bundled validator checks that constraint because JSON Schema cannot express it."
     },
     "macOSInstanceShape": {
       "description": "Supported macOS shapes, as vcpus/memoryGb: 4/7, 6/14, 8/14, 12/28, 12/56.",
