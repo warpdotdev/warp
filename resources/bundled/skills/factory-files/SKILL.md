@@ -1,6 +1,6 @@
 ---
 name: factory-files
-description: Create and edit file-based Warp software factory definitions. Use when authoring or changing factory.yaml, agent or automation Markdown, runner YAML, or factory and agent skill trees, and when fixing Factory file diagnostics. Do not use to operate a live factory or hand work to a factory through Factory MCP.
+description: Create and edit file-based Warp software factory definitions, in a repository tree rooted at a factory.yaml. Use when authoring or changing that factory.yaml, the agent.md, automation.md, or runner YAML files beside it, or its factory and agent skill trees, and when fixing Factory file diagnostics. Do not use for agent-definition Markdown that belongs to another tool, for a tree with no factory.yaml, or to operate a live factory or hand work to one through Factory MCP.
 ---
 
 # Factory Files
@@ -20,6 +20,10 @@ Every Factory tree is rooted at the directory containing `factory.yaml`. All
 paths below are relative to that root. A repository may register a
 subdirectory as the root, so find `factory.yaml` rather than assuming the
 repository root.
+
+If there is no `factory.yaml`, this is not a Factory tree and nothing here
+applies. `agents/<name>/agent.md` and similar paths are also used by other
+agent tooling; stop and say so rather than imposing this schema on them.
 
 ```
 factory.yaml                        required, exactly one
@@ -83,8 +87,8 @@ names, runner names, MCP server IDs, and integration availability are all
 validated when the plan is applied. Report that distinction rather than
 claiming a tree is fully verified.
 
-If the repository is checked out alongside `warp-server`, you can additionally
-run the authoritative parser:
+If a `warp-server` checkout is available, its parser tests are the authority.
+Run them from that checkout, not from the Factory repository:
 
 ```bash
 go test ./logic/factoryfile

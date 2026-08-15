@@ -43,7 +43,9 @@ fn factory_mcp_bundled_skill_bootstraps_canonical_mcp_resource() {
 }
 
 /// The Factory files skill is always bundled, so a stale trigger description
-/// or a broken reference silently reaches every GUI, TUI, and Oz agent.
+/// or a broken reference silently reaches every GUI, TUI, and Oz agent. Its
+/// trigger has to stay anchored to a factory.yaml root: `agents/<name>/agent.md`
+/// alone also describes unrelated agent-definition files.
 #[test]
 fn factory_files_bundled_skill_is_always_active_and_scoped_to_authoring() {
     let skills_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -64,6 +66,18 @@ fn factory_files_bundled_skill_is_always_active_and_scoped_to_authoring() {
     assert!(
         description.contains("factory mcp"),
         "trigger description should exclude Factory MCP operation: {description}"
+    );
+    assert!(
+        description.contains("rooted at a factory.yaml"),
+        "trigger description should anchor to a factory.yaml root: {description}"
+    );
+    assert!(
+        description.contains("belongs to another tool"),
+        "trigger description should exclude other tools' agent files: {description}"
+    );
+    assert!(
+        skill.content.contains("no `factory.yaml`"),
+        "SKILL.md should tell the agent to stop outside a Factory tree"
     );
 
     assert!(matches!(

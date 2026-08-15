@@ -75,7 +75,8 @@ bundled schemas look stale and, where you can, point at what changed in
 
 ## Checking against the parser directly
 When `warp-server` is checked out locally, its parser tests are the closest
-thing to ground truth:
+thing to ground truth. Run them from that checkout, not from the Factory
+repository:
 
 ```bash
 go test ./logic/factoryfile

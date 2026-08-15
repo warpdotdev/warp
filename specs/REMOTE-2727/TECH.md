@@ -1,8 +1,8 @@
 # Bundled skill for authoring Factory files
 ## Summary
-[REMOTE-2727](https://linear.app/warpdotdev/issue/REMOTE-2727/bundled-skill-for-authoringediting-file-based-factory-definitions) adds one bundled skill that teaches agents to create and edit file-based software factory definitions. The skill ships in Warp for the native GUI, TUI, and every Oz cloud agent. Byte-identical copies ship in the Claude Code and Codex Oz platform plugins because third-party harnesses cannot resolve a Warp `bundled_skill_id`.
+[REMOTE-2727](https://linear.app/warpdotdev/issue/REMOTE-2727/bundled-skill-for-authoringediting-file-based-factory-definitions) adds one bundled skill that teaches agents to create and edit file-based software factory definitions. The skill ships in Warp for the native GUI, TUI, and every Oz cloud agent. Copies ship in the Claude Code and Codex Oz platform plugins because third-party harnesses cannot resolve a Warp `bundled_skill_id`.
 
-The skill carries a machine-readable JSON Schema for the format and a dependency-free validator that runs it, so an agent can check its own edits before opening a pull request. That requirement came from the Factory bug bash, where the recurring failures were malformed frontmatter metadata that the parser accepts and the apply step later rejects.
+The skill carries machine-readable JSON Schemas for the format and a dependency-free validator that runs them, so an agent can check its own edits before opening a pull request. That requirement came from the Factory bug bash, where the recurring failures were malformed frontmatter metadata that the parser accepts and the apply step later rejects.
 
 This work needs only a technical spec. The user workflow is already defined, and the remaining decisions concern packaging, rollout, validation, and schema maintenance.
 
@@ -53,27 +53,36 @@ Use:
 - User-facing title: `Factory Files`
 - Trigger description:
 
-  > Create and edit file-based Warp software factory definitions. Use when authoring or changing `factory.yaml`, agent or automation Markdown, runner YAML, or factory and agent skill trees, and when fixing Factory file diagnostics. Do not use to operate a live factory or hand work to a factory through Factory MCP.
+  > Create and edit file-based Warp software factory definitions, in a repository tree rooted at a factory.yaml. Use when authoring or changing that factory.yaml, the agent.md, automation.md, or runner YAML files beside it, or its factory and agent skill trees, and when fixing Factory file diagnostics. Do not use for agent-definition Markdown that belongs to another tool, for a tree with no factory.yaml, or to operate a live factory or hand work to one through Factory MCP.
 
 `factory-files` names the artifact instead of the deployment model. `factory-as-code` is broader and can imply sync, deployment, or live operations.
 
+The description leads with the `factory.yaml` root rather than the file names, because `agents/<name>/agent.md` on its own also describes agent-definition files belonging to other tooling.
+
 The negative trigger boundary is required:
 
-- `factory-files` authors and edits repository files.
+- `factory-files` authors and edits repository files under a `factory.yaml` root.
 - `factory-mcp` operates a factory and transfers work through MCP.
 - Skills under `factory-dev/**/skills` define factory-agent playbooks. They do not define the file format.
+- Agent-definition Markdown belonging to another tool is out of scope entirely.
 
 ### Rollout
-Ship the skill in the stable, always-bundled directory from the first release. Do not add a feature flag or channel gate.
+Ship the skill in the stable, always-bundled directory from the first release. Do not add a feature flag or channel gate, and do not add a match arm to `activation_for_bundled_skill`; the default `Always` activation is intentional.
 
-The skill has no server dependency; its validator runs offline against bundled schemas. A dogfood or preview gate would delay the requested default availability and would not reduce third-party plugin risk. The moving `v1alpha1` format is addressed through the schema reference and drift checks, not by limiting discovery.
+Gating was considered and rejected. The case for it is that Factory is not released: `FactoryMcp` is dogfood-only and `PREVIEW_FLAGS` is empty, so an always-on skill documents an alpha format to every stable user. Three things outweigh that.
 
-Do not add a match arm to `activation_for_bundled_skill`. The default `Always` activation is intentional.
+The skill is self-gating by context. It does nothing unless the tree has a `factory.yaml`, so the population it can affect is Factory users, which is the same population a flag would select. The cost to everyone else is the name and trigger description in the skill list; full content and the schemas load only when the skill is read.
+
+Gating would misfire across surfaces. Whether Oz cloud agents running factory agents have `FactoryMcp` enabled depends on prod experiment state rather than anything in this repository, and a skill that fails to activate is invisible — the primary requested surface could lose it with no signal. The Claude Code and Codex plugin mirrors load filesystem skills and cannot read a Warp flag at all, so gating would leave third-party harnesses enabled while disabling Warp's own cloud agents.
+
+A flag would also couple authoring guidance to an unrelated kill switch. `FactoryMcp` attaches an MCP server for operating a live factory, which is exactly the boundary this skill excludes; turning it off during an MCP incident would remove file-authoring help for no reason. A dedicated flag avoids that but adds a second flag to flip in lockstep for no additional safety.
+
+The residual risk is trigger collision, not exposure: `agents/<name>/agent.md` also describes agent-definition files belonging to other tooling. That is handled in the trigger rather than by a flag. The description anchors the skill to a tree rooted at `factory.yaml`, names the other-tool case as an explicit exclusion, and `SKILL.md` instructs the agent to stop when no `factory.yaml` is present. The bundled-skill test pins the anchor so it cannot be loosened silently.
 
 ### Oz scope
 Make the skill available to every Oz agent.
 
-All Oz agents already receive the shared Warp bundled-resource catalog. No factory-only bundled activation exists. Adding a new environment or agent-type gate would increase implementation and testing scope for no material safety benefit. Skill metadata is small, and full content is loaded only when the agent reads the skill.
+All Oz agents already receive the shared Warp bundled-resource catalog. No factory-only bundled activation exists. Adding an environment or agent-type gate would increase implementation and testing scope for no material safety benefit, and would reintroduce the invisible-failure risk described under Rollout. Skill metadata is small, and full content is loaded only when the agent reads the skill.
 
 ### Skill structure
 Use one skill for both creation and editing. Both workflows use the same paths, inheritance rules, field constraints, and diagnostics. Splitting them would duplicate schema context and create competing triggers.
@@ -141,12 +150,14 @@ The canonical authored skill is:
 
 `warp/resources/bundled/skills/factory-files/`
 
-Mirror that directory byte-for-byte to:
+Mirror that directory to:
 
 - `claude-code-warp/plugins/oz-harness-support/skills/factory-files/`
 - `codex-warp/plugins/orchestration/skills/factory-files/`
 
-Add `sync-manifest.json` inside the canonical skill directory. It records SHA-256 hashes for `SKILL.md` and every file under `references/`, `schemas/`, and `scripts/`. It does not hash itself.
+Every file mirrors byte-for-byte except the one `SKILL.md` line carrying the `{{skill_dir}}` validator path, which the mirror step substitutes. Keeping the Warp copy templated is deliberate: an absolute rendered path is the reliable form for a shell command in the surface that serves most users, and the substitution is a single well-known line.
+
+Add `sync-manifest.json` inside the canonical skill directory. It records SHA-256 hashes for `SKILL.md` and every file under `references/`, `schemas/`, and `scripts/`. It does not hash itself. `SKILL.md` is hashed after substitution so a mirror and its source compare equal.
 
 Add `warp/script/sync_factory_files_skill` with two modes:
 
@@ -202,7 +213,8 @@ The schemas and validator were checked against the authoritative Go implementati
 
 - The canonical `logic/factoryfile/testdata/schema_contract` tree validates clean.
 - Every tree under `logic/factoryfile/testdata/invalid` is rejected, each with a message naming the same defect the parser reports.
-- A 68-case positive/negative corpus covering harness blocks, auth sources, inline schedules, runner platforms, alias characters, integrations, filter keys, and author prose produced the expected verdict in every case. It is committed as `script/test_factory_files_skill.py` and runs in `script/presubmit`.
+- A 69-case positive/negative corpus covering harness blocks, auth sources, inline schedules, runner platforms, alias characters, integrations, filter keys, and author prose produced the expected verdict in every case. It is committed as `script/test_factory_files_skill.py` and runs in `script/presubmit`.
+- Every field set, enum, path helper, and trigger filter key in the schemas was diffed mechanically against a contract dumped from `develop`, covering 78 comparisons with no mismatch. That comparator is the prototype for follow-up 1 below.
 - For every parser-level case in that corpus, `factoryfile.ParseTree` produced the matching verdict.
 - Filter keys and matcher shapes were checked directly against `triggers.ValidateFilter`, including the `schedule_ids` in-only restriction.
 
@@ -217,9 +229,10 @@ Focused tests under the existing bundled-skill test module:
 - `factory-files` parses with name `factory-files`.
 - Its trigger description contains create/edit intents and the Factory MCP exclusion.
 - `activation_for_bundled_skill("factory-files", ...)` returns `Always`.
+- The trigger description anchors the skill to a `factory.yaml` root, so it cannot be loosened into matching unrelated `agents/<name>/agent.md` files.
 - Every reference and script `SKILL.md` names exists on disk.
 - Every schema file parses as JSON, declares `$id`, and `factory.schema.json` keeps its required-field set and closed property set.
-- `sync-manifest.json` matches all canonical skill files.
+- `sync-manifest.json` matches all canonical skill files. Pending; lands with the manifest in sequence step 2.
 
 Run:
 
@@ -254,7 +267,7 @@ Before the Warp PR merges:
 
 - Confirm the Claude and Codex released versions are greater than or equal to the updated platform minimums.
 - Confirm GUI, TUI, and remote-server stable bundles contain the same manifest.
-- Confirm all three repository copies of the skill directory are byte-identical.
+- Confirm all three repository copies of the skill directory agree under the sync manifest, which accounts for the substituted validator path.
 
 No visual recording is required. This feature changes agent context and generated files, not a rendered UI workflow.
 
@@ -268,7 +281,7 @@ No visual recording is required. This feature changes agent context and generate
 - **A bundled validator can be wrong in either direction.** A false rejection blocks a correct edit; a false acceptance gives unearned confidence. Mitigate with the parity corpus, by declining to check anything needing server state, and by having the reader report what it cannot parse instead of guessing.
 - **A plugin mirror can remain pinned to an old valid commit.** Mitigate with the daily comparison against Warp `master` and an owning team for failures.
 - **Stable rollout increases skill-list size for unrelated agents.** The metadata cost is limited to the name and trigger description. Full content remains progressively disclosed.
-- **The trigger can collide with Factory MCP.** Include explicit positive and negative trigger evals and keep operation verbs out of the positive description.
+- **The trigger can collide with Factory MCP, or with another tool's agent files.** `agents/<name>/agent.md` is not a Factory-specific path. Mitigate by anchoring the description to a `factory.yaml` root, naming both exclusions explicitly, instructing the agent to stop when no `factory.yaml` is present, and pinning the anchor in a test. Cover both collisions in the trigger evals.
 - **Examples can leak environment-specific values.** Use placeholders. Do not copy production IDs, secrets, account numbers, or images from live factories.
 - **Version ordering can strand existing plugin installations.** Release plugins before merging the Warp minimum-version bump.
 
