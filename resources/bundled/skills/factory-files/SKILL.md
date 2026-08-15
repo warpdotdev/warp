@@ -114,9 +114,21 @@ read them.
 - Linux runners require `platform.linux.dockerImage`. A runner with no
   `platform` section defaults to Linux and will fail for that reason.
 
-## Schema drift
+## Schema drift and version skew
 The format is `v1alpha1` and still changing. `logic/factoryfile` in
-`warp-server` is the authority; these schemas mirror it. If the server reports
-a field the schemas reject, or accepts one they do not know, trust the server,
-tell the user the schemas are stale, and do not work around the validator by
-silently skipping it.
+`warp-server` is the authority; these schemas only mirror it.
+
+They also ship inside your Warp version rather than coming from the server, so
+they can be older than the server the Factory syncs against. A field the server
+added after your version was built will be reported here as unknown.
+
+Because of that:
+
+- Never delete, rename, or rewrite a field only because the validator calls it
+  unknown. On a file you did not author, that is at least as likely to be a
+  newer field as a mistake. Leave it, and say the schemas may be behind.
+- Treat unknown-field reports on your own new edits as real. You are the one
+  who just introduced the field.
+- If the server and these schemas disagree, the server is right. Say the
+  bundled schemas look stale rather than working around the validator by
+  skipping it.

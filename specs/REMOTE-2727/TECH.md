@@ -79,6 +79,19 @@ A flag would also couple authoring guidance to an unrelated kill switch. `Factor
 
 The residual risk is trigger collision, not exposure: `agents/<name>/agent.md` also describes agent-definition files belonging to other tooling. That is handled in the trigger rather than by a flag. The description anchors the skill to a tree rooted at `factory.yaml`, names the other-tool case as an explicit exclusion, and `SKILL.md` instructs the agent to stop when no `factory.yaml` is present. The bundled-skill test pins the anchor so it cannot be loosened silently.
 
+### Distribution and version skew
+Bundled skills ship inside the artifact; nothing delivers them from the server. Three release artifacts carry the bundle, which covers three of the four requested surfaces:
+
+- The macOS app bundle resolves `Contents/Resources`, and Linux and Windows resolve a `resources` directory beside the executable.
+- The TUI builds with the `standalone` feature so it resolves that same sibling directory, and its release job packages `resources` alongside the binary.
+- The `oz` CLI is packaged the same way, and `oz-agent-worker` executes exactly that binary (`internal/worker/direct.go`), so cloud Warp agents load the bundle without extra work.
+
+The fourth surface, third-party harness agents, is not covered by any of this and needs the plugin mirrors in sequence step 3.
+
+Because the schemas travel with the artifact, their freshness is bounded by that artifact's version. Cloud runs track releases closely. An installed desktop client can be far behind, and the server can be newer than both. A field added to the format after a client shipped will be reported by that client as an unknown field.
+
+The harmful direction is deletion, not rejection: an agent that trusts an unknown-field report on a file it did not write could remove working configuration. `SKILL.md` and `references/validation.md` therefore separate the two cases — an unknown field the agent just wrote is a mistake to fix, while an unknown field already in the file may be newer than the schemas and must be left alone and reported. Neither surface can be closed by a validator, so it is handled as instruction.
+
 ### Oz scope
 Make the skill available to every Oz agent.
 
@@ -278,6 +291,7 @@ No visual recording is required. This feature changes agent context and generate
 
 ## Risks and mitigations
 - **The bundled schemas can drift from `logic/factoryfile`.** They are hand-derived and nothing enforces agreement continuously. Mitigate with the code-owner checklist now and the generation follow-up next; the skill tells the agent to trust the server and report staleness rather than route around the validator.
+- **An older client validates against older schemas.** The bundle ships with the artifact, so a newer server can accept fields an installed client rejects. Mitigate by instructing the agent never to remove a field solely because the validator calls it unknown, and by keeping the server authoritative whenever it is reachable.
 - **A bundled validator can be wrong in either direction.** A false rejection blocks a correct edit; a false acceptance gives unearned confidence. Mitigate with the parity corpus, by declining to check anything needing server state, and by having the reader report what it cannot parse instead of guessing.
 - **A plugin mirror can remain pinned to an old valid commit.** Mitigate with the daily comparison against Warp `master` and an owning team for failures.
 - **Stable rollout increases skill-list size for unrelated agents.** The metadata cost is limited to the name and trigger description. Full content remains progressively disclosed.

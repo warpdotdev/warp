@@ -73,6 +73,18 @@ If a diagnostic contradicts these references, the server is right. Say that the
 bundled schemas look stale and, where you can, point at what changed in
 `logic/factoryfile`.
 
+## Version skew
+The schemas ship inside the Warp version running them, not from the server, so
+they can lag the server that a Factory actually syncs against. Cloud agent runs
+track releases closely; an installed desktop client can be much older.
+
+The asymmetry matters when reading an `unknown field` report:
+
+- On a field you just wrote, it is almost certainly a mistake. Fix it.
+- On a field that was already in the file, it may be a newer field your copy of
+  the schemas does not know. Leave it alone and report the possibility. Removing
+  it would silently drop working configuration.
+
 ## Checking against the parser directly
 When `warp-server` is checked out locally, its parser tests are the closest
 thing to ground truth. Run them from that checkout, not from the Factory
