@@ -515,6 +515,40 @@ class SchemaStore:
         return node, target
 
 
+# Keywords the evaluator implements, and the annotations it may ignore. A
+# keyword in neither set is reported rather than skipped: silently ignoring an
+# unimplemented keyword would under-validate without any signal.
+_SUPPORTED_KEYWORDS = frozenset(
+    {
+        "$ref",
+        "type",
+        "const",
+        "enum",
+        "minLength",
+        "maxLength",
+        "pattern",
+        "minimum",
+        "maximum",
+        "minItems",
+        "uniqueItems",
+        "items",
+        "required",
+        "minProperties",
+        "properties",
+        "additionalProperties",
+        "propertyNames",
+        "allOf",
+        "anyOf",
+        "oneOf",
+        "not",
+        "if",
+        "then",
+        "else",
+    }
+)
+_ANNOTATION_KEYWORDS = frozenset({"$schema", "$id", "$defs", "$comment", "title", "description"})
+
+
 def _describe(value: Any) -> str:
     for name, check in _TYPE_CHECKS.items():
         if name != "number" and check(value):
@@ -537,6 +571,14 @@ def validate_instance(
 
     errors: list[str] = []
 
+    unsupported = set(schema) - _SUPPORTED_KEYWORDS - _ANNOTATION_KEYWORDS
+    if unsupported:
+        listed = ", ".join(sorted(unsupported))
+        errors.append(
+            f"{pointer or '/'}: this validator does not implement schema keyword(s) {listed}; "
+            "its result is incomplete until they are added"
+        )
+
     if "$ref" in schema:
         target, target_document = store.resolve(schema["$ref"], document)
         errors.extend(validate_instance(instance, target, store, target_document, pointer))
@@ -558,7 +600,9 @@ def validate_instance(
 
     if isinstance(instance, str):
         if "minLength" in schema and len(instance) < schema["minLength"]:
-            errors.append(f"{pointer or '/'}: must not be empty")
+            required = schema["minLength"]
+            detail = "must not be empty" if required == 1 else f"must be at least {required} characters"
+            errors.append(f"{pointer or '/'}: {detail}")
         if "maxLength" in schema and len(instance) > schema["maxLength"]:
             errors.append(f"{pointer or '/'}: must be at most {schema['maxLength']} characters")
         if "pattern" in schema and not re.search(schema["pattern"], instance):

@@ -106,8 +106,8 @@
       "additionalProperties": false,
       "properties": {
         "type": {
-          "$ref": "#/$defs/nonEmptyString",
-          "description": "Harness config name: oz, claude (claude-code is also accepted), codex, or gemini."
+          "enum": ["oz", "claude", "claude-code", "codex", "gemini"],
+          "description": "Harness config name. claude-code is an accepted alias for claude."
         },
         "model": { "$ref": "#/$defs/clearableString" },
         "reasoningLevel": {

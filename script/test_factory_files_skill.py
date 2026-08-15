@@ -13,6 +13,7 @@ Run directly, or via script/presubmit.
 
 from __future__ import annotations
 
+import re
 import shutil
 import subprocess
 import sys
@@ -20,15 +21,9 @@ import tempfile
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-VALIDATOR = (
-    REPO_ROOT
-    / "resources"
-    / "bundled"
-    / "skills"
-    / "factory-files"
-    / "scripts"
-    / "validate_factory_files.py"
-)
+SKILL = REPO_ROOT / "resources" / "bundled" / "skills" / "factory-files"
+VALIDATOR = SKILL / "scripts" / "validate_factory_files.py"
+EXAMPLES = SKILL / "references" / "examples.md"
 
 FACTORY = """schemaVersion: v1alpha1
 name: demo
@@ -67,6 +62,15 @@ VALID_CASES: list[tuple[str, dict[str, str]]] = [
                 "agents/main/agent.md": "---\nagentType: MAIN\nharness:\n  type: claude\n"
                 "  model: opus\n  reasoningLevel: high\n  auth:\n    source: managedSecret\n"
                 "    secretName: ANTHROPIC_KEY\n---\nx\n"
+            }
+        ),
+    ),
+    (
+        "harness-claude-code-alias",
+        tree(
+            **{
+                "agents/main/agent.md": "---\nagentType: MAIN\nharness:\n  type: claude-code\n"
+                "  model: opus\n---\nx\n"
             }
         ),
     ),
@@ -311,6 +315,15 @@ INVALID_CASES: list[tuple[str, dict[str, str]]] = [
         ),
     ),
     ("empty-harness", tree(**{"agents/main/agent.md": "---\nagentType: MAIN\nharness: {}\n---\nx\n"})),
+    (
+        "unknown-harness-type",
+        tree(
+            **{
+                "agents/main/agent.md": "---\nagentType: MAIN\nharness:\n  type: claude_code\n"
+                "  model: opus\n---\nx\n"
+            }
+        ),
+    ),
     ("alias-bad-char", tree(**{"factory.yaml": FACTORY + "alias: demo/factory\n"})),
     ("alias-too-long", tree(**{"factory.yaml": FACTORY + "alias: " + "a" * 61 + "\n"})),
     ("integration-github", tree(**{"factory.yaml": FACTORY + "integrations:\n  - type: github\n"})),
@@ -536,9 +549,44 @@ def run_case(name: str, expect_valid: bool, files: dict[str, str]) -> bool:
         shutil.rmtree(root, ignore_errors=True)
 
 
+def documented_example_cases() -> list[tuple[str, bool, dict[str, str]]]:
+    """Assemble the code blocks in references/examples.md into valid trees.
+
+    The reference teaches by example, so an example that no longer validates is
+    a defect in the documentation. Block indices are positional: adding or
+    reordering a block in the reference means updating this mapping.
+    """
+    blocks = [
+        body for _, body in re.findall(r"```(yaml|markdown)\n(.*?)```", EXAMPLES.read_text(), re.S)
+    ]
+    expected_blocks = 10
+    if len(blocks) != expected_blocks:
+        raise SystemExit(
+            f"examples.md has {len(blocks)} example blocks, expected {expected_blocks}; "
+            "update documented_example_cases()"
+        )
+    minimal = {"factory.yaml": blocks[0], "agents/foreman/agent.md": blocks[1]}
+    full = {
+        "factory.yaml": blocks[2],
+        "agents/foreman/agent.md": blocks[1],
+        "agents/implementer/agent.md": blocks[3],
+        "agents/reviewer/agent.md": blocks[4],
+        "agents/investigator/agent.md": blocks[5],
+        "automations/pr-review/automation.md": blocks[6],
+        "automations/nightly-sweep/automation.md": blocks[7],
+        "runners/linux-standard.yaml": blocks[8],
+        "runners/macos-standard.yaml": blocks[9],
+    }
+    return [
+        ("documented-minimal-example", True, minimal),
+        ("documented-full-example", True, full),
+    ]
+
+
 def main() -> int:
     cases = [(name, True, files) for name, files in VALID_CASES]
     cases += [(name, False, files) for name, files in INVALID_CASES]
+    cases += documented_example_cases()
     failures = [name for name, expect, files in cases if not run_case(name, expect, files)]
     if failures:
         print(f"{len(failures)}/{len(cases)} factory-files validator cases failed", file=sys.stderr)

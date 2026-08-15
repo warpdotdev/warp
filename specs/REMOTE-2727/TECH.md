@@ -132,7 +132,7 @@ Ship machine-readable JSON Schemas and a validator that runs them. This reverses
 The validator is `scripts/validate_factory_files.py` and depends on nothing but Python 3. Neither PyYAML nor `jsonschema` is reliably present in agent sandboxes, so the script carries two small readers of its own:
 
 - A restricted YAML reader accepting exactly the subset the Factory file parser accepts. Anchors, aliases, explicit tags, merge keys, duplicate keys, and multiple documents are rejected rather than interpreted, which matches the parser instead of limiting the tool. Anything it cannot read confidently is reported, never guessed. Those constructs are recognized only where a YAML node begins, and a block scalar's body is treated as opaque text, so ordinary prose such as `It's a thing`, `A & B`, or `*emphasis*` inside a description is not mistaken for syntax.
-- A JSON Schema evaluator covering only the keywords the bundled schemas use. The schemas remain ordinary JSON Schema 2020-12 documents, so `check-jsonschema`, `ajv`, or `jsonschema` also work when available.
+- A JSON Schema evaluator covering only the keywords the bundled schemas use. The schemas remain ordinary JSON Schema 2020-12 documents, so `check-jsonschema`, `ajv`, or `jsonschema` also work when available. A keyword the evaluator does not implement is reported rather than skipped, so adding one to a schema fails loudly instead of quietly under-validating.
 
 The schemas encode what the schema language can express. Three tree-level rules cannot be expressed in a single-document schema and are implemented in the script: exactly one `MAIN`/`FOREMAN` agent, automation `agent` references resolving to a declared agent, and duplicate resource names across the flat and directory automation forms.
 
@@ -226,7 +226,8 @@ The schemas and validator were checked against the authoritative Go implementati
 
 - The canonical `logic/factoryfile/testdata/schema_contract` tree validates clean.
 - Every tree under `logic/factoryfile/testdata/invalid` is rejected, each with a message naming the same defect the parser reports.
-- A 69-case positive/negative corpus covering harness blocks, auth sources, inline schedules, runner platforms, alias characters, integrations, filter keys, and author prose produced the expected verdict in every case. It is committed as `script/test_factory_files_skill.py` and runs in `script/presubmit`.
+- A 73-case positive/negative corpus covering harness blocks, auth sources, inline schedules, runner platforms, alias characters, integrations, filter keys, and author prose produced the expected verdict in every case. It is committed as `script/test_factory_files_skill.py` and runs in `script/presubmit`.
+- Every example in `references/examples.md` is assembled into a tree and validated by that same corpus, so a reference that teaches invalid configuration fails the build.
 - Every field set, enum, path helper, and trigger filter key in the schemas was diffed mechanically against a contract dumped from `develop`, covering 78 comparisons with no mismatch. That comparator is the prototype for follow-up 1 below.
 - For every parser-level case in that corpus, `factoryfile.ParseTree` produced the matching verdict.
 - Filter keys and matcher shapes were checked directly against `triggers.ValidateFilter`, including the `schedule_ids` in-only restriction.
