@@ -85,7 +85,12 @@ Linear `*_ids` fields take durable Linear UUIDs, not display names or keys.
 ## jira
 - `issue_created`, `issue_labeled` — `project_keys`, `labels`
 - `status_changed` — `project_keys`, `status_ids`
-- `agent_session_created` — `project_keys`, `keywords`
+- `agent_session_created` — `project_keys`, `labels`, `keywords`
+
+Jira `labels` match case-sensitively, unlike the other providers. On
+`agent_session_created` the session payload does not carry labels, so a
+constrained subscription resolves them through a best-effort issue fetch and
+fails closed when that returns none.
 
 ## slack
 - `app_mention`, `message_dm`, `message_im`, `message_mpim`, `message_posted` —

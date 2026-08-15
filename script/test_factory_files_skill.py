@@ -255,6 +255,28 @@ VALID_CASES: list[tuple[str, dict[str, str]]] = [
         ),
     ),
     (
+        "jira-agent-session-labels",
+        tree(
+            **{
+                "automations/n/automation.md": "---\ntriggers:\n  - provider: jira\n"
+                "    event: agent_session_created\n    filter:\n      project_keys: [ENG]\n"
+                "      labels: [triage]\n      keywords: [urgent]\n---\nrun\n"
+            }
+        ),
+    ),
+    # Jira label matching is case-sensitive, so values differing only in case
+    # are two distinct labels rather than a conflict.
+    (
+        "jira-labels-are-case-sensitive",
+        tree(
+            **{
+                "automations/n/automation.md": "---\ntriggers:\n  - provider: jira\n"
+                "    event: issue_labeled\n    filter:\n      labels:\n        in: [Bug]\n"
+                "        not_in: [bug]\n---\nrun\n"
+            }
+        ),
+    ),
+    (
         "empty-and-null-matchers",
         tree(
             **{

@@ -678,6 +678,7 @@
                 "additionalProperties": false,
                 "properties": {
                   "project_keys": { "$ref": "#/$defs/stringMatcher" },
+                  "labels": { "$ref": "#/$defs/stringMatcher" },
                   "keywords": { "$ref": "#/$defs/stringMatcher" }
                 }
               }
