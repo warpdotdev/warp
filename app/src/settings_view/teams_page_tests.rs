@@ -245,3 +245,58 @@ fn workspace_admin_does_not_get_pending_invite_cancellation() {
     // it's out of scope for the workspace-admin override.
     assert!(action_labels(&items, "invitee@example.com").is_empty());
 }
+
+#[test]
+fn invite_link_display_shows_full_server_link_when_present() {
+    let mut team = team_with_members(vec![], true);
+    team.invite_link = Some("https://app.warp.dev/team/abc123".to_string());
+
+    let (text, copy_enabled) = TeamsWidget::invite_link_display(&team);
+
+    assert_eq!(text, "https://app.warp.dev/team/abc123");
+    assert!(
+        copy_enabled,
+        "copy should be enabled once the server provides a link"
+    );
+}
+
+#[test]
+fn invite_link_display_disables_copy_when_team_has_no_link() {
+    let team = team_with_members(vec![], true);
+
+    let (text, copy_enabled) = TeamsWidget::invite_link_display(&team);
+
+    assert_eq!(text, INVITE_LINK_DISABLED_TEXT);
+    assert!(
+        !copy_enabled,
+        "copy should be disabled when invite links are disabled for the team"
+    );
+}
+
+#[test]
+fn team_invite_link_enabled_follows_the_team_even_when_the_workspace_flag_disagrees() {
+    // Regression: this used to read `UserWorkspaces::is_invite_link_enabled()`, a
+    // workspace-wide flag, even though `SetIsInviteLinkEnabled` and `Team.inviteLink`
+    // are both scoped per team. A workspace whose flag disagrees with a specific
+    // team's own state must not affect that team's controls.
+    let mut enabled_team = team_with_members(vec![], true);
+    enabled_team.invite_link = Some("https://app.warp.dev/team/abc123".to_string());
+    let mut workspace_saying_disabled =
+        workspace_with_member(MEMBER_EMAIL, MembershipRole::User, true);
+    workspace_saying_disabled.settings.is_invite_link_enabled = false;
+
+    assert!(
+        TeamsWidget::team_invite_link_enabled(&enabled_team),
+        "an enabled team should show enabled controls even if the workspace-wide flag says disabled"
+    );
+
+    let disabled_team = team_with_members(vec![], true);
+    let mut workspace_saying_enabled =
+        workspace_with_member(MEMBER_EMAIL, MembershipRole::User, true);
+    workspace_saying_enabled.settings.is_invite_link_enabled = true;
+
+    assert!(
+        !TeamsWidget::team_invite_link_enabled(&disabled_team),
+        "a disabled team should show disabled controls even if the workspace-wide flag says enabled"
+    );
+}

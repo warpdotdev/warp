@@ -1724,14 +1724,12 @@ impl TeamsPageView {
     fn focus_on_next_input(&mut self, ctx: &mut ViewContext<Self>) {
         let workspaces: &UserWorkspaces = self.user_workspaces.as_ref(ctx);
 
-        if workspaces.team_for_view(ctx).is_some() {
-            if workspaces.is_invite_link_enabled() {
+        match workspaces.team_for_view(ctx) {
+            Some(team) if TeamsWidget::team_invite_link_enabled(team) => {
                 ctx.focus(&self.approve_domains_block_editor);
-            } else {
-                ctx.focus(&self.email_invites_block_editor);
             }
-        } else {
-            ctx.focus(&self.create_team_editor);
+            Some(_) => ctx.focus(&self.email_invites_block_editor),
+            None => ctx.focus(&self.create_team_editor),
         }
         ctx.notify();
     }
@@ -2701,6 +2699,19 @@ impl TeamsWidget {
         section.finish()
     }
 
+    /// Whether the "By link" controls (the enablement switch, the copy row,
+    /// "Reset links", and domain restrictions) should reflect an *enabled*
+    /// state for `team_metadata`.
+    ///
+    /// This intentionally does **not** read `UserWorkspaces::is_invite_link_enabled`
+    /// (a workspace-wide flag): the `SetIsInviteLinkEnabled` mutation and
+    /// `Team.inviteLink` are both scoped per team, so a workspace containing
+    /// teams with different enablement states would otherwise show every
+    /// team's controls in the same (wrong) state.
+    fn team_invite_link_enabled(team_metadata: &Team) -> bool {
+        team_metadata.invite_link.is_some()
+    }
+
     fn render_team_invitation_section(
         &self,
         team_metadata: &Team,
@@ -2712,10 +2723,10 @@ impl TeamsWidget {
     ) -> Box<dyn Element> {
         let mut invitation_section = Flex::column();
 
-        // Invite-link enablement and discoverability are workspace-level settings,
-        // read from the current workspace rather than the Team struct.
+        // Discoverability remains a workspace-level setting, read from the
+        // current workspace rather than the Team struct.
         let user_workspaces = UserWorkspaces::as_ref(app);
-        let is_invite_link_enabled = user_workspaces.is_invite_link_enabled();
+        let is_invite_link_enabled = Self::team_invite_link_enabled(team_metadata);
         let is_discoverable = user_workspaces.is_discoverable();
 
         // "team is full" or "billing issue" or some other alert thats restricting you from adding team members
@@ -3742,6 +3753,18 @@ impl TeamsWidget {
             .finish()
     }
 
+    /// The invite-link row's display text and whether its copy button should
+    /// be enabled, derived from the team's server-provided invite link. This
+    /// is the single source of truth `render_copy_link_row` uses for both,
+    /// pinned directly by unit tests in `teams_page_tests.rs` since the two
+    /// are otherwise only observable through a full element render.
+    fn invite_link_display(team_metadata: &Team) -> (String, bool) {
+        match &team_metadata.invite_link {
+            Some(invite_link) => (invite_link.clone(), true),
+            None => (INVITE_LINK_DISABLED_TEXT.to_string(), false),
+        }
+    }
+
     fn render_copy_link_row(
         &self,
         team_metadata: &Team,
@@ -3749,10 +3772,7 @@ impl TeamsWidget {
     ) -> Box<dyn Element> {
         let mut section = Flex::row().with_cross_axis_alignment(CrossAxisAlignment::Center);
 
-        let (link_text, button_enabled) = match &team_metadata.invite_link {
-            Some(invite_link) => (invite_link.clone(), true),
-            None => (INVITE_LINK_DISABLED_TEXT.into(), false),
-        };
+        let (link_text, button_enabled) = Self::invite_link_display(team_metadata);
         let theme = appearance.theme();
 
         let mut copy_button = appearance

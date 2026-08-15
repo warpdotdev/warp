@@ -3779,9 +3779,10 @@ type Team {
   domain: String
 
   """
-  inviteLink is the server-owned invite-by-link URL for this team, or null when
-  invite links are unavailable (e.g. invite links disabled, non-native
-  workspace not yet supported, or the caller lacks visibility).
+  inviteLink is the server-owned invite-by-link URL for this team. It is null
+  only when invite links are disabled for this team (`is_invite_link_enabled`
+  is false). A caller who lacks visibility into the team does not get null:
+  the query raises a NotAuthorized error instead.
   """
   inviteLink: String
   managedSecrets: ManagedSecretConfig
