@@ -18,6 +18,23 @@ pub enum SignatureResult<'a> {
 
 type SignatureLookupFn = dyn 'static + Send + Sync + Fn(&str) -> Option<Signature>;
 
+/// The longest a command name can be before we refuse to cache a lookup for it.
+///
+/// `SignatureCache::get` is called with arbitrary tokens taken from the terminal input line (see
+/// `CommandRegistry::signature_from_tokens` and friends), not just tokens we already know to be
+/// real command names. Since `SignatureCache::signatures` is append-only (see its doc comment for
+/// why), every distinct token ever looked up would otherwise be cached forever, which lets a
+/// single pathologically large token (e.g. a large blob of text pasted into the terminal input
+/// line) permanently retain an equally large `String` for the lifetime of the process. See
+/// APP-5431.
+///
+/// Real command names are executable names, which common filesystems cap at 255 bytes/characters
+/// (e.g. Linux `NAME_MAX`, macOS APFS/HFS+, and Windows NTFS all use this limit). No legitimate
+/// command name can exceed this, so a token longer than this cannot resolve to a real signature
+/// and is safe to skip caching (and looking up) entirely. As a sanity check, the longest name in
+/// the current embedded signature corpus is 43 characters, well under this cap.
+const MAX_CACHEABLE_COMMAND_LEN: usize = 255;
+
 /// A simple structure to cache parsed command signatures.  These are stored as
 /// JSON, so this makes it easy for us to lazily load and parse the JSON when
 /// a command signature is needed, and only need to do that parsing work once
@@ -49,6 +66,12 @@ impl SignatureCache {
         } else {
             command
         };
+        if command.len() > MAX_CACHEABLE_COMMAND_LEN {
+            // No real command name can be this long (see `MAX_CACHEABLE_COMMAND_LEN`), so this
+            // can't resolve to a signature. Bail out before caching (or even looking up) it to
+            // keep the cache bounded; see APP-5431.
+            return None;
+        }
         let command = command.to_lowercase();
         self.signatures
             .get_or_insert(&command, || (self.lookup_fn)(&command))
