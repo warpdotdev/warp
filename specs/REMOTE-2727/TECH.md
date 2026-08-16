@@ -220,15 +220,17 @@ Do not bump `MINIMUM_PLUGIN_VERSION` for the separate local notification plugins
 ## Implementation sequence
 Use the spec PR branch as the primary Warp implementation branch after approval.
 
-1. Add the canonical skill, its schemas, its validator, trigger tests, and packaging tests to the Warp spec PR. **Done.**
-2. Add the manifest and sync script to the same branch.
-3. Copy the approved Warp skill tree into Claude Code and Codex plugin branches, substituting the templated validator path. These two plugin changes can proceed in parallel.
-4. Merge and release both plugin patch versions.
-5. Update the Warp platform minimum version constants to the released versions.
-6. Run cross-repository drift checks and final skill evaluations.
-7. Merge the Warp PR only after the plugin versions named by its minimums are available.
+The Warp skill and the plugin mirrors ship independently. The Warp PR does not change either `MINIMUM_PLATFORM_PLUGIN_VERSION`, so it cannot require an unpublished plugin version and does not need to wait for one.
 
-This order prevents Warp from requiring unpublished plugin versions. It also lets plugin copies pin the exact pushed Warp source commit before the Warp PR merges.
+1. Add the canonical skill, its schemas, its validator, trigger tests, and packaging tests to the Warp spec PR. **Done.**
+2. Merge the Warp PR. The native client, TUI, and Warp cloud agents pick the skill up from the shared bundle at that point.
+3. Add the manifest and sync script.
+4. Copy the merged Warp skill tree into Claude Code and Codex plugin branches, substituting the templated validator path. These two plugin changes can proceed in parallel.
+5. Merge and release both plugin patch versions.
+6. In a separate Warp PR, raise the platform minimum version constants to the released versions. That PR, not this one, is the one that must not merge before the named releases exist.
+7. Run cross-repository drift checks and final skill evaluations.
+
+The real constraint is only that Warp must never require a plugin version that is not published, which binds step 6 alone. Landing the skill first also gives the plugin copies a merged commit to pin instead of a moving branch.
 
 The schema-generation follow-up in `warp-server` is tracked separately; it is not a prerequisite for this PR.
 
@@ -286,10 +288,13 @@ In each plugin repository:
 After release, verify a fresh Claude Code Oz run and a fresh Codex Oz run list `factory-files` as a filesystem skill and can read its references.
 
 ### Release check
-Before the Warp PR merges:
+Before the Warp skill PR merges:
+
+- Confirm GUI, TUI, and remote-server bundles contain the same skill tree, which `script/test_factory_files_skill.py` checks by packaging it.
+
+Before the minimum-version bump in step 6 merges:
 
 - Confirm the Claude and Codex released versions are greater than or equal to the updated platform minimums.
-- Confirm GUI, TUI, and remote-server stable bundles contain the same manifest.
 - Confirm all three repository copies of the skill directory agree under the sync manifest, which accounts for the substituted validator path.
 
 No visual recording is required. This feature changes agent context and generated files, not a rendered UI workflow.
