@@ -1722,7 +1722,7 @@ impl TeamsPageView {
         let workspaces: &UserWorkspaces = self.user_workspaces.as_ref(ctx);
 
         match workspaces.team_for_view(ctx) {
-            Some(team) if TeamsWidget::team_invite_link_enabled(team) => {
+            Some(team) if team.invite_link.is_some() => {
                 ctx.focus(&self.approve_domains_block_editor);
             }
             Some(_) => ctx.focus(&self.email_invites_block_editor),
@@ -2696,10 +2696,6 @@ impl TeamsWidget {
         section.finish()
     }
 
-    fn team_invite_link_enabled(team_metadata: &Team) -> bool {
-        team_metadata.invite_link.is_some()
-    }
-
     fn render_team_invitation_section(
         &self,
         team_metadata: &Team,
@@ -2712,7 +2708,7 @@ impl TeamsWidget {
         let mut invitation_section = Flex::column();
 
         let user_workspaces = UserWorkspaces::as_ref(app);
-        let is_invite_link_enabled = Self::team_invite_link_enabled(team_metadata);
+        let is_invite_link_enabled = team_metadata.invite_link.is_some();
         let is_discoverable = user_workspaces.is_discoverable();
 
         // "team is full" or "billing issue" or some other alert thats restricting you from adding team members
