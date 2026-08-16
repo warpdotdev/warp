@@ -8,7 +8,9 @@ use base64::Engine as _;
 use base64::prelude::BASE64_STANDARD;
 use itertools::Itertools;
 use lazy_static::lazy_static;
-use markdown_parser::FormattedText;
+use markdown_parser::{
+    FormattedText, FormattedTextLine, parse_markdown, parse_markdown_with_gfm_tables,
+};
 use mermaid_to_svg::MermaidTheme;
 use num_traits::SaturatingSub;
 use regex::Regex;
@@ -1475,38 +1477,40 @@ impl NotebooksEditorModel {
         ctx: &AppContext,
     ) -> Option<Range<CharOffset>> {
         let text = self.content.as_ref(ctx).text().into_string();
+        let source_lines = source_search_lines(source);
 
         if let Some(match_text) = target
             .match_text
             .as_deref()
             .filter(|text| !text.trim().is_empty())
         {
-            if let Some(start) = source_line_match_index(&text, source, target, match_text) {
+            if let Some(start) = source_line_match_index(&text, &source_lines, target, match_text) {
                 return Some(
                     CharOffset::from(start)..CharOffset::from(start + match_text.chars().count()),
                 );
             }
-            if let Some(occurrence) = source_occurrence_index(source, target, match_text)
+            if let Some(occurrence) = source_occurrence_index(&source_lines, target, match_text)
                 && let Some(start) = nth_char_index(&text, match_text, occurrence)
             {
                 return Some(
                     CharOffset::from(start)..CharOffset::from(start + match_text.chars().count()),
                 );
             }
+            return None;
         }
 
-        let line = source.lines().nth(target.source_line.checked_sub(1)?)?;
-        let needle = source_line_search_needle(line)?;
+        let line_index = target.source_line.checked_sub(1)?;
+        let needle = source_lines.get(line_index)?.text.as_deref()?;
 
         // When several source lines reduce to the same text, target the
         // occurrence matching the requested line rather than the first one.
-        let occurrence = source
-            .lines()
-            .take(target.source_line - 1)
-            .filter(|prior| source_line_search_needle(prior).as_deref() == Some(needle.as_str()))
+        let occurrence = source_lines
+            .iter()
+            .take(line_index)
+            .filter(|prior| prior.text.as_deref() == Some(needle))
             .count();
 
-        let start = nth_char_index(&text, &needle, occurrence)?;
+        let start = nth_line_char_index(&text, needle, occurrence)?;
         Some(CharOffset::from(start)..CharOffset::from(start + needle.chars().count()))
     }
 
@@ -2447,22 +2451,22 @@ impl ChildModels {
 
 fn source_line_match_index(
     rendered_text: &str,
-    source: &str,
+    source_lines: &[SourceSearchLine<'_>],
     target: &SourceScrollTarget,
     match_text: &str,
 ) -> Option<usize> {
     let line_index = target.source_line.checked_sub(1)?;
-    let line = source.lines().nth(line_index)?;
-    let needle = source_line_search_needle(line)?;
-    let line_occurrence = source
-        .lines()
+    let line = source_lines.get(line_index)?;
+    let needle = line.text.as_deref()?;
+    let line_occurrence = source_lines
+        .iter()
         .take(line_index)
-        .filter(|prior| source_line_search_needle(prior).as_deref() == Some(needle.as_str()))
+        .filter(|prior| prior.text.as_deref() == Some(needle))
         .count();
-    let line_start = nth_char_index(rendered_text, &needle, line_occurrence)?;
+    let line_start = nth_line_char_index(rendered_text, needle, line_occurrence)?;
     let match_occurrence =
         visible_match_occurrence_before_column(line, target.column_num, match_text);
-    let match_start = nth_char_index(&needle, match_text, match_occurrence)?;
+    let match_start = nth_char_index(needle, match_text, match_occurrence)?;
     Some(line_start + match_start)
 }
 
@@ -2472,26 +2476,26 @@ fn source_line_match_index(
 /// Counting and lookup both compare case-sensitively against the exact matched text, so a
 /// case-insensitive search still lands on the occurrence that was clicked.
 fn source_occurrence_index(
-    source: &str,
+    source_lines: &[SourceSearchLine<'_>],
     target: &SourceScrollTarget,
     match_text: &str,
 ) -> Option<usize> {
     let line_index = target.source_line.checked_sub(1)?;
-    let line = source.lines().nth(line_index)?;
-    let preceding_lines = source
-        .lines()
+    let line = source_lines.get(line_index)?;
+    let preceding_lines = source_lines
+        .iter()
         .take(line_index)
-        .filter_map(source_line_search_needle)
+        .filter_map(|line| line.text.as_deref())
         .map(|line| line.matches(match_text).count())
         .sum::<usize>();
     let within_line = visible_match_occurrence_before_column(line, target.column_num, match_text);
-    let visible_line = source_line_search_needle(line)?;
-    nth_char_index(&visible_line, match_text, within_line)?;
+    let visible_line = line.text.as_deref()?;
+    nth_char_index(visible_line, match_text, within_line)?;
     Some(preceding_lines + within_line)
 }
 
 fn visible_match_occurrence_before_column(
-    line: &str,
+    line: &SourceSearchLine<'_>,
     column: Option<usize>,
     match_text: &str,
 ) -> usize {
@@ -2499,11 +2503,16 @@ fn visible_match_occurrence_before_column(
         return 0;
     };
     let byte_limit = line
+        .source
         .char_indices()
         .nth(column.saturating_sub(1))
-        .map_or(line.len(), |(byte_index, _)| byte_index);
-    source_line_search_needle(&line[..byte_limit])
-        .map_or(0, |prefix| prefix.matches(match_text).count())
+        .map_or(line.source.len(), |(byte_index, _)| byte_index);
+    let prefix = &line.source[..byte_limit];
+    let visible_prefix = match line.code_fence_indent {
+        Some(indent) => strip_code_fence_indentation(prefix, indent).to_string(),
+        None => markdown_line_search_text(prefix).unwrap_or_default(),
+    };
+    visible_prefix.matches(match_text).count()
 }
 
 /// Char index (not byte index) of the `n`-th (0-based) occurrence of `needle` in `haystack`.
@@ -2517,114 +2526,135 @@ fn nth_char_index(haystack: &str, needle: &str, n: usize) -> Option<usize> {
         .map(|(byte_index, _)| haystack[..byte_index].chars().count())
 }
 
-/// Reduce a raw markdown source line to the text most likely to appear
-/// verbatim in the rendered document: leading block markers (heading `#`s,
-/// blockquote `>`s, list bullets, ordered-list numbers, task boxes) and
-/// inline emphasis / code markers are stripped, and link/image URLs are
-/// dropped in favor of their visible text. Returns None for lines with no
-/// searchable rendered text (blank lines, code fences, thematic breaks,
-/// table separator rows).
-fn source_line_search_needle(line: &str) -> Option<String> {
-    let trimmed = line.trim();
-    // Fence delimiters have no rendered text (their info string, e.g. the
-    // language tag, isn't rendered either).
-    if trimmed.starts_with("```") || trimmed.starts_with("~~~") {
-        return None;
+fn nth_line_char_index(haystack: &str, needle: &str, n: usize) -> Option<usize> {
+    let mut occurrence = 0;
+    let mut char_index = 0;
+    for line in haystack.split_inclusive('\n') {
+        let text = line.strip_suffix('\n').unwrap_or(line);
+        if text == needle {
+            if occurrence == n {
+                return Some(char_index);
+            }
+            occurrence += 1;
+        }
+        char_index += line.chars().count();
     }
-
-    let unmarked = strip_leading_block_markers(trimmed);
-    // Underscores are kept: intra-word underscores are literal in markdown
-    // and stripping them would break matching of code-like prose.
-    let without_inline: String = unmarked
-        .chars()
-        .filter(|c| !matches!(c, '*' | '`' | '~'))
-        .collect();
-    let needle = strip_link_urls(&without_inline);
-    let needle = needle.trim();
-
-    // Lines of pure punctuation (thematic breaks, table separator rows) have
-    // no rendered text to search for.
-    if !needle.chars().any(char::is_alphanumeric) {
-        return None;
-    }
-    Some(needle.to_string())
+    None
 }
 
-/// Strip leading markdown block markers (blockquotes, ATX headings, list
-/// bullets, ordered-list numbers, task boxes) from a trimmed source line.
-fn strip_leading_block_markers(mut rest: &str) -> &str {
-    loop {
-        let before = rest;
-        rest = rest.trim_start();
+struct SourceSearchLine<'a> {
+    source: &'a str,
+    text: Option<String>,
+    code_fence_indent: Option<usize>,
+}
 
-        if let Some(after) = rest.strip_prefix('>') {
-            rest = after;
+fn source_search_lines(source: &str) -> Vec<SourceSearchLine<'_>> {
+    let lines = source.lines().collect_vec();
+    let mut search_lines = Vec::with_capacity(lines.len());
+    let mut index = 0;
+
+    while index < lines.len() {
+        if let Some(opening_indent) = code_fence_opening_indent(lines[index])
+            && let Some(closing_index) = (index + 1..lines.len())
+                .find(|&candidate| is_code_fence_closing(lines[candidate], opening_indent))
+        {
+            let hidden = fenced_block_is_hidden(&lines[index..=closing_index]);
+            search_lines.push(SourceSearchLine {
+                source: lines[index],
+                text: None,
+                code_fence_indent: None,
+            });
+            for &line in &lines[index + 1..closing_index] {
+                let text = strip_code_fence_indentation(line, opening_indent).to_string();
+                search_lines.push(SourceSearchLine {
+                    source: line,
+                    text: (!hidden && !text.is_empty()).then_some(text),
+                    code_fence_indent: (!hidden).then_some(opening_indent),
+                });
+            }
+            search_lines.push(SourceSearchLine {
+                source: lines[closing_index],
+                text: None,
+                code_fence_indent: None,
+            });
+            index = closing_index + 1;
             continue;
         }
 
-        let hashes = rest.len() - rest.trim_start_matches('#').len();
-        if hashes > 0 {
-            let after = &rest[hashes..];
-            if after.is_empty() || after.starts_with(' ') {
-                rest = after;
-                continue;
-            }
-        }
-
-        for marker in ["- ", "* ", "+ "] {
-            if let Some(after) = rest.strip_prefix(marker) {
-                rest = after;
-            }
-        }
-
-        let digits = rest.len() - rest.trim_start_matches(|c: char| c.is_ascii_digit()).len();
-        if digits > 0 {
-            let after = &rest[digits..];
-            if let Some(after) = after
-                .strip_prefix(". ")
-                .or_else(|| after.strip_prefix(") "))
-            {
-                rest = after;
-                continue;
-            }
-        }
-
-        for marker in ["[ ] ", "[x] ", "[X] "] {
-            if let Some(after) = rest.strip_prefix(marker) {
-                rest = after;
-            }
-        }
-
-        if rest == before {
-            break;
-        }
+        search_lines.push(SourceSearchLine {
+            source: lines[index],
+            text: markdown_line_search_text(lines[index]),
+            code_fence_indent: None,
+        });
+        index += 1;
     }
-    rest
+
+    search_lines
 }
 
-/// Replace markdown link/image syntax `[text](url)` / `![alt](url)` with just
-/// the visible text, since URLs aren't part of the rendered document text.
-fn strip_link_urls(text: &str) -> String {
-    let mut out = String::with_capacity(text.len());
-    let mut chars = text.chars().peekable();
-    while let Some(c) = chars.next() {
-        match c {
-            '!' if chars.peek() == Some(&'[') => {}
-            '[' | ']' => {
-                if c == ']' && chars.peek() == Some(&'(') {
-                    // Skip the parenthesized URL.
-                    chars.next();
-                    for inner in chars.by_ref() {
-                        if inner == ')' {
-                            break;
-                        }
-                    }
-                }
-            }
-            _ => out.push(c),
-        }
+fn markdown_line_search_text(line: &str) -> Option<String> {
+    let line_with_ending = format!("{line}\n");
+    let formatted = parse_markdown_source(&line_with_ending)?;
+
+    let text = formatted
+        .lines
+        .iter()
+        .filter_map(|line| match line {
+            FormattedTextLine::LineBreak
+            | FormattedTextLine::HorizontalRule
+            | FormattedTextLine::Embedded(_) => None,
+            line => Some(line.raw_text().trim_end_matches('\n').to_string()),
+        })
+        .filter(|line| !line.is_empty())
+        .join("\n");
+    (!text.is_empty()).then_some(text)
+}
+
+fn parse_markdown_source(markdown: &str) -> Option<FormattedText> {
+    if FeatureFlag::MarkdownTables.is_enabled() {
+        parse_markdown_with_gfm_tables(markdown)
+    } else {
+        parse_markdown(markdown)
     }
-    out
+    .ok()
+}
+
+fn fenced_block_is_hidden(lines: &[&str]) -> bool {
+    let mut source = lines.join("\n");
+    source.push('\n');
+    parse_markdown_source(&source).is_some_and(|formatted| {
+        matches!(
+            formatted.lines.front(),
+            Some(FormattedTextLine::Embedded(_))
+        )
+    })
+}
+
+fn code_fence_opening_indent(line: &str) -> Option<usize> {
+    let indent = line
+        .chars()
+        .take_while(|&character| character == ' ')
+        .count();
+    line.get(indent..)?.starts_with("```").then_some(indent)
+}
+
+fn is_code_fence_closing(line: &str, opening_indent: usize) -> bool {
+    let indent = line
+        .chars()
+        .take_while(|&character| character == ' ')
+        .count();
+    let trimmed = line.trim();
+    indent <= opening_indent + 3
+        && trimmed.len() >= 3
+        && trimmed.chars().all(|character| character == '`')
+}
+
+fn strip_code_fence_indentation(line: &str, opening_indent: usize) -> &str {
+    let line_indent = line
+        .chars()
+        .take_while(|&character| character == ' ')
+        .count();
+    &line[opening_indent.min(line_indent)..]
 }
 
 /// Check if a content string is fully a valid URL.

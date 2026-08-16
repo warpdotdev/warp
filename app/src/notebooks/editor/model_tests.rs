@@ -3477,6 +3477,150 @@ fn test_scroll_to_source_target_ignores_match_in_same_line_link_url() {
     });
 }
 
+#[test]
+fn test_scroll_to_source_target_rejects_hidden_link_destination() {
+    App::test((), |mut app| async move {
+        initialize_deps(&mut app);
+
+        let source = "[Warp](https://example.com/needle)";
+        let model = model_from_markdown(source, &mut app, true);
+        layout_model(&mut app, &model).await;
+
+        assert_eq!(
+            source_target_range_at_column(&model, source, 1, Some(28), Some("needle"), &mut app),
+            None,
+            "a match that exists only in link syntax should not fall back to its source line"
+        );
+    });
+}
+
+#[test]
+fn test_scroll_to_source_target_handles_punctuation_in_code_fence() {
+    App::test((), |mut app| async move {
+        initialize_deps(&mut app);
+
+        let source = "prose =>\n\n```text\n=>\n---\n```\n\ntrailing =>";
+        let model = model_from_markdown(source, &mut app, true);
+        layout_model(&mut app, &model).await;
+        let document = document_text(&model, &mut app);
+
+        let arrow = source_target_range_at_column(&model, source, 4, Some(1), Some("=>"), &mut app)
+            .expect("should locate punctuation in fenced code");
+        assert_eq!(arrow, expected_range(&document, "=>", 1));
+
+        let dashes =
+            source_target_range_at_column(&model, source, 5, Some(1), Some("---"), &mut app)
+                .expect("should not treat code as a thematic break");
+        assert_eq!(dashes, expected_range(&document, "---", 0));
+    });
+}
+
+#[test]
+fn test_scroll_to_source_target_rejects_hidden_embedded_object_content() {
+    App::test((), |mut app| async move {
+        initialize_deps(&mut app);
+
+        let source = "```warp-embedded-object\nid: needle\n```\n\nvisible needle";
+        let model = model_from_markdown(source, &mut app, true);
+        layout_model(&mut app, &model).await;
+
+        assert_eq!(
+            source_target_range_at_column(&model, source, 2, Some(5), Some("needle"), &mut app),
+            None,
+            "embedded-object metadata is not rendered as code"
+        );
+    });
+}
+
+#[test]
+fn test_scroll_to_source_target_distinguishes_visible_punctuation_from_markers() {
+    App::test((), |mut app| async move {
+        initialize_deps(&mut app);
+
+        let source = "escaped \\*\n\n---\n\nvisible =>\n\n*emphasis*";
+        let model = model_from_markdown(source, &mut app, true);
+        layout_model(&mut app, &model).await;
+        let document = document_text(&model, &mut app);
+
+        let escaped =
+            source_target_range_at_column(&model, source, 1, Some(10), Some("*"), &mut app)
+                .expect("should locate escaped punctuation rendered as text");
+        assert_eq!(escaped, expected_range(&document, "*", 0));
+
+        let arrow = source_target_range_at_column(&model, source, 5, Some(9), Some("=>"), &mut app)
+            .expect("should locate punctuation-only prose");
+        assert_eq!(arrow, expected_range(&document, "=>", 0));
+
+        assert_eq!(
+            source_target_range_at_column(&model, source, 3, Some(1), Some("---"), &mut app),
+            None,
+            "a thematic break has no searchable rendered text"
+        );
+        assert_eq!(
+            source_target_range_at_column(&model, source, 7, Some(1), Some("*"), &mut app),
+            None,
+            "emphasis markers have no searchable rendered text"
+        );
+    });
+}
+
+#[test]
+fn test_scroll_to_source_target_handles_punctuation_in_gfm_table_cells() {
+    App::test((), |mut app| async move {
+        initialize_deps(&mut app);
+        let _tables = FeatureFlag::MarkdownTables.override_enabled(true);
+
+        let source = "| Header |\n| --- |\n| => |";
+        let model = model_from_markdown(source, &mut app, true);
+        layout_model(&mut app, &model).await;
+        let document = document_text(&model, &mut app);
+
+        let cell = source_target_range_at_column(&model, source, 3, Some(3), Some("=>"), &mut app)
+            .expect("should locate punctuation rendered in a table cell");
+        assert_eq!(cell, expected_range(&document, "=>", 0));
+
+        assert_eq!(
+            source_target_range_at_column(&model, source, 2, Some(3), Some("---"), &mut app),
+            None,
+            "the table separator row is syntax rather than rendered cell text"
+        );
+    });
+}
+
+#[test]
+fn test_scroll_to_source_target_does_not_anchor_inside_an_earlier_line() {
+    App::test((), |mut app| async move {
+        initialize_deps(&mut app);
+
+        let source = "prefix needle suffix\n\nneedle";
+        let model = model_from_markdown(source, &mut app, true);
+        layout_model(&mut app, &model).await;
+        let document = document_text(&model, &mut app);
+
+        let range =
+            source_target_range_at_column(&model, source, 3, Some(1), Some("needle"), &mut app)
+                .expect("should locate the clicked line");
+        assert_eq!(range, expected_range(&document, "needle", 1));
+    });
+}
+
+#[test]
+fn test_scroll_to_source_target_skips_image_alt_text_for_a_later_line() {
+    App::test((), |mut app| async move {
+        initialize_deps(&mut app);
+
+        let source = "![needle](image.png)\n\nclicked needle";
+        let model = model_from_markdown(source, &mut app, true);
+        layout_model(&mut app, &model).await;
+        let document = document_text(&model, &mut app);
+
+        let range =
+            source_target_range_at_column(&model, source, 3, Some(9), Some("needle"), &mut app)
+                .expect("should not stop at the earlier image alt text");
+        assert_eq!(range, expected_range(&document, "needle", 1));
+    });
+}
+
 /// A case-insensitive search yields the text as it appears in the file, so counting and lookup
 /// stay in step and land on the clicked occurrence.
 #[test]
