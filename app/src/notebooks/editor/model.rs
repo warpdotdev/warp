@@ -2581,6 +2581,21 @@ fn source_search_lines(source: &str) -> Vec<SourceSearchLine<'_>> {
             continue;
         }
 
+        if FeatureFlag::MarkdownTables.is_enabled() && source_starts_gfm_table(&lines[index..]) {
+            search_lines.push(SourceSearchLine {
+                source: lines[index],
+                text: markdown_line_search_text(lines[index]),
+                code_fence_indent: None,
+            });
+            search_lines.push(SourceSearchLine {
+                source: lines[index + 1],
+                text: None,
+                code_fence_indent: None,
+            });
+            index += 2;
+            continue;
+        }
+
         search_lines.push(SourceSearchLine {
             source: lines[index],
             text: markdown_line_search_text(lines[index]),
@@ -2628,6 +2643,18 @@ fn fenced_block_is_hidden(lines: &[&str]) -> bool {
             Some(FormattedTextLine::Embedded(_))
         )
     })
+}
+
+fn source_starts_gfm_table(lines: &[&str]) -> bool {
+    let [header, separator, ..] = lines else {
+        return false;
+    };
+    let source = format!("{header}\n{separator}\n");
+    parse_markdown_with_gfm_tables(&source)
+        .ok()
+        .is_some_and(|formatted| {
+            matches!(formatted.lines.front(), Some(FormattedTextLine::Table(_)))
+        })
 }
 
 fn code_fence_opening_indent(line: &str) -> Option<usize> {

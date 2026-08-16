@@ -3570,7 +3570,7 @@ fn test_scroll_to_source_target_handles_punctuation_in_gfm_table_cells() {
         initialize_deps(&mut app);
         let _tables = FeatureFlag::MarkdownTables.override_enabled(true);
 
-        let source = "| Header |\n| --- |\n| => |";
+        let source = "| Header |\n| --- |\n| => |\n\n```text\n| --- |\n```";
         let model = model_from_markdown(source, &mut app, true);
         layout_model(&mut app, &model).await;
         let document = document_text(&model, &mut app);
@@ -3584,6 +3584,10 @@ fn test_scroll_to_source_target_handles_punctuation_in_gfm_table_cells() {
             None,
             "the table separator row is syntax rather than rendered cell text"
         );
+
+        let code = source_target_range_at_column(&model, source, 6, Some(3), Some("---"), &mut app)
+            .expect("a hidden separator should not consume the visible code occurrence");
+        assert_eq!(code, expected_range(&document, "---", 0));
     });
 }
 
