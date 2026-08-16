@@ -20,6 +20,7 @@ const clientMutations = [
   'deleteConversation',
   'deleteInviteLinkDomainRestriction',
   'deleteManagedSecret',
+  'deleteRunner',
   'updateManagedSecret',
   'deleteObject',
   'deleteTeamInvite',
@@ -76,6 +77,7 @@ const clientMutations = [
   'updateWorkspaceSettings',
   'updateOnboardingSurveyStatus',
   'createSimpleIntegration',
+  'upsertRunner',
 ];
 
 const clientQueries = [
@@ -83,6 +85,7 @@ const clientQueries = [
   'codebaseContextConfig',
   'freeAvailableModels',
   'getRelevantFragments',
+  'getRunners',
   'rerankFragments',
   'harnessAuthSecrets',
   'listWarpDevImages',

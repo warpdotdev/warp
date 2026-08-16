@@ -1,6 +1,8 @@
 use crate::schema;
 #[derive(cynic::Enum, Clone, Debug)]
 pub enum Experiment {
+    AgentMemoryControl,
+    AgentMemoryExperiment,
     AgentModeAnalyticsControl,
     AgentModeAnalyticsExperiment,
     AmbientAgentsControl,

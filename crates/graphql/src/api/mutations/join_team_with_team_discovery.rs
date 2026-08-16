@@ -59,6 +59,8 @@ pub enum JoinTeamWithTeamDiscoveryResult {
 
 #[derive(cynic::Enum, Clone, Copy, Debug)]
 pub enum TeamDiscoveryEntrypoint {
+    #[cynic(rename = "OzWebappFtue")]
+    OzWebappFtue,
     #[cynic(rename = "TeamSettings")]
     TeamSettings,
     #[cynic(rename = "WebSignup")]

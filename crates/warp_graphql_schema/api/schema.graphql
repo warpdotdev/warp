@@ -4,6 +4,8 @@ schema {
   subscription: RootSubscription
 }
 
+directive @computedRequires on FIELD_DEFINITION
+
 """
 Directs the executor to defer this fragment when the `if` argument is true or undefined.
 """
@@ -47,7 +49,9 @@ type AIConversation {
   artifacts: [AIConversationArtifact!]!
   conversationId: ID!
 
-  """Public profile for the user who originally created the conversation, when available."""
+  """
+  Public profile for the user who originally created the conversation, when available.
+  """
   creator: PublicUserProfile
 
   """Base64-encoded proto binary of the final task list."""
@@ -258,6 +262,27 @@ enum AdminEnablementSetting {
   RESPECT_USER_SETTING
 }
 
+type AdminEnablementSettingInfo {
+  isEnforcedByWorkspace: Boolean!
+  value: AdminEnablementSetting!
+}
+
+type AgentDataStoragePolicy {
+  enabled: Boolean!
+}
+
+"""Settings for where agent data should be stored."""
+type AgentDataStorageSettings {
+  connections: [StorageConnection!]!
+  mappings: [NamespaceStorageMappingEntry!]!
+}
+
+type AgentDataStorageSetupInstructions {
+  awsBucketPolicyJsonTemplate: String!
+  gcpBucketIamCommandTemplate: String!
+  serviceAccountEmail: String!
+}
+
 """The harness that produced an agent conversation."""
 enum AgentHarness {
   CLAUDE_CODE
@@ -379,6 +404,11 @@ type AiAutonomyPolicy {
   toggleable: Boolean!
 }
 
+type AiAutonomySettingInfo {
+  isEnforcedByWorkspace: Boolean!
+  value: AiAutonomyValue!
+}
+
 type AiAutonomySettings {
   applyCodeDiffsSetting: AiAutonomyValue
   computerUseSetting: ComputerUseAutonomyValue
@@ -389,6 +419,18 @@ type AiAutonomySettings {
   readFilesAllowlist: [String!]
   readFilesSetting: AiAutonomyValue
   writeToPtySetting: WriteToPtyAutonomyValue
+}
+
+type AiAutonomySettingsInfo {
+  applyCodeDiffs: AiAutonomySettingInfo!
+  computerUse: ComputerUseSettingInfo!
+  createPlans: AiAutonomySettingInfo!
+  executeCommands: AiAutonomySettingInfo!
+  executeCommandsAllowlist: StringListSettingInfo!
+  executeCommandsDenylist: StringListSettingInfo!
+  readFiles: AiAutonomySettingInfo!
+  readFilesAllowlist: StringListSettingInfo!
+  writeToPty: WriteToPtySettingInfo!
 }
 
 input AiAutonomySettingsInput {
@@ -430,6 +472,11 @@ type AiPermissionsSettings {
   remoteSessionRegexList: [String!]!
 }
 
+type AiPermissionsSettingsInfo {
+  allowAiInRemoteSessions: BooleanSettingInfo!
+  remoteSessionRegexList: StringListSettingInfo!
+}
+
 input AiPermissionsSettingsInput {
   allowAiInRemoteSessions: Boolean
   remoteSessionRegexList: [String!]
@@ -440,6 +487,7 @@ type AmbientAgentSettings {
   enableWarpAttribution: AdminEnablementSetting!
   instanceShape: InstanceShape
   localAgentTracking: AgentVisibility!
+  pullRequestArtifactAttachments: PullRequestArtifactAttachmentsSetting
   warpHostedAgentsEnabled: Boolean!
 }
 
@@ -448,6 +496,7 @@ input AmbientAgentSettingsInput {
   enableWarpAttribution: AdminEnablementSetting
   instanceShape: InstanceShapeInput
   localAgentTracking: AgentVisibility
+  pullRequestArtifactAttachments: PullRequestArtifactAttachmentsSetting
   warpHostedAgentsEnabled: Boolean
 }
 
@@ -457,6 +506,12 @@ type AmbientAgentsPolicy {
   instanceShape: InstanceShape
   maxConcurrentAgents: Int!
   maxInstanceRuntimeSeconds: Int!
+
+  """
+  Maximum instance shape a runner may explicitly request on Warp-hosted
+  workers. Null means runners are capped at the workspace default shape.
+  """
+  maxInstanceShape: InstanceShape
   selfHostedEnabled: Boolean!
   toggleable: Boolean!
 }
@@ -501,6 +556,11 @@ type ApplyFileDiffStats {
   filesChanged: Int!
   linesAdded: Int!
   linesRemoved: Int!
+}
+
+type ArchivedTeam {
+  teamName: String!
+  teamUid: String!
 }
 
 type AvailableHarnesses {
@@ -579,13 +639,13 @@ type BonusGrant {
   requestCreditsGranted: Int!
   requestCreditsRemaining: Int!
   scope: BonusGrantScope!
+  teamUid: ID
   userFacingMessage: String
 }
 
-"""The credit pool a bonus grant belongs to."""
 enum BonusGrantScope {
-  USER
   TEAM
+  USER
   WORKSPACE
 }
 
@@ -604,6 +664,11 @@ enum BonusGrantType {
 type BonusGrantsInfo {
   grants: [BonusGrant!]!
   spendingInfo: BonusGrantSpendingInfo
+}
+
+type BooleanSettingInfo {
+  isEnforcedByWorkspace: Boolean!
+  value: Boolean!
 }
 
 """
@@ -644,24 +709,20 @@ type BundledActions {
   latestTimestamp: Time!
   oldestTimestamp: Time!
 }
-"""
-A configured first-party provider credential. Presence in the list means a key is
-configured for that provider.
-"""
-type ByoFirstPartyKey {
-  credentialUid: ID!
-  provider: LlmProvider!
-}
 
 type ByoApiKeyPolicy {
   enabled: Boolean!
 }
+
 type ByoEndpointMetadata {
-  "Credential handle for this endpoint."
+  """
+  Credential handle for this endpoint; pass to deleteTeamByoCredential to remove it.
+  """
   credentialUid: ID!
   enabled: Boolean!
   models: [ByoEndpointModelMetadata!]!
   name: String!
+  schema: TeamByoEndpointSchema!
   uid: ID!
 }
 
@@ -675,6 +736,15 @@ type ByoEndpointModelMetadata {
 
 type ByoEndpointPolicy {
   enabled: Boolean!
+}
+
+"""
+A configured first-party provider credential. Presence in the list means a key is
+configured for that provider; pass credentialUid to deleteTeamByoCredential to remove it.
+"""
+type ByoFirstPartyKey {
+  credentialUid: ID!
+  provider: LlmProvider!
 }
 
 """Token count for a specific usage category."""
@@ -722,13 +792,40 @@ type CloudEnvironment {
 }
 
 type CloudEnvironmentConfig {
+  """
+  The environment's forge. Legacy environments without a persisted value resolve to GITHUB.
+  """
+  codeForge: CodeForge!
+
+  """
+  Optional UID of a Runner used as the default runner for runs in this
+  environment. A task's runner_id overrides it.
+  """
+  defaultRunnerUid: ID
   description: String
   dockerImage: String!
+
+  """
+  When set (1-60 minutes), a failed run using this environment keeps its session
+  open for this many minutes so it can be inspected. null/absent means immediate
+  teardown (disabled by default).
+  
+  This is an idle window held by the agent process itself: working in the session
+  pushes it out, and it ends early if the sandbox reaches its own deadline first.
+  The setting applies to future failures of runs using this environment; it does not
+  change the window a currently-failed run was already started with.
+  """
+  failureSessionRetentionMinutes: Int
+
+  """Legacy compatibility mirror of sourceRepos."""
   githubRepos: [GitHubRepo!]!
   name: String!
   providers: ProvidersConfig
   secrets: [SecretRefOutput!]
   setupCommands: [String!]
+
+  """Provider-neutral repository list; authoritative when persisted."""
+  sourceRepos: [SourceRepo!]!
 }
 
 enum CloudEnvironmentSortBy {
@@ -772,6 +869,33 @@ union CloudObjectResult = CloudObjectOutput | UserFacingError
 
 union CloudObjectWithDescendants = AIConversation | FolderWithDescendants | GenericStringObject | Notebook | Workflow
 
+"""The source-control provider hosting an environment's repositories."""
+enum CodeForge {
+  GITHUB
+  GITLAB
+}
+
+"""
+Error type for when authenticating with the given forge could make the
+requested repositories accessible.
+"""
+type CodeForgeAuthRequiredError implements UserFacingErrorInterface {
+  authUrl: String
+  codeForge: CodeForge!
+  message: String!
+  txId: ID
+}
+
+"""
+Error type for when repositories on the given forge do not exist or are not
+accessible to the requesting principal.
+"""
+type CodeForgeRepositoryNotFoundError implements UserFacingErrorInterface {
+  codeForge: CodeForge!
+  message: String!
+  repositories: [SourceRepo!]!
+}
+
 type CodebaseContextConfigOutput implements Response {
   embeddingCadence: Int!
   embeddingConfig: EmbeddingConfig!
@@ -781,7 +905,6 @@ type CodebaseContextConfigOutput implements Response {
 union CodebaseContextConfigResult = CodebaseContextConfigOutput | UserFacingError
 
 type CodebaseContextPolicy {
-  defaultEnabledValue: Boolean!
   embeddingGenerationBatchSize: Int!
   isUnlimitedIndices: Boolean!
   maxFilesPerRepo: Int!
@@ -803,6 +926,11 @@ enum ComputerUseAutonomyValue {
   ALWAYS_ASK
   NEVER
   RESPECT_USER_SETTING
+}
+
+type ComputerUseSettingInfo {
+  isEnforcedByWorkspace: Boolean!
+  value: ComputerUseAutonomyValue!
 }
 
 input ConfirmFileArtifactUploadInput {
@@ -839,24 +967,24 @@ type ContentDataFieldValue {
 
 scalar ContentHash
 
-"""The kind of a context-window segment."""
-enum ContextWindowSegmentType {
-  UNKNOWN
-  SYSTEM_PROMPT
-  TOOL_DEFINITIONS
-  CONVERSATION_HISTORY
-  LATEST_INPUT
-  IMAGES
-  OTHER
+"""
+A single portion of the context window, described by its kind and an
+estimated token count.
+"""
+type ContextWindowSegment {
+  segmentType: ContextWindowSegmentType!
+  tokenCount: Int!
 }
 
-"""A single portion of the context window, described by its kind and token count."""
-type ContextWindowSegment {
-  """The kind of context window segment this entry represents."""
-  segmentType: ContextWindowSegmentType!
-
-  """The estimated number of tokens this segment occupies."""
-  tokenCount: Int!
+"""The kind of a ContextWindowSegment."""
+enum ContextWindowSegmentType {
+  CONVERSATION_HISTORY
+  IMAGES
+  LATEST_INPUT
+  OTHER
+  SYSTEM_PROMPT
+  TOOL_DEFINITIONS
+  UNKNOWN
 }
 
 """Represents usage data for a single multi-agent conversation."""
@@ -873,10 +1001,11 @@ type ConversationUsageMetadata {
   byokTokenUsage: [TokenUsage!]!
 
   """
-  A breakdown of the context window usage into segments, each carrying a
-  kind and token count. Segment token counts add up to the token total
-  represented by contextWindowUsage. The client derives per-segment
-  percentages.
+  Dev-only breakdown of the context window usage into segments
+  (e.g. system prompt, tool definitions, history, latest input). Empty
+  unless the feature is enabled server-side. Segment token counts add up
+  to the token total represented by contextWindowUsage; the client derives
+  per-segment percentages.
   """
   contextWindowSegments: [ContextWindowSegment!]!
   contextWindowUsage: Float!
@@ -886,8 +1015,6 @@ type ConversationUsageMetadata {
 
   """The total number of platform credits spent so far in the conversation."""
   platformCreditsSpent: Float!
-  """The cumulative provider cost in US cents, when available."""
-  totalProviderCostInCents: Float
   summarized: Boolean!
 
   """
@@ -896,6 +1023,13 @@ type ConversationUsageMetadata {
   """
   tokenUsage: [ModelTokenUsage!]! @deprecated(reason: "Use warpTokenUsage and byokTokenUsage instead")
   toolUsageMetadata: ToolUsageMetadata!
+
+  """
+  The cumulative provider cost spent so far in the conversation, in cents
+  (fractional cents allowed).
+  Null when the server cannot establish a complete historical baseline.
+  """
+  totalProviderCostInCents: Float
 
   """Token usage using the Warp API key, keyed by model."""
   warpTokenUsage: [TokenUsage!]!
@@ -915,6 +1049,13 @@ input CreateAgentTaskInput {
 
   """Optional environment UID to run the task in."""
   environmentUid: ID
+
+  """
+  Optional JSON-serialized metadata object for the run (string keys and values,
+  e.g. {"ticket_id":"ABC-123"}). Explicit keys override keys inherited from the
+  parent run; metadata bounds are enforced at creation.
+  """
+  metadata: String
 
   """Optional run ID of the parent that spawned this local task."""
   parentRunId: ID
@@ -994,6 +1135,23 @@ type CreateGenericStringObjectOutput implements Response {
 
 union CreateGenericStringObjectResult = CreateGenericStringObjectOutput | UserFacingError
 
+input CreateManagedMcpClientConfigInput {
+  uid: ID!
+}
+
+type CreateManagedMcpClientConfigOutput implements Response {
+  authorizationHeaderName: String
+  authorizationHeaderValue: String
+  expiresAt: Time
+  mcpConfigJson: String!
+  proxyToken: String
+  proxyUrl: String
+  responseContext: ResponseContext!
+  transportKind: ManagedMcpTransportKind!
+}
+
+union CreateManagedMcpClientConfigResult = CreateManagedMcpClientConfigOutput | UserFacingError
+
 input CreateManagedSecretInput {
   description: String
   encryptedValue: String!
@@ -1008,23 +1166,6 @@ type CreateManagedSecretOutput implements Response {
 }
 
 union CreateManagedSecretResult = CreateManagedSecretOutput | UserFacingError
-
-input CreateManagedMcpClientConfigInput {
-  uid: ID!
-}
-
-type CreateManagedMcpClientConfigOutput implements Response {
-  transportKind: ManagedMcpTransportKind!
-  mcpConfigJson: String!
-  proxyUrl: String
-  proxyToken: String
-  authorizationHeaderName: String
-  authorizationHeaderValue: String
-  expiresAt: Time
-  responseContext: ResponseContext!
-}
-
-union CreateManagedMcpClientConfigResult = CreateManagedMcpClientConfigOutput | UserFacingError
 
 input CreateNotebookInput {
   aiDocumentId: String
@@ -1172,6 +1313,19 @@ type DeleteObjectOutput implements Response {
 
 union DeleteObjectResult = DeleteObjectOutput | UserFacingError
 
+input DeleteRunnerInput {
+  uid: ID!
+}
+
+type DeleteRunnerOutput implements Response {
+  """The UID of the runner object that was marked for deletion."""
+  deletedUid: ID!
+  responseContext: ResponseContext!
+  success: Boolean!
+}
+
+union DeleteRunnerResult = DeleteRunnerOutput | UserFacingError
+
 input DeleteTeamInviteInput {
   email: String!
   teamUid: ID!
@@ -1198,8 +1352,22 @@ enum DelinquencyStatus {
   UNPAID
 }
 
+"""
+The team's effective direct API inference location. When the workspace has
+taken a stance, the value reflects it and isEnforcedByWorkspace is true.
+"""
+type DirectApiInferenceLocationSettingInfo {
+  isEnforcedByWorkspace: Boolean!
+  value: InferenceLocation!
+}
+
+input DirectApiInferenceLocationSettingsInput {
+  location: InferenceLocation
+}
+
 type DirectApiUsOnlyInferencePolicy {
-  default: Boolean!
+  default: InferenceLocation!
+  toggleable: Boolean!
 }
 
 type DirectLinkSharingPolicy {
@@ -1220,6 +1388,12 @@ type DiscoverableTeamData {
   teamUid: ID!
 }
 
+type DiscoverableWorkspaceData {
+  name: String!
+  openTeams: [DiscoverableTeamData!]!
+  workspaceUid: ID!
+}
+
 enum DisplaySetting {
   COMMAND
   COMMAND_AND_OUTPUT
@@ -1234,6 +1408,10 @@ type DomainCaptureSettings {
   enabled: Boolean!
 }
 
+type DomainCaptureSettingsInfo {
+  enabled: BooleanSettingInfo!
+}
+
 input DomainCaptureSettingsInput {
   enabled: Boolean
 }
@@ -1241,6 +1419,7 @@ input DomainCaptureSettingsInput {
 type EmailInvite {
   email: String!
   expired: Boolean!
+  teamUid: ID
 }
 
 enum EmbeddingConfig {
@@ -1292,11 +1471,16 @@ type EnterpriseAnalyticsPolicy {
   toggleable: Boolean!
 }
 
+type EnterpriseAnalyticsSettingsInfo {
+  enabled: BooleanSettingInfo!
+}
+
 type EnterpriseBillingSettings {
   maxMonthlyCloudAgentsSpendCents: Int
   maxMonthlyLocalAgentsSpendCents: Int
   maxMonthlyPerUserTotalSpendCents: Int
   maxMonthlyTotalSpendCents: Int
+  userHighUsageAlertingEnabled: Boolean!
 }
 
 input EnterpriseBillingSettingsInput {
@@ -1304,6 +1488,7 @@ input EnterpriseBillingSettingsInput {
   maxMonthlyLocalAgentsSpendCents: Int
   maxMonthlyPerUserTotalSpendCents: Int
   maxMonthlyTotalSpendCents: Int
+  userHighUsageAlertingEnabled: Boolean
 }
 
 type EnterpriseCreditsAutoReloadPolicy {
@@ -1328,6 +1513,7 @@ type EnterpriseSpendingLimitsPolicy {
 type EnterpriseUsageThresholdsPolicy {
   cloudSpendingLimitThresholdPercentages: [Int!]
   enabled: Boolean!
+  highUsageAlertThresholdCents: Int
   localSpendingLimitThresholdPercentages: [Int!]
   totalCreditDepletionThresholdPercentages: [Int!]
   totalSpendingLimitThresholdPercentages: [Int!]
@@ -1335,6 +1521,8 @@ type EnterpriseUsageThresholdsPolicy {
 
 """The set of experiments that could be enabled server-side."""
 enum Experiment {
+  AGENT_MEMORY_CONTROL
+  AGENT_MEMORY_EXPERIMENT
   AGENT_MODE_ANALYTICS_CONTROL
   AGENT_MODE_ANALYTICS_EXPERIMENT
   AGENT_MODE_EARLY_ACCESS_EXPERIMENT
@@ -1356,16 +1544,16 @@ enum Experiment {
   CODEBASE_CONTEXT_EXPERIMENT
   DISABLE_AGENT_MODE_EXPERIMENT
   ENV_VARS_EARLY_ACCESS_EXPERIMENT
-  FREE_TIER_TO_BUILD_CONVERSION_CONTROL
-  FREE_TIER_TO_BUILD_CONVERSION_DRIP_COUPON
-  FREE_TIER_TO_BUILD_CONVERSION_IMMEDIATE_COUPON
-  FREE_TIER_TO_BUILD_CONVERSION_INTERSTITIAL_EMAIL
-  FREE_TIER_TO_BUILD_CONVERSION_INTERSTITIAL_ONLY
+  FREE_TIER_TO_BUILD_CONVERSION_CONTROL @deprecated(reason: "This experiment is retired.")
+  FREE_TIER_TO_BUILD_CONVERSION_DRIP_COUPON @deprecated(reason: "This experiment is retired.")
+  FREE_TIER_TO_BUILD_CONVERSION_IMMEDIATE_COUPON @deprecated(reason: "This experiment is retired.")
+  FREE_TIER_TO_BUILD_CONVERSION_INTERSTITIAL_EMAIL @deprecated(reason: "This experiment is retired.")
+  FREE_TIER_TO_BUILD_CONVERSION_INTERSTITIAL_ONLY @deprecated(reason: "This experiment is retired.")
   FREE_USER_INITIAL_CREDITS_CONTROL
   FREE_USER_INITIAL_CREDITS_FIVE_HUNDRED
   FREE_USER_INITIAL_CREDITS_THREE_HUNDRED
-  FREE_USER_NO_AI_CONTROL
-  FREE_USER_NO_AI_EXPERIMENT
+  FREE_USER_NO_AI_CONTROL @deprecated(reason: "This experiment is retired.")
+  FREE_USER_NO_AI_EXPERIMENT @deprecated(reason: "This experiment is retired.")
   LINUX_LAUNCH_EXPERIMENT
   MACOS_RUNNERS_CONTROL
   MACOS_RUNNERS_EXPERIMENT
@@ -1420,6 +1608,17 @@ type ExpireApiKeyOutput implements Response {
 
 union ExpireApiKeyResult = ExpireApiKeyOutput | UserFacingError
 
+enum FactoryOnboardingStatus {
+  AGENTS_AND_INTEGRATIONS @deprecated(reason: "Factory onboarding state is now URL-encoded.")
+  CODEFORGE_SETUP @deprecated(reason: "Factory onboarding state is now URL-encoded.")
+  COMPLETED @deprecated(reason: "Factory onboarding state is now URL-encoded.")
+  IDENTITY_SETUP @deprecated(reason: "Factory onboarding state is now URL-encoded.")
+  INITIAL_PROMPT @deprecated(reason: "Factory onboarding state is now URL-encoded.")
+  NOT_STARTED @deprecated(reason: "Factory onboarding state is now URL-encoded.")
+  REPO_SELECTION @deprecated(reason: "Factory onboarding state is now URL-encoded.")
+  SKIPPED @deprecated(reason: "Factory onboarding state is now URL-encoded.")
+}
+
 type FeatureModelChoice {
   agentMode: AvailableLlms!
   cliAgent: AvailableLlms!
@@ -1434,6 +1633,7 @@ type FileArtifact {
   filepath: String!
   mimeType: String!
   sizeBytes: Int
+  title: String
 }
 
 """
@@ -1495,6 +1695,13 @@ type FreeAvailableModelsOutput implements Response {
 }
 
 union FreeAvailableModelsResult = FreeAvailableModelsOutput | UserFacingError
+
+type GCSStorageConnection implements StorageConnection {
+  bucket: String!
+
+  """Stable identifier of the form 'gcs:<bucket>'."""
+  id: ID!
+}
 
 type GcpProviderConfig {
   projectNumber: String!
@@ -1685,9 +1892,12 @@ enum GenericStringObjectFormat {
   JsonAIExecutionProfile
   JsonAIFact
   JsonCloudEnvironment
+  JsonCustomModelRouter
   JsonEnvVarCollection
+  JsonFactory
   JsonMCPServer
   JsonPreference
+  JsonRunner
   JsonScheduledAmbientAgent
   JsonTemplatableMCPServer
   JsonWorkflowEnum
@@ -1769,6 +1979,13 @@ type GetRelevantFragmentsOutput implements Response {
 
 union GetRelevantFragmentsResult = GetRelevantFragmentsError | GetRelevantFragmentsOutput | UserFacingError
 
+type GetRunnersOutput implements Response {
+  responseContext: ResponseContext!
+  runners: [Runner!]!
+}
+
+union GetRunnersResult = GetRunnersOutput | UserFacingError
+
 type GitHubRepo {
   owner: String!
   repo: String!
@@ -1791,7 +2008,7 @@ type GithubAuthRequiredOutput implements Response {
 """User is connected to GitHub and we have their info"""
 type GithubConnectedOutput implements Response {
   appInstallLink: String!
-  installedRepos: [RepoResult!]!
+  installedRepos: [InstalledRepo!]!
   responseContext: ResponseContext!
   username: String
 }
@@ -1898,6 +2115,12 @@ enum HostEnablementSetting {
   RESPECT_USER_SETTING
 }
 
+enum HostedDataStoreNamespace {
+  AI_CONVERSATION_ARTIFACTS
+  AI_CONVERSATION_TRANSCRIPTS
+  AI_RUN_ATTACHMENTS
+}
+
 """ImageTag represents a Docker image tag with repository information."""
 type ImageTag {
   """Full image name with tag (e.g., "warpdotdev/dev-ubuntu:latest")"""
@@ -1911,6 +2134,25 @@ type ImageTag {
 
   """Tag name (e.g., "latest", "24.04")"""
   tag: String!
+}
+
+enum InferenceLocation {
+  GLOBAL
+  US
+}
+
+"""
+A repository the connected user can access through one of their GitHub App
+installations. repositoryId and installationId are 64-bit GitHub numeric IDs
+carried as strings to avoid JavaScript precision loss; owner/repo are
+display-only and are never used for authorization.
+"""
+type InstalledRepo {
+  installationId: ID!
+  isPublic: Boolean!
+  owner: String!
+  repo: String!
+  repositoryId: ID!
 }
 
 type InstanceShape {
@@ -2014,9 +2256,28 @@ type LinkSharingSettings {
   directLinkSharingEnabled: Boolean!
 }
 
+type LinkSharingSettingsInfo {
+  anyoneWithLinkSharingEnabled: BooleanSettingInfo!
+  directLinkSharingEnabled: BooleanSettingInfo!
+}
+
 input LinkSharingSettingsInput {
   anyoneWithLinkSharingEnabled: Boolean
   directLinkSharingEnabled: Boolean
+}
+
+"""Linux-specific configuration for a cloud agent sandbox."""
+type LinuxConfig {
+  """Docker image reference for the sandbox."""
+  dockerImage: String!
+}
+
+"""Linux-specific runner configuration."""
+input LinuxConfigInput {
+  """
+  Docker image reference for the sandbox. The reference must be to a publicly-accessible image.
+  """
+  dockerImage: String!
 }
 
 input ListAIConversationsInput {
@@ -2062,6 +2323,7 @@ type ListedHarnessConfig {
 type ListedSimpleIntegrationConfig {
   basePrompt: String!
   computerUseEnabled: Boolean!
+  configOverrides: [ListedSimpleIntegrationConfigOverride!]!
   environmentUid: String!
   harness: ListedHarnessConfig
   harnessAuthSecrets: ListedHarnessAuthSecretsConfig
@@ -2069,6 +2331,11 @@ type ListedSimpleIntegrationConfig {
   modelId: String!
   secrets: [SecretRefOutput!]
   workerHost: String
+}
+
+type ListedSimpleIntegrationConfigOverride {
+  agentUid: ID
+  filter: String!
 }
 
 type LlmContextWindow {
@@ -2102,15 +2369,14 @@ type LlmHostSettings {
   enablementSetting: HostEnablementSetting
 
   """
-  Full resource name of the GCP workload identity provider that Gemini Enterprise
-  clients exchange Warp OIDC JWTs against (used as both the JWT audience and the
-  STS exchange audience).
+  Full GCP workload identity federation audience (//iam.googleapis.com/projects/.../providers/...) the client uses to mint Gemini Enterprise credentials.
   """
   gcpAudience: String
+  gcpLocation: String
+  gcpProjectId: String
 
   """
-  Email of the GCP service account that Gemini Enterprise clients impersonate after
-  the STS exchange. Empty means the federated token is used directly.
+  Service account email the client impersonates after the workload identity federation token exchange for Gemini Enterprise requests.
   """
   gcpSaEmail: String
 
@@ -2131,6 +2397,10 @@ type LlmHostSettingsEntry {
 input LlmHostSettingsInput {
   enabled: Boolean
   enablementSetting: HostEnablementSetting
+  gcpAudience: String
+  gcpLocation: String
+  gcpProjectId: String
+  gcpSaEmail: String
   oidcAssumeRoleArn: String
   optOutOfNewModels: Boolean
   region: String
@@ -2276,6 +2546,33 @@ type MCPTemplateVariable {
   key: String!
 }
 
+"""macOS-specific configuration for a cloud agent sandbox."""
+type MacOSConfig {
+  """
+  macOS version for the sandbox. The latest supported stable macOS release is
+  used by default when omitted.
+  """
+  version: RunnerMacOSVersion
+}
+
+"""macOS-specific runner configuration."""
+input MacOSConfigInput {
+  """
+  macOS version for the sandbox. The latest supported stable macOS release is
+  used by default when omitted.
+  """
+  version: RunnerMacOSVersion
+}
+
+type ManagedByokByoePolicy {
+  enabled: Boolean!
+}
+
+enum ManagedMcpTransportKind {
+  COMMAND
+  URL
+}
+
 type ManagedSecret {
   createdAt: Time!
 
@@ -2330,9 +2627,6 @@ type ManagedSecretConfig {
   """
   publicKey: String
 }
-type ManagedByokByoePolicy {
-  enabled: Boolean!
-}
 
 """A managed secret value representing an OpenAI API key."""
 type ManagedSecretOpenAiApiKeyValue {
@@ -2348,11 +2642,6 @@ type ManagedSecretOpenAiApiKeyValue {
 """A raw, unencrypted managed secret value."""
 type ManagedSecretRawValue {
   value: String!
-}
-
-enum ManagedMcpTransportKind {
-  URL
-  COMMAND
 }
 
 """Type of Warp-managed secret values."""
@@ -2436,6 +2725,15 @@ union MoveObjectResult = MoveObjectOutput | UserFacingError
 
 type MultiAdminPolicy {
   enabled: Boolean!
+}
+
+type NamespaceStorageMappingEntry {
+  namespace: HostedDataStoreNamespace!
+
+  """
+  Stable storage connection ID for the connection this namespace is mapped to.
+  """
+  storageConnectionId: ID!
 }
 
 type NativeWorkspacesPolicy {
@@ -2741,9 +3039,25 @@ type PullRequestArtifact {
   url: String!
 }
 
+enum PullRequestArtifactAttachmentsSetting {
+  DISABLED
+  EMBED
+  LINK_ONLY
+}
+
 type PurchaseAddOnCreditsPolicy {
   enabled: Boolean!
+
+  """
+  Whether the tier can purchase add-on credits at a premium over list price.
+  Mutually exclusive with enabled; used for free-plan ad-hoc purchases.
+  """
   premiumEnabled: Boolean!
+
+  """
+  Premium applied to the list price for premium purchases, in basis points
+  (1000 = +10%). Zero when premiumEnabled is false.
+  """
   pricePremiumBps: Int!
 }
 
@@ -2759,6 +3073,13 @@ type PurchaseAddonCreditsCheckoutOutput implements Response {
 
 input PurchaseAddonCreditsInput {
   credits: Int!
+  successReturnUrl: String
+
+  """
+  Team to purchase credits for. Optional: when omitted, the caller's sole team
+  is used (or a personal team is created for users with no team memberships).
+  Callers on multiple teams must pass it explicitly.
+  """
   teamUid: ID
 }
 
@@ -2948,13 +3269,6 @@ type ResetInviteLinksOutput implements Response {
 }
 
 union ResetInviteLinksResult = ResetInviteLinksOutput | UserFacingError
-type TuiOnboardingMarkersOutput implements Response {
-  firstZeroStateShown: Boolean!
-  firstCreditGateShown: Boolean!
-  responseContext: ResponseContext!
-}
-
-union TuiOnboardingMarkersResult = TuiOnboardingMarkersOutput | UserFacingError
 
 interface Response {
   responseContext: ResponseContext!
@@ -2987,125 +3301,6 @@ enum RoleSurveyResponse {
   STUDENT
 }
 
-type RunnerInstanceShape {
-  vcpus: Int!
-  memoryGb: Int!
-}
-
-"""Target operating system for a runner sandbox."""
-enum RunnerOS {
-  LINUX
-  MACOS
-}
-
-"""Target CPU architecture for a runner sandbox."""
-enum RunnerArch {
-  X86_64
-  AARCH64
-}
-
-"""macOS version to use for a sandbox."""
-enum RunnerMacOSVersion {
-  MACOS_14
-  MACOS_15
-  MACOS_26
-  MACOS_27
-}
-
-"""macOS-specific configuration for a cloud agent sandbox."""
-type MacOSConfig {
-  version: RunnerMacOSVersion
-}
-
-"""Linux-specific configuration for a cloud agent sandbox."""
-type LinuxConfig {
-  dockerImage: String!
-}
-
-type RunnerConfig {
-  name: String!
-  description: String
-  setupCommands: [String!]
-  instanceShape: RunnerInstanceShape
-  os: RunnerOS!
-  arch: RunnerArch!
-  mac: MacOSConfig
-  linux: LinuxConfig
-}
-
-type Runner {
-  uid: ID!
-  config: RunnerConfig!
-  lastUpdated: Time!
-  scope: Space!
-  creator: PublicUserProfile
-  lastEditor: PublicUserProfile
-}
-
-enum RunnerSortBy {
-  NAME
-  LAST_UPDATED
-}
-
-type GetRunnersOutput implements Response {
-  runners: [Runner!]!
-  responseContext: ResponseContext!
-}
-
-union GetRunnersResult = GetRunnersOutput | UserFacingError
-
-input RunnerInstanceShapeInput {
-  vcpus: Int!
-  memoryGb: Int!
-}
-
-"""macOS-specific runner configuration."""
-input MacOSConfigInput {
-  version: RunnerMacOSVersion
-}
-
-"""Linux-specific runner configuration."""
-input LinuxConfigInput {
-  dockerImage: String!
-}
-
-input RunnerInput {
-  name: String!
-  description: String
-  setupCommands: [String!]
-  instanceShape: RunnerInstanceShapeInput
-  os: RunnerOS
-  arch: RunnerArch
-  mac: MacOSConfigInput
-  linux: LinuxConfigInput
-}
-
-input UpsertRunnerInput {
-  uid: ID
-  owner: Owner
-  runner: RunnerInput!
-}
-
-type UpsertRunnerOutput implements Response {
-  runner: Runner!
-  isUpdate: Boolean!
-  responseContext: ResponseContext!
-}
-
-union UpsertRunnerResult = UpsertRunnerOutput | UserFacingError
-
-input DeleteRunnerInput {
-  uid: ID!
-}
-
-type DeleteRunnerOutput implements Response {
-  success: Boolean!
-  deletedUid: ID!
-  responseContext: ResponseContext!
-}
-
-union DeleteRunnerResult = DeleteRunnerOutput | UserFacingError
-
 type RootMutation {
   addInviteLinkDomainRestriction(input: AddInviteLinkDomainRestrictionInput!, requestContext: RequestContext!): AddInviteLinkDomainRestrictionResult!
   addObjectGuests(input: AddObjectGuestsInput!, requestContext: RequestContext!): AddObjectGuestsResult!
@@ -3128,10 +3323,10 @@ type RootMutation {
   createTeam(input: CreateTeamInput!, requestContext: RequestContext!): CreateTeamResult!
   createWorkflow(input: CreateWorkflowInput!, requestContext: RequestContext!): CreateWorkflowResult!
   deleteConversation(input: DeleteConversationInput!, requestContext: RequestContext!): DeleteConversationResult!
-  deleteRunner(input: DeleteRunnerInput!, requestContext: RequestContext!): DeleteRunnerResult!
   deleteInviteLinkDomainRestriction(input: DeleteInviteLinkDomainRestrictionInput!, requestContext: RequestContext!): DeleteInviteLinkDomainRestrictionResult!
   deleteManagedSecret(input: DeleteManagedSecretInput!, requestContext: RequestContext!): DeleteManagedSecretResult!
   deleteObject(input: DeleteObjectInput!, requestContext: RequestContext!): DeleteObjectResult!
+  deleteRunner(input: DeleteRunnerInput!, requestContext: RequestContext!): DeleteRunnerResult!
   deleteTeamInvite(input: DeleteTeamInviteInput!, requestContext: RequestContext!): DeleteTeamInviteResult!
   emptyTrash(input: EmptyTrashInput!, requestContext: RequestContext!): EmptyTrashResult!
   expireApiKey(input: ExpireApiKeyInput!, requestContext: RequestContext!): ExpireApiKeyResult!
@@ -3142,7 +3337,7 @@ type RootMutation {
   generateCommands(input: GenerateCommandsInput!, requestContext: RequestContext!): GenerateCommandsResult!
   generateDialogue(input: GenerateDialogueInput!, requestContext: RequestContext!): GenerateDialogueResult!
   generateMetadataForCommand(input: GenerateMetadataForCommandInput!, requestContext: RequestContext!): GenerateMetadataForCommandResult!
-  generateUniqueUpgradePromoCode(requestContext: RequestContext!): GenerateUniqueUpgradePromoCodeResult!
+  generateUniqueUpgradePromoCode(requestContext: RequestContext!): GenerateUniqueUpgradePromoCodeResult! @deprecated(reason: "This free-tier promo flow is retired.")
   giveUpNotebookEditAccess(input: UpdateNotebookEditAccessInput!, requestContext: RequestContext!): UpdateNotebookEditAccessResult!
   grabNotebookEditAccess(input: UpdateNotebookEditAccessInput!, requestContext: RequestContext!): UpdateNotebookEditAccessResult!
   issueTaskIdentityToken(input: IssueTaskIdentityTokenInput!, requestContext: RequestContext!): IssueTaskIdentityTokenResult!
@@ -3165,7 +3360,9 @@ type RootMutation {
 
   """
   `removeUserFromTeam` is the only mutation that should be used to remove a user from a team
-  in v2. Usage of the `leaveTeam` mutation in v1 will eventually be removed.
+  in v2. In a native workspace this removes only the team membership. In a
+  non-native workspace it removes the workspace membership and all team
+  memberships in that workspace.
   """
   removeUserFromTeam(input: RemoveUserFromTeamInput!, requestContext: RequestContext!): RemoveUserFromTeamResult!
   renameTeam(input: RenameTeamInput!, requestContext: RequestContext!): RenameTeamResult!
@@ -3284,8 +3481,125 @@ type RoutingHostConfig {
   modelRoutingHost: LlmModelHost!
 }
 
+type Runner {
+  config: RunnerConfig!
+  creator: PublicUserProfile
+  lastEditor: PublicUserProfile
+  lastUpdated: Time!
+  scope: Space!
+  uid: ID!
+}
+
+"""Target CPU architecture for a runner sandbox."""
+enum RunnerArch {
+  """ARM 64-bit"""
+  AARCH64
+
+  """x86-64"""
+  X86_64
+}
+
+type RunnerConfig {
+  arch: RunnerArch!
+  description: String
+  factoryUid: ID
+  instanceShape: RunnerInstanceShape
+
+  """Linux-specific configuration. Only set when os is LINUX."""
+  linux: LinuxConfig
+
+  """macOS-specific configuration. Only set when os is MACOS."""
+  mac: MacOSConfig
+  name: String!
+  os: RunnerOS!
+  setupCommands: [String!]
+}
+
+input RunnerInput {
+  """
+  Target CPU architecture for the runner. Defaults to X86_64 when omitted.
+  """
+  arch: RunnerArch
+
+  """Optional description for the runner."""
+  description: String
+
+  """Optional factory to associate with this runner."""
+  factoryUid: ID
+
+  """
+  Optional compute instance shape (SKU). Defaults to the tenant/workspace size
+  when omitted.
+  """
+  instanceShape: RunnerInstanceShapeInput
+
+  """Linux-specific configuration. May only be set when os is LINUX."""
+  linux: LinuxConfigInput
+
+  """macOS-specific configuration. May only be set when the input is MACOS."""
+  mac: MacOSConfigInput
+
+  """Name for the runner."""
+  name: String!
+
+  """
+  Target operating system for the runner. Defaults to LINUX when omitted.
+  """
+  os: RunnerOS
+
+  """Setup commands to run when initializing the runner's sandbox."""
+  setupCommands: [String!]
+}
+
+type RunnerInstanceShape {
+  memoryGb: Int!
+  vcpus: Int!
+}
+
+input RunnerInstanceShapeInput {
+  memoryGb: Int!
+  vcpus: Int!
+}
+
+"""macOS version to use for a sandbox."""
+enum RunnerMacOSVersion {
+  MACOS_14
+  MACOS_15
+  MACOS_26
+  MACOS_27
+}
+
+"""Target operating system for a runner sandbox."""
+enum RunnerOS {
+  """Linux (default)"""
+  LINUX
+
+  """macOS"""
+  MACOS
+}
+
+enum RunnerSortBy {
+  """Sort by most recently updated first"""
+  LAST_UPDATED
+
+  """Sort alphabetically by runner name"""
+  NAME
+}
+
+type S3StorageConnection implements StorageConnection {
+  bucket: String!
+
+  """Stable identifier of the form 's3:<bucket>'."""
+  id: ID!
+  region: String!
+}
+
 type SandboxedAgentSettings {
   executeCommandsDenylist: [String!]
+}
+
+type SandboxedAgentSettingsInfo {
+  executeCommandsDenylist: StringListSettingInfo!
 }
 
 input SandboxedAgentSettingsInput {
@@ -3335,10 +3649,22 @@ input SecretRedactionRegexInput {
   pattern: String!
 }
 
+type SecretRedactionRegexListInfo {
+  isConfigured: Boolean!
+  teamEntries: [SecretRedactionRegex!]!
+  values: [SecretRedactionRegex!]!
+  workspaceEntries: [SecretRedactionRegex!]!
+}
+
 type SecretRedactionSettings {
   enabled: Boolean!
   regexList: [String!]! @deprecated(reason: "Use regexes field instead")
   regexes: [SecretRedactionRegex!]!
+}
+
+type SecretRedactionSettingsInfo {
+  enabled: BooleanSettingInfo!
+  regexes: SecretRedactionRegexListInfo!
 }
 
 input SecretRedactionSettingsInput {
@@ -3454,6 +3780,38 @@ type SetObjectLinkPermissionsOutput implements Response {
 
 union SetObjectLinkPermissionsResult = SetObjectLinkPermissionsOutput | UserFacingError
 
+input SetTeamByoEndpointInput {
+  credentialAction: TeamByoCredentialUpdateAction!
+  enabled: Boolean!
+  id: String
+  models: [SetTeamByoEndpointModelInput!]!
+  name: String!
+  schema: TeamByoEndpointSchema
+  sealedCredential: String
+}
+
+input SetTeamByoEndpointModelInput {
+  alias: String
+  configKey: String
+  enabled: Boolean!
+  slug: String!
+}
+
+input SetTeamByoFirstPartyKeyInput {
+  credentialAction: TeamByoCredentialUpdateAction!
+  provider: TeamByoProvider!
+  sealedApiKey: String
+}
+
+input SetTeamByoSettingsInput {
+  allowUserEndpoints: Boolean
+  allowUserKeys: Boolean
+  endpoints: [SetTeamByoEndpointInput!]
+  endpointsEnabled: Boolean
+  firstPartyEnabled: Boolean
+  firstPartyKeys: [SetTeamByoFirstPartyKeyInput!]
+}
+
 input SetTeamDiscoverabilityInput {
   discoverable: Boolean!
   teamUid: ID!
@@ -3529,6 +3887,7 @@ type SimpleIntegration {
 input SimpleIntegrationConfig {
   basePrompt: String
   computerUseEnabled: Boolean
+  configOverrides: [SimpleIntegrationConfigOverrideInput!]
   environmentUid: String
   harness: HarnessInput
   harnessAuthSecrets: HarnessAuthSecretsInput
@@ -3537,6 +3896,11 @@ input SimpleIntegrationConfig {
   removeMcpServerNames: [String!]
   secrets: [SecretRefInput!]
   workerHost: String
+}
+
+input SimpleIntegrationConfigOverrideInput {
+  agentUid: ID
+  filter: String!
 }
 
 enum SimpleIntegrationConnectionStatus {
@@ -3570,6 +3934,16 @@ type SingleSignOnPolicy {
   toggleable: Boolean!
 }
 
+"""
+Provider-neutral repository identity. For GitLab, owner is the full (possibly
+nested) namespace and repo is the final project path segment.
+"""
+type SourceRepo {
+  codeForge: CodeForge!
+  owner: String!
+  repo: String!
+}
+
 type Space {
   type: SpaceType!
   uid: ID!
@@ -3583,6 +3957,28 @@ enum SpaceType {
 """A literal string value."""
 type StaticUploadFieldValue {
   value: String!
+}
+
+interface StorageConnection {
+  """Stable identifier of the form '<type>:<bucket>'."""
+  id: ID!
+}
+
+"""
+A list setting split by the layer that contributed each entry. `values` is the
+authoritative combined result; `workspaceEntries`/`teamEntries` exist so
+clients can present workspace-contributed entries separately from
+team-defined ones. All three are always present (as an empty list at minimum).
+
+`isConfigured` is true when the workspace or team explicitly configured this
+list, including an explicit empty override; it is false when `values` is
+empty only because nothing was ever configured.
+"""
+type StringListSettingInfo {
+  isConfigured: Boolean!
+  teamEntries: [String!]!
+  values: [String!]!
+  workspaceEntries: [String!]!
 }
 
 input StripeBillingPortalInput {
@@ -3765,11 +4161,9 @@ group drive objects and users together.
 """
 type Team {
   """
-  adminUid is equivalent to creatorFirebaseUid in the v1 Team type.
-  creatorId in v1 Team type is deprecated and should not be used. Use adminUid instead.
+  The team's color, a canonical lowercase #RRGGBB hex string, or null if no
+  color is set. Clients should render a default grey swatch for null.
   """
-  adminUid: String! @deprecated(reason: "Use members.role to determine admin status")
-  """The team's brand color as a hex string (e.g. "#7c3aed"), if set."""
   color: String
 
   """
@@ -3777,115 +4171,50 @@ type Team {
   Required for features that key off the team's domain (e.g. domain capture, SSO).
   """
   domain: String
+  inviteLink: String
   managedSecrets: ManagedSecretConfig
   memberSpendLimits: [MemberSpendLimit!]
   members: [TeamMember!]!
   name: String!
-  """
-  The effective settings that apply to the team, combining the workspace layer
-  with the team's own configuration. Workspace-governable groups carry an
-  indicator for whether their value is enforced by the workspace layer.
-  """
   settings: TeamSettings!
   uid: ID!
+
+  """
+  Team visibility governs which workspace members can discover and join a team.
+  It is a new axis, orthogonal to workspace-level discoverability (is_discoverable).
+  Existing teams default to OPEN.
+  """
+  visibility: TeamVisibility!
 }
 
-"""
-The effective settings that apply to a team, combining the workspace layer with
-the team's own configuration. This is a curated client-side subset of the server
-`TeamSettings` type — it only defines the fields the Rust client selects.
-"""
-type TeamSettings {
-  ugcCollection: UgcCollectionSettingInfo!
-  cloudConversationStorage: AdminEnablementSettingInfo!
-  codebaseContext: AdminEnablementSettingInfo!
-  aiPermissions: AiPermissionsSettingsInfo!
-  secretRedaction: SecretRedactionSettingsInfo!
-  aiAutonomy: AiAutonomySettingsInfo!
-  linkSharing: LinkSharingSettingsInfo!
-  sandboxedAgent: SandboxedAgentSettingsInfo!
-  llmSettings: LlmSettings!
-  telemetrySettings: TelemetrySettings!
-  usageBasedPricingSettings: UsageBasedPricingSettings!
-  addonCreditsSettings: AddonCreditsSettings!
-  ambientAgentSettings: AmbientAgentSettings
-  teamByo: TeamByoSettings
+enum TeamByoCredentialUpdateAction {
+  UNCHANGED
+  UPSERT
 }
 
-type UgcCollectionSettingInfo {
-  value: UgcCollectionEnablementSetting!
-  isEnforcedByWorkspace: Boolean!
+enum TeamByoEndpointSchema {
+  ANTHROPIC_MESSAGES
+  OPENAI_CHAT_COMPLETIONS
+  OPENAI_RESPONSES
 }
 
-type AdminEnablementSettingInfo {
-  value: AdminEnablementSetting!
-  isEnforcedByWorkspace: Boolean!
+enum TeamByoProvider {
+  ANTHROPIC
+  GOOGLE
+  OPENAI
 }
 
-type BooleanSettingInfo {
-  value: Boolean!
-  isEnforcedByWorkspace: Boolean!
-}
-
-type AiAutonomySettingInfo {
-  value: AiAutonomyValue!
-  isEnforcedByWorkspace: Boolean!
-}
-
-type WriteToPtySettingInfo {
-  value: WriteToPtyAutonomyValue!
-  isEnforcedByWorkspace: Boolean!
-}
-
-type ComputerUseSettingInfo {
-  value: ComputerUseAutonomyValue!
-  isEnforcedByWorkspace: Boolean!
-}
-
-type StringListSettingInfo {
-  values: [String!]!
-  workspaceEntries: [String!]!
-  teamEntries: [String!]!
-}
-
-type SecretRedactionRegexListInfo {
-  values: [SecretRedactionRegex!]!
-  workspaceEntries: [SecretRedactionRegex!]!
-  teamEntries: [SecretRedactionRegex!]!
-}
-
-type AiPermissionsSettingsInfo {
-  allowAiInRemoteSessions: BooleanSettingInfo!
-  remoteSessionRegexList: StringListSettingInfo!
-}
-
-type SecretRedactionSettingsInfo {
-  enabled: BooleanSettingInfo!
-  regexes: SecretRedactionRegexListInfo!
-}
-
-type AiAutonomySettingsInfo {
-  applyCodeDiffs: AiAutonomySettingInfo!
-  readFiles: AiAutonomySettingInfo!
-  createPlans: AiAutonomySettingInfo!
-  executeCommands: AiAutonomySettingInfo!
-  writeToPty: WriteToPtySettingInfo!
-  computerUse: ComputerUseSettingInfo!
-  readFilesAllowlist: StringListSettingInfo!
-  executeCommandsAllowlist: StringListSettingInfo!
-  executeCommandsDenylist: StringListSettingInfo!
-}
-
-type LinkSharingSettingsInfo {
-  anyoneWithLinkSharingEnabled: BooleanSettingInfo!
-  directLinkSharingEnabled: BooleanSettingInfo!
-}
-
-type SandboxedAgentSettingsInfo {
-  executeCommandsDenylist: StringListSettingInfo!
+type TeamByoSettings {
+  allowUserEndpoints: Boolean!
+  allowUserKeys: Boolean!
+  endpoints: [ByoEndpointMetadata!]!
+  endpointsEnabled: Boolean!
+  firstPartyEnabled: Boolean!
+  firstPartyKeys: [ByoFirstPartyKey!]!
 }
 
 enum TeamDiscoveryEntrypoint {
+  OzWebappFtue
   TeamSettings
   WebSignup
 }
@@ -3910,17 +4239,44 @@ type TeamMembershipsChanged {
   teamMembershipsLastUpdatedTs: Time!
 }
 
+"""
+The settings that apply to a team, combining the workspace layer with the
+team's own configuration. Workspace-governable groups carry an indicator for
+whether their value is enforced by the workspace layer; team-owned groups
+have no workspace layer and are surfaced directly.
+"""
+type TeamSettings {
+  addonCreditsSettings: AddonCreditsSettings!
+  agentDataStorageSettings: AgentDataStorageSettings!
+  aiAutonomy: AiAutonomySettingsInfo!
+  aiPermissions: AiPermissionsSettingsInfo!
+  ambientAgentSettings: AmbientAgentSettings
+  cloudConversationStorage: AdminEnablementSettingInfo!
+  codebaseContext: AdminEnablementSettingInfo!
+  directApiInferenceLocation: DirectApiInferenceLocationSettingInfo!
+  domainCapture: DomainCaptureSettingsInfo!
+  enterpriseAnalyticsDataCollection: EnterpriseAnalyticsSettingsInfo!
+  enterpriseBillingSettings: EnterpriseBillingSettings
+  harnessSettings: HarnessSettings
+  linkSharing: LinkSharingSettingsInfo!
+  llmSettings: LlmSettings!
+  sandboxedAgent: SandboxedAgentSettingsInfo!
+  secretRedaction: SecretRedactionSettingsInfo!
+  teamByo: TeamByoSettings
+  telemetrySettings: TelemetrySettings!
+  ugcCollection: UgcCollectionSettingInfo!
+  usageBasedPricingSettings: UsageBasedPricingSettings!
+}
+
 type TeamSizePolicy {
   isUnlimited: Boolean!
   limit: Int!
 }
-type TeamByoSettings {
-  allowUserEndpoints: Boolean!
-  allowUserKeys: Boolean!
-  endpoints: [ByoEndpointMetadata!]!
-  endpointsEnabled: Boolean!
-  firstPartyEnabled: Boolean!
-  firstPartyKeys: [ByoFirstPartyKey!]!
+
+enum TeamVisibility {
+  HIDDEN
+  OPEN
+  PRIVATE
 }
 
 type TelemetryDataCollectionPolicy {
@@ -3937,6 +4293,7 @@ input TelemetrySettingsInput {
 }
 
 type Tier {
+  agentDataStoragePolicy: AgentDataStoragePolicy
   agentHarnessesPolicy: AgentHarnessesPolicy
   agentIdentitiesPolicy: AgentIdentitiesPolicy
   aiAutonomyPolicy: AiAutonomyPolicy
@@ -3975,6 +4332,7 @@ type Tier {
   usageVisibilityPolicy: UsageVisibilityPolicy
   warpAiPolicy: WarpAiPolicy
   warpBasicPolicy: WarpBasicPolicy
+  workspaceOrganizationSettingsPolicy: WorkspaceOrganizationSettingsPolicy
 }
 
 type TierPricing {
@@ -4095,10 +4453,23 @@ type TrashObjectOutput implements Response {
 
 union TrashObjectResult = TrashObjectOutput | UserFacingError
 
+type TuiOnboardingMarkersOutput implements Response {
+  firstCreditGateShown: Boolean!
+  firstZeroStateShown: Boolean!
+  responseContext: ResponseContext!
+}
+
+union TuiOnboardingMarkersResult = TuiOnboardingMarkersOutput | UserFacingError
+
 enum UgcCollectionEnablementSetting {
   DISABLE
   ENABLE
   RESPECT_USER_SETTING
+}
+
+type UgcCollectionSettingInfo {
+  isEnforcedByWorkspace: Boolean!
+  value: UgcCollectionEnablementSetting!
 }
 
 type UgcCollectionSettings {
@@ -4355,6 +4726,7 @@ input UpdateWorkspaceSettingsInput {
   setAmbientAgentSettings: AmbientAgentSettingsInput
   setCloudConversationStorageSettings: CloudConversationStorageSettingsInput
   setCodebaseContextSettings: CodebaseContextSettingsInput
+  setDirectApiInferenceLocationSettings: DirectApiInferenceLocationSettingsInput
   setDomainCaptureSettings: DomainCaptureSettingsInput
   setEnterpriseAnalyticsDataCollectionSettings: EnterpriseAnalyticsDataCollectionSettingsInput
   setEnterpriseBillingSettings: EnterpriseBillingSettingsInput
@@ -4363,6 +4735,7 @@ input UpdateWorkspaceSettingsInput {
   setLlmSettings: LlmSettingsInput
   setSandboxedAgentSettings: SandboxedAgentSettingsInput
   setSecretRedactionSettings: SecretRedactionSettingsInput
+  setTeamByo: SetTeamByoSettingsInput
   setTelemetrySettings: TelemetrySettingsInput
   setUgcCollectionSettings: UgcCollectionSettingsInput
   setUsageBasedPricingSettings: UsageBasedPricingSettingsInput
@@ -4426,6 +4799,14 @@ input UpdatedObjectInput {
 }
 
 """
+Deprecated compatibility error. Device authorization no longer gates on upgrade
+eligibility and does not emit this error.
+"""
+type UpgradeRequiredError implements UserFacingErrorInterface {
+  message: String!
+}
+
+"""
 A single name/value pair for a multipart form field in a presigned POST upload.
 """
 type UploadField {
@@ -4435,6 +4816,27 @@ type UploadField {
 
 """The value of a multipart form field in a presigned POST upload target."""
 union UploadFieldValue = ContentCRC32CFieldValue | ContentDataFieldValue | StaticUploadFieldValue
+
+input UpsertRunnerInput {
+  """
+  Optional owner scope for the runner. Defaults to Team if not provided. Only used for creation.
+  """
+  owner: Owner
+
+  """The runner configuration"""
+  runner: RunnerInput!
+
+  """Optional UID - if provided, update existing; if not, create new"""
+  uid: ID
+}
+
+type UpsertRunnerOutput implements Response {
+  isUpdate: Boolean!
+  responseContext: ResponseContext!
+  runner: Runner!
+}
+
+union UpsertRunnerResult = UpsertRunnerOutput | UserFacingError
 
 type UsageBasedPricingPolicy {
   toggleable: Boolean!
@@ -4515,6 +4917,7 @@ type User {
   """
   conversationUsage(days: Int, lastUpdatedEndTimestamp: Time, limit: Int): [ConversationUsage!]!
   discoverableTeams: [DiscoverableTeamData!]!
+  discoverableWorkspaces: [DiscoverableWorkspaceData!]!
 
   """
   We differentiate between `null` and `[]` here:
@@ -4523,6 +4926,7 @@ type User {
   - `[]` means that the user is not part of any server-side enabled experiments.
   """
   experiments: [Experiment!]
+  factoryOnboardingStatus: FactoryOnboardingStatus @deprecated(reason: "Factory onboarding state is now URL-encoded.")
   githubInstallations: UserGithubInstallationsOutput!
 
   """
@@ -4699,6 +5103,8 @@ TODO(skambashi): REV-549 - migrate billing information from team to workspace
 """
 type Workspace {
   adminUid: String! @deprecated(reason: "Use members.role to determine admin status")
+  agentDataStorageSetupInstructions: AgentDataStorageSetupInstructions!
+  archivedTeams: [ArchivedTeam!]!
 
   """
   availableLlms returns the LLMs available to the user.
@@ -4730,11 +5136,13 @@ type Workspace {
   is the code itself.
   """
   inviteCode: String
+  inviteLink: String
   inviteLinkDomainRestrictions: [InviteLinkDomainRestriction!]!
   isEligibleForDiscovery: Boolean!
   memberSpendLimits: [MemberSpendLimit!]
   members: [WorkspaceMember!]!
   name: String!
+  openTeams: [DiscoverableTeamData!]!
   pendingEmailInvites: [EmailInvite!]!
 
   """
@@ -4749,7 +5157,9 @@ type Workspace {
 }
 
 type WorkspaceMember {
+  displayName: String
   email: String!
+  photoUrl: String
   role: MembershipRole!
   uid: ID!
   usageInfo: WorkspaceMemberUsageInfo!
@@ -4762,8 +5172,17 @@ type WorkspaceMemberUsageInfo {
   requestsUsedSinceLastRefresh: Int!
 }
 
+"""
+Controls whether workspace-level organization settings can be created or used.
+Only plan with enterprise features can have workspace-level organization settings.
+"""
+type WorkspaceOrganizationSettingsPolicy {
+  enabled: Boolean!
+}
+
 type WorkspaceSettings {
   addonCreditsSettings: AddonCreditsSettings!
+  agentDataStorageSettings: AgentDataStorageSettings!
   aiAutonomySettings: AiAutonomySettings!
   aiPermissionsSettings: AiPermissionsSettings!
   ambientAgentSettings: AmbientAgentSettings
@@ -4790,4 +5209,9 @@ enum WriteToPtyAutonomyValue {
   ALWAYS_ASK
   ASK_ON_FIRST_WRITE
   RESPECT_USER_SETTING
+}
+
+type WriteToPtySettingInfo {
+  isEnforcedByWorkspace: Boolean!
+  value: WriteToPtyAutonomyValue!
 }

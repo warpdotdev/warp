@@ -88,7 +88,10 @@ pub fn update_generic_string_object_result_to_update_result(
                                 rejected.conflicting_generic_string_object,
                             )?
                         }
-                        GenericStringObjectFormat::Unknown => {
+                        GenericStringObjectFormat::JsonCustomModelRouter
+                        | GenericStringObjectFormat::JsonFactory
+                        | GenericStringObjectFormat::JsonRunner
+                        | GenericStringObjectFormat::Unknown => {
                             bail!("conflicting generic string object has unknown format")
                         }
                     };

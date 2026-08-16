@@ -9,7 +9,7 @@ pub struct UserGithubInfoVariables {
 #[derive(cynic::QueryFragment, Debug, Clone)]
 pub struct GithubConnectedOutput {
     pub username: Option<String>,
-    pub installed_repos: Vec<RepoResult>,
+    pub installed_repos: Vec<InstalledRepo>,
     pub app_install_link: String,
 }
 
@@ -22,7 +22,7 @@ pub struct GithubAuthRequiredOutput {
 }
 
 #[derive(cynic::QueryFragment, Debug, Clone)]
-pub struct RepoResult {
+pub struct InstalledRepo {
     pub owner: String,
     pub repo: String,
     pub is_public: bool,
