@@ -140,7 +140,7 @@ impl CloudAgentCapacityModal {
             ),
             CloudAgentCapacityModalVariant::OutOfCredits => (
                 "You're out of AI credits",
-                "This cloud run stopped because your team has used all available AI credits for the current billing period.".to_string(),
+                "This cloud run stopped because there are no AI credits available for the current billing period.".to_string(),
             ),
         };
 

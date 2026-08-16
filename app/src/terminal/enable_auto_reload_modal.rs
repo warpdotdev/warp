@@ -404,8 +404,9 @@ impl warpui::TypedActionView for EnableAutoReloadModalBody {
                 let workspaces = UserWorkspaces::as_ref(ctx);
                 let Some(team_uid) = workspaces.team_uid_for_window(ctx.window_id()) else {
                     ctx.emit(EnableAutoReloadModalBodyEvent::ShowToast {
-                        message: "Oops, something went wrong; your team's data could not be found."
-                            .to_string(),
+                        message:
+                            "Oops, something went wrong; your billing data could not be found."
+                                .to_string(),
                         flavor: ToastFlavor::Error,
                     });
                     return;

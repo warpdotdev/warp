@@ -62,7 +62,7 @@ use crate::workspaces::workspace::{CustomerType, Workspace, WorkspaceUid};
 use crate::{WorkspaceAction, send_telemetry_from_ctx};
 
 const ADDON_CREDITS_DESCRIPTION: &str = "Add-on credits are purchased in prepaid packages that roll over each billing cycle and expire after one year. The more you purchase, the better the per-credit rate. Once your base plan credits are used, add-on credits will be consumed.";
-const ADDITIONAL_ADDON_CREDITS_DESCRIPTION_FOR_TEAM: &str =
+const ADDITIONAL_ADDON_CREDITS_DESCRIPTION_PERSONAL: &str =
     "Purchased add-on credits are added to your personal balance.";
 const MANAGED_AUTO_RELOAD_HEADER: &str = "Auto-reload is enabled";
 
@@ -1172,7 +1172,7 @@ impl BillingAndUsagePageV2View {
             .map(|team| team.members.len())
             .unwrap_or(1);
         let description_text = if team_count > 1 {
-            format!("{ADDON_CREDITS_DESCRIPTION} {ADDITIONAL_ADDON_CREDITS_DESCRIPTION_FOR_TEAM}")
+            format!("{ADDON_CREDITS_DESCRIPTION} {ADDITIONAL_ADDON_CREDITS_DESCRIPTION_PERSONAL}")
         } else {
             ADDON_CREDITS_DESCRIPTION.to_string()
         };
@@ -1210,8 +1210,9 @@ impl BillingAndUsagePageV2View {
             .map(|o| format!("{} credits", o.credits.separate_with_commas()))
             .unwrap_or_else(|| "selected credit amount".to_string());
         let auto_reload_tooltip_text = format!(
-            "When any member on your team’s credit balance reaches 100 credits remaining, \
-            automatically purchase {auto_reload_credit_amount}."
+            "When your available add-on credit balance falls below 100 credits remaining, \
+            automatically purchase {auto_reload_credit_amount}. Purchased credits are added \
+            to your personal balance."
         );
         let warning_text = if delinquent && has_admin_permissions {
             Some(ADDON_CREDITS_DELINQUENT_WARNING_STRING)
@@ -1269,11 +1270,11 @@ impl BillingAndUsagePageV2View {
                         option.price_usd_cents_with_premium(premium_bps) as f64 / 100.0
                     );
                     format!(
-                        "Your admin has enabled auto-reload for add-on credits. When your personal add-on credit balance runs low, Warp will automatically purchase {credits} credits for {price} and add them to your balance."
+                        "Your admin has enabled auto-reload for add-on credits. When your available add-on credit balance falls below 100 credits remaining, Warp will automatically purchase {credits} credits for {price} and add them to your personal balance."
                     )
                 }
                 None => {
-                    "Your admin has enabled auto-reload for add-on credits. When your personal add-on credit balance runs low, Warp will automatically purchase add-on credits and add them to your balance.".to_string()
+                    "Your admin has enabled auto-reload for add-on credits. When your available add-on credit balance falls below 100 credits remaining, Warp will automatically purchase add-on credits and add them to your personal balance.".to_string()
                 }
             };
             return AddonCreditsPanelState::AutoreloadNonAdmin {

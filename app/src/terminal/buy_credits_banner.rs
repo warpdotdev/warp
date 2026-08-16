@@ -244,7 +244,7 @@ impl BuyCreditsBanner {
                 if self.banner_auto_reload_update_in_flight {
                     self.banner_auto_reload_update_in_flight = false;
                     ctx.emit(BuyCreditsBannerEvent::ShowAutoReloadError {
-                        error_message: "Failed to enable auto-reload for your team. Please try again in Settings > Billing and Usage.",
+                        error_message: "Failed to enable auto-reload. Please try again in Settings > Billing and Usage.",
                     });
                     ctx.notify();
                 }
