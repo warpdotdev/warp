@@ -186,6 +186,7 @@ pub enum Icon {
     Kali,
     Arch,
     Linux,
+    Apple,
     Cancelled,
     BookOpen,
     LoadingDots0,
@@ -289,7 +290,6 @@ pub enum Icon {
     AntigravityLogo,
     NLD,
     Oz,
-    OzCloud,
     /// The Warp "W" glyph used as the agent brand mark (sourced from
     /// `bundled/svg/warp-drive.svg`). The background and tint color are
     /// the **call site's responsibility** — this variant carries the shape
@@ -532,6 +532,7 @@ impl From<Icon> for &'static str {
             Icon::Kali => "bundled/svg/kali.svg",
             Icon::Arch => "bundled/svg/arch.svg",
             Icon::Linux => "bundled/svg/linux.svg",
+            Icon::Apple => "bundled/svg/apple.svg",
             Icon::Cancelled => "bundled/svg/cancelled.svg",
             Icon::BookOpen => "bundled/svg/book-open.svg",
             Icon::LoadingDots0 => "bundled/svg/dots-0.svg",
@@ -636,8 +637,7 @@ impl From<Icon> for &'static str {
             Icon::GooseLogo => "bundled/svg/goose.svg",
             Icon::AntigravityLogo => "bundled/svg/antigravity_cli.svg",
             Icon::NLD => "bundled/svg/nld.svg",
-            Icon::Oz => "bundled/svg/oz.svg",
-            Icon::OzCloud => "bundled/svg/oz-cloud.svg",
+            Icon::Oz => "bundled/svg/warp-3.svg",
             Icon::Agent => "bundled/svg/warp-drive.svg",
             Icon::Conversation => "bundled/svg/conversation.svg",
             Icon::Prompt => "bundled/svg/prompt.svg",

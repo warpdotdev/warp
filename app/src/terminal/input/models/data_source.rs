@@ -545,7 +545,7 @@ impl SearchItem for ModelSearchItem {
             let discount_percentage = self.discount_percentage.unwrap_or(0.);
             let chip = Container::new(
                 Text::new_inline(
-                    format!("{}% off!", discount_percentage.round() as u32),
+                    format!("{}% off", discount_percentage.round() as u32),
                     appearance.ui_font_family(),
                     font_size,
                 )

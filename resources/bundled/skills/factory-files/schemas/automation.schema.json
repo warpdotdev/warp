@@ -1,0 +1,820 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "automation.schema.json",
+  "$comment": "FORWARD COMPATIBILITY - DO NOT TIGHTEN. additionalProperties is true, and catalogue values are recorded as x-warp-known-values / x-warp-known-max-items annotations rather than enum, const, or maxItems. That is deliberate, not an oversight. This file ships inside a Warp release and is routinely OLDER than the warp-server it validates against, so a closed schema rejects configuration a newer server accepts and pushes agents to delete working fields. When the format gains a value, add it to the annotation; do not convert the annotation back into a rejecting keyword. The two deliberate exceptions are documented in specs/REMOTE-2727/TECH.md: trigger filter keys, which only apply when both provider and event are known, and schemaVersion, which stops validation rather than misapplying v1alpha1 rules. See also references/validation.md.",
+  "title": "automations/<name>/automation.md frontmatter (v1alpha1)",
+  "description": "YAML frontmatter of an Automation file. The Automation's name comes from its directory, never from a field. The Markdown body after the closing fence is the run prompt.",
+  "type": "object",
+  "required": ["triggers"],
+  "additionalProperties": true,
+  "properties": {
+    "enabled": {
+      "type": "boolean",
+      "description": "Defaults to true when omitted."
+    },
+    "agent": {
+      "$ref": "common.schema.json#/$defs/nonEmptyString",
+      "description": "Name of a declared Agent. Defaults to the MAIN/FOREMAN Agent when omitted."
+    },
+    "model": { "$ref": "common.schema.json#/$defs/ozModelOverride" },
+    "harness": { "$ref": "common.schema.json#/$defs/harnessOverride" },
+    "runner": { "$ref": "common.schema.json#/$defs/runnerRef" },
+    "environmentId": { "$ref": "common.schema.json#/$defs/environmentId" },
+    "secrets": { "$ref": "common.schema.json#/$defs/secrets" },
+    "mcpServers": { "$ref": "common.schema.json#/$defs/mcpServers" },
+    "workerHost": { "$ref": "common.schema.json#/$defs/workerHost" },
+    "triggers": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/trigger" }
+    }
+  },
+  "allOf": [{ "$ref": "common.schema.json#/$defs/modelXorHarnessOptional" }],
+  "$defs": {
+    "stringMatcher": {
+      "description": "A bare array is sugar for {in: [...]}. Within a field, in matches ANY-of and not_in excludes ANY-of. Null and an empty matcher impose nothing.",
+      "anyOf": [
+        { "type": "null" },
+        { "type": "array", "items": { "type": "string" } },
+        {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "in": { "type": "array", "items": { "type": "string" } },
+            "not_in": { "type": "array", "items": { "type": "string" } }
+          }
+        }
+      ]
+    },
+    "intMatcher": {
+      "anyOf": [
+        { "type": "null" },
+        { "type": "array", "items": { "type": "integer" } },
+        {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "in": { "type": "array", "items": { "type": "integer" } },
+            "not_in": { "type": "array", "items": { "type": "integer" } }
+          }
+        }
+      ]
+    },
+    "scheduleIdsMatcher": {
+      "description": "schedule_ids supports only the in operator: an exclusion would match every other schedule in scope.",
+      "anyOf": [
+        { "type": "null" },
+        { "type": "array", "items": { "type": "string" } },
+        {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "in": { "type": "array", "items": { "type": "string" } }
+          }
+        }
+      ]
+    },
+    "nonEmptyScheduleIds": {
+      "type": "object",
+      "required": ["filter"],
+      "properties": {
+        "filter": {
+          "type": "object",
+          "required": ["schedule_ids"],
+          "properties": {
+            "schedule_ids": {
+              "anyOf": [
+                { "type": "array", "minItems": 1 },
+                {
+                  "type": "object",
+                  "required": ["in"],
+                  "properties": { "in": { "type": "array", "minItems": 1 } }
+                }
+              ]
+            }
+          }
+        }
+      }
+    },
+    "inlineSchedule": {
+      "type": "object",
+      "required": ["cron"],
+      "additionalProperties": true,
+      "description": "A cron schedule declared inline on a schedule.cron_fired trigger. Only valid on that kind, and mutually exclusive with filter.schedule_ids.",
+      "properties": {
+        "name": {
+          "type": ["string", "null"],
+          "description": "Stable identity of this declaration within the Automation. At most one inline schedule may omit name. Changing name replaces the schedule; changing only cron updates it in place."
+        },
+        "cron": {
+          "type": "string",
+          "pattern": "^\\s*(@(annually|yearly|monthly|weekly|daily|midnight|hourly)|@every\\s+\\S+|(\\S+\\s+){4}\\S+)\\s*$",
+          "description": "Standard five-field cron expression or a descriptor (@daily, @hourly, @every 1h). Always interpreted in UTC: a CRON_TZ= or TZ= prefix and the six-field seconds form are both rejected."
+        }
+      }
+    },
+    "trigger": {
+      "type": "object",
+      "required": ["provider", "event"],
+      "additionalProperties": true,
+      "properties": {
+        "provider": {
+          "$ref": "common.schema.json#/$defs/nonEmptyString",
+          "x-warp-known-values": ["github", "gitlab", "linear", "jira", "slack", "schedule", "factory"]
+        },
+        "event": { "type": "string" },
+        "filter": {
+          "type": "object",
+          "description": "Filter fields combine with AND. An absent field is a wildcard. The accepted keys depend on the (provider, event) pair."
+        },
+        "schedule": { "$ref": "#/$defs/inlineSchedule" }
+      },
+      "allOf": [
+        {
+          "if": {
+            "required": ["provider"],
+            "properties": { "provider": { "const": "github" } }
+          },
+          "then": {
+            "properties": {
+              "event": {
+                "$ref": "common.schema.json#/$defs/nonEmptyString",
+                "x-warp-known-values": [
+                  "push",
+                  "issue_created",
+                  "issue_labeled",
+                  "issue_mentioned",
+                  "issue_assigned",
+                  "pull_request_opened",
+                  "pull_request_ready",
+                  "pull_request_closed",
+                  "pull_request_merged",
+                  "pull_request_labeled",
+                  "pull_request_synchronized",
+                  "pull_request_reopened",
+                  "pull_request_mentioned",
+                  "pull_request_assigned",
+                  "pull_request_review_requested",
+                  "pull_request_review_submitted",
+                  "check_suite_completed",
+                  "check_suite_rerequested",
+                  "check_run_rerequested",
+                  "workflow_run_completed"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": ["provider"],
+            "properties": { "provider": { "const": "gitlab" } }
+          },
+          "then": {
+            "properties": {
+              "event": {
+                "$ref": "common.schema.json#/$defs/nonEmptyString",
+                "x-warp-known-values": ["merge_request", "bot_mentioned"]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": ["provider"],
+            "properties": { "provider": { "const": "factory" } }
+          },
+          "then": {
+            "properties": {
+              "event": {
+                "$ref": "common.schema.json#/$defs/nonEmptyString",
+                "x-warp-known-values": ["work_item_stage_changed"]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": ["provider"],
+            "properties": { "provider": { "const": "linear" } }
+          },
+          "then": {
+            "properties": {
+              "event": {
+                "$ref": "common.schema.json#/$defs/nonEmptyString",
+                "x-warp-known-values": [
+                  "issue_created",
+                  "issue_labeled",
+                  "issue_state_changed",
+                  "issue_assigned",
+                  "comment_created",
+                  "agent_session_created"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": ["provider"],
+            "properties": { "provider": { "const": "jira" } }
+          },
+          "then": {
+            "properties": {
+              "event": {
+                "$ref": "common.schema.json#/$defs/nonEmptyString",
+                "x-warp-known-values": [
+                  "issue_created",
+                  "issue_labeled",
+                  "status_changed",
+                  "agent_session_created"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": ["provider"],
+            "properties": { "provider": { "const": "slack" } }
+          },
+          "then": {
+            "properties": {
+              "event": {
+                "$ref": "common.schema.json#/$defs/nonEmptyString",
+                "x-warp-known-values": [
+                  "app_mention",
+                  "message_dm",
+                  "message_im",
+                  "message_mpim",
+                  "message_posted",
+                  "reaction_added",
+                  "member_joined_channel"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": ["provider"],
+            "properties": { "provider": { "const": "schedule" } }
+          },
+          "then": {
+            "properties": {
+              "event": {
+                "$ref": "common.schema.json#/$defs/nonEmptyString",
+                "x-warp-known-values": ["cron_fired"]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": ["provider", "event"],
+            "properties": {
+              "provider": { "const": "github" },
+              "event": { "const": "push" }
+            }
+          },
+          "then": {
+            "properties": {
+              "filter": {
+                "additionalProperties": false,
+                "properties": {
+                  "repos": { "$ref": "#/$defs/stringMatcher" },
+                  "branches": { "$ref": "#/$defs/stringMatcher" },
+                  "paths": { "$ref": "#/$defs/stringMatcher" }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": ["provider", "event"],
+            "properties": {
+              "provider": { "const": "github" },
+              "event": { "enum": ["issue_created", "issue_labeled"] }
+            }
+          },
+          "then": {
+            "properties": {
+              "filter": {
+                "additionalProperties": false,
+                "properties": {
+                  "repos": { "$ref": "#/$defs/stringMatcher" },
+                  "labels": { "$ref": "#/$defs/stringMatcher" },
+                  "assignees": { "$ref": "#/$defs/stringMatcher" },
+                  "authors": { "$ref": "#/$defs/stringMatcher" }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": ["provider", "event"],
+            "properties": {
+              "provider": { "const": "github" },
+              "event": {
+                "enum": [
+                  "pull_request_opened",
+                  "pull_request_ready",
+                  "pull_request_closed",
+                  "pull_request_merged",
+                  "pull_request_labeled",
+                  "pull_request_synchronized",
+                  "pull_request_reopened"
+                ]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "filter": {
+                "additionalProperties": false,
+                "properties": {
+                  "repos": { "$ref": "#/$defs/stringMatcher" },
+                  "base_branches": { "$ref": "#/$defs/stringMatcher" },
+                  "pr_numbers": { "$ref": "#/$defs/intMatcher" },
+                  "paths": { "$ref": "#/$defs/stringMatcher" },
+                  "assignees": { "$ref": "#/$defs/stringMatcher" },
+                  "authors": { "$ref": "#/$defs/stringMatcher" },
+                  "labels": { "$ref": "#/$defs/stringMatcher" }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": ["provider", "event"],
+            "properties": {
+              "provider": { "const": "github" },
+              "event": { "enum": ["issue_mentioned", "pull_request_mentioned"] }
+            }
+          },
+          "then": {
+            "properties": {
+              "filter": {
+                "additionalProperties": false,
+                "properties": {
+                  "repos": { "$ref": "#/$defs/stringMatcher" },
+                  "mentioned": { "$ref": "#/$defs/stringMatcher" },
+                  "labels": { "$ref": "#/$defs/stringMatcher" }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": ["provider", "event"],
+            "properties": {
+              "provider": { "const": "github" },
+              "event": { "enum": ["issue_assigned", "pull_request_assigned"] }
+            }
+          },
+          "then": {
+            "properties": {
+              "filter": {
+                "additionalProperties": false,
+                "properties": {
+                  "repos": { "$ref": "#/$defs/stringMatcher" },
+                  "assignees": { "$ref": "#/$defs/stringMatcher" },
+                  "labels": { "$ref": "#/$defs/stringMatcher" }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": ["provider", "event"],
+            "properties": {
+              "provider": { "const": "github" },
+              "event": { "const": "pull_request_review_requested" }
+            }
+          },
+          "then": {
+            "properties": {
+              "filter": {
+                "additionalProperties": false,
+                "properties": {
+                  "repos": { "$ref": "#/$defs/stringMatcher" },
+                  "reviewers": { "$ref": "#/$defs/stringMatcher" },
+                  "reviewer_teams": { "$ref": "#/$defs/stringMatcher" }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": ["provider", "event"],
+            "properties": {
+              "provider": { "const": "github" },
+              "event": { "const": "pull_request_review_submitted" }
+            }
+          },
+          "then": {
+            "properties": {
+              "filter": {
+                "additionalProperties": false,
+                "properties": {
+                  "repos": { "$ref": "#/$defs/stringMatcher" },
+                  "mentioned": { "$ref": "#/$defs/stringMatcher" },
+                  "labels": { "$ref": "#/$defs/stringMatcher" },
+                  "review_states": { "$ref": "#/$defs/stringMatcher" }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": ["provider", "event"],
+            "properties": {
+              "provider": { "const": "github" },
+              "event": { "const": "check_suite_completed" }
+            }
+          },
+          "then": {
+            "properties": {
+              "filter": {
+                "additionalProperties": false,
+                "properties": {
+                  "repos": { "$ref": "#/$defs/stringMatcher" },
+                  "conclusions": { "$ref": "#/$defs/stringMatcher" },
+                  "branches": { "$ref": "#/$defs/stringMatcher" },
+                  "labels": { "$ref": "#/$defs/stringMatcher" },
+                  "authors": { "$ref": "#/$defs/stringMatcher" }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": ["provider", "event"],
+            "properties": {
+              "provider": { "const": "github" },
+              "event": { "const": "workflow_run_completed" }
+            }
+          },
+          "then": {
+            "properties": {
+              "filter": {
+                "additionalProperties": false,
+                "properties": {
+                  "repos": { "$ref": "#/$defs/stringMatcher" },
+                  "conclusions": { "$ref": "#/$defs/stringMatcher" },
+                  "branches": { "$ref": "#/$defs/stringMatcher" },
+                  "workflows": { "$ref": "#/$defs/stringMatcher" },
+                  "labels": { "$ref": "#/$defs/stringMatcher" },
+                  "authors": { "$ref": "#/$defs/stringMatcher" }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": ["provider", "event"],
+            "properties": {
+              "provider": { "const": "github" },
+              "event": {
+                "enum": ["check_run_rerequested", "check_suite_rerequested"]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "filter": {
+                "additionalProperties": false,
+                "properties": {
+                  "repos": { "$ref": "#/$defs/stringMatcher" }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": ["provider", "event"],
+            "properties": {
+              "provider": { "const": "gitlab" },
+              "event": { "const": "merge_request" }
+            }
+          },
+          "then": {
+            "properties": {
+              "filter": {
+                "additionalProperties": false,
+                "properties": {
+                  "repos": { "$ref": "#/$defs/stringMatcher" },
+                  "actions": { "$ref": "#/$defs/stringMatcher" },
+                  "base_branches": { "$ref": "#/$defs/stringMatcher" }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": ["provider", "event"],
+            "properties": {
+              "provider": { "const": "gitlab" },
+              "event": { "const": "bot_mentioned" }
+            }
+          },
+          "then": {
+            "properties": {
+              "filter": {
+                "additionalProperties": false,
+                "properties": {
+                  "repos": { "$ref": "#/$defs/stringMatcher" },
+                  "mentioned": {
+                    "$ref": "#/$defs/stringMatcher",
+                    "description": "Server-seeded. Declaring it has no effect."
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": ["provider", "event"],
+            "properties": {
+              "provider": { "const": "factory" },
+              "event": { "const": "work_item_stage_changed" }
+            }
+          },
+          "then": {
+            "properties": {
+              "filter": {
+                "additionalProperties": false,
+                "properties": {
+                  "stages": { "$ref": "#/$defs/stringMatcher" }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": ["provider", "event"],
+            "properties": {
+              "provider": { "const": "linear" },
+              "event": {
+                "enum": [
+                  "issue_created",
+                  "issue_labeled",
+                  "issue_state_changed",
+                  "issue_assigned"
+                ]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "filter": {
+                "additionalProperties": false,
+                "properties": {
+                  "team_ids": { "$ref": "#/$defs/stringMatcher" },
+                  "project_ids": { "$ref": "#/$defs/stringMatcher" },
+                  "labels": { "$ref": "#/$defs/stringMatcher" },
+                  "state_ids": { "$ref": "#/$defs/stringMatcher" },
+                  "assignee_ids": { "$ref": "#/$defs/stringMatcher" },
+                  "mentioned_user_ids": { "$ref": "#/$defs/stringMatcher" },
+                  "creator_ids": { "$ref": "#/$defs/stringMatcher" }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": ["provider", "event"],
+            "properties": {
+              "provider": { "const": "linear" },
+              "event": { "const": "comment_created" }
+            }
+          },
+          "then": {
+            "properties": {
+              "filter": {
+                "additionalProperties": false,
+                "properties": {
+                  "team_ids": { "$ref": "#/$defs/stringMatcher" },
+                  "project_ids": { "$ref": "#/$defs/stringMatcher" },
+                  "labels": { "$ref": "#/$defs/stringMatcher" },
+                  "state_ids": { "$ref": "#/$defs/stringMatcher" },
+                  "issue_ids": { "$ref": "#/$defs/stringMatcher" },
+                  "mentioned_user_ids": { "$ref": "#/$defs/stringMatcher" },
+                  "creator_ids": { "$ref": "#/$defs/stringMatcher" }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": ["provider", "event"],
+            "properties": {
+              "provider": { "const": "linear" },
+              "event": { "const": "agent_session_created" }
+            }
+          },
+          "then": {
+            "properties": {
+              "filter": {
+                "additionalProperties": false,
+                "properties": {
+                  "team_ids": { "$ref": "#/$defs/stringMatcher" },
+                  "creator_ids": { "$ref": "#/$defs/stringMatcher" },
+                  "keywords": { "$ref": "#/$defs/stringMatcher" }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": ["provider", "event"],
+            "properties": {
+              "provider": { "const": "jira" },
+              "event": { "enum": ["issue_created", "issue_labeled"] }
+            }
+          },
+          "then": {
+            "properties": {
+              "filter": {
+                "additionalProperties": false,
+                "properties": {
+                  "project_keys": { "$ref": "#/$defs/stringMatcher" },
+                  "labels": { "$ref": "#/$defs/stringMatcher" }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": ["provider", "event"],
+            "properties": {
+              "provider": { "const": "jira" },
+              "event": { "const": "status_changed" }
+            }
+          },
+          "then": {
+            "properties": {
+              "filter": {
+                "additionalProperties": false,
+                "properties": {
+                  "project_keys": { "$ref": "#/$defs/stringMatcher" },
+                  "status_ids": { "$ref": "#/$defs/stringMatcher" }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": ["provider", "event"],
+            "properties": {
+              "provider": { "const": "jira" },
+              "event": { "const": "agent_session_created" }
+            }
+          },
+          "then": {
+            "properties": {
+              "filter": {
+                "additionalProperties": false,
+                "properties": {
+                  "project_keys": { "$ref": "#/$defs/stringMatcher" },
+                  "labels": { "$ref": "#/$defs/stringMatcher" },
+                  "keywords": { "$ref": "#/$defs/stringMatcher" }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": ["provider", "event"],
+            "properties": {
+              "provider": { "const": "slack" },
+              "event": {
+                "enum": [
+                  "app_mention",
+                  "message_dm",
+                  "message_im",
+                  "message_mpim",
+                  "message_posted"
+                ]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "filter": {
+                "additionalProperties": false,
+                "properties": {
+                  "channel_ids": { "$ref": "#/$defs/stringMatcher" },
+                  "user_ids": { "$ref": "#/$defs/stringMatcher" },
+                  "keywords": { "$ref": "#/$defs/stringMatcher" }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": ["provider", "event"],
+            "properties": {
+              "provider": { "const": "slack" },
+              "event": { "const": "reaction_added" }
+            }
+          },
+          "then": {
+            "properties": {
+              "filter": {
+                "additionalProperties": false,
+                "properties": {
+                  "channel_ids": { "$ref": "#/$defs/stringMatcher" },
+                  "user_ids": { "$ref": "#/$defs/stringMatcher" },
+                  "emojis": { "$ref": "#/$defs/stringMatcher" },
+                  "keywords": { "$ref": "#/$defs/stringMatcher" },
+                  "item_user_ids": { "$ref": "#/$defs/stringMatcher" }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": ["provider", "event"],
+            "properties": {
+              "provider": { "const": "slack" },
+              "event": { "const": "member_joined_channel" }
+            }
+          },
+          "then": {
+            "properties": {
+              "filter": {
+                "additionalProperties": false,
+                "properties": {
+                  "channel_ids": { "$ref": "#/$defs/stringMatcher" },
+                  "user_ids": { "$ref": "#/$defs/stringMatcher" }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": ["provider", "event"],
+            "properties": {
+              "provider": { "const": "schedule" },
+              "event": { "const": "cron_fired" }
+            }
+          },
+          "then": {
+            "properties": {
+              "filter": {
+                "additionalProperties": false,
+                "properties": {
+                  "schedule_ids": { "$ref": "#/$defs/scheduleIdsMatcher" }
+                }
+              }
+            },
+            "oneOf": [
+              { "required": ["schedule"] },
+              { "$ref": "#/$defs/nonEmptyScheduleIds" }
+            ]
+          }
+        },
+        {
+          "if": {
+            "not": {
+              "allOf": [
+                {
+                  "required": ["provider"],
+                  "properties": { "provider": { "const": "schedule" } }
+                },
+                {
+                  "required": ["event"],
+                  "properties": { "event": { "const": "cron_fired" } }
+                }
+              ]
+            }
+          },
+          "then": { "not": { "required": ["schedule"] } }
+        }
+      ]
+    }
+  }
+}

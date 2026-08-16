@@ -1,0 +1,118 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "factory.schema.json",
+  "$comment": "FORWARD COMPATIBILITY - DO NOT TIGHTEN. additionalProperties is true, and catalogue values are recorded as x-warp-known-values / x-warp-known-max-items annotations rather than enum, const, or maxItems. That is deliberate, not an oversight. This file ships inside a Warp release and is routinely OLDER than the warp-server it validates against, so a closed schema rejects configuration a newer server accepts and pushes agents to delete working fields. When the format gains a value, add it to the annotation; do not convert the annotation back into a rejecting keyword. The two deliberate exceptions are documented in specs/REMOTE-2727/TECH.md: trigger filter keys, which only apply when both provider and event are known, and schemaVersion, which stops validation rather than misapplying v1alpha1 rules. See also references/validation.md.",
+  "title": "factory.yaml (v1alpha1)",
+  "description": "The Factory root document. Exactly one factory.yaml must exist at the registered Factory root.",
+  "type": "object",
+  "required": ["schemaVersion", "name", "repositories", "agentDefaults"],
+  "additionalProperties": true,
+  "properties": {
+    "schemaVersion": {
+      "$ref": "common.schema.json#/$defs/nonEmptyString",
+      "x-warp-known-values": ["v1alpha1"],
+      "description": "Tree schema version. These schemas describe v1alpha1. A tree declaring a newer version is reported as unvalidatable rather than validated against v1alpha1 rules."
+    },
+    "name": {
+      "$ref": "common.schema.json#/$defs/nonEmptyString",
+      "description": "Factory name."
+    },
+    "description": {
+      "type": ["string", "null"]
+    },
+    "alias": { "$ref": "common.schema.json#/$defs/alias" },
+    "credentialStrategy": { "$ref": "common.schema.json#/$defs/credentialStrategy" },
+    "repositories": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "description": "GitHub repositories in the Factory's scope.",
+      "items": {
+        "type": "object",
+        "required": ["owner", "name"],
+        "additionalProperties": true,
+        "properties": {
+          "owner": { "$ref": "common.schema.json#/$defs/nonEmptyString" },
+          "name": { "$ref": "common.schema.json#/$defs/nonEmptyString" }
+        }
+      }
+    },
+    "secrets": { "$ref": "common.schema.json#/$defs/uniqueSecrets" },
+    "mcpServers": { "$ref": "common.schema.json#/$defs/mcpServers" },
+    "cloudProviders": {
+      "$ref": "#/$defs/cloudProviders",
+      "description": "Current cloud-provider identity federation section."
+    },
+    "providers": {
+      "$ref": "#/$defs/cloudProviders",
+      "description": "Legacy read-only alias for cloudProviders. Author cloudProviders in new files."
+    },
+    "integrations": {
+      "type": "array",
+      "uniqueItems": true,
+      "description": "Integration providers attached to the Factory. An empty list explicitly detaches every provider. github is not declarable here: repository access comes from repositories.",
+      "items": {
+        "type": "object",
+        "required": ["type"],
+        "additionalProperties": true,
+        "properties": {
+          "type": {
+            "$ref": "common.schema.json#/$defs/nonEmptyString",
+            "x-warp-known-values": ["jira", "linear", "slack"],
+            "description": "Provider slug. The server lowercases and trims the value; author the canonical known spelling."
+          }
+        }
+      }
+    },
+    "agentDefaults": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "Execution defaults every Agent inherits. Exactly one of model or harness is required.",
+      "properties": {
+        "model": { "$ref": "common.schema.json#/$defs/ozModelDefault" },
+        "harness": { "$ref": "common.schema.json#/$defs/harnessDefault" },
+        "runner": { "$ref": "common.schema.json#/$defs/runnerRef" },
+        "environmentId": { "$ref": "common.schema.json#/$defs/environmentId" },
+        "secrets": { "$ref": "common.schema.json#/$defs/secrets" },
+        "mcpServers": { "$ref": "common.schema.json#/$defs/mcpServers" },
+        "workerHost": { "$ref": "common.schema.json#/$defs/workerHost" }
+      },
+      "allOf": [{ "$ref": "common.schema.json#/$defs/modelXorHarnessRequired" }]
+    }
+  },
+  "$defs": {
+    "cloudProviders": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "Cloud provider identity federation used by agent runs.",
+      "properties": {
+        "gcp": {
+          "type": "object",
+          "required": [
+            "projectNumber",
+            "workloadIdentityFederationPoolId",
+            "workloadIdentityFederationProviderId"
+          ],
+          "additionalProperties": true,
+          "properties": {
+            "projectNumber": {
+              "$ref": "common.schema.json#/$defs/nonEmptyString",
+              "description": "Quote the value so YAML keeps it a string rather than an integer."
+            },
+            "workloadIdentityFederationPoolId": { "$ref": "common.schema.json#/$defs/nonEmptyString" },
+            "workloadIdentityFederationProviderId": { "$ref": "common.schema.json#/$defs/nonEmptyString" },
+            "serviceAccountEmail": { "$ref": "common.schema.json#/$defs/nonEmptyString" }
+          }
+        },
+        "aws": {
+          "type": "object",
+          "required": ["roleArn"],
+          "additionalProperties": true,
+          "properties": {
+            "roleArn": { "$ref": "common.schema.json#/$defs/nonEmptyString" }
+          }
+        }
+      }
+    }
+  }
+}

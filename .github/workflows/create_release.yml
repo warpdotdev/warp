@@ -118,7 +118,7 @@ jobs:
       - name: Create GitHub release
         if: ${{ steps.set_publish.outputs.should_publish == 'true' }}
         id: create_release
-        uses: softprops/action-gh-release@718ea10b132b3b2eba29c1007bb80653f286566b # v3.0.1
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
         with:
           name: ${{ steps.get-config.outputs.release_base_name }} ${{ steps.create_branch_and_tag.outputs.tag }}
           tag_name: ${{ steps.create_branch_and_tag.outputs.tag }}
@@ -202,7 +202,7 @@ jobs:
 
       - name: Add DMG to GitHub release assets
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
-        uses: softprops/action-gh-release@718ea10b132b3b2eba29c1007bb80653f286566b # v3.0.1
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
         with:
           tag_name: ${{ needs.prepare_release.outputs.release_tag }}
           files: ${{ steps.bundle_app.outputs.dmg_path }}
@@ -224,7 +224,7 @@ jobs:
 
       - name: Upload DMG as workflow artifact
         if: ${{ needs.prepare_release.outputs.should_publish != 'true' }}
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: release-macos-${{ matrix.arch }}-${{ steps.get-config.outputs.channel }}
           path: ${{ steps.bundle_app.outputs.dmg_path }}
@@ -258,7 +258,7 @@ jobs:
             ${{ steps.bundle_app.outputs.frameworks_dir }}
 
       - name: Archive ${{ matrix.arch }} build artifacts for universal build
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: macos-${{ matrix.arch }}-${{ steps.get-config.outputs.channel }}
           retention-days: 1
@@ -353,7 +353,7 @@ jobs:
       - name: Add DMG to GitHub release assets
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
         id: upload_github_assets
-        uses: softprops/action-gh-release@718ea10b132b3b2eba29c1007bb80653f286566b # v3.0.1
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
         # Continue if the upload fails; the next step will retry it.
         continue-on-error: true
         with:
@@ -367,7 +367,7 @@ jobs:
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' && steps.upload_github_assets.outcome == 'failure' }}
         # Continue if the upload fails; the next step will retry it.
         continue-on-error: true
-        uses: softprops/action-gh-release@718ea10b132b3b2eba29c1007bb80653f286566b # v3.0.1
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
         with:
           tag_name: ${{ needs.prepare_release.outputs.release_tag }}
           files: ${{ steps.bundle_app.outputs.dmg_path }}
@@ -377,7 +377,7 @@ jobs:
         id: upload_github_assets_retry2
         # If the first attempt failed, try again.
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' && steps.upload_github_assets_retry.outcome == 'failure' }}
-        uses: softprops/action-gh-release@718ea10b132b3b2eba29c1007bb80653f286566b # v3.0.1
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
         with:
           tag_name: ${{ needs.prepare_release.outputs.release_tag }}
           files: ${{ steps.bundle_app.outputs.dmg_path }}
@@ -402,7 +402,7 @@ jobs:
 
       - name: Upload DMG as workflow artifact
         if: ${{ needs.prepare_release.outputs.should_publish != 'true' }}
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: release-macos-universal-${{ steps.get-config.outputs.channel }}
           path: ${{ steps.bundle_app.outputs.dmg_path }}
@@ -468,7 +468,7 @@ jobs:
 
       - name: Add CLI to GitHub release assets
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
-        uses: softprops/action-gh-release@718ea10b132b3b2eba29c1007bb80653f286566b # v3.0.1
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
         with:
           tag_name: ${{ needs.prepare_release.outputs.release_tag }}
           files: oz-${{ steps.get-config.outputs.channel }}-macos-${{ matrix.arch }}.tar.gz
@@ -490,7 +490,7 @@ jobs:
 
       - name: Upload CLI as workflow artifact
         if: ${{ needs.prepare_release.outputs.should_publish != 'true' }}
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: release-macos-cli-${{ matrix.arch }}-${{ steps.get-config.outputs.channel }}
           path: oz-${{ steps.get-config.outputs.channel }}-macos-${{ matrix.arch }}.tar.gz
@@ -599,7 +599,7 @@ jobs:
 
       - name: Add TUI to GitHub release assets
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
-        uses: softprops/action-gh-release@718ea10b132b3b2eba29c1007bb80653f286566b # v3.0.1
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
         with:
           tag_name: ${{ needs.prepare_release.outputs.release_tag }}
           files: warp-tui-${{ steps.get-config.outputs.channel }}-macos-${{ matrix.arch }}.tar.gz
@@ -708,7 +708,7 @@ jobs:
 
       - name: Add TUI to GitHub release assets
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
-        uses: softprops/action-gh-release@718ea10b132b3b2eba29c1007bb80653f286566b # v3.0.1
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
         with:
           tag_name: ${{ needs.prepare_release.outputs.release_tag }}
           files: warp-tui-${{ steps.get-config.outputs.channel }}-linux-${{ matrix.arch }}.tar.gz
@@ -868,7 +868,7 @@ jobs:
       - name: Add packages to GitHub release assets
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
         id: upload_github_assets
-        uses: softprops/action-gh-release@718ea10b132b3b2eba29c1007bb80653f286566b # v3.0.1
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
         with:
           tag_name: ${{ needs.prepare_release.outputs.release_tag }}
           files: ${{ steps.bundle_app.outputs.packages_dir }}/*
@@ -891,7 +891,7 @@ jobs:
 
       - name: Upload packages as workflow artifact
         if: ${{ needs.prepare_release.outputs.should_publish != 'true' }}
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: release-linux-x86_64-${{ steps.get-config.outputs.channel }}
           path: ${{ steps.bundle_app.outputs.packages_dir }}
@@ -1027,7 +1027,7 @@ jobs:
       - name: Add CLI packages to GitHub release assets
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
         id: upload_github_assets
-        uses: softprops/action-gh-release@718ea10b132b3b2eba29c1007bb80653f286566b # v3.0.1
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
         with:
           tag_name: ${{ needs.prepare_release.outputs.release_tag }}
           files: ${{ steps.bundle_cli.outputs.packages_dir }}/*
@@ -1050,7 +1050,7 @@ jobs:
 
       - name: Add CLI tar.gz to GitHub release assets
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
-        uses: softprops/action-gh-release@718ea10b132b3b2eba29c1007bb80653f286566b # v3.0.1
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
         with:
           tag_name: ${{ needs.prepare_release.outputs.release_tag }}
           files: oz-${{ steps.get-config.outputs.channel }}-linux-x86_64.tar.gz
@@ -1067,7 +1067,7 @@ jobs:
 
       - name: Upload CLI packages as workflow artifact
         if: ${{ needs.prepare_release.outputs.should_publish != 'true' }}
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: release-linux-cli-x86_64-${{ steps.get-config.outputs.channel }}
           path: |
@@ -1165,7 +1165,7 @@ jobs:
           PACKAGES_DIR: ${{steps.build_app.outputs.packages_dir}}
 
       - name: Archive build files
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: built-arm64-linux-${{steps.get-config.outputs.channel}}
           retention-days: 1
@@ -1240,7 +1240,7 @@ jobs:
           PACKAGES_DIR: ${{steps.build_cli.outputs.packages_dir}}
 
       - name: Archive build files
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: built-arm64-linux-cli-${{steps.get-config.outputs.channel}}
           retention-days: 1
@@ -1443,14 +1443,14 @@ jobs:
 
       - name: Add app packages to GitHub release assets
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
-        uses: softprops/action-gh-release@718ea10b132b3b2eba29c1007bb80653f286566b # v3.0.1
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
         with:
           tag_name: ${{ needs.prepare_release.outputs.release_tag }}
           files: ${{ steps.bundle_app.outputs.packages_dir }}/*
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Add CLI packages to GitHub release assets
-        uses: softprops/action-gh-release@718ea10b132b3b2eba29c1007bb80653f286566b # v3.0.1
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' && steps.bundle_cli.outputs.packages_dir != steps.bundle_app.outputs.packages_dir }}
         with:
           tag_name: ${{ needs.prepare_release.outputs.release_tag }}
@@ -1459,7 +1459,7 @@ jobs:
 
       - name: Add CLI tar.gz to GitHub release assets
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
-        uses: softprops/action-gh-release@718ea10b132b3b2eba29c1007bb80653f286566b # v3.0.1
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
         with:
           tag_name: ${{ needs.prepare_release.outputs.release_tag }}
           files: oz-${{ steps.get-config.outputs.channel }}-linux-aarch64.tar.gz
@@ -1502,7 +1502,7 @@ jobs:
 
       - name: Upload packages as workflow artifact
         if: ${{ needs.prepare_release.outputs.should_publish != 'true' }}
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: release-linux-arm64-${{ steps.get-config.outputs.channel }}
           path: |
@@ -1570,7 +1570,7 @@ jobs:
       - name: Add packages to GitHub release assets
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
         id: upload_github_assets
-        uses: softprops/action-gh-release@718ea10b132b3b2eba29c1007bb80653f286566b # v3.0.1
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
         with:
           tag_name: ${{ needs.prepare_release.outputs.release_tag }}
           files: ${{ steps.bundle_app.outputs.packages_dir }}/*
@@ -1618,7 +1618,7 @@ jobs:
 
       - name: Upload web bundle as workflow artifact
         if: ${{ needs.prepare_release.outputs.should_publish != 'true' }}
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: release-web-${{ steps.get-config.outputs.channel }}
           path: ${{ steps.bundle_app.outputs.packages_dir }}
@@ -1712,7 +1712,7 @@ jobs:
           SIGN_TOOL_CMD: ${{ steps.setup_signing.outputs.sign_tool_cmd }}
       - name: Add TUI installer to GitHub release assets
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
-        uses: softprops/action-gh-release@718ea10b132b3b2eba29c1007bb80653f286566b # v3.0.1
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
         with:
           tag_name: ${{ needs.prepare_release.outputs.release_tag }}
           files: ${{ steps.bundle_tui.outputs.installer_path }}
@@ -1872,7 +1872,7 @@ jobs:
       - name: Add installer to GitHub release assets
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
         id: upload_github_assets
-        uses: softprops/action-gh-release@718ea10b132b3b2eba29c1007bb80653f286566b # v3.0.1
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
         with:
           tag_name: ${{ needs.prepare_release.outputs.release_tag }}
           files: ${{ steps.bundle_app.outputs.installer_path }}
@@ -1897,7 +1897,7 @@ jobs:
 
       - name: Upload installer as workflow artifact
         if: ${{ needs.prepare_release.outputs.should_publish != 'true' }}
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: release-windows-${{ matrix.arch }}-${{ steps.get-config.outputs.channel }}
           path: ${{ steps.bundle_app.outputs.installer_path }}
@@ -1965,15 +1965,19 @@ jobs:
           fi
 
       - name: Send Slack notification if unsuccessful
-        uses: slackapi/slack-github-action@410ae57cff5c6b682b106440be0e6c7eb8c98c9d # v1.16.0
+        uses: slackapi/slack-github-action@0d95c9a7becc1e6e297d76df9bc735c44f4cbcbc # v3.0.5
         if: ${{ steps.failed_releases.outputs.failed != '' }}
         with:
-          channel-id: "#oncall-client"
-          # Follows https://api.slack.com/reference/surfaces/formatting#mentioning-users.
-          # S06N82RS7FA is the user group ID for @oncall-client-eng.
-          slack-message: "Failed to create ${{ steps.failed_releases.outputs.failed }} release artifacts for ${{ inputs.channel }}. See https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}. cc: <!subteam^S06N82RS7FA>"
-        env:
-          SLACK_BOT_TOKEN: ${{ secrets.ACTION_MONITORING_SLACK }}
+          # Fail the step when Slack rejects the message.
+          errors: true
+          method: chat.postMessage
+          token: ${{ secrets.ACTION_MONITORING_SLACK }}
+          payload: |
+            channel: "#oncall-client"
+            # Follows https://api.slack.com/reference/surfaces/formatting#mentioning-users.
+            # S06N82RS7FA is the user group ID for @oncall-client-eng.
+            text: "Failed to create ${{ steps.failed_releases.outputs.failed }} release artifacts for ${{ inputs.channel }}. See https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}. cc: <!subteam^S06N82RS7FA>"
+
   gate_tui_release_artifacts:
     name: Gate changelog publication on TUI release artifacts
     runs-on: ubuntu-latest
@@ -2057,7 +2061,7 @@ jobs:
       - name: Upload raw Markdown changelog artifact (stable only)
         if: inputs.channel == 'stable'
         id: upload_changelog_draft_markdown
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: changelog-draft-markdown
           path: ${{ runner.temp }}/changelog-draft/changelog-draft.md
@@ -2129,6 +2133,7 @@ jobs:
           CHANGELOG_JSON: ${{ steps.generate_changelog.outputs.changelog }}
           RELEASE_TAG: ${{ needs.prepare_release.outputs.release_tag }}
           MARKDOWN_ARTIFACT_URL: ${{ steps.upload_changelog_draft_markdown.outputs.artifact-url }}
+          SLACK_CHANNEL: ${{ steps.get-config.outputs.changelog_slack_channel }}
         run: |
           CHANGELOG_INPUT="${{ runner.temp }}/slack-changelog-input.json"
           SLACK_PAYLOAD="${{ runner.temp }}/slack-changelog-payload.json"
@@ -2144,23 +2149,30 @@ jobs:
           fi
           echo "has_content=true" >> $GITHUB_OUTPUT
 
+          # chat.postMessage takes the destination channel as one of its
+          # arguments, so fold it into the payload the Slack step sends.
+          jq -c --arg channel "$SLACK_CHANNEL" '. + {channel: $channel}' "$SLACK_PAYLOAD" > "$SLACK_PAYLOAD.tmp"
+          mv "$SLACK_PAYLOAD.tmp" "$SLACK_PAYLOAD"
+
           echo "payload<<SLACK_PAYLOAD_EOF" >> $GITHUB_OUTPUT
           cat "$SLACK_PAYLOAD" >> $GITHUB_OUTPUT
           echo "SLACK_PAYLOAD_EOF" >> $GITHUB_OUTPUT
 
       - name: Post to a Slack channel
         id: slack
-        uses: slackapi/slack-github-action@410ae57cff5c6b682b106440be0e6c7eb8c98c9d # v1.16.0
+        uses: slackapi/slack-github-action@0d95c9a7becc1e6e297d76df9bc735c44f4cbcbc # v3.0.5
         if: ${{ steps.build_slack_payload.outputs.has_content == 'true' }}
         # Continue on with the rest of the workflow, even if we fail to send the
         # changelog info to Slack.  (We still want to stick the changelog JSON
         # in Cloud Storage.)
         continue-on-error: true
         with:
-          channel-id: ${{ steps.get-config.outputs.changelog_slack_channel }}
+          # Fail the step when Slack rejects the message; continue-on-error
+          # above still lets the rest of the job run.
+          errors: true
+          method: chat.postMessage
+          token: ${{ secrets.SLACK_CHANGELOG_BOT }}
           payload: ${{ steps.build_slack_payload.outputs.payload }}
-        env:
-          SLACK_BOT_TOKEN: ${{ secrets.SLACK_CHANGELOG_BOT }}
 
       - name: Generate changelog.json
         id: changelog_json

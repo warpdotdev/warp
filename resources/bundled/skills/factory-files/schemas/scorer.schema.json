@@ -1,0 +1,74 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "scorer.schema.json",
+  "$comment": "FORWARD COMPATIBILITY - DO NOT TIGHTEN. additionalProperties is true, and catalogue values are recorded as x-warp-known-values / x-warp-known-max-items annotations rather than enum, const, or maxItems. That is deliberate, not an oversight. This file ships inside a Warp release and is routinely OLDER than the warp-server it validates against, so a closed schema rejects configuration a newer server accepts and pushes agents to delete working fields. When the format gains a value, add it to the annotation; do not convert the annotation back into a rejecting keyword. The two deliberate exceptions are documented in specs/REMOTE-2727/TECH.md: trigger filter keys, which only apply when both provider and event are known, and schemaVersion, which stops validation rather than misapplying v1alpha1 rules. See also references/validation.md.",
+  "title": "scorers/<name>/scorer.md frontmatter (v1alpha1)",
+  "description": "YAML frontmatter of a Scorer file. The Scorer name comes from its directory, and the Markdown body is its required rubric.",
+  "type": "object",
+  "required": ["agents", "labels", "passingScore", "model"],
+  "additionalProperties": true,
+  "properties": {
+    "description": {
+      "type": ["string", "null"]
+    },
+    "agents": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "common.schema.json#/$defs/nonEmptyString"
+      },
+      "description": "Names of Agents declared by this Factory."
+    },
+    "enabled": {
+      "type": "boolean",
+      "description": "Defaults to true."
+    },
+    "output": {
+      "$ref": "common.schema.json#/$defs/nonEmptyString",
+      "x-warp-known-values": ["classification"],
+      "description": "Scorer output form. classification is the current v1 form; newer forms are preserved for forward compatibility."
+    },
+    "labels": {
+      "type": "array",
+      "minItems": 1,
+      "x-warp-known-max-items": 20,
+      "description": "Classifications this Scorer may return. The current server accepts at most 20; a larger set is left for the server to judge.",
+      "items": {
+        "type": "object",
+        "required": ["value", "score"],
+        "additionalProperties": true,
+        "properties": {
+          "value": {
+            "$ref": "common.schema.json#/$defs/nonEmptyString"
+          },
+          "description": {
+            "type": ["string", "null"]
+          },
+          "score": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          }
+        }
+      }
+    },
+    "passingScore": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "samplingRate": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 100,
+      "description": "Percentage of eligible runs to score. Defaults to 25. Zero is invalid; use enabled: false."
+    },
+    "model": {
+      "$ref": "common.schema.json#/$defs/nonEmptyString"
+    },
+    "selfImprovement": {
+      "type": "boolean",
+      "description": "Defaults to false."
+    }
+  }
+}

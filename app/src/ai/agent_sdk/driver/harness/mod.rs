@@ -42,6 +42,7 @@ mod codex;
 pub(crate) mod codex_transcript;
 mod gemini;
 mod json_utils;
+mod skill_dirs_publish;
 mod telemetry;
 pub(crate) use claude_code::ClaudeHarness;
 use claude_transcript::ClaudeResumeInfo;
