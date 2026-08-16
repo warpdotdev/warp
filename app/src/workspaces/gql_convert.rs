@@ -1284,8 +1284,8 @@ impl From<GqlTeamSettings> for TeamSettings {
 /// Derives a team's effective settings from the GraphQL payload. The settings
 /// always come from the **team** payload (`gql_team.settings`), never from a
 /// clone of the workspace settings. Workspace-scoped flags such as
-/// invite-link/discoverability are intentionally not part of `TeamSettings` and
-/// are read from the workspace settings at their call sites.
+/// discoverability are intentionally not part of `TeamSettings` and are read
+/// from the workspace settings at their call sites.
 ///
 /// Extracted from [`Team::from_gql`] so the team-payload sourcing is
 /// unit-testable without constructing a full `GqlWorkspace`.
@@ -1296,9 +1296,6 @@ pub(crate) fn team_settings_from_gql(team_settings: GqlTeamSettings) -> TeamSett
 impl Team {
     pub fn from_gql(gql_workspace: GqlWorkspace, gql_team: GqlTeam) -> Team {
         Self {
-            // TEAM FIELDS
-            // These fields will persist in the Team rust type even after we finish
-            // rolling out workspaces.
             uid: ServerId::from_string_lossy(gql_team.uid.inner()),
             name: gql_team.name.clone(),
             color: gql_team.color.clone(),
@@ -1308,13 +1305,7 @@ impl Team {
                 .into_iter()
                 .map(|gql_member| gql_member.into())
                 .collect(),
-
             invite_link: gql_team.invite_link.clone(),
-
-            // WORKSPACE FIELDS
-            // TODO(skambashi): The fields below are derived from the workspace. We should
-            // remove these from the Team rust type and use the values in the parent
-            // Workspace instead.
             pending_email_invites: gql_workspace
                 .pending_email_invites
                 .clone()
@@ -1333,9 +1324,7 @@ impl Team {
                 .as_ref()
                 .map(|id| id.clone().into_inner()),
             // Team-effective settings come from the team payload, not from a
-            // clone of the workspace settings. Invite-link / discoverability are
-            // workspace-level and are read from the workspace settings at their
-            // call sites, so they are not surfaced on `Team`.
+            // clone of the workspace settings.
             settings: team_settings_from_gql(gql_team.settings),
             is_eligible_for_discovery: gql_workspace.is_eligible_for_discovery,
             has_billing_history: gql_workspace.has_billing_history,

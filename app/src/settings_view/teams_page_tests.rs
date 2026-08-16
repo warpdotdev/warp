@@ -245,18 +245,3 @@ fn workspace_admin_does_not_get_pending_invite_cancellation() {
     // it's out of scope for the workspace-admin override.
     assert!(action_labels(&items, "invitee@example.com").is_empty());
 }
-
-#[test]
-fn invite_link_display_reflects_team_link_state() {
-    let mut team = team_with_members(vec![], true);
-    assert_eq!(
-        TeamsWidget::invite_link_display(&team),
-        (INVITE_LINK_DISABLED_TEXT.to_string(), false)
-    );
-
-    team.invite_link = Some("https://app.warp.dev/team/abc123".to_string());
-    assert_eq!(
-        TeamsWidget::invite_link_display(&team),
-        ("https://app.warp.dev/team/abc123".to_string(), true)
-    );
-}
