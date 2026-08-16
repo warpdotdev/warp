@@ -1309,8 +1309,6 @@ impl Team {
                 .map(|gql_member| gql_member.into())
                 .collect(),
 
-            // The server-owned invite-by-link URL, sourced directly from this
-            // team's own payload (unlike the workspace-derived fields below).
             invite_link: gql_team.invite_link.clone(),
 
             // WORKSPACE FIELDS
