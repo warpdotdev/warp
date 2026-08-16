@@ -5,7 +5,7 @@
   "description": "YAML frontmatter of an Automation file. The Automation's name comes from its directory, never from a field. The Markdown body after the closing fence is the run prompt.",
   "type": "object",
   "required": ["triggers"],
-  "additionalProperties": false,
+  "additionalProperties": true,
   "properties": {
     "enabled": {
       "type": "boolean",
@@ -37,7 +37,7 @@
         { "type": "array", "items": { "type": "string" } },
         {
           "type": "object",
-          "additionalProperties": false,
+          "additionalProperties": true,
           "properties": {
             "in": { "type": "array", "items": { "type": "string" } },
             "not_in": { "type": "array", "items": { "type": "string" } }
@@ -51,7 +51,7 @@
         { "type": "array", "items": { "type": "integer" } },
         {
           "type": "object",
-          "additionalProperties": false,
+          "additionalProperties": true,
           "properties": {
             "in": { "type": "array", "items": { "type": "integer" } },
             "not_in": { "type": "array", "items": { "type": "integer" } }
@@ -66,7 +66,7 @@
         { "type": "array", "items": { "type": "string" } },
         {
           "type": "object",
-          "additionalProperties": false,
+          "additionalProperties": true,
           "properties": {
             "in": { "type": "array", "items": { "type": "string" } }
           }
@@ -98,7 +98,7 @@
     "inlineSchedule": {
       "type": "object",
       "required": ["cron"],
-      "additionalProperties": false,
+      "additionalProperties": true,
       "description": "A cron schedule declared inline on a schedule.cron_fired trigger. Only valid on that kind, and mutually exclusive with filter.schedule_ids.",
       "properties": {
         "name": {
@@ -115,10 +115,11 @@
     "trigger": {
       "type": "object",
       "required": ["provider", "event"],
-      "additionalProperties": false,
+      "additionalProperties": true,
       "properties": {
         "provider": {
-          "enum": ["github", "gitlab", "linear", "jira", "slack", "schedule", "factory"]
+          "$ref": "common.schema.json#/$defs/nonEmptyString",
+          "x-warp-known-values": ["github", "gitlab", "linear", "jira", "slack", "schedule", "factory"]
         },
         "event": { "type": "string" },
         "filter": {
@@ -136,7 +137,8 @@
           "then": {
             "properties": {
               "event": {
-                "enum": [
+                "$ref": "common.schema.json#/$defs/nonEmptyString",
+                "x-warp-known-values": [
                   "push",
                   "issue_created",
                   "issue_labeled",
@@ -169,7 +171,10 @@
           },
           "then": {
             "properties": {
-              "event": { "enum": ["merge_request", "bot_mentioned"] }
+              "event": {
+                "$ref": "common.schema.json#/$defs/nonEmptyString",
+                "x-warp-known-values": ["merge_request", "bot_mentioned"]
+              }
             }
           }
         },
@@ -180,7 +185,10 @@
           },
           "then": {
             "properties": {
-              "event": { "enum": ["work_item_stage_changed"] }
+              "event": {
+                "$ref": "common.schema.json#/$defs/nonEmptyString",
+                "x-warp-known-values": ["work_item_stage_changed"]
+              }
             }
           }
         },
@@ -192,7 +200,8 @@
           "then": {
             "properties": {
               "event": {
-                "enum": [
+                "$ref": "common.schema.json#/$defs/nonEmptyString",
+                "x-warp-known-values": [
                   "issue_created",
                   "issue_labeled",
                   "issue_state_changed",
@@ -212,7 +221,8 @@
           "then": {
             "properties": {
               "event": {
-                "enum": [
+                "$ref": "common.schema.json#/$defs/nonEmptyString",
+                "x-warp-known-values": [
                   "issue_created",
                   "issue_labeled",
                   "status_changed",
@@ -230,7 +240,8 @@
           "then": {
             "properties": {
               "event": {
-                "enum": [
+                "$ref": "common.schema.json#/$defs/nonEmptyString",
+                "x-warp-known-values": [
                   "app_mention",
                   "message_dm",
                   "message_im",
@@ -249,7 +260,12 @@
             "properties": { "provider": { "const": "schedule" } }
           },
           "then": {
-            "properties": { "event": { "enum": ["cron_fired"] } }
+            "properties": {
+              "event": {
+                "$ref": "common.schema.json#/$defs/nonEmptyString",
+                "x-warp-known-values": ["cron_fired"]
+              }
+            }
           }
         },
         {
@@ -263,7 +279,7 @@
           "then": {
             "properties": {
               "filter": {
-                "additionalProperties": false,
+                "additionalProperties": true,
                 "properties": {
                   "repos": { "$ref": "#/$defs/stringMatcher" },
                   "branches": { "$ref": "#/$defs/stringMatcher" },
@@ -284,7 +300,7 @@
           "then": {
             "properties": {
               "filter": {
-                "additionalProperties": false,
+                "additionalProperties": true,
                 "properties": {
                   "repos": { "$ref": "#/$defs/stringMatcher" },
                   "labels": { "$ref": "#/$defs/stringMatcher" },
@@ -316,7 +332,7 @@
           "then": {
             "properties": {
               "filter": {
-                "additionalProperties": false,
+                "additionalProperties": true,
                 "properties": {
                   "repos": { "$ref": "#/$defs/stringMatcher" },
                   "base_branches": { "$ref": "#/$defs/stringMatcher" },
@@ -341,7 +357,7 @@
           "then": {
             "properties": {
               "filter": {
-                "additionalProperties": false,
+                "additionalProperties": true,
                 "properties": {
                   "repos": { "$ref": "#/$defs/stringMatcher" },
                   "mentioned": { "$ref": "#/$defs/stringMatcher" },
@@ -362,7 +378,7 @@
           "then": {
             "properties": {
               "filter": {
-                "additionalProperties": false,
+                "additionalProperties": true,
                 "properties": {
                   "repos": { "$ref": "#/$defs/stringMatcher" },
                   "assignees": { "$ref": "#/$defs/stringMatcher" },
@@ -383,7 +399,7 @@
           "then": {
             "properties": {
               "filter": {
-                "additionalProperties": false,
+                "additionalProperties": true,
                 "properties": {
                   "repos": { "$ref": "#/$defs/stringMatcher" },
                   "reviewers": { "$ref": "#/$defs/stringMatcher" },
@@ -404,7 +420,7 @@
           "then": {
             "properties": {
               "filter": {
-                "additionalProperties": false,
+                "additionalProperties": true,
                 "properties": {
                   "repos": { "$ref": "#/$defs/stringMatcher" },
                   "mentioned": { "$ref": "#/$defs/stringMatcher" },
@@ -426,7 +442,7 @@
           "then": {
             "properties": {
               "filter": {
-                "additionalProperties": false,
+                "additionalProperties": true,
                 "properties": {
                   "repos": { "$ref": "#/$defs/stringMatcher" },
                   "conclusions": { "$ref": "#/$defs/stringMatcher" },
@@ -449,7 +465,7 @@
           "then": {
             "properties": {
               "filter": {
-                "additionalProperties": false,
+                "additionalProperties": true,
                 "properties": {
                   "repos": { "$ref": "#/$defs/stringMatcher" },
                   "conclusions": { "$ref": "#/$defs/stringMatcher" },
@@ -475,7 +491,7 @@
           "then": {
             "properties": {
               "filter": {
-                "additionalProperties": false,
+                "additionalProperties": true,
                 "properties": {
                   "repos": { "$ref": "#/$defs/stringMatcher" }
                 }
@@ -494,7 +510,7 @@
           "then": {
             "properties": {
               "filter": {
-                "additionalProperties": false,
+                "additionalProperties": true,
                 "properties": {
                   "repos": { "$ref": "#/$defs/stringMatcher" },
                   "actions": { "$ref": "#/$defs/stringMatcher" },
@@ -515,7 +531,7 @@
           "then": {
             "properties": {
               "filter": {
-                "additionalProperties": false,
+                "additionalProperties": true,
                 "properties": {
                   "repos": { "$ref": "#/$defs/stringMatcher" },
                   "mentioned": {
@@ -538,7 +554,7 @@
           "then": {
             "properties": {
               "filter": {
-                "additionalProperties": false,
+                "additionalProperties": true,
                 "properties": {
                   "stages": { "$ref": "#/$defs/stringMatcher" }
                 }
@@ -564,7 +580,7 @@
           "then": {
             "properties": {
               "filter": {
-                "additionalProperties": false,
+                "additionalProperties": true,
                 "properties": {
                   "team_ids": { "$ref": "#/$defs/stringMatcher" },
                   "project_ids": { "$ref": "#/$defs/stringMatcher" },
@@ -589,7 +605,7 @@
           "then": {
             "properties": {
               "filter": {
-                "additionalProperties": false,
+                "additionalProperties": true,
                 "properties": {
                   "team_ids": { "$ref": "#/$defs/stringMatcher" },
                   "project_ids": { "$ref": "#/$defs/stringMatcher" },
@@ -614,7 +630,7 @@
           "then": {
             "properties": {
               "filter": {
-                "additionalProperties": false,
+                "additionalProperties": true,
                 "properties": {
                   "team_ids": { "$ref": "#/$defs/stringMatcher" },
                   "creator_ids": { "$ref": "#/$defs/stringMatcher" },
@@ -635,7 +651,7 @@
           "then": {
             "properties": {
               "filter": {
-                "additionalProperties": false,
+                "additionalProperties": true,
                 "properties": {
                   "project_keys": { "$ref": "#/$defs/stringMatcher" },
                   "labels": { "$ref": "#/$defs/stringMatcher" }
@@ -655,7 +671,7 @@
           "then": {
             "properties": {
               "filter": {
-                "additionalProperties": false,
+                "additionalProperties": true,
                 "properties": {
                   "project_keys": { "$ref": "#/$defs/stringMatcher" },
                   "status_ids": { "$ref": "#/$defs/stringMatcher" }
@@ -675,7 +691,7 @@
           "then": {
             "properties": {
               "filter": {
-                "additionalProperties": false,
+                "additionalProperties": true,
                 "properties": {
                   "project_keys": { "$ref": "#/$defs/stringMatcher" },
                   "labels": { "$ref": "#/$defs/stringMatcher" },
@@ -704,7 +720,7 @@
           "then": {
             "properties": {
               "filter": {
-                "additionalProperties": false,
+                "additionalProperties": true,
                 "properties": {
                   "channel_ids": { "$ref": "#/$defs/stringMatcher" },
                   "user_ids": { "$ref": "#/$defs/stringMatcher" },
@@ -725,7 +741,7 @@
           "then": {
             "properties": {
               "filter": {
-                "additionalProperties": false,
+                "additionalProperties": true,
                 "properties": {
                   "channel_ids": { "$ref": "#/$defs/stringMatcher" },
                   "user_ids": { "$ref": "#/$defs/stringMatcher" },
@@ -748,7 +764,7 @@
           "then": {
             "properties": {
               "filter": {
-                "additionalProperties": false,
+                "additionalProperties": true,
                 "properties": {
                   "channel_ids": { "$ref": "#/$defs/stringMatcher" },
                   "user_ids": { "$ref": "#/$defs/stringMatcher" }
@@ -768,7 +784,7 @@
           "then": {
             "properties": {
               "filter": {
-                "additionalProperties": false,
+                "additionalProperties": true,
                 "properties": {
                   "schedule_ids": { "$ref": "#/$defs/scheduleIdsMatcher" }
                 }

@@ -1,6 +1,6 @@
 ---
 name: factory-files
-description: Create and edit file-based Warp software factory definitions, in a repository tree rooted at a factory.yaml. Use when authoring or changing that factory.yaml, the agent.md, automation.md, or runner YAML files under that root, or its factory and agent skill trees, and when fixing Factory file diagnostics. Do not use for agent-definition Markdown that belongs to another tool, for a tree with no factory.yaml, or to operate a live factory or hand work to one through Factory MCP.
+description: Create and edit file-based Warp software factory definitions, in a repository tree rooted at a factory.yaml. Use when authoring or changing that factory.yaml, Agent, Automation, Scorer, or Runner files under that root, or its factory and agent skill trees, and when fixing Factory file diagnostics. Do not use for agent-definition Markdown that belongs to another tool, for a tree with no factory.yaml, or to operate a live factory or hand work to one through Factory MCP.
 ---
 
 # Factory Files
@@ -31,6 +31,7 @@ agents/<name>/agent.md              at least one; exactly one must be MAIN
 agents/<name>/skills/**             skills only that agent can use
 automations/<name>/automation.md    optional
 runners/<name>.yaml                 optional
+scorers/<name>/scorer.md            optional; Markdown body is the rubric
 skills/**                           skills every agent in the factory can use
 ```
 
@@ -45,13 +46,17 @@ unless the user asks you to normalize the tree.
 1. Read the files you are about to change, plus `factory.yaml`, so you can see
    what is inherited and what is overridden.
 2. Preserve fields and Markdown bodies you were not asked to change. The body
-   after an agent's or automation's closing `---` fence is the prompt; never
-   fold it into frontmatter.
+   after an Agent's or Automation's closing `---` fence is its prompt; a
+   Scorer's body is its rubric. Never fold either into frontmatter.
 3. Prefer the smallest edit that satisfies the request.
 
 ## Author against the schema
-The parser rejects unknown fields, duplicate keys, YAML anchors, aliases,
-explicit tags, and multiple documents per file. Do not invent fields.
+The current server parser rejects unknown fields, but bundled schemas can be
+older than the server. They therefore validate known fields while preserving
+unknown properties and newer catalogue values. Do not invent a field when a
+documented one exists, and do not delete an existing unknown field. Duplicate
+keys, YAML anchors, aliases, explicit tags, and multiple documents remain
+invalid.
 
 The bundled JSON Schemas are the machine-readable contract:
 
@@ -60,14 +65,16 @@ schemas/factory.schema.json      factory.yaml
 schemas/agent.schema.json        agents/<name>/agent.md frontmatter
 schemas/automation.schema.json   automations/<name>/automation.md frontmatter
 schemas/runner.schema.json       runners/<name>.yaml
+schemas/scorer.schema.json       scorers/<name>/scorer.md frontmatter
 schemas/common.schema.json       shared definitions referenced by the above
 ```
 
 Read `references/schema.md` for the field-by-field reference, defaults, and
 inheritance rules. Read `references/triggers.md` before writing or changing an
 automation trigger: filter keys are specific to each provider and event, and
-the parser does not catch a wrong one. Read `references/examples.md` for
-worked examples of each resource.
+the parser does not catch a wrong one. Read `references/scorers.md` before
+writing or changing a Scorer. Read `references/examples.md` for worked
+examples of each resource.
 
 ## Validate before opening a pull request
 Run the bundled validator with Python 3.8 or newer, using the host's command (`python3`,
@@ -86,11 +93,12 @@ was validated without the user's approval. Check the changed document against
 the corresponding JSON Schema manually and report that automated validation
 was unavailable.
 
-The validator checks structure, field names, enums, mutual exclusions, trigger
-filter keys, cron syntax, runner platform rules, and the tree-level rules
-(exactly one MAIN agent, automation agent references, duplicate resource
-names). It does not resolve server state: model IDs, environment IDs, secret
-names, runner names, MCP server IDs, and integration availability are all
+The validator checks known field structure, mutual exclusions, trigger and
+Scorer semantics, cron syntax, runner platform rules, and tree-level rules
+(exactly one MAIN agent, Agent references, duplicate resource names). Unknown
+properties and newer catalogue values pass through for version skew. It does
+not resolve server state: model IDs, environment IDs, secret names, runner
+names, Scorer model IDs, MCP server IDs, and integration availability are all
 validated when the plan is applied. Report that distinction rather than
 claiming a tree is fully verified.
 

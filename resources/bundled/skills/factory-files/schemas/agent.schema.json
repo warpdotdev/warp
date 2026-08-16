@@ -4,7 +4,7 @@
   "title": "agents/<name>/agent.md frontmatter (v1alpha1)",
   "description": "YAML frontmatter of an Agent file. The Agent's name comes from its directory, never from a field. The Markdown body after the closing fence is the Agent's prompt.",
   "type": "object",
-  "additionalProperties": false,
+  "additionalProperties": true,
   "properties": {
     "description": {
       "type": ["string", "null"]

@@ -33,6 +33,7 @@ SCHEMA_BY_KIND = {
     "agent": "agent.schema.json",
     "automation": "automation.schema.json",
     "runner": "runner.schema.json",
+    "scorer": "scorer.schema.json",
 }
 
 MAIN_AGENT_TYPES = {"MAIN", "FOREMAN"}
@@ -475,15 +476,15 @@ def load_yaml(text: str) -> Any:
     return value
 
 
-def split_frontmatter(text: str) -> tuple[str, int]:
-    """Return an Agent or Automation file's frontmatter and its line offset."""
+def split_frontmatter(text: str) -> tuple[str, str, int]:
+    """Return a Markdown resource's frontmatter, body, and line offset."""
     normalized = text.replace("\r\n", "\n").replace("\r", "\n")
     lines = normalized.split("\n")
     if not lines or lines[0].rstrip() != "---":
         raise YamlError("resource file must start with a frontmatter fence (---)", 1)
     for index in range(1, len(lines)):
         if lines[index].rstrip() == "---":
-            return "\n".join(lines[1:index]), 1
+            return "\n".join(lines[1:index]), "\n".join(lines[index + 1 :]), 1
     raise YamlError("frontmatter is missing a closing fence (---)", 1)
 
 
@@ -541,6 +542,7 @@ _SUPPORTED_KEYWORDS = frozenset(
         "minimum",
         "maximum",
         "minItems",
+        "maxItems",
         "uniqueItems",
         "items",
         "required",
@@ -566,6 +568,7 @@ _ANNOTATION_KEYWORDS = frozenset(
         "title",
         "description",
         "x-warp-character-class",
+        "x-warp-known-values",
         "x-warp-max-trimmed-runes",
     }
 )
@@ -644,6 +647,8 @@ def validate_instance(
     if isinstance(instance, list):
         if "minItems" in schema and len(instance) < schema["minItems"]:
             errors.append(f"{pointer or '/'}: must contain at least {schema['minItems']} entries")
+        if "maxItems" in schema and len(instance) > schema["maxItems"]:
+            errors.append(f"{pointer or '/'}: must contain at most {schema['maxItems']} entries")
         if schema.get("uniqueItems") and _has_duplicates(instance):
             errors.append(f"{pointer or '/'}: entries must be unique")
         if "items" in schema:
@@ -766,12 +771,18 @@ def classify(relative: str) -> tuple[str, str]:
     if len(segments) == 2 and segments[0] == "runners" and segments[1].endswith(".yaml"):
         name = segments[1][: -len(".yaml")]
         return ("runner", name) if _valid_name(name) else ("invalid", "")
+    if len(segments) == 3 and segments[0] == "scorers" and segments[2] == "scorer.md":
+        return ("scorer", segments[1]) if _valid_name(segments[1]) else ("invalid", "")
+    if len(segments) == 2 and segments[0] == "scorers" and segments[1].endswith(".md"):
+        return "invalid", ""
     base = segments[-1]
     if segments[0] == "agents" and base == "agent.md":
         return "invalid", ""
     if segments[0] == "automations" and base == "automation.md":
         return "invalid", ""
     if segments[0] == "runners" and base.endswith(".yaml"):
+        return "invalid", ""
+    if segments[0] == "scorers" and base == "scorer.md":
         return "invalid", ""
     return "unrelated", ""
 
@@ -781,7 +792,7 @@ def _valid_name(name: str) -> bool:
 
 def _resource_files(root: Path) -> list[Path]:
     files = [root / "factory.yaml"]
-    for directory_name in ("agents", "automations", "runners"):
+    for directory_name in ("agents", "automations", "runners", "scorers"):
         resource_root = root / directory_name
         if not resource_root.is_dir():
             continue
@@ -812,11 +823,12 @@ def validate_tree(root: Path, store: SchemaStore) -> list[Problem]:
                 Problem(
                     relative,
                     "resource files must use factory.yaml, agents/<name>/agent.md, "
-                    "automations/<name>/automation.md, or runners/<name>.yaml",
+                    "automations/<name>/automation.md, runners/<name>.yaml, "
+                    "or scorers/<name>/scorer.md",
                 )
             )
             continue
-        if kind in ("automation", "runner"):
+        if kind in ("automation", "runner", "scorer"):
             previous = seen_names.get((kind, name))
             if previous is not None:
                 problems.append(
@@ -831,9 +843,10 @@ def validate_tree(root: Path, store: SchemaStore) -> list[Problem]:
             problems.append(Problem(relative, f"could not read UTF-8 resource: {error}"))
             continue
         offset = 0
+        body = ""
         try:
-            if kind in ("agent", "automation"):
-                frontmatter, offset = split_frontmatter(text)
+            if kind in ("agent", "automation", "scorer"):
+                frontmatter, body, offset = split_frontmatter(text)
                 parsed = load_yaml(frontmatter) if frontmatter.strip() else {}
             else:
                 parsed = load_yaml(text)
@@ -858,8 +871,80 @@ def validate_tree(root: Path, store: SchemaStore) -> list[Problem]:
             problems.extend(_factory_semantics(relative, parsed))
         elif kind == "runner":
             problems.extend(_runner_semantics(relative, parsed))
+        elif kind == "scorer":
+            problems.extend(_scorer_semantics(relative, parsed, body))
 
     problems.extend(_validate_cross_file(documents))
+    return problems
+
+
+def _scorer_semantics(relative: str, parsed: dict[str, Any], body: str) -> list[Problem]:
+    problems: list[Problem] = []
+    if not body.strip():
+        problems.append(Problem(relative, "the Markdown body is the rubric and must not be empty"))
+
+    agents = parsed.get("agents")
+    if isinstance(agents, list):
+        normalized_agents = [value.strip() for value in agents if isinstance(value, str)]
+        if len(set(normalized_agents)) != len(normalized_agents):
+            problems.append(Problem(relative, "agent names must be unique after trimming", pointer="agents"))
+
+    labels = parsed.get("labels")
+    threshold = parsed.get("passingScore")
+    numeric_scores: list[float] = []
+    if isinstance(labels, list):
+        seen_labels: set[str] = set()
+        for index, label in enumerate(labels):
+            if not isinstance(label, dict):
+                continue
+            value = label.get("value")
+            if isinstance(value, str):
+                normalized_value = value.strip()
+                if normalized_value in seen_labels:
+                    problems.append(
+                        Problem(
+                            relative,
+                            f'duplicate label "{normalized_value}"',
+                            pointer=f"labels.{index}.value",
+                        )
+                    )
+                seen_labels.add(normalized_value)
+            score = label.get("score")
+            if isinstance(score, (int, float)) and not isinstance(score, bool):
+                numeric_scores.append(float(score))
+    if (
+        isinstance(threshold, (int, float))
+        and not isinstance(threshold, bool)
+        and numeric_scores
+    ):
+        threshold_value = float(threshold)
+        if not any(score >= threshold_value for score in numeric_scores):
+            problems.append(
+                Problem(
+                    relative,
+                    "at least one label score must be at or above passingScore",
+                    pointer="passingScore",
+                )
+            )
+        if not any(score < threshold_value for score in numeric_scores):
+            problems.append(
+                Problem(
+                    relative,
+                    "at least one label score must be below passingScore",
+                    pointer="passingScore",
+                )
+            )
+
+    sampling_rate = parsed.get("samplingRate")
+    if isinstance(sampling_rate, (int, float)) and not isinstance(sampling_rate, bool):
+        if float(sampling_rate) == 0:
+            problems.append(
+                Problem(
+                    relative,
+                    "samplingRate must not be 0; use enabled: false to stop scoring",
+                    pointer="samplingRate",
+                )
+            )
     return problems
 
 
@@ -1146,13 +1231,25 @@ def _validate_cross_file(documents: dict[str, tuple[str, str, Any]]) -> list[Pro
             )
 
     for relative, (kind, _, parsed) in documents.items():
-        if kind != "automation":
-            continue
-        agent = parsed.get("agent")
-        if isinstance(agent, str) and agent not in agent_names:
-            problems.append(
-                Problem(relative, f'agent "{agent}" must name a declared Agent', pointer="agent")
-            )
+        if kind == "automation":
+            agent = parsed.get("agent")
+            if isinstance(agent, str) and agent not in agent_names:
+                problems.append(
+                    Problem(relative, f'agent "{agent}" must name a declared Agent', pointer="agent")
+                )
+        elif kind == "scorer":
+            agents = parsed.get("agents")
+            if not isinstance(agents, list):
+                continue
+            for index, agent in enumerate(agents):
+                if isinstance(agent, str) and agent.strip() not in agent_names:
+                    problems.append(
+                        Problem(
+                            relative,
+                            f'agent "{agent.strip()}" must name a declared Agent',
+                            pointer=f"agents.{index}",
+                        )
+                    )
     return problems
 
 

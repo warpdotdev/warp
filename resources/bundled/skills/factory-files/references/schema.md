@@ -28,14 +28,18 @@ Required: `schemaVersion`, `name`, `repositories`, `agentDefaults`.
 - `secrets` — list of managed secret names. Duplicates are rejected here.
 - `mcpServers` — map of server name to `{warpId}`. `warpId` is the only key an
   entry may carry.
-- `providers.gcp` — `projectNumber`, `workloadIdentityFederationPoolId`, and
+- `cloudProviders.gcp` — `projectNumber`, `workloadIdentityFederationPoolId`, and
   `workloadIdentityFederationProviderId` are all required;
   `serviceAccountEmail` is optional. Quote `projectNumber` so YAML keeps it a
   string.
-- `providers.aws` — `roleArn` required.
-- `integrations` — list of `{type}` where type is `jira`, `linear`, or `slack`.
-  `github` is deliberately not declarable: repository access comes from
-  `repositories`. An empty list explicitly detaches every provider; omitting
+- `cloudProviders.aws` — `roleArn` required.
+- `providers` — legacy read-only alias for `cloudProviders`. New files should
+  use `cloudProviders`; when both exist, the server uses `cloudProviders`.
+- `integrations` — list of `{type}`. Current known types are `jira`, `linear`,
+  and `slack`; preserve newer provider slugs.
+  The current server rejects `github` because repository access comes from
+  `repositories`; an older bundled schema leaves the final catalogue decision
+  to a server plan. An empty list explicitly detaches every provider; omitting
   the section leaves the server-owned set alone.
 - `agentDefaults` — execution defaults every agent inherits. Accepts `model`
   XOR `harness` (one is required), plus `runner`, `environmentId`, `secrets`,
@@ -89,6 +93,10 @@ apply-time platform validation makes some effectively required.
   may be omitted, which defaults the version to `26`; if the section is
   present, `version` is required. Quote it so YAML keeps it a string. Only
   valid on macOS.
+
+## `scorers/<name>/scorer.md`
+The directory name is the Scorer name. The Markdown body is its required
+rubric. Read `scorers.md` for the full contract and a worked example.
 
 ## The harness block
 `model: <id>` is shorthand for `harness: {type: oz, model: <id>}`. Declaring

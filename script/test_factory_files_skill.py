@@ -168,6 +168,25 @@ VALID_CASES: list[tuple[str, dict[str, str]]] = [
     ),
     ("integrations-empty", tree(**{"factory.yaml": FACTORY + "integrations: []\n"})),
     (
+        "cloud-providers-current-key",
+        tree(
+            **{
+                "factory.yaml": FACTORY
+                + "cloudProviders:\n  aws:\n    roleArn: arn:aws:iam::123456789012:role/factory\n"
+            }
+        ),
+    ),
+    (
+        "cloud-providers-current-and-legacy",
+        tree(
+            **{
+                "factory.yaml": FACTORY
+                + "cloudProviders:\n  aws:\n    roleArn: arn:aws:iam::123456789012:role/current\n"
+                + "providers:\n  aws:\n    roleArn: arn:aws:iam::123456789012:role/legacy\n"
+            }
+        ),
+    ),
+    (
         "integrations-normalize-case-and-space",
         tree(**{"factory.yaml": FACTORY + "integrations:\n  - type: ' Slack '\n"}),
     ),
@@ -331,6 +350,41 @@ VALID_CASES: list[tuple[str, dict[str, str]]] = [
             }
         ),
     ),
+    (
+        "scorer-complete",
+        tree(
+            **{
+                "agents/implementer/agent.md": "---\n---\nImplement.\n",
+                "scorers/tests/scorer.md": "---\nagents:\n  - implementer\nlabels:\n"
+                "  - value: pass\n    score: 1\n  - value: fail\n    score: 0\n"
+                "passingScore: 1\nsamplingRate: 25\nmodel: claude-4-5-haiku\n"
+                "selfImprovement: true\n---\nEvaluate the run.\n",
+            }
+        ),
+    ),
+    (
+        "forward-compatible-unknowns",
+        tree(
+            **{
+                "factory.yaml": FACTORY
+                + "futureFactoryField: enabled\n"
+                + "integrations:\n  - type: future-provider\n",
+                "agents/main/agent.md": "---\nagentType: MAIN\nfutureAgentField: true\n"
+                "credentialStrategy: FUTURE\nharness:\n  type: future-harness\n"
+                "  model: future-model\nmcpServers:\n  future:\n    warpId: future\n"
+                "    futureMcpField: true\n---\nx\n",
+                "agents/future/agent.md": "---\nagentType: FUTURE\n---\nx\n",
+                "automations/future/automation.md": "---\nfutureAutomationField: true\n"
+                "triggers:\n  - provider: future-provider\n    event: future_event\n"
+                "    filter:\n      future_filter: [value]\n---\nx\n",
+                "runners/future.yaml": "futureRunnerField: true\nplatform:\n"
+                "  os: future-os\n  arch: future-arch\n",
+                "scorers/future/scorer.md": "---\nagents: [main]\nlabels:\n"
+                "  - value: pass\n    score: 1\n  - value: fail\n    score: 0\n"
+                "passingScore: 1\nmodel: future-model\nfutureScorerField: true\n---\nRubric.\n",
+            }
+        ),
+    ),
 ]
 
 INVALID_CASES: list[tuple[str, dict[str, str]]] = [
@@ -390,18 +444,8 @@ INVALID_CASES: list[tuple[str, dict[str, str]]] = [
         ),
     ),
     ("empty-harness", tree(**{"agents/main/agent.md": "---\nagentType: MAIN\nharness: {}\n---\nx\n"})),
-    (
-        "unknown-harness-type",
-        tree(
-            **{
-                "agents/main/agent.md": "---\nagentType: MAIN\nharness:\n  type: claude_code\n"
-                "  model: opus\n---\nx\n"
-            }
-        ),
-    ),
     ("alias-bad-char", tree(**{"factory.yaml": FACTORY + "alias: demo/factory\n"})),
     ("alias-too-long", tree(**{"factory.yaml": FACTORY + "alias: " + "a" * 61 + "\n"})),
-    ("integration-github", tree(**{"factory.yaml": FACTORY + "integrations:\n  - type: github\n"})),
     ("two-main-agents", tree(**{"agents/other/agent.md": "---\nagentType: FOREMAN\n---\nx\n"})),
     (
         "no-main-agent",
@@ -462,54 +506,8 @@ INVALID_CASES: list[tuple[str, dict[str, str]]] = [
             }
         ),
     ),
-    (
-        "unknown-filter-key",
-        tree(
-            **{
-                "automations/n/automation.md": "---\ntriggers:\n  - provider: slack\n"
-                "    event: app_mention\n    filter:\n      channels: [C1]\n---\nrun\n"
-            }
-        ),
-    ),
-    (
-        "schedule-ids-not-in",
-        tree(
-            **{
-                "automations/n/automation.md": "---\ntriggers:\n  - provider: schedule\n"
-                "    event: cron_fired\n    filter:\n      schedule_ids:\n        not_in: [s1]\n"
-                "    schedule:\n      cron: 0 3 * * *\n---\nrun\n"
-            }
-        ),
-    ),
-    (
-        "unknown-event",
-        tree(
-            **{
-                "automations/n/automation.md": "---\ntriggers:\n  - provider: github\n"
-                "    event: issue_closed\n---\nrun\n"
-            }
-        ),
-    ),
-    (
-        "unknown-provider",
-        tree(
-            **{
-                "automations/n/automation.md": "---\ntriggers:\n  - provider: gitlab\n"
-                "    event: push\n---\nrun\n"
-            }
-        ),
-    ),
     ("no-triggers", tree(**{"automations/n/automation.md": "---\nenabled: true\n---\nrun\n"})),
     ("empty-triggers", tree(**{"automations/n/automation.md": "---\ntriggers: []\n---\nrun\n"})),
-    (
-        "mcp-extra-key",
-        tree(
-            **{
-                "agents/main/agent.md": "---\nagentType: MAIN\nmcpServers:\n  gh:\n"
-                "    warpId: m1\n    command: x\n---\nx\n"
-            }
-        ),
-    ),
     ("duplicate-secrets", tree(**{"factory.yaml": FACTORY + "secrets:\n  - A\n  - A\n"})),
     (
         "empty-repositories",
@@ -536,29 +534,7 @@ INVALID_CASES: list[tuple[str, dict[str, str]]] = [
         "macos-with-linux-section",
         tree(**{"runners/mac.yaml": "platform:\n  os: macos\n  linux:\n    dockerImage: u\n"}),
     ),
-    ("macos-x86", tree(**{"runners/mac.yaml": "platform:\n  os: macos\n  arch: x86_64\n"})),
-    (
-        "macos-bad-version",
-        tree(**{"runners/mac.yaml": "platform:\n  os: macos\n  mac:\n    version: '13'\n"}),
-    ),
-    (
-        "macos-bad-shape",
-        tree(
-            **{
-                "runners/mac.yaml": "platform:\n  os: macos\n  mac:\n    version: '15'\n"
-                "instanceShape:\n  vcpus: 5\n  memoryGb: 9\n"
-            }
-        ),
-    ),
     ("bad-agent-type", tree(**{"agents/main/agent.md": "---\nagentType: BOSS\n---\nx\n"})),
-    (
-        "bad-credential-strategy",
-        tree(**{"agents/main/agent.md": "---\nagentType: MAIN\ncredentialStrategy: OWNER\n---\nx\n"}),
-    ),
-    (
-        "unknown-agent-field",
-        tree(**{"agents/main/agent.md": "---\nagentType: MAIN\nprompt: inline\n---\nx\n"}),
-    ),
     ("nested-agent-path", tree(**{"agents/team/extra/agent.md": "---\n---\nx\n"})),
     (
         "duplicate-automation-name",
@@ -686,6 +662,56 @@ INVALID_CASES: list[tuple[str, dict[str, str]]] = [
         "unquoted-yaml-timestamp",
         tree(**{"factory.yaml": FACTORY + "description: 2026-08-15\n"}),
     ),
+    (
+        "scorer-empty-rubric",
+        tree(
+            **{
+                "scorers/empty/scorer.md": "---\nagents: [main]\nlabels:\n"
+                "  - value: pass\n    score: 1\n  - value: fail\n    score: 0\n"
+                "passingScore: 1\nmodel: m\n---\n",
+            }
+        ),
+    ),
+    (
+        "scorer-unknown-agent",
+        tree(
+            **{
+                "scorers/unknown/scorer.md": "---\nagents: [missing]\nlabels:\n"
+                "  - value: pass\n    score: 1\n  - value: fail\n    score: 0\n"
+                "passingScore: 1\nmodel: m\n---\nRubric.\n",
+            }
+        ),
+    ),
+    (
+        "scorer-all-pass",
+        tree(
+            **{
+                "scorers/all-pass/scorer.md": "---\nagents: [main]\nlabels:\n"
+                "  - value: pass\n    score: 1\n  - value: better\n    score: 0.9\n"
+                "passingScore: 0.5\nmodel: m\n---\nRubric.\n",
+            }
+        ),
+    ),
+    (
+        "scorer-zero-sampling",
+        tree(
+            **{
+                "scorers/zero/scorer.md": "---\nagents: [main]\nlabels:\n"
+                "  - value: pass\n    score: 1\n  - value: fail\n    score: 0\n"
+                "passingScore: 1\nsamplingRate: 0\nmodel: m\n---\nRubric.\n",
+            }
+        ),
+    ),
+    (
+        "scorer-flat-path",
+        tree(
+            **{
+                "scorers/flat.md": "---\nagents: [main]\nlabels:\n"
+                "  - value: pass\n    score: 1\n  - value: fail\n    score: 0\n"
+                "passingScore: 1\nmodel: m\n---\nRubric.\n",
+            }
+        ),
+    ),
 ]
 
 
@@ -726,7 +752,7 @@ def documented_example_cases() -> list[tuple[str, bool, dict[str, str]]]:
             r"```(yaml|markdown)\n(.*?)```", EXAMPLES.read_text(encoding="utf-8"), re.S
         )
     ]
-    expected_blocks = 10
+    expected_blocks = 11
     if len(blocks) != expected_blocks:
         raise SystemExit(
             f"examples.md has {len(blocks)} example blocks, expected {expected_blocks}; "
@@ -743,6 +769,7 @@ def documented_example_cases() -> list[tuple[str, bool, dict[str, str]]]:
         "automations/nightly-sweep/automation.md": blocks[7],
         "runners/linux-standard.yaml": blocks[8],
         "runners/macos-standard.yaml": blocks[9],
+        "scorers/tests-run/scorer.md": blocks[10],
     }
     return [
         ("documented-minimal-example", True, minimal),

@@ -15,6 +15,7 @@ The Factory file parser accepts a versioned, path-derived tree:
 - `agents/<name>/agent.md`
 - `automations/<name>/automation.md`
 - `runners/<name>.yaml`
+- `scorers/<name>/scorer.md`
 - `skills/**`
 - `agents/<name>/skills/**`
 
@@ -22,16 +23,17 @@ The parser also accepts the legacy flat path `automations/<name>.md`, but render
 
 The current schema is `v1alpha1`. The parser rejects unknown fields, duplicate keys, YAML anchors, aliases, explicit tags, malformed frontmatter, invalid paths, invalid references, and invalid field values. It also requires exactly one `MAIN` or `FOREMAN` agent. The following sources are authoritative:
 
-- [`logic/factoryfile/v1alpha1.go @ 57033405`](https://github.com/warpdotdev/warp-server/blob/57033405e261cee9c049fc4c46cda7a3804443bf/logic/factoryfile/v1alpha1.go) defines the schema version, allowed field sets, document decoding, and tree-level rules.
-- [`logic/factoryfile/path.go @ 57033405`](https://github.com/warpdotdev/warp-server/blob/57033405e261cee9c049fc4c46cda7a3804443bf/logic/factoryfile/path.go) defines canonical resource and skill paths.
-- [`logic/factoryfile/agenttype.go @ 57033405`](https://github.com/warpdotdev/warp-server/blob/57033405e261cee9c049fc4c46cda7a3804443bf/logic/factoryfile/agenttype.go) defines accepted agent types and the `MAIN` alias.
-- [`logic/factoryfile/credentialstrategy.go @ 57033405`](https://github.com/warpdotdev/warp-server/blob/57033405e261cee9c049fc4c46cda7a3804443bf/logic/factoryfile/credentialstrategy.go) defines credential strategies.
-- [`logic/factoryfile/parsetree.go @ 57033405`](https://github.com/warpdotdev/warp-server/blob/57033405e261cee9c049fc4c46cda7a3804443bf/logic/factoryfile/parsetree.go) selects the adapter and classifies resource paths.
-- [`model/types/triggers @ 57033405`](https://github.com/warpdotdev/warp-server/tree/57033405e261cee9c049fc4c46cda7a3804443bf/model/types/triggers) defines providers, events, filter fields, matcher forms, and canonical overlap checks.
-- [`model/types/runner.go @ 57033405`](https://github.com/warpdotdev/warp-server/blob/57033405e261cee9c049fc4c46cda7a3804443bf/model/types/runner.go) defines runner platforms, macOS versions, defaults, and instance-shape validation.
-- [`logic/factoryalias/alias.go @ 57033405`](https://github.com/warpdotdev/warp-server/blob/57033405e261cee9c049fc4c46cda7a3804443bf/logic/factoryalias/alias.go) and [`logic/cronspec/cronspec.go @ 57033405`](https://github.com/warpdotdev/warp-server/blob/57033405e261cee9c049fc4c46cda7a3804443bf/logic/cronspec/cronspec.go) define alias and inline schedule syntax.
+- [`logic/factoryfile/v1alpha1.go @ 182c274c6d`](https://github.com/warpdotdev/warp-server/blob/182c274c6d/logic/factoryfile/v1alpha1.go) defines the schema version, allowed field sets, document decoding, and tree-level rules.
+- [`logic/factoryfile/path.go @ 182c274c6d`](https://github.com/warpdotdev/warp-server/blob/182c274c6d/logic/factoryfile/path.go) defines canonical resource and skill paths.
+- [`logic/factoryfile/agenttype.go @ 182c274c6d`](https://github.com/warpdotdev/warp-server/blob/182c274c6d/logic/factoryfile/agenttype.go) defines accepted agent types and the `MAIN` alias.
+- [`logic/factoryfile/credentialstrategy.go @ 182c274c6d`](https://github.com/warpdotdev/warp-server/blob/182c274c6d/logic/factoryfile/credentialstrategy.go) defines credential strategies.
+- [`logic/factoryfile/parsetree.go @ 182c274c6d`](https://github.com/warpdotdev/warp-server/blob/182c274c6d/logic/factoryfile/parsetree.go) selects the adapter and classifies resource paths.
+- [`logic/factoryfile/v1alpha1_scoredefinition.go @ 182c274c6d`](https://github.com/warpdotdev/warp-server/blob/182c274c6d/logic/factoryfile/v1alpha1_scoredefinition.go) defines file-managed Scorer frontmatter, rubric, sampling, and label constraints.
+- [`model/types/triggers @ 182c274c6d`](https://github.com/warpdotdev/warp-server/tree/182c274c6d/model/types/triggers) defines providers, events, filter fields, matcher forms, and canonical overlap checks.
+- [`model/types/runner.go @ 182c274c6d`](https://github.com/warpdotdev/warp-server/blob/182c274c6d/model/types/runner.go) defines runner platforms, macOS versions, defaults, and instance-shape validation.
+- [`logic/factoryalias/alias.go @ 182c274c6d`](https://github.com/warpdotdev/warp-server/blob/182c274c6d/logic/factoryalias/alias.go) and [`logic/cronspec/cronspec.go @ 182c274c6d`](https://github.com/warpdotdev/warp-server/blob/182c274c6d/logic/cronspec/cronspec.go) define alias and inline schedule syntax.
 
-The schema is still changing. For example, `integrations` is already accepted by the current `factoryFields` set even though older summaries of the format omit it. A manually copied field table will become stale.
+The schema is still changing. During this PR, `cloudProviders` replaced the legacy read-only `providers` key and file-managed Scorers landed. A manually copied closed-world schema will become stale.
 
 Warp already provides the common distribution mechanism:
 
@@ -55,7 +57,7 @@ Use:
 - User-facing title: `Factory Files`
 - Trigger description:
 
-  > Create and edit file-based Warp software factory definitions, in a repository tree rooted at a factory.yaml. Use when authoring or changing that factory.yaml, the agent.md, automation.md, or runner YAML files under that root, or its factory and agent skill trees, and when fixing Factory file diagnostics. Do not use for agent-definition Markdown that belongs to another tool, for a tree with no factory.yaml, or to operate a live factory or hand work to one through Factory MCP.
+  > Create and edit file-based Warp software factory definitions, in a repository tree rooted at a factory.yaml. Use when authoring or changing that factory.yaml, Agent, Automation, Scorer, or Runner files under that root, or its factory and agent skill trees, and when fixing Factory file diagnostics. Do not use for agent-definition Markdown that belongs to another tool, for a tree with no factory.yaml, or to operate a live factory or hand work to one through Factory MCP.
 
 `factory-files` names the artifact instead of the deployment model. `factory-as-code` is broader and can imply sync, deployment, or live operations.
 
@@ -111,11 +113,13 @@ Use progressive disclosure:
   - Require a validator run before opening a pull request, and state what the validator does not cover.
   - Point to the smallest relevant reference.
 - `schemas/*.schema.json`
-  - JSON Schema 2020-12 documents for `factory.yaml` and for agent, automation, and runner documents, plus a shared `common.schema.json` the others reference by relative `$ref`.
+  - JSON Schema 2020-12 documents for `factory.yaml` and Agent, Automation, Runner, and Scorer documents, plus a shared `common.schema.json` the others reference by relative `$ref`.
 - `references/schema.md`
   - Path rules, field reference, enums, defaults, and inheritance, split by which layer enforces each rule.
 - `references/triggers.md`
   - The provider, event, and filter-key catalogue, and inline schedule rules.
+- `references/scorers.md`
+  - Scorer fields, classification labels, thresholds, sampling, Agent references, and rubric rules.
 - `references/examples.md`
   - Curated minimal root, full harness, agent, automation, inline schedule, runner, and scoped-skill examples.
   - Examples use placeholder IDs and secrets. They must not copy production credentials or identifiers from `factory-dev`.
@@ -136,7 +140,7 @@ The validator is `scripts/validate_factory_files.py` and depends on nothing but 
 - A restricted YAML reader for the canonical forms the skill emits. Anchors, aliases, explicit tags, merge keys, duplicate keys, and multiple documents are rejected rather than interpreted, which matches the parser. It is deliberately not described as a complete YAML implementation: anything outside the canonical subset is reported rather than guessed, and the skill tells the agent not to normalize an existing server-accepted file merely for this reader. YAML syntax constructs are recognized only where a node begins, and a block scalar's body is treated as opaque text, so ordinary prose such as `It's a thing`, `A & B`, or `*emphasis*` inside a description is not mistaken for syntax.
 - A JSON Schema evaluator covering only the keywords the bundled schemas use. A keyword the evaluator does not implement is reported rather than skipped, so adding one to a schema fails loudly instead of quietly under-validating. The schemas remain ordinary JSON Schema 2020-12 documents, so `check-jsonschema`, `ajv`, or `jsonschema` can read them, but those tools check the schema layer only and silently skip everything listed below.
 
-The schemas encode what the schema language can express. The script owns the remaining state-independent rules: exactly one `MAIN`/`FOREMAN` agent, automation `agent` references resolving to a declared agent, duplicate resource names across the flat and directory automation forms, trimmed alias length, normalized repository and secret duplicates, Linux power-of-two shapes, full cron grammar, duplicate inline schedule identities, and matcher `in`/`not_in` conflicts.
+The schemas validate known fields while allowing additional properties and newer catalogue values. This is deliberate: a schema bundled in an older client must not reject or erase source accepted by a newer server. Required core fields and known value shapes are still checked. The script owns the remaining state-independent rules: exactly one `MAIN`/`FOREMAN` agent, Automation and Scorer Agent references, duplicate resource names, non-empty Scorer rubrics, mixed Scorer outcomes, trimmed alias length, normalized repository/secret/Scorer duplicates, Linux power-of-two shapes, full cron grammar, duplicate inline schedule identities, and matcher `in`/`not_in` conflicts.
 
 Two rules are deliberately not checked, because the server accepts them and a check would produce false failures: a `runner` name may resolve to an existing team runner the tree does not declare, and every server-resolved value (model IDs, environment IDs, secret names, MCP IDs) needs state the validator does not have. `SKILL.md` and `references/validation.md` both state this boundary so the agent does not overstate what a clean run proves.
 
@@ -147,9 +151,9 @@ A parser-backed CLI or an API that validates an arbitrary source tree remains a 
 ### Schema ownership and drift
 Eng-Platform FA owns the Factory file format, so it owns the bundled schemas. A change author who modifies `logic/factoryfile` owns the companion update to `warp/resources/bundled/skills/factory-files/schemas/`.
 
-The schemas are hand-derived from `logic/factoryfile`, `model/types/triggers`, `model/types/runner.go`, `logic/factoryalias`, and `logic/cronspec`. They were verified against the real Go implementation: every accepted and rejected construct in the parity corpus produced the same verdict from the validator and from `factoryfile.ParseTree`, and the filter catalogue was checked against `triggers.ValidateFilter`.
+The schemas are hand-derived from `logic/factoryfile`, `logic/factoryfile/v1alpha1_scoredefinition.go`, `model/types/triggers`, `model/types/runner.go`, `logic/factoryalias`, and `logic/cronspec`. They intentionally accept some inputs the current server rejects when those inputs are plausible future extensions; the server remains authoritative.
 
-Nothing enforces that agreement continuously, which is the main residual risk, and it is not theoretical. Between first drafting these schemas and self-reviewing them days later, `warp-server` had added two trigger providers (`gitlab` with `merge_request` and `bot_mentioned`, and `factory` with `work_item_stage_changed`). The schemas would have rejected valid automations until they were refreshed by re-dumping the catalogue from `triggers.EventsForProvider`.
+Nothing enforces that agreement continuously, which is the main residual risk, and it is not theoretical. During this PR, `warp-server` added trigger providers, renamed `providers` to `cloudProviders`, and added file-managed Scorers. Permissive unknown-property/catalogue handling limits breakage, while explicit schemas and references are refreshed for new resource kinds and known fields.
 
 Generating the schemas from the Go packages is not possible in one repository: the schemas live in `warp`, the authority lives in `warp-server`. Two follow-ups close the gap, in preference order:
 
@@ -228,12 +232,9 @@ The schemas and validator were checked against the authoritative Go implementati
 
 - The canonical `logic/factoryfile/testdata/schema_contract` tree validates clean.
 - All three Factory roots currently in `warpdotdev/factory-dev` (`v1`, `frank`, and `dan-factory`) pass both the bundled validator and `factoryfile.ParseTree`.
-- Every tree under `logic/factoryfile/testdata/invalid` is rejected, each with a message naming the same defect the parser reports.
-- A 93-case positive/negative corpus covering harness blocks, null inheritance, auth sources, inline schedules, cron grammar, runner platforms and shapes, Unicode aliases, integration normalization, canonical filter conflicts, YAML edge cases, and author prose produced the expected verdict in every case. It is committed as `script/test_factory_files_skill.py` and runs in `script/presubmit`.
+- The regression corpus distinguishes required structural/semantic failures from deliberately tolerated forward-compatible fields and catalogue values.
 - Every example in `references/examples.md` is assembled into a tree and validated by that same corpus, so a reference that teaches invalid configuration fails the build.
-- Every field set, path helper, provider/event pair, and trigger filter key was diffed mechanically against a contract dumped from `develop`; nullable override behavior and apply-time runner constraints are covered separately in the corpus. That comparator is the prototype for follow-up 1 below.
-- For every parser-level case in that corpus, `factoryfile.ParseTree` produced the matching verdict.
-- Filter keys and matcher shapes were checked directly against `triggers.ValidateFilter`, including the `schedule_ids` in-only restriction.
+- Current `develop` paths and known fields, including `cloudProviders` and `scorers/<name>/scorer.md`, are represented; future additions are tolerated.
 
 Re-run after any format change:
 
@@ -248,7 +249,7 @@ Focused tests under the existing bundled-skill test module:
 - `activation_for_bundled_skill("factory-files", ...)` returns `Always`.
 - The trigger description anchors the skill to a `factory.yaml` root, so it cannot be loosened into matching unrelated `agents/<name>/agent.md` files.
 - Every reference and script `SKILL.md` names exists on disk.
-- Every schema file parses as JSON, uses a relative `$id`, every local `$ref` resolves to a packaged file and JSON pointer, and `factory.schema.json` keeps its required-field set and closed property set.
+- Every schema file parses as JSON, uses a relative `$id`, and every local `$ref` resolves to a packaged file and JSON pointer.
 - `script/test_factory_files_skill.py` runs `prepare_bundled_resources` and verifies the packaged `factory-files` tree has the same files and bytes as the canonical source.
 
 Run:

@@ -5,7 +5,7 @@
   "description": "The Factory root document. Exactly one factory.yaml must exist at the registered Factory root.",
   "type": "object",
   "required": ["schemaVersion", "name", "repositories", "agentDefaults"],
-  "additionalProperties": false,
+  "additionalProperties": true,
   "properties": {
     "schemaVersion": {
       "const": "v1alpha1",
@@ -28,7 +28,7 @@
       "items": {
         "type": "object",
         "required": ["owner", "name"],
-        "additionalProperties": false,
+        "additionalProperties": true,
         "properties": {
           "owner": { "$ref": "common.schema.json#/$defs/nonEmptyString" },
           "name": { "$ref": "common.schema.json#/$defs/nonEmptyString" }
@@ -37,9 +37,51 @@
     },
     "secrets": { "$ref": "common.schema.json#/$defs/uniqueSecrets" },
     "mcpServers": { "$ref": "common.schema.json#/$defs/mcpServers" },
+    "cloudProviders": {
+      "$ref": "#/$defs/cloudProviders",
+      "description": "Current cloud-provider identity federation section."
+    },
     "providers": {
+      "$ref": "#/$defs/cloudProviders",
+      "description": "Legacy read-only alias for cloudProviders. Author cloudProviders in new files."
+    },
+    "integrations": {
+      "type": "array",
+      "uniqueItems": true,
+      "description": "Integration providers attached to the Factory. An empty list explicitly detaches every provider. github is not declarable here: repository access comes from repositories.",
+      "items": {
+        "type": "object",
+        "required": ["type"],
+        "additionalProperties": true,
+        "properties": {
+          "type": {
+            "$ref": "common.schema.json#/$defs/nonEmptyString",
+            "x-warp-known-values": ["jira", "linear", "slack"],
+            "description": "Provider slug. The server lowercases and trims the value; author the canonical known spelling."
+          }
+        }
+      }
+    },
+    "agentDefaults": {
       "type": "object",
-      "additionalProperties": false,
+      "additionalProperties": true,
+      "description": "Execution defaults every Agent inherits. Exactly one of model or harness is required.",
+      "properties": {
+        "model": { "$ref": "common.schema.json#/$defs/ozModelDefault" },
+        "harness": { "$ref": "common.schema.json#/$defs/harnessDefault" },
+        "runner": { "$ref": "common.schema.json#/$defs/runnerRef" },
+        "environmentId": { "$ref": "common.schema.json#/$defs/environmentId" },
+        "secrets": { "$ref": "common.schema.json#/$defs/secrets" },
+        "mcpServers": { "$ref": "common.schema.json#/$defs/mcpServers" },
+        "workerHost": { "$ref": "common.schema.json#/$defs/workerHost" }
+      },
+      "allOf": [{ "$ref": "common.schema.json#/$defs/modelXorHarnessRequired" }]
+    }
+  },
+  "$defs": {
+    "cloudProviders": {
+      "type": "object",
+      "additionalProperties": true,
       "description": "Cloud provider identity federation used by agent runs.",
       "properties": {
         "gcp": {
@@ -49,7 +91,7 @@
             "workloadIdentityFederationPoolId",
             "workloadIdentityFederationProviderId"
           ],
-          "additionalProperties": false,
+          "additionalProperties": true,
           "properties": {
             "projectNumber": {
               "$ref": "common.schema.json#/$defs/nonEmptyString",
@@ -63,44 +105,12 @@
         "aws": {
           "type": "object",
           "required": ["roleArn"],
-          "additionalProperties": false,
+          "additionalProperties": true,
           "properties": {
             "roleArn": { "$ref": "common.schema.json#/$defs/nonEmptyString" }
           }
         }
       }
-    },
-    "integrations": {
-      "type": "array",
-      "uniqueItems": true,
-      "description": "Integration providers attached to the Factory. An empty list explicitly detaches every provider. github is not declarable here: repository access comes from repositories.",
-      "items": {
-        "type": "object",
-        "required": ["type"],
-        "additionalProperties": false,
-        "properties": {
-          "type": {
-            "type": "string",
-            "pattern": "^\\s*(?:[Jj][Ii][Rr][Aa]|[Ll][Ii][Nn][Ee][Aa][Rr]|[Ss][Ll][Aa][Cc][Kk])\\s*$",
-            "description": "Provider slug. The server lowercases and trims the value; author the canonical jira, linear, or slack spelling."
-          }
-        }
-      }
-    },
-    "agentDefaults": {
-      "type": "object",
-      "additionalProperties": false,
-      "description": "Execution defaults every Agent inherits. Exactly one of model or harness is required.",
-      "properties": {
-        "model": { "$ref": "common.schema.json#/$defs/ozModelDefault" },
-        "harness": { "$ref": "common.schema.json#/$defs/harnessDefault" },
-        "runner": { "$ref": "common.schema.json#/$defs/runnerRef" },
-        "environmentId": { "$ref": "common.schema.json#/$defs/environmentId" },
-        "secrets": { "$ref": "common.schema.json#/$defs/secrets" },
-        "mcpServers": { "$ref": "common.schema.json#/$defs/mcpServers" },
-        "workerHost": { "$ref": "common.schema.json#/$defs/workerHost" }
-      },
-      "allOf": [{ "$ref": "common.schema.json#/$defs/modelXorHarnessRequired" }]
     }
   }
 }

@@ -57,7 +57,7 @@ fn factory_files_bundled_skill_is_always_active_and_scoped_to_authoring() {
 
     assert_eq!(skill.name, "factory-files");
     let description = skill.description.to_lowercase();
-    for intent in ["create", "edit", "factory.yaml", "runner"] {
+    for intent in ["create", "edit", "factory.yaml", "runner", "scorer"] {
         assert!(
             description.contains(intent),
             "trigger description should mention {intent}: {description}"
@@ -87,6 +87,7 @@ fn factory_files_bundled_skill_is_always_active_and_scoped_to_authoring() {
 
     for reference in [
         "references/schema.md",
+        "references/scorers.md",
         "references/triggers.md",
         "references/examples.md",
         "references/validation.md",
@@ -143,6 +144,7 @@ fn factory_files_schemas_are_parseable_and_keep_the_factory_contract() {
         "agent.schema.json",
         "automation.schema.json",
         "runner.schema.json",
+        "scorer.schema.json",
     ] {
         let raw = std::fs::read_to_string(schemas_dir.join(name))
             .unwrap_or_else(|error| panic!("read {name}: {error}"));
@@ -172,8 +174,27 @@ fn factory_files_schemas_are_parseable_and_keep_the_factory_contract() {
     );
     assert_eq!(
         factory["additionalProperties"],
-        serde_json::Value::Bool(false)
+        serde_json::Value::Bool(true)
     );
+    assert!(factory["properties"].get("cloudProviders").is_some());
+    assert!(factory["properties"].get("providers").is_some());
+
+    let scorer: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(schemas_dir.join("scorer.schema.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        scorer["additionalProperties"],
+        serde_json::Value::Bool(true)
+    );
+    for required in ["agents", "labels", "passingScore", "model"] {
+        assert!(
+            scorer["required"].as_array().is_some_and(|fields| {
+                fields.iter().any(|field| field.as_str() == Some(required))
+            }),
+            "scorer schema should require {required}"
+        );
+    }
 }
 
 #[test]

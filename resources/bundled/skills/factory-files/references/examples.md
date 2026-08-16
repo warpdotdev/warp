@@ -51,7 +51,7 @@ mcpServers:
 integrations:
   - type: linear
   - type: slack
-providers:
+cloudProviders:
   gcp:
     projectNumber: "000000000000"
     workloadIdentityFederationPoolId: example-pool
@@ -171,6 +171,27 @@ platform:
   arch: aarch64
   mac:
     version: "15"
+```
+## Scorer
+`scorers/tests-run/scorer.md`:
+
+```markdown
+---
+description: Checks whether implementation runs include test evidence.
+agents:
+  - implementer
+labels:
+  - value: tests_run
+    score: 1
+  - value: tests_skipped
+    score: 0
+passingScore: 1
+samplingRate: 25
+model: claude-4-5-haiku
+---
+Evaluate whether the agent ran the relevant tests before finishing. Return
+`tests_run` when the transcript contains the command and result; otherwise
+return `tests_skipped`.
 ```
 
 ## Scoped skills

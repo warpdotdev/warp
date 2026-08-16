@@ -4,7 +4,7 @@
   "title": "runners/<name>.yaml (v1alpha1)",
   "description": "A Runner document. The Runner's name comes from the file name, never from a field. Platform and instance-shape rules are enforced when the plan is applied, not by the file parser.",
   "type": "object",
-  "additionalProperties": false,
+  "additionalProperties": true,
   "properties": {
     "description": {
       "type": ["string", "null"]
@@ -17,7 +17,7 @@
     "instanceShape": {
       "type": "object",
       "required": ["vcpus", "memoryGb"],
-      "additionalProperties": false,
+      "additionalProperties": true,
       "properties": {
         "vcpus": { "type": "integer", "minimum": 1 },
         "memoryGb": { "type": "integer", "minimum": 1 }
@@ -25,19 +25,21 @@
     },
     "platform": {
       "type": "object",
-      "additionalProperties": false,
+      "additionalProperties": true,
       "properties": {
         "os": {
-          "enum": ["linux", "macos"],
+          "$ref": "common.schema.json#/$defs/nonEmptyString",
+          "x-warp-known-values": ["linux", "macos"],
           "description": "Defaults to linux when omitted."
         },
         "arch": {
-          "enum": ["x86_64", "aarch64"],
+          "$ref": "common.schema.json#/$defs/nonEmptyString",
+          "x-warp-known-values": ["x86_64", "aarch64"],
           "description": "Defaults to x86_64 on linux and aarch64 on macos. Supported pairs: linux/x86_64, linux/aarch64, macos/aarch64."
         },
         "linux": {
           "type": "object",
-          "additionalProperties": false,
+          "additionalProperties": true,
           "properties": {
             "dockerImage": {
               "$ref": "common.schema.json#/$defs/nonEmptyString",
@@ -48,10 +50,11 @@
         "mac": {
           "type": "object",
           "required": ["version"],
-          "additionalProperties": false,
+          "additionalProperties": true,
           "properties": {
             "version": {
-              "enum": ["14", "15", "26", "27"],
+              "$ref": "common.schema.json#/$defs/nonEmptyString",
+              "x-warp-known-values": ["14", "15", "26", "27"],
               "description": "Quote the value so YAML keeps it a string. Defaults to 26 when the mac section is omitted."
             }
           }
@@ -59,29 +62,34 @@
       }
     }
   },
-  "if": { "$ref": "#/$defs/declaresMacOS" },
-  "then": {
-    "properties": {
-      "platform": {
-        "not": { "required": ["linux"] },
-        "properties": { "arch": { "const": "aarch64" } }
-      },
-      "instanceShape": { "$ref": "#/$defs/macOSInstanceShape" }
-    }
-  },
-  "else": {
-    "required": ["platform"],
-    "properties": {
-      "platform": {
-        "required": ["linux"],
-        "not": { "required": ["mac"] },
+  "allOf": [
+    {
+      "if": { "$ref": "#/$defs/declaresMacOS" },
+      "then": {
         "properties": {
-          "linux": { "required": ["dockerImage"] }
+          "platform": {
+            "not": { "required": ["linux"] }
+          }
         }
-      },
-      "instanceShape": { "$ref": "#/$defs/linuxInstanceShape" }
+      }
+    },
+    {
+      "if": { "$ref": "#/$defs/declaresLinuxOrDefault" },
+      "then": {
+        "required": ["platform"],
+        "properties": {
+          "platform": {
+            "required": ["linux"],
+            "not": { "required": ["mac"] },
+            "properties": {
+              "linux": { "required": ["dockerImage"] }
+            }
+          },
+          "instanceShape": { "$ref": "#/$defs/linuxInstanceShape" }
+        }
+      }
     }
-  },
+  ],
   "$defs": {
     "declaresMacOS": {
       "type": "object",
@@ -94,6 +102,26 @@
         }
       }
     },
+    "declaresLinuxOrDefault": {
+      "anyOf": [
+        { "not": { "required": ["platform"] } },
+        {
+          "required": ["platform"],
+          "properties": {
+            "platform": { "not": { "required": ["os"] } }
+          }
+        },
+        {
+          "required": ["platform"],
+          "properties": {
+            "platform": {
+              "required": ["os"],
+              "properties": { "os": { "const": "linux" } }
+            }
+          }
+        }
+      ]
+    },
     "linuxInstanceShape": {
       "required": ["vcpus", "memoryGb"],
       "properties": {
@@ -101,46 +129,6 @@
         "memoryGb": { "type": "integer", "minimum": 1 }
       },
       "description": "Both values must be powers of two; the bundled validator checks that constraint because JSON Schema cannot express it."
-    },
-    "macOSInstanceShape": {
-      "description": "Supported macOS shapes, as vcpus/memoryGb: 4/7, 6/14, 8/14, 12/28, 12/56.",
-      "oneOf": [
-        {
-          "properties": {
-            "vcpus": { "const": 4 },
-            "memoryGb": { "const": 7 }
-          },
-          "required": ["vcpus", "memoryGb"]
-        },
-        {
-          "properties": {
-            "vcpus": { "const": 6 },
-            "memoryGb": { "const": 14 }
-          },
-          "required": ["vcpus", "memoryGb"]
-        },
-        {
-          "properties": {
-            "vcpus": { "const": 8 },
-            "memoryGb": { "const": 14 }
-          },
-          "required": ["vcpus", "memoryGb"]
-        },
-        {
-          "properties": {
-            "vcpus": { "const": 12 },
-            "memoryGb": { "const": 28 }
-          },
-          "required": ["vcpus", "memoryGb"]
-        },
-        {
-          "properties": {
-            "vcpus": { "const": 12 },
-            "memoryGb": { "const": 56 }
-          },
-          "required": ["vcpus", "memoryGb"]
-        }
-      ]
     }
   }
 }

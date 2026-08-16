@@ -50,8 +50,9 @@ The server reports these when a plan is run against a registered Factory.
 
 - `FF_MISSING_FACTORY` — no `factory.yaml` at the Factory root.
 - `FF_UNSUPPORTED_VERSION` — `schemaVersion` is not `v1alpha1`.
-- `FF_UNSUPPORTED_PATH` — a file under `agents/`, `automations/`, or `runners/`
-  is not at a canonical resource path.
+- `FF_UNSUPPORTED_PATH` — a file that resembles an Agent, Automation, Runner,
+  or Scorer resource is at a non-canonical path. Other unrelated files under
+  those directories are intentionally ignored.
 - `FF_DUPLICATE_PATH` — the same resource name is declared twice, most often an
   automation declared in both the flat and directory forms.
 - `FF_INVALID_DOCUMENT` — a file is empty or its root is not a YAML mapping.
@@ -69,14 +70,19 @@ The server reports these when a plan is run against a registered Factory.
 - `FF_INVALID_VALUE` — a value violates a format or exclusivity rule, such as
   declaring both `model` and `harness`, or an alias with disallowed characters.
 - `FF_INVALID_REFERENCE` — a named reference does not resolve, such as an
-  automation naming an agent the tree does not declare, or an unknown
-  `agentType` or `credentialStrategy`.
+  Automation or Scorer naming an Agent the tree does not declare, or an
+  unknown current `agentType` or `credentialStrategy`.
 - `FF_INVALID_MCP` — an MCP entry is not exactly a non-empty `warpId`.
 - `FF_INVALID_TRIGGER` — a trigger is structurally wrong, such as an inline
   schedule on a non-schedule trigger, or a `schedule.cron_fired` trigger that
   declares both or neither of `schedule.cron` and `filter.schedule_ids`.
 - `FF_INVALID_EVENT`, `FF_INVALID_FILTER` — the event is unknown, or a filter
   value is outside its valid domain.
+
+The bundled schemas do not reproduce every catalogue rejection above. Unknown
+properties, harnesses, integration types, trigger kinds, filter fields, runner
+platform values, and Scorer output forms are preserved so an older client does
+not reject source accepted by a newer server. A server plan is authoritative.
 
 ## Fixing a diagnostic
 Change the file the diagnostic names, at the field it names. Do not silence a
