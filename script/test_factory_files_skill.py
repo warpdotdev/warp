@@ -11,6 +11,13 @@ matching change to the Factory file format.
 The final check runs prepare_bundled_resources and compares the packaged skill
 tree byte-for-byte with the canonical source.
 
+Some VALID_CASES assert that the validator TOLERATES input the current server
+rejects. Those are not mistakes and must not be "corrected" into INVALID_CASES:
+the schemas ship inside a Warp release and are routinely older than the server,
+so they defer catalogue and limit decisions rather than rejecting a tree built
+for a newer server. If one of them starts failing, a schema was tightened;
+reopen the schema rather than moving the case. See specs/REMOTE-2727/TECH.md.
+
 Run directly, or via script/presubmit.
 """
 
@@ -362,6 +369,15 @@ VALID_CASES: list[tuple[str, dict[str, str]]] = [
             }
         ),
     ),
+    # ---------------------------------------------------------------
+    # Deliberate forward-compatibility tolerances.
+    #
+    # Each case below is input the CURRENT server rejects and this
+    # validator accepts anyway, so that a Warp release older than the
+    # server does not block valid work. Do not move these to
+    # INVALID_CASES to "match the server" - that reintroduces exactly the
+    # false rejections these were added to prevent.
+    # ---------------------------------------------------------------
     (
         "new-event-on-known-provider-leaves-filter-open",
         tree(
@@ -833,7 +849,71 @@ def assert_packaged_skill_matches() -> None:
             if (SKILL / relative).read_bytes() != (packaged / relative).read_bytes():
                 raise RuntimeError(f"packaged content differs for {relative}")
 
+# Keywords that reject an otherwise well-formed value because it is not in a
+# hard-coded list. Every one of these is a place a newer server could legitimately
+# widen, so they are banned outside the narrow exceptions below.
+_CLOSED_KEYWORDS = ("enum", "const", "maxItems")
+
+
+def _walk_schema(node, path, found):
+    if isinstance(node, dict):
+        for keyword in _CLOSED_KEYWORDS:
+            if keyword in node:
+                found.append((path, keyword))
+        if node.get("additionalProperties") is False:
+            found.append((path, "additionalProperties:false"))
+        for key, value in node.items():
+            _walk_schema(value, f"{path}/{key}", found)
+    elif isinstance(node, list):
+        for index, value in enumerate(node):
+            _walk_schema(value, f"{path}/{index}", found)
+
+
+def assert_schemas_stay_forward_compatible() -> None:
+    """Fail if a schema was closed back up against future server changes.
+
+    The bundled schemas ship inside a Warp release and are routinely older than
+    the warp-server they validate against, so rejecting unknown properties or
+    unknown catalogue values would block configuration a newer server accepts.
+    New values belong in an x-warp-known-values annotation instead.
+
+    Three exceptions are allowed, all scoped so drift cannot trip them:
+
+    - `if` conditions select which rule applies; they never reject on their own.
+    - `$defs` named `declares*` exist only to be referenced from an `if`, so they
+      are conditions too. Keep that naming convention for new ones.
+    - Per-(provider, event) trigger filter objects close their key set, because
+      a misspelled filter key is a common mistake that otherwise survives until
+      apply. Those rules only fire when both provider and event are recognized.
+    """
+    import json
+
+    offenders: list[str] = []
+    for schema_path in sorted((SKILL / "schemas").glob("*.schema.json")):
+        document = json.loads(schema_path.read_text(encoding="utf-8"))
+        found: list[tuple[str, str]] = []
+        _walk_schema(document, "", found)
+        for path, keyword in found:
+            if "/if/" in path or path.endswith("/if"):
+                continue
+            if path.startswith("/$defs/declares"):
+                continue
+            if keyword == "additionalProperties:false" and path.endswith("/then/properties/filter"):
+                continue
+            offenders.append(f"{schema_path.name}{path or '/'} uses {keyword}")
+    if offenders:
+        raise RuntimeError(
+            "these schemas were tightened against future server changes, which "
+            "would reject trees a newer server accepts; record new values in an "
+            "x-warp-known-values annotation instead (see "
+            "specs/REMOTE-2727/TECH.md):\n  " + "\n  ".join(offenders)
+        )
+
+
 def main() -> int:
+    # Run first: tightening a schema also fails several corpus cases, and this
+    # explains why rather than leaving the reader to infer it from a rejection.
+    assert_schemas_stay_forward_compatible()
     cases = [(name, True, files) for name, files in VALID_CASES]
     cases += [(name, False, files) for name, files in INVALID_CASES]
     cases += documented_example_cases()
@@ -843,6 +923,7 @@ def main() -> int:
         return 1
     assert_packaged_skill_matches()
     print(f"factory-files validator: {len(cases)}/{len(cases)} cases passed")
+    print("factory-files schemas: still open to future server changes")
     print("factory-files packaging: source and bundled trees match")
     return 0
 

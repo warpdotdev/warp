@@ -151,3 +151,8 @@ Because of that:
   `schemaVersion`, it stopped instead of applying `v1alpha1` rules to a format
   it does not know. Validate with the server; never downgrade `schemaVersion`
   to make the local run pass.
+
+If you are editing the bundled schemas themselves rather than a Factory tree,
+their openness is deliberate and load-bearing. Read the "If you are changing
+these schemas" section of `references/validation.md` before tightening
+anything.

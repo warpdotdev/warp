@@ -15,6 +15,27 @@ it cannot read confidently is reported rather than guessed at.
 It does not replace server-side validation. Provider catalogues, model IDs,
 environment IDs, secret names, and runner references are resolved by the
 server; this checks structure, field names, enums, and cross-file references.
+
+FORWARD COMPATIBILITY - DO NOT TIGHTEN
+--------------------------------------
+This validator and its schemas ship inside a Warp release, so they are
+routinely older than the warp-server they are used against. They therefore
+accept some input the current server rejects, on purpose. Unknown properties,
+agent types, credential strategies, harness types and per-harness
+capabilities, integration slugs, trigger providers and events, runner
+platforms, Scorer output forms, and the Scorer label cap are all deferred to
+the server.
+
+If you are here because the validator accepted something the server rejects,
+the fix is usually a clearer server diagnostic, not a stricter schema. A false
+rejection is far more expensive than a false acceptance: it blocks correct
+work and invites an agent to "repair" valid configuration by deleting it,
+whereas the server revalidates every tree at apply time anyway.
+
+Two checks are deliberately kept strict, and both are scoped so drift cannot
+trip them: trigger filter keys apply only when the provider and event are both
+recognized, and an unrecognized schemaVersion stops validation instead of
+misapplying v1alpha1 rules. See specs/REMOTE-2727/TECH.md.
 """
 
 from __future__ import annotations

@@ -172,10 +172,17 @@ fn factory_files_schemas_are_parseable_and_keep_the_factory_contract() {
         required,
         ["schemaVersion", "name", "repositories", "agentDefaults"]
     );
+    // These schemas ship inside a Warp release and are routinely older than the
+    // warp-server they validate against, so they stay open on purpose: a closed
+    // schema would reject configuration a newer server accepts. Flipping either
+    // assertion to `false` is a regression, not a tightening. See
+    // specs/REMOTE-2727/TECH.md.
     assert_eq!(
         factory["additionalProperties"],
         serde_json::Value::Bool(true)
     );
+    // Both the current key and the legacy alias stay accepted; the server reads
+    // cloudProviders first and falls back to providers.
     assert!(factory["properties"].get("cloudProviders").is_some());
     assert!(factory["properties"].get("providers").is_some());
 

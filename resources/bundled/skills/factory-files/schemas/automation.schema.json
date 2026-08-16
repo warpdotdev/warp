@@ -1,6 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "automation.schema.json",
+  "$comment": "FORWARD COMPATIBILITY - DO NOT TIGHTEN. additionalProperties is true, and catalogue values are recorded as x-warp-known-values / x-warp-known-max-items annotations rather than enum, const, or maxItems. That is deliberate, not an oversight. This file ships inside a Warp release and is routinely OLDER than the warp-server it validates against, so a closed schema rejects configuration a newer server accepts and pushes agents to delete working fields. When the format gains a value, add it to the annotation; do not convert the annotation back into a rejecting keyword. The two deliberate exceptions are documented in specs/REMOTE-2727/TECH.md: trigger filter keys, which only apply when both provider and event are known, and schemaVersion, which stops validation rather than misapplying v1alpha1 rules. See also references/validation.md.",
   "title": "automations/<name>/automation.md frontmatter (v1alpha1)",
   "description": "YAML frontmatter of an Automation file. The Automation's name comes from its directory, never from a field. The Markdown body after the closing fence is the run prompt.",
   "type": "object",

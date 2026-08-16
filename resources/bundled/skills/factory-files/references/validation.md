@@ -100,6 +100,18 @@ one `MAIN`/`FOREMAN` Agent, duplicate resource names and labels, an empty
 Scorer rubric, a label set that cannot both pass and fail, and filters that can
 never match.
 
+## If you are changing these schemas
+The permissiveness above is load-bearing, not an unfinished edge. These files
+ship inside a Warp release and are routinely older than the `warp-server` they
+run against, so closing them back up would reject configuration a newer server
+accepts and push agents to delete working fields.
+
+When the format gains a value, add it to the relevant `x-warp-known-values` or
+`x-warp-known-max-items` annotation. Do not turn an annotation back into
+`enum`, `const`, `maxItems`, or `additionalProperties: false`. The regression
+corpus in `script/test_factory_files_skill.py` asserts several of these
+tolerances on purpose; if one starts failing, a schema was tightened.
+
 ## Fixing a diagnostic
 Change the file the diagnostic names, at the field it names. Do not silence a
 diagnostic by deleting the resource, loosening the schema, or moving a file to
