@@ -79,8 +79,6 @@ pub struct Team {
     pub name: String,
     /// The team's brand color as a hex string (e.g. "#7c3aed"), if set by the team admin.
     pub color: Option<String>,
-    /// The server-owned invite-by-link URL, or `None` when invite links are disabled for this
-    /// team.
     pub invite_link: Option<String>,
     pub members: Vec<TeamMember>,
     pub pending_email_invites: Vec<EmailInvite>,

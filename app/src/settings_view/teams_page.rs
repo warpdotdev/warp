@@ -2696,8 +2696,6 @@ impl TeamsWidget {
         section.finish()
     }
 
-    /// Invite-link enablement is scoped per team (`Team.inviteLink` is null when disabled), so
-    /// this deliberately ignores the workspace-wide `is_invite_link_enabled` flag.
     fn team_invite_link_enabled(team_metadata: &Team) -> bool {
         team_metadata.invite_link.is_some()
     }
@@ -2713,8 +2711,6 @@ impl TeamsWidget {
     ) -> Box<dyn Element> {
         let mut invitation_section = Flex::column();
 
-        // Discoverability is a workspace-level setting, read from the current workspace rather
-        // than the Team struct.
         let user_workspaces = UserWorkspaces::as_ref(app);
         let is_invite_link_enabled = Self::team_invite_link_enabled(team_metadata);
         let is_discoverable = user_workspaces.is_discoverable();
@@ -3743,7 +3739,6 @@ impl TeamsWidget {
             .finish()
     }
 
-    /// The invite-link row's display text and whether its copy button is enabled.
     fn invite_link_display(team_metadata: &Team) -> (String, bool) {
         match &team_metadata.invite_link {
             Some(invite_link) => (invite_link.clone(), true),
