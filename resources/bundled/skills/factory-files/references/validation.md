@@ -39,6 +39,12 @@ existing file that the server accepts, do not normalize or rewrite the file
 merely for the reader; report that local validation was unavailable and use a
 server plan when possible.
 
+A resource file that is a symlink is reported and not read. The server parses
+the repository tree, where a symlink is stored as its target path rather than
+its target's content, so it never follows one either; a Factory resource has to
+be a real file. Reading the target locally would also let a repository aim a
+resource at any readable path on the machine.
+
 The schemas are ordinary JSON Schema 2020-12 documents, so any standard
 validator works too if the tree is already converted to JSON. `x-warp-*`
 annotations carry constraints JSON Schema cannot express portably, such as

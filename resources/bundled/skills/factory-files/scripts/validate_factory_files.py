@@ -827,6 +827,25 @@ def _resource_files(root: Path) -> list[Path]:
     return sorted(files)
 
 
+def _leaves_factory_root(path: Path, root: Path) -> bool:
+    """Report whether reading path would follow a link out of the tree.
+
+    The server never resolves links: it parses an in-memory git tree, where a
+    symlink is a blob whose content is the target path, so it sees the link
+    itself. Following one here would both diverge from that and read a file the
+    Factory does not contain - an untrusted repository could otherwise point a
+    resource at any readable path and have its content echoed back in a parse
+    error.
+    """
+    if path.is_symlink():
+        return True
+    try:
+        path.resolve().relative_to(root.resolve())
+    except (OSError, ValueError, RuntimeError):
+        return True
+    return False
+
+
 SUPPORTED_SCHEMA_VERSION = "v1alpha1"
 
 
@@ -837,8 +856,12 @@ def _unsupported_schema_version(root: Path) -> Optional[Problem]:
     fact under a cascade of bogus unknown-field reports, so stop instead and
     say the server is the authority.
     """
+    factory_file = root / "factory.yaml"
+    if _leaves_factory_root(factory_file, root):
+        # Leave the report to validate_tree, which names it as a link.
+        return None
     try:
-        parsed = load_yaml((root / "factory.yaml").read_text(encoding="utf-8"))
+        parsed = load_yaml(factory_file.read_text(encoding="utf-8"))
     except (OSError, UnicodeError, YamlError):
         return None
     if not isinstance(parsed, dict):
@@ -890,6 +913,18 @@ def validate_tree(root: Path, store: SchemaStore) -> list[Problem]:
                 )
                 continue
             seen_names[(kind, name)] = relative
+
+        if _leaves_factory_root(absolute, root):
+            problems.append(
+                Problem(
+                    relative,
+                    "resource file is a symlink, or resolves outside the Factory root, "
+                    "and was not read. The server parses the repository tree, so it sees "
+                    "the link itself rather than its target and cannot accept this "
+                    "either. Replace it with a real file.",
+                )
+            )
+            continue
 
         try:
             text = absolute.read_text(encoding="utf-8")

@@ -910,6 +910,67 @@ def assert_schemas_stay_forward_compatible() -> None:
         )
 
 
+def assert_symlinked_resources_are_refused() -> None:
+    """A resource file that links out of the tree must not be read.
+
+    The dict-based cases above cannot express a symlink, so this builds one
+    directly. Two things are asserted: the tree is rejected, and the link
+    target's content never reaches the output. The server parses an in-memory
+    git tree, where a symlink is a blob holding the target path, so it never
+    reads the target either.
+    """
+    canary = "CANARY-SHOULD-NEVER-BE-ECHOED"
+    root = Path(tempfile.mkdtemp(prefix="factory-files-symlink-"))
+    try:
+        (root / "agents" / "main").mkdir(parents=True)
+        (root / "runners").mkdir()
+        (root / "factory.yaml").write_text(FACTORY, encoding="utf-8")
+        (root / "agents" / "main" / "agent.md").write_text(MAIN_AGENT, encoding="utf-8")
+
+        outside = Path(tempfile.mkdtemp(prefix="factory-files-outside-"))
+        try:
+            secret = outside / "secret.txt"
+            secret.write_text(f"{canary}\nnot a mapping: [\n", encoding="utf-8")
+            (root / "runners" / "linked.yaml").symlink_to(secret)
+
+            result = subprocess.run(
+                [sys.executable, str(VALIDATOR), str(root)],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            output = result.stdout + result.stderr
+            if result.returncode == 0:
+                raise RuntimeError("a symlinked resource file was accepted")
+            if canary in output:
+                raise RuntimeError(
+                    "the validator echoed the content of a file outside the Factory root"
+                )
+            if "symlink" not in output:
+                raise RuntimeError(f"expected a symlink diagnostic, got: {output.strip()}")
+        finally:
+            shutil.rmtree(outside, ignore_errors=True)
+
+        # A link whose target is inside the root is refused too. The escape
+        # check cannot see this one, so it exercises the is_symlink branch: the
+        # server still reads the link rather than its target.
+        (root / "runners" / "linked.yaml").unlink()
+        (root / "runners" / "real.yaml").write_text(
+            "platform:\n  linux:\n    dockerImage: ubuntu:24.04\n", encoding="utf-8"
+        )
+        (root / "runners" / "alias.yaml").symlink_to(root / "runners" / "real.yaml")
+        result = subprocess.run(
+            [sys.executable, str(VALIDATOR), str(root)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.returncode == 0:
+            raise RuntimeError("a symlink pointing inside the Factory root was accepted")
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
 def main() -> int:
     # Run first: tightening a schema also fails several corpus cases, and this
     # explains why rather than leaving the reader to infer it from a rejection.
@@ -921,9 +982,11 @@ def main() -> int:
     if failures:
         print(f"{len(failures)}/{len(cases)} factory-files validator cases failed", file=sys.stderr)
         return 1
+    assert_symlinked_resources_are_refused()
     assert_packaged_skill_matches()
     print(f"factory-files validator: {len(cases)}/{len(cases)} cases passed")
     print("factory-files schemas: still open to future server changes")
+    print("factory-files resources: symlinks out of the tree are refused")
     print("factory-files packaging: source and bundled trees match")
     return 0
 
