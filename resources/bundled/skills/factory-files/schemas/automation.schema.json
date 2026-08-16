@@ -279,7 +279,7 @@
           "then": {
             "properties": {
               "filter": {
-                "additionalProperties": true,
+                "additionalProperties": false,
                 "properties": {
                   "repos": { "$ref": "#/$defs/stringMatcher" },
                   "branches": { "$ref": "#/$defs/stringMatcher" },
@@ -300,7 +300,7 @@
           "then": {
             "properties": {
               "filter": {
-                "additionalProperties": true,
+                "additionalProperties": false,
                 "properties": {
                   "repos": { "$ref": "#/$defs/stringMatcher" },
                   "labels": { "$ref": "#/$defs/stringMatcher" },
@@ -332,7 +332,7 @@
           "then": {
             "properties": {
               "filter": {
-                "additionalProperties": true,
+                "additionalProperties": false,
                 "properties": {
                   "repos": { "$ref": "#/$defs/stringMatcher" },
                   "base_branches": { "$ref": "#/$defs/stringMatcher" },
@@ -357,7 +357,7 @@
           "then": {
             "properties": {
               "filter": {
-                "additionalProperties": true,
+                "additionalProperties": false,
                 "properties": {
                   "repos": { "$ref": "#/$defs/stringMatcher" },
                   "mentioned": { "$ref": "#/$defs/stringMatcher" },
@@ -378,7 +378,7 @@
           "then": {
             "properties": {
               "filter": {
-                "additionalProperties": true,
+                "additionalProperties": false,
                 "properties": {
                   "repos": { "$ref": "#/$defs/stringMatcher" },
                   "assignees": { "$ref": "#/$defs/stringMatcher" },
@@ -399,7 +399,7 @@
           "then": {
             "properties": {
               "filter": {
-                "additionalProperties": true,
+                "additionalProperties": false,
                 "properties": {
                   "repos": { "$ref": "#/$defs/stringMatcher" },
                   "reviewers": { "$ref": "#/$defs/stringMatcher" },
@@ -420,7 +420,7 @@
           "then": {
             "properties": {
               "filter": {
-                "additionalProperties": true,
+                "additionalProperties": false,
                 "properties": {
                   "repos": { "$ref": "#/$defs/stringMatcher" },
                   "mentioned": { "$ref": "#/$defs/stringMatcher" },
@@ -442,7 +442,7 @@
           "then": {
             "properties": {
               "filter": {
-                "additionalProperties": true,
+                "additionalProperties": false,
                 "properties": {
                   "repos": { "$ref": "#/$defs/stringMatcher" },
                   "conclusions": { "$ref": "#/$defs/stringMatcher" },
@@ -465,7 +465,7 @@
           "then": {
             "properties": {
               "filter": {
-                "additionalProperties": true,
+                "additionalProperties": false,
                 "properties": {
                   "repos": { "$ref": "#/$defs/stringMatcher" },
                   "conclusions": { "$ref": "#/$defs/stringMatcher" },
@@ -491,7 +491,7 @@
           "then": {
             "properties": {
               "filter": {
-                "additionalProperties": true,
+                "additionalProperties": false,
                 "properties": {
                   "repos": { "$ref": "#/$defs/stringMatcher" }
                 }
@@ -510,7 +510,7 @@
           "then": {
             "properties": {
               "filter": {
-                "additionalProperties": true,
+                "additionalProperties": false,
                 "properties": {
                   "repos": { "$ref": "#/$defs/stringMatcher" },
                   "actions": { "$ref": "#/$defs/stringMatcher" },
@@ -531,7 +531,7 @@
           "then": {
             "properties": {
               "filter": {
-                "additionalProperties": true,
+                "additionalProperties": false,
                 "properties": {
                   "repos": { "$ref": "#/$defs/stringMatcher" },
                   "mentioned": {
@@ -554,7 +554,7 @@
           "then": {
             "properties": {
               "filter": {
-                "additionalProperties": true,
+                "additionalProperties": false,
                 "properties": {
                   "stages": { "$ref": "#/$defs/stringMatcher" }
                 }
@@ -580,7 +580,7 @@
           "then": {
             "properties": {
               "filter": {
-                "additionalProperties": true,
+                "additionalProperties": false,
                 "properties": {
                   "team_ids": { "$ref": "#/$defs/stringMatcher" },
                   "project_ids": { "$ref": "#/$defs/stringMatcher" },
@@ -605,7 +605,7 @@
           "then": {
             "properties": {
               "filter": {
-                "additionalProperties": true,
+                "additionalProperties": false,
                 "properties": {
                   "team_ids": { "$ref": "#/$defs/stringMatcher" },
                   "project_ids": { "$ref": "#/$defs/stringMatcher" },
@@ -630,7 +630,7 @@
           "then": {
             "properties": {
               "filter": {
-                "additionalProperties": true,
+                "additionalProperties": false,
                 "properties": {
                   "team_ids": { "$ref": "#/$defs/stringMatcher" },
                   "creator_ids": { "$ref": "#/$defs/stringMatcher" },
@@ -651,7 +651,7 @@
           "then": {
             "properties": {
               "filter": {
-                "additionalProperties": true,
+                "additionalProperties": false,
                 "properties": {
                   "project_keys": { "$ref": "#/$defs/stringMatcher" },
                   "labels": { "$ref": "#/$defs/stringMatcher" }
@@ -671,7 +671,7 @@
           "then": {
             "properties": {
               "filter": {
-                "additionalProperties": true,
+                "additionalProperties": false,
                 "properties": {
                   "project_keys": { "$ref": "#/$defs/stringMatcher" },
                   "status_ids": { "$ref": "#/$defs/stringMatcher" }
@@ -691,7 +691,7 @@
           "then": {
             "properties": {
               "filter": {
-                "additionalProperties": true,
+                "additionalProperties": false,
                 "properties": {
                   "project_keys": { "$ref": "#/$defs/stringMatcher" },
                   "labels": { "$ref": "#/$defs/stringMatcher" },
@@ -720,7 +720,7 @@
           "then": {
             "properties": {
               "filter": {
-                "additionalProperties": true,
+                "additionalProperties": false,
                 "properties": {
                   "channel_ids": { "$ref": "#/$defs/stringMatcher" },
                   "user_ids": { "$ref": "#/$defs/stringMatcher" },
@@ -741,7 +741,7 @@
           "then": {
             "properties": {
               "filter": {
-                "additionalProperties": true,
+                "additionalProperties": false,
                 "properties": {
                   "channel_ids": { "$ref": "#/$defs/stringMatcher" },
                   "user_ids": { "$ref": "#/$defs/stringMatcher" },
@@ -764,7 +764,7 @@
           "then": {
             "properties": {
               "filter": {
-                "additionalProperties": true,
+                "additionalProperties": false,
                 "properties": {
                   "channel_ids": { "$ref": "#/$defs/stringMatcher" },
                   "user_ids": { "$ref": "#/$defs/stringMatcher" }
@@ -784,7 +784,7 @@
           "then": {
             "properties": {
               "filter": {
-                "additionalProperties": true,
+                "additionalProperties": false,
                 "properties": {
                   "schedule_ids": { "$ref": "#/$defs/scheduleIdsMatcher" }
                 }

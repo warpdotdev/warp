@@ -35,9 +35,10 @@ finishing. Return exactly one declared label.
   a zero sampling rate to pause scoring.
 - `output` — optional output form. `classification` is the current known form;
   preserve newer values for forward compatibility.
-- `labels` — required list of 1–20 classifications. Each label requires a
-  non-empty `value` and a numeric `score` from 0 through 1; `description` is
-  optional. Label values are trimmed and unique.
+- `labels` — required non-empty list of classifications; the current server
+  accepts at most 20. Each label requires a non-empty `value` and a numeric
+  `score` from 0 through 1; `description` is optional. Label values are
+  trimmed and unique.
 - `passingScore` — required numeric threshold from 0 through 1. At least one
   label must score at or above it, and at least one below it.
 - `samplingRate` — optional percentage, default 25. Values are rounded to two

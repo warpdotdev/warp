@@ -147,3 +147,7 @@ Because of that:
 - If the server and these schemas disagree, the server is right. Say the
   bundled schemas look stale rather than working around the validator by
   skipping it.
+- If the validator reports that it does not describe the tree's
+  `schemaVersion`, it stopped instead of applying `v1alpha1` rules to a format
+  it does not know. Validate with the server; never downgrade `schemaVersion`
+  to make the local run pass.

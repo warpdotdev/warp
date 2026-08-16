@@ -568,6 +568,7 @@ _ANNOTATION_KEYWORDS = frozenset(
         "title",
         "description",
         "x-warp-character-class",
+        "x-warp-known-max-items",
         "x-warp-known-values",
         "x-warp-max-trimmed-runes",
     }
@@ -805,6 +806,34 @@ def _resource_files(root: Path) -> list[Path]:
     return sorted(files)
 
 
+SUPPORTED_SCHEMA_VERSION = "v1alpha1"
+
+
+def _unsupported_schema_version(root: Path) -> Optional[Problem]:
+    """Report a tree whose schemaVersion these schemas do not describe.
+
+    Validating a newer tree against v1alpha1 rules would bury the one useful
+    fact under a cascade of bogus unknown-field reports, so stop instead and
+    say the server is the authority.
+    """
+    try:
+        parsed = load_yaml((root / "factory.yaml").read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, YamlError):
+        return None
+    if not isinstance(parsed, dict):
+        return None
+    declared = parsed.get("schemaVersion")
+    if not isinstance(declared, str) or declared.strip() in ("", SUPPORTED_SCHEMA_VERSION):
+        return None
+    return Problem(
+        "factory.yaml",
+        f"these bundled schemas describe {SUPPORTED_SCHEMA_VERSION}, not "
+        f"{declared.strip()!r}, so this tree was not validated locally; check it "
+        "with the server instead of downgrading schemaVersion",
+        pointer="schemaVersion",
+    )
+
+
 def validate_tree(root: Path, store: SchemaStore) -> list[Problem]:
     problems: list[Problem] = []
     documents: dict[str, tuple[str, str, Any]] = {}
@@ -812,6 +841,10 @@ def validate_tree(root: Path, store: SchemaStore) -> list[Problem]:
 
     if not (root / "factory.yaml").is_file():
         return [Problem("factory.yaml", "factory.yaml is required at the Factory root")]
+
+    unsupported = _unsupported_schema_version(root)
+    if unsupported is not None:
+        return [unsupported]
 
     for absolute in _resource_files(root):
         relative = absolute.relative_to(root).as_posix()

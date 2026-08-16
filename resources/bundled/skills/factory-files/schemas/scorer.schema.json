@@ -30,7 +30,8 @@
     "labels": {
       "type": "array",
       "minItems": 1,
-      "maxItems": 20,
+      "x-warp-known-max-items": 20,
+      "description": "Classifications this Scorer may return. The current server accepts at most 20; a larger set is left for the server to judge.",
       "items": {
         "type": "object",
         "required": ["value", "score"],

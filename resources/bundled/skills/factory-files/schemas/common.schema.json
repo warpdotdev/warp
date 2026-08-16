@@ -114,22 +114,10 @@
         "model": { "$ref": "#/$defs/nullableNonEmptyString" },
         "reasoningLevel": {
           "$ref": "#/$defs/clearableString",
-          "description": "Not supported by the oz harness."
+          "description": "The current server rejects this on the oz harness. Per-harness capabilities change, so the bundled schema leaves that judgement to the server."
         },
         "auth": { "$ref": "#/$defs/harnessAuth" }
-      },
-      "allOf": [
-        {
-          "if": {
-            "required": ["type"],
-            "properties": { "type": { "const": "oz" } }
-          },
-          "then": {
-            "not": { "required": ["reasoningLevel"] },
-            "properties": { "auth": { "type": "null" } }
-          }
-        }
-      ]
+      }
     },
     "harnessOverride": {
       "allOf": [

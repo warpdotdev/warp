@@ -117,7 +117,7 @@ VALID_CASES: list[tuple[str, dict[str, str]]] = [
         ),
     ),
     (
-        "schedule-ids-filter",
+        "schedule-ids-not-in",
         tree(
             **{
                 "automations/n/automation.md": "---\ntriggers:\n  - provider: schedule\n"
@@ -363,6 +363,39 @@ VALID_CASES: list[tuple[str, dict[str, str]]] = [
         ),
     ),
     (
+        "new-event-on-known-provider-leaves-filter-open",
+        tree(
+            **{
+                "automations/n/automation.md": "---\ntriggers:\n  - provider: github\n"
+                "    event: brand_new_github_event\n    filter:\n"
+                "      brand_new_filter_key: [x]\n---\nrun\n"
+            }
+        ),
+    ),
+    (
+        "oz-harness-capability-limits-are-server-owned",
+        tree(
+            **{
+                "agents/main/agent.md": "---\nagentType: MAIN\nharness:\n  type: oz\n"
+                "  model: auto\n  reasoningLevel: high\n"
+                "  auth:\n    source: managedSecret\n    secretName: K\n---\nx\n"
+            }
+        ),
+    ),
+    (
+        "scorer-label-count-above-current-server-cap",
+        tree(
+            **{
+                "scorers/many/scorer.md": "---\nagents: [main]\nlabels:\n"
+                + "".join(
+                    f"  - value: label_{index}\n    score: {1 if index == 0 else 0}\n"
+                    for index in range(21)
+                )
+                + "passingScore: 1\nmodel: m\n---\nRubric.\n",
+            }
+        ),
+    ),
+    (
         "forward-compatible-unknowns",
         tree(
             **{
@@ -408,24 +441,6 @@ INVALID_CASES: list[tuple[str, dict[str, str]]] = [
         ),
     ),
     (
-        "oz-reasoning-level",
-        tree(
-            **{
-                "agents/main/agent.md": "---\nagentType: MAIN\nharness:\n  type: oz\n"
-                "  model: auto\n  reasoningLevel: high\n---\nx\n"
-            }
-        ),
-    ),
-    (
-        "oz-auth",
-        tree(
-            **{
-                "agents/main/agent.md": "---\nagentType: MAIN\nharness:\n  type: oz\n"
-                "  model: auto\n  auth:\n    source: managedSecret\n    secretName: K\n---\nx\n"
-            }
-        ),
-    ),
-    (
         "worker-env-with-secret",
         tree(
             **{
@@ -457,6 +472,15 @@ INVALID_CASES: list[tuple[str, dict[str, str]]] = [
             **{
                 "automations/n/automation.md": "---\nagent: nope\ntriggers:\n  - provider: github\n"
                 "    event: push\n---\nrun\n"
+            }
+        ),
+    ),
+    (
+        "unknown-filter-key-on-known-provider-and-event",
+        tree(
+            **{
+                "automations/n/automation.md": "---\ntriggers:\n  - provider: slack\n"
+                "    event: app_mention\n    filter:\n      channels: [C1]\n---\nrun\n"
             }
         ),
     ),

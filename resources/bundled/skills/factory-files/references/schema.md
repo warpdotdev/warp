@@ -12,7 +12,9 @@ rejected when the plan is applied.
 ## factory.yaml
 Required: `schemaVersion`, `name`, `repositories`, `agentDefaults`.
 
-- `schemaVersion` — must be `v1alpha1`, the only registered version.
+- `schemaVersion` — `v1alpha1`, the only version these schemas describe. A tree
+  declaring a different version is reported as unvalidatable rather than
+  checked against v1alpha1 rules; never downgrade the value to silence that.
 - `name` — non-empty string.
 - `description` — free text.
 - `alias` — display handle, used as the factory's @-mention name on integrated
@@ -106,9 +108,12 @@ both `model` and `harness` is an error at every level.
   or `gemini`.
 - `harness.model` — a model ID valid for that harness. On an override, null
   inherits; an empty string is invalid.
-- `harness.reasoningLevel` — not supported by the `oz` harness.
-- `harness.auth` — not supported by the `oz` harness. Null explicitly clears
-  inherited auth.
+- `harness.reasoningLevel` — rejected by the current server on the `oz`
+  harness. Per-harness capabilities change, so the bundled validator leaves
+  that call to the server.
+- `harness.auth` — rejected by the current server on the `oz` harness, on the
+  same server-owned basis as `reasoningLevel`. Null explicitly clears inherited
+  auth.
   - `auth.source: managedSecret` requires `auth.secretName`.
   - `auth.source: workerEnvironment` forbids `auth.secretName` and requires a
     self-hosted `workerHost`.

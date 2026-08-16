@@ -49,7 +49,9 @@ annotations.
 The server reports these when a plan is run against a registered Factory.
 
 - `FF_MISSING_FACTORY` — no `factory.yaml` at the Factory root.
-- `FF_UNSUPPORTED_VERSION` — `schemaVersion` is not `v1alpha1`.
+- `FF_UNSUPPORTED_VERSION` — `schemaVersion` names no registered tree adapter.
+  The bundled validator reports an unrecognized version and stops rather than
+  applying v1alpha1 rules to a tree it does not describe.
 - `FF_UNSUPPORTED_PATH` — a file that resembles an Agent, Automation, Runner,
   or Scorer resource is at a non-canonical path. Other unrelated files under
   those directories are intentionally ignored.
@@ -80,9 +82,23 @@ The server reports these when a plan is run against a registered Factory.
   value is outside its valid domain.
 
 The bundled schemas do not reproduce every catalogue rejection above. Unknown
-properties, harnesses, integration types, trigger kinds, filter fields, runner
-platform values, and Scorer output forms are preserved so an older client does
-not reject source accepted by a newer server. A server plan is authoritative.
+properties, agent types, credential strategies, harnesses and their per-harness
+capabilities, integration types, trigger providers and events, runner platform
+values, Scorer output forms, and server-tunable limits such as the Scorer label
+cap are all preserved so an older client does not reject source accepted by a
+newer server. A server plan is authoritative.
+
+Filter keys are the one catalogue still checked, because a misspelled key is a
+common mistake that otherwise survives until apply. The check applies only when
+both the provider and the event are ones these schemas know; a newer provider,
+or a newer event on a known provider, leaves its filter unconstrained.
+
+What the bundled validator still refuses is what stays wrong under any of those
+changes: malformed YAML and frontmatter, missing required fields, values of the
+wrong type, references to Agents the tree does not declare, more or fewer than
+one `MAIN`/`FOREMAN` Agent, duplicate resource names and labels, an empty
+Scorer rubric, a label set that cannot both pass and fail, and filters that can
+never match.
 
 ## Fixing a diagnostic
 Change the file the diagnostic names, at the field it names. Do not silence a

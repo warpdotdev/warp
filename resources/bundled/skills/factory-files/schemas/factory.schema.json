@@ -8,8 +8,9 @@
   "additionalProperties": true,
   "properties": {
     "schemaVersion": {
-      "const": "v1alpha1",
-      "description": "The only registered tree schema version."
+      "$ref": "common.schema.json#/$defs/nonEmptyString",
+      "x-warp-known-values": ["v1alpha1"],
+      "description": "Tree schema version. These schemas describe v1alpha1. A tree declaring a newer version is reported as unvalidatable rather than validated against v1alpha1 rules."
     },
     "name": {
       "$ref": "common.schema.json#/$defs/nonEmptyString",
