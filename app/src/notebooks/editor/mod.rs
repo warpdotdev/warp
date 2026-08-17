@@ -207,9 +207,9 @@ pub fn rich_text_styles(appearance: &Appearance, font_settings: &FontSettings) -
 
     let base_text = ParagraphStyles {
         font_size,
-        font_weight: Default::default(),
+        font_weight: appearance.monospace_font_weight(),
         line_height_ratio,
-        font_family: appearance.ui_font_family(),
+        font_family: appearance.monospace_font_family(),
         text_color: theme.main_text_color(theme.background()).into_solid(),
         baseline_ratio,
         fixed_width_tab_size: None,
@@ -220,7 +220,7 @@ pub fn rich_text_styles(appearance: &Appearance, font_settings: &FontSettings) -
         code_text: ParagraphStyles {
             font_family: appearance.monospace_font_family(),
             font_size,
-            font_weight: Default::default(),
+            font_weight: appearance.monospace_font_weight(),
             line_height_ratio,
             text_color: theme.main_text_color(theme.background()).into_solid(),
             baseline_ratio,
@@ -230,7 +230,7 @@ pub fn rich_text_styles(appearance: &Appearance, font_settings: &FontSettings) -
         embedding_background: theme.surface_2().into(),
         embedding_text: ParagraphStyles {
             font_size,
-            font_weight: Default::default(),
+            font_weight: appearance.monospace_font_weight(),
             line_height_ratio,
             font_family: appearance.monospace_font_family(),
             text_color: theme.main_text_color(theme.surface_2()).into_solid(),
@@ -273,7 +273,11 @@ pub fn rich_text_styles(appearance: &Appearance, font_settings: &FontSettings) -
         minimum_paragraph_height: Some(base_text.line_height()),
         cursor_width: 3.,
         highlight_urls: true,
-        table_style: markdown_table_style(appearance, appearance.ui_font_family(), font_size),
+        table_style: markdown_table_style(
+            appearance,
+            appearance.monospace_font_family(),
+            font_size,
+        ),
     }
 }
 
@@ -325,6 +329,7 @@ impl<'a> From<&'a BufferBlockStyle> for BlockType {
             BufferBlockStyle::OrderedList { .. } => BlockType::OrderedList,
             BufferBlockStyle::TaskList { .. } => BlockType::TaskList,
             BufferBlockStyle::Table { .. } => BlockType::Text,
+            BufferBlockStyle::BlockQuote => BlockType::Text,
         }
     }
 }

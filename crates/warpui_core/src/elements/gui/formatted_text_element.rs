@@ -76,6 +76,8 @@ impl HeadingFontSizeMultipliers {
 pub type HighlightedHyperlink = Arc<Mutex<Option<HyperlinkPosition>>>;
 
 const CODE_BLOCK_OFFSET: usize = 1;
+const BLOCK_QUOTE_RAIL_WIDTH: f32 = 3.;
+const BLOCK_QUOTE_RAIL_LEFT_INSET: f32 = 4.;
 
 // TODO: We should think about whether line height applies to notebooks as well.
 // Consider whether this element really needs a different default than DEFAULT_UI_LINE_HEIGHT_RATIO
@@ -1325,6 +1327,7 @@ enum LaidOutTextFrame {
     Indented {
         text_frame: Arc<TextFrame>,
         indent: usize,
+        is_block_quote: bool,
         frame_bounds: RectF,
         top_padding: f32,
         bottom_padding: f32,
@@ -1619,6 +1622,7 @@ fn apply_secret_replacements(
 enum LineType {
     OrderedList,
     UnorderedList,
+    BlockQuote,
     FormattedLine,
     CodeBlock,
     LineBreak,
@@ -1633,6 +1637,7 @@ impl From<&FormattedTextLine> for LineType {
             | FormattedTextLine::Line(_)
             | FormattedTextLine::TaskList(_)
             | FormattedTextLine::Table(_) => LineType::FormattedLine,
+            FormattedTextLine::BlockQuote(_) => LineType::BlockQuote,
             FormattedTextLine::CodeBlock(_) => LineType::CodeBlock,
             FormattedTextLine::LineBreak
             | FormattedTextLine::HorizontalRule
@@ -1678,6 +1683,9 @@ impl Element for FormattedTextElement {
                 ),
                 FormattedTextLine::Line(texts) => {
                     (self.font_size, texts, 0, LineType::FormattedLine)
+                }
+                FormattedTextLine::BlockQuote(texts) => {
+                    (self.font_size, texts, 1, LineType::BlockQuote)
                 }
                 // TODO: Update when we support task lists.
                 FormattedTextLine::TaskList(list) => {
@@ -2047,20 +2055,23 @@ impl Element for FormattedTextElement {
                     bottom_padding,
                     raw_text: text,
                 },
-                LineType::OrderedList | LineType::UnorderedList => LaidOutTextFrame::Indented {
-                    text_frame,
-                    indent,
-                    frame_bounds: RectF::default(),
-                    top_padding: FRAME_SPACER_HEIGHT,
-                    bottom_padding,
-                    left_padding: font_size * indent as f32,
-                    raw_text: text,
-                    mouse_handlers: self
-                        .text_frame_mouse_handlers
-                        .get(line_index)
-                        .cloned()
-                        .unwrap_or(Rc::new(RefCell::new(FrameMouseHandlers::default()))),
-                },
+                LineType::OrderedList | LineType::UnorderedList | LineType::BlockQuote => {
+                    LaidOutTextFrame::Indented {
+                        text_frame,
+                        indent,
+                        is_block_quote: matches!(line_type, LineType::BlockQuote),
+                        frame_bounds: RectF::default(),
+                        top_padding: FRAME_SPACER_HEIGHT,
+                        bottom_padding,
+                        left_padding: font_size * indent as f32,
+                        raw_text: text,
+                        mouse_handlers: self
+                            .text_frame_mouse_handlers
+                            .get(line_index)
+                            .cloned()
+                            .unwrap_or(Rc::new(RefCell::new(FrameMouseHandlers::default()))),
+                    }
+                }
                 LineType::LineBreak => LaidOutTextFrame::LineBreak {
                     frame_bounds: RectF::default(),
                 },
@@ -2174,9 +2185,26 @@ impl Element for FormattedTextElement {
                     frame_bounds,
                     top_padding,
                     bottom_padding,
+                    is_block_quote,
                     ..
                 } => {
                     let curr_origin = vec2f(x_offset, mut_origin.y() + *top_padding);
+                    if *is_block_quote {
+                        let mut rail_color = self.text_color;
+                        rail_color.a = 128;
+                        ctx.scene
+                            .draw_rect_without_hit_recording(RectF::new(
+                                vec2f(
+                                    mut_origin.x() + BLOCK_QUOTE_RAIL_LEFT_INSET,
+                                    curr_origin.y(),
+                                ),
+                                vec2f(
+                                    BLOCK_QUOTE_RAIL_WIDTH,
+                                    frame_height - *top_padding - *bottom_padding,
+                                ),
+                            ))
+                            .with_background(Fill::Solid(rail_color));
+                    }
                     *frame_bounds = RectF::new(
                         curr_origin,
                         Vector2F::new(size.x(), frame_height - *top_padding - *bottom_padding),

@@ -165,6 +165,14 @@ impl<'a> Positioned<'a, BlockItem> {
         self.position_centered(paragraph, paragraph.height())
     }
 
+    pub fn block_quote(&self, paragraph: &'a Paragraph) -> Positioned<'a, Paragraph> {
+        debug_assert!(
+            matches!(self.item, BlockItem::BlockQuote { .. }),
+            "Must be a block quote"
+        );
+        self.position(paragraph)
+    }
+
     /// Position this item's paragraph.
     pub fn paragraph(&self, paragraph: &'a Paragraph) -> Positioned<'a, Paragraph> {
         debug_assert!(

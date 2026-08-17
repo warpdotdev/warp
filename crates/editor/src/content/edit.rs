@@ -1144,6 +1144,17 @@ fn layout_text_block(
                 })
                 .ok_or_else(|| anyhow!("Header item should have one paragraph"))
         }
+        BufferBlockStyle::BlockQuote => {
+            debug_assert_eq!(
+                paragraphs.len(),
+                1,
+                "Block quote paragraphs should only have one line."
+            );
+            paragraphs
+                .pop()
+                .map(|paragraph| BlockItem::BlockQuote { paragraph })
+                .ok_or_else(|| anyhow!("Block quote should have one paragraph"))
+        }
         BufferBlockStyle::PlainText => {
             debug_assert_eq!(
                 paragraphs.len(),

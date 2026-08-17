@@ -671,6 +671,43 @@ impl Buffer {
                         }
                     }
                 }
+                FormattedTextLine::BlockQuote(line) => {
+                    let block_style = BufferBlockStyle::BlockQuote;
+
+                    match previous_block_type.clone() {
+                        BlockType::Item(_) => {
+                            update_content_after_block_item(
+                                &mut new_content,
+                                &mut previous_block_type,
+                                BlockType::Text(block_style),
+                                Some(line),
+                            );
+                        }
+                        BlockType::Text(previous_block_style) => {
+                            if inherit_styling
+                                && block_style
+                                    .should_inherit_style(edit_cursor, previous_block_style.clone())
+                            {
+                                push_text_fragments_to_block(
+                                    &mut new_content,
+                                    line,
+                                    previous_block_style,
+                                );
+                            } else {
+                                maybe_push_new_block_marker(
+                                    inherit_styling,
+                                    edit_cursor,
+                                    previous_block_style,
+                                    block_style.clone(),
+                                    &mut new_content,
+                                );
+
+                                previous_block_type = BlockType::Text(block_style);
+                                update_content_with_text_fragments(&mut new_content, line);
+                            }
+                        }
+                    }
+                }
                 FormattedTextLine::CodeBlock(block) => {
                     let block_style = BufferBlockStyle::CodeBlock {
                         code_block_type: (&block).into(),

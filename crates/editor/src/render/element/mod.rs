@@ -27,6 +27,7 @@ use warpui_core::{
     PaintContext, SizeConstraint, WeakViewHandle,
 };
 
+use self::block_quote::RenderableBlockQuote;
 use self::empty::Empty;
 use self::header::RenderableHeader;
 use self::hidden_section::RenderableHiddenSection;
@@ -49,6 +50,7 @@ use super::model::{
 use crate::content::version::BufferVersion;
 use crate::editor::EditorView;
 
+mod block_quote;
 pub mod broken_embedding;
 mod empty;
 mod header;
@@ -860,6 +862,7 @@ impl<V: EditorView> RichTextElement<V> {
             .map(|(item, block)| {
                 let renderable_block = match block {
                     BlockItem::Paragraph(_) => RenderableParagraph::new(item).finish(),
+                    BlockItem::BlockQuote { .. } => RenderableBlockQuote::new(item).finish(),
                     BlockItem::TextBlock { .. } => RenderableTextBlock::new(item).finish(),
                     BlockItem::Header { .. } => RenderableHeader::new(item).finish(),
                     BlockItem::UnorderedList { indent_level, .. } => {
