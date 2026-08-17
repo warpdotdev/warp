@@ -232,7 +232,6 @@ fn current_user_gets_no_actions_against_their_own_row_as_workspace_admin() {
 
 #[test]
 fn non_native_workspace_keeps_create_team_ui() {
-    // Admin role, but the workspace isn't native, so create-team stays.
     let workspace = workspace_with_member(ADMIN_EMAIL, MembershipRole::Admin, false);
 
     assert_eq!(
@@ -273,7 +272,6 @@ fn native_workspace_admin_gets_admin_panel_cta() {
         ),
         TeamlessContent::AdminPanelCta { join_teams: true }
     );
-    // An admin with nothing to join sees only the admin-panel CTA.
     assert_eq!(
         TeamsWidget::teamless_content_for(
             Some(&workspace),
@@ -308,7 +306,6 @@ fn native_workspace_member_gets_join_or_empty_state() {
 
 #[test]
 fn viewer_missing_from_the_workspace_roster_is_not_an_admin() {
-    // An unresolved email can't match an admin row, so this is the member path.
     let workspace = admin_workspace(ADMIN_EMAIL);
 
     assert_eq!(
@@ -319,7 +316,6 @@ fn viewer_missing_from_the_workspace_roster_is_not_an_admin() {
 
 #[test]
 fn native_workspace_member_waits_for_team_discovery() {
-    // Avoids flashing the empty state before the fetch resolves.
     let workspace = workspace_with_member(MEMBER_EMAIL, MembershipRole::User, true);
 
     assert_eq!(

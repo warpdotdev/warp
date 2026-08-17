@@ -400,10 +400,6 @@ pub fn render_separator(appearance: &Appearance) -> Box<dyn Element> {
         .finish()
 }
 
-/// Renders the shared settings CTA banner: a rounded surface strip with a
-/// leading icon and a single line of sub-text whose leading phrase is a
-/// hyperlink dispatching `action` (e.g. "Open the admin panel to manage
-/// workspace settings and spend limits.").
 pub fn render_cta_banner<A: Action + Clone>(
     icon: Icon,
     link_text: &str,

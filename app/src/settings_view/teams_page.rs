@@ -86,7 +86,6 @@ const TEAM_NAME_EDITOR_PLACEHOLDER_TEXT: &str = "Team name";
 const CREATE_TEAM_BUTTON_LEFT_PADDING: f32 = 10.;
 const CREATE_TEAM_DESCRIPTION: &str = "When you create a team, you can collaborate on agent-driven development by sharing cloud agent runs, environments, automations, and artifacts. You can also create a shared knowledge store for teammates and agents alike.";
 
-// Teamless page copy
 const OR_JOIN_TEAM_HEADER: &str = "Or, join an existing team within your company";
 const JOIN_TEAM_HEADER: &str = "Join an existing team within your company";
 const NO_TEAMS_TO_JOIN_DESCRIPTION: &str =
@@ -383,9 +382,6 @@ enum GrowTeamWarningCta {
     None,
 }
 
-/// Whether the teamless viewer has a team available to join. Team discovery
-/// resolves asynchronously, so `Pending` is kept distinct from `Empty` to
-/// avoid flashing the "no teams to join" state while the fetch is in flight.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 enum JoinableTeams {
     Pending,
@@ -393,19 +389,10 @@ enum JoinableTeams {
     Available,
 }
 
-/// What the teamless Teams page renders. Native workspaces manage team
-/// membership from the admin panel, so the create-team UI is replaced by an
-/// admin CTA, the join UI, or an empty state.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 enum TeamlessContent {
-    /// Create-team UI, plus the discoverable-teams list when `join_teams`.
-    CreateTeam {
-        join_teams: bool,
-    },
-    /// Admin-panel CTA banner, plus the discoverable-teams list when `join_teams`.
-    AdminPanelCta {
-        join_teams: bool,
-    },
+    CreateTeam { join_teams: bool },
+    AdminPanelCta { join_teams: bool },
     JoinTeams,
     NoTeamsToJoin,
     PendingTeamDiscovery,
@@ -514,7 +501,6 @@ pub struct TeamsPageView {
     transfer_ownership_modal_state: ModalViewState<Modal<TransferOwnershipConfirmationModal>>,
     clipped_scroll_state: ClippedScrollStateHandle,
     discoverable_teams_states: Vec<DiscoverableTeamState>,
-    /// Whether a team discovery fetch has resolved, successfully or not.
     discoverable_teams_fetched: bool,
     rename_team_editor: ViewHandle<ClickableTextInput>,
     checkbox_value: bool,
@@ -1076,8 +1062,6 @@ impl TeamsPageView {
                 ctx.notify();
             }
             UserWorkspacesEvent::FetchDiscoverableTeamsRejected(e) => {
-                // A failed fetch still resolves the teamless page out of its
-                // pending state; there is nothing to join as far as we know.
                 self.discoverable_teams_fetched = true;
                 // Don't show toast, only log to sentry
                 report_error!(e);
@@ -1761,8 +1745,6 @@ impl TeamsPageView {
         }
     }
 
-    /// Focus the first input on the page: a team member's domain or email
-    /// editor, or the create-team editor when the teamless page renders it.
     fn focus_on_next_input(&mut self, ctx: &mut ViewContext<Self>) {
         let workspaces: &UserWorkspaces = self.user_workspaces.as_ref(ctx);
 
@@ -1780,9 +1762,6 @@ impl TeamsPageView {
         ctx.notify();
     }
 
-    /// Whether the teamless page renders the create-team editor. Asks the same
-    /// helper the page renders from, so focus can't land on an editor that
-    /// isn't there.
     fn renders_create_team_ui(&self, ctx: &AppContext) -> bool {
         matches!(
             TeamsWidget::teamless_content_for(
@@ -4090,10 +4069,6 @@ impl TeamsWidget {
             .finish()
     }
 
-    /// Maps the teamless viewer's workspace context onto the page's content.
-    /// The states are resolved in one place so they can be unit tested without
-    /// rendering, and so the focus logic can ask the same question. A workspace
-    /// we don't have yet can't be native, so it keeps the create-team page.
     fn teamless_content_for(
         workspace: Option<&Workspace>,
         email: Option<&str>,
@@ -4186,15 +4161,12 @@ impl TeamsWidget {
         page.finish()
     }
 
-    /// A single line of page-level copy, for the states that have no controls.
     fn render_teamless_message(&self, text: String, appearance: &Appearance) -> Box<dyn Element> {
         Container::new(self.render_description(text, appearance))
             .with_padding_top(6.)
             .finish()
     }
 
-    /// The discoverable-teams header and list. The header is passed in because
-    /// "Or, join ..." only reads correctly below the create-team UI.
     fn render_join_teams_section(
         &self,
         view: &TeamsPageView,
@@ -4215,7 +4187,6 @@ impl TeamsWidget {
     ) -> Box<dyn Element> {
         let mut page = Flex::column();
 
-        // Subtitle and description
         page.add_child(
             self.render_sub_header_with_subtext_color(appearance, "Create a team".to_string()),
         );
