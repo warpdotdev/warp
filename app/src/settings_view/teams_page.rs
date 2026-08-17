@@ -88,9 +88,6 @@ const CREATE_TEAM_DESCRIPTION: &str = "When you create a team, you can collabora
 
 const OR_JOIN_TEAM_HEADER: &str = "Or, join an existing team within your company";
 const JOIN_TEAM_HEADER: &str = "Join an existing team within your company";
-const NO_TEAMS_TO_JOIN_DESCRIPTION: &str =
-    "You have no available teams to join — contact an admin to add you to a team.";
-const LOADING_TEAMS_TEXT: &str = "Loading...";
 const ADMIN_PANEL_CTA_LINK_TEXT: &str = "Visit the admin panel";
 const ADMIN_PANEL_CTA_TRAILING_COPY: &str = "to manage teams.";
 
@@ -383,19 +380,10 @@ enum GrowTeamWarningCta {
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
-enum JoinableTeams {
-    Pending,
-    Empty,
-    Available,
-}
-
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-enum TeamlessContent {
-    CreateTeam { join_teams: bool },
-    AdminPanelCta { join_teams: bool },
-    JoinTeams,
-    NoTeamsToJoin,
-    PendingTeamDiscovery,
+enum TeamsPageSection {
+    CreateTeam,
+    AdminPanelCta,
+    JoinTeams { header: &'static str },
 }
 
 /// The order of the ItemState enum values determines the ordering of the members and
@@ -501,7 +489,6 @@ pub struct TeamsPageView {
     transfer_ownership_modal_state: ModalViewState<Modal<TransferOwnershipConfirmationModal>>,
     clipped_scroll_state: ClippedScrollStateHandle,
     discoverable_teams_states: Vec<DiscoverableTeamState>,
-    discoverable_teams_fetched: bool,
     rename_team_editor: ViewHandle<ClickableTextInput>,
     checkbox_value: bool,
     member_actions_menu: ViewHandle<Menu<TeamsPageAction>>,
@@ -894,7 +881,6 @@ impl TeamsPageView {
             pending_team_action_confirmation: None,
             transfer_ownership_modal_state: ModalViewState::new(transfer_ownership_modal),
             discoverable_teams_states: Vec::new(),
-            discoverable_teams_fetched: false,
             rename_team_editor,
             checkbox_value: true,
             member_actions_menu,
@@ -1058,11 +1044,9 @@ impl TeamsPageView {
                     .iter()
                     .map(|team| DiscoverableTeamState::new(team.clone()))
                     .collect();
-                self.discoverable_teams_fetched = true;
                 ctx.notify();
             }
             UserWorkspacesEvent::FetchDiscoverableTeamsRejected(e) => {
-                self.discoverable_teams_fetched = true;
                 // Don't show toast, only log to sentry
                 report_error!(e);
             }
@@ -1763,24 +1747,12 @@ impl TeamsPageView {
     }
 
     fn renders_create_team_ui(&self, ctx: &AppContext) -> bool {
-        matches!(
-            TeamsWidget::teamless_content_for(
-                self.user_workspaces.as_ref(ctx).current_workspace(),
-                self.auth_state.user_email().as_deref(),
-                self.joinable_teams(),
-            ),
-            TeamlessContent::CreateTeam { .. }
+        TeamsWidget::page_sections_for(
+            self.user_workspaces.as_ref(ctx).current_workspace(),
+            self.auth_state.user_email().as_deref(),
+            !self.discoverable_teams_states.is_empty(),
         )
-    }
-
-    fn joinable_teams(&self) -> JoinableTeams {
-        if !self.discoverable_teams_fetched {
-            JoinableTeams::Pending
-        } else if self.discoverable_teams_states.is_empty() {
-            JoinableTeams::Empty
-        } else {
-            JoinableTeams::Available
-        }
+        .contains(&TeamsPageSection::CreateTeam)
     }
 
     fn team_to_item_list(
@@ -4069,26 +4041,33 @@ impl TeamsWidget {
             .finish()
     }
 
-    fn teamless_content_for(
+    fn page_sections_for(
         workspace: Option<&Workspace>,
         email: Option<&str>,
-        joinable_teams: JoinableTeams,
-    ) -> TeamlessContent {
-        let join_teams = joinable_teams == JoinableTeams::Available;
+        join_teams: bool,
+    ) -> Vec<TeamsPageSection> {
+        let mut sections = Vec::new();
         if !workspace.is_some_and(Workspace::is_native_workspaces_enabled) {
-            return TeamlessContent::CreateTeam { join_teams };
+            sections.push(TeamsPageSection::CreateTeam);
+            if join_teams {
+                sections.push(TeamsPageSection::JoinTeams {
+                    header: OR_JOIN_TEAM_HEADER,
+                });
+            }
+            return sections;
         }
         let is_workspace_admin = workspace
             .zip(email)
             .is_some_and(|(workspace, email)| workspace.is_workspace_admin(email));
         if is_workspace_admin {
-            return TeamlessContent::AdminPanelCta { join_teams };
+            sections.push(TeamsPageSection::AdminPanelCta);
         }
-        match joinable_teams {
-            JoinableTeams::Available => TeamlessContent::JoinTeams,
-            JoinableTeams::Empty => TeamlessContent::NoTeamsToJoin,
-            JoinableTeams::Pending => TeamlessContent::PendingTeamDiscovery,
+        if join_teams {
+            sections.push(TeamsPageSection::JoinTeams {
+                header: JOIN_TEAM_HEADER,
+            });
         }
+        sections
     }
 
     fn render_teamless_page(
@@ -4097,74 +4076,44 @@ impl TeamsWidget {
         appearance: &Appearance,
         app: &AppContext,
     ) -> Box<dyn Element> {
-        let content = Self::teamless_content_for(
+        let sections = Self::page_sections_for(
             view.user_workspaces.as_ref(app).current_workspace(),
             view.auth_state.user_email().as_deref(),
-            view.joinable_teams(),
+            !view.discoverable_teams_states.is_empty(),
         );
 
         let mut page = Flex::column();
         page.add_child(render_sub_header(appearance, "Teams".to_string(), None));
 
-        match content {
-            TeamlessContent::CreateTeam { join_teams } => {
-                page.add_child(self.render_create_team_section(view, appearance, app));
-                if join_teams {
-                    page.add_child(render_separator(appearance));
-                    page.add_child(self.render_join_teams_section(
-                        view,
-                        appearance,
-                        OR_JOIN_TEAM_HEADER,
-                    ));
+        for (index, section) in sections.iter().enumerate() {
+            if index > 0 {
+                page.add_child(render_separator(appearance));
+            }
+            match section {
+                TeamsPageSection::CreateTeam => {
+                    page.add_child(self.render_create_team_section(view, appearance, app));
                 }
-            }
-            TeamlessContent::AdminPanelCta { join_teams } => {
-                page.add_child(
-                    Container::new(render_cta_banner(
-                        Icon::Users,
-                        ADMIN_PANEL_CTA_LINK_TEXT,
-                        ADMIN_PANEL_CTA_TRAILING_COPY,
-                        TeamsPageAction::OpenWorkspaceAdminPanel,
-                        appearance,
-                    ))
-                    .with_padding_top(6.)
-                    .with_padding_bottom(12.)
-                    .finish(),
-                );
-                if join_teams {
-                    page.add_child(render_separator(appearance));
-                    page.add_child(self.render_join_teams_section(
-                        view,
-                        appearance,
-                        JOIN_TEAM_HEADER,
-                    ));
+                TeamsPageSection::AdminPanelCta => {
+                    page.add_child(
+                        Container::new(render_cta_banner(
+                            Icon::Users,
+                            ADMIN_PANEL_CTA_LINK_TEXT,
+                            ADMIN_PANEL_CTA_TRAILING_COPY,
+                            TeamsPageAction::OpenWorkspaceAdminPanel,
+                            appearance,
+                        ))
+                        .with_padding_top(6.)
+                        .with_padding_bottom(12.)
+                        .finish(),
+                    );
                 }
-            }
-            TeamlessContent::JoinTeams => {
-                page.add_child(self.render_join_teams_section(view, appearance, JOIN_TEAM_HEADER));
-            }
-            TeamlessContent::NoTeamsToJoin => {
-                page.add_child(
-                    self.render_teamless_message(
-                        NO_TEAMS_TO_JOIN_DESCRIPTION.to_string(),
-                        appearance,
-                    ),
-                );
-            }
-            TeamlessContent::PendingTeamDiscovery => {
-                page.add_child(
-                    self.render_teamless_message(LOADING_TEAMS_TEXT.to_string(), appearance),
-                );
+                TeamsPageSection::JoinTeams { header } => {
+                    page.add_child(self.render_join_teams_section(view, appearance, header));
+                }
             }
         }
 
         page.finish()
-    }
-
-    fn render_teamless_message(&self, text: String, appearance: &Appearance) -> Box<dyn Element> {
-        Container::new(self.render_description(text, appearance))
-            .with_padding_top(6.)
-            .finish()
     }
 
     fn render_join_teams_section(
