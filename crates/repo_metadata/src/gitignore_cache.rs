@@ -1,30 +1,20 @@
 //! A small process-wide cache of parsed `.gitignore` files.
 //!
-//! Constructing a [`Gitignore`] compiles a fresh `regex_automata` regex, and
-//! that regex owns its own thread-safe `Pool` of per-thread search caches
-//! (see `regex_automata::util::pool::Pool`). Re-parsing the same
-//! `.gitignore` file on every file-tree traversal — which happens on every
-//! watcher-triggered rebuild — creates a fresh pool each time. This cache
-//! reuses a parsed, `Arc`-shared [`Gitignore`] across traversals as long as
-//! the file's content is unchanged, so a given `.gitignore` path compiles
-//! its regex (and allocates its pool) at most once until the file is
-//! actually edited.
+//! Constructing a [`Gitignore`] compiles a fresh `regex_automata` regex, and that regex owns
+//! its own thread-safe `Pool` of per-thread search caches (see
+//! `regex_automata::util::pool::Pool`). Re-parsing the same `.gitignore` file on every
+//! file-tree traversal — which happens on every watcher-triggered rebuild — creates a fresh
+//! pool each time. This cache reuses a parsed, `Arc`-shared [`Gitignore`] across traversals as
+//! long as the file's content is unchanged, so a given `.gitignore` path compiles its regex
+//! (and allocates its pool) at most once until the file is actually edited.
 //!
-//! Invalidation is keyed by a hash of the file's content rather than its
-//! (mtime, length): a same-length edit within the filesystem's timestamp
-//! granularity would otherwise be indistinguishable from an unchanged file,
-//! serving stale ignore rules. Computing the hash means reading the file on
-//! every call (in addition to the read `Gitignore::new` itself does when the
-//! hash misses), but `.gitignore` files are small and, after the first
-//! traversal, page-cached — this trades a cheap read for correctness rather
-//! than reintroducing the compile cost this cache exists to avoid.
+//! Invalidation is keyed by a hash of the file's content, so an edit is detected even when it
+//! preserves the file's mtime and byte length. Hashing means an extra read on every call (in
+//! addition to the read `Gitignore::new` itself does on a miss), but `.gitignore` files are
+//! small and page-cached after the first traversal, so this stays cheap relative to the parse
+//! it guards.
 //!
-//! The cache is bounded by estimated retained bytes, not entry count: a
-//! `.gitignore` with many largely-distinct glob patterns can retain
-//! megabytes in its compiled matcher (see [`RETAINED_BYTES_PER_SOURCE_BYTE`]
-//! for the measurement backing that estimate), so a fixed entry-count cap
-//! could not bound total memory. Entries beyond the byte budget are evicted
-//! least-recently-used first.
+//! Eviction is weight-bounded LRU rather than count-bounded (see [`MAX_CACHE_WEIGHT_BYTES`]).
 
 use std::collections::HashMap;
 use std::collections::hash_map::DefaultHasher;
@@ -35,23 +25,17 @@ use std::sync::{Arc, LazyLock};
 use ignore::gitignore::Gitignore;
 use parking_lot::Mutex;
 
-/// Estimated multiplier from a `.gitignore` file's source byte length to the
-/// heap retained by its compiled matcher (regex_automata NFA/DFA tables,
-/// aho-corasick tables, and the first accessing thread's `regex_automata`
-/// `Pool` cache, once the matcher has actually been used). Measured with an
-/// ad hoc RSS-delta harness: a 10-line, 78-byte gitignore retained ~5 KiB
-/// (~65x), while a pathological gitignore of 1,000 largely-distinct
-/// doublestar globs (29.5 KB) retained ~4.8 MiB (~163x) after one match.
-/// Rounded up from the worse-observed ratio for margin.
+/// Estimated multiplier from a `.gitignore`'s source byte length to the heap retained by its
+/// compiled matcher (regex_automata NFA/DFA tables, aho-corasick tables, and the accessing
+/// thread's `Pool` cache). A small gitignore (78 bytes) retained ~65x its size; a pathological
+/// one (1,000 distinct doublestar globs, 29.5 KB) retained ~163x. Rounded up from the worse
+/// ratio for margin.
 const RETAINED_BYTES_PER_SOURCE_BYTE: u64 = 200;
 
-/// Total estimated retained heap the cache may hold before it evicts
-/// least-recently-used entries, independent of how many distinct
-/// `.gitignore` paths that represents. At [`RETAINED_BYTES_PER_SOURCE_BYTE`],
-/// this bounds worst-case retention to roughly thirteen pathological,
-/// megabyte-scale gitignores, or many thousands of ordinary ones — generous
-/// for the distinct `.gitignore` paths touched in a real session, while
-/// remaining a small, fixed fraction of typical available memory.
+/// Total estimated retained heap the cache may hold before evicting least-recently-used
+/// entries, bounding memory regardless of `.gitignore` count — a single pathological file can
+/// retain megabytes (see [`RETAINED_BYTES_PER_SOURCE_BYTE`]). At that multiplier, this permits
+/// roughly thirteen megabyte-scale pathological gitignores, or many thousands of ordinary ones.
 #[cfg(not(test))]
 const MAX_CACHE_WEIGHT_BYTES: u64 = 64 * 1024 * 1024;
 /// Small in tests so eviction can be exercised without huge fixtures.
@@ -63,9 +47,8 @@ struct CacheEntry {
     gitignore: Arc<Gitignore>,
     /// Estimated retained bytes, per [`RETAINED_BYTES_PER_SOURCE_BYTE`].
     weight: u64,
-    /// Tick from [`Cache::next_tick`] as of the last hit or insert. The
-    /// entry with the smallest tick is evicted first once the cache is over
-    /// budget.
+    /// Tick from [`Cache::next_tick`] as of the last hit or insert; the LRU eviction key (the
+    /// entry with the smallest tick is evicted first).
     last_used: u64,
 }
 
@@ -73,9 +56,8 @@ struct CacheEntry {
 struct Cache {
     entries: HashMap<PathBuf, CacheEntry>,
     total_weight: u64,
-    /// Monotonically increasing recency counter. Only ever read or written
-    /// while `CACHE`'s mutex is held, so a plain counter (rather than an
-    /// atomic) is enough.
+    /// Recency counter. Only ever read or written while `CACHE`'s mutex is held, so a plain
+    /// counter (rather than an atomic) is enough.
     next_tick: u64,
 }
 
@@ -86,8 +68,7 @@ impl Cache {
         tick
     }
 
-    /// Returns the cached matcher for `path` if it's still fresh (its
-    /// content digest matches `content_digest`), bumping its recency.
+    /// Returns the cached matcher for `path` if its content digest matches `content_digest`.
     fn lookup(&mut self, path: &Path, content_digest: u64) -> Option<Arc<Gitignore>> {
         if self.entries.get(path)?.content_digest != content_digest {
             return None;
@@ -98,9 +79,7 @@ impl Cache {
         Some(entry.gitignore.clone())
     }
 
-    /// Inserts a freshly parsed matcher for `path`, replacing any previous
-    /// entry, then evicts least-recently-used entries until back under
-    /// [`MAX_CACHE_WEIGHT_BYTES`].
+    /// Inserts a freshly parsed matcher for `path`, replacing any previous entry.
     fn insert(
         &mut self,
         path: PathBuf,
@@ -148,10 +127,10 @@ impl Cache {
 
 static CACHE: LazyLock<Mutex<Cache>> = LazyLock::new(|| Mutex::new(Cache::default()));
 
-/// `parking_lot::Mutex` doesn't poison on a panic while held, so a panic
-/// elsewhere mid-update can't permanently disable every subsequent
-/// traversal: the next lookup just sees whatever (possibly inconsistent,
-/// best-effort) state was left behind instead of every later call failing.
+/// `parking_lot::Mutex` doesn't poison on a panic while held, so a panic elsewhere mid-update
+/// can't permanently disable every subsequent traversal: the next lookup just sees whatever
+/// (possibly inconsistent, best-effort) state was left behind instead of every later call
+/// failing.
 fn lock_cache() -> parking_lot::MutexGuard<'static, Cache> {
     CACHE.lock()
 }
@@ -162,21 +141,19 @@ fn content_digest(content: &[u8]) -> u64 {
     hasher.finish()
 }
 
-/// Returns a cached, parsed `.gitignore` matcher for `gitignore_path`,
-/// reusing the previous parse when the file's content is unchanged and
-/// re-parsing (and caching the fresh result) otherwise.
+/// Returns a cached, parsed `.gitignore` matcher for `gitignore_path`, reusing the previous
+/// parse when the file's content is unchanged and re-parsing (and caching the fresh result)
+/// otherwise.
 ///
-/// Never caches a result that doesn't reflect the file's current, complete
-/// contents: a transient read failure or a parse error is returned directly
-/// without touching the cache, so a stale or partial result can never shadow
-/// a later, successful parse (e.g. after a permissions fix or an edit that
-/// corrects a malformed glob line).
+/// Never caches a result that doesn't reflect the file's current, complete contents: a
+/// transient read failure or a parse error is returned directly without touching the cache, so
+/// a stale or partial result can never shadow a later, successful parse (e.g. after a
+/// permissions fix or an edit that corrects a malformed glob line).
 pub(crate) fn get_or_parse(gitignore_path: &Path) -> Arc<Gitignore> {
     let Ok(content) = std::fs::read(gitignore_path) else {
-        // Can't fingerprint a file we can't read right now. Parse directly —
-        // `Gitignore::new` fails open the same way on an unreadable file —
-        // without disturbing any existing cache entry, so a later, readable
-        // call still finds (or repopulates) a correct entry.
+        // Can't fingerprint a file we can't read right now. Parse directly — `Gitignore::new`
+        // fails open the same way on an unreadable file — without disturbing any existing
+        // cache entry, so a later, readable call still finds (or repopulates) a correct entry.
         let (gitignore, _) = Gitignore::new(gitignore_path);
         return Arc::new(gitignore);
     };
@@ -186,17 +163,15 @@ pub(crate) fn get_or_parse(gitignore_path: &Path) -> Arc<Gitignore> {
         return gitignore;
     }
 
-    // Parse outside the lock (`Gitignore::new` does its own blocking file
-    // I/O) so a slow parse doesn't block unrelated cache lookups. A
-    // concurrent caller parsing the same path at the same time is a
-    // harmless, rare race: the last insert wins and both callers still get a
+    // Parse outside the lock (`Gitignore::new` does its own blocking file I/O) so a slow parse
+    // doesn't block unrelated cache lookups. A concurrent caller parsing the same path at the
+    // same time is a harmless, rare race: the last insert wins and both callers still get a
     // valid, usable matcher.
     let (gitignore, error) = Gitignore::new(gitignore_path);
     if error.is_some() {
-        // A parse error (e.g. one malformed glob line) means this instance
-        // doesn't fully represent the file. Don't cache it, so a later call
-        // — after the file is fixed, but with the same content otherwise —
-        // isn't shadowed by this partial result.
+        // A parse error (e.g. one malformed glob line) means this instance doesn't fully
+        // represent the file. Don't cache it, so a later call — after the file is fixed, but
+        // with the same content otherwise — isn't shadowed by this partial result.
         return Arc::new(gitignore);
     }
     let gitignore = Arc::new(gitignore);

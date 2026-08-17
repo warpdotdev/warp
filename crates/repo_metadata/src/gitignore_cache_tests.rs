@@ -2,9 +2,9 @@ use std::sync::Arc;
 
 use super::get_or_parse;
 
-/// Reading the same unchanged `.gitignore` twice must return the exact same
-/// `Arc<Gitignore>` instance (not merely an equal one), since a distinct
-/// instance means a distinct compiled regex and pool were allocated.
+/// Reading the same unchanged `.gitignore` twice must return the exact same `Arc<Gitignore>`
+/// instance (not merely an equal one), since a distinct instance means a distinct compiled
+/// regex and pool were allocated.
 #[test]
 fn reuses_cached_entry_for_unchanged_file() {
     super::clear_for_test();
@@ -21,11 +21,8 @@ fn reuses_cached_entry_for_unchanged_file() {
     );
 }
 
-/// Regression test for the bug in the (mtime, length) fingerprint this cache
-/// used to key on: an edit that preserves the file's byte length can also
-/// fall within the filesystem's mtime resolution, making it indistinguishable
-/// from an unchanged file under the old scheme. Content hashing must still
-/// detect it.
+/// A same-length edit that lands within the filesystem's mtime resolution must still be
+/// detected: content hashing must not mistake it for an unchanged file.
 #[test]
 fn rebuilds_when_content_changes_at_the_same_length() {
     super::clear_for_test();
@@ -45,9 +42,8 @@ fn rebuilds_when_content_changes_at_the_same_length() {
          to exercise the same-size case"
     );
     std::fs::write(&path, replacement).unwrap();
-    // Force the mtime back to its original value so this test reproduces an
-    // identical (mtime, length) pair deterministically, regardless of the
-    // filesystem's actual clock resolution.
+    // Force the mtime back to its original value so this test deterministically exercises the
+    // same-mtime case regardless of the filesystem's actual clock resolution.
     std::fs::File::open(&path)
         .unwrap()
         .set_modified(original_mtime)
@@ -62,13 +58,9 @@ fn rebuilds_when_content_changes_at_the_same_length() {
     assert!(!after.matched("target", true).is_ignore());
 }
 
-/// A `.gitignore` first touched while transiently unreadable (e.g. a
-/// permissions race during checkout) must not cache the resulting empty
-/// matcher. `chmod` changes neither a file's mtime nor its length, so an
-/// (mtime, length) fingerprint computed once permissions are restored would
-/// match the entry cached during the outage, permanently shadowing the real
-/// rules; content hashing must not have this failure mode, and a failed read
-/// must not be cached at all regardless of fingerprint scheme.
+/// A `.gitignore` first touched while transiently unreadable (e.g. a permissions race during
+/// checkout) must not cache the resulting empty matcher: a failed read must never be cached,
+/// regardless of the file's later content.
 #[cfg(unix)]
 #[test]
 fn recovers_after_a_transient_read_failure() {
@@ -80,15 +72,14 @@ fn recovers_after_a_transient_read_failure() {
     std::fs::write(&path, "target/\n").unwrap();
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o000)).unwrap();
     if std::fs::read(&path).is_ok() {
-        // Running as a user (e.g. root) that ignores permission bits: the
-        // failure this test exercises can't be reproduced here.
+        // Running as a user (e.g. root) that ignores permission bits: the failure this test
+        // exercises can't be reproduced here.
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
         return;
     }
 
-    // The very first access happens while the file is unreadable: it must
-    // fail open (an empty matcher) without poisoning the cache with that
-    // result.
+    // The very first access happens while the file is unreadable: it must fail open (an empty
+    // matcher) without poisoning the cache with that result.
     let during_failure = get_or_parse(&path);
     assert!(!during_failure.matched("target", true).is_ignore());
 
@@ -101,11 +92,10 @@ fn recovers_after_a_transient_read_failure() {
     );
 }
 
-/// A `.gitignore` with a malformed line (`[z-a]` is an invalid character
-/// range) makes `Gitignore::new` report a partial error. That result must
-/// never be cached: two calls against the same still-broken content must
-/// each produce an independent parse, and fixing the line must not be
-/// shadowed by a previously cached partial result.
+/// A `.gitignore` with a malformed line (`[z-a]` is an invalid character range) makes
+/// `Gitignore::new` report a partial error. That result must never be cached: two calls
+/// against the same still-broken content must each produce an independent parse, and fixing
+/// the line must not be shadowed by a previously cached partial result.
 #[test]
 fn does_not_cache_a_failed_parse() {
     super::clear_for_test();
@@ -129,17 +119,15 @@ fn does_not_cache_a_failed_parse() {
     );
 }
 
-/// The cache is bounded by estimated retained bytes, not entry count: once
-/// more distinct paths are parsed than the configured budget allows, the
-/// least-recently-touched entry is evicted first.
+/// Exceeding the cache's byte budget evicts the least-recently-used entry first.
 #[test]
 fn evicts_least_recently_used_entry_over_capacity() {
     super::clear_for_test();
     let temp_dir = tempfile::tempdir().unwrap();
 
-    // Each file is 8 bytes ("target/\n"), so under the test budget of 5,000
-    // estimated bytes (`content.len() * 200`), three fit (4,800) but a
-    // fourth does not (6,400) and forces an eviction.
+    // Each file is 8 bytes ("target/\n"), so under the test budget of 5,000 estimated bytes
+    // (`content.len() * 200`), three fit (4,800) but a fourth does not (6,400) and forces an
+    // eviction.
     let paths: Vec<_> = (0..3)
         .map(|i| {
             let path = temp_dir.path().join(format!("gitignore_{i}"));
