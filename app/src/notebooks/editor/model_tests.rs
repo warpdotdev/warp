@@ -3117,8 +3117,7 @@ fn test_source_line_resolves_through_markdown_source_map() {
         let model = model_from_markdown("First paragraph\n\nSecond paragraph", &mut app, true);
         layout_model(&mut app, &model).await;
 
-        // Asserted by the text the offset lands on rather than a literal offset, so the test
-        // pins the behaviour that matters instead of the buffer's internal offset arithmetic.
+        // Asserted on the text the offset lands on rather than a literal offset.
         let second_paragraph = app.read(|ctx| {
             let buffer = model.as_ref(ctx).content();
             let buffer = buffer.as_ref(ctx);

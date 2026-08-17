@@ -351,10 +351,8 @@ fn parse_markdown_internal<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
 
 /// Anchors every source line consumed by one block onto the [`FormattedTextLine`] it produced.
 ///
-/// `row_in_line` stays 0 except for constructs that render several source lines as several rows of
-/// a single line: fenced code blocks and tables. Those rows are internal to the line, so the row
-/// count can be taken from the line itself without predicting anything about how surrounding
-/// blocks are laid out.
+/// `row_in_line` stays 0 except for fenced code blocks and tables, whose rows are internal to the
+/// line and so can be counted from the line itself.
 fn source_anchors_for_block(
     source: &str,
     line: &FormattedTextLine,

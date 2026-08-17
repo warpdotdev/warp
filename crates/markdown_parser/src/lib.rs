@@ -123,24 +123,21 @@ pub struct ParsedMarkdown {
 
 /// Where a Markdown source line ended up in the rendered [`FormattedText`].
 ///
-/// This deliberately anchors to a [`FormattedTextLine`] rather than to a rendered row index.
-/// How many rows a line occupies once it is lowered into a buffer is a property of the consumer,
-/// not of the parser: block-level items (thematic breaks, images, embedded objects) can be merged
-/// with a following blank line or dropped entirely, so any row count predicted here would drift
-/// from the real layout and silently mis-target every later line.
+/// Anchors to a [`FormattedTextLine`] rather than to a row index because row counts are decided
+/// when the text is lowered into a buffer, not here: block-level items (thematic breaks, images,
+/// embedded objects) can absorb the blank line after them or be dropped entirely.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MarkdownSourceAnchor {
     /// Index into [`FormattedText::lines`].
     pub line_index: usize,
-    /// Row offset within that line's own rendered rows. Non-zero only for constructs that render
-    /// as several rows from several source lines, i.e. fenced code blocks and tables.
+    /// Row offset within that line's own rows. Non-zero only for fenced code blocks and tables,
+    /// which render several source lines as several rows.
     pub row_in_line: usize,
 }
 
 /// Maps 0-based Markdown source lines onto [`MarkdownSourceAnchor`]s.
 ///
-/// Source lines that render to nothing at all (for example the inside of an HTML comment) map to
-/// `None`, so a caller can leave the viewport alone rather than scrolling somewhere arbitrary.
+/// Lines that render to nothing, such as the inside of an HTML comment, map to `None`.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct MarkdownSourceMap {
     anchors: Vec<Option<MarkdownSourceAnchor>>,

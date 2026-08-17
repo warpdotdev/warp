@@ -13,9 +13,8 @@ use crate::content::text::{
     BlockType, BufferBlockStyle, IndentBehavior, TABLE_BLOCK_MARKDOWN_LANG,
 };
 
-/// The rendered row a source line resolves to, as text. Asserting on the landed row rather than a
-/// magic offset keeps these tests meaningful: what matters is that a source line targets the line
-/// the reader expects to see, whatever offset that happens to be.
+/// The rendered row a source line resolves to, as text. Asserted on instead of a literal offset so
+/// the tests pin the row a reader lands on rather than the buffer's offset arithmetic.
 fn landed_row(buffer: &Buffer, source_line: usize) -> Option<String> {
     let offset = buffer.markdown_offset_for_source_line(source_line)?;
     let end = buffer
@@ -94,9 +93,8 @@ fn markdown_source_map_does_not_count_hidden_link_destinations() {
     });
 }
 
-/// Thematic breaks lower to a block item that swallows the blank line after it, so the buffer
-/// renders fewer rows than the parsed line count. Anchoring to lines rather than to predicted rows
-/// keeps everything below the rule on target.
+/// A thematic break lowers to a block item that absorbs the blank line after it, so the buffer
+/// renders fewer rows than the parsed line count.
 #[test]
 fn markdown_source_map_survives_thematic_breaks() {
     App::test((), |mut app| async move {
@@ -115,8 +113,7 @@ fn markdown_source_map_survives_thematic_breaks() {
     });
 }
 
-/// As above for block-level images, including the last source line, which used to fall off the end
-/// of the row table and resolve to nothing at all.
+/// As above for block-level images, including the last source line.
 #[test]
 fn markdown_source_map_survives_block_images() {
     App::test((), |mut app| async move {
@@ -136,8 +133,7 @@ fn markdown_source_map_survives_block_images() {
     });
 }
 
-/// An embedded object whose conversion yields nothing renders no row at all. Lines after it must
-/// still resolve.
+/// An embedded object whose conversion yields nothing renders no row at all.
 #[test]
 fn markdown_source_map_survives_dropped_embedded_objects() {
     App::test((), |mut app| async move {
@@ -156,8 +152,7 @@ fn markdown_source_map_survives_dropped_embedded_objects() {
     });
 }
 
-/// A document mixing several block-level items: each one used to shift everything below it by a
-/// row, so the drift compounded.
+/// Several block-level items in one document, whose row differences would otherwise compound.
 #[test]
 fn markdown_source_map_survives_repeated_block_items() {
     App::test((), |mut app| async move {
@@ -232,8 +227,7 @@ fn markdown_source_map_is_invalidated_after_an_edit() {
 }
 
 /// Syntax highlighting only writes colors, which are never serialized back to Markdown, so it must
-/// not discard the source map. The highlight pass lands asynchronously after load, so treating it
-/// as a content change disabled source-line scrolling for every document with a fenced code block.
+/// not discard the source map. It runs asynchronously after load.
 #[test]
 fn markdown_source_map_survives_code_block_highlighting() {
     App::test((), |mut app| async move {

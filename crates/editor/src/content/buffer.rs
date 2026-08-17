@@ -420,13 +420,9 @@ impl BufferEditAction<'_> {
         }
     }
 
-    /// Whether this action leaves the Markdown source the buffer was parsed from unchanged, so a
-    /// previously computed source map stays valid.
-    ///
-    /// Only presentation-only actions qualify. Syntax highlighting writes ephemeral colors that are
-    /// never serialized back to Markdown, so it must not discard the mapping: the code-block
-    /// highlight pass lands asynchronously after load, and dropping the map there would silently
-    /// disable source-line scrolling for every document containing a fenced code block.
+    /// Whether this action leaves the Markdown source unchanged, so a previously computed source
+    /// map stays valid. Syntax highlighting only writes colors, which are never serialized back to
+    /// Markdown, and it runs asynchronously after load.
     fn preserves_markdown_source_map(&self) -> bool {
         matches!(self, BufferEditAction::ColorCodeBlock { .. })
     }
@@ -585,11 +581,10 @@ pub struct Buffer {
     /// has no line endings (e.g. single-line text).
     session_platform: Option<SessionPlatform>,
     /// Buffer offset for each 0-based line of the Markdown source this buffer was parsed from, or
-    /// `None` for source lines that render to nothing. Cleared as soon as an edit changes the text,
-    /// since the source it was derived from no longer describes the buffer.
+    /// `None` for source lines that render to nothing. Cleared when an edit changes the text.
     markdown_source_line_offsets: Option<Vec<Option<CharOffset>>>,
-    /// Offsets at which each `FormattedTextLine` of the most recent formatted-text lowering landed,
-    /// recorded by `CoreEditor::edit` and consumed by [`Buffer::from_markdown`].
+    /// Offset at which each `FormattedTextLine` of the most recent lowering landed, recorded by
+    /// `CoreEditor::edit` and consumed by [`Buffer::from_markdown`].
     pub(super) lowered_formatted_text_line_offsets: Option<Vec<CharOffset>>,
 }
 
@@ -902,11 +897,11 @@ impl Buffer {
         buffer
     }
 
-    /// Resolve each Markdown source line to a buffer offset, using the offsets the lowering step
-    /// actually produced for every [`markdown_parser::FormattedTextLine`].
+    /// Resolves each Markdown source line to a buffer offset, using the offsets the lowering
+    /// recorded for every [`markdown_parser::FormattedTextLine`].
     ///
-    /// `rendered_line_count` is the number of lines that were handed to the lowering, and guards
-    /// against consuming offsets recorded by some unrelated edit.
+    /// `rendered_line_count` is the number of lines handed to the lowering, and guards against
+    /// consuming offsets recorded by an unrelated edit.
     fn set_markdown_source_map(
         &mut self,
         source_map: MarkdownSourceMap,
@@ -927,9 +922,8 @@ impl Buffer {
                 .map(|source_line| {
                     let anchor = source_map.anchor_for_source_line(source_line)?;
                     let line_offset = line_offsets.get(anchor.line_index).copied()?;
-                    // A line's recorded offset is its block marker, which sits at the end of the
-                    // preceding row, so the line's own first row is the one after it. Rows beyond
-                    // the first belong to multi-row contents (code blocks, tables).
+                    // The recorded offset is the line's block marker, which sits at the end of the
+                    // preceding row, so the line's own first row is the next one.
                     let row = line_offset
                         .to_buffer_point(self)
                         .row

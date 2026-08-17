@@ -565,9 +565,8 @@ impl Buffer {
         // silently failing to load.
         let text = replace_oversized_data_uri_images(text);
         // Buffer offset each `FormattedTextLine` starts at. Recorded here rather than predicted by
-        // the caller because how many rows a line occupies is decided below: block-level items
-        // absorb a following `LineBreak`, and an `Embedded` line with no conversion emits nothing
-        // at all, so any row count guessed from the `FormattedText` alone drifts from the layout.
+        // the caller because the row count is decided below: block-level items absorb a following
+        // `LineBreak`, and an `Embedded` line with no conversion emits nothing at all.
         let mut lowered_line_offsets = Vec::with_capacity(text.lines.len());
         for line in text.lines {
             lowered_line_offsets.push(new_content.extent::<CharOffset>());
