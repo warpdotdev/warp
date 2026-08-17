@@ -88,6 +88,8 @@ const CREATE_TEAM_DESCRIPTION: &str = "When you create a team, you can collabora
 
 const OR_JOIN_TEAM_HEADER: &str = "Or, join an existing team within your company";
 const JOIN_TEAM_HEADER: &str = "Join an existing team within your company";
+const NO_TEAMS_TO_JOIN_DESCRIPTION: &str =
+    "You have no available teams to join — contact an admin to add you to a team.";
 const ADMIN_PANEL_CTA_LINK_TEXT: &str = "Visit the admin panel";
 const ADMIN_PANEL_CTA_TRAILING_COPY: &str = "to manage teams.";
 
@@ -384,6 +386,7 @@ enum TeamsPageSection {
     CreateTeam,
     AdminPanelCta,
     JoinTeams { header: &'static str },
+    NoTeamsToJoin,
 }
 
 /// The order of the ItemState enum values determines the ordering of the members and
@@ -4066,6 +4069,8 @@ impl TeamsWidget {
             sections.push(TeamsPageSection::JoinTeams {
                 header: JOIN_TEAM_HEADER,
             });
+        } else if !is_workspace_admin {
+            sections.push(TeamsPageSection::NoTeamsToJoin);
         }
         sections
     }
@@ -4109,6 +4114,16 @@ impl TeamsWidget {
                 }
                 TeamsPageSection::JoinTeams { header } => {
                     page.add_child(self.render_join_teams_section(view, appearance, header));
+                }
+                TeamsPageSection::NoTeamsToJoin => {
+                    page.add_child(
+                        Container::new(self.render_description(
+                            NO_TEAMS_TO_JOIN_DESCRIPTION.to_string(),
+                            appearance,
+                        ))
+                        .with_padding_top(6.)
+                        .finish(),
+                    );
                 }
             }
         }

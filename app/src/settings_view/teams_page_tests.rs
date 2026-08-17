@@ -288,7 +288,7 @@ fn native_workspace_member_gets_join_or_empty_state() {
     );
     assert_eq!(
         TeamsWidget::page_sections_for(Some(&workspace), Some(MEMBER_EMAIL), false),
-        vec![]
+        vec![TeamsPageSection::NoTeamsToJoin]
     );
 }
 
@@ -298,7 +298,7 @@ fn viewer_missing_from_the_workspace_roster_is_not_an_admin() {
 
     assert_eq!(
         TeamsWidget::page_sections_for(Some(&workspace), None, false),
-        vec![]
+        vec![TeamsPageSection::NoTeamsToJoin]
     );
 }
 
