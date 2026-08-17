@@ -14,7 +14,8 @@
 //! small and page-cached after the first traversal, so this stays cheap relative to the parse
 //! it guards.
 //!
-//! Eviction is weight-bounded LRU rather than count-bounded (see [`MAX_CACHE_WEIGHT_BYTES`]).
+//! Eviction is source-byte-bounded LRU rather than count-bounded (see
+//! [`MAX_CACHED_SOURCE_BYTES`]).
 
 use std::collections::HashMap;
 use std::collections::hash_map::DefaultHasher;
@@ -25,28 +26,20 @@ use std::sync::{Arc, LazyLock};
 use ignore::gitignore::Gitignore;
 use parking_lot::Mutex;
 
-/// Estimated multiplier from a `.gitignore`'s source byte length to the heap retained by its
-/// compiled matcher (regex_automata NFA/DFA tables, aho-corasick tables, and the accessing
-/// thread's `Pool` cache). A small gitignore (78 bytes) retained ~65x its size; a pathological
-/// one (1,000 distinct doublestar globs, 29.5 KB) retained ~163x. Rounded up from the worse
-/// ratio for margin.
-const RETAINED_BYTES_PER_SOURCE_BYTE: u64 = 200;
-
-/// Total estimated retained heap the cache may hold before evicting least-recently-used
-/// entries, bounding memory regardless of `.gitignore` count — a single pathological file can
-/// retain megabytes (see [`RETAINED_BYTES_PER_SOURCE_BYTE`]). At that multiplier, this permits
-/// roughly thirteen megabyte-scale pathological gitignores, or many thousands of ordinary ones.
+/// Total `.gitignore` source bytes the cache may hold before evicting least-recently-used
+/// entries, bounding memory regardless of `.gitignore` count. A compiled matcher can retain up
+/// to ~163x its source size in the worst case observed, so this bounds worst-case retained
+/// heap to roughly 60 MiB.
 #[cfg(not(test))]
-const MAX_CACHE_WEIGHT_BYTES: u64 = 64 * 1024 * 1024;
+const MAX_CACHED_SOURCE_BYTES: u64 = 384 * 1024;
 /// Small in tests so eviction can be exercised without huge fixtures.
 #[cfg(test)]
-const MAX_CACHE_WEIGHT_BYTES: u64 = 5_000;
+const MAX_CACHED_SOURCE_BYTES: u64 = 24;
 
 struct CacheEntry {
     content_digest: u64,
     gitignore: Arc<Gitignore>,
-    /// Estimated retained bytes, per [`RETAINED_BYTES_PER_SOURCE_BYTE`].
-    weight: u64,
+    source_len: u64,
     /// Tick from [`Cache::next_tick`] as of the last hit or insert; the LRU eviction key (the
     /// entry with the smallest tick is evicted first).
     last_used: u64,
@@ -55,7 +48,7 @@ struct CacheEntry {
 #[derive(Default)]
 struct Cache {
     entries: HashMap<PathBuf, CacheEntry>,
-    total_weight: u64,
+    total_source_bytes: u64,
     /// Recency counter, only ever accessed while `CACHE`'s mutex is held.
     next_tick: u64,
 }
@@ -84,7 +77,7 @@ impl Cache {
         path: PathBuf,
         content_digest: u64,
         gitignore: Arc<Gitignore>,
-        weight: u64,
+        source_len: u64,
     ) {
         let last_used = self.next_tick();
         if let Some(previous) = self.entries.insert(
@@ -92,47 +85,39 @@ impl Cache {
             CacheEntry {
                 content_digest,
                 gitignore,
-                weight,
+                source_len,
                 last_used,
             },
         ) {
-            self.total_weight -= previous.weight;
+            self.total_source_bytes -= previous.source_len;
         }
-        self.total_weight += weight;
+        self.total_source_bytes += source_len;
         self.evict_if_over_budget();
     }
 
     /// Evicts least-recently-used entries until the cache is back under
-    /// [`MAX_CACHE_WEIGHT_BYTES`].
+    /// [`MAX_CACHED_SOURCE_BYTES`].
     fn evict_if_over_budget(&mut self) {
-        if self.total_weight <= MAX_CACHE_WEIGHT_BYTES {
+        if self.total_source_bytes <= MAX_CACHED_SOURCE_BYTES {
             return;
         }
         let mut by_last_used: Vec<(PathBuf, u64, u64)> = self
             .entries
             .iter()
-            .map(|(path, entry)| (path.clone(), entry.last_used, entry.weight))
+            .map(|(path, entry)| (path.clone(), entry.last_used, entry.source_len))
             .collect();
         by_last_used.sort_by_key(|(_, last_used, _)| *last_used);
-        for (path, _, weight) in by_last_used {
-            if self.total_weight <= MAX_CACHE_WEIGHT_BYTES {
+        for (path, _, source_len) in by_last_used {
+            if self.total_source_bytes <= MAX_CACHED_SOURCE_BYTES {
                 break;
             }
             self.entries.remove(&path);
-            self.total_weight -= weight;
+            self.total_source_bytes -= source_len;
         }
     }
 }
 
 static CACHE: LazyLock<Mutex<Cache>> = LazyLock::new(|| Mutex::new(Cache::default()));
-
-/// `parking_lot::Mutex` doesn't poison on a panic while held, so a panic elsewhere mid-update
-/// can't permanently disable every subsequent traversal: the next lookup just sees whatever
-/// (possibly inconsistent, best-effort) state was left behind instead of every later call
-/// failing.
-fn lock_cache() -> parking_lot::MutexGuard<'static, Cache> {
-    CACHE.lock()
-}
 
 fn content_digest(content: &[u8]) -> u64 {
     let mut hasher = DefaultHasher::new();
@@ -158,7 +143,7 @@ pub(crate) fn get_or_parse(gitignore_path: &Path) -> Arc<Gitignore> {
     };
     let content_digest = content_digest(&content);
 
-    if let Some(gitignore) = lock_cache().lookup(gitignore_path, content_digest) {
+    if let Some(gitignore) = CACHE.lock().lookup(gitignore_path, content_digest) {
         return gitignore;
     }
 
@@ -174,22 +159,22 @@ pub(crate) fn get_or_parse(gitignore_path: &Path) -> Arc<Gitignore> {
         return Arc::new(gitignore);
     }
     let gitignore = Arc::new(gitignore);
-    let weight = content.len() as u64 * RETAINED_BYTES_PER_SOURCE_BYTE;
+    let source_len = content.len() as u64;
 
-    lock_cache().insert(
+    CACHE.lock().insert(
         gitignore_path.to_path_buf(),
         content_digest,
         gitignore.clone(),
-        weight,
+        source_len,
     );
     gitignore
 }
 
 #[cfg(test)]
 pub(crate) fn clear_for_test() {
-    let mut cache = lock_cache();
+    let mut cache = CACHE.lock();
     cache.entries.clear();
-    cache.total_weight = 0;
+    cache.total_source_bytes = 0;
 }
 
 #[cfg(test)]

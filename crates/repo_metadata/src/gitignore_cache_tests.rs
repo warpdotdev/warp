@@ -125,9 +125,8 @@ fn evicts_least_recently_used_entry_over_capacity() {
     super::clear_for_test();
     let temp_dir = tempfile::tempdir().unwrap();
 
-    // Each file is 8 bytes ("target/\n"), so under the test budget of 5,000 estimated bytes
-    // (`content.len() * 200`), three fit (4,800) but a fourth does not (6,400) and forces an
-    // eviction.
+    // Each file is 8 bytes ("target/\n"), so under the test budget of 24 source bytes, three
+    // files fit (24) but a fourth does not (32) and forces an eviction.
     let paths: Vec<_> = (0..3)
         .map(|i| {
             let path = temp_dir.path().join(format!("gitignore_{i}"));
