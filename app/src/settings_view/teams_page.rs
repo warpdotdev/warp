@@ -36,7 +36,7 @@ use super::SettingsSection;
 use super::admin_actions::AdminActions;
 use super::settings_page::{
     MatchData, PageType, SettingsPageMeta, SettingsPageViewHandle, SettingsWidget,
-    render_customer_type_badge, render_separator, render_sub_header,
+    render_cta_banner, render_customer_type_badge, render_separator, render_sub_header,
 };
 use super::tab_menu::Tabs;
 use super::transfer_ownership_confirmation_modal::{
@@ -85,6 +85,14 @@ const TEAM_MEMBERS_HEADER_POSITION_ID: &str = "team_settings:team_members_header
 const TEAM_NAME_EDITOR_PLACEHOLDER_TEXT: &str = "Team name";
 const CREATE_TEAM_BUTTON_LEFT_PADDING: f32 = 10.;
 const CREATE_TEAM_DESCRIPTION: &str = "When you create a team, you can collaborate on agent-driven development by sharing cloud agent runs, environments, automations, and artifacts. You can also create a shared knowledge store for teammates and agents alike.";
+
+// Teamless page copy
+const CREATE_OR_JOIN_TEAM_HEADER: &str = "Or, join an existing team within your company";
+const JOIN_TEAM_HEADER: &str = "Join an existing team within your company";
+const NO_TEAMS_TO_JOIN_DESCRIPTION: &str =
+    "You have no available teams to join — contact an admin to add you to a team.";
+const ADMIN_PANEL_CTA_LINK_TEXT: &str = "Visit the admin panel";
+const ADMIN_PANEL_CTA_TRAILING_COPY: &str = "to manage teams.";
 
 // Styling for team management page
 const LEAVE_TEAM_BUTTON_LABEL: &str = "Leave team";
@@ -374,6 +382,33 @@ enum GrowTeamWarningCta {
     None,
 }
 
+/// Whether the teamless viewer has a team available to join. Team discovery
+/// resolves asynchronously, so `Pending` is kept distinct from `Empty` to
+/// avoid flashing the "no teams to join" state while the fetch is in flight.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+enum JoinableTeams {
+    Pending,
+    Empty,
+    Available,
+}
+
+/// What the teamless Teams page renders. Native workspaces manage team
+/// membership from the admin panel, so the create-team UI is replaced by an
+/// admin CTA, the join UI, or an empty state.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+enum TeamlessContent {
+    /// Create-team UI, plus the discoverable-teams list when `join_teams`.
+    CreateTeam { join_teams: bool },
+    /// Admin-panel CTA banner, plus the discoverable-teams list when `join_teams`.
+    AdminPanelCta { join_teams: bool },
+    /// Discoverable-teams list on its own.
+    JoinTeams,
+    /// Nothing to create and nothing to join.
+    NoTeamsToJoin,
+    /// Team discovery hasn't resolved yet.
+    PendingTeamDiscovery,
+}
+
 /// The order of the ItemState enum values determines the ordering of the members and
 /// invites list in the team management page (see `impl Ord for Item`` below).
 #[derive(Clone, PartialOrd, PartialEq, Eq, Ord)]
@@ -477,6 +512,8 @@ pub struct TeamsPageView {
     transfer_ownership_modal_state: ModalViewState<Modal<TransferOwnershipConfirmationModal>>,
     clipped_scroll_state: ClippedScrollStateHandle,
     discoverable_teams_states: Vec<DiscoverableTeamState>,
+    /// Whether a team discovery fetch has resolved, successfully or not.
+    discoverable_teams_fetched: bool,
     rename_team_editor: ViewHandle<ClickableTextInput>,
     checkbox_value: bool,
     member_actions_menu: ViewHandle<Menu<TeamsPageAction>>,
@@ -654,7 +691,10 @@ impl View for TeamsPageView {
     }
 
     fn on_focus(&mut self, focus_ctx: &FocusContext, ctx: &mut ViewContext<Self>) {
-        if focus_ctx.is_self_focused() && !self.user_workspaces.as_ref(ctx).has_teams() {
+        if focus_ctx.is_self_focused()
+            && !self.user_workspaces.as_ref(ctx).has_teams()
+            && self.renders_create_team_ui(ctx)
+        {
             ctx.focus(&self.create_team_editor);
             ctx.notify();
         }
@@ -866,6 +906,7 @@ impl TeamsPageView {
             pending_team_action_confirmation: None,
             transfer_ownership_modal_state: ModalViewState::new(transfer_ownership_modal),
             discoverable_teams_states: Vec::new(),
+            discoverable_teams_fetched: false,
             rename_team_editor,
             checkbox_value: true,
             member_actions_menu,
@@ -1029,9 +1070,13 @@ impl TeamsPageView {
                     .iter()
                     .map(|team| DiscoverableTeamState::new(team.clone()))
                     .collect();
+                self.discoverable_teams_fetched = true;
                 ctx.notify();
             }
             UserWorkspacesEvent::FetchDiscoverableTeamsRejected(e) => {
+                // A failed fetch still resolves the teamless page out of its
+                // pending state; there is nothing to join as far as we know.
+                self.discoverable_teams_fetched = true;
                 // Don't show toast, only log to sentry
                 report_error!(e);
             }
@@ -1724,9 +1769,34 @@ impl TeamsPageView {
                 ctx.focus(&self.approve_domains_block_editor);
             }
             Some(_) => ctx.focus(&self.email_invites_block_editor),
-            None => ctx.focus(&self.create_team_editor),
+            None => {
+                if self.renders_create_team_ui(ctx) {
+                    ctx.focus(&self.create_team_editor);
+                }
+            }
         }
         ctx.notify();
+    }
+
+    /// Whether the teamless page renders the create-team editor; native
+    /// workspace users create teams from the admin panel instead, so there is
+    /// no editor to focus.
+    fn renders_create_team_ui(&self, ctx: &AppContext) -> bool {
+        !self
+            .user_workspaces
+            .as_ref(ctx)
+            .current_workspace()
+            .is_some_and(Workspace::is_native_workspaces_enabled)
+    }
+
+    fn joinable_teams(&self) -> JoinableTeams {
+        if !self.discoverable_teams_fetched {
+            JoinableTeams::Pending
+        } else if self.discoverable_teams_states.is_empty() {
+            JoinableTeams::Empty
+        } else {
+            JoinableTeams::Available
+        }
     }
 
     fn team_to_item_list(
@@ -4015,20 +4085,117 @@ impl TeamsWidget {
             .finish()
     }
 
-    fn render_create_team_page_with_banner(
+    /// Maps the teamless viewer's workspace context onto the page's content.
+    /// The five states are enumerated in one place so they can be unit tested
+    /// without rendering.
+    fn teamless_content(
+        native_workspaces: bool,
+        is_workspace_admin: bool,
+        joinable_teams: JoinableTeams,
+    ) -> TeamlessContent {
+        let join_teams = joinable_teams == JoinableTeams::Available;
+        if !native_workspaces {
+            return TeamlessContent::CreateTeam { join_teams };
+        }
+        if is_workspace_admin {
+            return TeamlessContent::AdminPanelCta { join_teams };
+        }
+        match joinable_teams {
+            JoinableTeams::Available => TeamlessContent::JoinTeams,
+            JoinableTeams::Empty => TeamlessContent::NoTeamsToJoin,
+            JoinableTeams::Pending => TeamlessContent::PendingTeamDiscovery,
+        }
+    }
+
+    fn render_teamless_page(
         &self,
         view: &TeamsPageView,
         appearance: &Appearance,
         app: &AppContext,
     ) -> Box<dyn Element> {
-        let mut column = Flex::column();
+        let workspace = view.user_workspaces.as_ref(app).current_workspace();
+        let is_workspace_admin = workspace
+            .zip(view.auth_state.user_email())
+            .is_some_and(|(workspace, email)| workspace.is_workspace_admin(&email));
+        let content = Self::teamless_content(
+            workspace.is_some_and(Workspace::is_native_workspaces_enabled),
+            is_workspace_admin,
+            view.joinable_teams(),
+        );
 
-        column.add_child(self.render_create_team_page(view, appearance, app));
+        let mut page = Flex::column();
+        page.add_child(render_sub_header(appearance, "Teams".to_string(), None));
 
-        column.finish()
+        match content {
+            TeamlessContent::CreateTeam { join_teams } => {
+                page.add_child(self.render_create_team_section(view, appearance, app));
+                if join_teams {
+                    page.add_child(render_separator(appearance));
+                    page.add_child(self.render_join_teams_section(
+                        view,
+                        appearance,
+                        CREATE_OR_JOIN_TEAM_HEADER,
+                    ));
+                }
+            }
+            TeamlessContent::AdminPanelCta { join_teams } => {
+                page.add_child(
+                    Container::new(render_cta_banner(
+                        Icon::Users,
+                        ADMIN_PANEL_CTA_LINK_TEXT,
+                        ADMIN_PANEL_CTA_TRAILING_COPY,
+                        TeamsPageAction::OpenWorkspaceAdminPanel,
+                        appearance,
+                    ))
+                    .with_padding_top(6.)
+                    .with_padding_bottom(12.)
+                    .finish(),
+                );
+                if join_teams {
+                    page.add_child(render_separator(appearance));
+                    page.add_child(self.render_join_teams_section(
+                        view,
+                        appearance,
+                        JOIN_TEAM_HEADER,
+                    ));
+                }
+            }
+            TeamlessContent::JoinTeams => {
+                page.add_child(self.render_join_teams_section(view, appearance, JOIN_TEAM_HEADER));
+            }
+            TeamlessContent::NoTeamsToJoin => {
+                page.add_child(
+                    Container::new(
+                        self.render_description(
+                            NO_TEAMS_TO_JOIN_DESCRIPTION.to_string(),
+                            appearance,
+                        ),
+                    )
+                    .with_padding_top(6.)
+                    .finish(),
+                );
+            }
+            TeamlessContent::PendingTeamDiscovery => {}
+        }
+
+        page.finish()
     }
 
-    fn render_create_team_page(
+    /// The discoverable-teams header and list. The header is passed in because
+    /// "Or, join ..." only reads correctly below the create-team UI.
+    fn render_join_teams_section(
+        &self,
+        view: &TeamsPageView,
+        appearance: &Appearance,
+        header: &str,
+    ) -> Box<dyn Element> {
+        Flex::column()
+            .with_child(self.render_sub_header_with_subtext_color(appearance, header.to_string()))
+            .with_child(self.render_team_discovery_section(view, appearance))
+            .finish()
+    }
+
+    fn render_create_team_section(
         &self,
         view: &TeamsPageView,
         appearance: &Appearance,
@@ -4036,8 +4203,7 @@ impl TeamsWidget {
     ) -> Box<dyn Element> {
         let mut page = Flex::column();
 
-        // Title, subtitle, and description
-        page.add_child(render_sub_header(appearance, "Teams".to_string(), None));
+        // Subtitle and description
         page.add_child(
             self.render_sub_header_with_subtext_color(appearance, "Create a team".to_string()),
         );
@@ -4093,18 +4259,6 @@ impl TeamsWidget {
                 .with_padding_bottom(12.)
                 .finish(),
         );
-
-        if !view.discoverable_teams_states.is_empty() {
-            // Separator and subtitle
-            page.add_child(render_separator(appearance));
-            page.add_child(self.render_sub_header_with_subtext_color(
-                appearance,
-                "Or, join an existing team within your company".to_string(),
-            ));
-
-            // Team discovery
-            page.add_child(self.render_team_discovery_section(view, appearance));
-        }
 
         page.finish()
     }
@@ -4436,7 +4590,7 @@ impl SettingsWidget for TeamsWidget {
                 Some((team, workspace)) => {
                     self.render_team_management_page(team, workspace, view, appearance, app)
                 }
-                None => self.render_create_team_page_with_banner(view, appearance, app),
+                None => self.render_teamless_page(view, appearance, app),
             }
         } else {
             appearance

@@ -231,6 +231,52 @@ fn current_user_gets_no_actions_against_their_own_row_as_workspace_admin() {
 }
 
 #[test]
+fn non_native_workspace_keeps_create_team_ui() {
+    assert_eq!(
+        TeamsWidget::teamless_content(false, false, JoinableTeams::Available),
+        TeamlessContent::CreateTeam { join_teams: true }
+    );
+    assert_eq!(
+        TeamsWidget::teamless_content(false, true, JoinableTeams::Empty),
+        TeamlessContent::CreateTeam { join_teams: false }
+    );
+}
+
+#[test]
+fn native_workspace_admin_gets_admin_panel_cta() {
+    assert_eq!(
+        TeamsWidget::teamless_content(true, true, JoinableTeams::Available),
+        TeamlessContent::AdminPanelCta { join_teams: true }
+    );
+    // An admin with nothing to join sees only the admin-panel CTA.
+    assert_eq!(
+        TeamsWidget::teamless_content(true, true, JoinableTeams::Empty),
+        TeamlessContent::AdminPanelCta { join_teams: false }
+    );
+}
+
+#[test]
+fn native_workspace_member_gets_join_or_empty_state() {
+    assert_eq!(
+        TeamsWidget::teamless_content(true, false, JoinableTeams::Available),
+        TeamlessContent::JoinTeams
+    );
+    assert_eq!(
+        TeamsWidget::teamless_content(true, false, JoinableTeams::Empty),
+        TeamlessContent::NoTeamsToJoin
+    );
+}
+
+#[test]
+fn native_workspace_member_waits_for_team_discovery() {
+    // Avoids flashing the empty state before the fetch resolves.
+    assert_eq!(
+        TeamsWidget::teamless_content(true, false, JoinableTeams::Pending),
+        TeamlessContent::PendingTeamDiscovery
+    );
+}
+
+#[test]
 fn workspace_admin_does_not_get_pending_invite_cancellation() {
     let mut team = team_with_members(vec![member(MEMBER_EMAIL, MembershipRole::User)], true);
     team.pending_email_invites.push(EmailInvite {
