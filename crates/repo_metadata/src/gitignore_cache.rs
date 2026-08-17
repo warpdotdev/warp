@@ -30,7 +30,6 @@ use std::collections::HashMap;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, LazyLock, Mutex};
 
 use ignore::gitignore::Gitignore;
@@ -63,8 +62,9 @@ struct CacheEntry {
     gitignore: Arc<Gitignore>,
     /// Estimated retained bytes, per [`RETAINED_BYTES_PER_SOURCE_BYTE`].
     weight: u64,
-    /// Tick from [`next_tick`] as of the last hit or insert. The entry with
-    /// the smallest tick is evicted first once the cache is over budget.
+    /// Tick from [`Cache::next_tick`] as of the last hit or insert. The
+    /// entry with the smallest tick is evicted first once the cache is over
+    /// budget.
     last_used: u64,
 }
 
@@ -72,14 +72,80 @@ struct CacheEntry {
 struct Cache {
     entries: HashMap<PathBuf, CacheEntry>,
     total_weight: u64,
+    /// Monotonically increasing recency counter. Only ever read or written
+    /// while `CACHE`'s mutex is held, so a plain counter (rather than an
+    /// atomic) is enough.
+    next_tick: u64,
+}
+
+impl Cache {
+    fn next_tick(&mut self) -> u64 {
+        let tick = self.next_tick;
+        self.next_tick += 1;
+        tick
+    }
+
+    /// Returns the cached matcher for `path` if it's still fresh (its
+    /// content digest matches `content_digest`), bumping its recency.
+    fn lookup(&mut self, path: &Path, content_digest: u64) -> Option<Arc<Gitignore>> {
+        if self.entries.get(path)?.content_digest != content_digest {
+            return None;
+        }
+        let tick = self.next_tick();
+        let entry = self.entries.get_mut(path)?;
+        entry.last_used = tick;
+        Some(entry.gitignore.clone())
+    }
+
+    /// Inserts a freshly parsed matcher for `path`, replacing any previous
+    /// entry, then evicts least-recently-used entries until back under
+    /// [`MAX_CACHE_WEIGHT_BYTES`].
+    fn insert(
+        &mut self,
+        path: PathBuf,
+        content_digest: u64,
+        gitignore: Arc<Gitignore>,
+        weight: u64,
+    ) {
+        let last_used = self.next_tick();
+        if let Some(previous) = self.entries.insert(
+            path,
+            CacheEntry {
+                content_digest,
+                gitignore,
+                weight,
+                last_used,
+            },
+        ) {
+            self.total_weight -= previous.weight;
+        }
+        self.total_weight += weight;
+        self.evict_if_over_budget();
+    }
+
+    /// Evicts least-recently-used entries until the cache is back under
+    /// [`MAX_CACHE_WEIGHT_BYTES`].
+    fn evict_if_over_budget(&mut self) {
+        if self.total_weight <= MAX_CACHE_WEIGHT_BYTES {
+            return;
+        }
+        let mut by_last_used: Vec<(PathBuf, u64, u64)> = self
+            .entries
+            .iter()
+            .map(|(path, entry)| (path.clone(), entry.last_used, entry.weight))
+            .collect();
+        by_last_used.sort_by_key(|(_, last_used, _)| *last_used);
+        for (path, _, weight) in by_last_used {
+            if self.total_weight <= MAX_CACHE_WEIGHT_BYTES {
+                break;
+            }
+            self.entries.remove(&path);
+            self.total_weight -= weight;
+        }
+    }
 }
 
 static CACHE: LazyLock<Mutex<Cache>> = LazyLock::new(|| Mutex::new(Cache::default()));
-static NEXT_TICK: AtomicU64 = AtomicU64::new(0);
-
-fn next_tick() -> u64 {
-    NEXT_TICK.fetch_add(1, Ordering::Relaxed)
-}
 
 /// A panic elsewhere while the lock is held must not permanently disable
 /// every subsequent traversal; the cache is best-effort, so recovering the
@@ -116,14 +182,8 @@ pub(crate) fn get_or_parse(gitignore_path: &Path) -> Arc<Gitignore> {
     };
     let content_digest = content_digest(&content);
 
-    {
-        let mut cache = lock_cache();
-        if let Some(entry) = cache.entries.get_mut(gitignore_path)
-            && entry.content_digest == content_digest
-        {
-            entry.last_used = next_tick();
-            return entry.gitignore.clone();
-        }
+    if let Some(gitignore) = lock_cache().lookup(gitignore_path, content_digest) {
+        return gitignore;
     }
 
     // Parse outside the lock (`Gitignore::new` does its own blocking file
@@ -142,42 +202,13 @@ pub(crate) fn get_or_parse(gitignore_path: &Path) -> Arc<Gitignore> {
     let gitignore = Arc::new(gitignore);
     let weight = content.len() as u64 * RETAINED_BYTES_PER_SOURCE_BYTE;
 
-    let mut cache = lock_cache();
-    if let Some(previous) = cache.entries.insert(
+    lock_cache().insert(
         gitignore_path.to_path_buf(),
-        CacheEntry {
-            content_digest,
-            gitignore: gitignore.clone(),
-            weight,
-            last_used: next_tick(),
-        },
-    ) {
-        cache.total_weight -= previous.weight;
-    }
-    cache.total_weight += weight;
-    evict_if_over_budget(&mut cache);
+        content_digest,
+        gitignore.clone(),
+        weight,
+    );
     gitignore
-}
-
-/// Evicts least-recently-used entries until the cache is back under
-/// [`MAX_CACHE_WEIGHT_BYTES`].
-fn evict_if_over_budget(cache: &mut Cache) {
-    if cache.total_weight <= MAX_CACHE_WEIGHT_BYTES {
-        return;
-    }
-    let mut by_last_used: Vec<(PathBuf, u64, u64)> = cache
-        .entries
-        .iter()
-        .map(|(path, entry)| (path.clone(), entry.last_used, entry.weight))
-        .collect();
-    by_last_used.sort_by_key(|(_, last_used, _)| *last_used);
-    for (path, _, weight) in by_last_used {
-        if cache.total_weight <= MAX_CACHE_WEIGHT_BYTES {
-            break;
-        }
-        cache.entries.remove(&path);
-        cache.total_weight -= weight;
-    }
 }
 
 #[cfg(test)]
