@@ -8,6 +8,8 @@ This work needs only a technical spec. The user workflow is already defined, and
 
 The implementation uses `warpdotdev/warp` as its primary repository. Warp owns the canonical skill copy and the shared distribution path for three of the four requested surfaces. `warp-server` remains authoritative for the Factory file schema. The Claude Code and Codex plugin repositories contain downstream mirrors.
 
+The schema-ownership, drift, trigger-filter validation, and follow-up design in this document is superseded by [`warpdotdev/warp-server/specs/REMOTE-2868/TECH.md`](https://github.com/warpdotdev/warp-server/blob/develop/specs/REMOTE-2868/TECH.md). REMOTE-2868 moves schema generation and parser-backed validation to `warp-server` while retaining this skill's permissive offline fallback. This document remains authoritative for the skill trigger, authoring workflow, canonical paths, symlink policy, and boundary against `factory-mcp`.
+
 ## Context
 The Factory file parser accepts a versioned, path-derived tree:
 
@@ -152,7 +154,9 @@ The openness is easy to mistake for an unfinished edge and quietly undo, so it i
 
 Two rules are deliberately not checked, because the server accepts them and a check would produce false failures: a `runner` name may resolve to an existing team runner the tree does not declare, and every server-resolved value (model IDs, environment IDs, secret names, MCP IDs) needs state the validator does not have. `SKILL.md` and `references/validation.md` both state this boundary so the agent does not overstate what a clean run proves.
 
-The trigger filter catalogue is the one catalogue still enforced, and it is the highest-value check here: the parser accepts any mapping as a `filter` and defers key validation to apply time, so a wrong filter key currently survives review. It is kept drift-safe by scoping it, because every filter rule fires only when both the provider and the event match values these schemas know. A newer provider, or a newer event on a known provider, matches no rule and leaves its filter unconstrained, so the check cannot reject a tree built for a newer server. The residual gap is a new filter key added to an existing provider/event pair, which the server would still catch at apply time. The `warp-server` fixture at `logic/factoryfile/testdata/valid/automations/triage/automation.md` contains exactly this defect today: it uses `teams`, `projects`, `states`, `issues`, `baseBranches`, `channels`, `users`, and `itemUsers`, none of which `triggers.CanonicalizeFilter` accepts. That fixture should be corrected separately.
+The trigger filter catalogue is the one catalogue still enforced, and it is the highest-value check here: the parser accepts any mapping as a `filter` and defers key validation to apply time, so a wrong filter key currently survives review. It is kept drift-safe by scoping it, because every filter rule fires only when both the provider and the event match values these schemas know. A newer provider, or a newer event on a known provider, matches no rule and leaves its filter unconstrained, so the check cannot reject a tree built for a newer server. The residual gap is a new filter key added to an existing provider/event pair, which the server would still catch at apply time.
+
+Correction: `teams`, `projects`, `states`, `issues`, `baseBranches`, `channels`, `users`, and `itemUsers` in `logic/factoryfile/testdata/valid/automations/triage/automation.md` are supported authoring aliases, not a defective fixture. Apply rewrites the GitHub aliases locally and resolves the Linear and Slack name aliases through provider snapshots before `triggers.CanonicalizeFilter`. The validator must not pass the authored keys directly to canonical validation. REMOTE-2868 defines the key-by-key policy.
 
 A parser-backed CLI or an API that validates an arbitrary source tree remains a follow-up. Do not add either endpoint in this work item.
 
@@ -303,7 +307,7 @@ No visual recording is required. This feature changes agent context and generate
 
 ## Findings worth acting on separately
 - The `alias` rule is not what the bug-bash notes assumed. `factoryalias.Normalize` accepts Unicode letters, digits, spaces, `-`, `_`, and `.` up to 60 runes, and preserves case; uniqueness folds case in the comparison key only. There is no lowercase or hyphen-separated requirement. The schemas and reference encode the implemented rule. If the intended product rule really is lowercase-and-hyphenated, that is a server change, not a schema change.
-- `logic/factoryfile/testdata/valid/automations/triage/automation.md` uses filter keys the apply step rejects. It passes today only because `ParseTree` does not validate filter keys. Worth fixing in `warp-server` so the fixture stops teaching the wrong spelling.
+- `logic/factoryfile/testdata/valid/automations/triage/automation.md` uses supported authoring aliases. The earlier claim that apply rejects them was incorrect; apply rewrites or resolves them before canonical validation.
 - Filter keys being parser-accepted and apply-rejected is the underlying gap. Validating filters during parse, or at least during plan, would move the error to where the author can see it.
 
 ## Risks and mitigations
