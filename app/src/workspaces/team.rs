@@ -73,6 +73,20 @@ impl TeamDeleteDisabledReason {
     }
 }
 
+/// Governs which workspace members can discover and join a team. Orthogonal to
+/// workspace-level discoverability (`WorkspaceSettings::is_discoverable`).
+#[derive(Clone, Copy, Eq, PartialEq, Debug, Serialize, Deserialize)]
+pub enum TeamVisibility {
+    Open,
+    Private,
+    Hidden,
+    /// The team's visibility hasn't been loaded from the server yet (e.g. a
+    /// team hydrated from the local cache before the authoritative value
+    /// arrives). Callers must render a non-committal state for this rather
+    /// than assuming `Open` or a specific non-open state.
+    Unknown,
+}
+
 #[derive(Clone, Debug)]
 pub struct Team {
     pub uid: ServerId,
@@ -90,6 +104,7 @@ pub struct Team {
     /// If the team is eligible for discovery, then show toggle for setting discoverability to the team's admin
     pub is_eligible_for_discovery: bool,
     pub has_billing_history: bool,
+    pub visibility: TeamVisibility,
 }
 
 impl Team {
@@ -113,6 +128,10 @@ impl Team {
             settings: settings.unwrap_or_default(),
             is_eligible_for_discovery: false,
             has_billing_history: false,
+            // Visibility is not persisted to the local cache. Default to `Unknown`
+            // rather than `Open` so a cached private/hidden team never briefly shows
+            // the invite-link toggle before the authoritative value arrives.
+            visibility: TeamVisibility::Unknown,
         }
     }
 

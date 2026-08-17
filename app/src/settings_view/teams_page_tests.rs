@@ -1,5 +1,5 @@
 use super::*;
-use crate::workspaces::team::TeamMember;
+use crate::workspaces::team::{TeamMember, TeamVisibility};
 use crate::workspaces::workspace::{
     EmailInvite, MultiAdminPolicy, NativeWorkspacesPolicy, Tier, WorkspaceMember,
     WorkspaceMemberUsageInfo,
@@ -35,6 +35,7 @@ fn team_with_members(members: Vec<TeamMember>, multi_admin_enabled: bool) -> Tea
         settings: Default::default(),
         is_eligible_for_discovery: false,
         has_billing_history: false,
+        visibility: TeamVisibility::Open,
     }
 }
 
@@ -244,4 +245,88 @@ fn workspace_admin_does_not_get_pending_invite_cancellation() {
     // Cancelling a pending invite remains gated on team-admin permissions;
     // it's out of scope for the workspace-admin override.
     assert!(action_labels(&items, "invitee@example.com").is_empty());
+}
+
+/// Covers every `(visibility, has_admin_permissions)` combination the by-link
+/// renderer branches on. `Unknown` -- a team hydrated from the local cache
+/// before the server's authoritative visibility arrives -- must render
+/// non-committally: never show the toggle (which could be wrong for a
+/// private/hidden team) and never claim links are disabled (which could be
+/// wrong for an open team).
+#[test]
+fn invite_by_link_presentation_covers_every_visibility_and_admin_combination() {
+    let cases = [
+        (
+            TeamVisibility::Open,
+            true,
+            InviteByLinkPresentation {
+                admin_subtext: Some(INVITE_LINK_TOGGLE_INSTRUCTIONS),
+                invite_links_available: true,
+            },
+        ),
+        (
+            TeamVisibility::Open,
+            false,
+            InviteByLinkPresentation {
+                admin_subtext: None,
+                invite_links_available: true,
+            },
+        ),
+        (
+            TeamVisibility::Private,
+            true,
+            InviteByLinkPresentation {
+                admin_subtext: Some(INVITE_LINK_DISABLED_FOR_NON_OPEN_TEAM_INSTRUCTIONS),
+                invite_links_available: false,
+            },
+        ),
+        (
+            TeamVisibility::Private,
+            false,
+            InviteByLinkPresentation {
+                admin_subtext: None,
+                invite_links_available: false,
+            },
+        ),
+        (
+            TeamVisibility::Hidden,
+            true,
+            InviteByLinkPresentation {
+                admin_subtext: Some(INVITE_LINK_DISABLED_FOR_NON_OPEN_TEAM_INSTRUCTIONS),
+                invite_links_available: false,
+            },
+        ),
+        (
+            TeamVisibility::Hidden,
+            false,
+            InviteByLinkPresentation {
+                admin_subtext: None,
+                invite_links_available: false,
+            },
+        ),
+        (
+            TeamVisibility::Unknown,
+            true,
+            InviteByLinkPresentation {
+                admin_subtext: None,
+                invite_links_available: false,
+            },
+        ),
+        (
+            TeamVisibility::Unknown,
+            false,
+            InviteByLinkPresentation {
+                admin_subtext: None,
+                invite_links_available: false,
+            },
+        ),
+    ];
+
+    for (visibility, has_admin_permissions, expected) in cases {
+        assert_eq!(
+            invite_by_link_presentation(visibility, has_admin_permissions),
+            expected,
+            "visibility={visibility:?} has_admin_permissions={has_admin_permissions}"
+        );
+    }
 }

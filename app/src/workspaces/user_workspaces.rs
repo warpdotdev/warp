@@ -12,6 +12,8 @@ use warpui::{
     WindowId,
 };
 
+#[cfg(test)]
+use super::team::TeamVisibility;
 use super::team::{DiscoverableTeam, MembershipRole, Team};
 #[cfg(test)]
 use super::workspace::WorkspaceMemberUsageInfo;
@@ -1908,6 +1910,7 @@ impl UserWorkspaces {
                 stripe_customer_id: None,
                 is_eligible_for_discovery: false,
                 has_billing_history: false,
+                visibility: TeamVisibility::Open,
             }],
             members: vec![WorkspaceMember {
                 uid: owner_uid,

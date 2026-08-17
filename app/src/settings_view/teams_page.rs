@@ -73,7 +73,9 @@ use crate::view_components::{
 };
 use crate::word_block_editor::{ChipEditorState, WordBlockEditorView, WordBlockEditorViewEvent};
 use crate::workspace::WorkspaceAction;
-use crate::workspaces::team::{DiscoverableTeam, MembershipRole, Team, TeamDeleteDisabledReason};
+use crate::workspaces::team::{
+    DiscoverableTeam, MembershipRole, Team, TeamDeleteDisabledReason, TeamVisibility,
+};
 use crate::workspaces::update_manager::{TeamUpdateManager, TeamUpdateManagerEvent};
 use crate::workspaces::user_workspaces::{UserWorkspaces, UserWorkspacesEvent};
 use crate::workspaces::workspace::{
@@ -111,6 +113,8 @@ const INVALID_DOMAINS_INSTRUCTIONS: &str =
     "Some of the provided domains are invalid, or have already been added.";
 
 const INVITE_LINK_TOGGLE_INSTRUCTIONS: &str = "As an admin, you can choose whether to enable or disable the ability for team members to invite others by invitation link.";
+const INVITE_LINK_DISABLED_FOR_NON_OPEN_TEAM_INSTRUCTIONS: &str =
+    "Invite links are disabled for private and hidden teams.";
 const INVITE_LINK_DOMAIN_RESTRICTIONS_INSTRUCTIONS: &str = "Restrict by domain — only allow users with emails at specific domains to join your team through the invite link.";
 
 const INVITE_BY_EMAIL_EXPIRY_INSTRUCTIONS: &str = "Email invitations are valid for 7 days.";
@@ -136,6 +140,43 @@ fn owner_state_chip_text_color(theme: &themes::theme::WarpTheme) -> ColorU {
         .background()
         .blend(&theme.accent().with_opacity(OWNER_STATE_CHIP_ACCENT_OPACITY));
     theme.main_text_color(chip_background).into_solid()
+}
+
+/// The "By link" subsection's presentation for a team's visibility and the
+/// viewer's admin status, independent of the actual invite-link on/off state.
+/// Extracted from `render_invite_by_link_section` so it's unit-testable
+/// without building a full `Element` tree.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct InviteByLinkPresentation {
+    /// Explanatory text shown only to admins; `None` means nothing renders
+    /// (non-admin viewer, or a team whose visibility isn't known yet).
+    admin_subtext: Option<&'static str>,
+    /// Whether the toggle and the copy-link / reset-link / domain-restriction
+    /// rows should render at all. Only an open team can have a live invite
+    /// link; `Unknown` (visibility not yet loaded, e.g. a team hydrated from
+    /// the local cache) is treated the same as a non-open team so the toggle
+    /// never flashes on for a team that may actually be private or hidden.
+    invite_links_available: bool,
+}
+
+fn invite_by_link_presentation(
+    visibility: TeamVisibility,
+    has_admin_permissions: bool,
+) -> InviteByLinkPresentation {
+    let admin_subtext = has_admin_permissions
+        .then_some(match visibility {
+            TeamVisibility::Open => Some(INVITE_LINK_TOGGLE_INSTRUCTIONS),
+            TeamVisibility::Private | TeamVisibility::Hidden => {
+                Some(INVITE_LINK_DISABLED_FOR_NON_OPEN_TEAM_INSTRUCTIONS)
+            }
+            TeamVisibility::Unknown => None,
+        })
+        .flatten();
+
+    InviteByLinkPresentation {
+        admin_subtext,
+        invite_links_available: visibility == TeamVisibility::Open,
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -2798,15 +2839,20 @@ impl TeamsWidget {
     ) -> Box<dyn Element> {
         let mut section = Flex::column();
 
+        let InviteByLinkPresentation {
+            admin_subtext,
+            invite_links_available,
+        } = invite_by_link_presentation(team.visibility, has_admin_permissions);
+
         // Header + admin-only subtext on the left, toggle on the right. The
         // text is stacked so the toggle centers against the whole block.
         let header = self.render_subsubsection_header("By link".to_owned(), appearance);
-        let text_column = if has_admin_permissions {
+        let text_column = if let Some(admin_subtext) = admin_subtext {
             Flex::column()
                 .with_child(header)
                 .with_child(
                     Container::new(self.render_sub_text(
-                        INVITE_LINK_TOGGLE_INSTRUCTIONS.into(),
+                        admin_subtext.into(),
                         appearance,
                         Some(Coords::uniform(0.).right(48.)),
                     ))
@@ -2824,8 +2870,9 @@ impl TeamsWidget {
             .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
             .with_child(Shrinkable::new(1., text_column).finish());
 
-        // Toggle on the right only renders if user is admin
-        if has_admin_permissions {
+        // Toggle on the right only renders for an admin of an open team; a
+        // non-open (or not-yet-known) team has no invite-link toggle to show.
+        if has_admin_permissions && invite_links_available {
             let team_uid = team.uid;
             let current_state = is_invite_link_enabled;
             let invite_by_link_toggle = appearance
@@ -2846,8 +2893,10 @@ impl TeamsWidget {
         section.add_child(invite_by_link_header_row.finish());
 
         // 3) Invite link + domain restrictions
-        // Only renders if invite by link is enabled
-        if is_invite_link_enabled {
+        // Only renders if invite by link is enabled on an open team. A non-open
+        // team never has a live invite link to show, regardless of the stored
+        // toggle state.
+        if is_invite_link_enabled && invite_links_available {
             section.add_child(self.render_copy_link_row(team, appearance));
 
             // Render invite link reset text if admin user
