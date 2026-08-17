@@ -86,9 +86,7 @@ fn factory_files_bundled_skill_is_always_active_and_scoped_to_authoring() {
     ));
 
     for reference in [
-        "references/schema.md",
         "references/scorers.md",
-        "references/triggers.md",
         "references/examples.md",
         "references/validation.md",
         "scripts/validate_factory_files.py",
@@ -104,104 +102,52 @@ fn factory_files_bundled_skill_is_always_active_and_scoped_to_authoring() {
     }
 }
 
-/// The schemas are the contract the skill tells agents to author against, so
-/// they have to stay parseable and keep the Factory document's shape.
+/// The skill must not carry a copy of the Factory file format.
+///
+/// A bundled copy ships inside a Warp release and goes stale against the
+/// warp-server it is used against. A stale copy does not fail quietly: it
+/// reports fields the server accepts as unknown, and an agent clearing that
+/// diagnostic deletes working configuration. An earlier revision did exactly
+/// that to the Linear and Slack trigger aliases. The format is fetched from
+/// the server now, so nothing here should describe it.
 #[test]
-fn factory_files_schemas_are_parseable_and_keep_the_factory_contract() {
-    let schemas_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../resources/bundled/skills/factory-files/schemas");
-    fn assert_refs_resolve(value: &serde_json::Value, current_name: &str, schemas_dir: &Path) {
-        match value {
-            serde_json::Value::Object(object) => {
-                if let Some(reference) = object.get("$ref").and_then(serde_json::Value::as_str) {
-                    let (name, fragment) = reference.split_once('#').unwrap_or((reference, ""));
-                    let target_name = if name.is_empty() { current_name } else { name };
-                    let raw = std::fs::read_to_string(schemas_dir.join(target_name))
-                        .unwrap_or_else(|error| panic!("read $ref target {target_name}: {error}"));
-                    let target: serde_json::Value = serde_json::from_str(&raw)
-                        .unwrap_or_else(|error| panic!("parse $ref target {target_name}: {error}"));
-                    assert!(
-                        fragment.is_empty() || target.pointer(fragment).is_some(),
-                        "{current_name} contains unresolved $ref {reference}"
-                    );
-                }
-                for child in object.values() {
-                    assert_refs_resolve(child, current_name, schemas_dir);
-                }
+fn factory_files_skill_carries_no_copy_of_the_format() {
+    let skill_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../resources/bundled/skills/factory-files")
+        .canonicalize()
+        .expect("factory-files skill directory");
+
+    let mut schemas = Vec::new();
+    let mut pending = vec![skill_dir.clone()];
+    while let Some(directory) = pending.pop() {
+        for entry in std::fs::read_dir(&directory).expect("read skill directory") {
+            let path = entry.expect("read skill entry").path();
+            if path.is_dir() {
+                pending.push(path);
+            } else if path.to_string_lossy().ends_with(".schema.json") {
+                schemas.push(path);
             }
-            serde_json::Value::Array(values) => {
-                for child in values {
-                    assert_refs_resolve(child, current_name, schemas_dir);
-                }
-            }
-            _ => {}
         }
     }
-
-    for name in [
-        "common.schema.json",
-        "factory.schema.json",
-        "agent.schema.json",
-        "automation.schema.json",
-        "runner.schema.json",
-        "scorer.schema.json",
-    ] {
-        let raw = std::fs::read_to_string(schemas_dir.join(name))
-            .unwrap_or_else(|error| panic!("read {name}: {error}"));
-        let schema: serde_json::Value = serde_json::from_str(&raw)
-            .unwrap_or_else(|error| panic!("{name} should be valid JSON: {error}"));
-        assert_eq!(
-            schema.get("$id").and_then(serde_json::Value::as_str),
-            Some(name),
-            "{name} should use a relative $id so sibling $refs resolve locally"
-        );
-        assert_refs_resolve(&schema, name, &schemas_dir);
-    }
-
-    let factory: serde_json::Value = serde_json::from_str(
-        &std::fs::read_to_string(schemas_dir.join("factory.schema.json")).unwrap(),
-    )
-    .unwrap();
-    let required: Vec<&str> = factory["required"]
-        .as_array()
-        .expect("factory schema declares required fields")
-        .iter()
-        .map(|value| value.as_str().expect("required entries are strings"))
-        .collect();
-    assert_eq!(
-        required,
-        ["schemaVersion", "name", "repositories", "agentDefaults"]
+    assert!(
+        schemas.is_empty(),
+        "the skill has regrown bundled schemas, which go stale against the server \
+         and produce false rejections; fetch the format instead: {schemas:?}"
     );
-    // These schemas ship inside a Warp release and are routinely older than the
-    // warp-server they validate against, so they stay open on purpose: a closed
-    // schema would reject configuration a newer server accepts. Flipping either
-    // assertion to `false` is a regression, not a tightening. See
-    // specs/REMOTE-2727/TECH.md.
-    assert_eq!(
-        factory["additionalProperties"],
-        serde_json::Value::Bool(true)
-    );
-    // Both the current key and the legacy alias stay accepted; the server reads
-    // cloudProviders first and falls back to providers.
-    assert!(factory["properties"].get("cloudProviders").is_some());
-    assert!(factory["properties"].get("providers").is_some());
 
-    let scorer: serde_json::Value = serde_json::from_str(
-        &std::fs::read_to_string(schemas_dir.join("scorer.schema.json")).unwrap(),
-    )
-    .unwrap();
-    assert_eq!(
-        scorer["additionalProperties"],
-        serde_json::Value::Bool(true)
-    );
-    for required in ["agents", "labels", "passingScore", "model"] {
+    let validator = std::fs::read_to_string(skill_dir.join("scripts/validate_factory_files.py"))
+        .expect("read the validator");
+    for banned in ["import yaml", "def load_yaml", "jsonschema"] {
         assert!(
-            scorer["required"].as_array().is_some_and(|fields| {
-                fields.iter().any(|field| field.as_str() == Some(required))
-            }),
-            "scorer schema should require {required}"
+            !validator.contains(banned),
+            "the validator parses the format again ({banned}); it should send bytes \
+             to the server and relay the verdict"
         );
     }
+    assert!(
+        validator.contains("/api/v1/factory-files/validate"),
+        "the validator should reach the server's validation endpoint"
+    );
 }
 
 #[test]

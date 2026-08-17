@@ -33,8 +33,7 @@ finishing. Return exactly one declared label.
   Names are trimmed and must be unique.
 - `enabled` — optional boolean, default true. Use `enabled: false` rather than
   a zero sampling rate to pause scoring.
-- `output` — optional output form. `classification` is the current known form;
-  preserve newer values for forward compatibility.
+- `output` — optional output form. `classification` is the current known form.
 - `labels` — required non-empty list of classifications; the current server
   accepts at most 20. Each label requires a non-empty `value` and a numeric
   `score` from 0 through 1; `description` is optional. Label values are
@@ -46,6 +45,8 @@ finishing. Return exactly one declared label.
 - `model` — required model ID. The server validates availability.
 - `selfImprovement` — optional boolean, default false.
  
-The Markdown body must not be empty. Scorer fields are forward-compatible:
-preserve unknown fields rather than deleting them to satisfy an older bundled
-schema.
+The Markdown body must not be empty.
+
+The field list above is a summary for authoring; the server's schema is the
+contract. If a Scorer already contains a field this page does not mention,
+leave it alone and validate against the server rather than deleting it.

@@ -10,10 +10,10 @@ authoring and editing those files, and validating them before you open a pull
 request.
 
 warp-server owns the format. It publishes the schema for each version it
-supports and validates a tree with the same parser the apply path uses, so ask
-it rather than reasoning from a copy that ships inside a Warp release. This
-skill bundles schemas and a validator as an offline floor for when the server
-cannot be reached, and always says which of the two ran.
+supports and validates a tree with the same parser the apply path uses. This
+skill carries no copy of the format: a copy ships inside a Warp release, goes
+stale against the server, and then reports confident, wrong diagnostics. When
+the server cannot be reached, the answer is that the tree was not checked.
 
 Use this skill for repository files. It is not the skill for operating a live
 factory: use `factory-mcp` to send work to a factory, inspect task status, or
@@ -94,38 +94,40 @@ can contain spaces.
 python3 "{{skill_dir}}/scripts/validate_factory_files.py" "<factory-root>"
 ```
 
-It asks the server first and falls back to the bundled copy on its own. Add
-`--json` for machine-readable output, `--server-root <url>` to point at a
-local, staging, or self-hosted server, and `--offline` to skip the server
-deliberately. `WARP_SERVER_ROOT` sets the root too. The validation endpoint is
-authenticated and reads `WARP_API_KEY`, which agent sandboxes already carry.
+It selects the tree's resource files and submits them to the server, which runs
+the real parser. Add `--json` for machine-readable output and `--server-root
+<url>`, or `WARP_SERVER_ROOT`, to point at a local, staging, or self-hosted
+server. No credential is required; `WARP_API_KEY` is forwarded when the
+environment already carries one, as an agent sandbox does.
 
-A non-zero exit means at least one problem; fix every reported problem and
-re-run until it is clean.
+The exit code distinguishes three outcomes, and so must you:
+
+- `0` the server checked the tree and found no problem.
+- `1` the server checked the tree and reported diagnostics. Fix every one and
+  re-run until it is clean.
+- `2` the tree was **not** checked. This is not a pass and not a failure; it
+  says nothing about the files at all.
+
+### Never imply a check that did not happen
+On exit `2`, say plainly that validation did not run and why. Do not describe
+the files as valid, correct, or ready, and do not substitute your own reading
+of the schema for a verdict. If you cannot reach a server and the change
+matters, say so and let the user decide.
+
+On exit `0`, repeat the sentence the validator prints rather than paraphrasing
+it into something stronger. A pass means the parser and the state-independent
+checks agreed; it does not mean the tree will apply.
+
+Validation resolves no server state. Model IDs, environment IDs, secret names,
+runner names, Scorer model IDs, MCP server IDs, integration availability, and
+the values of Linear and Slack name aliases are all checked when the plan is
+applied. The response lists what it did not check, including any deferred name
+aliases; report that distinction rather than claiming a tree is fully verified.
 
 If no Python 3 interpreter is available, do not install one or claim the tree
 was validated without the user's approval. Check the changed document against
 the fetched schema by hand and report that automated validation was
 unavailable.
-
-### Say which validation ran
-The validator prints one of two sentences. Repeat it; do not paraphrase it
-away.
-
-- Server: the tree went through warp-server's own parser for its declared
-  version. State-dependent apply checks still did not run.
-- Offline: the server was unreachable, unauthenticated, or answered unusably,
-  so the bundled copy ran instead. That copy can be older than the server, so a
-  pass is weaker evidence than it looks.
-
-Never present an offline pass as a server verdict, and never treat a successful
-schema fetch as validation on its own.
-
-Neither path resolves server state. Model IDs, environment IDs, secret names,
-runner names, Scorer model IDs, MCP server IDs, integration availability, and
-the values of Linear and Slack name aliases are all checked when the plan is
-applied. The server response lists what it did not check; report that
-distinction rather than claiming a tree is fully verified.
 
 When the Factory is already registered, a server plan remains the strongest
 available check. See `references/validation.md` for diagnostic codes and how to
@@ -154,23 +156,14 @@ read them.
   name objects the server looks up at apply time, so they take a plain list of
   names rather than an `in`/`not_in` matcher.
 
-## When the bundled copy and the server disagree
-The server is right. The bundled schemas and validator ship inside your Warp
-version, so they can be older than the server the Factory syncs against, and
-they are deliberately permissive to avoid rejecting what a newer server
-accepts.
+## Do not add a local copy of the format
+It is tempting to bundle the schema, or to reimplement a few checks here so
+authoring works offline. Both have been tried and removed. A copy inside a Warp
+release is routinely older than the server it is used against, and a stale copy
+does not fail quietly: it reports a valid field as unknown, and an agent trying
+to get to a clean run deletes working configuration to satisfy it. That has
+already happened once, to Linear and Slack trigger aliases the server accepts.
 
-- Never delete, rename, or rewrite a field only because the offline validator
-  calls it unknown. On a file you did not author, that is at least as likely to
-  be a newer field as a mistake. Leave it, and say the bundled copy may be
-  behind.
-- Treat unknown-field reports on your own new edits as real. You are the one
-  who just introduced the field.
-- If the offline validator reports that it does not describe the tree's
-  `schemaVersion`, it stopped rather than applying `v1alpha1` rules to a format
-  it does not know. Validate against the server instead.
-
-If you are editing the bundled schemas themselves rather than a Factory tree,
-their openness is deliberate and load-bearing, and it is not the policy the
-server's own schemas follow. Read the "If you are changing these schemas"
-section of `references/validation.md` before tightening anything.
+Reporting that a tree was not checked costs a little. Reporting the wrong
+answer costs correct configuration. Fetch the format when you need it; say
+nothing when you cannot.
