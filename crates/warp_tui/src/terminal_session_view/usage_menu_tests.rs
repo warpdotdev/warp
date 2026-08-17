@@ -1,12 +1,13 @@
-use warp::tui_export::{Appearance, TuiUsageCreditBar, TuiUsagePayAsYouGo, TuiUsageSnapshot};
+use warp::tui_export::Appearance;
 use warpui::{App, EntityIdMap};
-use warpui_core::elements::MouseStateHandle;
 use warpui_core::elements::tui::{
     TuiBuffer, TuiBufferExt, TuiConstraint, TuiElement, TuiLayoutContext, TuiPaintContext,
     TuiPaintSurface, TuiRect, TuiScreenPosition, TuiSize,
 };
 
+use super::model::{TuiUsageCreditBar, TuiUsagePayAsYouGo, TuiUsageSnapshot};
 use super::*;
+use crate::link::TuiLink;
 use crate::tui_builder::TuiUiBuilder;
 
 const WIDTH: u16 = 110;
@@ -32,8 +33,8 @@ fn render_snapshot(snapshot: TuiUsageSnapshot) -> Vec<String> {
         let mut element = app.read(|ctx| {
             render(
                 &snapshot,
-                &MouseStateHandle::default(),
-                &MouseStateHandle::default(),
+                &TuiLink::default(),
+                &TuiLink::default(),
                 "https://example.com/upgrade",
                 &TuiUiBuilder::from_app(ctx),
             )
@@ -88,7 +89,7 @@ fn renders_account_usage_summary() {
     assert!(
         rendered
             .iter()
-            .any(|line| line.contains("Spend: 3500 credits / $30.00 • ● = 500 credits"))
+            .any(|line| line.contains("Spend: 3,500 credits / $30.00 • ● = 500 credits"))
     );
     assert!(
         rendered

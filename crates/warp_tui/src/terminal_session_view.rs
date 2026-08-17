@@ -20,11 +20,11 @@ use warp::settings::{
 use warp::tui_export::slash_commands;
 use warp::tui_export::{
     AIAgentActionId, AIAgentContext, AIAgentExchangeId, AIAgentPtyWriteMode, AIConversation,
-    AIConversationAutoexecuteMode, AIConversationId, AIRequestUsageModel, AIRequestUsageModelEvent,
-    AcceptSlashCommandOrSavedPrompt, ActiveSession, ActiveSessionEvent, AfterBlockCompletedEvent,
-    AgentConversationEntryId, AgentConversationListEntryState, AgentConversationsModel,
-    AgentInteractionMetadata, AgentViewEntryOrigin, Appearance, BlockId, BlockType,
-    BlocklistAIActionEvent, BlocklistAIActionModel, BlocklistAIContextModel, BlocklistAIController,
+    AIConversationAutoexecuteMode, AIConversationId, AcceptSlashCommandOrSavedPrompt,
+    ActiveSession, ActiveSessionEvent, AfterBlockCompletedEvent, AgentConversationEntryId,
+    AgentConversationListEntryState, AgentConversationsModel, AgentInteractionMetadata,
+    AgentViewEntryOrigin, Appearance, BlockId, BlockType, BlocklistAIActionEvent,
+    BlocklistAIActionModel, BlocklistAIContextModel, BlocklistAIController,
     BlocklistAIHistoryEvent, BlocklistAIHistoryModel, BlocklistAIInputModel,
     BlocklistOrchestrationTelemetryEvent, CLISubagentController, CLISubagentEvent,
     CLISubagentTarget, COMMAND_REGISTRY, CancellationReason, ChangelogModel, ChangelogRequestType,
@@ -42,13 +42,12 @@ use warp::tui_export::{
     TuiMcpAction, TuiMcpManager, TuiMcpServerId, TuiMcpVariableValue, TuiOnboardingMarker,
     TuiOnboardingMarkers, TuiOnboardingMarkersEvent, TuiSlashCommandDataSource,
     TuiSlashCommandDataSourceArgs, TuiUpArrowHistoryItemKind, TuiUserInfoManager,
-    TuiUserInfoManagerEvent, TuiZeroStateDataSource, UserTakeOverReason, UserWorkspaces,
-    WAKEUP_THROTTLE_PERIOD, WarpConfig, WarpConfigUpdateEvent, block_context_from_terminal_model,
-    build_slash_command_mixer, compute_tui_usage_snapshot, detect_possible_git_repo,
-    export_conversation_markdown, loaded_subtree_rollup, log_out_tui,
-    maybe_build_ai_query_upsert_event, prepare_conversation_block_restoration,
-    record_autodetection_toggle_from_slash_command, record_saved_prompt_accepted,
-    record_static_slash_command_accepted, saved_prompt_text_for_id,
+    TuiUserInfoManagerEvent, TuiZeroStateDataSource, UserTakeOverReason, WAKEUP_THROTTLE_PERIOD,
+    WarpConfig, WarpConfigUpdateEvent, block_context_from_terminal_model,
+    build_slash_command_mixer, detect_possible_git_repo, export_conversation_markdown,
+    loaded_subtree_rollup, log_out_tui, maybe_build_ai_query_upsert_event,
+    prepare_conversation_block_restoration, record_autodetection_toggle_from_slash_command,
+    record_saved_prompt_accepted, record_static_slash_command_accepted, saved_prompt_text_for_id,
     slash_command_selection_behavior, throttle,
 };
 use warp_core::channel::{Channel, ChannelState};
@@ -174,6 +173,7 @@ use self::state::{
     TuiFirstZeroStateState, TuiTerminalSessionState, TuiTerminalSessionStateModel,
     TuiTerminalSessionStateResolveError,
 };
+use self::usage_menu::TuiUsageSnapshot;
 
 /// Width used before the first layout pass pushes the real terminal width into the editor.
 const INITIAL_INPUT_WIDTH: u16 = 80;
@@ -218,12 +218,14 @@ fn status_menu_is_open(mode: TuiInputSuggestionsMode) -> bool {
         TuiInputSuggestionsMode::ReadOnlyMenu(TuiReadOnlyMenuKind::Status)
     )
 }
+
 fn usage_menu_is_open(mode: TuiInputSuggestionsMode) -> bool {
     matches!(
         mode,
         TuiInputSuggestionsMode::ReadOnlyMenu(TuiReadOnlyMenuKind::Usage)
     )
 }
+
 fn todo_menu_is_open(mode: TuiInputSuggestionsMode) -> bool {
     matches!(
         mode,
@@ -238,7 +240,7 @@ const SESSION_CAN_DETACH_AGENT_FROM_RUNNING_COMMAND_FLAG: &str =
     "TuiSessionCanDetachAgentFromRunningCommand";
 const SESSION_CAN_ACCEPT_BLOCKED_TERMINAL_USE_ACTION_FLAG: &str =
     "TuiSessionCanAcceptBlockedTerminalUseAction";
-const SESSION_CAN_OPEN_OUT_OF_CREDITS_URL_FLAG: &str = "TuiSessionCanOpenOutOfCreditsUrl";
+const SESSION_CAN_OPEN_UPGRADE_URL_FLAG: &str = "TuiSessionCanOpenUpgradeUrl";
 pub(crate) const SESSION_COMPOSER_SHORTCUTS_ACTIVE_FLAG: &str = "TuiSessionComposerShortcutsActive";
 pub(crate) const PASTE_IMAGE_BINDING_NAME: &str = "tui:session:paste_image";
 pub(crate) const AUTO_APPROVE_TOGGLE_BINDING_NAME: &str = "tui:session:toggle_auto_approve";
@@ -595,8 +597,8 @@ pub(crate) enum TuiTerminalSessionAction {
     /// conversation, else clear the input; a second press within
     /// [`CTRL_C_EXIT_WINDOW`] exits the TUI.
     Interrupt,
-    /// Open the out-of-credits upgrade and credit-pack flow.
-    OpenOutOfCreditsUrl,
+    /// Open the upgrade and credit-pack flow.
+    OpenUpgradeUrl,
     /// Cancel an in-flight conversation restore.
     CancelRestore,
     /// Return a user-controlled terminal-use command to the agent.
@@ -674,6 +676,7 @@ pub(crate) struct TuiTerminalSessionView {
     suggestions_mode: ModelHandle<TuiInputSuggestionsModeModel>,
     read_only_menu_selection: TuiSelectionHandle,
     read_only_menu_viewport: TuiViewportedListState,
+    usage_snapshot: Option<TuiUsageSnapshot>,
     /// The selected conversation and active TODO-list generation currently
     /// displayed by an open TODO menu.
     open_todo_menu_list_key: Option<(AIConversationId, usize)>,
@@ -746,12 +749,8 @@ pub(crate) struct TuiTerminalSessionView {
     auto_approve_feedback_timer: Option<SpawnedFutureHandle>,
     footer_auto_approve_mouse: MouseStateHandle,
     warping_auto_approve_mouse: MouseStateHandle,
-    /// Hover and click state for the `/usage` panel's "Manage billing and
-    /// usage" link, owned here so it survives element-tree rebuilds.
-    usage_manage_billing_mouse: MouseStateHandle,
-    /// Hover and click state for the `/usage` panel's "Buy more credits or
-    /// upgrade plan" link.
-    usage_upgrade_mouse: MouseStateHandle,
+    usage_manage_billing_link: TuiLink,
+    usage_upgrade_link: TuiLink,
     conversation_restore_state: ConversationRestoreState,
     next_restore_request_id: u64,
     exit_summary: TuiExitSummaryHandle,
@@ -799,9 +798,9 @@ pub(crate) fn init(app: &mut AppContext) {
         .with_group(TUI_BINDING_GROUP),
         FixedBinding::new(
             "ctrl-o",
-            TuiTerminalSessionAction::OpenOutOfCreditsUrl,
+            TuiTerminalSessionAction::OpenUpgradeUrl,
             (id!(TuiInputView::ui_name()) | view_context.clone())
-                & id!(SESSION_CAN_OPEN_OUT_OF_CREDITS_URL_FLAG),
+                & id!(SESSION_CAN_OPEN_UPGRADE_URL_FLAG),
         )
         .with_group(TUI_BINDING_GROUP),
     ]);
@@ -1620,35 +1619,6 @@ impl TuiTerminalSessionView {
                 ctx.notify();
             }
         });
-        // The `/usage` panel recomputes its snapshot fresh on every render, but
-        // nothing else re-renders this view when usage/billing data changes in
-        // the background, so refresh explicitly while the panel is open.
-        // Guarded like `AppEditorSettings` elsewhere in this file: lightweight
-        // test fixtures don't always register these app-wide singletons.
-        if ctx.has_singleton_model::<AIRequestUsageModel>() {
-            let suggestions_mode_for_usage = suggestions_mode.clone();
-            ctx.subscribe_to_model(
-                &AIRequestUsageModel::handle(ctx),
-                move |_, _, event, ctx| {
-                    if matches!(
-                        event,
-                        AIRequestUsageModelEvent::RequestUsageUpdated
-                            | AIRequestUsageModelEvent::CreditAvailabilityUpdated
-                    ) && usage_menu_is_open(suggestions_mode_for_usage.as_ref(ctx).mode())
-                    {
-                        ctx.notify();
-                    }
-                },
-            );
-        }
-        if ctx.has_singleton_model::<UserWorkspaces>() {
-            let suggestions_mode_for_usage_workspaces = suggestions_mode.clone();
-            ctx.subscribe_to_model(&UserWorkspaces::handle(ctx), move |_, _, _, ctx| {
-                if usage_menu_is_open(suggestions_mode_for_usage_workspaces.as_ref(ctx).mode()) {
-                    ctx.notify();
-                }
-            });
-        }
         let read_only_menu_selection = TuiSelectionHandle::default();
         let read_only_menu_viewport = TuiViewportedListState::new_at_end();
         read_only_menu_viewport.scroll_to_rows_from_top(0);
@@ -2015,6 +1985,11 @@ impl TuiTerminalSessionView {
         });
         ctx.subscribe_to_model(&suggestions_mode, |view, _, event, ctx| {
             view.read_only_menu_selection.clear();
+            view.usage_snapshot = matches!(
+                event.mode,
+                TuiInputSuggestionsMode::ReadOnlyMenu(TuiReadOnlyMenuKind::Usage)
+            )
+            .then(|| TuiUsageSnapshot::capture(ctx));
             view.open_todo_menu_list_key = match event.mode.read_only_menu() {
                 Some(TuiReadOnlyMenuKind::Todos) => view.active_todo_menu_list_key(ctx),
                 Some(
@@ -2271,6 +2246,7 @@ impl TuiTerminalSessionView {
             suggestions_mode,
             read_only_menu_selection,
             read_only_menu_viewport,
+            usage_snapshot: None,
             open_todo_menu_list_key: None,
             session_state,
             api_keys_menu,
@@ -2314,8 +2290,8 @@ impl TuiTerminalSessionView {
             auto_approve_feedback_timer: None,
             footer_auto_approve_mouse: MouseStateHandle::default(),
             warping_auto_approve_mouse: MouseStateHandle::default(),
-            usage_manage_billing_mouse: MouseStateHandle::default(),
-            usage_upgrade_mouse: MouseStateHandle::default(),
+            usage_manage_billing_link: TuiLink::default(),
+            usage_upgrade_link: TuiLink::default(),
             conversation_restore_state: ConversationRestoreState::Idle,
             next_restore_request_id: 0,
             exit_summary,
@@ -2714,7 +2690,7 @@ impl TuiTerminalSessionView {
 
     /// Renders a shared [`TuiReadOnlyMenu`] (status/shortcuts/todos) with this
     /// session's persistent selection and viewport state wired up.
-    fn render_selectable_read_only_menu(
+    fn render_read_only_menu(
         &self,
         menu: TuiReadOnlyMenu,
         builder: &TuiUiBuilder,
@@ -2759,12 +2735,12 @@ impl TuiTerminalSessionView {
         let menu_element = open_read_only_menu.and_then(|kind| match kind {
             TuiReadOnlyMenuKind::Shortcuts => {
                 let keymap_context = self.keymap_context(ctx);
-                Some(self.render_selectable_read_only_menu(
+                Some(self.render_read_only_menu(
                     shortcuts::menu(state, &keymap_context, builder, ctx),
                     builder,
                 ))
             }
-            TuiReadOnlyMenuKind::Status => Some(self.render_selectable_read_only_menu(
+            TuiReadOnlyMenuKind::Status => Some(self.render_read_only_menu(
                 status_menu::menu(self.compute_status_info(ctx), builder),
                 builder,
             )),
@@ -2773,22 +2749,22 @@ impl TuiTerminalSessionView {
                 .as_ref(ctx)
                 .selected_conversation(ctx)
                 .and_then(|conversation| todo_menu::active_todo_menu(conversation, builder))
-                .map(|menu| self.render_selectable_read_only_menu(menu, builder)),
-            TuiReadOnlyMenuKind::Usage => Some(usage_menu::render(
-                &compute_tui_usage_snapshot(ctx),
-                &self.usage_manage_billing_mouse,
-                &self.usage_upgrade_mouse,
-                &upgrade_url(ctx),
-                builder,
-            )),
+                .map(|menu| self.render_read_only_menu(menu, builder)),
+            TuiReadOnlyMenuKind::Usage => self.usage_snapshot.as_ref().map(|snapshot| {
+                usage_menu::render(
+                    snapshot,
+                    &self.usage_manage_billing_link,
+                    &self.usage_upgrade_link,
+                    &upgrade_url(ctx),
+                    builder,
+                )
+            }),
         });
         if let Some(menu_element) = menu_element {
             let padded_menu = TuiContainer::new(menu_element)
                 .with_padding_top(INLINE_MENU_TOP_PADDING_ROWS)
                 .finish();
-            // The `/usage` panel's spec requires it to grow vertically to fit
-            // wrapped pay-as-you-go circles rather than clip them, so it gets
-            // no row cap; every other read-only menu keeps the shared cap.
+            // Pay-as-you-go circles can wrap, so the usage panel is not capped.
             let wrapped_menu = if matches!(open_read_only_menu, Some(TuiReadOnlyMenuKind::Usage)) {
                 padded_menu
             } else {
@@ -5197,17 +5173,14 @@ impl TuiView for TuiTerminalSessionView {
                 .set
                 .insert(SESSION_CAN_ACCEPT_BLOCKED_TERMINAL_USE_ACTION_FLAG);
         }
-        // Also enable ctrl-o's upgrade-URL binding while the `/usage` panel is
-        // open, so the same shortcut the panel advertises (`(ctrl+o)` next to
-        // "Buy more credits or upgrade plan") actually opens the upgrade page,
-        // not just the out-of-credits path.
+
         if self
             .transcript
             .as_ref(ctx)
             .latest_agent_block_is_out_of_credits(ctx)
             || usage_menu_is_open(self.suggestions_mode.as_ref(ctx).mode())
         {
-            context.set.insert(SESSION_CAN_OPEN_OUT_OF_CREDITS_URL_FLAG);
+            context.set.insert(SESSION_CAN_OPEN_UPGRADE_URL_FLAG);
         }
         if state.as_ref().is_some_and(|state| state.plan_available()) {
             context.set.insert(PLAN_TOGGLE_AVAILABLE_FLAG);
@@ -5598,7 +5571,7 @@ impl TypedActionView for TuiTerminalSessionView {
     fn handle_action(&mut self, action: &TuiTerminalSessionAction, ctx: &mut ViewContext<Self>) {
         match action {
             TuiTerminalSessionAction::Interrupt => self.handle_interrupt(ctx),
-            TuiTerminalSessionAction::OpenOutOfCreditsUrl => ctx.open_url(&upgrade_url(ctx)),
+            TuiTerminalSessionAction::OpenUpgradeUrl => ctx.open_url(&upgrade_url(ctx)),
             TuiTerminalSessionAction::Eof => self.handle_eof(ctx),
             TuiTerminalSessionAction::CancelRestore => {
                 self.cancel_conversation_restore(ctx);

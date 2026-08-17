@@ -1,43 +1,24 @@
 //! Rendering for the interactive `/usage` panel.
 
-use warp::tui_export::{TuiUsageCreditBar, TuiUsagePayAsYouGo, TuiUsageSnapshot};
+use warp::tui_export::{format_usage_cost_cents, format_usage_credits};
 use warpui_core::AppContext;
+use warpui_core::elements::CrossAxisAlignment;
 use warpui_core::elements::tui::{
-    Modifier, TuiConstraint, TuiContainer, TuiElement, TuiFlex, TuiHoverable, TuiLayoutContext,
-    TuiPaintContext, TuiPaintSurface, TuiScreenPoint, TuiScreenPosition, TuiSize, TuiStyle,
-    TuiText,
+    Modifier, TuiConstraint, TuiContainer, TuiElement, TuiFlex, TuiLayoutContext, TuiPaintContext,
+    TuiPaintSurface, TuiScreenPoint, TuiScreenPosition, TuiSize, TuiStyle, TuiText,
 };
-use warpui_core::elements::{CrossAxisAlignment, MouseStateHandle};
 
+pub(super) use self::model::TuiUsageSnapshot;
+use self::model::{TuiUsageCreditBar, TuiUsagePayAsYouGo};
+use crate::link::TuiLink;
 use crate::tui_builder::TuiUiBuilder;
+mod model;
 
+/// Smallest credit value represented by one pay-as-you-go circle.
 const MIN_CREDITS_PER_CIRCLE: u64 = 500;
+/// Maximum rows available to the pay-as-you-go circle visualization.
 const MAX_PAY_AS_YOU_GO_ROWS: usize = 2;
-
-fn paint_text(
-    surface: &mut TuiPaintSurface<'_>,
-    origin: TuiScreenPosition,
-    row: u16,
-    column: &mut usize,
-    limit: usize,
-    text: &str,
-    style: TuiStyle,
-) {
-    for glyph in text.chars() {
-        if *column >= limit {
-            break;
-        }
-        let Ok(column_offset) = u16::try_from(*column) else {
-            break;
-        };
-        if let Some(cell) =
-            surface.cell_mut(origin.offset(i32::from(column_offset), i32::from(row)))
-        {
-            cell.set_symbol(glyph.to_string().as_str()).set_style(style);
-        }
-        *column += 1;
-    }
-}
+/// A one-row credit bar that fills the width assigned by its parent.
 struct TuiUsageBar {
     ratio: f64,
     filled_char: char,
@@ -126,8 +107,7 @@ struct TuiUsagePayAsYouGoRows {
     empty_style: TuiStyle,
     primary_style: TuiStyle,
     muted_style: TuiStyle,
-    size: Option<TuiSize>,
-    origin: Option<TuiScreenPoint>,
+    content: Option<Box<dyn TuiElement>>,
 }
 
 impl TuiUsagePayAsYouGoRows {
@@ -142,9 +122,9 @@ impl TuiUsagePayAsYouGoRows {
             credits_used: payg.credits_used.max(0) as u64,
             cost_cents: payg.cost_cents,
             summary_note: if payg.has_kicked_in {
-                KICKED_IN_NOTE
+                "Kicks in after credits are exhausted."
             } else {
-                NOT_KICKED_IN_NOTE
+                "Kicks in after base and add-on credits are exhausted."
             },
             credits_per_circle: MIN_CREDITS_PER_CIRCLE,
             visible_circles: 0,
@@ -153,8 +133,7 @@ impl TuiUsagePayAsYouGoRows {
             empty_style,
             primary_style,
             muted_style,
-            size: None,
-            origin: None,
+            content: None,
         }
     }
 }
@@ -163,8 +142,8 @@ impl TuiElement for TuiUsagePayAsYouGoRows {
     fn layout(
         &mut self,
         constraint: TuiConstraint,
-        _ctx: &mut TuiLayoutContext,
-        _app: &AppContext,
+        ctx: &mut TuiLayoutContext,
+        app: &AppContext,
     ) -> TuiSize {
         let width = usize::from(constraint.max.width.max(1));
         let capacity = width.saturating_mul(MAX_PAY_AS_YOU_GO_ROWS);
@@ -182,9 +161,61 @@ impl TuiElement for TuiUsagePayAsYouGoRows {
             self.visible_circles.div_ceil(width)
         };
         self.circle_rows = u16::try_from(circle_rows).unwrap_or(u16::MAX);
-        let rows = self.circle_rows.saturating_add(1);
-        let size = TuiSize::new(constraint.max.width, constraint.constrain_height(rows));
-        self.size = Some(size);
+
+        let mut circle_spans = Vec::new();
+        let mut remaining = self.visible_circles;
+        for row in 0..self.circle_rows {
+            let filled_in_row = remaining.min(width);
+            remaining -= filled_in_row;
+            circle_spans.push(("●".repeat(filled_in_row), self.filled_style));
+            circle_spans.push((
+                format!(
+                    "{}{}",
+                    "-".repeat(width.saturating_sub(filled_in_row)),
+                    if row + 1 < self.circle_rows { "\n" } else { "" }
+                ),
+                self.empty_style,
+            ));
+        }
+        let summary = TuiFlex::row()
+            .child(
+                TuiText::from_spans([
+                    ("Spend: ".to_owned(), self.muted_style),
+                    (
+                        format!(
+                            "{} credits / {}",
+                            format_usage_credits(self.credits_used as i64),
+                            format_usage_cost_cents(self.cost_cents)
+                        ),
+                        self.primary_style,
+                    ),
+                    (" • ".to_owned(), self.muted_style),
+                    ("●".to_owned(), self.filled_style),
+                    (
+                        format!(
+                            " = {} credits",
+                            format_usage_credits(self.credits_per_circle as i64)
+                        ),
+                        self.muted_style,
+                    ),
+                ])
+                .truncate()
+                .finish(),
+            )
+            .flex_child(TuiText::new(String::new()).finish())
+            .child(
+                TuiText::new(self.summary_note)
+                    .with_style(self.muted_style)
+                    .truncate()
+                    .finish(),
+            )
+            .finish();
+        let mut content = TuiFlex::column()
+            .child(TuiText::from_spans(circle_spans).truncate().finish())
+            .child(summary)
+            .finish();
+        let size = content.layout(constraint, ctx, app);
+        self.content = Some(content);
         size
     }
 
@@ -194,217 +225,18 @@ impl TuiElement for TuiUsagePayAsYouGoRows {
         surface: &mut TuiPaintSurface<'_>,
         ctx: &mut TuiPaintContext,
     ) {
-        self.origin = Some(ctx.scene_point(origin));
-        let Some(size) = self.size else {
-            return;
-        };
-        if size.width == 0 || size.height == 0 {
-            return;
+        if let Some(content) = self.content.as_mut() {
+            content.render(origin, surface, ctx);
         }
-        let width = usize::from(size.width);
-        let mut remaining = self.visible_circles;
-        for row in 0..self.circle_rows.min(size.height) {
-            let filled_in_row = remaining.min(width);
-            remaining -= filled_in_row;
-            for column in 0..size.width {
-                let (glyph, style) = if usize::from(column) < filled_in_row {
-                    ('\u{25CF}', self.filled_style)
-                } else {
-                    ('-', self.empty_style)
-                };
-                if let Some(cell) =
-                    surface.cell_mut(origin.offset(i32::from(column), i32::from(row)))
-                {
-                    cell.set_symbol(glyph.to_string().as_str()).set_style(style);
-                }
-            }
-        }
-        if self.circle_rows >= size.height {
-            return;
-        }
-        let note_width = self.summary_note.chars().count().min(width);
-        let note_start = width.saturating_sub(note_width);
-        let left_limit = note_start.saturating_sub(1);
-        let mut column = 0;
-        paint_text(
-            surface,
-            origin,
-            self.circle_rows,
-            &mut column,
-            left_limit,
-            "Spend: ",
-            self.muted_style,
-        );
-        paint_text(
-            surface,
-            origin,
-            self.circle_rows,
-            &mut column,
-            left_limit,
-            format!(
-                "{} credits / {}",
-                decimal_with_commas(self.credits_used as i64),
-                dollars(self.cost_cents)
-            )
-            .as_str(),
-            self.primary_style,
-        );
-        paint_text(
-            surface,
-            origin,
-            self.circle_rows,
-            &mut column,
-            left_limit,
-            " • ",
-            self.muted_style,
-        );
-        paint_text(
-            surface,
-            origin,
-            self.circle_rows,
-            &mut column,
-            left_limit,
-            "●",
-            self.filled_style,
-        );
-        paint_text(
-            surface,
-            origin,
-            self.circle_rows,
-            &mut column,
-            left_limit,
-            format!(
-                " = {} credits",
-                unsigned_decimal_with_commas(self.credits_per_circle)
-            )
-            .as_str(),
-            self.muted_style,
-        );
-        let mut note_column = note_start;
-        paint_text(
-            surface,
-            origin,
-            self.circle_rows,
-            &mut note_column,
-            width,
-            self.summary_note,
-            self.muted_style,
-        );
     }
 
     fn size(&self) -> Option<TuiSize> {
-        self.size
+        self.content.as_ref().and_then(|content| content.size())
     }
 
     fn origin(&self) -> Option<TuiScreenPoint> {
-        self.origin
+        self.content.as_ref().and_then(|content| content.origin())
     }
-}
-
-const KICKED_IN_NOTE: &str = "Kicks in after credits are exhausted.";
-const NOT_KICKED_IN_NOTE: &str = "Kicks in after base and add-on credits are exhausted.";
-
-fn plain_row(text: impl Into<String>, style: TuiStyle) -> Box<dyn TuiElement> {
-    TuiText::new(text.into())
-        .with_style(style)
-        .truncate()
-        .finish()
-}
-
-fn flex_row(left: Vec<(String, TuiStyle)>, right: Vec<(String, TuiStyle)>) -> Box<dyn TuiElement> {
-    TuiFlex::row()
-        .child(spans_row(left))
-        .flex_child(TuiText::new(String::new()).finish())
-        .child(spans_row(right))
-        .finish()
-}
-
-fn label_value_row(label: &str, value: &str, style: TuiStyle) -> Box<dyn TuiElement> {
-    flex_row(
-        vec![(label.to_owned(), style)],
-        vec![(value.to_owned(), style)],
-    )
-}
-
-fn spans_row(spans: Vec<(String, TuiStyle)>) -> Box<dyn TuiElement> {
-    TuiText::from_spans(spans).truncate().finish()
-}
-
-fn credit_bar_row(
-    used: i64,
-    limit: i64,
-    filled_style: TuiStyle,
-    empty_style: TuiStyle,
-) -> Box<dyn TuiElement> {
-    let ratio = if limit <= 0 {
-        1.0
-    } else {
-        (used as f64 / limit as f64).clamp(0.0, 1.0)
-    };
-    TuiUsageBar::new(ratio, '█', '░', filled_style, empty_style).finish()
-}
-fn pay_as_you_go_rows(
-    payg: &TuiUsagePayAsYouGo,
-    filled_style: TuiStyle,
-    empty_style: TuiStyle,
-    primary_style: TuiStyle,
-    muted_style: TuiStyle,
-) -> Box<dyn TuiElement> {
-    TuiUsagePayAsYouGoRows::new(payg, filled_style, empty_style, primary_style, muted_style)
-        .finish()
-}
-
-fn hoverable_link(
-    text: &str,
-    mouse_state: &MouseStateHandle,
-    style: TuiStyle,
-    url: String,
-) -> Box<dyn TuiElement> {
-    let is_hovered = mouse_state.lock().is_ok_and(|state| state.is_hovered());
-    let mut style = style.add_modifier(Modifier::UNDERLINED);
-    if is_hovered {
-        style = style.add_modifier(Modifier::BOLD);
-    }
-    TuiHoverable::new(
-        mouse_state.clone(),
-        TuiText::new(text.to_owned()).with_style(style).finish(),
-    )
-    .on_click(move |_, app| app.open_url(&url))
-    .finish()
-}
-
-fn dollars(cents: i64) -> String {
-    if cents == 0 {
-        return "$0".to_owned();
-    }
-    let sign = if cents < 0 { "-" } else { "" };
-    let cents = cents.unsigned_abs();
-    format!(
-        "{sign}${}.{:02}",
-        decimal_with_commas((cents / 100) as i64),
-        cents % 100
-    )
-}
-
-fn decimal_with_commas(value: i64) -> String {
-    if value.unsigned_abs() < 10_000 {
-        return value.to_string();
-    }
-    let digits = unsigned_decimal_with_commas(value.unsigned_abs());
-    if value < 0 {
-        format!("-{digits}")
-    } else {
-        digits
-    }
-}
-fn unsigned_decimal_with_commas(value: u64) -> String {
-    let mut digits = value.to_string();
-    let mut separator = digits.len();
-    while separator > 3 {
-        separator -= 3;
-        digits.insert(separator, ',');
-    }
-    digits
 }
 
 fn credit_section(
@@ -419,26 +251,42 @@ fn credit_section(
     let empty = builder.usage_bar_empty_style();
     let remaining = (bar.limit - bar.used).max(0);
 
-    let title_row = flex_row(
-        vec![(title.to_owned(), primary)],
-        vec![
-            (remaining.to_string(), primary_bold),
-            (" remaining".to_owned(), primary),
-        ],
-    );
-
-    let credits_used_row = flex_row(
-        vec![
-            ("Credits used: ".to_owned(), muted),
-            (format!("{}/{}", bar.used, bar.limit), primary),
-        ],
-        vec![(bar.note.clone(), muted)],
-    );
-
+    let ratio = if bar.limit <= 0 {
+        1.0
+    } else {
+        (bar.used as f64 / bar.limit as f64).clamp(0.0, 1.0)
+    };
     vec![
-        title_row,
-        credit_bar_row(bar.used, bar.limit, filled_style, empty),
-        credits_used_row,
+        TuiFlex::row()
+            .child(TuiText::new(title).with_style(primary).truncate().finish())
+            .flex_child(TuiText::new(String::new()).finish())
+            .child(
+                TuiText::from_spans([
+                    (remaining.to_string(), primary_bold),
+                    (" remaining".to_owned(), primary),
+                ])
+                .truncate()
+                .finish(),
+            )
+            .finish(),
+        TuiUsageBar::new(ratio, '█', '░', filled_style, empty).finish(),
+        TuiFlex::row()
+            .child(
+                TuiText::from_spans([
+                    ("Credits used: ".to_owned(), muted),
+                    (format!("{}/{}", bar.used, bar.limit), primary),
+                ])
+                .truncate()
+                .finish(),
+            )
+            .flex_child(TuiText::new(String::new()).finish())
+            .child(
+                TuiText::new(bar.note.clone())
+                    .with_style(muted)
+                    .truncate()
+                    .finish(),
+            )
+            .finish(),
     ]
 }
 
@@ -452,15 +300,29 @@ fn pay_as_you_go_section(
     let empty = muted;
 
     vec![
-        label_value_row("Pay-as-you-go", "No limit", primary),
-        pay_as_you_go_rows(payg, filled, empty, primary, muted),
+        TuiFlex::row()
+            .child(
+                TuiText::new("Pay-as-you-go")
+                    .with_style(primary)
+                    .truncate()
+                    .finish(),
+            )
+            .flex_child(TuiText::new(String::new()).finish())
+            .child(
+                TuiText::new("No limit")
+                    .with_style(primary)
+                    .truncate()
+                    .finish(),
+            )
+            .finish(),
+        TuiUsagePayAsYouGoRows::new(payg, filled, empty, primary, muted).finish(),
     ]
 }
 
 pub(super) fn render(
     info: &TuiUsageSnapshot,
-    manage_billing_mouse: &MouseStateHandle,
-    upgrade_mouse: &MouseStateHandle,
+    manage_billing_link: &TuiLink,
+    upgrade_link: &TuiLink,
     upgrade_url: &str,
     builder: &TuiUiBuilder,
 ) -> Box<dyn TuiElement> {
@@ -473,20 +335,29 @@ pub(super) fn render(
     if let Some(team_name) = &info.team_name {
         metadata.push_str(&format!(" | Team: {team_name}"));
     }
-    let mut trailing = TuiFlex::row().child(plain_row(metadata, primary));
+    let mut trailing = TuiFlex::row().child(
+        TuiText::new(metadata)
+            .with_style(primary)
+            .truncate()
+            .finish(),
+    );
     if let Some(manage_billing_url) = info.manage_billing_url.clone() {
         trailing = trailing
-            .child(plain_row(" | ", primary))
-            .child(hoverable_link(
+            .child(TuiText::new(" | ").with_style(primary).truncate().finish())
+            .child(manage_billing_link.render(
                 "Manage billing and usage",
-                manage_billing_mouse,
                 primary,
-                manage_billing_url,
+                move |_, app| app.open_url(&manage_billing_url),
             ));
     }
     let header = TuiContainer::new(
         TuiFlex::row()
-            .child(plain_row("\u{25D4} Usage", primary_bold))
+            .child(
+                TuiText::new("\u{25D4} Usage")
+                    .with_style(primary_bold)
+                    .truncate()
+                    .finish(),
+            )
             .flex_child(TuiText::new(String::new()).finish())
             .child(trailing.finish())
             .finish(),
@@ -498,14 +369,14 @@ pub(super) fn render(
     let mut body = TuiFlex::column().with_cross_axis_alignment(CrossAxisAlignment::Stretch);
 
     if let Some(base) = &info.base_credits {
-        body = body.child(plain_row(" ", muted));
+        body = body.child(TuiText::new(" ").with_style(muted).truncate().finish());
         for row in credit_section("Base credits", base, builder.success_glyph_style(), builder) {
             body = body.child(row);
         }
     }
 
     if let Some(addon) = &info.addon_credits {
-        body = body.child(plain_row(" ", muted));
+        body = body.child(TuiText::new(" ").with_style(muted).truncate().finish());
         for row in credit_section(
             "Add-on credits",
             addon,
@@ -517,24 +388,29 @@ pub(super) fn render(
     }
 
     if let Some(payg) = &info.pay_as_you_go {
-        body = body.child(plain_row(" ", muted));
+        body = body.child(TuiText::new(" ").with_style(muted).truncate().finish());
         for row in pay_as_you_go_section(payg, builder) {
             body = body.child(row);
         }
     }
 
-    body = body.child(plain_row(" ", muted));
-    let upgrade_link = hoverable_link(
+    body = body.child(TuiText::new(" ").with_style(muted).truncate().finish());
+    let upgrade_url = upgrade_url.to_owned();
+    let upgrade_link = upgrade_link.render(
         "Buy more credits or upgrade plan",
-        upgrade_mouse,
         primary,
-        upgrade_url.to_owned(),
+        move |_, app| app.open_url(&upgrade_url),
     );
     body = body.child(
         TuiFlex::row()
             .child(upgrade_link)
-            .child(plain_row(" ", muted))
-            .child(plain_row("(ctrl+o)", shortcut))
+            .child(TuiText::new(" ").with_style(muted).truncate().finish())
+            .child(
+                TuiText::new("(ctrl+o)")
+                    .with_style(shortcut)
+                    .truncate()
+                    .finish(),
+            )
             .finish(),
     );
 
@@ -555,11 +431,12 @@ pub(super) fn render(
     // between the panel and it.
     TuiFlex::column()
         .child(panel)
-        .child(plain_row(" ", muted))
-        .child(spans_row(vec![
-            ("Esc ".to_owned(), primary),
-            ("to exit".to_owned(), muted),
-        ]))
+        .child(TuiText::new(" ").with_style(muted).truncate().finish())
+        .child(
+            TuiText::from_spans([("Esc ".to_owned(), primary), ("to exit".to_owned(), muted)])
+                .truncate()
+                .finish(),
+        )
         .finish()
 }
 

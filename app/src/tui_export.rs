@@ -156,10 +156,7 @@ pub use crate::ai::orchestration::{
     resolve_auth_secret_selection_for_harness, resolve_default_environment_id,
     resolve_default_host_slug, should_show_auth_secret_picker,
 };
-pub use crate::ai::request_usage_model::{
-    AIRequestUsageModel, AIRequestUsageModelEvent, TuiUsageCreditBar, TuiUsagePayAsYouGo,
-    TuiUsageSnapshot, compute_tui_usage_snapshot,
-};
+pub use crate::ai::request_usage_model::{AIRequestUsageModel, BonusGrantType};
 pub use crate::ai::skills::{SkillManager, SkillManagerEvent, SkillReference};
 #[cfg(not(target_family = "wasm"))]
 pub use crate::ai::tui_api_keys::notify_tui_api_keys_changed;
@@ -278,6 +275,15 @@ pub use crate::util::time_format::format_elapsed_seconds;
 #[cfg(feature = "voice_input")]
 pub use crate::voice::transcriber::{Transcriber, VoiceTranscriber};
 pub use crate::workspaces::user_workspaces::{UserWorkspaces, UserWorkspacesEvent};
+pub use crate::workspaces::workspace::{AiCreditsUsageAndCostType, UsageVisibilityGranularity};
+
+pub fn format_usage_cost_cents(cents: i64) -> String {
+    crate::settings_view::format_cost_cents(cents)
+}
+
+pub fn format_usage_credits(credits: i64) -> String {
+    crate::settings_view::format_credits(credits)
+}
 
 /// Builds the live-shell completion context used to parse TUI input for NLD.
 pub fn tui_completion_session_context(

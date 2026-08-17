@@ -244,7 +244,7 @@ fn out_of_credits_ctrl_o_binding_opens_upgrade() {
             });
         });
         view.update(&mut app, |view, ctx| {
-            view.handle_action(&TuiTerminalSessionAction::OpenOutOfCreditsUrl, ctx);
+            view.handle_action(&TuiTerminalSessionAction::OpenUpgradeUrl, ctx);
         });
         assert_eq!(opened_urls.borrow().as_slice(), &[expected_upgrade_url]);
     });
