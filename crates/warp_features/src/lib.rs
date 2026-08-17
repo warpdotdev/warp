@@ -1040,8 +1040,6 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::OrchestrationUnifiedStack,
     FeatureFlag::McpJsonTreeView,
     FeatureFlag::BoxDrawingGlyphs,
-    FeatureFlag::WellKnownMcpIds,
-    FeatureFlag::FactoryMcp,
     FeatureFlag::PricingTransparency,
     FeatureFlag::PeriodicHandoffCheckpoints,
 ];
