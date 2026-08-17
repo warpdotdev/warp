@@ -146,6 +146,20 @@ pub struct Symbol {
     pub line_number: usize,
 }
 
+impl Symbol {
+    /// Approximate number of heap bytes owned by this symbol (its owned
+    /// `String`s). Excludes the inline `Symbol` struct itself, which is
+    /// accounted for by the containing `Vec`'s capacity in
+    /// [`FileOutline::approx_heap_size`].
+    fn approx_heap_size(&self) -> usize {
+        let comment_bytes = self.comment.as_ref().map_or(0, |lines| {
+            lines.capacity() * std::mem::size_of::<String>()
+                + lines.iter().map(String::len).sum::<usize>()
+        });
+        self.name.len() + self.type_prefix.as_ref().map_or(0, String::len) + comment_bytes
+    }
+}
+
 /// Represents the "outline" of a file with all the identifier symbols of interest.
 #[derive(Debug, Clone, Default)]
 pub struct FileOutline {
@@ -156,6 +170,15 @@ impl FileOutline {
     /// Get the symbols from the outline.
     pub fn symbols(&self) -> Option<&Vec<Symbol>> {
         self.symbols.as_ref()
+    }
+
+    /// Approximate number of heap bytes retained by this outline's symbols. Used
+    /// to bound the cumulative size of a repository's in-memory outline.
+    pub(crate) fn approx_heap_size(&self) -> usize {
+        self.symbols.as_ref().map_or(0, |symbols| {
+            symbols.capacity() * std::mem::size_of::<Symbol>()
+                + symbols.iter().map(Symbol::approx_heap_size).sum::<usize>()
+        })
     }
 
     /// Format the outline into a string.
@@ -183,3 +206,7 @@ impl FileOutline {
         )
     }
 }
+
+#[cfg(test)]
+#[path = "mod_test.rs"]
+mod tests;
