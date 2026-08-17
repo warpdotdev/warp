@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "automation.schema.json",
-  "$comment": "FORWARD COMPATIBILITY - DO NOT TIGHTEN. additionalProperties is true, and catalogue values are recorded as x-warp-known-values / x-warp-known-max-items annotations rather than enum, const, or maxItems. That is deliberate, not an oversight. This file ships inside a Warp release and is routinely OLDER than the warp-server it validates against, so a closed schema rejects configuration a newer server accepts and pushes agents to delete working fields. When the format gains a value, add it to the annotation; do not convert the annotation back into a rejecting keyword. The two deliberate exceptions are documented in specs/REMOTE-2727/TECH.md: trigger filter keys, which only apply when both provider and event are known, and schemaVersion, which stops validation rather than misapplying v1alpha1 rules. See also references/validation.md.",
+  "$comment": "OFFLINE FLOOR - DO NOT TIGHTEN. This is the fallback copy that ships inside a Warp release, so it is routinely OLDER than the warp-server it validates against. additionalProperties is true and catalogue values are recorded as x-warp-known-values / x-warp-known-max-items annotations rather than enum, const, or maxItems, because a closed schema here rejects configuration a newer server accepts and pushes agents to delete working fields. Fetch GET /api/v1/factory-files/schemas/<version> for the exact schema; that one is served by the parser that owns the format and cannot lag it, so do not copy it over this file. When the format gains a value, add it to the annotation. The two deliberate exceptions are trigger filter keys, which only apply when both provider and event are known, and schemaVersion, which stops validation rather than misapplying v1alpha1 rules. See warp-server specs/REMOTE-2868/TECH.md and references/validation.md.",
   "title": "automations/<name>/automation.md frontmatter (v1alpha1)",
   "description": "YAML frontmatter of an Automation file. The Automation's name comes from its directory, never from a field. The Markdown body after the closing fence is the run prompt.",
   "type": "object",
@@ -73,6 +73,16 @@
           }
         }
       ]
+    },
+    "stringAliasList": {
+      "description": "A provider name alias takes a bare list of names, never a matcher object: the server resolves the names to durable IDs before the filter is canonicalized.",
+      "type": "array",
+      "items": { "$ref": "common.schema.json#/$defs/nonEmptyString" }
+    },
+    "intAliasList": {
+      "description": "A provider number alias takes a bare list of positive numbers, never a matcher object.",
+      "type": "array",
+      "items": { "type": "integer", "minimum": 1 }
     },
     "nonEmptyScheduleIds": {
       "type": "object",
@@ -335,6 +345,14 @@
               "filter": {
                 "additionalProperties": false,
                 "properties": {
+                  "baseBranches": {
+                    "$ref": "#/$defs/stringMatcher",
+                    "description": "Authoring alias for base_branches; the two are mutually exclusive."
+                  },
+                  "prNumbers": {
+                    "$ref": "#/$defs/intMatcher",
+                    "description": "Authoring alias for pr_numbers; the two are mutually exclusive."
+                  },
                   "repos": { "$ref": "#/$defs/stringMatcher" },
                   "base_branches": { "$ref": "#/$defs/stringMatcher" },
                   "pr_numbers": { "$ref": "#/$defs/intMatcher" },
@@ -342,7 +360,11 @@
                   "assignees": { "$ref": "#/$defs/stringMatcher" },
                   "authors": { "$ref": "#/$defs/stringMatcher" },
                   "labels": { "$ref": "#/$defs/stringMatcher" }
-                }
+                },
+                "allOf": [
+                  { "not": { "required": ["baseBranches", "base_branches"] } },
+                  { "not": { "required": ["prNumbers", "pr_numbers"] } }
+                ]
               }
             }
           }
@@ -583,6 +605,18 @@
               "filter": {
                 "additionalProperties": false,
                 "properties": {
+                  "teams": {
+                    "$ref": "#/$defs/stringAliasList",
+                    "description": "Authoring alias for team_ids; the two are mutually exclusive."
+                  },
+                  "projects": {
+                    "$ref": "#/$defs/stringAliasList",
+                    "description": "Authoring alias for project_ids; the two are mutually exclusive."
+                  },
+                  "states": {
+                    "$ref": "#/$defs/stringAliasList",
+                    "description": "Authoring alias for state_ids; the two are mutually exclusive."
+                  },
                   "team_ids": { "$ref": "#/$defs/stringMatcher" },
                   "project_ids": { "$ref": "#/$defs/stringMatcher" },
                   "labels": { "$ref": "#/$defs/stringMatcher" },
@@ -590,7 +624,12 @@
                   "assignee_ids": { "$ref": "#/$defs/stringMatcher" },
                   "mentioned_user_ids": { "$ref": "#/$defs/stringMatcher" },
                   "creator_ids": { "$ref": "#/$defs/stringMatcher" }
-                }
+                },
+                "allOf": [
+                  { "not": { "required": ["team_ids", "teams"] } },
+                  { "not": { "required": ["project_ids", "projects"] } },
+                  { "not": { "required": ["state_ids", "states"] } }
+                ]
               }
             }
           }
@@ -608,6 +647,22 @@
               "filter": {
                 "additionalProperties": false,
                 "properties": {
+                  "teams": {
+                    "$ref": "#/$defs/stringAliasList",
+                    "description": "Authoring alias for team_ids; the two are mutually exclusive."
+                  },
+                  "projects": {
+                    "$ref": "#/$defs/stringAliasList",
+                    "description": "Authoring alias for project_ids; the two are mutually exclusive."
+                  },
+                  "states": {
+                    "$ref": "#/$defs/stringAliasList",
+                    "description": "Authoring alias for state_ids; the two are mutually exclusive."
+                  },
+                  "issues": {
+                    "$ref": "#/$defs/intAliasList",
+                    "description": "Authoring alias for issue_ids; the two are mutually exclusive."
+                  },
                   "team_ids": { "$ref": "#/$defs/stringMatcher" },
                   "project_ids": { "$ref": "#/$defs/stringMatcher" },
                   "labels": { "$ref": "#/$defs/stringMatcher" },
@@ -615,7 +670,13 @@
                   "issue_ids": { "$ref": "#/$defs/stringMatcher" },
                   "mentioned_user_ids": { "$ref": "#/$defs/stringMatcher" },
                   "creator_ids": { "$ref": "#/$defs/stringMatcher" }
-                }
+                },
+                "allOf": [
+                  { "not": { "required": ["team_ids", "teams"] } },
+                  { "not": { "required": ["project_ids", "projects"] } },
+                  { "not": { "required": ["state_ids", "states"] } },
+                  { "not": { "required": ["issue_ids", "issues"] } }
+                ]
               }
             }
           }
@@ -633,10 +694,17 @@
               "filter": {
                 "additionalProperties": false,
                 "properties": {
+                  "teams": {
+                    "$ref": "#/$defs/stringAliasList",
+                    "description": "Authoring alias for team_ids; the two are mutually exclusive."
+                  },
                   "team_ids": { "$ref": "#/$defs/stringMatcher" },
                   "creator_ids": { "$ref": "#/$defs/stringMatcher" },
                   "keywords": { "$ref": "#/$defs/stringMatcher" }
-                }
+                },
+                "allOf": [
+                  { "not": { "required": ["team_ids", "teams"] } }
+                ]
               }
             }
           }
@@ -723,10 +791,22 @@
               "filter": {
                 "additionalProperties": false,
                 "properties": {
+                  "channels": {
+                    "$ref": "#/$defs/stringAliasList",
+                    "description": "Authoring alias for channel_ids; the two are mutually exclusive."
+                  },
+                  "users": {
+                    "$ref": "#/$defs/stringAliasList",
+                    "description": "Authoring alias for user_ids; the two are mutually exclusive."
+                  },
                   "channel_ids": { "$ref": "#/$defs/stringMatcher" },
                   "user_ids": { "$ref": "#/$defs/stringMatcher" },
                   "keywords": { "$ref": "#/$defs/stringMatcher" }
-                }
+                },
+                "allOf": [
+                  { "not": { "required": ["channel_ids", "channels"] } },
+                  { "not": { "required": ["user_ids", "users"] } }
+                ]
               }
             }
           }
@@ -744,12 +824,29 @@
               "filter": {
                 "additionalProperties": false,
                 "properties": {
+                  "channels": {
+                    "$ref": "#/$defs/stringAliasList",
+                    "description": "Authoring alias for channel_ids; the two are mutually exclusive."
+                  },
+                  "users": {
+                    "$ref": "#/$defs/stringAliasList",
+                    "description": "Authoring alias for user_ids; the two are mutually exclusive."
+                  },
+                  "itemUsers": {
+                    "$ref": "#/$defs/stringAliasList",
+                    "description": "Authoring alias for item_user_ids; the two are mutually exclusive."
+                  },
                   "channel_ids": { "$ref": "#/$defs/stringMatcher" },
                   "user_ids": { "$ref": "#/$defs/stringMatcher" },
                   "emojis": { "$ref": "#/$defs/stringMatcher" },
                   "keywords": { "$ref": "#/$defs/stringMatcher" },
                   "item_user_ids": { "$ref": "#/$defs/stringMatcher" }
-                }
+                },
+                "allOf": [
+                  { "not": { "required": ["channel_ids", "channels"] } },
+                  { "not": { "required": ["user_ids", "users"] } },
+                  { "not": { "required": ["itemUsers", "item_user_ids"] } }
+                ]
               }
             }
           }
@@ -767,9 +864,21 @@
               "filter": {
                 "additionalProperties": false,
                 "properties": {
+                  "channels": {
+                    "$ref": "#/$defs/stringAliasList",
+                    "description": "Authoring alias for channel_ids; the two are mutually exclusive."
+                  },
+                  "users": {
+                    "$ref": "#/$defs/stringAliasList",
+                    "description": "Authoring alias for user_ids; the two are mutually exclusive."
+                  },
                   "channel_ids": { "$ref": "#/$defs/stringMatcher" },
                   "user_ids": { "$ref": "#/$defs/stringMatcher" }
-                }
+                },
+                "allOf": [
+                  { "not": { "required": ["channel_ids", "channels"] } },
+                  { "not": { "required": ["user_ids", "users"] } }
+                ]
               }
             }
           }

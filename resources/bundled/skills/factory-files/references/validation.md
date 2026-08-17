@@ -1,20 +1,25 @@
 # Validating and reading diagnostics
 
 ## Layers of validation
-1. **The bundled validator** (`scripts/validate_factory_files.py`) checks the
-   files themselves against the JSON Schemas plus the tree-level rules. It runs
-   offline and needs nothing but Python 3. Run it before every pull request.
-2. **The parser** (`logic/factoryfile` in `warp-server`) is the authority for
-   everything the validator checks. Its diagnostics carry `FF_*` codes and a
-   file path and line.
+1. **The server's parser** (`logic/factoryfile` in `warp-server`) is the
+   authority. `POST /api/v1/factory-files/validate` runs it over a tree you
+   submit as paths and content, and adds the state-independent rules the apply
+   path enforces next: runner platforms and instance shapes, and trigger filter
+   keys and matchers. Its diagnostics carry `FF_*` codes with a path, line, and
+   column.
+2. **The bundled validator** (`scripts/validate_factory_files.py`) is the
+   offline floor. It checks the files against the JSON Schemas shipped beside
+   it plus the tree-level rules, needs nothing but Python 3, and runs when the
+   server cannot be reached. It can be older than the server.
 3. **Resolution and apply** validate everything that needs server state: model
    IDs, environment IDs, secret names, runner names, MCP server IDs,
    integration providers, harness model catalogues, worker-host entitlement,
-   and runner platform and instance-shape rules.
+   and the values of Linear and Slack name aliases.
 
-A clean validator run means the files pass the bundled structural and
-state-independent semantic checks. It does not mean the plan will apply. Say
-so rather than overstating what was checked.
+A clean result from either of the first two means the files pass the structural
+and state-independent semantic checks. It does not mean the plan will apply.
+The server response lists the checks it did not run; say so rather than
+overstating what was checked.
 
 ## Running the validator
 The script lives at `scripts/validate_factory_files.py` inside this skill's
@@ -23,7 +28,22 @@ directory; `SKILL.md` shows its resolved path.
 ```bash
 python3 "<skill-dir>/scripts/validate_factory_files.py" "<factory-root>"
 python3 "<skill-dir>/scripts/validate_factory_files.py" "<factory-root>" --json
+python3 "<skill-dir>/scripts/validate_factory_files.py" "<factory-root>" --offline
 ```
+
+It reads the tree's `schemaVersion`, confirms the server publishes it, and
+submits the tree; only if that fails does it fall back. `--server-root <url>`
+or `WARP_SERVER_ROOT` selects a local, staging, or self-hosted server;
+`WARP_API_KEY` authenticates the validation endpoint. `--offline` skips the
+server deliberately.
+
+Every run ends with a sentence naming the path that ran, and `--json` carries
+the same fact in `validated_with`. Repeat it. An offline pass is not a server
+verdict, and a successful schema fetch is not validation.
+
+A version the server does not publish stops the run rather than being measured
+against another version's rules. Correct the version; never lower it to make a
+check pass.
 
 Use Python 3.8 or newer via the host's command (`python3`, `python`, or `py -3`). If none is
 available, do not install an interpreter or claim automated validation without
@@ -46,13 +66,23 @@ be a real file. Reading the target locally would also let a repository aim a
 resource at any readable path on the machine.
 
 The schemas are ordinary JSON Schema 2020-12 documents, so any standard
-validator works too if the tree is already converted to JSON. `x-warp-*`
-annotations carry constraints JSON Schema cannot express portably, such as
-trimmed Unicode alias rules; only the bundled validator enforces those
-annotations.
+validator works too if the tree is already converted to JSON. That applies to
+the documents the server serves as well; those are exact for the version they
+describe. `x-warp-*` annotations carry constraints JSON Schema cannot express
+portably, such as trimmed Unicode alias rules and the power-of-two Linux
+compute sizes; only a Warp validator enforces those annotations.
+
+## Deferred resolutions
+A server response can carry `deferred_resolutions` alongside its diagnostics. A
+deferred entry is not a problem: it names an authored value the endpoint
+deliberately did not prove, because proving it needs provider state. Linear and
+Slack name aliases are the current case — the endpoint checks that `teams` or
+`channels` is a list of non-empty names applicable to that event, and leaves
+whether those names exist to apply time.
 
 ## Diagnostic codes
-The server reports these when a plan is run against a registered Factory.
+The server reports these from the validation endpoint and when a plan is run
+against a registered Factory.
 
 - `FF_MISSING_FACTORY` — no `factory.yaml` at the Factory root.
 - `FF_UNSUPPORTED_VERSION` — `schemaVersion` names no registered tree adapter.

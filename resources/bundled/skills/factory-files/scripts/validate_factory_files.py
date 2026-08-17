@@ -1,10 +1,18 @@
 #!/usr/bin/env python3
-"""Validate a Factory file tree against the bundled v1alpha1 JSON Schemas.
+"""Validate a Factory file tree, against warp-server when it is reachable.
 
 Usage:
-    python3 validate_factory_files.py [FACTORY_ROOT] [--json] [--schemas DIR]
+    python3 validate_factory_files.py [FACTORY_ROOT] [--json] [--offline]
+                                      [--server-root URL] [--schemas DIR]
 
 FACTORY_ROOT defaults to the current directory and must contain factory.yaml.
+
+The server owns the Factory file format, so this script asks it first: it reads
+the tree's declared schemaVersion, confirms the server publishes that version,
+and submits the tree to the validation endpoint. Only when that path is
+unavailable does it fall back to the schemas and checks bundled here, and it
+always says which of the two ran. A bundled result can be older than the
+server; presenting one as though the server had agreed would be a lie.
 
 The script is intentionally dependency-free: it ships a restricted YAML reader
 for the canonical forms this skill emits (no anchors, aliases, explicit tags,
@@ -12,21 +20,24 @@ or multiple documents) and a JSON Schema evaluator covering the keywords the
 bundled schemas use. It is not a general-purpose YAML implementation. Anything
 it cannot read confidently is reported rather than guessed at.
 
-It does not replace server-side validation. Provider catalogues, model IDs,
-environment IDs, secret names, and runner references are resolved by the
-server; this checks structure, field names, enums, and cross-file references.
+Neither path resolves server state. Model IDs, environment IDs, secret names,
+runner references, MCP server IDs, integration availability, and the values of
+provider name aliases are all checked when the plan is applied.
 
 FORWARD COMPATIBILITY - DO NOT TIGHTEN
 --------------------------------------
-This validator and its schemas ship inside a Warp release, so they are
-routinely older than the warp-server they are used against. They therefore
-accept some input the current server rejects, on purpose. Unknown properties,
-agent types, credential strategies, harness types and per-harness
-capabilities, integration slugs, trigger providers and events, runner
-platforms, Scorer output forms, and the Scorer label cap are all deferred to
-the server.
+The bundled schemas ship inside a Warp release, so they are routinely older
+than the warp-server they are used against. They therefore accept some input
+the current server rejects, on purpose. Unknown properties, agent types,
+credential strategies, harness types and per-harness capabilities, integration
+slugs, trigger providers and events, runner platforms, Scorer output forms, and
+the Scorer label cap are all deferred to the server.
 
-If you are here because the validator accepted something the server rejects,
+This tolerance is for the offline floor only. The server's own schemas are
+exact for the version they describe, because they cannot lag the parser that
+serves them. Do not copy them over these.
+
+If you are here because the offline path accepted something the server rejects,
 the fix is usually a clearer server diagnostic, not a stricter schema. A false
 rejection is far more expensive than a false acceptance: it blocks correct
 work and invites an agent to "repair" valid configuration by deleting it,
@@ -35,7 +46,7 @@ whereas the server revalidates every tree at apply time anyway.
 Two checks are deliberately kept strict, and both are scoped so drift cannot
 trip them: trigger filter keys apply only when the provider and event are both
 recognized, and an unrecognized schemaVersion stops validation instead of
-misapplying v1alpha1 rules. See specs/REMOTE-2727/TECH.md.
+misapplying v1alpha1 rules. See warp-server specs/REMOTE-2868/TECH.md.
 """
 
 from __future__ import annotations
@@ -46,6 +57,8 @@ import os
 import re
 import sys
 import unicodedata
+import urllib.error
+import urllib.request
 from pathlib import Path
 from typing import Any, Optional
 
@@ -848,34 +861,11 @@ def _leaves_factory_root(path: Path, root: Path) -> bool:
 
 SUPPORTED_SCHEMA_VERSION = "v1alpha1"
 
-
-def _unsupported_schema_version(root: Path) -> Optional[Problem]:
-    """Report a tree whose schemaVersion these schemas do not describe.
-
-    Validating a newer tree against v1alpha1 rules would bury the one useful
-    fact under a cascade of bogus unknown-field reports, so stop instead and
-    say the server is the authority.
-    """
-    factory_file = root / "factory.yaml"
-    if _leaves_factory_root(factory_file, root):
-        # Leave the report to validate_tree, which names it as a link.
-        return None
-    try:
-        parsed = load_yaml(factory_file.read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, YamlError):
-        return None
-    if not isinstance(parsed, dict):
-        return None
-    declared = parsed.get("schemaVersion")
-    if not isinstance(declared, str) or declared.strip() in ("", SUPPORTED_SCHEMA_VERSION):
-        return None
-    return Problem(
-        "factory.yaml",
-        f"these bundled schemas describe {SUPPORTED_SCHEMA_VERSION}, not "
-        f"{declared.strip()!r}, so this tree was not validated locally; check it "
-        "with the server instead of downgrading schemaVersion",
-        pointer="schemaVersion",
-    )
+SYMLINK_REFUSED = (
+    "resource file is a symlink, or resolves outside the Factory root, and was not "
+    "read. The server parses the repository tree, so it sees the link itself rather "
+    "than its target and cannot accept this either. Replace it with a real file."
+)
 
 
 def validate_tree(root: Path, store: SchemaStore) -> list[Problem]:
@@ -885,10 +875,6 @@ def validate_tree(root: Path, store: SchemaStore) -> list[Problem]:
 
     if not (root / "factory.yaml").is_file():
         return [Problem("factory.yaml", "factory.yaml is required at the Factory root")]
-
-    unsupported = _unsupported_schema_version(root)
-    if unsupported is not None:
-        return [unsupported]
 
     for absolute in _resource_files(root):
         relative = absolute.relative_to(root).as_posix()
@@ -915,15 +901,7 @@ def validate_tree(root: Path, store: SchemaStore) -> list[Problem]:
             seen_names[(kind, name)] = relative
 
         if _leaves_factory_root(absolute, root):
-            problems.append(
-                Problem(
-                    relative,
-                    "resource file is a symlink, or resolves outside the Factory root, "
-                    "and was not read. The server parses the repository tree, so it sees "
-                    "the link itself rather than its target and cannot accept this "
-                    "either. Replace it with a real file.",
-                )
-            )
+            problems.append(Problem(relative, SYMLINK_REFUSED))
             continue
 
         try:
@@ -1342,10 +1320,261 @@ def _validate_cross_file(documents: dict[str, tuple[str, str, Any]]) -> list[Pro
     return problems
 
 
+# ---------------------------------------------------------------------------
+# Server-backed validation
+# ---------------------------------------------------------------------------
+
+DEFAULT_SERVER_ROOT = "https://app.warp.dev"
+SCHEMA_REGISTRY_PATH = "/api/v1/factory-files/schemas"
+VALIDATE_PATH = "/api/v1/factory-files/validate"
+
+# Bounded so an unreachable or slow server degrades to the offline floor in
+# seconds rather than stalling an authoring session.
+REQUEST_TIMEOUT_SECONDS = 10.0
+MAX_RESPONSE_BYTES = 8 * 1024 * 1024
+
+# Mirrors the caps the endpoint enforces, so an oversized tree falls back
+# locally instead of collecting a 400 from the server.
+MAX_REMOTE_FILES = 256
+MAX_REMOTE_FILE_BYTES = 256 * 1024
+MAX_REMOTE_CONTENT_BYTES = 2 * 1024 * 1024
+
+
+class RemoteUnavailable(Exception):
+    """The server could not be used, so the offline floor has to run."""
+
+
+class UnsupportedRemoteVersion(Exception):
+    """The server does not publish the version this tree declares.
+
+    This is not a fallback case. Measuring a version nobody recognizes against
+    v1alpha1 rules would bury the one useful fact under invented unknown-field
+    reports.
+    """
+
+
+class Outcome:
+    """What ran, what it found, and what it deliberately did not check."""
+
+    def __init__(
+        self,
+        mode: str,
+        schema_version: str,
+        problems: list[Problem],
+        deferred: Optional[list[dict[str, Any]]] = None,
+        fallback_reason: str = "",
+    ):
+        self.mode = mode
+        self.schema_version = schema_version
+        self.problems = problems
+        self.deferred = deferred or []
+        self.fallback_reason = fallback_reason
+
+    def disclosure(self) -> str:
+        """The sentence the agent must repeat. Never claim more than ran."""
+        if self.mode == "remote":
+            return (
+                f"Validated with the warp-server parser for {self.schema_version}; "
+                "state-dependent apply checks were not run."
+            )
+        if self.mode == "unsupported-version":
+            return (
+                f"This tree declares {self.schema_version}, which was not validated; "
+                "check it against a server that publishes that version rather than "
+                "downgrading schemaVersion."
+            )
+        return (
+            f"Server validation was unavailable ({self.fallback_reason}); validated with "
+            f"the bundled offline {self.schema_version} fallback, which may be older than "
+            "the server. State-dependent apply checks were not run."
+        )
+
+
+def declared_schema_version(root: Path) -> str:
+    """Return the version factory.yaml declares, defaulting as the parser does."""
+    factory_file = root / "factory.yaml"
+    if _leaves_factory_root(factory_file, root):
+        return SUPPORTED_SCHEMA_VERSION
+    try:
+        parsed = load_yaml(factory_file.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, YamlError):
+        return SUPPORTED_SCHEMA_VERSION
+    if not isinstance(parsed, dict):
+        return SUPPORTED_SCHEMA_VERSION
+    declared = parsed.get("schemaVersion")
+    if not isinstance(declared, str) or not declared.strip():
+        return SUPPORTED_SCHEMA_VERSION
+    return declared.strip()
+
+
+def server_root(argument: Optional[str]) -> str:
+    """Resolve the server to ask, so a local or staging root needs no code change."""
+    chosen = argument or os.environ.get("WARP_SERVER_ROOT") or DEFAULT_SERVER_ROOT
+    return chosen.rstrip("/")
+
+
+def _request_json(url: str, token: Optional[str] = None, payload: Optional[Any] = None) -> Any:
+    """Fetch or post JSON, turning every failure class into RemoteUnavailable."""
+    data = None
+    headers = {"Accept": "application/json"}
+    if payload is not None:
+        data = json.dumps(payload).encode("utf-8")
+        headers["Content-Type"] = "application/json"
+    if token:
+        headers["Authorization"] = "Bearer " + token
+    request = urllib.request.Request(url, data=data, headers=headers)
+    try:
+        with urllib.request.urlopen(request, timeout=REQUEST_TIMEOUT_SECONDS) as response:
+            body = response.read(MAX_RESPONSE_BYTES + 1)
+    except urllib.error.HTTPError as error:
+        raise RemoteUnavailable(f"the server answered HTTP {error.code}") from error
+    except Exception as error:  # DNS, TLS, connection, timeout, proxy, ...
+        raise RemoteUnavailable(f"the server could not be reached: {error}") from error
+    if len(body) > MAX_RESPONSE_BYTES:
+        raise RemoteUnavailable("the server response was implausibly large")
+    try:
+        return json.loads(body.decode("utf-8"))
+    except (UnicodeError, ValueError) as error:
+        raise RemoteUnavailable(f"the server response was not JSON: {error}") from error
+
+
+def _remote_payload(root: Path) -> tuple[list[dict[str, str]], list[Problem]]:
+    """Collect the tree to submit, refusing symlinks the way the server does."""
+    files: list[dict[str, str]] = []
+    problems: list[Problem] = []
+    total = 0
+    for absolute in _resource_files(root):
+        relative = absolute.relative_to(root).as_posix()
+        kind, _ = classify(relative)
+        if kind in ("unrelated", "skill", "invalid"):
+            continue
+        if _leaves_factory_root(absolute, root):
+            problems.append(Problem(relative, SYMLINK_REFUSED))
+            continue
+        try:
+            content = absolute.read_text(encoding="utf-8")
+        except (OSError, UnicodeError) as error:
+            problems.append(Problem(relative, f"could not read UTF-8 resource: {error}"))
+            continue
+        encoded = len(content.encode("utf-8"))
+        if encoded > MAX_REMOTE_FILE_BYTES:
+            raise RemoteUnavailable(f"{relative} is larger than the endpoint accepts")
+        total += encoded
+        if total > MAX_REMOTE_CONTENT_BYTES or len(files) >= MAX_REMOTE_FILES:
+            raise RemoteUnavailable("the tree is larger than the endpoint accepts")
+        files.append({"path": relative, "content": content})
+    if not files:
+        raise RemoteUnavailable("the tree has no resource files to submit")
+    return files, problems
+
+
+def validate_with_server(root: Path, base_url: str, version: str) -> Outcome:
+    """Validate through the server, or raise so the caller falls back.
+
+    Fetching the schema is not validation: a reachable registry with an
+    unusable validate endpoint still means the tree was never checked.
+    """
+    token = os.environ.get("WARP_API_KEY")
+    if not token:
+        raise RemoteUnavailable("WARP_API_KEY is not set and the endpoint is authenticated")
+
+    registry = _request_json(base_url + SCHEMA_REGISTRY_PATH)
+    if not isinstance(registry, dict) or not isinstance(registry.get("versions"), list):
+        raise RemoteUnavailable("the schema registry response was malformed")
+    published = {
+        entry.get("schema_version") for entry in registry["versions"] if isinstance(entry, dict)
+    }
+    if version not in published:
+        raise UnsupportedRemoteVersion(version)
+
+    files, local_problems = _remote_payload(root)
+    response = _request_json(base_url + VALIDATE_PATH, token=token, payload={"files": files})
+    if not isinstance(response, dict) or not isinstance(response.get("diagnostics"), list):
+        raise RemoteUnavailable("the validation response was malformed")
+
+    problems = list(local_problems)
+    for diagnostic in response["diagnostics"]:
+        if not isinstance(diagnostic, dict):
+            raise RemoteUnavailable("the validation response was malformed")
+        code = str(diagnostic.get("code", ""))
+        message = str(diagnostic.get("message", ""))
+        line = diagnostic.get("line")
+        problems.append(
+            Problem(
+                str(diagnostic.get("path", "")),
+                f"{code}: {message}" if code else message,
+                line=line if isinstance(line, int) else None,
+            )
+        )
+    deferred = [
+        entry for entry in response.get("deferred_resolutions", []) if isinstance(entry, dict)
+    ]
+    reported = response.get("schema_version")
+    return Outcome(
+        "remote",
+        reported if isinstance(reported, str) and reported else version,
+        problems,
+        deferred,
+    )
+
+
+def validate(root: Path, store: SchemaStore, base_url: str, offline: bool) -> Outcome:
+    """Validate against the server when it is usable, otherwise offline."""
+    version = declared_schema_version(root)
+    fallback_reason = "--offline was requested"
+    if not offline:
+        try:
+            return validate_with_server(root, base_url, version)
+        except UnsupportedRemoteVersion:
+            return Outcome(
+                "unsupported-version",
+                version,
+                [
+                    Problem(
+                        "factory.yaml",
+                        f"the server does not publish schema version {version!r}, so this "
+                        "tree was not validated; correct the version rather than "
+                        "downgrading it to make a check pass",
+                        pointer="schemaVersion",
+                    )
+                ],
+            )
+        except RemoteUnavailable as error:
+            fallback_reason = str(error)
+
+    if version != SUPPORTED_SCHEMA_VERSION:
+        # The offline floor may only judge the one version it describes.
+        return Outcome(
+            "unsupported-version",
+            version,
+            [
+                Problem(
+                    "factory.yaml",
+                    f"these bundled schemas describe {SUPPORTED_SCHEMA_VERSION}, not "
+                    f"{version!r}, so this tree was not validated locally; check it with "
+                    "the server instead of downgrading schemaVersion",
+                    pointer="schemaVersion",
+                )
+            ],
+        )
+    return Outcome("offline", version, validate_tree(root, store), fallback_reason=fallback_reason)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("root", nargs="?", default=".", help="Factory root containing factory.yaml")
     parser.add_argument("--json", action="store_true", help="emit machine-readable output")
+    parser.add_argument(
+        "--offline",
+        action="store_true",
+        help="skip the server and use the bundled schemas, which may be older",
+    )
+    parser.add_argument(
+        "--server-root",
+        default=None,
+        help="warp-server root to validate against; defaults to $WARP_SERVER_ROOT then "
+        + DEFAULT_SERVER_ROOT,
+    )
     parser.add_argument(
         "--schemas",
         default=str(Path(__file__).resolve().parent.parent / "schemas"),
@@ -1355,17 +1584,40 @@ def main() -> int:
 
     root = Path(args.root).resolve()
     store = SchemaStore(Path(args.schemas).resolve())
-    problems = validate_tree(root, store)
+    outcome = validate(root, store, server_root(args.server_root), args.offline)
+    problems = outcome.problems
 
     if args.json:
-        print(json.dumps({"valid": not problems, "problems": [p.as_dict() for p in problems]}, indent=2))
-    elif problems:
+        print(
+            json.dumps(
+                {
+                    "valid": not problems,
+                    "validated_with": outcome.mode,
+                    "schema_version": outcome.schema_version,
+                    "disclosure": outcome.disclosure(),
+                    "problems": [problem.as_dict() for problem in problems],
+                    "deferred_resolutions": outcome.deferred,
+                },
+                indent=2,
+            )
+        )
+        return 1 if problems else 0
+
+    if problems:
         print(f"{len(problems)} problem(s) in {root}:", file=sys.stderr)
         for problem in problems:
             print(f"  {problem.render()}", file=sys.stderr)
-    else:
-        print(f"{root}: factory files are valid against the v1alpha1 schemas")
-    return 1 if problems else 0
+        print(outcome.disclosure(), file=sys.stderr)
+        return 1
+
+    print(f"{root}: factory files are valid.")
+    print(outcome.disclosure())
+    for entry in outcome.deferred:
+        print(
+            f"  deferred: {entry.get('path', '')} {entry.get('field', '')} "
+            f"({entry.get('kind', '')}) is resolved when the plan is applied"
+        )
+    return 0
 
 
 if __name__ == "__main__":

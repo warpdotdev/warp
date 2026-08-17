@@ -16,19 +16,24 @@ rejects. Those are not mistakes and must not be "corrected" into INVALID_CASES:
 the schemas ship inside a Warp release and are routinely older than the server,
 so they defer catalogue and limit decisions rather than rejecting a tree built
 for a newer server. If one of them starts failing, a schema was tightened;
-reopen the schema rather than moving the case. See specs/REMOTE-2727/TECH.md.
+reopen the schema rather than moving the case. See
+warp-server specs/REMOTE-2868/TECH.md.
 
 Run directly, or via script/presubmit.
 """
 
 from __future__ import annotations
 
+import contextlib
+import http.server
+import json
 import os
 import re
 import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -138,6 +143,42 @@ VALID_CASES: list[tuple[str, dict[str, str]]] = [
             **{
                 "automations/n/automation.md": "---\ntriggers:\n  - provider: schedule\n"
                 "    event: cron_fired\n    schedule:\n      cron: '@daily'\n---\nrun\n"
+            }
+        ),
+    ),
+    # The authoring aliases the apply path rewrites. These parse clean and
+    # apply, so rejecting them here would block correct trees; an earlier
+    # revision of these schemas did exactly that.
+    (
+        "github-local-aliases",
+        tree(
+            **{
+                "automations/pr/automation.md": "---\ntriggers:\n  - provider: github\n"
+                "    event: pull_request_ready\n    filter:\n"
+                "      baseBranches: [develop, main]\n      prNumbers: [7]\n---\nreview\n"
+            }
+        ),
+    ),
+    (
+        "github-local-alias-matcher-object",
+        tree(
+            **{
+                "automations/pr/automation.md": "---\ntriggers:\n  - provider: github\n"
+                "    event: pull_request_ready\n    filter:\n      baseBranches:\n"
+                "        not_in: [main]\n---\nreview\n"
+            }
+        ),
+    ),
+    (
+        "linear-and-slack-provider-aliases",
+        tree(
+            **{
+                "automations/triage/automation.md": "---\ntriggers:\n  - provider: linear\n"
+                "    event: comment_created\n    filter:\n      teams: [ENG]\n"
+                "      projects: [Factory]\n      states: [Backlog]\n      issues: [2039]\n"
+                "  - provider: slack\n    event: reaction_added\n    filter:\n"
+                "      channels: ['#factory']\n      users: [zach]\n      itemUsers: [safia]\n"
+                "---\ntriage\n"
             }
         ),
     ),
@@ -438,6 +479,45 @@ VALID_CASES: list[tuple[str, dict[str, str]]] = [
 
 INVALID_CASES: list[tuple[str, dict[str, str]]] = [
     (
+        "alias-and-canonical-field-together",
+        tree(
+            **{
+                "automations/pr/automation.md": "---\ntriggers:\n  - provider: github\n"
+                "    event: pull_request_ready\n    filter:\n      baseBranches: [develop]\n"
+                "      base_branches: [main]\n---\nreview\n"
+            }
+        ),
+    ),
+    (
+        "provider-alias-as-matcher-object",
+        tree(
+            **{
+                "automations/triage/automation.md": "---\ntriggers:\n  - provider: linear\n"
+                "    event: issue_created\n    filter:\n      teams:\n        in: [ENG]\n"
+                "---\ntriage\n"
+            }
+        ),
+    ),
+    (
+        "provider-alias-with-non-positive-number",
+        tree(
+            **{
+                "automations/triage/automation.md": "---\ntriggers:\n  - provider: linear\n"
+                "    event: comment_created\n    filter:\n      issues: [0]\n---\ntriage\n"
+            }
+        ),
+    ),
+    (
+        "alias-on-an-event-its-field-does-not-reach",
+        tree(
+            **{
+                "automations/triage/automation.md": "---\ntriggers:\n  - provider: linear\n"
+                "    event: agent_session_created\n    filter:\n      projects: [Factory]\n"
+                "---\ntriage\n"
+            }
+        ),
+    ),
+    (
         "model-and-harness",
         tree(
             **{
@@ -492,11 +572,14 @@ INVALID_CASES: list[tuple[str, dict[str, str]]] = [
         ),
     ),
     (
+        # A misspelling, not "channels": that one is a supported authoring
+        # alias for channel_ids, so asserting it invalid would be the bug this
+        # corpus is meant to catch.
         "unknown-filter-key-on-known-provider-and-event",
         tree(
             **{
                 "automations/n/automation.md": "---\ntriggers:\n  - provider: slack\n"
-                "    event: app_mention\n    filter:\n      channels: [C1]\n---\nrun\n"
+                "    event: app_mention\n    filter:\n      chanels: [C1]\n---\nrun\n"
             }
         ),
     ),
@@ -762,8 +845,10 @@ def run_case(name: str, expect_valid: bool, files: dict[str, str]) -> bool:
             path = root / relative
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(content, encoding="utf-8")
+        # --offline is the point of this corpus: it exercises the bundled
+        # floor, and without it every case would try to reach a server.
         result = subprocess.run(
-            [sys.executable, str(VALIDATOR), str(root)],
+            [sys.executable, str(VALIDATOR), str(root), "--offline"],
             capture_output=True,
             text=True,
             check=False,
@@ -886,8 +971,6 @@ def assert_schemas_stay_forward_compatible() -> None:
       a misspelled filter key is a common mistake that otherwise survives until
       apply. Those rules only fire when both provider and event are recognized.
     """
-    import json
-
     offenders: list[str] = []
     for schema_path in sorted((SKILL / "schemas").glob("*.schema.json")):
         document = json.loads(schema_path.read_text(encoding="utf-8"))
@@ -906,7 +989,7 @@ def assert_schemas_stay_forward_compatible() -> None:
             "these schemas were tightened against future server changes, which "
             "would reject trees a newer server accepts; record new values in an "
             "x-warp-known-values annotation instead (see "
-            "specs/REMOTE-2727/TECH.md):\n  " + "\n  ".join(offenders)
+            "warp-server specs/REMOTE-2868/TECH.md):\n  " + "\n  ".join(offenders)
         )
 
 
@@ -934,7 +1017,7 @@ def assert_symlinked_resources_are_refused() -> None:
             (root / "runners" / "linked.yaml").symlink_to(secret)
 
             result = subprocess.run(
-                [sys.executable, str(VALIDATOR), str(root)],
+                [sys.executable, str(VALIDATOR), str(root), "--offline"],
                 capture_output=True,
                 text=True,
                 check=False,
@@ -960,13 +1043,234 @@ def assert_symlinked_resources_are_refused() -> None:
         )
         (root / "runners" / "alias.yaml").symlink_to(root / "runners" / "real.yaml")
         result = subprocess.run(
-            [sys.executable, str(VALIDATOR), str(root)],
+            [sys.executable, str(VALIDATOR), str(root), "--offline"],
             capture_output=True,
             text=True,
             check=False,
         )
         if result.returncode == 0:
             raise RuntimeError("a symlink pointing inside the Factory root was accepted")
+
+        # The remote path must refuse the same link rather than uploading a
+        # file the server would never see in a git tree.
+        (root / "runners" / "alias.yaml").unlink()
+        (root / "runners" / "linked.yaml").symlink_to(Path("/etc/hostname"))
+        with fake_server({"diagnostics": []}) as server:
+            result = run_validator(root, server.url, api_key="warp_key")
+        if result.returncode == 0:
+            raise RuntimeError("a symlinked resource file was accepted by the remote path")
+        if "symlink" not in result.stdout + result.stderr:
+            raise RuntimeError("the remote path did not report the symlink")
+        if any(
+            entry["path"].endswith("linked.yaml") for entry in server.submitted_files()
+        ):
+            raise RuntimeError("the remote path uploaded a symlinked resource")
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+class _FakeServer:
+    """A warp-server stand-in for the fetch-first path.
+
+    Records what the validator submitted so a test can assert the tree it sent,
+    not just the verdict it printed.
+    """
+
+    def __init__(self, httpd, thread):
+        self._httpd = httpd
+        self._thread = thread
+        self.url = f"http://127.0.0.1:{httpd.server_address[1]}"
+
+    def submitted_files(self) -> list[dict]:
+        return self._httpd.submitted_files
+
+    def requested_paths(self) -> list[str]:
+        return self._httpd.requested_paths
+
+
+@contextlib.contextmanager
+def fake_server(
+    validate_body,
+    versions=("v1alpha1",),
+    validate_status: int = 200,
+    registry_status: int = 200,
+):
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def log_message(self, *_args):  # keep the corpus output readable
+            pass
+
+        def _respond(self, status: int, body) -> None:
+            encoded = json.dumps(body).encode("utf-8") if body is not None else b""
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(encoded)))
+            self.end_headers()
+            self.wfile.write(encoded)
+
+        def do_GET(self):  # noqa: N802 - BaseHTTPRequestHandler's naming
+            self.server.requested_paths.append(self.path)
+            if registry_status != 200:
+                self._respond(registry_status, {"error": "nope"})
+                return
+            self._respond(
+                200,
+                {
+                    "current_version": versions[0] if versions else "",
+                    "versions": [
+                        {
+                            "schema_version": version,
+                            "schema_url": f"/api/v1/factory-files/schemas/{version}",
+                        }
+                        for version in versions
+                    ],
+                },
+            )
+
+        def do_POST(self):  # noqa: N802 - BaseHTTPRequestHandler's naming
+            self.server.requested_paths.append(self.path)
+            length = int(self.headers.get("Content-Length", "0"))
+            payload = json.loads(self.rfile.read(length) or b"{}")
+            self.server.submitted_files.extend(payload.get("files", []))
+            self.server.authorization = self.headers.get("Authorization", "")
+            self._respond(validate_status, validate_body)
+
+    httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    httpd.submitted_files = []
+    httpd.requested_paths = []
+    httpd.authorization = ""
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield _FakeServer(httpd, thread)
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+        thread.join(timeout=5)
+
+
+def run_validator(root: Path, server_url: str, api_key: str = ""):
+    environment = os.environ.copy()
+    environment.pop("WARP_API_KEY", None)
+    environment.pop("WARP_SERVER_ROOT", None)
+    if api_key:
+        environment["WARP_API_KEY"] = api_key
+    return subprocess.run(
+        [sys.executable, str(VALIDATOR), str(root), "--server-root", server_url],
+        capture_output=True,
+        text=True,
+        check=False,
+        env=environment,
+    )
+
+
+REMOTE_DISCLOSURE = "Validated with the warp-server parser"
+OFFLINE_DISCLOSURE = "Server validation was unavailable"
+
+
+def assert_fetch_first_behavior() -> None:
+    """The server is asked first, and the answer always says which path ran.
+
+    Claiming a server verdict after falling back to the bundled floor is the
+    failure this whole change exists to prevent, so each fallback class is
+    checked for the disclosure rather than only for its exit code.
+    """
+    root = Path(tempfile.mkdtemp(prefix="factory-files-remote-"))
+    try:
+        (root / "agents" / "main").mkdir(parents=True)
+        (root / "factory.yaml").write_text(FACTORY, encoding="utf-8")
+        (root / "agents" / "main" / "agent.md").write_text(MAIN_AGENT, encoding="utf-8")
+
+        with fake_server({"schema_version": "v1alpha1", "diagnostics": []}) as server:
+            result = run_validator(root, server.url, api_key="warp_key")
+            if result.returncode != 0 or REMOTE_DISCLOSURE not in result.stdout:
+                raise RuntimeError(f"expected a remote pass, got: {result.stdout}{result.stderr}")
+            submitted = {entry["path"] for entry in server.submitted_files()}
+            if submitted != {"factory.yaml", "agents/main/agent.md"}:
+                raise RuntimeError(f"unexpected submitted tree: {sorted(submitted)}")
+
+        # A server diagnostic is reported as the server worded it.
+        remote_problem = {
+            "schema_version": "v1alpha1",
+            "diagnostics": [
+                {
+                    "path": "factory.yaml",
+                    "line": 2,
+                    "column": 1,
+                    "code": "FF_UNKNOWN_FIELD",
+                    "message": 'unknown field "bogus"',
+                }
+            ],
+        }
+        with fake_server(remote_problem) as server:
+            result = run_validator(root, server.url, api_key="warp_key")
+        if result.returncode == 0 or "FF_UNKNOWN_FIELD" not in result.stderr:
+            raise RuntimeError(f"expected the server diagnostic, got: {result.stderr}")
+
+        # A deferred provider alias is surfaced, not silently dropped.
+        deferred = {
+            "schema_version": "v1alpha1",
+            "diagnostics": [],
+            "deferred_resolutions": [
+                {
+                    "path": "automations/t/automation.md",
+                    "field": "triggers[0].filter.teams",
+                    "kind": "linear_name_alias",
+                }
+            ],
+        }
+        with fake_server(deferred) as server:
+            result = run_validator(root, server.url, api_key="warp_key")
+        if "linear_name_alias" not in result.stdout:
+            raise RuntimeError(f"deferred resolutions were not reported: {result.stdout}")
+
+        # Every fallback class runs the offline floor and says so.
+        fallbacks = {
+            "no api key": dict(api_key=""),
+            "validate 401": dict(api_key="warp_key", validate_status=401),
+            "validate 429": dict(api_key="warp_key", validate_status=429),
+            "validate 500": dict(api_key="warp_key", validate_status=500),
+            "registry 503": dict(api_key="warp_key", registry_status=503),
+            "malformed response": dict(api_key="warp_key", body={"unexpected": True}),
+        }
+        for name, options in fallbacks.items():
+            api_key = options.pop("api_key")
+            body = options.pop("body", {"schema_version": "v1alpha1", "diagnostics": []})
+            with fake_server(body, **options) as server:
+                result = run_validator(root, server.url, api_key=api_key)
+            if result.returncode != 0:
+                raise RuntimeError(f"{name}: expected the offline floor to run and pass")
+            if OFFLINE_DISCLOSURE not in result.stdout:
+                raise RuntimeError(f"{name}: the fallback was not disclosed: {result.stdout}")
+            if REMOTE_DISCLOSURE in result.stdout:
+                raise RuntimeError(f"{name}: a fallback claimed a server verdict")
+
+        # An unreachable server is a fallback too, not a hang or a crash.
+        result = run_validator(root, "http://127.0.0.1:9", api_key="warp_key")
+        if result.returncode != 0 or OFFLINE_DISCLOSURE not in result.stdout:
+            raise RuntimeError(f"an unreachable server did not fall back: {result.stdout}")
+
+        # A version the server does not publish stops instead of being measured
+        # against v1alpha1 rules.
+        newer = FACTORY.replace("v1alpha1", "v2beta1")
+        (root / "factory.yaml").write_text(newer, encoding="utf-8")
+        with fake_server({"diagnostics": []}) as server:
+            result = run_validator(root, server.url, api_key="warp_key")
+        combined = result.stdout + result.stderr
+        if result.returncode == 0 or "v2beta1" not in combined:
+            raise RuntimeError(f"an unpublished version was not reported: {combined}")
+        if OFFLINE_DISCLOSURE in combined or REMOTE_DISCLOSURE in combined:
+            raise RuntimeError("an unpublished version was validated anyway")
+
+        # The offline floor refuses the same version rather than applying
+        # v1alpha1 rules to a format it does not describe.
+        result = subprocess.run(
+            [sys.executable, str(VALIDATOR), str(root), "--offline"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.returncode == 0 or "v2beta1" not in result.stdout + result.stderr:
+            raise RuntimeError("the offline floor validated an unknown schemaVersion")
     finally:
         shutil.rmtree(root, ignore_errors=True)
 
@@ -983,10 +1287,12 @@ def main() -> int:
         print(f"{len(failures)}/{len(cases)} factory-files validator cases failed", file=sys.stderr)
         return 1
     assert_symlinked_resources_are_refused()
+    assert_fetch_first_behavior()
     assert_packaged_skill_matches()
-    print(f"factory-files validator: {len(cases)}/{len(cases)} cases passed")
+    print(f"factory-files validator: {len(cases)}/{len(cases)} offline cases passed")
     print("factory-files schemas: still open to future server changes")
     print("factory-files resources: symlinks out of the tree are refused")
+    print("factory-files validation: the server is asked first and fallbacks are disclosed")
     print("factory-files packaging: source and bundled trees match")
     return 0
 

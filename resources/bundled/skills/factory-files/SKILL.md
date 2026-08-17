@@ -9,6 +9,12 @@ A software factory can be defined by files in a repository. This skill covers
 authoring and editing those files, and validating them before you open a pull
 request.
 
+warp-server owns the format. It publishes the schema for each version it
+supports and validates a tree with the same parser the apply path uses, so ask
+it rather than reasoning from a copy that ships inside a Warp release. This
+skill bundles schemas and a validator as an offline floor for when the server
+cannot be reached, and always says which of the two ran.
+
 Use this skill for repository files. It is not the skill for operating a live
 factory: use `factory-mcp` to send work to a factory, inspect task status, or
 pull a task down locally. Playbooks under a factory's own `skills/` directories
@@ -19,7 +25,9 @@ not a schema change, so this skill's rules do not apply to their contents.
 Every Factory tree is rooted at the directory containing `factory.yaml`. All
 paths below are relative to that root. A repository may register a
 subdirectory as the root, so find `factory.yaml` rather than assuming the
-repository root.
+repository root. Do not follow symlinks while looking: the server parses the
+repository tree, where a symlink is stored as its target path rather than its
+target's content.
 
 If there is no `factory.yaml`, this is not a Factory tree and nothing here
 applies. `agents/<name>/agent.md` and similar paths are also used by other
@@ -50,66 +58,76 @@ unless the user asks you to normalize the tree.
    Scorer's body is its rubric. Never fold either into frontmatter.
 3. Prefer the smallest edit that satisfies the request.
 
-## Author against the schema
-The current server parser rejects unknown fields, but bundled schemas can be
-older than the server. They therefore validate known fields while preserving
-unknown properties and newer catalogue values. Do not invent a field when a
-documented one exists, and do not delete an existing unknown field. Duplicate
-keys, YAML anchors, aliases, explicit tags, and multiple documents remain
-invalid.
+## Author against the server's schema
+Read the tree's `schemaVersion` from `factory.yaml`; a tree that omits it is
+`v1alpha1`. Then fetch the schema for that version:
 
-The bundled JSON Schemas are the machine-readable contract:
-
-```
-schemas/factory.schema.json      factory.yaml
-schemas/agent.schema.json        agents/<name>/agent.md frontmatter
-schemas/automation.schema.json   automations/<name>/automation.md frontmatter
-schemas/runner.schema.json       runners/<name>.yaml
-schemas/scorer.schema.json       scorers/<name>/scorer.md frontmatter
-schemas/common.schema.json       shared definitions referenced by the above
+```bash
+curl -s https://app.warp.dev/api/v1/factory-files/schemas
+curl -s https://app.warp.dev/api/v1/factory-files/schemas/<schemaVersion>
 ```
 
-Read `references/schema.md` for the field-by-field reference, defaults, and
-inheritance rules. Read `references/triggers.md` before writing or changing an
-automation trigger: filter keys are specific to each provider and event, and
-the parser does not catch a wrong one. Read `references/scorers.md` before
-writing or changing a Scorer. Read `references/examples.md` for worked
-examples of each resource.
+The registry lists the versions the server supports. The version endpoint
+returns every document describing one version, keyed by file name:
+`factory.schema.json` for `factory.yaml`, `agent.schema.json`,
+`automation.schema.json`, `runner.schema.json` and `scorer.schema.json` for the
+corresponding resources, and `common.schema.json` for the definitions they
+share. Both endpoints are unauthenticated. They are exact for the version they
+describe: an unknown field is an error, and each enumerated value is one the
+server accepts today.
+
+If the server does not publish the declared version, stop. Do not measure the
+tree against a version it does not claim to be, and never lower
+`schemaVersion` to make a check pass.
+
+Read `references/examples.md` for worked examples of each resource, and
+`references/scorers.md` before writing or changing a Scorer. The field-by-field
+catalogue is not duplicated here any more; the fetched schema carries it, with
+a description on each field.
 
 ## Validate before opening a pull request
-Run the bundled validator with Python 3.8 or newer, using the host's command (`python3`,
-`python`, or `py -3`). Quote both paths because an app-bundle path can contain
-spaces.
+Run the bundled validator with Python 3.8 or newer, using the host's command
+(`python3`, `python`, or `py -3`). Quote both paths because an app-bundle path
+can contain spaces.
 
 ```bash
 python3 "{{skill_dir}}/scripts/validate_factory_files.py" "<factory-root>"
 ```
 
-Add `--json` for machine-readable output. A non-zero exit means at least one
-problem; fix every reported problem and re-run until it is clean.
+It asks the server first and falls back to the bundled copy on its own. Add
+`--json` for machine-readable output, `--server-root <url>` to point at a
+local, staging, or self-hosted server, and `--offline` to skip the server
+deliberately. `WARP_SERVER_ROOT` sets the root too. The validation endpoint is
+authenticated and reads `WARP_API_KEY`, which agent sandboxes already carry.
+
+A non-zero exit means at least one problem; fix every reported problem and
+re-run until it is clean.
 
 If no Python 3 interpreter is available, do not install one or claim the tree
 was validated without the user's approval. Check the changed document against
-the corresponding JSON Schema manually and report that automated validation
-was unavailable.
+the fetched schema by hand and report that automated validation was
+unavailable.
 
-The validator checks known field structure, mutual exclusions, trigger and
-Scorer semantics, cron syntax, runner platform rules, and tree-level rules
-(exactly one MAIN agent, Agent references, duplicate resource names). Unknown
-properties and newer catalogue values pass through for version skew. It does
-not resolve server state: model IDs, environment IDs, secret names, runner
-names, Scorer model IDs, MCP server IDs, and integration availability are all
-validated when the plan is applied. Report that distinction rather than
-claiming a tree is fully verified.
+### Say which validation ran
+The validator prints one of two sentences. Repeat it; do not paraphrase it
+away.
 
-If a `warp-server` checkout is available, its parser tests are the authority.
-Run them from that checkout, not from the Factory repository:
+- Server: the tree went through warp-server's own parser for its declared
+  version. State-dependent apply checks still did not run.
+- Offline: the server was unreachable, unauthenticated, or answered unusably,
+  so the bundled copy ran instead. That copy can be older than the server, so a
+  pass is weaker evidence than it looks.
 
-```bash
-go test ./logic/factoryfile
-```
+Never present an offline pass as a server verdict, and never treat a successful
+schema fetch as validation on its own.
 
-When the Factory is already registered, a server plan is the strongest
+Neither path resolves server state. Model IDs, environment IDs, secret names,
+runner names, Scorer model IDs, MCP server IDs, integration availability, and
+the values of Linear and Slack name aliases are all checked when the plan is
+applied. The server response lists what it did not check; report that
+distinction rather than claiming a tree is fully verified.
+
+When the Factory is already registered, a server plan remains the strongest
 available check. See `references/validation.md` for diagnostic codes and how to
 read them.
 
@@ -128,31 +146,31 @@ read them.
   non-empty `filter.schedule_ids`, and never both.
 - Linux runners require `platform.linux.dockerImage`. A runner with no
   `platform` section defaults to Linux and will fail for that reason.
+- Trigger filter keys depend on the `(provider, event)` pair. Some fields have
+  a friendlier authoring spelling that the server rewrites for you: GitHub
+  `baseBranches` and `prNumbers`, Linear `teams`, `projects`, `states` and
+  `issues`, and Slack `channels`, `users` and `itemUsers`. Each stands in for
+  its canonical key, and declaring both is an error. The Linear and Slack ones
+  name objects the server looks up at apply time, so they take a plain list of
+  names rather than an `in`/`not_in` matcher.
 
-## Schema drift and version skew
-The format is `v1alpha1` and still changing. `logic/factoryfile` in
-`warp-server` is the authority; these schemas only mirror it.
+## When the bundled copy and the server disagree
+The server is right. The bundled schemas and validator ship inside your Warp
+version, so they can be older than the server the Factory syncs against, and
+they are deliberately permissive to avoid rejecting what a newer server
+accepts.
 
-They also ship inside your Warp version rather than coming from the server, so
-they can be older than the server the Factory syncs against. A field the server
-added after your version was built will be reported here as unknown.
-
-Because of that:
-
-- Never delete, rename, or rewrite a field only because the validator calls it
-  unknown. On a file you did not author, that is at least as likely to be a
-  newer field as a mistake. Leave it, and say the schemas may be behind.
+- Never delete, rename, or rewrite a field only because the offline validator
+  calls it unknown. On a file you did not author, that is at least as likely to
+  be a newer field as a mistake. Leave it, and say the bundled copy may be
+  behind.
 - Treat unknown-field reports on your own new edits as real. You are the one
   who just introduced the field.
-- If the server and these schemas disagree, the server is right. Say the
-  bundled schemas look stale rather than working around the validator by
-  skipping it.
-- If the validator reports that it does not describe the tree's
-  `schemaVersion`, it stopped instead of applying `v1alpha1` rules to a format
-  it does not know. Validate with the server; never downgrade `schemaVersion`
-  to make the local run pass.
+- If the offline validator reports that it does not describe the tree's
+  `schemaVersion`, it stopped rather than applying `v1alpha1` rules to a format
+  it does not know. Validate against the server instead.
 
 If you are editing the bundled schemas themselves rather than a Factory tree,
-their openness is deliberate and load-bearing. Read the "If you are changing
-these schemas" section of `references/validation.md` before tightening
-anything.
+their openness is deliberate and load-bearing, and it is not the policy the
+server's own schemas follow. Read the "If you are changing these schemas"
+section of `references/validation.md` before tightening anything.
