@@ -87,10 +87,11 @@ const CREATE_TEAM_BUTTON_LEFT_PADDING: f32 = 10.;
 const CREATE_TEAM_DESCRIPTION: &str = "When you create a team, you can collaborate on agent-driven development by sharing cloud agent runs, environments, automations, and artifacts. You can also create a shared knowledge store for teammates and agents alike.";
 
 // Teamless page copy
-const CREATE_OR_JOIN_TEAM_HEADER: &str = "Or, join an existing team within your company";
+const OR_JOIN_TEAM_HEADER: &str = "Or, join an existing team within your company";
 const JOIN_TEAM_HEADER: &str = "Join an existing team within your company";
 const NO_TEAMS_TO_JOIN_DESCRIPTION: &str =
     "You have no available teams to join — contact an admin to add you to a team.";
+const LOADING_TEAMS_TEXT: &str = "Loading...";
 const ADMIN_PANEL_CTA_LINK_TEXT: &str = "Visit the admin panel";
 const ADMIN_PANEL_CTA_TRAILING_COPY: &str = "to manage teams.";
 
@@ -398,14 +399,15 @@ enum JoinableTeams {
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 enum TeamlessContent {
     /// Create-team UI, plus the discoverable-teams list when `join_teams`.
-    CreateTeam { join_teams: bool },
+    CreateTeam {
+        join_teams: bool,
+    },
     /// Admin-panel CTA banner, plus the discoverable-teams list when `join_teams`.
-    AdminPanelCta { join_teams: bool },
-    /// Discoverable-teams list on its own.
+    AdminPanelCta {
+        join_teams: bool,
+    },
     JoinTeams,
-    /// Nothing to create and nothing to join.
     NoTeamsToJoin,
-    /// Team discovery hasn't resolved yet.
     PendingTeamDiscovery,
 }
 
@@ -1759,8 +1761,8 @@ impl TeamsPageView {
         }
     }
 
-    /// Find view handle of first input. If user team does not exist, this will default to
-    /// the create_team_editor.
+    /// Focus the first input on the page: a team member's domain or email
+    /// editor, or the create-team editor when the teamless page renders it.
     fn focus_on_next_input(&mut self, ctx: &mut ViewContext<Self>) {
         let workspaces: &UserWorkspaces = self.user_workspaces.as_ref(ctx);
 
@@ -1778,15 +1780,18 @@ impl TeamsPageView {
         ctx.notify();
     }
 
-    /// Whether the teamless page renders the create-team editor; native
-    /// workspace users create teams from the admin panel instead, so there is
-    /// no editor to focus.
+    /// Whether the teamless page renders the create-team editor. Asks the same
+    /// helper the page renders from, so focus can't land on an editor that
+    /// isn't there.
     fn renders_create_team_ui(&self, ctx: &AppContext) -> bool {
-        !self
-            .user_workspaces
-            .as_ref(ctx)
-            .current_workspace()
-            .is_some_and(Workspace::is_native_workspaces_enabled)
+        matches!(
+            TeamsWidget::teamless_content_for(
+                self.user_workspaces.as_ref(ctx).current_workspace(),
+                self.auth_state.user_email().as_deref(),
+                self.joinable_teams(),
+            ),
+            TeamlessContent::CreateTeam { .. }
+        )
     }
 
     fn joinable_teams(&self) -> JoinableTeams {
@@ -4086,17 +4091,21 @@ impl TeamsWidget {
     }
 
     /// Maps the teamless viewer's workspace context onto the page's content.
-    /// The five states are enumerated in one place so they can be unit tested
-    /// without rendering.
-    fn teamless_content(
-        native_workspaces: bool,
-        is_workspace_admin: bool,
+    /// The states are resolved in one place so they can be unit tested without
+    /// rendering, and so the focus logic can ask the same question. A workspace
+    /// we don't have yet can't be native, so it keeps the create-team page.
+    fn teamless_content_for(
+        workspace: Option<&Workspace>,
+        email: Option<&str>,
         joinable_teams: JoinableTeams,
     ) -> TeamlessContent {
         let join_teams = joinable_teams == JoinableTeams::Available;
-        if !native_workspaces {
+        if !workspace.is_some_and(Workspace::is_native_workspaces_enabled) {
             return TeamlessContent::CreateTeam { join_teams };
         }
+        let is_workspace_admin = workspace
+            .zip(email)
+            .is_some_and(|(workspace, email)| workspace.is_workspace_admin(email));
         if is_workspace_admin {
             return TeamlessContent::AdminPanelCta { join_teams };
         }
@@ -4113,13 +4122,9 @@ impl TeamsWidget {
         appearance: &Appearance,
         app: &AppContext,
     ) -> Box<dyn Element> {
-        let workspace = view.user_workspaces.as_ref(app).current_workspace();
-        let is_workspace_admin = workspace
-            .zip(view.auth_state.user_email())
-            .is_some_and(|(workspace, email)| workspace.is_workspace_admin(&email));
-        let content = Self::teamless_content(
-            workspace.is_some_and(Workspace::is_native_workspaces_enabled),
-            is_workspace_admin,
+        let content = Self::teamless_content_for(
+            view.user_workspaces.as_ref(app).current_workspace(),
+            view.auth_state.user_email().as_deref(),
             view.joinable_teams(),
         );
 
@@ -4134,7 +4139,7 @@ impl TeamsWidget {
                     page.add_child(self.render_join_teams_section(
                         view,
                         appearance,
-                        CREATE_OR_JOIN_TEAM_HEADER,
+                        OR_JOIN_TEAM_HEADER,
                     ));
                 }
             }
@@ -4165,20 +4170,27 @@ impl TeamsWidget {
             }
             TeamlessContent::NoTeamsToJoin => {
                 page.add_child(
-                    Container::new(
-                        self.render_description(
-                            NO_TEAMS_TO_JOIN_DESCRIPTION.to_string(),
-                            appearance,
-                        ),
-                    )
-                    .with_padding_top(6.)
-                    .finish(),
+                    self.render_teamless_message(
+                        NO_TEAMS_TO_JOIN_DESCRIPTION.to_string(),
+                        appearance,
+                    ),
                 );
             }
-            TeamlessContent::PendingTeamDiscovery => {}
+            TeamlessContent::PendingTeamDiscovery => {
+                page.add_child(
+                    self.render_teamless_message(LOADING_TEAMS_TEXT.to_string(), appearance),
+                );
+            }
         }
 
         page.finish()
+    }
+
+    /// A single line of page-level copy, for the states that have no controls.
+    fn render_teamless_message(&self, text: String, appearance: &Appearance) -> Box<dyn Element> {
+        Container::new(self.render_description(text, appearance))
+            .with_padding_top(6.)
+            .finish()
     }
 
     /// The discoverable-teams header and list. The header is passed in because

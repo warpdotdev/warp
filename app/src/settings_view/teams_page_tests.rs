@@ -232,37 +232,87 @@ fn current_user_gets_no_actions_against_their_own_row_as_workspace_admin() {
 
 #[test]
 fn non_native_workspace_keeps_create_team_ui() {
+    // Admin role, but the workspace isn't native, so create-team stays.
+    let workspace = workspace_with_member(ADMIN_EMAIL, MembershipRole::Admin, false);
+
     assert_eq!(
-        TeamsWidget::teamless_content(false, false, JoinableTeams::Available),
+        TeamsWidget::teamless_content_for(
+            Some(&workspace),
+            Some(ADMIN_EMAIL),
+            JoinableTeams::Available
+        ),
         TeamlessContent::CreateTeam { join_teams: true }
     );
     assert_eq!(
-        TeamsWidget::teamless_content(false, true, JoinableTeams::Empty),
+        TeamsWidget::teamless_content_for(
+            Some(&workspace),
+            Some(ADMIN_EMAIL),
+            JoinableTeams::Empty
+        ),
+        TeamlessContent::CreateTeam { join_teams: false }
+    );
+}
+
+#[test]
+fn unresolved_workspace_keeps_create_team_ui() {
+    assert_eq!(
+        TeamsWidget::teamless_content_for(None, Some(MEMBER_EMAIL), JoinableTeams::Empty),
         TeamlessContent::CreateTeam { join_teams: false }
     );
 }
 
 #[test]
 fn native_workspace_admin_gets_admin_panel_cta() {
+    let workspace = admin_workspace(ADMIN_EMAIL);
+
     assert_eq!(
-        TeamsWidget::teamless_content(true, true, JoinableTeams::Available),
+        TeamsWidget::teamless_content_for(
+            Some(&workspace),
+            Some(ADMIN_EMAIL),
+            JoinableTeams::Available
+        ),
         TeamlessContent::AdminPanelCta { join_teams: true }
     );
     // An admin with nothing to join sees only the admin-panel CTA.
     assert_eq!(
-        TeamsWidget::teamless_content(true, true, JoinableTeams::Empty),
+        TeamsWidget::teamless_content_for(
+            Some(&workspace),
+            Some(ADMIN_EMAIL),
+            JoinableTeams::Empty
+        ),
         TeamlessContent::AdminPanelCta { join_teams: false }
     );
 }
 
 #[test]
 fn native_workspace_member_gets_join_or_empty_state() {
+    let workspace = workspace_with_member(MEMBER_EMAIL, MembershipRole::User, true);
+
     assert_eq!(
-        TeamsWidget::teamless_content(true, false, JoinableTeams::Available),
+        TeamsWidget::teamless_content_for(
+            Some(&workspace),
+            Some(MEMBER_EMAIL),
+            JoinableTeams::Available
+        ),
         TeamlessContent::JoinTeams
     );
     assert_eq!(
-        TeamsWidget::teamless_content(true, false, JoinableTeams::Empty),
+        TeamsWidget::teamless_content_for(
+            Some(&workspace),
+            Some(MEMBER_EMAIL),
+            JoinableTeams::Empty
+        ),
+        TeamlessContent::NoTeamsToJoin
+    );
+}
+
+#[test]
+fn viewer_missing_from_the_workspace_roster_is_not_an_admin() {
+    // An unresolved email can't match an admin row, so this is the member path.
+    let workspace = admin_workspace(ADMIN_EMAIL);
+
+    assert_eq!(
+        TeamsWidget::teamless_content_for(Some(&workspace), None, JoinableTeams::Empty),
         TeamlessContent::NoTeamsToJoin
     );
 }
@@ -270,8 +320,14 @@ fn native_workspace_member_gets_join_or_empty_state() {
 #[test]
 fn native_workspace_member_waits_for_team_discovery() {
     // Avoids flashing the empty state before the fetch resolves.
+    let workspace = workspace_with_member(MEMBER_EMAIL, MembershipRole::User, true);
+
     assert_eq!(
-        TeamsWidget::teamless_content(true, false, JoinableTeams::Pending),
+        TeamsWidget::teamless_content_for(
+            Some(&workspace),
+            Some(MEMBER_EMAIL),
+            JoinableTeams::Pending
+        ),
         TeamlessContent::PendingTeamDiscovery
     );
 }
