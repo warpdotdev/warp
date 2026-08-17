@@ -105,6 +105,10 @@ fn mount_command(cache_root: &Path, cwd: &Path, modes: &[String]) -> Command {
         duration_ms = tracing::field::Empty,
         disk_usage_total = tracing::field::Empty,
         disk_usage_used = tracing::field::Empty,
+        mount_error_kind = tracing::field::Empty,
+        mount_error_exit_code = tracing::field::Empty,
+        otel.status_code = tracing::field::Empty,
+        otel.status_message = tracing::field::Empty,
     )
 )]
 pub(super) async fn run_spacectl_mount<F, Fut>(
@@ -169,7 +173,17 @@ where
             }
         }
         Err(err) => {
-            tracing::error!(error = ?err);
+            span.record("mount_error_kind", err.kind());
+            if let Some(exit_code) = err.exit_code() {
+                span.record("mount_error_exit_code", exit_code);
+            }
+            span.record("otel.status_code", "ERROR");
+            span.record("otel.status_message", err.to_string());
+            tracing::error!(
+                mount_error_kind = err.kind(),
+                mount_error_exit_code = err.exit_code(),
+                "spacectl cache mount failed"
+            );
             failed_invocation(scope, modes, relative_cache_dir, err, duration)
         }
     }

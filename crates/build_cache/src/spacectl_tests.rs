@@ -1,9 +1,80 @@
+use std::collections::BTreeMap;
 use std::ffi::OsStr;
 use std::path::Path;
+use std::sync::{Arc, Mutex};
 
 use command::r#async::Command;
+use futures::executor::block_on;
+use tracing::field::{Field, Visit};
+use tracing::span::{Attributes, Id, Record};
+use tracing::{Subscriber, subscriber};
+use tracing_subscriber::layer::{Context, SubscriberExt as _};
+use tracing_subscriber::registry::LookupSpan;
+use tracing_subscriber::{Layer, Registry};
 
-use super::{MountResponse, detect_command, mount_command};
+use super::{MountResponse, detect_command, mount_command, run_spacectl_mount};
+use crate::{CacheScope, CacheSetupError};
+
+#[derive(Clone, Default)]
+struct SpanFields(Arc<Mutex<BTreeMap<String, String>>>);
+
+impl SpanFields {
+    fn record(&self, values: &Record<'_>) {
+        values.record(&mut FieldVisitor(Arc::clone(&self.0)));
+    }
+
+    fn get(&self, field: &str) -> Option<String> {
+        self.0.lock().unwrap().get(field).cloned()
+    }
+}
+
+struct FieldVisitor(Arc<Mutex<BTreeMap<String, String>>>);
+
+impl Visit for FieldVisitor {
+    fn record_i64(&mut self, field: &Field, value: i64) {
+        self.0
+            .lock()
+            .unwrap()
+            .insert(field.name().to_owned(), value.to_string());
+    }
+
+    fn record_str(&mut self, field: &Field, value: &str) {
+        self.0
+            .lock()
+            .unwrap()
+            .insert(field.name().to_owned(), value.to_owned());
+    }
+
+    fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
+        self.0
+            .lock()
+            .unwrap()
+            .insert(field.name().to_owned(), format!("{value:?}"));
+    }
+}
+
+impl<S> Layer<S> for SpanFields
+where
+    S: Subscriber + for<'lookup> LookupSpan<'lookup>,
+{
+    fn on_new_span(&self, attributes: &Attributes<'_>, id: &Id, context: Context<'_, S>) {
+        if context
+            .span(id)
+            .is_some_and(|span| span.name() == "spacectl_cache_mount")
+        {
+            attributes.record(&mut FieldVisitor(Arc::clone(&self.0)));
+        }
+    }
+
+    fn on_record(&self, id: &Id, values: &Record<'_>, context: Context<'_, S>) {
+        if context
+            .span(id)
+            .is_some_and(|span| span.name() == "spacectl_cache_mount")
+        {
+            self.record(values);
+        }
+    }
+}
 
 fn args(command: &Command) -> Vec<&OsStr> {
     command.get_args().collect()
@@ -81,4 +152,70 @@ fn mount_response_deserializes_spacectl_output() {
 
     let response = serde_json::from_slice::<MountResponse>(br#"{"input":{},"output":{}}"#).unwrap();
     assert_eq!(response.output.disk_usage, None);
+}
+
+#[test]
+fn mount_failures_record_safe_error_details_and_error_status_on_span() {
+    let cases = [
+        CacheSetupError::SpawnFailed,
+        CacheSetupError::NonzeroExit {
+            exit_code: Some(17),
+        },
+        CacheSetupError::Timeout,
+    ];
+
+    for error in cases {
+        let fields = SpanFields::default();
+        let subscriber = Registry::default().with(fields.clone());
+        let report = subscriber::with_default(subscriber, || {
+            block_on(run_spacectl_mount(
+                CacheScope::Global,
+                vec!["go".to_owned()],
+                false,
+                "shared".into(),
+                Path::new("/cache/shared"),
+                Path::new("/work"),
+                &mut |_| futures::future::ready(Err(error.clone())),
+            ))
+        });
+
+        assert_eq!(report.error.as_ref(), Some(&error));
+        assert_eq!(
+            fields.get("mount_error_kind").as_deref(),
+            Some(error.kind())
+        );
+        assert_eq!(fields.get("otel.status_code").as_deref(), Some("ERROR"));
+        assert_eq!(
+            fields.get("otel.status_message").as_deref(),
+            Some(error.to_string().as_str())
+        );
+        assert_eq!(
+            fields.get("mount_error_exit_code"),
+            error.exit_code().map(|exit_code| exit_code.to_string())
+        );
+    }
+}
+
+#[test]
+fn invalid_spacectl_json_records_parse_failure_on_span() {
+    let fields = SpanFields::default();
+    let subscriber = Registry::default().with(fields.clone());
+    let report = subscriber::with_default(subscriber, || {
+        block_on(run_spacectl_mount(
+            CacheScope::Global,
+            vec!["go".to_owned()],
+            false,
+            "shared".into(),
+            Path::new("/cache/shared"),
+            Path::new("/work"),
+            &mut |_| futures::future::ready(Ok(b"not json".to_vec())),
+        ))
+    });
+
+    assert_eq!(report.error, Some(CacheSetupError::JsonParseFailed));
+    assert_eq!(
+        fields.get("mount_error_kind").as_deref(),
+        Some("json_parse_failed")
+    );
+    assert_eq!(fields.get("otel.status_code").as_deref(), Some("ERROR"));
 }

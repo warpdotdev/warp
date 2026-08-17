@@ -27,3 +27,4 @@ warp_errors.workspace = true
 
 [dev-dependencies]
 futures.workspace = true
+tracing-subscriber.workspace = true

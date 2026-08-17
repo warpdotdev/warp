@@ -2460,6 +2460,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.17",
  "tracing",
+ "tracing-subscriber",
  "warp_core",
  "warp_errors",
 ]
