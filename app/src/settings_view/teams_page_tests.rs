@@ -35,6 +35,7 @@ fn team_with_members(members: Vec<TeamMember>, multi_admin_enabled: bool) -> Tea
         settings: Default::default(),
         is_eligible_for_discovery: false,
         has_billing_history: false,
+        visibility: Default::default(),
     }
 }
 
