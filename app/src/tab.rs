@@ -1,4 +1,5 @@
-use std::collections::HashMap;
+use std::cell::RefCell;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -19,10 +20,12 @@ use warpui::elements::{
     SizeConstraintSwitch, Stack, Text,
 };
 use warpui::fonts::Weight;
+use warpui::keymap::Keystroke;
+use warpui::platform::keyboard::KeyCode;
 use warpui::text_layout::ClipConfig;
 use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
 use warpui::ui_components::text_input::TextInput;
-use warpui::{AppContext, SingletonEntity, ViewHandle};
+use warpui::{AppContext, Entity, SingletonEntity, ViewHandle};
 
 use crate::BlocklistAIHistoryModel;
 use crate::ai::agent::conversation::ConversationStatus;
@@ -44,6 +47,7 @@ use crate::themes::theme::{AnsiColorIdentifier, Fill as ThemeFill, VerticalGradi
 use crate::ui_components::buttons::icon_button;
 use crate::ui_components::color_dot::{TAB_COLOR_OPTIONS, render_color_dot};
 use crate::ui_components::icons::{ICON_DIMENSIONS, Icon};
+use crate::util::bindings::{keybinding_name_to_display_string, keybinding_name_to_keystroke};
 use crate::util::color::{Opacity, coloru_with_opacity};
 use crate::util::truncation::truncate_from_end;
 use crate::window_settings::WindowSettings;
@@ -58,6 +62,119 @@ use crate::workspace::{
 
 pub const TAB_BAR_BORDER_HEIGHT: f32 = 1.0;
 pub(crate) const TAB_INDICATOR_HEIGHT: f32 = 14.0;
+
+/// Binding names for switching to tabs 1–8 (tab index 0–7), used to surface the
+/// effective keystroke (including user overrides) on each tab.
+pub(crate) const TAB_ACTIVATE_BINDING_NAMES: [&str; 8] = [
+    "workspace:activate_first_tab",
+    "workspace:activate_second_tab",
+    "workspace:activate_third_tab",
+    "workspace:activate_fourth_tab",
+    "workspace:activate_fifth_tab",
+    "workspace:activate_sixth_tab",
+    "workspace:activate_seventh_tab",
+    "workspace:activate_eighth_tab",
+];
+
+/// Modifier kinds relevant to revealing tab shortcut hints. The Super kind is
+/// the Cmd key on macOS and the Windows/Super key elsewhere; a `Keystroke`'s
+/// `cmd` and `meta` flags both correspond to it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum ShortcutModifierKind {
+    Super,
+    Control,
+    Alt,
+    Shift,
+}
+
+pub(crate) fn shortcut_modifier_kind(key_code: KeyCode) -> Option<ShortcutModifierKind> {
+    match key_code {
+        KeyCode::SuperLeft | KeyCode::SuperRight => Some(ShortcutModifierKind::Super),
+        KeyCode::ControlLeft | KeyCode::ControlRight => Some(ShortcutModifierKind::Control),
+        KeyCode::AltLeft | KeyCode::AltRight => Some(ShortcutModifierKind::Alt),
+        KeyCode::ShiftLeft | KeyCode::ShiftRight => Some(ShortcutModifierKind::Shift),
+        // KeyCode is non_exhaustive; non-modifier keys reveal nothing.
+        _ => None,
+    }
+}
+
+pub(crate) fn keystroke_modifier_kinds(keystroke: &Keystroke) -> HashSet<ShortcutModifierKind> {
+    let mut kinds = HashSet::new();
+    if keystroke.cmd || keystroke.meta {
+        kinds.insert(ShortcutModifierKind::Super);
+    }
+    if keystroke.ctrl {
+        kinds.insert(ShortcutModifierKind::Control);
+    }
+    if keystroke.alt {
+        kinds.insert(ShortcutModifierKind::Alt);
+    }
+    if keystroke.shift {
+        kinds.insert(ShortcutModifierKind::Shift);
+    }
+    kinds
+}
+
+pub(crate) fn reveals_shortcut_hints(
+    held: &HashSet<ShortcutModifierKind>,
+    binding_kinds: &HashSet<ShortcutModifierKind>,
+) -> bool {
+    held.intersection(binding_kinds).next().is_some()
+}
+
+/// Tracks which physical modifier keys are currently held, so tab surfaces can
+/// temporarily show switch-to-tab shortcut hints while a relevant modifier is
+/// down.
+#[derive(Default)]
+pub struct TabShortcutModifierState {
+    held_keys: RefCell<HashSet<KeyCode>>,
+}
+
+impl TabShortcutModifierState {
+    pub fn new() -> Self {
+        Default::default()
+    }
+
+    /// Returns whether the held-key set changed.
+    pub fn set_key_held(&self, key_code: KeyCode, pressed: bool) -> bool {
+        let mut held_keys = self.held_keys.borrow_mut();
+        if pressed {
+            held_keys.insert(key_code)
+        } else {
+            held_keys.remove(&key_code)
+        }
+    }
+
+    fn held_kinds(&self) -> HashSet<ShortcutModifierKind> {
+        self.held_keys
+            .borrow()
+            .iter()
+            .filter_map(|key| shortcut_modifier_kind(*key))
+            .collect()
+    }
+}
+
+impl Entity for TabShortcutModifierState {
+    type Event = ();
+}
+
+impl SingletonEntity for TabShortcutModifierState {}
+
+/// Whether shortcut hints should show right now: some held modifier is one the
+/// current switch-to-tab bindings actually use. Derived from the bindings so a
+/// user who remapped, say, ⌘1 to ⌥1 reveals with ⌥, not ⌘.
+pub(crate) fn reveals_tab_shortcut_hints(ctx: &AppContext) -> bool {
+    let held = TabShortcutModifierState::as_ref(ctx).held_kinds();
+    if held.is_empty() {
+        return false;
+    }
+    let binding_kinds: HashSet<_> = TAB_ACTIVATE_BINDING_NAMES
+        .iter()
+        .filter_map(|name| keybinding_name_to_keystroke(name, ctx))
+        .flat_map(|keystroke| keystroke_modifier_kinds(&keystroke))
+        .collect();
+    reveals_shortcut_hints(&held, &binding_kinds)
+}
 
 /// Label for the tab right-click menu's "Move to group" submenu parent.
 pub const MOVE_TO_GROUP_LABEL: &str = "Move to group";
@@ -932,6 +1049,7 @@ pub struct TabComponent<'a> {
     /// both the in-selection highlight and the right-click menu dispatch
     /// (multi-tab menu vs single-tab menu).
     is_in_multi_tab_selection: bool,
+    shortcut_hint_label: Option<String>,
 }
 
 /// Structure that holds TabComponent styles.
@@ -1019,6 +1137,12 @@ impl<'a> TabComponent<'a> {
             .as_ref(ctx)
             .is_terminal_pane_being_shared(ctx);
         let should_show_indicators = *TabSettings::as_ref(ctx).show_indicators.value();
+        let shortcut_hint_label =
+            if reveals_tab_shortcut_hints(ctx) && tab_index < TAB_ACTIVATE_BINDING_NAMES.len() {
+                keybinding_name_to_display_string(TAB_ACTIVATE_BINDING_NAMES[tab_index], ctx)
+            } else {
+                None
+            };
         let are_inputs_synced = SyncedInputState::as_ref(ctx)
             .should_sync_this_pane_group(tab.pane_group.id(), tab.pane_group.window_id(ctx));
 
@@ -1094,6 +1218,7 @@ impl<'a> TabComponent<'a> {
             sole_grouped_member: false,
             locator,
             is_in_multi_tab_selection: false,
+            shortcut_hint_label,
         }
     }
 
@@ -1580,6 +1705,26 @@ impl<'a> TabComponent<'a> {
         })
     }
 
+    fn render_shortcut_hint(&self) -> Option<Box<dyn Element>> {
+        if self.for_drag_ghost {
+            return None;
+        }
+        let label = self.shortcut_hint_label.as_ref()?;
+        let theme = self.appearance.theme();
+        let font_size = self.styles.default.font_size.unwrap_or(12.);
+        let text = Text::new_inline(
+            label.clone(),
+            self.styles
+                .default
+                .font_family_id
+                .expect("Font family defined"),
+            font_size,
+        )
+        .with_color(theme.sub_text_color(theme.background()).into())
+        .finish();
+        Some(Container::new(text).with_margin_right(4.).finish())
+    }
+
     fn render_tab_container(&self, is_hovered: bool) -> Box<dyn Element> {
         let is_tab_dragging = self.is_tab_dragging();
         let is_hovered = is_hovered && !self.tab_bar.is_any_tab_dragging;
@@ -1680,6 +1825,9 @@ impl<'a> TabComponent<'a> {
                 .with_main_axis_size(MainAxisSize::Max)
                 .with_main_axis_alignment(MainAxisAlignment::Center)
                 .with_cross_axis_alignment(warpui::elements::CrossAxisAlignment::Center);
+            if let Some(hint) = self.render_shortcut_hint() {
+                flex_row.add_child(hint);
+            }
             if let Some(indicator) = self.render_indicator() {
                 flex_row.add_child(indicator);
             }
