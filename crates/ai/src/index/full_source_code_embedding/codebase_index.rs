@@ -153,7 +153,7 @@ pub struct CodebaseIndex {
     repository: ModelHandle<Repository>,
     leaf_node_to_fragment_metadatas: LeafToFragmentMetadata,
     embedding_config: EmbeddingConfig,
-    gitignores: Arc<Vec<Arc<Gitignore>>>,
+    gitignores: Vec<Arc<Gitignore>>,
     tree_sync_state: TreeSourceSyncState,
     retrieval_requests: HashMap<RetrievalID, AbortHandle>,
     store_client: Arc<dyn StoreClient>,
@@ -330,7 +330,7 @@ pub enum CodebaseIndexEvent {
     #[cfg(feature = "local_fs")]
     GitignoresUpdated {
         repo_root_path: PathBuf,
-        gitignores: Arc<Vec<Arc<Gitignore>>>,
+        gitignores: Vec<Arc<Gitignore>>,
     },
     LocalIndexBuilt {
         repo_root_path: PathBuf,
@@ -438,7 +438,7 @@ impl CodebaseIndex {
             repository,
             ts_metadata: CodebaseIndexTimeStampMetadata::default(),
             embedding_config,
-            gitignores: Arc::new(vec![]),
+            gitignores: vec![],
             tree_sync_state: TreeSourceSyncState::unsynced(),
             leaf_node_to_fragment_metadatas: LeafToFragmentMetadata::default(),
             retrieval_requests: Default::default(),
@@ -978,7 +978,7 @@ impl CodebaseIndex {
 
         time_tracker.mark_interval_end(FILE_TRAVERSAL_TIME);
 
-        self.gitignores = Arc::new(gitignores);
+        self.gitignores = gitignores;
         ctx.emit(CodebaseIndexEvent::GitignoresUpdated {
             repo_root_path: repo_path.clone(),
             gitignores: self.gitignores.clone(),
@@ -1858,7 +1858,7 @@ impl CodebaseIndex {
                                             }
                                         };
 
-                                    me.gitignores = Arc::new(gitignores);
+                                    me.gitignores = gitignores;
                                     ctx.emit(CodebaseIndexEvent::GitignoresUpdated {
                                         repo_root_path: me.repo_path.clone(),
                                         gitignores: me.gitignores.clone(),
