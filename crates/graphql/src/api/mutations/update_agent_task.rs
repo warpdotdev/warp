@@ -35,6 +35,12 @@ pub struct AgentTaskStatusMessageInput {
     #[cynic(skip_serializing_if = "Option::is_none")]
     pub error_code: Option<PlatformErrorCode>,
     pub message: String,
+    #[cynic(skip_serializing_if = "Option::is_none")]
+    pub retryable: Option<bool>,
+    #[cynic(skip_serializing_if = "Option::is_none")]
+    pub provider: Option<String>,
+    #[cynic(skip_serializing_if = "Option::is_none")]
+    pub dependency: Option<String>,
 }
 
 #[derive(cynic::QueryFragment, Debug)]

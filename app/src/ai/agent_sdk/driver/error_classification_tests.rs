@@ -3,6 +3,7 @@ use warp_graphql::ai::{AgentTaskState, PlatformErrorCode};
 use super::classify_driver_error;
 use crate::ai::agent_sdk::driver::AgentDriverError;
 use crate::ai::agent_sdk::driver::terminal::{BootstrapError, ShareSessionError};
+use crate::server::server_api::ai::TaskGitCredentialsError;
 
 fn assert_state_and_code(
     error: AgentDriverError,
@@ -15,6 +16,63 @@ fn assert_state_and_code(
         update.error_code, expected_code,
         "unexpected error_code for {error}"
     );
+}
+
+#[test]
+fn retryable_dependency_credentials_failure_is_error_with_structured_metadata() {
+    let (state, update) = classify_driver_error(&AgentDriverError::GitCredentialsFetchFailed(
+        TaskGitCredentialsError::Platform {
+            message: "External dependency is unavailable.".to_string(),
+            code: PlatformErrorCode::ResourceUnavailable,
+            retryable: true,
+            detail: Some(
+                "GitHub is temporarily unavailable while resolving repository access.".to_string(),
+            ),
+            provider: Some("github".to_string()),
+            dependency: Some("github_api".to_string()),
+        },
+    ));
+
+    assert_eq!(state, AgentTaskState::Error);
+    assert_eq!(
+        update.error_code,
+        Some(PlatformErrorCode::ResourceUnavailable)
+    );
+    assert_eq!(update.retryable, Some(true));
+    assert_eq!(update.provider.as_deref(), Some("github"));
+    assert_eq!(update.dependency.as_deref(), Some("github_api"));
+    assert!(update.message.contains("GitHub is temporarily unavailable"));
+}
+
+#[test]
+fn user_credentials_failure_remains_failed() {
+    let (state, update) = classify_driver_error(&AgentDriverError::GitCredentialsFetchFailed(
+        TaskGitCredentialsError::Platform {
+            message: "Repository was not found.".to_string(),
+            code: PlatformErrorCode::ResourceNotFound,
+            retryable: false,
+            detail: None,
+            provider: Some("github".to_string()),
+            dependency: Some("repository".to_string()),
+        },
+    ));
+
+    assert_eq!(state, AgentTaskState::Failed);
+    assert_eq!(update.error_code, Some(PlatformErrorCode::ResourceNotFound));
+    assert_eq!(update.retryable, Some(false));
+}
+
+#[test]
+fn credential_request_error_redacts_internal_cause_from_status() {
+    let internal = "token=not-for-production";
+    let (state, update) = classify_driver_error(&AgentDriverError::GitCredentialsFetchFailed(
+        TaskGitCredentialsError::Request(anyhow::anyhow!(internal)),
+    ));
+
+    assert_eq!(state, AgentTaskState::Error);
+    assert_eq!(update.error_code, Some(PlatformErrorCode::InternalError));
+    assert_eq!(update.retryable, Some(true));
+    assert!(!update.message.contains(internal));
 }
 
 // --- Infrastructure errors → ERROR ---

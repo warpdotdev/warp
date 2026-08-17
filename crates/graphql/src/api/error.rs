@@ -1,3 +1,4 @@
+use super::ai::PlatformErrorCode;
 use super::object::ObjectType;
 use crate::response_context::ResponseContext;
 use crate::schema;
@@ -8,8 +9,19 @@ pub struct UserFacingError {
     pub response_context: ResponseContext,
 }
 
+#[derive(cynic::QueryFragment, Debug)]
+pub struct PlatformError {
+    pub message: String,
+    pub code: PlatformErrorCode,
+    pub retryable: bool,
+    pub detail: Option<String>,
+    pub provider: Option<String>,
+    pub dependency: Option<String>,
+}
+
 #[derive(cynic::InlineFragments, Debug)]
 pub enum UserFacingErrorInterface {
+    PlatformError(PlatformError),
     SharedObjectsLimitExceeded(SharedObjectsLimitExceeded),
     PersonalObjectsLimitExceeded(PersonalObjectsLimitExceeded),
     AccountDelinquencyError(AccountDelinquencyError),

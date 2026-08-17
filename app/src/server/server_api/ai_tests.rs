@@ -2,6 +2,11 @@ use chrono::{TimeZone, Utc};
 use futures::executor::block_on;
 use itertools::Itertools;
 use mockito::{Matcher, Server};
+use warp_graphql::ai::PlatformErrorCode;
+use warp_graphql::error::{
+    PlatformError as GraphqlPlatformError, UserFacingError, UserFacingErrorInterface,
+};
+use warp_graphql::response_context::ResponseContext;
 use warp_server_client::base_client::CLOUD_AGENT_ID_HEADER;
 
 use super::super::ServerApi;
@@ -11,11 +16,52 @@ use super::{
     ConnectedSelfHostedWorker, ExecutionLocation, ForkConversationResponse,
     ListConnectedSelfHostedWorkersResponse, ListRunsResponse, PrepareAttachmentUploadsResponse,
     ReadAgentMessageResponse, RunFollowupRequest, RunSortBy, RunSortOrder, SpawnAgentRequest,
-    TaskListFilter, UploadFieldValue, UserQueryMode, build_fork_conversation_url,
-    build_list_agent_runs_url, build_run_followup_url,
+    TaskGitCredentialsError, TaskListFilter, UploadFieldValue, UserQueryMode,
+    build_fork_conversation_url, build_list_agent_runs_url, build_run_followup_url,
 };
 use crate::notebooks::NotebookId;
 use crate::server::server_api::presigned_upload::upload_to_target;
+
+#[test]
+fn parses_structured_task_git_credentials_error() {
+    let error = TaskGitCredentialsError::from_user_facing(UserFacingError {
+        error: UserFacingErrorInterface::PlatformError(GraphqlPlatformError {
+            message: "External dependency is unavailable.".to_string(),
+            code: PlatformErrorCode::ResourceUnavailable,
+            retryable: true,
+            detail: Some(
+                "GitHub is temporarily unavailable while resolving repository access.".to_string(),
+            ),
+            provider: Some("github".to_string()),
+            dependency: Some("github_api".to_string()),
+        }),
+        response_context: ResponseContext {
+            server_version: None,
+        },
+    });
+
+    match error {
+        TaskGitCredentialsError::Platform {
+            message,
+            code,
+            retryable,
+            detail,
+            provider,
+            dependency,
+        } => {
+            assert_eq!(message, "External dependency is unavailable.");
+            assert_eq!(code, PlatformErrorCode::ResourceUnavailable);
+            assert!(retryable);
+            assert_eq!(
+                detail.as_deref(),
+                Some("GitHub is temporarily unavailable while resolving repository access.")
+            );
+            assert_eq!(provider.as_deref(), Some("github"));
+            assert_eq!(dependency.as_deref(), Some("github_api"));
+        }
+        error => panic!("expected structured platform error, got {error:?}"),
+    }
+}
 
 #[test]
 fn ambient_agent_headers_for_task_overrides_existing_cloud_agent_header() {

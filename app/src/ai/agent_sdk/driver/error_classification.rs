@@ -239,6 +239,7 @@ pub fn classify_driver_error(error: &AgentDriverError) -> (AgentTaskState, TaskS
                 PlatformErrorCode::ResourceNotFound,
             ),
         ),
+        AgentDriverError::GitCredentialsFetchFailed(error) => error.task_status(),
         AgentDriverError::ConfigBuildFailed(err) => (
             AgentTaskState::Failed,
             TaskStatusUpdate::with_error_code(

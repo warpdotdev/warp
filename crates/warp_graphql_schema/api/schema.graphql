@@ -355,6 +355,12 @@ type AgentTaskStatusMessage {
   invalid configuration) will not succeed.
   """
   retryable: Boolean
+
+  """External provider associated with the failure, when applicable."""
+  provider: String
+
+  """Specific dependency associated with the failure, when applicable."""
+  dependency: String
 }
 
 input AgentTaskStatusMessageInput {
@@ -367,6 +373,15 @@ input AgentTaskStatusMessageInput {
 
   """The status message text."""
   message: String!
+
+  """Whether retrying the failed operation is safe."""
+  retryable: Boolean
+
+  """External provider associated with the failure, when applicable."""
+  provider: String
+
+  """Specific dependency associated with the failure, when applicable."""
+  dependency: String
 }
 
 enum AgentVisibility {
@@ -4576,6 +4591,18 @@ known type that the client can query even if new types of errors that implement
 type UserFacingError implements Response {
   error: UserFacingErrorInterface!
   responseContext: ResponseContext!
+}
+
+"""
+A structured platform error. Internal causes and debug details are deliberately omitted.
+"""
+type PlatformError implements UserFacingErrorInterface {
+  code: PlatformErrorCode!
+  dependency: String
+  detail: String
+  message: String!
+  provider: String
+  retryable: Boolean!
 }
 
 """
