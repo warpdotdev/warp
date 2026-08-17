@@ -2754,6 +2754,14 @@ fn read_sqlite_data(
                     email: row.email,
                     role: serde_json::from_str(&row.role)
                         .unwrap_or(crate::workspaces::team::MembershipRole::User),
+                    // Not persisted locally: it's a live-refreshed hint, not core
+                    // membership data. Any staleness is a false negative (a disabled
+                    // member renders as active, never the reverse). Opening the
+                    // Teams page fires an out-of-band refresh (`on_page_selected`),
+                    // so it's normally corrected within one round-trip, but while
+                    // offline polling stops outright (see `update_manager.rs`) and
+                    // a row can stay undimmed until connectivity returns.
+                    is_disabled: false,
                 };
                 acc.entry(row.team_id).or_default().push(member);
                 acc

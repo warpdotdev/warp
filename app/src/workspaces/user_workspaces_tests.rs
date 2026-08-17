@@ -875,6 +875,7 @@ fn admin_billing_link_for_default_team_targets_the_first_admin_team() {
         uid: user_uid,
         email: email.to_owned(),
         role: MembershipRole::Owner,
+        is_disabled: false,
     });
     let mut second_team = first_team.clone();
     second_team.uid = 456.into();
@@ -907,6 +908,7 @@ fn admin_billing_link_for_default_team_accepts_admin_when_multi_admin_is_enabled
         uid: user_uid,
         email: email.to_owned(),
         role: MembershipRole::Admin,
+        is_disabled: false,
     });
     let team_uid = team.uid;
     let workspace = workspace_for_test(&team);
@@ -935,6 +937,7 @@ fn admin_billing_link_for_default_team_rejects_admin_without_multi_admin_policy(
         uid: user_uid,
         email: email.to_owned(),
         role: MembershipRole::Admin,
+        is_disabled: false,
     });
     let workspace = workspace_for_test(&team);
 
@@ -959,6 +962,7 @@ fn admin_billing_link_for_default_team_rejects_regular_members() {
         uid: user_uid,
         email: email.to_owned(),
         role: MembershipRole::User,
+        is_disabled: false,
     });
     let workspace = workspace_for_test(&team);
 
@@ -1813,6 +1817,7 @@ fn test_remove_user_from_team_success_emits_success_event_and_refreshes_members(
         uid: user_uid,
         email: "member@example.com".to_string(),
         role: MembershipRole::User,
+        is_disabled: false,
     });
     let team_uid = team.uid;
     let workspace = workspace_for_test(&team);
@@ -2126,6 +2131,7 @@ fn gql_team(uid: &str, name: &str, member_uids: &[&str]) -> GqlTeam {
                 uid: (*member_uid).into(),
                 email: format!("{member_uid}@example.com"),
                 role: GqlMembershipRole::User,
+                is_disabled: false,
             })
             .collect(),
         settings: gql_team_settings(),
@@ -2264,6 +2270,50 @@ fn test_member_team_settings_win_over_workspace_settings() {
             assert!(
                 !user_workspaces.is_custom_llm_enabled_for_team(team),
                 "the team's own settings should win when the user has a team"
+            );
+        });
+    })
+}
+
+#[test]
+fn test_disabled_team_member_flows_through_from_server_metadata() {
+    App::test((), |mut app| async move {
+        initialize_window_team_test_app(&mut app, vec![]);
+        register_ai_usage_model(&mut app);
+
+        let mut workspace = gql_workspace("workspace_uid123456789", None);
+        let mut team = gql_team(
+            "member-team",
+            "Member Team",
+            &["test-user", "disabled-user"],
+        );
+        team.members[1].is_disabled = true;
+        workspace.teams = vec![team];
+
+        apply_workspaces_metadata(&mut app, gql_user(None, vec![workspace]).into());
+
+        app.read(|ctx| {
+            let user_workspaces = UserWorkspaces::as_ref(ctx);
+            let team = user_workspaces
+                .sole_team()
+                .expect("the member team should survive filtering");
+            let enabled_member = team
+                .members
+                .iter()
+                .find(|member| member.email == "test-user@example.com")
+                .expect("the active member should be present");
+            let disabled_member = team
+                .members
+                .iter()
+                .find(|member| member.email == "disabled-user@example.com")
+                .expect("the disabled member should be present");
+            assert!(
+                !enabled_member.is_disabled,
+                "an active member's account must not be flagged disabled"
+            );
+            assert!(
+                disabled_member.is_disabled,
+                "the server's isDisabled flag should flow through to the client's TeamMember"
             );
         });
     })

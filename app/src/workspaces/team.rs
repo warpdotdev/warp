@@ -45,6 +45,11 @@ pub struct TeamMember {
     pub uid: UserUid,
     pub email: String,
     pub role: MembershipRole,
+    /// Whether the underlying user account has been disabled server-side.
+    /// Disabled members stay in the team and remain removable; the Teams
+    /// settings UI renders them dimmed with an explanatory tooltip instead
+    /// of hiding them.
+    pub is_disabled: bool,
 }
 
 impl PartialOrd for TeamMember {

@@ -93,6 +93,7 @@ impl From<GqlTeamMember> for TeamMember {
             uid: UserUid::new(&gql_team_member.uid.into_inner()),
             email: gql_team_member.email,
             role: gql_team_member.role.into(),
+            is_disabled: gql_team_member.is_disabled,
         }
     }
 }

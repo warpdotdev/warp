@@ -408,6 +408,7 @@ fn team_with_members(uids: &[&str]) -> Team {
             uid: UserUid::new(uid),
             email: format!("{uid}@warp.dev"),
             role: MembershipRole::User,
+            is_disabled: false,
         })
         .collect();
     Team::from_local_cache(
