@@ -1340,8 +1340,7 @@ impl CurrentPrompt {
             && let Some(terminal_model) = &self
                 .terminal_model
                 .as_mut()
-                .map(|model| model.upgrade())
-                .flatten()
+                .and_then(|model| model.upgrade())
             && let Some(cmd) = user_block_completed
                 .command
                 .get_with(|compute| {
