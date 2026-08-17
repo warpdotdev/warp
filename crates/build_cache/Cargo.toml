@@ -27,4 +27,7 @@ warp_errors.workspace = true
 
 [dev-dependencies]
 futures.workspace = true
+opentelemetry.workspace = true
+opentelemetry_sdk.workspace = true
+tracing-opentelemetry.workspace = true
 tracing-subscriber.workspace = true

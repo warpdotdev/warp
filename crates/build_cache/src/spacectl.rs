@@ -108,7 +108,7 @@ fn mount_command(cache_root: &Path, cwd: &Path, modes: &[String]) -> Command {
         mount_error_kind = tracing::field::Empty,
         mount_error_exit_code = tracing::field::Empty,
         otel.status_code = tracing::field::Empty,
-        otel.status_message = tracing::field::Empty,
+        otel.status_description = tracing::field::Empty,
     )
 )]
 pub(super) async fn run_spacectl_mount<F, Fut>(
@@ -178,7 +178,7 @@ where
                 span.record("mount_error_exit_code", exit_code);
             }
             span.record("otel.status_code", "ERROR");
-            span.record("otel.status_message", err.to_string());
+            span.record("otel.status_description", err.to_string());
             tracing::error!(
                 mount_error_kind = err.kind(),
                 mount_error_exit_code = err.exit_code(),

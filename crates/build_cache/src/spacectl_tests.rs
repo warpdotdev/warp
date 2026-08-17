@@ -4,7 +4,12 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use command::r#async::Command;
+use futures::FutureExt as _;
 use futures::executor::block_on;
+use opentelemetry::Value;
+use opentelemetry::trace::{Status, TracerProvider as _};
+use opentelemetry_sdk::error::OTelSdkResult;
+use opentelemetry_sdk::trace::{SdkTracerProvider, SpanData, SpanExporter};
 use tracing::field::{Field, Visit};
 use tracing::span::{Attributes, Id, Record};
 use tracing::{Subscriber, subscriber};
@@ -25,6 +30,16 @@ impl SpanFields {
 
     fn get(&self, field: &str) -> Option<String> {
         self.0.lock().unwrap().get(field).cloned()
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+struct CapturedSpans(Arc<Mutex<Vec<SpanData>>>);
+
+impl SpanExporter for CapturedSpans {
+    async fn export(&self, batch: Vec<SpanData>) -> OTelSdkResult {
+        self.0.lock().unwrap().extend(batch);
+        Ok(())
     }
 }
 
@@ -186,7 +201,7 @@ fn mount_failures_record_safe_error_details_and_error_status_on_span() {
         );
         assert_eq!(fields.get("otel.status_code").as_deref(), Some("ERROR"));
         assert_eq!(
-            fields.get("otel.status_message").as_deref(),
+            fields.get("otel.status_description").as_deref(),
             Some(error.to_string().as_str())
         );
         assert_eq!(
@@ -198,10 +213,14 @@ fn mount_failures_record_safe_error_details_and_error_status_on_span() {
 
 #[test]
 fn invalid_spacectl_json_records_parse_failure_on_span() {
-    let fields = SpanFields::default();
-    let subscriber = Registry::default().with(fields.clone());
+    let exporter = CapturedSpans::default();
+    let provider = SdkTracerProvider::builder()
+        .with_simple_exporter(exporter.clone())
+        .build();
+    let tracer = provider.tracer("build-cache-test");
+    let subscriber = Registry::default().with(tracing_opentelemetry::layer().with_tracer(tracer));
     let report = subscriber::with_default(subscriber, || {
-        block_on(run_spacectl_mount(
+        run_spacectl_mount(
             CacheScope::Global,
             vec!["go".to_owned()],
             false,
@@ -209,13 +228,27 @@ fn invalid_spacectl_json_records_parse_failure_on_span() {
             Path::new("/cache/shared"),
             Path::new("/work"),
             &mut |_| futures::future::ready(Ok(b"not json".to_vec())),
-        ))
+        )
+        .now_or_never()
+        .expect("mocked spacectl call should be immediately ready")
     });
 
     assert_eq!(report.error, Some(CacheSetupError::JsonParseFailed));
+    provider.force_flush().unwrap();
+    let spans = exporter.0.lock().unwrap();
+    let span = spans
+        .iter()
+        .find(|span| span.name == "spacectl_cache_mount")
+        .expect("spacectl span should be exported");
     assert_eq!(
-        fields.get("mount_error_kind").as_deref(),
-        Some("json_parse_failed")
+        span.status,
+        Status::error(CacheSetupError::JsonParseFailed.to_string())
     );
-    assert_eq!(fields.get("otel.status_code").as_deref(), Some("ERROR"));
+    assert!(span.attributes.iter().any(|attribute| {
+        attribute.key.as_str() == "mount_error_kind"
+            && matches!(
+                &attribute.value,
+                Value::String(value) if value.as_str() == "json_parse_failed"
+            )
+    }));
 }
