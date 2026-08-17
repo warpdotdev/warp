@@ -564,7 +564,13 @@ impl Buffer {
         // into the buffer, so an over-limit image surfaces a hint instead of
         // silently failing to load.
         let text = replace_oversized_data_uri_images(text);
+        // Buffer offset each `FormattedTextLine` starts at. Recorded here rather than predicted by
+        // the caller because how many rows a line occupies is decided below: block-level items
+        // absorb a following `LineBreak`, and an `Embedded` line with no conversion emits nothing
+        // at all, so any row count guessed from the `FormattedText` alone drifts from the layout.
+        let mut lowered_line_offsets = Vec::with_capacity(text.lines.len());
         for line in text.lines {
+            lowered_line_offsets.push(new_content.extent::<CharOffset>());
             should_override_next_block_style = false;
             match line {
                 FormattedTextLine::LineBreak => {
@@ -1070,6 +1076,7 @@ impl Buffer {
         new_content.push_tree(buffer_cursor.suffix());
         drop(buffer_cursor);
         self.content = new_content;
+        self.lowered_formatted_text_line_offsets = Some(lowered_line_offsets);
 
         // If insertion is not on selection, we want to clamp instead of invalidating the anchors.
         let anchor_udpate = AnchorUpdate {

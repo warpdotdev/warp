@@ -12,7 +12,8 @@ pub use html_parser::parse_html;
 use itertools::Itertools;
 pub use markdown_parser::{
     parse_image_prefix, parse_image_run_line, parse_inline_markdown, parse_markdown,
-    parse_markdown_with_gfm_tables,
+    parse_markdown_with_gfm_tables, parse_markdown_with_gfm_tables_and_source_map,
+    parse_markdown_with_source_map,
 };
 use serde_yaml::Mapping;
 use weight::CustomWeight;
@@ -111,6 +112,52 @@ pub fn compute_formatted_text_delta(old: FormattedText, new: FormattedText) -> F
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FormattedText {
     pub lines: VecDeque<FormattedTextLine>,
+}
+
+/// Rendered Markdown together with anchors from source lines into the rendered text.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParsedMarkdown {
+    pub text: FormattedText,
+    pub source_map: MarkdownSourceMap,
+}
+
+/// Where a Markdown source line ended up in the rendered [`FormattedText`].
+///
+/// This deliberately anchors to a [`FormattedTextLine`] rather than to a rendered row index.
+/// How many rows a line occupies once it is lowered into a buffer is a property of the consumer,
+/// not of the parser: block-level items (thematic breaks, images, embedded objects) can be merged
+/// with a following blank line or dropped entirely, so any row count predicted here would drift
+/// from the real layout and silently mis-target every later line.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MarkdownSourceAnchor {
+    /// Index into [`FormattedText::lines`].
+    pub line_index: usize,
+    /// Row offset within that line's own rendered rows. Non-zero only for constructs that render
+    /// as several rows from several source lines, i.e. fenced code blocks and tables.
+    pub row_in_line: usize,
+}
+
+/// Maps 0-based Markdown source lines onto [`MarkdownSourceAnchor`]s.
+///
+/// Source lines that render to nothing at all (for example the inside of an HTML comment) map to
+/// `None`, so a caller can leave the viewport alone rather than scrolling somewhere arbitrary.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct MarkdownSourceMap {
+    anchors: Vec<Option<MarkdownSourceAnchor>>,
+}
+
+impl MarkdownSourceMap {
+    pub(crate) fn new(anchors: Vec<Option<MarkdownSourceAnchor>>) -> Self {
+        Self { anchors }
+    }
+
+    pub fn anchor_for_source_line(&self, source_line: usize) -> Option<MarkdownSourceAnchor> {
+        self.anchors.get(source_line).copied().flatten()
+    }
+
+    pub fn source_line_count(&self) -> usize {
+        self.anchors.len()
+    }
 }
 
 impl FormattedText {

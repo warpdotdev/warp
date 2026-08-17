@@ -319,21 +319,14 @@ fn test_load_static() {
 }
 
 #[test]
-fn test_loaded_source_target_uses_raw_content() {
+fn test_loaded_source_target_uses_source_map() {
     App::test((), |mut app| async move {
         init_app(&mut app);
         let (_, handle) = app.add_window(WindowStyle::NotStealFocus, FileNotebookView::new);
 
         handle.update(&mut app, |file_notebook, ctx| {
             file_notebook.open_static("Test Title", "Here's a markdown comment.\n", ctx);
-            file_notebook.scroll_to_source_target(
-                SourceScrollTarget {
-                    source_line: 1,
-                    column_num: None,
-                    match_text: None,
-                },
-                ctx,
-            );
+            file_notebook.scroll_to_source_target(SourceScrollTarget { source_line: 1 }, ctx);
 
             assert!(
                 file_notebook

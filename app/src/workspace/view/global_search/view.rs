@@ -97,10 +97,6 @@ pub enum GlobalSearchAction {
         location: LocalOrRemotePath,
         line_number: u32,
         column_num: Option<usize>,
-        /// The exact matched text. Rendered views (e.g. the Markdown viewer)
-        /// drop source syntax, so line/column don't locate the match there;
-        /// the text does.
-        match_text: Option<String>,
     },
     ResultsUp,
     ResultsDown,
@@ -151,10 +147,6 @@ pub enum Event {
         location: LocalOrRemotePath,
         line_number: u32,
         column_num: Option<usize>,
-        /// The exact matched text. Rendered views (e.g. the Markdown viewer)
-        /// drop source syntax, so line/column don't locate the match there;
-        /// the text does.
-        match_text: Option<String>,
     },
 }
 
@@ -307,17 +299,6 @@ struct Match {
 }
 
 impl Match {
-    /// The exact text of the first submatch. Used to locate this match in
-    /// views that render their content (e.g. the Markdown viewer), where the
-    /// source line and column don't correspond to anything on screen.
-    fn match_text(&self) -> Option<String> {
-        let submatch = self.submatches.first()?;
-        self.line_text
-            .get(submatch.byte_start.as_usize()..submatch.byte_end.as_usize())
-            .filter(|text| !text.is_empty())
-            .map(str::to_string)
-    }
-
     fn new(
         line_text: String,
         line_number: u32,
@@ -399,13 +380,11 @@ impl TypedActionView for GlobalSearchView {
                 location,
                 line_number,
                 column_num,
-                match_text,
             } => {
                 ctx.emit(Event::OpenMatch {
                     location: location.clone(),
                     line_number: *line_number,
                     column_num: *column_num,
-                    match_text: match_text.clone(),
                 });
                 self.enter_query_mode(ctx);
             }
@@ -1351,7 +1330,6 @@ impl GlobalSearchView {
         let column_num = matched.column_num;
         let line_text = matched.line_text.clone();
         let submatches = matched.submatches.clone();
-        let match_text = matched.match_text();
         let mouse_state = matched.mouse_state.clone();
 
         let directory_path_for_select = directory_path.clone();
@@ -1416,7 +1394,6 @@ impl GlobalSearchView {
                 location: location_for_click.clone(),
                 line_number,
                 column_num,
-                match_text: match_text.clone(),
             });
         })
         .finish()
@@ -1821,7 +1798,6 @@ impl GlobalSearchView {
                     location: matched_path.path.clone(),
                     line_number: matched.line_number,
                     column_num: matched.column_num,
-                    match_text: matched.match_text(),
                 });
             }
             RowIndexType::DirectoryHeader => {

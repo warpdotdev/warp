@@ -6408,42 +6408,6 @@ impl Workspace {
         code_source: CodeSource,
         ctx: &mut ViewContext<Self>,
     ) {
-        self.open_file_with_target_and_match(
-            path,
-            target,
-            OpenFileLocation::from_line_col(line_col),
-            code_source,
-            ctx,
-        );
-    }
-
-    #[cfg(not(feature = "local_fs"))]
-    pub fn open_file_with_target_and_match(
-        &mut self,
-        _path: PathBuf,
-        _target: FileTarget,
-        _location: OpenFileLocation,
-        _code_source: CodeSource,
-        _ctx: &mut ViewContext<Self>,
-    ) {
-    }
-
-    /// As [`Self::open_file_with_target`], but carrying the text of the search
-    /// match this open came from. The Markdown viewer renders its content, so
-    /// it locates the match by text rather than by source line and column.
-    #[cfg(feature = "local_fs")]
-    pub fn open_file_with_target_and_match(
-        &mut self,
-        path: PathBuf,
-        target: FileTarget,
-        location: OpenFileLocation,
-        code_source: CodeSource,
-        ctx: &mut ViewContext<Self>,
-    ) {
-        let OpenFileLocation {
-            line_col,
-            match_text,
-        } = location;
         // Handle directories for CodeEditor(NewTab) target by opening a new terminal tab
         if path.is_dir() && matches!(target, FileTarget::CodeEditor(EditorLayout::NewTab)) {
             self.add_tab_with_pane_layout(
@@ -6468,7 +6432,7 @@ impl Workspace {
                     session,
                     layout,
                     Some(code_source),
-                    source_scroll_target(line_col, match_text),
+                    source_scroll_target(line_col),
                     ctx,
                 );
             }
@@ -6561,20 +6525,16 @@ impl Workspace {
                 location,
                 target,
                 line_col,
-                match_text,
             } => {
                 let code_source = CodeSource::FileTree {
                     location: location.clone(),
                 };
                 match location {
                     LocalOrRemotePath::Local(path) => {
-                        self.open_file_with_target_and_match(
+                        self.open_file_with_target(
                             path.clone(),
                             target.clone(),
-                            OpenFileLocation {
-                                line_col: *line_col,
-                                match_text: match_text.clone(),
-                            },
+                            *line_col,
                             code_source,
                             ctx,
                         );
@@ -6591,7 +6551,7 @@ impl Workspace {
                                     None,
                                     *layout,
                                     Some(code_source),
-                                    source_scroll_target(*line_col, match_text.clone()),
+                                    source_scroll_target(*line_col),
                                     ctx,
                                 );
                             } else {
@@ -29529,37 +29489,12 @@ pub(crate) fn tab_bar_rects_for_window(window_id: WindowId, app: &AppContext) ->
         .collect()
 }
 
-/// Where in a file an open request wants to land.
-///
-/// `match_text` is set when the open came from a search result. Views that render their content,
-/// such as the Markdown viewer, locate the match by that text because source line and column do
-/// not map onto rendered output.
-#[derive(Debug, Clone, Default)]
-pub struct OpenFileLocation {
-    pub line_col: Option<LineAndColumnArg>,
-    pub match_text: Option<String>,
-}
-
-impl OpenFileLocation {
-    pub fn from_line_col(line_col: Option<LineAndColumnArg>) -> Self {
-        Self {
-            line_col,
-            match_text: None,
-        }
-    }
-}
-
 /// Builds the Markdown viewer's scroll target, or `None` when there is no line to scroll to.
 #[cfg(feature = "local_fs")]
-fn source_scroll_target(
-    line_col: Option<LineAndColumnArg>,
-    match_text: Option<String>,
-) -> Option<SourceScrollTarget> {
+fn source_scroll_target(line_col: Option<LineAndColumnArg>) -> Option<SourceScrollTarget> {
     let line_col = line_col?;
     Some(SourceScrollTarget {
         source_line: line_col.line_num,
-        column_num: line_col.column_num,
-        match_text,
     })
 }
 
