@@ -18,12 +18,6 @@ use warp_util::standardized_path::StandardizedPath;
 use crate::index::file_outline::{FileOutline, Outline, Symbol};
 use crate::index::{Entry, FileId, FileMetadata, THREADPOOL};
 
-cfg_if::cfg_if! {
-    if #[cfg(feature = "local_fs")] {
-        use crate::index::matches_gitignores;
-    }
-}
-
 /// Given a repo path, try to build its outline. An outline is a list of all its files and the symbols
 /// of interest from each file.
 pub async fn build_outline(
@@ -94,7 +88,6 @@ pub async fn build_outline(
     Ok(Outline {
         root: entry,
         file_id_to_outline,
-        gitignores,
     })
 }
 
@@ -173,12 +166,15 @@ impl Outline {
                 // At the end of the iteration we'll have reached the target path.
                 let mut current_parent = directory;
                 for ancestor in ancestors_between_target_and_directory.iter().rev() {
-                    if matches_gitignores(
-                        ancestor,
-                        ancestor.is_dir(),
-                        &self.gitignores,
-                        false, /* check_ancestors */
-                    ) || ancestor.ends_with(".git")
+                    // Gitignore checking is intentionally omitted here: callers have already
+                    // filtered out gitignored files via `TargetFile::is_ignored` (set by
+                    // `Repository::check_gitignore_status` with `check_ancestors: true`),
+                    // so any non-ignored file is guaranteed to have non-ignored ancestors too.
+                    // Re-checking via `matches_gitignores` would share the long-lived
+                    // `Arc<GlobSet>` pool with every tokio worker thread that processes
+                    // outline updates, causing unbounded `regex_automata::PikeVM` cache
+                    // accumulation (APP-4828).
+                    if ancestor.ends_with(".git")
                     {
                         // Short-circuit if an ancestor is ignored.
                         return None;
