@@ -198,7 +198,13 @@ impl AwsCredentialRefresher for ApiKeyManager {
         terminal_model: Arc<FairMutex<TerminalModel>>,
         ctx: &mut ModelContext<Self>,
     ) {
+        // we cannot simply capture the strong references, or we risk having a reference cycle.
+        let terminal_model_weak = Arc::downgrade(&terminal_model);
         ctx.subscribe_to_model(model_events, move |manager, _, event, ctx| {
+            let Some(terminal_model) = terminal_model_weak.upgrade() else {
+                return;
+            };
+
             if let ModelEvent::AfterBlockCompleted(AfterBlockCompletedEvent {
                 block_type: BlockType::User(user_block_completed),
                 ..

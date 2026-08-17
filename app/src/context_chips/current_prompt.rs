@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash as _, Hasher as _};
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 use std::time::Duration;
 
 use futures::{FutureExt as _, pin_mut};
@@ -176,7 +176,7 @@ pub struct CurrentPrompt {
     /// `new_with_model_events` with a live terminal session. See that constructor's `live_session`
     /// parameter, which bundles this with the model events subscription so the two can't
     /// disagree.
-    terminal_model: Option<Arc<FairMutex<TerminalModel>>>,
+    terminal_model: Option<Weak<FairMutex<TerminalModel>>>,
 }
 
 /// Context about the current terminal session, needed to update the prompt.
@@ -239,7 +239,10 @@ impl CurrentPrompt {
         if let Some((model_events, _)) = &live_session {
             ctx.subscribe_to_model(model_events, Self::handle_model_event);
         }
-        let terminal_model = live_session.map(|(_, terminal_model)| terminal_model);
+
+        // we cannot simply capture the strong references in subscriptions, or we risk having a reference cycle.
+        let terminal_model =
+            live_session.map(|(_, terminal_model)| Arc::downgrade(&terminal_model));
 
         let (update_tx, update_rx) = async_channel::unbounded();
         let debounce_period = ctx
@@ -1334,7 +1337,11 @@ impl CurrentPrompt {
     ) {
         if let ModelEvent::AfterBlockCompleted(after_block_completed) = event
             && let BlockType::User(user_block_completed) = &after_block_completed.block_type
-            && let Some(terminal_model) = &self.terminal_model
+            && let Some(terminal_model) = &self
+                .terminal_model
+                .as_mut()
+                .map(|model| model.upgrade())
+                .flatten()
             && let Some(cmd) = user_block_completed
                 .command
                 .get_with(|compute| {
