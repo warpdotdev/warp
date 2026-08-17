@@ -1005,6 +1005,7 @@ impl CodeEditorModel {
                 | BlockItem::UnorderedList { .. }
                 | BlockItem::OrderedList { .. }
                 | BlockItem::Header { .. }
+                | BlockItem::BlockQuote { .. }
                 | BlockItem::Embedded(_)
                 | BlockItem::HorizontalRule(_)
                 | BlockItem::Image { .. }

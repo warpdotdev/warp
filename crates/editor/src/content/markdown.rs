@@ -87,6 +87,7 @@ impl<'a> BufferMarkdownParser<'a> {
                             res.push_str(&"#".repeat(header_size.into()));
                             res.push(' ');
                         }
+                        BufferBlockStyle::BlockQuote => res.push_str("> "),
                         BufferBlockStyle::UnorderedList { indent_level } => {
                             res.push_str("    ".repeat(indent_level.as_usize()).as_str());
                             res.push_str("* ")
@@ -147,6 +148,7 @@ impl<'a> BufferMarkdownParser<'a> {
                         }
                         BufferBlockStyle::Header { .. }
                         | BufferBlockStyle::PlainText
+                        | BufferBlockStyle::BlockQuote
                         | BufferBlockStyle::UnorderedList { .. }
                         | BufferBlockStyle::OrderedList { .. }
                         | BufferBlockStyle::TaskList { .. } => (),
@@ -504,6 +506,16 @@ impl<'a> BufferToFormattedText<'a> {
                                         trailing_new_line = run.run.ends_with('\n');
                                         run.to_formatted_text_fragment()
                                     })
+                                    .collect(),
+                            )
+                        }
+                        BufferBlockStyle::BlockQuote => {
+                            trailing_new_line = false;
+                            FormattedTextLine::BlockQuote(
+                                text_block
+                                    .block
+                                    .into_iter()
+                                    .map(|run| run.to_formatted_text_fragment())
                                     .collect(),
                             )
                         }
@@ -902,6 +914,7 @@ impl Serialize for ExportedBufferBlocks<'_> {
                         BufferBlockStyle::Header { header_size } => {
                             Some(format!("h{}", Into::<usize>::into(header_size)))
                         }
+                        BufferBlockStyle::BlockQuote => Some("blockquote".to_string()),
                         BufferBlockStyle::PlainText => Some("p".to_string()),
                         BufferBlockStyle::Table { .. } => None,
                     };
@@ -1121,6 +1134,7 @@ fn formatted_text_line_to_block_style(line: &FormattedTextLine) -> Option<Buffer
             number: list.number,
         }),
         FormattedTextLine::Line(_) => Some(BufferBlockStyle::PlainText),
+        FormattedTextLine::BlockQuote(_) => Some(BufferBlockStyle::BlockQuote),
         FormattedTextLine::LineBreak => None,
         FormattedTextLine::HorizontalRule => Some(BufferBlockStyle::PlainText),
         // TODO(kevin): handle embedded objects in buffer.

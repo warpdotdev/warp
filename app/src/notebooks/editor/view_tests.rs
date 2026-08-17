@@ -127,6 +127,32 @@ fn initialize_editor(
     (window, editor_view, test_view)
 }
 
+#[test]
+fn markdown_styles_use_the_terminal_font() {
+    App::test((), |mut app| async move {
+        initialize_settings_for_tests(&mut app);
+        app.add_singleton_model(|_| Appearance::mock());
+
+        app.read(|ctx| {
+            let appearance = Appearance::as_ref(ctx);
+            let styles = rich_text_styles(appearance, FontSettings::as_ref(ctx));
+
+            assert_eq!(
+                styles.base_text.font_family,
+                appearance.monospace_font_family()
+            );
+            assert_eq!(
+                styles.base_text.font_weight,
+                appearance.monospace_font_weight()
+            );
+            assert_eq!(
+                styles.table_style.font_family,
+                appearance.monospace_font_family()
+            );
+        });
+    });
+}
+
 async fn reset_editor_with_markdown(
     app: &mut App,
     editor_view: &ViewHandle<RichTextEditorView>,

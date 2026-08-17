@@ -53,6 +53,28 @@ fn test_parse_single_line() {
 }
 
 #[test]
+fn test_parse_block_quote_with_bold_text() {
+    let source = "> **\"hello world\"**\n> second line";
+    assert_eq!(
+        test_parse_markdown(source),
+        vec![
+            FormattedTextLine::BlockQuote(vec![FormattedTextFragment::bold("\"hello world\"")]),
+            FormattedTextLine::BlockQuote(vec![FormattedTextFragment::plain_text("second line")]),
+        ]
+    );
+}
+
+#[test]
+fn test_parse_bold_text_with_quotes() {
+    assert_eq!(
+        test_parse_markdown("**\"hello world\"**"),
+        vec![FormattedTextLine::Line(vec![FormattedTextFragment::bold(
+            "\"hello world\""
+        )])]
+    );
+}
+
+#[test]
 fn test_parse_headers() {
     let source = "# This is a header";
     assert_eq!(
