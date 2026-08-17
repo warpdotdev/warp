@@ -43,8 +43,12 @@ fn rebuilds_when_content_changes_at_the_same_length() {
     );
     std::fs::write(&path, replacement).unwrap();
     // Force the mtime back to its original value so this test deterministically exercises the
-    // same-mtime case regardless of the filesystem's actual clock resolution.
-    std::fs::File::open(&path)
+    // same-mtime case regardless of the filesystem's actual clock resolution. `set_modified`
+    // requires a handle opened for write on Windows (a read-only handle lacks
+    // FILE_WRITE_ATTRIBUTES), even though the same call succeeds on a read-only handle on Unix.
+    std::fs::File::options()
+        .write(true)
+        .open(&path)
         .unwrap()
         .set_modified(original_mtime)
         .unwrap();
