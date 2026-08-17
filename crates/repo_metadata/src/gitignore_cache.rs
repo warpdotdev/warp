@@ -30,9 +30,10 @@ use std::collections::HashMap;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, LazyLock, Mutex};
+use std::sync::{Arc, LazyLock};
 
 use ignore::gitignore::Gitignore;
+use parking_lot::Mutex;
 
 /// Estimated multiplier from a `.gitignore` file's source byte length to the
 /// heap retained by its compiled matcher (regex_automata NFA/DFA tables,
@@ -147,13 +148,12 @@ impl Cache {
 
 static CACHE: LazyLock<Mutex<Cache>> = LazyLock::new(|| Mutex::new(Cache::default()));
 
-/// A panic elsewhere while the lock is held must not permanently disable
-/// every subsequent traversal; the cache is best-effort, so recovering the
-/// (possibly inconsistent) inner state is preferable to poisoning it forever.
-fn lock_cache() -> std::sync::MutexGuard<'static, Cache> {
-    CACHE
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
+/// `parking_lot::Mutex` doesn't poison on a panic while held, so a panic
+/// elsewhere mid-update can't permanently disable every subsequent
+/// traversal: the next lookup just sees whatever (possibly inconsistent,
+/// best-effort) state was left behind instead of every later call failing.
+fn lock_cache() -> parking_lot::MutexGuard<'static, Cache> {
+    CACHE.lock()
 }
 
 fn content_digest(content: &[u8]) -> u64 {
