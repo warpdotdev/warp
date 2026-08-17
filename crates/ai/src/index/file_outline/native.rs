@@ -1,6 +1,6 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::anyhow;
 use arborium::tree_sitter::{Parser, Query, QueryCursor, Tree};
@@ -9,7 +9,10 @@ use ignore::gitignore::Gitignore;
 use itertools::Itertools;
 use rayon::prelude::*;
 use repo_metadata::RepositoryUpdate;
-use repo_metadata::entry::{BudgetExceededBehavior, IgnoredPathStrategy, is_file_parsable};
+use repo_metadata::entry::{
+    BudgetExceededBehavior, IgnoredPathStrategy, gitignores_for_directory, is_file_parsable,
+    matches_gitignores,
+};
 use streaming_iterator::StreamingIterator;
 use syntax_tree::TextSlice;
 use warp_errors::report_error;
@@ -17,12 +20,6 @@ use warp_util::standardized_path::StandardizedPath;
 
 use crate::index::file_outline::{FileOutline, Outline, Symbol};
 use crate::index::{Entry, FileId, FileMetadata, THREADPOOL};
-
-cfg_if::cfg_if! {
-    if #[cfg(feature = "local_fs")] {
-        use crate::index::matches_gitignores;
-    }
-}
 
 /// Given a repo path, try to build its outline. An outline is a list of all its files and the symbols
 /// of interest from each file.
@@ -94,7 +91,6 @@ pub async fn build_outline(
     Ok(Outline {
         root: entry,
         file_id_to_outline,
-        gitignores,
     })
 }
 
@@ -124,6 +120,13 @@ impl Outline {
             }
         }
 
+        // `TargetFile::is_ignored` is only computed against the repo's root and global
+        // gitignores, so it doesn't know about nested `.gitignore` files. Loaded fresh here
+        // (rather than cached on `Outline`) because a `Gitignore`'s compiled matcher retains a
+        // cache entry for as long as it's alive, so a copy kept for the outline's lifetime would
+        // keep that memory retained indefinitely.
+        let mut gitignores = GitignoreScope::new(&self.root.path().to_local_path_lossy());
+
         // Extract paths from TargetFile for addition, filtering out gitignored files
         for target_file in added
             .into_iter()
@@ -131,7 +134,9 @@ impl Outline {
             .chain(moved.keys().cloned())
             .filter(|target_file| !target_file.is_ignored)
         {
-            if let Some(file_metadata) = self.find_or_insert_path_to_file_tree(&target_file.path) {
+            if let Some(file_metadata) =
+                self.find_or_insert_path_to_file_tree(&target_file.path, &mut gitignores)
+            {
                 files_metadata.push(file_metadata.clone());
             }
         }
@@ -147,8 +152,14 @@ impl Outline {
 
     /// Returns the `FileMetadata` for the file corresponding to the given target path.
     ///
-    /// If the target path corresponds to a directory, returns `None`.
-    fn find_or_insert_path_to_file_tree(&mut self, target_path: &Path) -> Option<&FileMetadata> {
+    /// If the target path corresponds to a directory, returns `None`. `gitignores` accumulates
+    /// any nested `.gitignore` files discovered along the way, so callers processing multiple
+    /// target paths in the same directory subtree should reuse it across calls.
+    fn find_or_insert_path_to_file_tree(
+        &mut self,
+        target_path: &Path,
+        gitignores: &mut GitignoreScope,
+    ) -> Option<&FileMetadata> {
         match &mut self.root {
             Entry::Directory(directory) => {
                 let dir_local = directory.path.to_local_path_lossy();
@@ -173,16 +184,16 @@ impl Outline {
                 // At the end of the iteration we'll have reached the target path.
                 let mut current_parent = directory;
                 for ancestor in ancestors_between_target_and_directory.iter().rev() {
-                    if matches_gitignores(
-                        ancestor,
-                        ancestor.is_dir(),
-                        &self.gitignores,
-                        false, /* check_ancestors */
-                    ) || ancestor.ends_with(".git")
+                    if gitignores.matches(ancestor, ancestor.is_dir()) || ancestor.ends_with(".git")
                     {
                         // Short-circuit if an ancestor is ignored.
                         return None;
                     }
+
+                    // A `.gitignore` here applies to this ancestor's descendants, checked in the
+                    // rest of this loop.
+                    gitignores.load_own_gitignore(ancestor);
+
                     match current_parent.find_or_insert_child(ancestor) {
                         Some(Entry::File(file_metadata)) => {
                             // If this entry is a file, we've reached the target path -- files can't
@@ -202,6 +213,43 @@ impl Outline {
                 None
             }
         }
+    }
+}
+
+/// Gitignore matchers gathered while processing one batch of changed paths. Tracks which
+/// `.gitignore` files have already been loaded so a directory shared by multiple changed paths
+/// in the same batch is parsed and matched against only once.
+struct GitignoreScope {
+    matchers: Vec<Gitignore>,
+    loaded_paths: HashSet<PathBuf>,
+}
+
+impl GitignoreScope {
+    fn new(root: &Path) -> Self {
+        Self {
+            matchers: gitignores_for_directory(root),
+            loaded_paths: HashSet::new(),
+        }
+    }
+
+    fn matches(&self, path: &Path, is_dir: bool) -> bool {
+        matches_gitignores(
+            path,
+            is_dir,
+            &self.matchers,
+            false, /* check_ancestors */
+        )
+    }
+
+    /// Loads `path`'s own `.gitignore`, if present and not already loaded, so it applies when
+    /// matching this path's descendants.
+    fn load_own_gitignore(&mut self, path: &Path) {
+        let gitignore_path = path.join(".gitignore");
+        if !self.loaded_paths.insert(gitignore_path.clone()) || !gitignore_path.exists() {
+            return;
+        }
+        let (gitignore, _) = Gitignore::new(gitignore_path);
+        self.matchers.push(gitignore);
     }
 }
 
