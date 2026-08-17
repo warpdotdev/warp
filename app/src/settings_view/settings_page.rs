@@ -437,6 +437,7 @@ pub fn render_cta_banner<A: Action + Clone>(
         .finish();
 
     let row = Flex::row()
+        .with_main_axis_size(MainAxisSize::Max)
         .with_cross_axis_alignment(CrossAxisAlignment::Center)
         .with_child(Container::new(icon).with_margin_right(8.).finish())
         .with_child(body)

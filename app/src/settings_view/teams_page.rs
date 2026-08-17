@@ -4091,7 +4091,7 @@ impl TeamsWidget {
         page.add_child(render_sub_header(appearance, "Teams".to_string(), None));
 
         for (index, section) in sections.iter().enumerate() {
-            if index > 0 {
+            if index > 0 && matches!(sections[index - 1], TeamsPageSection::CreateTeam) {
                 page.add_child(render_separator(appearance));
             }
             match section {
@@ -4107,8 +4107,7 @@ impl TeamsWidget {
                             TeamsPageAction::OpenWorkspaceAdminPanel,
                             appearance,
                         ))
-                        .with_padding_top(6.)
-                        .with_padding_bottom(12.)
+                        .with_padding_bottom(16.)
                         .finish(),
                     );
                 }
