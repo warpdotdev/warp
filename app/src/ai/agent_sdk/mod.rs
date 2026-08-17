@@ -909,7 +909,16 @@ impl AgentDriverRunner {
             })
             .await?;
 
-        let credentials = match Self::fetch_task_git_credentials(task_id_str, ai_client).await {
+        let credentials = match driver::git_credentials::fetch_with_retry(
+            "Git credentials bootstrap",
+            &driver::git_credentials::GIT_CREDENTIALS_BOOTSTRAP_BACKOFF,
+            || Self::fetch_task_git_credentials(task_id_str.clone(), Arc::clone(&ai_client)),
+            |delay| async move {
+                warpui::r#async::Timer::after(delay).await;
+            },
+        )
+        .await
+        {
             Ok(credentials) => credentials,
             Err(TaskGitCredentialsError::Request(err))
                 if err
@@ -922,11 +931,6 @@ impl AgentDriverRunner {
                 return Ok(());
             }
             Err(err) => {
-                log::warn!("Failed to fetch git credentials before skill resolution: {err}");
-                tracing::warn!(
-                    error = %err,
-                    "Failed to fetch git credentials before skill resolution"
-                );
                 return Err(AgentDriverError::GitCredentialsFetchFailed(err));
             }
         };

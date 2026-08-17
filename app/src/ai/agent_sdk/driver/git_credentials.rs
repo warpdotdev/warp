@@ -10,18 +10,29 @@
 /// - An async refresh loop that periodically fetches a fresh token from the
 ///   server and overwrites the credential files, keeping long-running agents
 ///   authenticated for their entire duration.
-use std::{path::PathBuf, sync::Arc, time::Duration};
+use std::{future::Future, path::PathBuf, sync::Arc, time::Duration};
 
 use anyhow::{Context, Result};
 // Use the project's allowed Command wrapper (not std::process::Command, which is
 // disallowed by clippy rules because it flashes a terminal window on Windows).
 use command::blocking::Command as BlockingCommand;
+use warp_core::safe_warn;
 
-use crate::server::server_api::ai::{AIClient, GitCredential};
+use crate::server::server_api::ai::{AIClient, GitCredential, TaskGitCredentialsError};
 
 /// How long to wait between credential refresh attempts (~50 minutes, staying
 /// well ahead of the shortest-lived one-hour token expiry).
 pub(crate) const GIT_CREDENTIALS_REFRESH_INTERVAL: Duration = Duration::from_secs(50 * 60);
+pub(crate) const GIT_CREDENTIALS_BOOTSTRAP_BACKOFF: [Duration; 3] = [
+    Duration::from_secs(1),
+    Duration::from_secs(2),
+    Duration::from_secs(4),
+];
+const GIT_CREDENTIALS_REFRESH_BACKOFF: [Duration; 3] = [
+    Duration::from_secs(60),
+    Duration::from_secs(2 * 60),
+    Duration::from_secs(4 * 60),
+];
 
 const DEFAULT_GIT_NAME: &str = "Warp";
 const DEFAULT_GIT_EMAIL: &str = "agent@warp.dev";
@@ -239,6 +250,96 @@ pub(crate) fn configure_git_credentials(credentials: &[GitCredential]) -> Result
     write_git_credentials(credentials)
 }
 
+pub(crate) async fn fetch_with_retry<Fetch, FetchFuture, Sleep, SleepFuture>(
+    operation: &'static str,
+    backoff_delays: &[Duration],
+    mut fetch: Fetch,
+    mut sleep: Sleep,
+) -> Result<Vec<GitCredential>, TaskGitCredentialsError>
+where
+    Fetch: FnMut() -> FetchFuture,
+    FetchFuture: Future<Output = Result<Vec<GitCredential>, TaskGitCredentialsError>>,
+    Sleep: FnMut(Duration) -> SleepFuture,
+    SleepFuture: Future<Output = ()>,
+{
+    let mut attempt = 1usize;
+    loop {
+        match fetch().await {
+            Ok(credentials) => return Ok(credentials),
+            Err(error) if error.retryable() && attempt <= backoff_delays.len() => {
+                let delay = backoff_delays[attempt - 1];
+                log_task_git_credentials_failure(operation, attempt, &error, Some(delay));
+                sleep(delay).await;
+                attempt += 1;
+            }
+            Err(error) => {
+                log_task_git_credentials_failure(operation, attempt, &error, None);
+                return Err(error);
+            }
+        }
+    }
+}
+
+fn log_task_git_credentials_failure(
+    operation: &str,
+    attempt: usize,
+    error: &TaskGitCredentialsError,
+    retry_delay: Option<Duration>,
+) {
+    match error {
+        TaskGitCredentialsError::Platform {
+            code,
+            retryable,
+            provider,
+            dependency,
+            ..
+        } => {
+            log::warn!(
+                "{operation} failed (attempt {attempt}, code={code:?}, retryable={retryable}, \
+                 provider={}, dependency={}, retry_delay_seconds={})",
+                provider.as_deref().unwrap_or("unknown"),
+                dependency.as_deref().unwrap_or("unknown"),
+                retry_delay.map_or(0, |delay| delay.as_secs()),
+            );
+            tracing::warn!(
+                operation,
+                attempt,
+                error_code = ?code,
+                retryable,
+                provider = provider.as_deref().unwrap_or("unknown"),
+                dependency = dependency.as_deref().unwrap_or("unknown"),
+                retry_delay_seconds = retry_delay.map_or(0, |delay| delay.as_secs()),
+                "Task git credentials request failed"
+            );
+        }
+        TaskGitCredentialsError::Request(source) => {
+            safe_warn!(
+                safe: (
+                    "{operation} request failed (attempt {attempt}); source details redacted"
+                ),
+                full: ("{operation} request failed (attempt {attempt}): {source:#}")
+            );
+            tracing::warn!(
+                operation,
+                attempt,
+                retry_delay_seconds = retry_delay.map_or(0, |delay| delay.as_secs()),
+                "Task git credentials request failed; source details redacted"
+            );
+        }
+        TaskGitCredentialsError::Unstructured { .. } => {
+            log::warn!(
+                "{operation} failed with a non-retryable user-facing error (attempt {attempt})"
+            );
+            tracing::warn!(
+                operation,
+                attempt,
+                retryable = false,
+                "Task git credentials request failed"
+            );
+        }
+    }
+}
+
 /// Run a git config command, logging a warning on failure rather than
 /// propagating the error (git may not be installed in all sandboxes).
 fn run_git_config(key: &str, value: &str) {
@@ -331,32 +432,19 @@ pub(crate) fn configure_git_identity(credentials: &[GitCredential]) {
     tags.cloud_agent = true,
     task_id,
 ))]
-async fn try_refresh(task_id: &str, ai_client: &Arc<dyn AIClient>) -> Result<()> {
+async fn try_refresh(
+    task_id: &str,
+    ai_client: &Arc<dyn AIClient>,
+) -> Result<Vec<GitCredential>, TaskGitCredentialsError> {
     let workload_token =
         warp_isolation_platform::issue_workload_token(Some(Duration::from_secs(5 * 60)))
             .await
-            .context("Failed to issue workload token for git credentials refresh")?
+            .map_err(|error| TaskGitCredentialsError::Request(error.into()))?
             .token;
 
-    let credentials = ai_client
+    ai_client
         .get_task_git_credentials(task_id.to_string(), workload_token)
         .await
-        .context("Failed to fetch git credentials from server")?;
-
-    if credentials.is_empty() {
-        log::debug!("No git credentials returned during refresh; skipping file write");
-        return Ok(());
-    }
-
-    match write_git_credentials(&credentials) {
-        Err(e) => {
-            log::warn!("Failed to write refreshed git credentials: {e:#}");
-        }
-        _ => {
-            log::info!("Git credentials refreshed successfully");
-        }
-    }
-    Ok(())
 }
 
 /// Infinite async loop that refreshes git credentials every
@@ -383,33 +471,32 @@ pub(crate) async fn refresh_loop(task_id: String, ai_client: Arc<dyn AIClient>) 
 
         log::info!("Refreshing git credentials for task {task_id}");
 
-        let backoff_delays = [
-            Duration::from_secs(60),
-            Duration::from_secs(2 * 60),
-            Duration::from_secs(4 * 60),
-        ];
-        let mut attempt = 0usize;
-        loop {
-            match try_refresh(&task_id, &ai_client).await {
-                Ok(()) => break,
-                Err(e) if attempt < backoff_delays.len() => {
-                    let delay = backoff_delays[attempt];
-                    log::warn!(
-                        "Git credentials refresh failed (attempt {}): {e:#}; retrying in {}s",
-                        attempt + 1,
-                        delay.as_secs()
-                    );
-                    warpui::r#async::Timer::after(delay).await;
-                    attempt += 1;
+        match fetch_with_retry(
+            "Git credentials refresh",
+            &GIT_CREDENTIALS_REFRESH_BACKOFF,
+            || try_refresh(&task_id, &ai_client),
+            |delay| async move {
+                warpui::r#async::Timer::after(delay).await;
+            },
+        )
+        .await
+        {
+            Ok(credentials) if credentials.is_empty() => {
+                log::debug!("No git credentials returned during refresh; skipping file write");
+            }
+            Ok(credentials) => match write_git_credentials(&credentials) {
+                Err(error) => {
+                    log::warn!("Failed to write refreshed git credentials: {error:#}");
                 }
-                Err(e) => {
-                    log::warn!(
-                        "Git credentials refresh failed after {} attempts: {e:#}; \
-                         credentials may expire before next refresh cycle",
-                        attempt + 1
-                    );
-                    break;
+                Ok(()) => {
+                    log::info!("Git credentials refreshed successfully");
                 }
+            },
+            Err(_) => {
+                log::warn!(
+                    "Git credentials refresh stopped after a non-retryable error or exhausted \
+                     retries; credentials may expire before the next refresh cycle"
+                );
             }
         }
     }

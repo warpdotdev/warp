@@ -114,6 +114,7 @@ use warp_graphql::queries::task_git_credentials::{
     TaskGitCredentials, TaskGitCredentialsInput, TaskGitCredentialsResult,
     TaskGitCredentialsVariables,
 };
+use warp_isolation_platform::IsolationPlatformError;
 use warp_multi_agent_api::ConversationData;
 
 use super::ServerApi;
@@ -214,13 +215,17 @@ impl TaskGitCredentialsError {
     }
 
     pub fn retryable(&self) -> bool {
-        matches!(
-            self,
-            Self::Platform {
-                retryable: true,
-                ..
+        match self {
+            Self::Platform { retryable, .. } => *retryable,
+            Self::Request(error) => {
+                !error
+                    .downcast_ref::<IsolationPlatformError>()
+                    .is_some_and(|error| {
+                        matches!(error, IsolationPlatformError::NoIsolationPlatformDetected)
+                    })
             }
-        )
+            Self::Unstructured { .. } => false,
+        }
     }
 
     pub(crate) fn task_status(&self) -> (AgentTaskState, TaskStatusUpdate) {
@@ -285,6 +290,39 @@ impl TaskGitCredentialsError {
                 },
             ),
         }
+    }
+}
+
+fn parse_task_git_credentials_result(
+    result: TaskGitCredentialsResult,
+) -> Result<Vec<GitCredential>, TaskGitCredentialsError> {
+    match result {
+        TaskGitCredentialsResult::TaskGitCredentialsOutput(output) => Ok(output
+            .credentials
+            .into_iter()
+            .map(|credential| GitCredential {
+                token: credential.token,
+                username: credential.username,
+                email: credential.email,
+                host: credential.host,
+            })
+            .collect()),
+        TaskGitCredentialsResult::UserFacingError(error) => {
+            Err(TaskGitCredentialsError::from_user_facing(error))
+        }
+        TaskGitCredentialsResult::Unknown => Err(TaskGitCredentialsError::Request(anyhow!(
+            "Unknown taskGitCredentials response"
+        ))),
+    }
+}
+
+fn agent_task_status_message_input(update: TaskStatusUpdate) -> AgentTaskStatusMessageInput {
+    AgentTaskStatusMessageInput {
+        message: update.message,
+        error_code: update.error_code,
+        retryable: update.retryable,
+        provider: update.provider,
+        dependency: update.dependency,
     }
 }
 fn public_api_user_query_mode(mode: UserQueryMode) -> &'static str {
@@ -2281,13 +2319,7 @@ impl AIClient for ServerApi {
                 task_state,
                 session_id: session_id.map(|id| id.to_string().into()),
                 conversation_id: conversation_id.map(|id| id.into()),
-                status_message: status_message.map(|update| AgentTaskStatusMessageInput {
-                    message: update.message,
-                    error_code: update.error_code,
-                    retryable: update.retryable,
-                    provider: update.provider,
-                    dependency: update.dependency,
-                }),
+                status_message: status_message.map(agent_task_status_message_input),
                 session_debug_until: session_debug_until.map(Into::into),
             },
             request_context: get_request_context(),
@@ -2789,27 +2821,7 @@ impl AIClient for ServerApi {
             .await
             .map_err(TaskGitCredentialsError::Request)?;
 
-        match response.task_git_credentials {
-            TaskGitCredentialsResult::TaskGitCredentialsOutput(output) => {
-                let credentials = output
-                    .credentials
-                    .into_iter()
-                    .map(|c| GitCredential {
-                        token: c.token,
-                        username: c.username,
-                        email: c.email,
-                        host: c.host,
-                    })
-                    .collect();
-                Ok(credentials)
-            }
-            TaskGitCredentialsResult::UserFacingError(error) => {
-                Err(TaskGitCredentialsError::from_user_facing(error))
-            }
-            TaskGitCredentialsResult::Unknown => Err(TaskGitCredentialsError::Request(anyhow!(
-                "Unknown taskGitCredentials response"
-            ))),
-        }
+        parse_task_git_credentials_result(response.task_git_credentials)
     }
 
     #[tracing::instrument(skip_all, err, fields(tags.cloud_agent = true))]

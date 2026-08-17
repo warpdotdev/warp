@@ -1,11 +1,19 @@
+use crate::ai::agent_sdk::driver::git_credentials::{
+    GIT_CREDENTIALS_BOOTSTRAP_BACKOFF, fetch_with_retry,
+};
 use chrono::{TimeZone, Utc};
+use cynic::MutationBuilder;
 use futures::executor::block_on;
 use itertools::Itertools;
 use mockito::{Matcher, Server};
-use warp_graphql::ai::PlatformErrorCode;
+use warp_graphql::ai::{AgentTaskState, PlatformErrorCode};
 use warp_graphql::error::{
     PlatformError as GraphqlPlatformError, UserFacingError, UserFacingErrorInterface,
 };
+use warp_graphql::mutations::update_agent_task::{
+    UpdateAgentTask, UpdateAgentTaskInput, UpdateAgentTaskVariables,
+};
+use warp_graphql::queries::task_git_credentials::TaskGitCredentials;
 use warp_graphql::response_context::ResponseContext;
 use warp_server_client::base_client::CLOUD_AGENT_ID_HEADER;
 
@@ -17,7 +25,8 @@ use super::{
     ListConnectedSelfHostedWorkersResponse, ListRunsResponse, PrepareAttachmentUploadsResponse,
     ReadAgentMessageResponse, RunFollowupRequest, RunSortBy, RunSortOrder, SpawnAgentRequest,
     TaskGitCredentialsError, TaskListFilter, UploadFieldValue, UserQueryMode,
-    build_fork_conversation_url, build_list_agent_runs_url, build_run_followup_url,
+    agent_task_status_message_input, build_fork_conversation_url, build_list_agent_runs_url,
+    build_run_followup_url, parse_task_git_credentials_result,
 };
 use crate::notebooks::NotebookId;
 use crate::server::server_api::presigned_upload::upload_to_target;
@@ -61,6 +70,156 @@ fn parses_structured_task_git_credentials_error() {
         }
         error => panic!("expected structured platform error, got {error:?}"),
     }
+}
+
+const DEPENDENCY_CREDENTIALS_RESPONSE: &str = r#"{
+    "data": {
+        "taskGitCredentials": {
+            "__typename": "UserFacingError",
+            "error": {
+                "__typename": "PlatformError",
+                "message": "External dependency is unavailable.",
+                "code": "RESOURCE_UNAVAILABLE",
+                "retryable": true,
+                "detail": "GitHub is temporarily unavailable while resolving repository access.",
+                "provider": "github",
+                "dependency": "github_api"
+            },
+            "responseContext": {"serverVersion": null}
+        }
+    }
+}"#;
+
+const SUCCESS_CREDENTIALS_RESPONSE: &str = r#"{
+    "data": {
+        "taskGitCredentials": {
+            "__typename": "TaskGitCredentialsOutput",
+            "credentials": [{
+                "token": "credential-token-that-must-not-be-reported",
+                "username": "octocat",
+                "email": "octocat@example.com",
+                "host": "github.com"
+            }]
+        }
+    }
+}"#;
+
+const USER_CREDENTIALS_RESPONSE: &str = r#"{
+    "data": {
+        "taskGitCredentials": {
+            "__typename": "UserFacingError",
+            "error": {
+                "__typename": "InvalidSecretError",
+                "message": "Unable to access task git credentials"
+            },
+            "responseContext": {"serverVersion": null}
+        }
+    }
+}"#;
+
+fn parse_serialized_task_git_credentials(
+    body: &str,
+) -> Result<Vec<super::GitCredential>, TaskGitCredentialsError> {
+    let response: cynic::GraphQlResponse<TaskGitCredentials> =
+        serde_json::from_str(body).expect("serialized GraphQL fixture should parse");
+    let data = response.data.expect("GraphQL fixture should contain data");
+    parse_task_git_credentials_result(data.task_git_credentials)
+}
+
+#[test]
+fn serialized_dependency_response_retries_then_returns_credentials() {
+    let mut attempts = 0usize;
+    let credentials = block_on(fetch_with_retry(
+        "serialized bootstrap test",
+        &GIT_CREDENTIALS_BOOTSTRAP_BACKOFF,
+        || {
+            attempts += 1;
+            std::future::ready(parse_serialized_task_git_credentials(if attempts == 1 {
+                DEPENDENCY_CREDENTIALS_RESPONSE
+            } else {
+                SUCCESS_CREDENTIALS_RESPONSE
+            }))
+        },
+        |_| std::future::ready(()),
+    ))
+    .expect("retryable serialized dependency response should recover");
+
+    assert_eq!(attempts, 2);
+    assert_eq!(credentials.len(), 1);
+    assert_eq!(credentials[0].host, "github.com");
+}
+
+#[test]
+fn serialized_dependency_exhaustion_reports_error_with_metadata() {
+    let mut attempts = 0usize;
+    let result = block_on(fetch_with_retry(
+        "serialized bootstrap test",
+        &GIT_CREDENTIALS_BOOTSTRAP_BACKOFF,
+        || {
+            attempts += 1;
+            std::future::ready(parse_serialized_task_git_credentials(
+                DEPENDENCY_CREDENTIALS_RESPONSE,
+            ))
+        },
+        |_| std::future::ready(()),
+    ));
+    let error = match result {
+        Err(error) => error,
+        Ok(_) => panic!("dependency fixture should exhaust bounded retries"),
+    };
+
+    assert_eq!(attempts, GIT_CREDENTIALS_BOOTSTRAP_BACKOFF.len() + 1);
+    let (state, status) = error.task_status();
+    assert_eq!(state, AgentTaskState::Error);
+    let variables = UpdateAgentTaskVariables {
+        input: UpdateAgentTaskInput {
+            task_id: cynic::Id::new("task-id-that-must-not-leak".to_string()),
+            task_state: Some(state),
+            session_id: None,
+            conversation_id: None,
+            status_message: Some(agent_task_status_message_input(status)),
+            session_debug_until: None,
+        },
+        request_context: super::get_request_context(),
+    };
+    let payload = serde_json::to_value(UpdateAgentTask::build(variables))
+        .expect("updateAgentTask operation should serialize")
+        .to_string();
+
+    assert!(payload.contains("RESOURCE_UNAVAILABLE"));
+    assert!(payload.contains(r#""retryable":true"#));
+    assert!(payload.contains(r#""provider":"github""#));
+    assert!(payload.contains(r#""dependency":"github_api""#));
+    assert!(payload.contains(r#""taskState":"ERROR""#));
+    assert!(!payload.contains("credential-token-that-must-not-be-reported"));
+}
+
+#[test]
+fn serialized_user_error_fails_fast_and_reports_failed() {
+    let mut attempts = 0usize;
+    let result = block_on(fetch_with_retry(
+        "serialized bootstrap test",
+        &GIT_CREDENTIALS_BOOTSTRAP_BACKOFF,
+        || {
+            attempts += 1;
+            std::future::ready(parse_serialized_task_git_credentials(
+                USER_CREDENTIALS_RESPONSE,
+            ))
+        },
+        |_| std::future::ready(()),
+    ));
+    let error = match result {
+        Err(error) => error,
+        Ok(_) => panic!("user/config fixture should fail"),
+    };
+
+    assert_eq!(attempts, 1);
+    let (state, status) = error.task_status();
+    assert_eq!(state, AgentTaskState::Failed);
+    assert_eq!(status.error_code, Some(PlatformErrorCode::InvalidRequest));
+    assert_eq!(status.retryable, Some(false));
+    assert_eq!(status.provider, None);
+    assert_eq!(status.dependency, None);
 }
 
 #[test]
