@@ -56,8 +56,7 @@ struct CacheEntry {
 struct Cache {
     entries: HashMap<PathBuf, CacheEntry>,
     total_weight: u64,
-    /// Recency counter. Only ever read or written while `CACHE`'s mutex is held, so a plain
-    /// counter (rather than an atomic) is enough.
+    /// Recency counter, only ever accessed while `CACHE`'s mutex is held.
     next_tick: u64,
 }
 
