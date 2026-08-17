@@ -75,6 +75,64 @@ fn drop_every_team_when_user_has_no_team_membership() {
     assert!(team_names(&workspace).is_empty());
 }
 
+mod pending_email_invites_conversion {
+    use warp_graphql::workspace::EmailInvite as GqlEmailInvite;
+
+    use crate::workspaces::gql_convert::team_pending_email_invites_from_gql;
+
+    fn gql_invite(email: &str, team_uid: Option<&str>) -> GqlEmailInvite {
+        GqlEmailInvite {
+            email: email.to_string(),
+            expired: false,
+            team_uid: team_uid.map(cynic::Id::new),
+        }
+    }
+
+    #[test]
+    fn keeps_only_invites_sent_for_the_given_team() {
+        let team_a_uid = format!("{:0>22}", "team-a");
+        let team_b_uid = format!("{:0>22}", "team-b");
+        let team_a = cynic::Id::new(team_a_uid.clone());
+        let team_b = cynic::Id::new(team_b_uid.clone());
+        let workspace_invites = vec![
+            gql_invite("alice@example.com", Some(team_a_uid.as_str())),
+            gql_invite("bob@example.com", Some(team_b_uid.as_str())),
+            gql_invite("carol@example.com", Some(team_a_uid.as_str())),
+        ];
+
+        let team_a_invites = team_pending_email_invites_from_gql(&workspace_invites, &team_a);
+        assert_eq!(
+            team_a_invites
+                .iter()
+                .map(|invite| invite.invitee_email.as_str())
+                .collect::<Vec<_>>(),
+            vec!["alice@example.com", "carol@example.com"],
+            "team A's page must not show team B's pending invite"
+        );
+
+        let team_b_invites = team_pending_email_invites_from_gql(&workspace_invites, &team_b);
+        assert_eq!(
+            team_b_invites
+                .iter()
+                .map(|invite| invite.invitee_email.as_str())
+                .collect::<Vec<_>>(),
+            vec!["bob@example.com"],
+            "team B's page must not show team A's pending invites"
+        );
+    }
+
+    #[test]
+    fn drops_invites_with_no_team_uid() {
+        // Invites without a teamUid can't be attributed to any team, so they
+        // must not leak onto a team's pending-invite list.
+        let team_a = cynic::Id::new(format!("{:0>22}", "team-a"));
+        let workspace_invites = vec![gql_invite("dangling@example.com", None)];
+
+        let team_a_invites = team_pending_email_invites_from_gql(&workspace_invites, &team_a);
+        assert!(team_a_invites.is_empty());
+    }
+}
+
 mod team_settings_conversion {
     use warp_graphql::workspace as gqlws;
 

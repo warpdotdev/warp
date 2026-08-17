@@ -487,6 +487,7 @@ pub struct InviteLinkDomainRestriction {
 pub struct EmailInvite {
     pub email: String,
     pub expired: bool,
+    pub team_uid: Option<cynic::Id>,
 }
 
 #[derive(cynic::QueryFragment, Debug, Clone)]

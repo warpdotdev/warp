@@ -1241,6 +1241,7 @@ input DomainCaptureSettingsInput {
 type EmailInvite {
   email: String!
   expired: Boolean!
+  teamUid: ID
 }
 
 enum EmbeddingConfig {

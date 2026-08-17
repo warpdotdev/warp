@@ -244,6 +244,9 @@ impl From<GqlEmailInvite> for EmailInvite {
         Self {
             invitee_email: gql_email_invite.email,
             expired: gql_email_invite.expired,
+            team_uid: gql_email_invite
+                .team_uid
+                .map(|uid| ServerId::from_string_lossy(uid.into_inner())),
         }
     }
 }
@@ -1313,6 +1316,22 @@ pub(crate) fn team_settings_from_gql(team_settings: GqlTeamSettings) -> TeamSett
     team_settings.into()
 }
 
+/// Narrows the workspace's pending email invites down to the ones sent for a
+/// specific team. `Workspace.pendingEmailInvites` is workspace-wide across
+/// every team, so a team-scoped consumer must filter it by `teamUid` rather
+/// than use it as-is.
+pub(crate) fn team_pending_email_invites_from_gql(
+    workspace_pending_email_invites: &[GqlEmailInvite],
+    team_uid: &cynic::Id,
+) -> Vec<EmailInvite> {
+    workspace_pending_email_invites
+        .iter()
+        .filter(|invite| invite.team_uid.as_ref() == Some(team_uid))
+        .cloned()
+        .map(Into::into)
+        .collect()
+}
+
 impl Team {
     pub fn from_gql(gql_workspace: GqlWorkspace, gql_team: GqlTeam) -> Team {
         Self {
@@ -1326,12 +1345,10 @@ impl Team {
                 .map(|gql_member| gql_member.into())
                 .collect(),
             invite_link: gql_team.invite_link.clone(),
-            pending_email_invites: gql_workspace
-                .pending_email_invites
-                .clone()
-                .into_iter()
-                .map(|gql_email_invite| gql_email_invite.into())
-                .collect(),
+            pending_email_invites: team_pending_email_invites_from_gql(
+                &gql_workspace.pending_email_invites,
+                &gql_team.uid,
+            ),
             invite_link_domain_restrictions: gql_workspace
                 .invite_link_domain_restrictions
                 .clone()

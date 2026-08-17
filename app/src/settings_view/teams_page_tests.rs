@@ -239,6 +239,7 @@ fn workspace_admin_can_cancel_pending_invite() {
     team.pending_email_invites.push(EmailInvite {
         invitee_email: "invitee@example.com".to_string(),
         expired: false,
+        team_uid: Some(1.into()),
     });
     let workspace = admin_workspace(MEMBER_EMAIL);
 
