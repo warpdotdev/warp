@@ -1037,6 +1037,7 @@ impl AgentDriverRunner {
                     resume: None,
                     cloud_providers: Vec::new(),
                     environment: None,
+                    repository_head_overrides: args.repository_head_overrides.clone(),
                     selected_harness: args.harness,
                     third_party_harness_model_config,
                     snapshot_disabled: args.snapshot.no_snapshot.then_some(true),
@@ -1105,6 +1106,10 @@ impl AgentDriverRunner {
                 Self::resolve_environment(foreground, environment_id, &mut driver_options),
             )
             .await?;
+        driver::environment::validate_repository_head_overrides(
+            driver_options.environment.as_ref(),
+            &driver_options.repository_head_overrides,
+        )?;
 
         Ok((driver_options, task, task_conversation_id))
     }

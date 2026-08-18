@@ -22,7 +22,7 @@ use repo_metadata::local_model::IndexedRepoState;
 use repo_metadata::{RepoMetadataModel, RepositoryIdentifier};
 use session_sharing_protocol::sharer::SessionRetentionReason;
 use uuid::Uuid;
-use warp_cli::agent::{Harness, OutputFormat};
+use warp_cli::agent::{Harness, OutputFormat, RepositoryHeadOverride};
 use warp_cli::mcp::MCPSpec;
 use warp_cli::share::ShareRequest;
 use warp_cli::skill::SkillSpec;
@@ -297,6 +297,8 @@ pub struct AgentDriverOptions {
     pub cloud_providers: Vec<Box<dyn cloud_provider::CloudProvider>>,
     /// Resolved environment configuration, if any.
     pub environment: Option<AmbientAgentEnvironment>,
+    /// Overrides for repository HEADs in the agent's session.
+    pub repository_head_overrides: Vec<RepositoryHeadOverride>,
     /// Selected execution harness for this run.
     pub selected_harness: Harness,
     /// Model config for the selected harness. Only used for non-Oz harnesses.
@@ -364,6 +366,7 @@ pub struct AgentDriver {
 
     /// Resolved environment configuration.
     environment: Option<AmbientAgentEnvironment>,
+    repository_head_overrides: Vec<RepositoryHeadOverride>,
 
     // End-of-run snapshot upload controls.
     snapshot_disabled: bool,
@@ -635,6 +638,7 @@ impl AgentDriver {
             resume,
             cloud_providers,
             environment,
+            repository_head_overrides,
             selected_harness,
             third_party_harness_model_config,
             snapshot_disabled,
@@ -761,6 +765,7 @@ impl AgentDriver {
             resume_payload,
             cloud_providers,
             environment,
+            repository_head_overrides,
             snapshot_disabled: snapshot_disabled_value,
             snapshot_upload_timeout: snapshot_upload_timeout
                 .unwrap_or(snapshot::DEFAULT_SNAPSHOT_UPLOAD_TIMEOUT),
@@ -805,6 +810,7 @@ impl AgentDriver {
             resume_payload: None,
             cloud_providers: Vec::new(),
             environment: None,
+            repository_head_overrides: Vec::new(),
             snapshot_disabled: false,
             snapshot_upload_timeout: snapshot::DEFAULT_SNAPSHOT_UPLOAD_TIMEOUT,
             snapshot_script_timeout: snapshot::DEFAULT_DECLARATIONS_SCRIPT_TIMEOUT,
@@ -2156,7 +2162,9 @@ impl AgentDriver {
             .await?;
         let mut environment_skill_repos = Vec::new();
 
-        let environment_opt = foreground.spawn(|me, _| me.environment.clone()).await?;
+        let (environment_opt, repository_head_overrides) = foreground
+            .spawn(|me, _| (me.environment.clone(), me.repository_head_overrides.clone()))
+            .await?;
 
         if let Some(environment) = environment_opt {
             log::info!("Loading environment...");
@@ -2197,6 +2205,9 @@ impl AgentDriver {
                             working_dir,
                             false, /* is_sandbox */
                             harness,
+                            environment::RepositoryHeadOverrideContext::new(
+                                repository_head_overrides,
+                            ),
                             setup_events_for_environment,
                             ctx,
                         )

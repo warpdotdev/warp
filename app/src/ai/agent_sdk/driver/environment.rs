@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -7,11 +7,12 @@ use std::time::Duration;
 use ai::index::full_source_code_embedding::manager::{
     CodebaseIndexManager, CodebaseIndexManagerEvent,
 };
+use cloud_object_models::CodeForge;
 use futures::channel::oneshot;
 use futures::future::join_all;
 use repo_metadata::repositories::{DetectedRepositories, RepoDetectionSource};
-use warp_cli::agent::Harness;
-use warp_completer::completer::CommandExitStatus;
+use warp_cli::agent::{Harness, RepositoryForge, RepositoryHeadOverride, RepositoryHeadRef};
+use warp_completer::completer::{CommandExitStatus, CommandOutput};
 use warp_core::command::ExitCode;
 use warp_core::{safe_info, safe_warn};
 use warpui::r#async::FutureExt;
@@ -32,6 +33,12 @@ pub enum PrepareEnvironmentError {
     InvalidRuntimeState,
     #[error("Failed to clone {repo_name}")]
     CloneRepo { repo_name: String },
+    #[error("Invalid repository HEAD overrides: {reason}")]
+    InvalidRepositoryHeadOverrides { reason: String },
+    #[error("Failed to prepare repositories: {repo_names}")]
+    PrepareRepositories { repo_names: String },
+    #[error("Failed to remove remotes from overridden repositories")]
+    RemoveOverrideRemotes,
     #[error("Failed to run setup command: {command}")]
     SetupCommand { command: String },
     #[error("Failed to change directory into {repo_name}")]
@@ -40,8 +47,57 @@ pub enum PrepareEnvironmentError {
     TerminalDriver { source: AgentDriverError },
 }
 
+/// Server-owned repository HEAD override context for environment preparation.
+#[derive(Default)]
+pub(crate) struct RepositoryHeadOverrideContext {
+    overrides: Vec<RepositoryHeadOverride>,
+}
+
+impl RepositoryHeadOverrideContext {
+    pub fn new(overrides: Vec<RepositoryHeadOverride>) -> Self {
+        Self { overrides }
+    }
+}
+
+pub(crate) fn validate_repository_head_overrides(
+    environment: Option<&AmbientAgentEnvironment>,
+    overrides: &[RepositoryHeadOverride],
+) -> Result<(), PrepareEnvironmentError> {
+    if overrides.is_empty() {
+        return Ok(());
+    }
+    let source_repos = environment
+        .ok_or_else(|| PrepareEnvironmentError::InvalidRepositoryHeadOverrides {
+            reason: "repository HEAD overrides require an environment".to_string(),
+        })?
+        .effective_repos();
+    let mut identities = HashSet::new();
+    for head_override in overrides {
+        if !identities.insert(head_override.identity()) {
+            return Err(PrepareEnvironmentError::InvalidRepositoryHeadOverrides {
+                reason: format!(
+                    "duplicate repository identity {:?}/{}/{}",
+                    head_override.code_forge, head_override.repo_owner, head_override.repo_name
+                ),
+            });
+        }
+        if !source_repos
+            .iter()
+            .any(|repo| head_override_matches_repo(head_override, repo))
+        {
+            return Err(PrepareEnvironmentError::InvalidRepositoryHeadOverrides {
+                reason: format!(
+                    "repository {:?}/{}/{} is not declared by the environment",
+                    head_override.code_forge, head_override.repo_owner, head_override.repo_name
+                ),
+            });
+        }
+    }
+    Ok(())
+}
+
 /// Prepare a cloud agent environment within a terminal session. This will:
-/// 1. Clone all repositories, skipping any that are already cloned.
+/// 1. Materialize all repositories, enforcing server-provided HEAD overrides.
 /// 2. Begin codebase indexing for all repositories (Oz harness only).
 /// 3. Run any setup commands.
 /// 4. If there is only one repository, navigate into it.
@@ -57,11 +113,16 @@ pub fn prepare_environment(
     working_dir: PathBuf,
     is_sandbox: bool,
     harness: Harness,
+    repository_head_override_context: RepositoryHeadOverrideContext,
     setup_events: SetupClientEventReporter,
     ctx: &mut ModelContext<TerminalDriver>,
 ) -> impl Future<Output = Result<(), PrepareEnvironmentError>> {
     let spawner = ctx.spawner();
     async move {
+        let RepositoryHeadOverrideContext {
+            overrides: repository_head_overrides,
+        } = repository_head_override_context;
+        validate_repository_head_overrides(Some(&environment), &repository_head_overrides)?;
         let source_repos = environment.effective_repos();
         let setup_commands = environment.setup_commands;
 
@@ -80,6 +141,7 @@ pub fn prepare_environment(
             working_dir.as_path(),
             is_sandbox,
             &source_repos,
+            &repository_head_overrides,
             setup_commands,
             should_index_codebase,
             Arc::clone(&repo_channels),
@@ -105,6 +167,7 @@ async fn prepare_environment_impl(
     working_dir: &Path,
     is_sandbox: bool,
     source_repos: &[SourceRepo],
+    repository_head_overrides: &[RepositoryHeadOverride],
     setup_commands: Vec<String>,
     should_index_codebase: bool,
     repo_channels: Arc<Mutex<HashMap<PathBuf, oneshot::Sender<()>>>>,
@@ -127,25 +190,30 @@ async fn prepare_environment_impl(
     if !source_repos.is_empty() {
         setup_events
             .record_result(SetupStep::EnvironmentRepoClone, async {
-                clone_repos(source_repos, working_dir, spawner).await?;
-                for repo in source_repos {
-                    register_cloned_repo(repo, working_dir, is_sandbox, spawner).await?;
-                    if !is_sandbox && should_index_codebase {
-                        let receiver = index_repo_codebase(
-                            &repo.repo,
-                            working_dir,
-                            Arc::clone(&repo_channels),
-                            spawner,
-                        )
-                        .await?;
-                        if let Some(receiver) = receiver {
-                            codebase_context_receivers.push(receiver);
-                        }
-                    }
-                }
-                Ok::<(), PrepareEnvironmentError>(())
+                prepare_repositories(
+                    source_repos,
+                    repository_head_overrides,
+                    working_dir,
+                    spawner,
+                )
+                .await
             })
             .await?;
+        for repo in source_repos {
+            register_cloned_repo(repo, working_dir, is_sandbox, spawner).await?;
+            if !is_sandbox && should_index_codebase {
+                let receiver = index_repo_codebase(
+                    &repo.repo,
+                    working_dir,
+                    Arc::clone(&repo_channels),
+                    spawner,
+                )
+                .await?;
+                if let Some(receiver) = receiver {
+                    codebase_context_receivers.push(receiver);
+                }
+            }
+        }
 
         if should_index_codebase {
             record_codebase_indexing(
@@ -157,7 +225,7 @@ async fn prepare_environment_impl(
     }
 
     let has_setup_commands = !setup_commands.is_empty();
-    if has_setup_commands {
+    let setup_result = if has_setup_commands {
         setup_events
             .record_result(SetupStep::EnvironmentSetupCommands, async {
                 // Set CI=true so setup commands run in a CI-like environment. This should help us run
@@ -197,14 +265,22 @@ async fn prepare_environment_impl(
                 execute_command("unset CI".to_string(), spawner).await?;
                 Ok::<(), PrepareEnvironmentError>(())
             })
-            .await?;
+            .await
     } else if should_index_codebase && source_repos.is_empty() {
         let _ = spawner
             .spawn(|_, ctx| {
                 ctx.unsubscribe_from_model(&CodebaseIndexManager::handle(ctx));
             })
             .await;
-    }
+        Ok(())
+    } else {
+        Ok(())
+    };
+
+    let remove_remotes_result =
+        remove_override_remotes(repository_head_overrides, working_dir, spawner).await;
+    setup_result?;
+    remove_remotes_result?;
 
     if should_index_codebase && source_repos.is_empty() {
         log::info!("No repositories to index for codebase context");
@@ -222,7 +298,6 @@ async fn prepare_environment_impl(
             return Err(PrepareEnvironmentError::ChangeDirectory { repo_name });
         }
     }
-
     Ok(())
 }
 
@@ -259,6 +334,250 @@ fn record_codebase_indexing(
             })
             .await;
     });
+}
+
+fn repository_forge_for_repo(repo: &SourceRepo) -> RepositoryForge {
+    match repo.code_forge.unwrap_or_default() {
+        CodeForge::GitHub => RepositoryForge::GitHub,
+        CodeForge::GitLab => RepositoryForge::GitLab,
+    }
+}
+fn head_override_matches_repo(head_override: &RepositoryHeadOverride, repo: &SourceRepo) -> bool {
+    head_override.code_forge == repository_forge_for_repo(repo)
+        && head_override.repo_owner == repo.owner
+        && head_override.repo_name == repo.repo
+}
+
+fn head_override_for_repo<'a>(
+    overrides: &'a [RepositoryHeadOverride],
+    repo: &SourceRepo,
+) -> Option<&'a RepositoryHeadOverride> {
+    overrides
+        .iter()
+        .find(|head_override| head_override_matches_repo(head_override, repo))
+}
+
+async fn active_shell_type(spawner: &ModelSpawner<TerminalDriver>) -> ShellType {
+    spawner
+        .spawn(|driver, ctx| {
+            driver
+                .active_session_shell_type(ctx)
+                .unwrap_or(ShellType::Bash)
+        })
+        .await
+        .unwrap_or(ShellType::Bash)
+}
+
+fn build_parallel_prepare_command(
+    repos: &[SourceRepo],
+    overrides: &[RepositoryHeadOverride],
+    shell_type: ShellType,
+) -> String {
+    let mut script = String::from(
+        r#"set +e
+failed=0
+pids=""
+tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/warp-repo-logs.XXXXXX")"
+cleanup_repo_logs() {
+  rm -rf "$tmp_dir"
+}
+trap cleanup_repo_logs EXIT
+clone_repo() {
+  repo_name="$1"
+  repo_url="$2"
+  target="$3"
+  if [ -d "$target" ]; then
+    printf '%s\n' "Repository directory $target already exists, skipping clone..."
+    return 0
+  fi
+  printf '%s\n' "Cloning repository $repo_name..."
+  git clone --filter=tree:0 "$repo_url" "$target"
+}
+verify_shallow_checkout() {
+  repo_name="$1"
+  target="$2"
+  shallow="$(git -C "$target" rev-parse --is-shallow-repository)" || return 1
+  if [ "$shallow" != "true" ]; then
+    printf '%s\n' "Overridden repository $repo_name is not shallow" >&2
+    return 1
+  fi
+  reachable_commits="$(git -C "$target" rev-list --count HEAD --all)" || return 1
+  if [ "$reachable_commits" != "1" ]; then
+    printf '%s\n' "Overridden repository $repo_name exposes $reachable_commits commits, expected exactly 1" >&2
+    return 1
+  fi
+}
+checkout_commit() {
+  repo_name="$1"
+  repo_url="$2"
+  target="$3"
+  commit_sha="$4"
+  if [ -e "$target" ]; then
+    printf '%s\n' "Verifying existing repository $repo_name at $commit_sha..."
+  else
+    printf '%s\n' "Initializing repository $repo_name at $commit_sha..."
+    git init --quiet "$target" || return 1
+    git -C "$target" remote add origin "$repo_url" || return 1
+    git -C "$target" fetch --depth=1 origin "$commit_sha" || return 1
+    git -C "$target" checkout --detach "$commit_sha" || return 1
+  fi
+  if ! git -C "$target" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    printf '%s\n' "Overridden repository path $target is not a Git repository" >&2
+    return 1
+  fi
+  actual_sha="$(git -C "$target" rev-parse HEAD)" || return 1
+  if [ "$actual_sha" != "$commit_sha" ]; then
+    printf '%s\n' "Repository $repo_name is at $actual_sha, expected $commit_sha" >&2
+    return 1
+  fi
+  if git -C "$target" symbolic-ref --quiet HEAD >/dev/null 2>&1; then
+    printf '%s\n' "Repository $repo_name must use a detached HEAD for a commit override" >&2
+    return 1
+  fi
+  verify_shallow_checkout "$repo_name" "$target"
+}
+checkout_branch() {
+  repo_name="$1"
+  repo_url="$2"
+  target="$3"
+  branch="$4"
+  if [ -e "$target" ]; then
+    printf '%s\n' "Verifying existing repository $repo_name at branch $branch..."
+  else
+    printf '%s\n' "Cloning repository $repo_name at branch $branch..."
+    git clone --filter=tree:0 --depth=1 --single-branch --branch "$branch" "$repo_url" "$target" || return 1
+  fi
+  if ! git -C "$target" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    printf '%s\n' "Overridden repository path $target is not a Git repository" >&2
+    return 1
+  fi
+  actual_branch="$(git -C "$target" symbolic-ref --quiet --short HEAD)" || return 1
+  if [ "$actual_branch" != "$branch" ]; then
+    printf '%s\n' "Repository $repo_name is on branch $actual_branch, expected $branch" >&2
+    return 1
+  fi
+  verify_shallow_checkout "$repo_name" "$target"
+}
+"#,
+    );
+
+    let mut log_outputs = String::new();
+    for (index, repo) in repos.iter().enumerate() {
+        let repo_name = format!("{}/{}", repo.owner, repo.repo);
+        let escaped_repo_name = shell_escape_single_quotes(&repo_name, ShellType::Bash);
+        let escaped_repo_url = shell_escape_single_quotes(&repo.https_clone_url(), ShellType::Bash);
+        let escaped_target = shell_escape_single_quotes(&repo.repo, ShellType::Bash);
+        let log_var = format!("log_file_{index}");
+        script.push_str(&format!("{log_var}=\"$tmp_dir/repo-{index}.log\"\n"));
+        match head_override_for_repo(overrides, repo).map(|head_override| &head_override.head) {
+            Some(RepositoryHeadRef::CommitSha(commit_sha)) => {
+                let escaped_commit_sha = shell_escape_single_quotes(commit_sha, ShellType::Bash);
+                script.push_str(&format!(
+                    "checkout_commit '{escaped_repo_name}' '{escaped_repo_url}' '{escaped_target}' '{escaped_commit_sha}' >\"${log_var}\" 2>&1 &\n"
+                ));
+            }
+            Some(RepositoryHeadRef::Branch(branch)) => {
+                let escaped_branch = shell_escape_single_quotes(branch, ShellType::Bash);
+                script.push_str(&format!(
+                    "checkout_branch '{escaped_repo_name}' '{escaped_repo_url}' '{escaped_target}' '{escaped_branch}' >\"${log_var}\" 2>&1 &\n"
+                ));
+            }
+            None => {
+                script.push_str(&format!(
+                    "clone_repo '{escaped_repo_name}' '{escaped_repo_url}' '{escaped_target}' >\"${log_var}\" 2>&1 &\n"
+                ));
+            }
+        }
+        script.push_str("pids=\"$pids $!\"\n");
+        log_outputs.push_str(&format!(
+            "printf '%s\\n' '===== {escaped_repo_name} ====='\n\
+             if [ -s \"${log_var}\" ]; then\n\
+             \tcat \"${log_var}\"\n\
+             else\n\
+             \tprintf '%s\\n' '(no output)'\n\
+             fi\n"
+        ));
+    }
+
+    script.push_str(
+        r#"for pid in $pids; do
+  if ! wait "$pid"; then
+    failed=1
+  fi
+done
+"#,
+    );
+    script.push_str(&log_outputs);
+    script.push_str(
+        r#"
+exit "$failed"
+"#,
+    );
+
+    let escaped_script = shell_escape_single_quotes(&script, shell_type);
+    format!("sh -c '{escaped_script}'")
+}
+
+async fn prepare_repositories(
+    repos: &[SourceRepo],
+    overrides: &[RepositoryHeadOverride],
+    working_dir: &Path,
+    spawner: &ModelSpawner<TerminalDriver>,
+) -> Result<(), PrepareEnvironmentError> {
+    if overrides.is_empty() {
+        clone_repos(repos, working_dir, spawner).await?;
+    } else {
+        let shell_type = active_shell_type(spawner).await;
+        let command = build_parallel_prepare_command(repos, overrides, shell_type);
+        let exit_code = execute_command(command, spawner).await?;
+        if exit_code != 0.into() {
+            return Err(PrepareEnvironmentError::PrepareRepositories {
+                repo_names: repos
+                    .iter()
+                    .map(|repo| format!("{}/{}", repo.owner, repo.repo))
+                    .collect::<Vec<_>>()
+                    .join(", "),
+            });
+        }
+    }
+    Ok(())
+}
+fn build_remove_override_remotes_command(
+    overrides: &[RepositoryHeadOverride],
+    working_dir: &Path,
+    shell_type: ShellType,
+) -> String {
+    let mut script = String::new();
+    for head_override in overrides {
+        let repo_path = working_dir.join(&head_override.repo_name);
+        let escaped_path =
+            shell_escape_single_quotes(&repo_path.to_string_lossy(), ShellType::Bash);
+        script.push_str(&format!(
+            "if git -C '{escaped_path}' remote get-url origin >/dev/null 2>&1; then\n\
+             \tgit -C '{escaped_path}' remote remove origin || exit 1\n\
+             fi\n"
+        ));
+    }
+    let escaped_script = shell_escape_single_quotes(&script, shell_type);
+    format!("sh -c '{escaped_script}'")
+}
+
+async fn remove_override_remotes(
+    overrides: &[RepositoryHeadOverride],
+    working_dir: &Path,
+    spawner: &ModelSpawner<TerminalDriver>,
+) -> Result<(), PrepareEnvironmentError> {
+    if overrides.is_empty() {
+        return Ok(());
+    }
+    let shell_type = active_shell_type(spawner).await;
+    let command = build_remove_override_remotes_command(overrides, working_dir, shell_type);
+    let output = execute_silent_command(command, spawner).await?;
+    if output.success() {
+        Ok(())
+    } else {
+        Err(PrepareEnvironmentError::RemoveOverrideRemotes)
+    }
 }
 
 fn build_parallel_clone_command(repos: &[SourceRepo], shell_type: ShellType) -> String {
@@ -610,6 +929,21 @@ async fn execute_command(
             AgentDriverError::InvalidRuntimeState => PrepareEnvironmentError::InvalidRuntimeState,
             source => PrepareEnvironmentError::TerminalDriver { source },
         })?
+        .await
+        .map_err(|error| match error {
+            AgentDriverError::InvalidRuntimeState => PrepareEnvironmentError::InvalidRuntimeState,
+            source => PrepareEnvironmentError::TerminalDriver { source },
+        })
+}
+
+async fn execute_silent_command(
+    command: String,
+    spawner: &ModelSpawner<TerminalDriver>,
+) -> Result<CommandOutput, PrepareEnvironmentError> {
+    spawner
+        .spawn(move |driver, ctx| driver.execute_silent_command(command, ctx))
+        .await
+        .map_err(|_| PrepareEnvironmentError::InvalidRuntimeState)?
         .await
         .map_err(|error| match error {
             AgentDriverError::InvalidRuntimeState => PrepareEnvironmentError::InvalidRuntimeState,
