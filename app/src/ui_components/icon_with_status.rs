@@ -75,6 +75,8 @@ fn circle_padding(total: f32) -> f32 {
     (circle_size(total) - icon_size(total)) / 2.
 }
 
+/// Returns the diameter of the status badge's cutout ring, i.e. the badge's
+/// full painted footprint.
 fn badge_size(total: f32, style: StatusBadgeStyle) -> f32 {
     total * style.ring_ratio
 }
@@ -142,8 +144,11 @@ pub(crate) enum IconWithStatusVariant {
         is_ambient: bool,
     },
     /// A pre-rendered avatar with an optional status overlay (cloud lobe when
-    /// ambient). Caller must size `avatar` to `circle_size(total_size)` so the
-    /// overlay's overhang matches the other variants.
+    /// ambient). The overlay is anchored to the `total_size` box's bottom-right
+    /// corner however big `avatar` is, so pass either an avatar sized to
+    /// `circle_size(total_size)` (to match the overhang of the other variants)
+    /// or an element that already fills the `total_size` box and places its own
+    /// artwork inside it.
     CustomAvatar {
         avatar: Box<dyn Element>,
         status: Option<ConversationStatus>,
@@ -439,9 +444,11 @@ fn render_with_optional_status_badge(
     status_container_background: WarpThemeFill,
 ) -> Box<dyn Element> {
     let Some(status) = status else {
-        // No status badge: still occupy the full `total_size` footprint so the agent
-        // circle (which is only `circle_size(total)` wide) sits centered in the box
-        // the caller reserved.
+        // No status badge: still reserve the full `total_size` footprint the caller
+        // asked for, so badged and un-badged variants occupy identical space.
+        // `ConstrainedBox` only tightens constraints — it does not center — so the
+        // circle (which is only `circle_size(total)` wide) is painted at the box's
+        // top-left. Callers that need it centered must wrap it in `Align`.
         return ConstrainedBox::new(circle)
             .with_width(total_size)
             .with_height(total_size)

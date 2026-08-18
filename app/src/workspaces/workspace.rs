@@ -48,7 +48,6 @@ pub struct Workspace {
     pub billing_cycle_usage: Option<BillingCycleUsageData>,
     pub has_billing_history: bool,
     pub settings: WorkspaceSettings,
-    pub invite_code: Option<WorkspaceInviteCode>,
     pub invite_link_domain_restrictions: Vec<InviteLinkDomainRestriction>,
     pub pending_email_invites: Vec<EmailInvite>,
     // If the team is eligible for discovery, then show toggle for setting discoverability to the team's admin
@@ -77,7 +76,6 @@ impl Workspace {
             billing_cycle_usage: None,
             has_billing_history: false,
             settings: Default::default(), // TODO: persistence wrapper instead of default
-            invite_code: Default::default(),
             invite_link_domain_restrictions: Default::default(),
             pending_email_invites: Default::default(),
             is_eligible_for_discovery: false,
@@ -100,6 +98,10 @@ impl Workspace {
             .tier
             .native_workspaces_policy
             .is_some_and(|policy| policy.enabled)
+    }
+
+    pub fn is_native_workspaces_admin(&self, user_email: &str) -> bool {
+        self.is_workspace_admin(user_email) && self.is_native_workspaces_enabled()
     }
 
     pub fn resolve_usage_visibility(&self, is_admin: bool) -> UsageVisibility {
@@ -205,11 +207,6 @@ impl Workspace {
     }
 }
 
-#[derive(Clone, Debug)]
-pub struct WorkspaceInviteCode {
-    pub code: String,
-}
-
 #[derive(Clone, Eq, PartialEq, Debug)]
 pub struct WorkspaceMember {
     pub uid: UserUid,
@@ -242,6 +239,7 @@ impl Ord for WorkspaceMember {
 pub struct EmailInvite {
     pub invitee_email: String,
     pub expired: bool,
+    pub team_uid: Option<ServerId>,
 }
 
 impl PartialOrd for EmailInvite {

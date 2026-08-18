@@ -514,7 +514,7 @@ impl AmbientAgentRunner {
                 prompt,
                 mode,
                 config,
-                title: None,
+                title: args.title,
                 team: match (args.scope.team, args.scope.personal) {
                     (true, _) => Some(true),
                     (_, true) => Some(false),
@@ -524,7 +524,7 @@ impl AmbientAgentRunner {
                 skill,
                 attachments,
                 interactive: None,
-                parent_run_id: None,
+                parent_run_id: args.parent_run_id,
                 runtime_skills: vec![],
                 referenced_attachments: vec![],
                 conversation_id: args.conversation,

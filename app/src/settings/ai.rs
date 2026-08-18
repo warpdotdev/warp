@@ -521,7 +521,7 @@ impl DefaultSessionMode {
         match self {
             DefaultSessionMode::Terminal => "Terminal",
             DefaultSessionMode::Agent => "Agent",
-            DefaultSessionMode::CloudAgent => "Cloud Oz",
+            DefaultSessionMode::CloudAgent => "Cloud agent",
             DefaultSessionMode::TabConfig => "Tab Config",
             DefaultSessionMode::DockerSandbox => "Local Docker Sandbox",
         }
@@ -1772,7 +1772,7 @@ define_settings_group!(AISettings, settings: [
         private: true,
     }
 
-    // Used to determine whether the "What's new in Oz" section of the agent view
+    // Used to determine whether the "Latest updates" section of the agent view
     // zero state is expanded or collapsed by default.
     should_expand_oz_updates: ShouldExpandOzUpdates {
         type: bool,
@@ -1783,7 +1783,7 @@ define_settings_group!(AISettings, settings: [
         private: true,
     }
 
-    // Used to determine whether the "What's new in Oz" section of the agent view
+    // Used to determine whether the "Latest updates" section of the agent view
     // zero state is shown or hidden.
     should_show_oz_updates_in_zero_state: ShouldShowOzUpdatesInZeroState {
         type: bool,

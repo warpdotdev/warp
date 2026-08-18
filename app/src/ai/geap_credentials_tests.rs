@@ -11,7 +11,7 @@ use super::*;
 use crate::server::server_api::ServerApiProvider;
 use crate::server::server_api::team::MockTeamClient;
 use crate::server::server_api::workspace::MockWorkspaceClient;
-use crate::workspaces::team::Team;
+use crate::workspaces::team::{Team, TeamVisibility};
 use crate::workspaces::workspace::{HostEnablementSetting, LlmHostSettings, Workspace};
 
 // ── pure helpers ────────────────────────────────────────────────
@@ -146,7 +146,7 @@ fn team_for_test() -> Team {
         uid: 123.into(),
         name: "test".to_string(),
         color: None,
-        invite_code: None,
+        invite_link: None,
         members: vec![],
         pending_email_invites: vec![],
         invite_link_domain_restrictions: vec![],
@@ -155,6 +155,7 @@ fn team_for_test() -> Team {
         settings: Default::default(),
         is_eligible_for_discovery: false,
         has_billing_history: false,
+        visibility: TeamVisibility::Open,
     }
 }
 
@@ -170,7 +171,6 @@ fn workspace_with_geap_host(enabled: bool) -> Workspace {
         billing_cycle_usage: None,
         has_billing_history: false,
         settings: Default::default(),
-        invite_code: None,
         invite_link_domain_restrictions: vec![],
         pending_email_invites: vec![],
         is_eligible_for_discovery: false,

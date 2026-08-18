@@ -509,6 +509,8 @@ crash_reporting = [
 creating_shared_sessions = []
 cross_repo_context = []
 codebase_index_persistence = ["full_source_code_embedding"]
+well_known_mcp_ids = []
+factory_mcp = []
 default = [
     "agent_mode",
     "osc_hyperlinks",
@@ -707,6 +709,8 @@ default = [
     "cloud_runners",
     "cloud_agent_runners",
     "file_backed_execution_profiles",
+    "well_known_mcp_ids",
+    "factory_mcp",
 ]
 # Enable this feature to automatically perform heap profiling.  NOTE: This will
 # substantially slow down program execution.

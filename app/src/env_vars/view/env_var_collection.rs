@@ -832,7 +832,7 @@ impl EnvVarCollectionView {
                         new_env_var_collection,
                         id,
                         self.active_env_var_collection_data
-                            .update(ctx, |data, _| data.revision_ts.clone()),
+                            .update(ctx, |data, _| data.revision_ts),
                         ctx,
                     );
                 }),

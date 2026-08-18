@@ -362,6 +362,9 @@ fn record_codebase_indexing(
             log::warn!(
                 "Timed out waiting for codebase index sync; continuing without guaranteed codebase context",
             );
+            tracing::warn!(
+                "Timed out waiting for codebase index sync; continuing without guaranteed codebase context",
+            );
         }
         let _ = spawner
             .spawn(|_, ctx| {

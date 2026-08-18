@@ -529,13 +529,14 @@ fn render_long_string_row(
 
     let mut row = Flex::row()
         .with_main_axis_size(MainAxisSize::Max)
-        .with_cross_axis_alignment(CrossAxisAlignment::Center);
+        .with_cross_axis_alignment(CrossAxisAlignment::Start);
 
     // Indent spacer.
     row.add_child(indent_spacer(depth));
 
+    let mut chevron_and_key = Flex::row().with_cross_axis_alignment(CrossAxisAlignment::Center);
     // Chevron in the standard left position.
-    row.add_child(
+    chevron_and_key.add_child(
         ConstrainedBox::new(
             icon.to_warpui_icon(warp_core::ui::theme::Fill::Solid(colors.annotation))
                 .finish(),
@@ -551,8 +552,9 @@ fn render_long_string_row(
             .with_color(colors.key)
             .soft_wrap(false)
             .finish();
-        row.add_child(key_text);
+        chevron_and_key.add_child(key_text);
     }
+    row.add_child(chevron_and_key.finish());
 
     // String value: preview when collapsed, full text when expanded.
     let string_element: Box<dyn Element> = if is_expanded {

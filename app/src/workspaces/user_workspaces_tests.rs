@@ -33,7 +33,7 @@ use warp_graphql::workspace::{
     SecretRedactionSettingsInfo as GqlSecretRedactionSettingsInfo,
     StringListSettingInfo as GqlStringListSettingInfo, Team as GqlTeam,
     TeamMember as GqlTeamMember, TeamSettings as GqlTeamSettings,
-    TelemetrySettings as GqlTelemetrySettings,
+    TeamVisibility as GqlTeamVisibility, TelemetrySettings as GqlTelemetrySettings,
     UgcCollectionEnablementSetting as GqlUgcCollectionEnablementSetting,
     UgcCollectionSettingInfo as GqlUgcCollectionSettingInfo,
     UgcCollectionSettings as GqlUgcCollectionSettings,
@@ -64,7 +64,7 @@ use crate::system::SystemStats;
 use crate::workflows::workflow::Workflow;
 use crate::workflows::{CloudWorkflow, CloudWorkflowModel};
 use crate::workspaces::gql_convert::PLACEHOLDER_WORKSPACE_UID;
-use crate::workspaces::team::{Team, TeamMember};
+use crate::workspaces::team::{Team, TeamMember, TeamVisibility};
 use crate::workspaces::team_tester::TeamTesterStatus;
 use crate::workspaces::update_manager::TeamUpdateManager;
 use crate::workspaces::user_workspaces::UserWorkspaces;
@@ -169,7 +169,7 @@ fn test_loading_all_spaces_after_switching_from_offline() {
         uid: 123.into(),
         name: "test".to_string(),
         color: None,
-        invite_code: None,
+        invite_link: None,
         members: vec![],
         pending_email_invites: vec![],
         invite_link_domain_restrictions: vec![],
@@ -178,6 +178,7 @@ fn test_loading_all_spaces_after_switching_from_offline() {
         settings: Default::default(),
         is_eligible_for_discovery: false,
         has_billing_history: false,
+        visibility: TeamVisibility::Open,
     };
 
     let workspace = Workspace {
@@ -190,7 +191,6 @@ fn test_loading_all_spaces_after_switching_from_offline() {
         billing_cycle_usage: None,
         has_billing_history: false,
         settings: Default::default(),
-        invite_code: None,
         invite_link_domain_restrictions: vec![],
         pending_email_invites: vec![],
         is_eligible_for_discovery: false,
@@ -305,7 +305,7 @@ fn team_for_test() -> Team {
         uid: 123.into(),
         name: "test".to_string(),
         color: None,
-        invite_code: None,
+        invite_link: None,
         members: vec![],
         pending_email_invites: vec![],
         invite_link_domain_restrictions: vec![],
@@ -314,6 +314,7 @@ fn team_for_test() -> Team {
         settings: Default::default(),
         is_eligible_for_discovery: false,
         has_billing_history: false,
+        visibility: TeamVisibility::Open,
     }
 }
 
@@ -735,7 +736,6 @@ fn workspace_for_test(team: &Team) -> Workspace {
         billing_cycle_usage: None,
         has_billing_history: false,
         settings: Default::default(),
-        invite_code: None,
         invite_link_domain_restrictions: vec![],
         pending_email_invites: vec![],
         is_eligible_for_discovery: false,
@@ -1262,7 +1262,7 @@ fn test_joining_team_moves_objects() {
         uid: 123.into(),
         name: "test".to_string(),
         color: None,
-        invite_code: None,
+        invite_link: None,
         members: vec![],
         pending_email_invites: vec![],
         invite_link_domain_restrictions: vec![],
@@ -1271,6 +1271,7 @@ fn test_joining_team_moves_objects() {
         settings: Default::default(),
         is_eligible_for_discovery: false,
         has_billing_history: false,
+        visibility: TeamVisibility::Open,
     };
     let team_uid = team.uid;
     let workspace = Workspace {
@@ -1283,7 +1284,6 @@ fn test_joining_team_moves_objects() {
         billing_cycle_usage: None,
         has_billing_history: false,
         settings: Default::default(),
-        invite_code: None,
         invite_link_domain_restrictions: vec![],
         pending_email_invites: vec![],
         is_eligible_for_discovery: false,
@@ -1501,7 +1501,7 @@ fn test_leaving_team_moves_objects() {
         uid: 123.into(),
         name: "test".to_string(),
         color: None,
-        invite_code: None,
+        invite_link: None,
         members: vec![],
         pending_email_invites: vec![],
         invite_link_domain_restrictions: vec![],
@@ -1510,6 +1510,7 @@ fn test_leaving_team_moves_objects() {
         settings: Default::default(),
         is_eligible_for_discovery: false,
         has_billing_history: false,
+        visibility: TeamVisibility::Open,
     };
     let team_uid = team.uid;
     let workspace = Workspace {
@@ -1522,7 +1523,6 @@ fn test_leaving_team_moves_objects() {
         billing_cycle_usage: None,
         has_billing_history: false,
         settings: Default::default(),
-        invite_code: None,
         invite_link_domain_restrictions: vec![],
         pending_email_invites: vec![],
         is_eligible_for_discovery: false,
@@ -1736,6 +1736,163 @@ fn test_purchase_addon_credits_forwards_team_uid_when_present() {
     })
 }
 
+#[test]
+fn test_remove_user_from_team_rejected_emits_error_event_without_updating_workspaces() {
+    let team = team_for_test();
+    let team_uid = team.uid;
+    let workspace = workspace_for_test(&team);
+
+    App::test((), |mut app| async move {
+        let mut team_client = MockTeamClient::new();
+        team_client
+            .expect_remove_user_from_team()
+            .times(1)
+            .returning(|_, _, _| {
+                Err(anyhow::anyhow!(
+                    "missing response data for RemoveUserFromTeam: Not found: no rows in result set"
+                ))
+            });
+
+        app.add_singleton_model(|ctx| {
+            UserWorkspaces::mock(
+                Arc::new(team_client),
+                Arc::new(MockWorkspaceClient::new()),
+                vec![workspace],
+                ctx,
+            )
+        });
+
+        let user_workspaces_handle = UserWorkspaces::handle(&app);
+        let (sender, receiver) = async_channel::unbounded();
+        app.update(|ctx| {
+            let sender = sender.clone();
+            ctx.subscribe_to_model(
+                &user_workspaces_handle,
+                move |_, event: &UserWorkspacesEvent, _| {
+                    if let UserWorkspacesEvent::RemoveUserFromTeamRejected(err) = event {
+                        let _ = sender.try_send(err.to_string());
+                    }
+                },
+            );
+        });
+
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.remove_user_from_team(
+                UserUid::new("member-uid"),
+                team_uid,
+                CloudObjectEventEntrypoint::TeamSettings,
+                ctx,
+            );
+        });
+
+        warpui::r#async::Timer::after(Duration::from_millis(100)).await;
+
+        let error_message = receiver
+            .try_recv()
+            .expect("expected RemoveUserFromTeamRejected to be emitted");
+        assert!(
+            error_message.contains("no rows in result set"),
+            "the rejected event should carry the server's error message, got: {error_message}"
+        );
+
+        // A failed removal must not silently drop the team from local state.
+        app.read(|ctx| {
+            assert!(
+                UserWorkspaces::as_ref(ctx).has_teams(),
+                "a rejected removal should leave the existing team data untouched"
+            );
+        });
+    })
+}
+
+#[test]
+fn test_remove_user_from_team_success_emits_success_event_and_refreshes_members() {
+    let user_uid = UserUid::new("member-uid");
+    let mut team = team_for_test();
+    team.members.push(TeamMember {
+        uid: user_uid,
+        email: "member@example.com".to_string(),
+        role: MembershipRole::User,
+    });
+    let team_uid = team.uid;
+    let workspace = workspace_for_test(&team);
+
+    let mut updated_team = team.clone();
+    updated_team.members.clear();
+    let updated_workspace = workspace_for_test(&updated_team);
+
+    App::test((), |mut app| async move {
+        let mut team_client = MockTeamClient::new();
+        team_client
+            .expect_remove_user_from_team()
+            .times(1)
+            .returning(move |_, _, _| {
+                Ok(WorkspacesMetadataWithPricing {
+                    metadata: WorkspacesMetadataResponse {
+                        workspaces: vec![updated_workspace.clone()],
+                        joinable_teams: vec![],
+                        experiments: None,
+                        feature_model_choices: None,
+                        ai_credit_availability: None,
+                        user_purchase_policy: None,
+                    },
+                    pricing_info: None,
+                })
+            });
+
+        app.add_singleton_model(PrivacySettings::mock);
+        app.add_singleton_model(|ctx| {
+            UserWorkspaces::mock(
+                Arc::new(team_client),
+                Arc::new(MockWorkspaceClient::new()),
+                vec![workspace],
+                ctx,
+            )
+        });
+
+        let user_workspaces_handle = UserWorkspaces::handle(&app);
+        let (sender, receiver) = async_channel::unbounded();
+        app.update(|ctx| {
+            let sender = sender.clone();
+            ctx.subscribe_to_model(
+                &user_workspaces_handle,
+                move |_, event: &UserWorkspacesEvent, _| {
+                    if matches!(event, UserWorkspacesEvent::RemoveUserFromTeamSuccess) {
+                        let _ = sender.try_send(());
+                    }
+                },
+            );
+        });
+
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.remove_user_from_team(
+                user_uid,
+                team_uid,
+                CloudObjectEventEntrypoint::TeamSettings,
+                ctx,
+            );
+        });
+
+        warpui::r#async::Timer::after(Duration::from_millis(100)).await;
+
+        receiver
+            .try_recv()
+            .expect("expected RemoveUserFromTeamSuccess to be emitted");
+
+        // The acceptance criteria requires that a successful removal continues to
+        // refresh the member list, exactly like before this fix.
+        app.read(|ctx| {
+            let team = UserWorkspaces::as_ref(ctx)
+                .team_from_uid(team_uid)
+                .expect("team should still exist after removal");
+            assert!(
+                team.members.is_empty(),
+                "member list should refresh to reflect the removal"
+            );
+        });
+    })
+}
+
 fn gql_tier(purchase_policy: Option<GqlPurchaseAddOnCreditsPolicy>) -> GqlTier {
     GqlTier {
         name: "Free".to_string(),
@@ -1847,7 +2004,6 @@ fn gql_workspace(
             ambient_agent_settings: None,
         },
         has_billing_history: false,
-        invite_code: None,
         pending_email_invites: vec![],
         invite_link_domain_restrictions: vec![],
         is_eligible_for_discovery: false,
@@ -1973,6 +2129,8 @@ fn gql_team(uid: &str, name: &str, member_uids: &[&str]) -> GqlTeam {
             })
             .collect(),
         settings: gql_team_settings(),
+        invite_link: None,
+        visibility: GqlTeamVisibility::Open,
     }
 }
 

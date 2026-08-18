@@ -52,6 +52,49 @@ fn start_device_login_action_retries_from_failure() {
         });
     });
 }
+
+#[test]
+fn terminal_root_focus_delegates_to_the_selected_session() {
+    App::test((), |mut app| async move {
+        register_tui_session_view_test_singletons(&mut app);
+        add_test_semantic_selection(&mut app);
+        app.update(crate::autoupdate::TuiAutoupdater::register);
+        let (window_id, root) = add_root(&mut app);
+        let sessions = app.add_singleton_model(|_| TuiSessions::new_for_test());
+        let (foreground, foreground_manager) = add_test_terminal_session(&mut app, window_id);
+        let foreground_id = app.update(|ctx| {
+            TuiSessions::register_session(
+                &sessions,
+                foreground.clone(),
+                foreground_manager,
+                true,
+                ctx,
+            )
+        });
+        let (background, background_manager) = add_test_terminal_session(&mut app, window_id);
+        app.update(|ctx| {
+            TuiSessions::register_session(
+                &sessions,
+                background.clone(),
+                background_manager,
+                false,
+                ctx,
+            );
+        });
+        root.update(&mut app, |root, ctx| root.show_terminal(ctx));
+
+        background.update(&mut app, |background, ctx| background.activate(ctx));
+        assert!(app.read(|ctx| { ctx.check_view_or_child_focused(window_id, &background.id()) }));
+        assert_eq!(
+            app.read(|ctx| TuiSessions::as_ref(ctx).focused_session_id()),
+            Some(foreground_id)
+        );
+
+        root.update(&mut app, |_, ctx| ctx.focus_self());
+
+        assert!(app.read(|ctx| { ctx.check_view_or_child_focused(window_id, &foreground.id()) }));
+    });
+}
 #[test]
 fn pending_copy_clears_on_failure_before_url_generation() {
     App::test((), |mut app| async move {

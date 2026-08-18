@@ -437,6 +437,8 @@ pub enum FileTreeSource {
     ForceOpened,
     /// Opened from the CLI agent view footer (e.g., Claude Code).
     CLIAgentView,
+    /// Opened from the File explorer chip in Warp's own agent input toolbelt.
+    AgentToolbelt,
 }
 
 #[cfg(feature = "local_fs")]

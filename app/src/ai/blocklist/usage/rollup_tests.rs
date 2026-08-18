@@ -32,6 +32,7 @@ fn spawn_child(
             name.to_string(),
             parent_id,
             None,
+            false,
             ctx,
         )
     })

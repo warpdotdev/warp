@@ -309,6 +309,10 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::SummarizationConversationCommand,
         #[cfg(feature = "mcp_grouped_server_context")]
         FeatureFlag::MCPGroupedServerContext,
+        #[cfg(feature = "well_known_mcp_ids")]
+        FeatureFlag::WellKnownMcpIds,
+        #[cfg(feature = "factory_mcp")]
+        FeatureFlag::FactoryMcp,
         #[cfg(feature = "web_search_ui")]
         FeatureFlag::WebSearchUI,
         #[cfg(feature = "web_fetch_ui")]

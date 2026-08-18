@@ -639,6 +639,7 @@ fn should_autoexecute_for_child_conversation_without_plan_or_profile() {
                     "mid-tree".to_string(),
                     state.conversation_id,
                     None,
+                    false,
                     ctx,
                 )
             });
@@ -670,6 +671,7 @@ fn child_run_agents_executes_when_multi_level_orchestration_enabled() {
                     "mid-tree".to_string(),
                     state.conversation_id,
                     None,
+                    false,
                     ctx,
                 )
             });
@@ -713,6 +715,7 @@ fn execute_denies_child_run_agents_when_multi_level_orchestration_disabled() {
                     "mid-tree".to_string(),
                     state.conversation_id,
                     None,
+                    false,
                     ctx,
                 )
             });

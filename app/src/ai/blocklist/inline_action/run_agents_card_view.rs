@@ -31,7 +31,7 @@ use crate::ai::blocklist::action_model::{
 };
 use crate::ai::blocklist::agent_view::orchestration_pill_bar::render_static_agent_pill;
 use crate::ai::blocklist::block::AIBlock;
-use crate::ai::blocklist::block::model::AIBlockModel;
+use crate::ai::blocklist::block::model::{AIBlockModel, AIBlockOutputStatus};
 use crate::ai::blocklist::block::view_impl::WithContentItemSpacing;
 use crate::ai::blocklist::inline_action::create_environment_modal::{
     CreateEnvironmentModal, CreateEnvironmentModalEvent,
@@ -73,6 +73,7 @@ use crate::view_components::dropdown::DropdownEvent;
 use crate::view_components::{FilterableDropdownEvent, FilterableDropdownOrientation};
 
 const RUN_AGENTS_CARD_TITLE: &str = "Can I start additional agents for this task?";
+const SPAWN_AGENTS_CANCELLED_LABEL: &str = "Spawn agents cancelled";
 
 pub fn init(app: &mut AppContext) {
     use warpui::keymap::macros::*;
@@ -1255,12 +1256,11 @@ impl View for RunAgentsCardView {
         // Cancelled. Must be checked before the streaming gate below,
         // because restored blocks have no pending action status.
         if self.block_model.is_restored() {
-            return render_status_only_card(
-                "Spawn agents cancelled".to_string(),
-                appearance,
-                StatusKind::Cancelled,
-                app,
-            );
+            return render_cancelled_card(appearance, app);
+        }
+
+        if is_orphaned_by_finished_output(status.as_ref(), &self.block_model.status(app)) {
+            return render_cancelled_card(appearance, app);
         }
 
         // Still streaming: show "Configuring agents..." placeholder until
@@ -1651,8 +1651,29 @@ pub(crate) fn format_terminal_state(result: &RunAgentsResult) -> (String, Status
             };
             (label, StatusKind::Failure)
         }
-        RunAgentsResult::Cancelled => ("Spawn agents cancelled".to_string(), StatusKind::Cancelled),
+        RunAgentsResult::Cancelled => (
+            SPAWN_AGENTS_CANCELLED_LABEL.to_string(),
+            StatusKind::Cancelled,
+        ),
     }
+}
+
+/// Whether the card can no longer reach a real outcome and must render as
+/// cancelled: the tool call never entered the action queue (so it has no
+/// status and will never produce a result), and the response stream that was
+/// streaming it has already finished as cancelled or failed. Without this the
+/// card would keep rendering the in-progress placeholder forever. Mirrors how
+/// [`crate::ai::blocklist::block::view_impl::output::action_icon`] treats a
+/// statusless action on a finished block.
+fn is_orphaned_by_finished_output(
+    action_status: Option<&AIActionStatus>,
+    block_status: &AIBlockOutputStatus,
+) -> bool {
+    action_status.is_none()
+        && matches!(
+            block_status,
+            AIBlockOutputStatus::Cancelled { .. } | AIBlockOutputStatus::Failed { .. }
+        )
 }
 
 #[derive(Clone, Copy)]
@@ -1676,6 +1697,16 @@ fn render_spawning_card(
         format!("Spawning {total} agents\u{2026}")
     };
     render_status_only_card(label, appearance, StatusKind::Spawning, app)
+}
+
+/// Terminal card for a tool call that ended without launching any agent.
+fn render_cancelled_card(appearance: &Appearance, app: &AppContext) -> Box<dyn Element> {
+    render_status_only_card(
+        SPAWN_AGENTS_CANCELLED_LABEL.to_string(),
+        appearance,
+        StatusKind::Cancelled,
+        app,
+    )
 }
 
 fn render_status_only_card(
