@@ -23,6 +23,7 @@ use warp_core::features::FeatureFlag;
 use warp_errors::report_error;
 use warp_terminal::model::grid::Dimensions as _;
 use warp_terminal::model::{KeyboardModes, KeyboardModesApplyBehavior};
+use warp_util::lazy::Lazy;
 use warp_util::path::user_friendly_path;
 use warpui::r#async::executor::Background;
 use warpui::record_trace_event;
@@ -66,7 +67,6 @@ use crate::terminal::model::terminal_model::{BlockIndex, WithinBlock};
 use crate::terminal::shell::ShellType;
 use crate::terminal::view::WithinBlockBanner;
 use crate::terminal::{BlockPadding, ShellHost, SizeInfo};
-use crate::util::lazy::Lazy;
 
 pub const LONG_RUNNING_COMMAND_DURATION_MS: u64 = 50;
 pub const LONG_RUNNING_BOTTOM_PADDING_LINES: f32 = 0.2;
@@ -528,8 +528,7 @@ pub struct PromptInfo {
     pub prompt_snapshot: Option<String>,
 }
 
-/// Computes [`UserBlockCompleted::command`] lazily from the live block. See
-/// [`crate::util::lazy::Lazy`].
+/// Computes [`UserBlockCompleted::command`] lazily from the live block. See [`warp_util::lazy::Lazy`].
 fn compute_command(block: &Block) -> String {
     block.command_to_string()
 }

@@ -7,6 +7,7 @@ use std::time::Duration;
 
 use instant::Instant;
 pub use remote_server::setup::RemoteServerSetupState;
+use warp_util::lazy::Lazy;
 
 use super::history::HistoryEntry;
 use super::model::ansi::FinishUpdateValue;
@@ -23,7 +24,6 @@ use crate::terminal::model::completions::ShellCompletion;
 use crate::terminal::model::terminal_model::HandlerEvent;
 use crate::terminal::shell::ShellType;
 use crate::util::AsciiDebug;
-use crate::util::lazy::Lazy;
 
 #[derive(Clone)]
 /// Events sent to the main thread by the terminal model & event loop.

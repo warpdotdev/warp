@@ -4,6 +4,10 @@ use std::sync::{Arc, OnceLock};
 
 use parking_lot::Mutex;
 
+#[cfg(test)]
+#[path = "lazy_tests.rs"]
+mod tests;
+
 /// A deferred compute closure, boxed to erase the (possibly capturing, per-instance) concrete
 /// closure type so many differently-behaving instances can share the same `Lazy<T, S>` type.
 type ComputeFn<T, S> = Box<dyn FnOnce(&S) -> T + Send>;
@@ -133,7 +137,3 @@ impl<T: fmt::Debug, S> fmt::Debug for Lazy<T, S> {
         }
     }
 }
-
-#[cfg(test)]
-#[path = "lazy_tests.rs"]
-mod tests;
