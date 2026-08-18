@@ -668,7 +668,10 @@ pub fn spawn_tui_driver<T: TuiView>(
                 &freeze_repaints_when_unfocused,
                 ctx,
             ) {
-                report_error!(anyhow::Error::new(error).context("failed to draw a TUI frame"));
+                report_error!(
+                    anyhow::Error::new(error).context("failed to draw a TUI frame"),
+                    warp_errors::ReportErrorLogMode::OncePerRun
+                );
             }
         });
     }
@@ -810,7 +813,10 @@ fn draw_and_schedule_repaint<T: TuiView, R: TuiTerminal + 'static>(
                         &freeze_repaints_when_unfocused,
                         ctx,
                     ) {
-                        report_error!("failed to draw a TUI frame", extra: { "error" => %error });
+                        report_error!(
+                            anyhow::Error::new(error).context("failed to draw a TUI frame"),
+                            warp_errors::ReportErrorLogMode::OncePerRun
+                        );
                     }
                 });
             })
