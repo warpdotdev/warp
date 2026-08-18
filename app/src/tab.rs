@@ -145,6 +145,17 @@ impl TabShortcutModifierState {
         }
     }
 
+    /// Clears all held keys and returns whether the held-key set changed.
+    pub fn clear_held_keys(&self) -> bool {
+        let mut held_keys = self.held_keys.borrow_mut();
+        if held_keys.is_empty() {
+            false
+        } else {
+            held_keys.clear();
+            true
+        }
+    }
+
     fn held_kinds(&self) -> HashSet<ShortcutModifierKind> {
         self.held_keys
             .borrow()
@@ -1722,7 +1733,7 @@ impl<'a> TabComponent<'a> {
         )
         .with_color(theme.sub_text_color(theme.background()).into())
         .finish();
-        Some(Container::new(text).with_margin_right(4.).finish())
+        Some(Container::new(text).with_margin_left(4.).finish())
     }
 
     fn render_tab_container(&self, is_hovered: bool) -> Box<dyn Element> {
@@ -1825,9 +1836,6 @@ impl<'a> TabComponent<'a> {
                 .with_main_axis_size(MainAxisSize::Max)
                 .with_main_axis_alignment(MainAxisAlignment::Center)
                 .with_cross_axis_alignment(warpui::elements::CrossAxisAlignment::Center);
-            if let Some(hint) = self.render_shortcut_hint() {
-                flex_row.add_child(hint);
-            }
             if let Some(indicator) = self.render_indicator() {
                 flex_row.add_child(indicator);
             }
@@ -1839,6 +1847,9 @@ impl<'a> TabComponent<'a> {
                 )
                 .finish(),
             );
+            if let Some(hint) = self.render_shortcut_hint() {
+                flex_row.add_child(hint);
+            }
             // Equal padding on both sides so the title stays centered; the pin
             // vanishes before it can reach the title.
             let horizontal_padding = if reserve_pin_space {

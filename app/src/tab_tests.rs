@@ -1,6 +1,11 @@
 use std::collections::HashMap;
 
-use super::{SelectedTabColor, next_tab_color, tab_group_menu_entry_flags};
+use warpui::platform::keyboard::KeyCode;
+
+use super::{
+    SelectedTabColor, ShortcutModifierKind, TabShortcutModifierState, next_tab_color,
+    tab_group_menu_entry_flags,
+};
 use crate::themes::theme::AnsiColorIdentifier;
 use crate::ui_components::color_dot::TAB_COLOR_OPTIONS;
 use crate::workspace::tab_group::{TabGroup, TabGroupId};
@@ -33,6 +38,23 @@ fn sole_member_of_group_hides_new_group_and_offers_remove() {
         show_remove_from_group,
         "a tab in a group should offer 'Remove from group'"
     );
+}
+
+#[test]
+fn tab_shortcut_modifier_state_clear_reports_whether_state_changed() {
+    let state = TabShortcutModifierState::new();
+
+    assert!(!state.clear_held_keys());
+
+    assert!(state.set_key_held(KeyCode::SuperLeft, true));
+    assert_eq!(
+        state.held_kinds(),
+        [ShortcutModifierKind::Super].into_iter().collect()
+    );
+
+    assert!(state.clear_held_keys());
+    assert!(state.held_kinds().is_empty());
+    assert!(!state.clear_held_keys());
 }
 
 // GH-13073 follow-up: a tab that shares a group with siblings SHOULD still be

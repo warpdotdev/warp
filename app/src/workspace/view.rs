@@ -18897,6 +18897,15 @@ impl Workspace {
             StateEvent::ValueChanged { current, previous } => {
                 let did_window_change_focus =
                     WindowManager::did_window_change_focus(self.window_id, current, previous);
+                let window_lost_focus = previous.active_window == Some(self.window_id)
+                    && current.active_window != Some(self.window_id);
+                let app_lost_focus = previous.stage == ApplicationStage::Active
+                    && current.stage != ApplicationStage::Active;
+                let shortcut_state_changed = if window_lost_focus || app_lost_focus {
+                    TabShortcutModifierState::as_ref(ctx).clear_held_keys()
+                } else {
+                    false
+                };
                 let cached_window_is_active = current.active_window == Some(self.window_id);
                 let app_became_active = previous.stage != ApplicationStage::Active
                     && current.stage == ApplicationStage::Active;
@@ -18924,8 +18933,10 @@ impl Workspace {
                     );
                 }
 
-                // Re-render if fullscreen state for active window has changed.
-                if current.is_active_window_fullscreen != previous.is_active_window_fullscreen {
+                // Re-render if fullscreen or shortcut-hint visibility changed.
+                if current.is_active_window_fullscreen != previous.is_active_window_fullscreen
+                    || shortcut_state_changed
+                {
                     ctx.notify();
                 } else if did_window_change_focus {
                     // Re-render if this window's focus state has changed.
