@@ -122,7 +122,7 @@ const BACKOFF_JITTER: f32 = 0.3;
 /// Ceiling on the backoff exponent, so a caller with a larger budget than
 /// [`MAX_ATTEMPTS`] can't grow the interval without bound (or overflow the
 /// multiplication). At [`BACKOFF_FACTOR`] this caps a single wait at ~32s.
-const BACKOFF_MAX_EXPONENT: u32 = 6;
+const BACKOFF_MAX_EXPONENT: i32 = 6;
 
 /// Jittered exponential backoff to wait after `attempts_made` failed attempts, before
 /// making the next one.
@@ -130,10 +130,10 @@ const BACKOFF_MAX_EXPONENT: u32 = 6;
 /// `attempts_made` is 1-based: the wait after the first failure is [`INITIAL_BACKOFF`],
 /// and each subsequent wait multiplies by [`BACKOFF_FACTOR`].
 pub(crate) fn backoff_after_attempts(attempts_made: usize) -> Duration {
-    let exponent = u32::try_from(attempts_made.saturating_sub(1))
-        .unwrap_or(u32::MAX)
+    let exponent = i32::try_from(attempts_made.saturating_sub(1))
+        .unwrap_or(i32::MAX)
         .min(BACKOFF_MAX_EXPONENT);
-    let delay = INITIAL_BACKOFF.mul_f32(BACKOFF_FACTOR.powi(exponent as i32));
+    let delay = INITIAL_BACKOFF.mul_f32(BACKOFF_FACTOR.powi(exponent));
     duration_with_jitter(delay, BACKOFF_JITTER)
 }
 
