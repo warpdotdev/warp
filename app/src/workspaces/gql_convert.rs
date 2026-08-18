@@ -1316,10 +1316,6 @@ pub(crate) fn team_settings_from_gql(team_settings: GqlTeamSettings) -> TeamSett
     team_settings.into()
 }
 
-/// Narrows the workspace's pending email invites down to the ones sent for a
-/// specific team. `Workspace.pendingEmailInvites` is workspace-wide across
-/// every team, so a team-scoped consumer must filter it by `teamUid` rather
-/// than use it as-is.
 pub(crate) fn team_pending_email_invites_from_gql(
     workspace_pending_email_invites: &[GqlEmailInvite],
     team_uid: &cynic::Id,

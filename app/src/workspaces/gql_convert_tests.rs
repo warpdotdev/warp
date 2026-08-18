@@ -123,8 +123,6 @@ mod pending_email_invites_conversion {
 
     #[test]
     fn drops_invites_with_no_team_uid() {
-        // Invites without a teamUid can't be attributed to any team, so they
-        // must not leak onto a team's pending-invite list.
         let team_a = cynic::Id::new(format!("{:0>22}", "team-a"));
         let workspace_invites = vec![gql_invite("dangling@example.com", None)];
 

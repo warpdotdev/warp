@@ -239,9 +239,6 @@ impl Ord for WorkspaceMember {
 pub struct EmailInvite {
     pub invitee_email: String,
     pub expired: bool,
-    /// The team this invite was sent for. `None` for invites created before
-    /// the server started tagging invites with a team, or if the workspace
-    /// no longer has that team.
     pub team_uid: Option<ServerId>,
 }
 
