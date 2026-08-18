@@ -393,14 +393,14 @@ clone_repo() {
     printf '%s\n' "Repository directory $target already exists, skipping clone..."
   else
     printf '%s\n' "Cloning repository $repo_name..."
-    git clone --filter=tree:0 "$repo_url" "$target" || return 1
+    git clone --filter=blob:none "$repo_url" "$target" || return 1
   fi
   # Pin after clone or reuse: a reused directory may still be on an old ref.
   if [ -n "$checkout_ref" ]; then
     printf '%s\n' "Checking out $checkout_ref in $repo_name..."
     # Fetch leaves the object in FETCH_HEAD; check that out detached so we
     # never prefer a stale local branch with the same name.
-    git -C "$target" fetch --filter=tree:0 origin "$checkout_ref" && git -C "$target" checkout --detach FETCH_HEAD
+    git -C "$target" fetch --filter=blob:none origin "$checkout_ref" && git -C "$target" checkout --detach FETCH_HEAD
   fi
 }
 "#,
@@ -519,8 +519,10 @@ pub(super) async fn clone_repo(
         .await
         .unwrap_or(ShellType::Bash);
     let escaped_url = shell_escape_single_quotes(&repo_url, shell_type);
-    // We do a partial clone here to speed up environment setup time.
-    let command = format!("git clone --filter=tree:0 '{escaped_url}'");
+    // We do a blobless partial clone here to speed up environment setup time
+    // while still keeping trees local, so path-limited history and blame stay
+    // fully local instead of lazily refetching from the promisor remote.
+    let command = format!("git clone --filter=blob:none '{escaped_url}'");
 
     let repo_dir = working_dir.join(&repo.repo);
     // Always ask the session whether the repo dir already exists, rather
@@ -581,12 +583,12 @@ pub(super) async fn clone_repo(
 /// Build the `git fetch` + `git checkout` command that pins `repo`'s clone at
 /// its `checkout_ref`, or `None` when the repo has no ref to pin.
 ///
-/// A partial clone (`--filter=tree:0`) only fetches the default branch, so an
-/// arbitrary ref (commit SHA, branch, or tag) may not be present yet: fetch it
-/// first, then check out the resulting `FETCH_HEAD` detached. Checking out the
-/// original ref name can prefer a stale local branch or fail when the object
-/// only landed in `FETCH_HEAD`. Detached HEAD is expected and fine — trials
-/// never merge.
+/// A partial clone (`--filter=blob:none`) only fetches the default branch, so
+/// an arbitrary ref (commit SHA, branch, or tag) may not be present yet: fetch
+/// it first, then check out the resulting `FETCH_HEAD` detached. Checking out
+/// the original ref name can prefer a stale local branch or fail when the
+/// object only landed in `FETCH_HEAD`. Detached HEAD is expected and fine —
+/// trials never merge.
 fn checkout_command_for(
     repo: &SourceRepo,
     working_dir: &Path,
@@ -597,7 +599,7 @@ fn checkout_command_for(
     let escaped_dir = shell_escape_single_quotes(&repo_dir.to_string_lossy(), shell_type);
     let escaped_ref = shell_escape_single_quotes(checkout_ref, shell_type);
     Some(format!(
-        "git -C '{escaped_dir}' fetch --filter=tree:0 origin '{escaped_ref}' && \
+        "git -C '{escaped_dir}' fetch --filter=blob:none origin '{escaped_ref}' && \
          git -C '{escaped_dir}' checkout --detach FETCH_HEAD"
     ))
 }

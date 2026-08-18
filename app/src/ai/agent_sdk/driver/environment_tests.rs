@@ -171,14 +171,16 @@ fn parallel_clone_command_threads_checkout_ref_and_pins_after_clone() {
     // The shell function fetches then checks out FETCH_HEAD only when a ref is set.
     assert!(command.contains("checkout_ref=\"$4\""));
     assert!(command.contains("if [ -n \"$checkout_ref\" ]; then"));
-    assert!(command.contains("git -C \"$target\" fetch --filter=tree:0 origin \"$checkout_ref\""));
+    assert!(
+        command.contains("git -C \"$target\" fetch --filter=blob:none origin \"$checkout_ref\"")
+    );
     assert!(command.contains("git -C \"$target\" checkout --detach FETCH_HEAD"));
     // Pinning must not be nested under the "directory missing" branch — reused
     // target directories still need fetch/checkout when a ref is set.
     assert!(command.contains("already exists, skipping clone..."));
     assert!(!command.contains("already exists, skipping clone...\n    return 0"));
     // A clone failure must short-circuit before any checkout attempt.
-    assert!(command.contains("git clone --filter=tree:0 \"$repo_url\" \"$target\" || return 1"));
+    assert!(command.contains("git clone --filter=blob:none \"$repo_url\" \"$target\" || return 1"));
     // The pinned repo's ref is threaded into the command (as the 4th positional
     // arg to clone_repo). The whole script is single-quote-escaped for `sh -c`,
     // so assert on the ref content rather than the surrounding quoting.
@@ -197,7 +199,7 @@ fn checkout_command_checks_out_fetch_head_not_ref_name() {
     let command =
         checkout_command_for(&repo, Path::new("/tmp/work"), ShellType::Bash).expect("ref set");
 
-    assert!(command.contains("fetch --filter=tree:0 origin 'abc123'"));
+    assert!(command.contains("fetch --filter=blob:none origin 'abc123'"));
     assert!(command.contains("checkout --detach FETCH_HEAD"));
     // Must not check out the original ref name after fetch (stale local branch
     // risk / FETCH_HEAD-only objects).
@@ -336,7 +338,7 @@ fn partial_clone(fixture: &Fixture) -> PathBuf {
     git(
         &[
             "clone",
-            "--filter=tree:0",
+            "--filter=blob:none",
             &fixture.origin_url,
             repo_dir.to_str().unwrap(),
         ],
@@ -416,9 +418,9 @@ fn checkout_command_pins_head_to_commit_absent_from_default_branch() {
     let fixture = build_fixture();
     let repo_dir = partial_clone(&fixture);
 
-    // The partial clone (`--filter=tree:0`) only fetched `main`, so the pinned
-    // commit — which lives off the default branch — requires the fetch step
-    // baked into the command before it can be checked out.
+    // The partial clone (`--filter=blob:none`) only fetched `main`, so the
+    // pinned commit — which lives off the default branch — requires the fetch
+    // step baked into the command before it can be checked out.
     let repo = SourceRepo::new(
         CodeForge::GitHub,
         "warpdotdev".to_string(),
