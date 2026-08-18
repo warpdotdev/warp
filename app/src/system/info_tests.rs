@@ -8,36 +8,44 @@ const THRESHOLD_BYTES: u64 = 10 * 1024 * 1024 * 1024;
 
 #[test]
 fn decide_memory_warning_ignores_a_footprint_under_threshold() {
-    let (pending, decision) = decide_memory_warning(None, THRESHOLD_BYTES - 1, THRESHOLD_BYTES);
+    let (latched, pending, decision) =
+        decide_memory_warning(false, None, THRESHOLD_BYTES - 1, THRESHOLD_BYTES);
+    assert!(!latched);
     assert_eq!(pending, None);
     assert_eq!(decision, MemoryWarningDecision::NoAction);
 }
 
 #[test]
 fn decide_memory_warning_starts_tracking_a_first_crossing_without_reporting() {
-    let (pending, decision) = decide_memory_warning(None, THRESHOLD_BYTES, THRESHOLD_BYTES);
+    let (latched, pending, decision) =
+        decide_memory_warning(false, None, THRESHOLD_BYTES, THRESHOLD_BYTES);
+    assert!(!latched);
     assert_eq!(pending, Some(THRESHOLD_BYTES));
     assert_eq!(decision, MemoryWarningDecision::NoAction);
 }
 
 #[test]
-fn decide_memory_warning_confirms_a_sustained_crossing() {
-    let (pending, decision) = decide_memory_warning(
+fn decide_memory_warning_confirms_a_sustained_crossing_and_sets_the_latch() {
+    let (latched, pending, decision) = decide_memory_warning(
+        false,
         Some(THRESHOLD_BYTES),
         THRESHOLD_BYTES + 1024,
         THRESHOLD_BYTES,
     );
+    assert!(latched);
     assert_eq!(pending, None);
     assert_eq!(decision, MemoryWarningDecision::Confirmed);
 }
 
 #[test]
-fn decide_memory_warning_reports_a_transient_spike_and_clears_the_pending_state() {
-    let (pending, decision) = decide_memory_warning(
+fn decide_memory_warning_reports_a_transient_spike_without_setting_the_latch() {
+    let (latched, pending, decision) = decide_memory_warning(
+        false,
         Some(THRESHOLD_BYTES + 4096),
         THRESHOLD_BYTES - 1024,
         THRESHOLD_BYTES,
     );
+    assert!(!latched);
     assert_eq!(pending, None);
     assert_eq!(
         decision,
@@ -49,26 +57,50 @@ fn decide_memory_warning_reports_a_transient_spike_and_clears_the_pending_state(
 }
 
 #[test]
-fn decide_memory_warning_can_start_a_fresh_cycle_after_a_transient_skip() {
-    // A skip must not permanently disable detection: after a transient spike
-    // is dismissed, a later sustained crossing should still be trackable and
-    // eventually confirmed.
-    let (pending, decision) = decide_memory_warning(None, THRESHOLD_BYTES, THRESHOLD_BYTES);
+fn decide_memory_warning_leaves_the_latch_unset_until_a_later_crossing_is_confirmed() {
+    // The one property that matters most: a transient skip must not consume
+    // the once-per-process latch, or an early blip would silence detection
+    // for the rest of the process's lifetime. Drive the state machine
+    // through a full cycle -- first crossing, transient skip, fresh
+    // crossing, confirmation -- asserting the latch at every step.
+    let (latched, pending, decision) =
+        decide_memory_warning(false, None, THRESHOLD_BYTES, THRESHOLD_BYTES);
+    assert!(!latched);
     assert_eq!(pending, Some(THRESHOLD_BYTES));
     assert_eq!(decision, MemoryWarningDecision::NoAction);
 
-    let (pending, decision) = decide_memory_warning(pending, THRESHOLD_BYTES - 1, THRESHOLD_BYTES);
+    let (latched, pending, decision) =
+        decide_memory_warning(latched, pending, THRESHOLD_BYTES - 1, THRESHOLD_BYTES);
+    assert!(!latched, "a transient skip must not set the latch");
     assert_eq!(pending, None);
     assert!(matches!(decision, MemoryWarningDecision::Transient { .. }));
 
-    // A brand new crossing after the skip starts a fresh cycle.
-    let (pending, decision) = decide_memory_warning(pending, THRESHOLD_BYTES, THRESHOLD_BYTES);
+    // A brand new crossing after the skip starts a fresh cycle, proving the
+    // latch wasn't stuck unset by a bug that would otherwise leave it
+    // permanently blocking future confirmation instead.
+    let (latched, pending, decision) =
+        decide_memory_warning(latched, pending, THRESHOLD_BYTES, THRESHOLD_BYTES);
+    assert!(!latched);
     assert_eq!(pending, Some(THRESHOLD_BYTES));
     assert_eq!(decision, MemoryWarningDecision::NoAction);
 
-    let (pending, decision) = decide_memory_warning(pending, THRESHOLD_BYTES, THRESHOLD_BYTES);
+    let (latched, pending, decision) =
+        decide_memory_warning(latched, pending, THRESHOLD_BYTES, THRESHOLD_BYTES);
+    assert!(
+        latched,
+        "a sustained crossing after a prior skip must still confirm"
+    );
     assert_eq!(pending, None);
     assert_eq!(decision, MemoryWarningDecision::Confirmed);
+}
+
+#[test]
+fn decide_memory_warning_stays_latched_and_inert_once_confirmed() {
+    let (latched, pending, decision) =
+        decide_memory_warning(true, None, THRESHOLD_BYTES + 1, THRESHOLD_BYTES);
+    assert!(latched);
+    assert_eq!(pending, None);
+    assert_eq!(decision, MemoryWarningDecision::NoAction);
 }
 
 #[test]

@@ -189,10 +189,6 @@ impl SystemInfo {
         memory_footprint: Byte,
         ctx: &mut ModelContext<Self>,
     ) {
-        if self.has_emitted_memory_warning_event {
-            return;
-        }
-
         let threshold_bytes = MEMORY_USAGE_WARNING_THRESHOLD
             .expect("Threshold should not overflow u64")
             .as_u64();
@@ -200,11 +196,13 @@ impl SystemInfo {
         // has been swapped out or compressed by the OS.
         let footprint_bytes = memory_footprint.as_u64();
 
-        let (pending, decision) = decide_memory_warning(
+        let (has_emitted_memory_warning_event, pending, decision) = decide_memory_warning(
+            self.has_emitted_memory_warning_event,
             self.pending_excessive_memory_footprint_bytes,
             footprint_bytes,
             threshold_bytes,
         );
+        self.has_emitted_memory_warning_event = has_emitted_memory_warning_event;
         self.pending_excessive_memory_footprint_bytes = pending;
 
         match decision {
@@ -255,7 +253,6 @@ impl SystemInfo {
                 );
 
                 ctx.emit(SystemInfoEvent::MemoryUsageHigh);
-                self.has_emitted_memory_warning_event = true;
             }
         }
     }
@@ -328,8 +325,9 @@ enum MemoryWarningDecision {
     Confirmed,
 }
 
-/// Decides what to do about the current memory footprint, given any pending
-/// unconfirmed crossing from the previous poll tick. Returns the new
+/// Decides what to do about the current memory footprint, owning the full
+/// state machine: the once-per-process report latch and the pending-crossing
+/// state from the previous poll tick. Returns the new latch value and
 /// pending-crossing state (to be stored back for the next tick) and the
 /// decision for this tick.
 ///
@@ -337,24 +335,33 @@ enum MemoryWarningDecision {
 /// still over the threshold on the very next poll tick, rather than on the
 /// tick that first observed it. That keeps a single instantaneous blip from
 /// generating a report, while still reacting within one extra poll interval.
+/// Only a `Confirmed` decision sets the latch; `Transient` clears the
+/// pending-crossing state but leaves the latch unset, so a later, distinct
+/// sustained crossing can still be confirmed.
 fn decide_memory_warning(
+    has_emitted_memory_warning_event: bool,
     pending_footprint_bytes: Option<u64>,
     footprint_bytes: u64,
     threshold_bytes: u64,
-) -> (Option<u64>, MemoryWarningDecision) {
+) -> (bool, Option<u64>, MemoryWarningDecision) {
+    if has_emitted_memory_warning_event {
+        return (
+            true,
+            pending_footprint_bytes,
+            MemoryWarningDecision::NoAction,
+        );
+    }
+
     let is_excessive = footprint_bytes >= threshold_bytes;
 
     match pending_footprint_bytes {
-        // No pending crossing: start tracking one if this tick is excessive,
-        // but don't report yet -- it must still be excessive next tick.
         None => {
             let pending = is_excessive.then_some(footprint_bytes);
-            (pending, MemoryWarningDecision::NoAction)
+            (false, pending, MemoryWarningDecision::NoAction)
         }
-        // A pending crossing is still excessive on this subsequent tick.
-        Some(_) if is_excessive => (None, MemoryWarningDecision::Confirmed),
-        // A pending crossing is back under the threshold: transient.
+        Some(_) if is_excessive => (true, None, MemoryWarningDecision::Confirmed),
         Some(triggering_footprint_bytes) => (
+            false,
             None,
             MemoryWarningDecision::Transient {
                 triggering_footprint_bytes,
