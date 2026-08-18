@@ -67,6 +67,18 @@ HACK_FONT_FILEPATH = "../../app/assets/bundled/fonts/hack/Hack-Regular.ttf"
 ROBOTO_FONT_FILEPATH = "../../app/assets/bundled/fonts/roboto/Roboto-Regular.ttf"
 FONT_DOWNLOAD_DIR = "./downloaded_fonts"
 
+# Code points that Hack Nerd Font must not claim even though its cmap covers them.
+# Warp renders these glyphs next to mac modifier glyphs (e.g. ⌘ U+2318, ⌥ U+2325)
+# that resolve to Noto Sans Symbols 2 because Hack Nerd Font doesn't cover them. Hack
+# Nerd Font is a monospace icon font with different metrics and weight than Noto Sans
+# Symbols 2, so when it wins one glyph out of a set that's meant to render consistently
+# side-by-side (see KeyboardShortcut), that glyph ends up mismatched in weight and
+# baseline alignment. Excluding them here lets them fall through to the next
+# highest-priority font that also covers them, currently Noto Sans Symbols 2.
+HACK_NERD_FONT_EXCLUDED_CODE_POINTS = {
+    0x21E7,  # ⇧ UPWARDS WHITE ARROW (Shift key glyph)
+}
+
 
 def download_fallback_fonts():
     if os.path.exists(FONT_DOWNLOAD_DIR):
@@ -132,6 +144,8 @@ def generate_mapping(default_fonts, fallback_fonts):
         font_code_points = supported_code_points(font)
         for code_point in font_code_points:
             if code_point in default_code_points:
+                continue
+            if font_name == "Hack Nerd Font" and code_point in HACK_NERD_FONT_EXCLUDED_CODE_POINTS:
                 continue
             mapping[code_point] = font_name
     ranges = coalesce_ranges(collapse_to_ranges(mapping))

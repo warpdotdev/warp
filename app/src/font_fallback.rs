@@ -5,6 +5,10 @@ use warpui::fonts::ExternalFontFamily;
 
 use crate::ChannelState;
 
+// This module is only registered as the app's fallback-font provider on web/wasm (see
+// `launch` in `lib.rs`), but it's compiled on every target so that `fallback_font_fn`'s
+// mapping logic can be covered by a native unit test.
+#[cfg_attr(not(target_family = "wasm"), allow(dead_code))]
 fn url_for_font(family_name: &str, font_file: &str) -> String {
     format!(
         "{}/assets/client/static/fallback-fonts/{}/{}",
@@ -103,9 +107,11 @@ lazy_static! {
     };
 }
 
+#[cfg_attr(not(target_family = "wasm"), allow(dead_code))]
 pub fn fallback_font_fn(ch: char) -> Option<ExternalFontFamily> {
     match ch {
         '\u{007F}'..='\u{007F}'
+        | '\u{21E7}'..='\u{21E7}'
         | '\u{21EA}'..='\u{21EA}'
         | '\u{2316}'..='\u{2316}'
         | '\u{2318}'..='\u{2318}'
@@ -274,7 +280,8 @@ pub fn fallback_font_fn(ch: char) -> Option<ExternalFontFamily> {
         | '\u{2153}'..='\u{215A}'
         | '\u{215F}'..='\u{215F}'
         | '\u{2190}'..='\u{21DD}'
-        | '\u{21E0}'..='\u{21E9}'
+        | '\u{21E0}'..='\u{21E6}'
+        | '\u{21E8}'..='\u{21E9}'
         | '\u{21EB}'..='\u{2201}'
         | '\u{2203}'..='\u{2205}'
         | '\u{2207}'..='\u{220E}'
@@ -1434,3 +1441,7 @@ pub fn fallback_font_fn(ch: char) -> Option<ExternalFontFamily> {
         _ => None,
     }
 }
+
+#[cfg(test)]
+#[path = "font_fallback_tests.rs"]
+mod tests;
