@@ -1411,6 +1411,10 @@ fn parse_server_gso<T, S>(
         Ok(object) => {
             map.entry(format).or_default().push(Box::new(object));
         }
-        Err(err) => report_error!(err.context(format!("Failed to convert {format:?} {uid}"))),
+        Err(err) => report_error!(
+            err.context("Failed to convert generic string object"),
+            extra: { "format" => ?format, "uid" => %uid },
+            warp_errors::ReportErrorLogMode::OncePerRun
+        ),
     }
 }
