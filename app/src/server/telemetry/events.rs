@@ -2178,6 +2178,18 @@ pub enum TelemetryEvent {
         /// vary by OS).  See `memory_footprint::memory_breakdown()`.
         memory_breakdown: serde_json::Value,
     },
+    /// Emitted when the OS memory footprint crossed
+    /// `MEMORY_USAGE_WARNING_THRESHOLD` but had already dropped back under it
+    /// by the time we re-checked on the next poll tick, so we skip sending
+    /// `MemoryUsageHigh` (and the associated Sentry heap-dump report) for
+    /// what looks like a short-lived spike.
+    TransientMemorySpike {
+        /// The OS memory footprint (bytes) that crossed the threshold.
+        triggering_footprint_bytes: u64,
+        /// The OS memory footprint (bytes) re-measured at confirmation time,
+        /// after which we determined the spike was no longer excessive.
+        confirmation_footprint_bytes: u64,
+    },
     EnvVarCollectionInvoked(EnvVarTelemetryMetadata),
     EnvVarWorkflowParameterization(EnvVarTelemetryMetadata),
 
@@ -3704,6 +3716,13 @@ impl TelemetryEvent {
                 "total_application_usage_bytes": total_application_usage_bytes,
                 "memory_breakdown": memory_breakdown,
             })),
+            TelemetryEvent::TransientMemorySpike {
+                triggering_footprint_bytes,
+                confirmation_footprint_bytes,
+            } => Some(json!({
+                "triggering_footprint_bytes": triggering_footprint_bytes,
+                "confirmation_footprint_bytes": confirmation_footprint_bytes,
+            })),
             TelemetryEvent::EnvVarCollectionInvoked(metadata) => Some(json!(metadata)),
             TelemetryEvent::EnvVarWorkflowParameterization(metadata) => Some(json!(metadata)),
             TelemetryEvent::CompletedSettingsImport {
@@ -4970,6 +4989,7 @@ impl TelemetryEvent {
             | TelemetryEvent::ResourceUsageStats { .. }
             | TelemetryEvent::MemoryUsageStats { .. }
             | TelemetryEvent::MemoryUsageHigh { .. }
+            | TelemetryEvent::TransientMemorySpike { .. }
             | TelemetryEvent::EnvVarCollectionInvoked(_)
             | TelemetryEvent::EnvVarWorkflowParameterization(_)
             | TelemetryEvent::CompletedSettingsImport { .. }
@@ -5482,6 +5502,7 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
                 channels: vec![Channel::Local, Channel::Dev],
             },
             Self::MemoryUsageHigh => EnablementState::Always,
+            Self::TransientMemorySpike => EnablementState::Always,
             Self::AgentModeClickedEntrypoint
             | Self::AgentModeAttachedBlockContext
             | Self::AgentModeToggleAutoDetectionSetting
@@ -5979,6 +6000,7 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             Self::ResourceUsageStats => "perf_metrics.resource_usage",
             Self::MemoryUsageStats => "perf_metrics.memory_usage",
             Self::MemoryUsageHigh => "perf_metrics.memory_usage_high",
+            Self::TransientMemorySpike => "perf_metrics.transient_memory_spike",
             Self::AgentModeToggleAutoDetectionSetting => "AgentMode.ToggleAutoDetectionSetting",
             Self::AgentModePotentialAutoDetectionFalsePositive => {
                 "AgentMode.PotentialAutoDetectionFalsePositive"
@@ -6691,6 +6713,10 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             Self::MemoryUsageStats => "Periodic report on application memory usage statistics",
             Self::MemoryUsageHigh => {
                 "Total application memory usage exceeded a significant threshold"
+            }
+            Self::TransientMemorySpike => {
+                "Application memory usage briefly crossed the excessive-usage threshold but \
+                 dropped back under it before being reported as high"
             }
             Self::AgentModeToggleAutoDetectionSetting => {
                 "Toggled the setting that enables or disables natural language auto-detection in the input. "
