@@ -1,27 +1,78 @@
+use std::collections::VecDeque;
 use std::sync::Arc;
-use std::time::Duration;
 
-use instant::Instant;
 use itertools::Itertools;
+use parking_lot::Mutex;
 use tantivy::tokenizer::{TextAnalyzer, Token};
 use warpui_core::r#async::executor::Background;
 
 use crate::define_search_schema;
-use crate::searcher::{CustomTokenizer, MIN_MEMORY_BUDGET};
+use crate::searcher::{
+    AsyncSearcher, CustomTokenizer, FullTextSearchDocumentEntry, FullTextSearchFieldValue,
+    MIN_MEMORY_BUDGET, QueuedOp, SearchSchemaConfig, SearcherEvent, SearcherQueue,
+    SimpleFullTextSearcher, resolve_batch,
+};
 
-/// Polls `condition` until it returns `true` or `deadline` elapses, sleeping briefly between
-/// checks. Used instead of a fixed sleep to wait for `AsyncSearcher`'s background writer to
-/// converge, so the assertion doesn't flake under a slow or contended test runner.
-fn poll_until(deadline: Duration, mut condition: impl FnMut() -> bool) -> bool {
-    let start = Instant::now();
-    loop {
-        if condition() {
-            return true;
-        }
-        if start.elapsed() >= deadline {
-            return false;
-        }
-        std::thread::sleep(Duration::from_millis(10));
+/// Builds an [`AsyncSearcher`] whose queue has no background writer draining it, so a test can
+/// drive the real async write API and then decide exactly when the queued work is applied, with
+/// [`drain_pending_chunks`] and [`apply_chunks`] standing in for the background writer.
+///
+/// The returned receiver is the wake-up channel the background writer would own. Nothing reads
+/// from it; it is handed back so the test can keep it alive, since enqueuing fails once that
+/// channel is closed.
+fn async_searcher_without_background_writer<C: SearchSchemaConfig>(
+    searcher: SimpleFullTextSearcher<C>,
+) -> (AsyncSearcher<C>, async_channel::Receiver<()>) {
+    let (notify_tx, notify_rx) = async_channel::bounded(1);
+    let queue = Arc::new(SearcherQueue {
+        ops: Mutex::new(VecDeque::new()),
+        notify_tx,
+    });
+    (AsyncSearcher { searcher, queue }, notify_rx)
+}
+
+/// Drains everything queued so far and resolves it into per-commit chunks, exactly as the
+/// background writer does with a batch it has drained.
+fn drain_pending_chunks<C: SearchSchemaConfig>(
+    searcher: &AsyncSearcher<C>,
+) -> Vec<Vec<SearcherEvent>> {
+    let batch = searcher.queue.ops.lock().drain(..).collect_vec();
+    resolve_batch(batch)
+}
+
+/// Applies `chunks` through the synchronous writer, committing each chunk on its own, exactly as
+/// the background writer does.
+fn apply_chunks<C: SearchSchemaConfig>(
+    searcher: &AsyncSearcher<C>,
+    chunks: Vec<Vec<SearcherEvent>>,
+) {
+    for chunk in chunks {
+        searcher
+            .searcher
+            .writer
+            .lock()
+            .execute_operations(chunk)
+            .unwrap();
+    }
+}
+
+/// Renders resolved events as readable operations, so an ordering assertion fails with a legible
+/// diff. Inserted documents are identified by their `name` field.
+fn describe_events(events: &[SearcherEvent]) -> Vec<String> {
+    events
+        .iter()
+        .map(|event| match event {
+            SearcherEvent::IndexCleared => "clear".to_owned(),
+            SearcherEvent::DocumentInserted(entry) => format!("insert {}", document_name(entry)),
+            SearcherEvent::DocumentDeleted(entry) => format!("delete {entry:?}"),
+        })
+        .collect()
+}
+
+fn document_name(entry: &FullTextSearchDocumentEntry) -> String {
+    match entry.get("name") {
+        Some(FullTextSearchFieldValue::Str(name)) => name.clone(),
+        other => panic!("expected a string `name` field, got {other:?}"),
     }
 }
 
@@ -334,7 +385,13 @@ fn test_searcher_async() {
 /// clear-and-reinsert of every document on `AsyncSearcher`'s unbounded background channel, with
 /// nothing to coalesce or bound them. A sustained burst would grow the channel's backing queue
 /// without limit. `rebuild_index_async` must ensure that only the most recently requested
-/// document set is ever queued, and that the index still converges to the correct final content.
+/// document set is ever queued, and that the index still ends up with the correct final content.
+///
+/// The burst is fired through the real `rebuild_index_async` API, but at a searcher with no
+/// background writer attached, so the test observes exactly what the burst left queued and then
+/// applies precisely that itself. Both halves are therefore deterministic: the coalescing bound
+/// is read off the queue rather than inferred, and the resulting index content is read back after
+/// a known set of commits instead of waiting on a background thread to converge.
 #[test]
 fn test_searcher_async_rebuild_coalesces_burst() {
     define_search_schema!(
@@ -349,12 +406,9 @@ fn test_searcher_async_rebuild_coalesces_burst() {
     const BURST_SIZE: usize = 500;
     const DOCS_PER_REBUILD: u64 = 50;
 
-    let background_executor = Arc::new(Background::default());
-    let searcher_async =
-        TEST_SCHEMA.create_async_searcher(MIN_MEMORY_BUDGET, background_executor.clone());
+    let (searcher_async, _notify_rx) =
+        async_searcher_without_background_writer(TEST_SCHEMA.create_searcher(MIN_MEMORY_BUDGET));
 
-    // Fire a burst of rebuild requests back-to-back, faster than the background writer could
-    // possibly drain them if each one were queued as a separate clear + N inserts.
     for burst in 0..BURST_SIZE {
         let documents = (0..DOCS_PER_REBUILD).map(|id| SearchDoc {
             name: format!("burst {burst} doc {id}"),
@@ -363,32 +417,53 @@ fn test_searcher_async_rebuild_coalesces_burst() {
         searcher_async.rebuild_index_async(documents).unwrap();
     }
 
-    // Regardless of how many rebuilds were requested, at most one rebuild operation should ever
-    // be outstanding on the background queue: later requests must coalesce into the pending one
-    // rather than piling up as separate index operations.
-    let queue_len = searcher_async.queue.ops.lock().len();
+    // However many rebuilds were requested, the queue must hold a single rebuild carrying a
+    // single document set: later requests replace the pending one instead of piling up behind it.
+    {
+        let ops = searcher_async.queue.ops.lock();
+        assert_eq!(
+            ops.len(),
+            1,
+            "a burst of {BURST_SIZE} rebuild requests should coalesce to one queued operation"
+        );
+        assert!(
+            matches!(ops.front(), Some(QueuedOp::Rebuild(documents)) if documents.len() == DOCS_PER_REBUILD as usize),
+            "the queued operation should be a rebuild holding exactly one snapshot of {DOCS_PER_REBUILD} documents"
+        );
+    }
+
+    let chunks = drain_pending_chunks(&searcher_async);
+    assert_eq!(
+        chunks.len(),
+        1,
+        "the coalesced rebuild should resolve to a single commit"
+    );
+    assert_eq!(
+        chunks[0].len(),
+        DOCS_PER_REBUILD as usize + 1,
+        "the rebuild should expand to a clear plus one insert per document of a single snapshot, not of all {BURST_SIZE} requested ones"
+    );
     assert!(
-        queue_len <= 1,
-        "a burst of rebuild requests should coalesce to at most one queued operation, found {queue_len}"
+        matches!(chunks[0].first(), Some(SearcherEvent::IndexCleared)),
+        "a rebuild must clear the index before re-inserting its snapshot"
     );
 
-    // Poll (rather than sleep a fixed duration) until the background writer has drained the
-    // queue and applied the *final* rebuild specifically -- every burst produces the same
-    // document count, so polling on count alone could return as soon as any intermediate,
-    // superseded rebuild happens to be committed.
-    let last_burst_prefix = format!("burst {}", BURST_SIZE - 1);
-    let converged = poll_until(Duration::from_secs(5), || {
-        searcher_async.get_all_documents().is_ok_and(|docs| {
-            docs.len() == DOCS_PER_REBUILD as usize
-                && docs
-                    .iter()
-                    .all(|doc| doc.name.starts_with(&last_burst_prefix))
-        })
-    });
+    apply_chunks(&searcher_async, chunks);
+
+    // The snapshot that survives must be the most recently requested one. Every burst produces
+    // the same document count, so the document names are what distinguish it.
+    let documents = searcher_async.get_all_documents().unwrap();
+    assert_eq!(
+        documents.len(),
+        DOCS_PER_REBUILD as usize,
+        "the index should hold exactly the final rebuild's snapshot, got: {documents:?}"
+    );
+    let last_burst_prefix = format!("burst {} doc ", BURST_SIZE - 1);
     assert!(
-        converged,
-        "the index did not converge to the final rebuild's document set within the deadline, got: {:?}",
-        searcher_async.get_all_documents().unwrap()
+        documents
+            .iter()
+            .all(|doc| doc.name.starts_with(&last_burst_prefix)),
+        "every document should come from the final rebuild's snapshot, got: {documents:?}"
     );
 }
 
@@ -403,6 +478,13 @@ fn test_searcher_async_rebuild_coalesces_burst() {
 /// `rebuild_index_async` must instead preserve request order: an insert/delete made before a
 /// rebuild must never be applied after (and so clobber) that rebuild, and one made after a
 /// rebuild must never be silently overwritten by it.
+///
+/// Request order is asserted directly -- on the queue, and on the per-commit chunks it resolves
+/// into -- at a searcher with no background writer attached. Those chunks are then applied
+/// through the synchronous writer and the index read back, which is what covers the Tantivy
+/// semantics that force a rebuild into a commit of its own: `delete_all_documents` only removes
+/// already-committed documents, so an insert requested before a rebuild has to be committed
+/// before the rebuild's clear runs, or it survives that clear.
 #[test]
 fn test_searcher_async_rebuild_preserves_operation_order_with_interleaved_updates() {
     define_search_schema!(
@@ -414,24 +496,24 @@ fn test_searcher_async_rebuild_preserves_operation_order_with_interleaved_update
         id_fields: [id: u64]
     );
 
-    let background_executor = Arc::new(Background::default());
-    let searcher_async =
-        TEST_SCHEMA.create_async_searcher(MIN_MEMORY_BUDGET, background_executor.clone());
+    let (searcher_async, _notify_rx) =
+        async_searcher_without_background_writer(TEST_SCHEMA.create_searcher(MIN_MEMORY_BUDGET));
 
-    let get_name = || {
+    let indexed_documents = || {
         searcher_async
             .get_all_documents()
             .unwrap()
             .into_iter()
-            .find(|doc| doc.id == 1)
-            .map(|doc| doc.name)
+            .map(|doc| (doc.id, doc.name))
+            .sorted()
+            .collect_vec()
     };
 
     // Request a rebuild (R1), then -- before the background writer gets a chance to apply it --
-    // an incremental update for the same document lands (as Warp Drive's per-object insert calls
-    // do), then a second rebuild (R2) is requested whose snapshot reflects a newer value for that
-    // same document. R2 supersedes R1 in the coalescer, but the interleaved incremental update
-    // must still be treated as older than R2, since it was requested before R2.
+    // incremental updates land (as Warp Drive's per-object insert calls do), then a second
+    // rebuild (R2) is requested whose snapshot holds a newer value for document 1 and no longer
+    // contains document 2 at all. R2 supersedes R1 in the coalescer, but the interleaved updates
+    // must still be treated as older than R2, since they were requested before it.
     searcher_async
         .rebuild_index_async([SearchDoc {
             name: "r1 stale".to_owned(),
@@ -445,21 +527,69 @@ fn test_searcher_async_rebuild_preserves_operation_order_with_interleaved_update
         })
         .unwrap();
     searcher_async
+        .insert_document_async(SearchDoc {
+            name: "interleaved doc dropped by r2".to_owned(),
+            id: 2,
+        })
+        .unwrap();
+    searcher_async
         .rebuild_index_async([SearchDoc {
             name: "r2 fresh".to_owned(),
             id: 1,
         }])
         .unwrap();
 
-    assert!(
-        poll_until(Duration::from_secs(5), || get_name().as_deref()
-            == Some("r2 fresh")),
-        "the newer rebuild (r2) must win over the interleaved update that preceded it, got {:?}",
-        get_name()
+    {
+        let ops = searcher_async.queue.ops.lock();
+        assert_eq!(
+            ops.len(),
+            3,
+            "the superseded rebuild should be replaced by the newer one, not queued alongside it"
+        );
+        assert!(
+            ops.iter()
+                .take(2)
+                .all(|op| matches!(op, QueuedOp::Event(SearcherEvent::DocumentInserted(_)))),
+            "the interleaved inserts should stay ahead of the newer rebuild, since they were requested first"
+        );
+        assert!(
+            matches!(ops.back(), Some(QueuedOp::Rebuild(_))),
+            "the replacement rebuild should be re-appended at the tail of the queue"
+        );
+    }
+
+    let chunks = drain_pending_chunks(&searcher_async);
+    assert_eq!(
+        chunks
+            .iter()
+            .map(|chunk| describe_events(chunk))
+            .collect_vec(),
+        vec![
+            vec![
+                "insert stale interleaved update".to_owned(),
+                "insert interleaved doc dropped by r2".to_owned(),
+            ],
+            vec!["clear".to_owned(), "insert r2 fresh".to_owned()],
+        ],
+        "the interleaved inserts should be committed before, and separately from, the newer rebuild"
     );
 
-    // Conversely, an update requested *after* a rebuild must not be silently overwritten by it:
-    // it should still win, since it is the most recent operation.
+    apply_chunks(&searcher_async, chunks);
+    assert_eq!(
+        indexed_documents(),
+        vec![(1, "r2 fresh".to_owned())],
+        "the newer rebuild must win over the interleaved updates that preceded it"
+    );
+
+    // Conversely, an update requested *after* a rebuild must not be silently overwritten by it,
+    // even when the two are drained into the same batch: it is the more recent request, so it has
+    // to be applied after the rebuild.
+    searcher_async
+        .rebuild_index_async([SearchDoc {
+            name: "r3 rebuild".to_owned(),
+            id: 1,
+        }])
+        .unwrap();
     searcher_async
         .insert_document_async(SearchDoc {
             name: "fresh update after rebuild".to_owned(),
@@ -467,10 +597,23 @@ fn test_searcher_async_rebuild_preserves_operation_order_with_interleaved_update
         })
         .unwrap();
 
-    assert!(
-        poll_until(Duration::from_secs(5), || get_name().as_deref()
-            == Some("fresh update after rebuild")),
-        "an update requested after a rebuild must win over that rebuild, got {:?}",
-        get_name()
+    let chunks = drain_pending_chunks(&searcher_async);
+    assert_eq!(
+        chunks
+            .iter()
+            .map(|chunk| describe_events(chunk))
+            .collect_vec(),
+        vec![
+            vec!["clear".to_owned(), "insert r3 rebuild".to_owned()],
+            vec!["insert fresh update after rebuild".to_owned()],
+        ],
+        "an update requested after a rebuild should resolve into a chunk after it"
+    );
+
+    apply_chunks(&searcher_async, chunks);
+    assert_eq!(
+        indexed_documents(),
+        vec![(1, "fresh update after rebuild".to_owned())],
+        "an update requested after a rebuild must win over that rebuild"
     );
 }
