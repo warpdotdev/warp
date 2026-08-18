@@ -1413,8 +1413,7 @@ fn parse_server_gso<T, S>(
         }
         Err(err) => report_error!(
             err.context("Failed to convert generic string object"),
-            extra: { "format" => ?format, "uid" => %uid },
-            warp_errors::ReportErrorLogMode::OncePerRun
+            extra: { "format" => ?format, "uid" => %uid }
         ),
     }
 }
