@@ -7,6 +7,7 @@ use anyhow::{Context, Result};
 use async_trait::async_trait;
 #[cfg(test)]
 use mockall::automock;
+use warp_cli::agent::RepositoryBaseline;
 
 #[cfg(feature = "local_fs")]
 pub use super::presigned_upload::FileUploadBody;
@@ -145,6 +146,10 @@ struct FinishTaskRequest {
     success: bool,
     summary: String,
 }
+#[derive(serde::Serialize)]
+struct ReportRepositoryBaselinesRequest<'a> {
+    repositories: &'a [RepositoryBaseline],
+}
 
 #[derive(Debug, Clone, serde::Serialize)]
 struct ShutdownError {
@@ -204,6 +209,8 @@ pub trait HarnessSupportClient: 'static + Send + Sync {
     /// Report task completion or failure. The server derives PR links/branches from
     /// artifacts already reported via `report_artifact`.
     async fn finish_task(&self, success: bool, summary: &str) -> Result<()>;
+    /// Report verified initial repository state before environment setup begins.
+    async fn report_repository_baselines(&self, repositories: &[RepositoryBaseline]) -> Result<()>;
 
     /// Report a clean shutdown of the agent process.
     async fn report_clean_shutdown(&self) -> Result<()>;
@@ -379,6 +386,13 @@ impl HarnessSupportClient for ServerApi {
             &GetUploadTargetRequest {
                 conversation_id: conversation_id.to_string(),
             },
+        )
+        .await
+    }
+    async fn report_repository_baselines(&self, repositories: &[RepositoryBaseline]) -> Result<()> {
+        self.post_public_api_unit(
+            "harness-support/repository-baselines",
+            &ReportRepositoryBaselinesRequest { repositories },
         )
         .await
     }

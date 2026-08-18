@@ -208,6 +208,12 @@ impl HarnessSupportClient for TestClient {
     async fn finish_task(&self, _success: bool, _summary: &str) -> Result<()> {
         unimplemented!("not used by upload_snapshot_from_declarations_file")
     }
+    async fn report_repository_baselines(
+        &self,
+        _repositories: &[warp_cli::agent::RepositoryBaseline],
+    ) -> Result<()> {
+        unimplemented!("not used by upload_snapshot_from_declarations_file")
+    }
 
     async fn report_clean_shutdown(&self) -> Result<()> {
         unimplemented!("not used by upload_snapshot_from_declarations_file")

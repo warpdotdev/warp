@@ -299,6 +299,8 @@ pub struct AgentDriverOptions {
     pub environment: Option<AmbientAgentEnvironment>,
     /// Server-owned immutable repository baselines for this run.
     pub repository_baselines: Vec<RepositoryBaseline>,
+    /// Whether this server-dispatched run reports its verified repository baselines.
+    pub report_repository_baselines: bool,
     /// Selected execution harness for this run.
     pub selected_harness: Harness,
     /// Model config for the selected harness. Only used for non-Oz harnesses.
@@ -367,6 +369,7 @@ pub struct AgentDriver {
     /// Resolved environment configuration.
     environment: Option<AmbientAgentEnvironment>,
     repository_baselines: Vec<RepositoryBaseline>,
+    report_repository_baselines: bool,
 
     // End-of-run snapshot upload controls.
     snapshot_disabled: bool,
@@ -639,6 +642,7 @@ impl AgentDriver {
             cloud_providers,
             environment,
             repository_baselines,
+            report_repository_baselines,
             selected_harness,
             third_party_harness_model_config,
             snapshot_disabled,
@@ -766,6 +770,7 @@ impl AgentDriver {
             cloud_providers,
             environment,
             repository_baselines,
+            report_repository_baselines,
             snapshot_disabled: snapshot_disabled_value,
             snapshot_upload_timeout: snapshot_upload_timeout
                 .unwrap_or(snapshot::DEFAULT_SNAPSHOT_UPLOAD_TIMEOUT),
@@ -811,6 +816,7 @@ impl AgentDriver {
             cloud_providers: Vec::new(),
             environment: None,
             repository_baselines: Vec::new(),
+            report_repository_baselines: false,
             snapshot_disabled: false,
             snapshot_upload_timeout: snapshot::DEFAULT_SNAPSHOT_UPLOAD_TIMEOUT,
             snapshot_script_timeout: snapshot::DEFAULT_DECLARATIONS_SCRIPT_TIMEOUT,
@@ -2162,8 +2168,16 @@ impl AgentDriver {
             .await?;
         let mut environment_skill_repos = Vec::new();
 
-        let (environment_opt, repository_baselines) = foreground
-            .spawn(|me, _| (me.environment.clone(), me.repository_baselines.clone()))
+        let (environment_opt, repository_baselines, baseline_reporter) = foreground
+            .spawn(|me, ctx| {
+                let baseline_reporter = (me.report_repository_baselines && me.task_id.is_some())
+                    .then(|| ServerApiProvider::as_ref(ctx).get_harness_support_client());
+                (
+                    me.environment.clone(),
+                    me.repository_baselines.clone(),
+                    baseline_reporter,
+                )
+            })
             .await?;
 
         if let Some(environment) = environment_opt {
@@ -2205,7 +2219,10 @@ impl AgentDriver {
                             working_dir,
                             false, /* is_sandbox */
                             harness,
-                            environment::RepositoryBaselineContext::new(repository_baselines),
+                            environment::RepositoryBaselineContext::new(
+                                repository_baselines,
+                                baseline_reporter,
+                            ),
                             setup_events_for_environment,
                             ctx,
                         )

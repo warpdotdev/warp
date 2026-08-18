@@ -22,6 +22,7 @@ use super::terminal::TerminalDriver;
 use super::AgentDriverError;
 use crate::ai::agent_sdk::setup_observability::{SetupClientEventReporter, SetupStep};
 use crate::ai::cloud_environments::{AmbientAgentEnvironment, SourceRepo};
+use crate::server::server_api::harness_support::HarnessSupportClient;
 use crate::terminal::model::session::command_executor::shell_escape_single_quotes;
 use crate::terminal::shell::ShellType;
 
@@ -37,6 +38,10 @@ pub enum PrepareEnvironmentError {
     InvalidRepositoryBaselines { reason: String },
     #[error("Failed to prepare repositories: {repo_names}")]
     PrepareRepositories { repo_names: String },
+    #[error("Failed to verify repository {repo_name}")]
+    VerifyRepository { repo_name: String },
+    #[error("Failed to report repository baselines: {source}")]
+    ReportRepositoryBaselines { source: anyhow::Error },
     #[error("Failed to remove remotes from pinned repositories")]
     RemovePinnedRemotes,
     #[error("Failed to run setup command: {command}")]
@@ -47,15 +52,22 @@ pub enum PrepareEnvironmentError {
     TerminalDriver { source: AgentDriverError },
 }
 
-/// Server-owned repository pinning context for environment preparation.
+/// Server-owned repository pinning and reporting context for environment preparation.
 #[derive(Default)]
 pub(crate) struct RepositoryBaselineContext {
     baselines: Vec<RepositoryBaseline>,
+    reporter: Option<Arc<dyn HarnessSupportClient>>,
 }
 
 impl RepositoryBaselineContext {
-    pub fn new(baselines: Vec<RepositoryBaseline>) -> Self {
-        Self { baselines }
+    pub fn new(
+        baselines: Vec<RepositoryBaseline>,
+        reporter: Option<Arc<dyn HarnessSupportClient>>,
+    ) -> Self {
+        Self {
+            baselines,
+            reporter,
+        }
     }
 }
 
@@ -141,6 +153,7 @@ pub fn prepare_environment(
     async move {
         let RepositoryBaselineContext {
             baselines: repository_baselines,
+            reporter: baseline_reporter,
         } = repository_baseline_context;
         validate_repository_baselines(Some(&environment), &repository_baselines)?;
         let source_repos = environment.effective_repos();
@@ -162,6 +175,7 @@ pub fn prepare_environment(
             is_sandbox,
             &source_repos,
             &repository_baselines,
+            baseline_reporter,
             setup_commands,
             should_index_codebase,
             Arc::clone(&repo_channels),
@@ -188,6 +202,7 @@ async fn prepare_environment_impl(
     is_sandbox: bool,
     source_repos: &[SourceRepo],
     repository_baselines: &[RepositoryBaseline],
+    baseline_reporter: Option<Arc<dyn HarnessSupportClient>>,
     setup_commands: Vec<String>,
     should_index_codebase: bool,
     repo_channels: Arc<Mutex<HashMap<PathBuf, oneshot::Sender<()>>>>,
@@ -207,12 +222,28 @@ async fn prepare_environment_impl(
     }
     let mut codebase_context_receivers = Vec::new();
 
-    if !source_repos.is_empty() {
+    let verified_baselines = if source_repos.is_empty() {
+        Vec::new()
+    } else {
         setup_events
             .record_result(SetupStep::EnvironmentRepoClone, async {
                 prepare_repositories(source_repos, repository_baselines, working_dir, spawner).await
             })
-            .await?;
+            .await?
+    };
+
+    if let Some(reporter) = baseline_reporter {
+        reporter
+            .report_repository_baselines(&verified_baselines)
+            .await
+            .map_err(|source| PrepareEnvironmentError::ReportRepositoryBaselines { source })?;
+    } else if !repository_baselines.is_empty() {
+        return Err(PrepareEnvironmentError::InvalidRepositoryBaselines {
+            reason: "pinned repositories require an authenticated task reporter".to_string(),
+        });
+    }
+
+    if !source_repos.is_empty() {
         for repo in source_repos {
             register_cloned_repo(repo, working_dir, is_sandbox, spawner).await?;
             if !is_sandbox && should_index_codebase {
@@ -504,7 +535,7 @@ async fn prepare_repositories(
     baselines: &[RepositoryBaseline],
     working_dir: &Path,
     spawner: &ModelSpawner<TerminalDriver>,
-) -> Result<(), PrepareEnvironmentError> {
+) -> Result<Vec<RepositoryBaseline>, PrepareEnvironmentError> {
     if baselines.is_empty() {
         clone_repos(repos, working_dir, spawner).await?;
     } else {
@@ -521,7 +552,75 @@ async fn prepare_repositories(
             });
         }
     }
-    Ok(())
+
+    collect_verified_baselines(repos, baselines, working_dir, spawner).await
+}
+
+async fn collect_verified_baselines(
+    repos: &[SourceRepo],
+    baselines: &[RepositoryBaseline],
+    working_dir: &Path,
+    spawner: &ModelSpawner<TerminalDriver>,
+) -> Result<Vec<RepositoryBaseline>, PrepareEnvironmentError> {
+    let shell_type = active_shell_type(spawner).await;
+    let mut verified = Vec::with_capacity(repos.len());
+    for repo in repos {
+        let repo_path = working_dir.join(&repo.repo);
+        let escaped_path =
+            shell_escape_single_quotes(&repo_path.to_string_lossy(), ShellType::Bash);
+        let script = format!(
+            "sha=$(git -C '{escaped_path}' rev-parse HEAD) || exit 1\n\
+             printf '%s\\n' \"$sha\"\n\
+             git -C '{escaped_path}' symbolic-ref --quiet --short HEAD || true"
+        );
+        let escaped_script = shell_escape_single_quotes(&script, shell_type);
+        let command = format!("sh -c '{escaped_script}'");
+        let output = execute_silent_command(command, spawner).await?;
+        if !output.success() {
+            return Err(PrepareEnvironmentError::VerifyRepository {
+                repo_name: format!("{}/{}", repo.owner, repo.repo),
+            });
+        }
+        let stdout = String::from_utf8(output.stdout).map_err(|_| {
+            PrepareEnvironmentError::VerifyRepository {
+                repo_name: format!("{}/{}", repo.owner, repo.repo),
+            }
+        })?;
+        let mut lines = stdout.lines();
+        let commit_sha = lines.next().unwrap_or_default().trim().to_string();
+        if commit_sha.len() != 40
+            || !commit_sha
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+        {
+            return Err(PrepareEnvironmentError::VerifyRepository {
+                repo_name: format!("{}/{}", repo.owner, repo.repo),
+            });
+        }
+        let baseline = baseline_for_repo(baselines, repo);
+        if baseline.is_some_and(|baseline| baseline.commit_sha != commit_sha) {
+            return Err(PrepareEnvironmentError::VerifyRepository {
+                repo_name: format!("{}/{}", repo.owner, repo.repo),
+            });
+        }
+        let branch = baseline
+            .and_then(|baseline| baseline.branch.clone())
+            .or_else(|| {
+                lines
+                    .next()
+                    .map(str::trim)
+                    .filter(|line| !line.is_empty())
+                    .map(str::to_string)
+            });
+        verified.push(RepositoryBaseline {
+            code_forge: baseline_forge_for_repo(repo),
+            repo_owner: repo.owner.clone(),
+            repo_name: repo.repo.clone(),
+            commit_sha,
+            branch,
+        });
+    }
+    Ok(verified)
 }
 
 fn build_remove_pinned_remotes_command(
