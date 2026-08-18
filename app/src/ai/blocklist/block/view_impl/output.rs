@@ -261,21 +261,15 @@ pub(super) fn render(props: Props, app: &AppContext) -> Box<dyn Element> {
         | AIBlockOutputStatus::Failed { .. } => {
             if let Some(output) = status.output_to_render() {
                 let output = output.get();
-                // TODO(vkodithala): Blocks with recording-related actions still
-                // recompute this conversation-wide map on every render. Cache
-                // spans on BlocklistAIActionModel keyed by conversation and
-                // refresh on action/result mutations instead.
                 let recording_spans_by_action_id = if props.has_recording_related_actions {
-                    props
-                        .model
-                        .conversation(app)
-                        .map(|conversation| {
-                            conversation
-                                .recording_spans_by_action_id(Some(props.action_model.as_ref(app)))
-                        })
-                        .unwrap_or_default()
+                    props.model.conversation(app).map(|conversation| {
+                        props
+                            .action_model
+                            .as_ref(app)
+                            .recording_spans_for_conversation(conversation)
+                    })
                 } else {
-                    HashMap::new()
+                    None
                 };
                 let is_complete = matches!(status, AIBlockOutputStatus::Complete { .. });
                 let is_output_for_static_prompt_suggestions =
@@ -781,7 +775,9 @@ pub(super) fn render(props: Props, app: &AppContext) -> Box<dyn Element> {
                                 props,
                                 id,
                                 request,
-                                recording_spans_by_action_id.get(id),
+                                recording_spans_by_action_id
+                                    .as_ref()
+                                    .and_then(|spans| spans.get(id)),
                                 app,
                             ));
                         }

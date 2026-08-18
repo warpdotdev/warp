@@ -2001,7 +2001,7 @@ impl AIBlock {
             }
         }
 
-        self.has_recording_related_actions = output.actions().any(|action| {
+        let has_recording_related_actions = output.actions().any(|action| {
             matches!(
                 &action.action,
                 AIAgentActionType::StartRecording { .. }
@@ -2009,6 +2009,13 @@ impl AIBlock {
                     | AIAgentActionType::UseComputer(_)
             )
         });
+        if self.has_recording_related_actions || has_recording_related_actions {
+            let conversation_id = self.client_ids.conversation_id;
+            self.action_model.update(ctx, |action_model, _ctx| {
+                action_model.invalidate_recording_spans(conversation_id);
+            });
+        }
+        self.has_recording_related_actions = has_recording_related_actions;
 
         if FeatureFlag::WebSearchUI.is_enabled() {
             // Handle WebSearch messages
