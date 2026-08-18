@@ -6,13 +6,13 @@ use uuid::Uuid;
 use warp_multi_agent_api::response_event;
 use warpui::{App, SingletonEntity};
 
+use super::response_stream::RecoveryBudget;
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent::task::TaskId;
 use crate::ai::agent::{
     AIAgentAttachment, AIAgentContext, AIAgentInput, CancellationReason, ImageContext,
     PassiveSuggestionTrigger, UserQueryMode,
 };
-use super::response_stream::RecoveryBudget;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::blocklist::{
     BlocklistAIHistoryEvent, BlocklistAIHistoryModel, PendingAttachment, PendingFile, RequestInput,

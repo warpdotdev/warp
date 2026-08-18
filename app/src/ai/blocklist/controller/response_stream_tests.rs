@@ -103,7 +103,9 @@ fn resume_failures_consume_the_shared_budget() {
     let mut recovery = RecoveryBudget::fresh();
     let mut actions = Vec::new();
     for _ in 0..MAX_RECOVERY_ATTEMPTS + 1 {
-        let action = recovery_action(/*has_received_client_actions*/ true, true, recovery, true);
+        let action = recovery_action(
+            /*has_received_client_actions*/ true, true, recovery, true,
+        );
         actions.push(action);
         if action == RecoveryAction::Resume {
             recovery = recovery.next_attempt();
@@ -116,7 +118,10 @@ fn resume_failures_consume_the_shared_budget() {
             .iter()
             .all(|action| *action == RecoveryAction::Resume)
     );
-    assert_eq!(terminal, [RecoveryAction::Fail(FailReason::BudgetExhausted)]);
+    assert_eq!(
+        terminal,
+        [RecoveryAction::Fail(FailReason::BudgetExhausted)]
+    );
     assert_eq!(recovery.attempts_used(), MAX_RECOVERY_ATTEMPTS);
 }
 
