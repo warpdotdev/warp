@@ -6,6 +6,7 @@ use std::sync::Arc;
 use email_address::EmailAddress;
 use itertools::Itertools;
 use lazy_static::lazy_static;
+use markdown_parser::{FormattedText, FormattedTextFragment, FormattedTextLine};
 use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::vec2f;
 use regex::Regex;
@@ -16,9 +17,10 @@ use warp_errors::report_error;
 use warpui::clipboard::ClipboardContent;
 use warpui::elements::{
     Align, Border, ChildAnchor, ClippedScrollStateHandle, ConstrainedBox, Container, CornerRadius,
-    CrossAxisAlignment, Element, Flex, Hoverable, MainAxisAlignment, MainAxisSize,
-    MouseStateHandle, OffsetPositioning, ParentAnchor, ParentElement, ParentOffsetBounds, Radius,
-    SavePosition, ScrollTarget, ScrollToPositionMode, Shrinkable, Stack, Text,
+    CrossAxisAlignment, Element, Flex, FormattedTextElement, HighlightedHyperlink, Hoverable,
+    MainAxisAlignment, MainAxisSize, MouseStateHandle, OffsetPositioning, ParentAnchor,
+    ParentElement, ParentOffsetBounds, Radius, SavePosition, ScrollTarget, ScrollToPositionMode,
+    Shrinkable, Stack, Text,
 };
 use warpui::fonts::{Properties, Weight};
 use warpui::platform::Cursor;
@@ -119,6 +121,8 @@ const INVALID_DOMAINS_INSTRUCTIONS: &str =
     "Some of the provided domains are invalid, or have already been added.";
 
 const INVITE_LINK_TOGGLE_INSTRUCTIONS: &str = "As an admin, you can choose whether to enable or disable the ability for team members to invite others by invitation link.";
+const INVITE_LINK_UNAVAILABLE_INSTRUCTIONS: &str =
+    "Your team’s visibility settings prevent you from creating invite links.";
 const INVITE_LINK_DOMAIN_RESTRICTIONS_INSTRUCTIONS: &str = "Restrict by domain — only allow users with emails at specific domains to join your team through the invite link.";
 
 const INVITE_BY_EMAIL_EXPIRY_INSTRUCTIONS: &str = "Email invitations are valid for 7 days.";
@@ -319,6 +323,7 @@ struct TeamsWidgetMouseHandles {
     grow_team_warning_cta_button: MouseStateHandle,
     team_members_count_tooltip: MouseStateHandle,
     outgrow_upgrade_link: MouseStateHandle,
+    workspace_admin_panel_link: HighlightedHyperlink,
 }
 
 /// TeamsInviteOption is whether the user is looking at invite-by-link or invite-by-email.
@@ -398,6 +403,8 @@ enum ItemState {
     Pending,
     Owner,
     Admin,
+    WorkspaceOwner,
+    WorkspaceAdmin,
     Valid,
 }
 
@@ -444,6 +451,11 @@ impl Ord for Item {
 struct DiscoverableTeamState {
     team: DiscoverableTeam,
     mouse_state_handle: MouseStateHandle,
+}
+#[derive(Copy, Clone)]
+struct TeamInvitationPermissions {
+    has_admin_permissions: bool,
+    is_workspace_admin: bool,
 }
 
 impl DiscoverableTeamState {
@@ -1067,6 +1079,17 @@ impl TeamsPageView {
             }
             UserWorkspacesEvent::SetTeamMemberRoleRejected(err) => {
                 self.show_error("Failed to update team member role", Some(err), ctx);
+            }
+            UserWorkspacesEvent::RemoveUserFromTeamSuccess => {
+                self.update_team_members_state(ctx);
+                self.show_success("Removed team member", ctx);
+            }
+            UserWorkspacesEvent::RemoveUserFromTeamRejected(err) => {
+                self.show_error(
+                    format!("Failed to remove team member: {err}"),
+                    Some(err),
+                    ctx,
+                );
             }
             UserWorkspacesEvent::UpdateWorkspaceSettingsSuccess => {
                 // as of right now, this is only emitted on the billing & usage page
@@ -1765,13 +1788,9 @@ impl TeamsPageView {
         workspace: &Workspace,
     ) -> Vec<Item> {
         let mut combined = Vec::new();
-        let current_user_has_admin_permissions = team.has_admin_permissions(current_user_email);
+        let current_user_has_admin_permissions = team.has_admin_permissions(current_user_email)
+            || workspace.is_workspace_admin(current_user_email);
         let current_user_has_owner_permissions = team.has_owner_permissions(current_user_email);
-        // Admins of the team's native workspace can manage team membership roles even without
-        // an explicit team-admin role. Ownership transfer stays gated on team-owner permissions
-        // only, and is unaffected by this.
-        let current_user_can_manage_team_members = current_user_has_admin_permissions
-            || workspace.is_native_workspaces_admin(current_user_email);
 
         // pending email invites
         team.pending_email_invites.iter().for_each(|email_invite| {
@@ -1805,13 +1824,22 @@ impl TeamsPageView {
         team.members.iter().for_each(|member| {
             let team_member_has_owner_permissions = team.has_owner_permissions(&member.email);
             let team_member_has_admin_permissions = team.has_admin_permissions(&member.email);
+            let member_workspace_role = workspace
+                .members
+                .iter()
+                .find(|workspace_member| workspace_member.email == member.email)
+                .map(|workspace_member| workspace_member.role);
 
             let state = if team_member_has_owner_permissions {
                 ItemState::Owner
             } else if team_member_has_admin_permissions {
                 ItemState::Admin
             } else {
-                ItemState::Valid
+                match member_workspace_role {
+                    Some(MembershipRole::Owner) => ItemState::WorkspaceOwner,
+                    Some(MembershipRole::Admin) => ItemState::WorkspaceAdmin,
+                    _ => ItemState::Valid,
+                }
             };
 
             let mut actions = Vec::new();
@@ -1832,7 +1860,7 @@ impl TeamsPageView {
 
                 // Admins can promote and demote other admins
                 if team.is_multi_admin_enabled()
-                    && current_user_can_manage_team_members
+                    && current_user_has_admin_permissions
                     && !team_member_has_owner_permissions
                 {
                     if team_member_has_admin_permissions {
@@ -1859,7 +1887,7 @@ impl TeamsPageView {
                 }
 
                 // Admins can remove non-owner members
-                if current_user_can_manage_team_members && !team_member_has_owner_permissions {
+                if current_user_has_admin_permissions && !team_member_has_owner_permissions {
                     actions.push(ItemAction {
                         icon: Icon::X,
                         label: "Remove from team".to_string(),
@@ -2340,7 +2368,10 @@ impl TeamsWidget {
         // 3) Team invitation flows (invite link / email invites / discovery)
         main_content.add_child(self.render_team_invitation_section(
             team_metadata,
-            has_admin_permissions,
+            TeamInvitationPermissions {
+                has_admin_permissions,
+                is_workspace_admin: use_workspace_admin_panel,
+            },
             view,
             appearance,
             chip_editor_style,
@@ -2727,7 +2758,7 @@ impl TeamsWidget {
     fn render_team_invitation_section(
         &self,
         team_metadata: &Team,
-        has_admin_permissions: bool,
+        permissions: TeamInvitationPermissions,
         view: &TeamsPageView,
         appearance: &Appearance,
         chip_editor_style: UiComponentStyles,
@@ -2746,7 +2777,7 @@ impl TeamsWidget {
             let alert = self.render_grow_team_warning_alert(
                 team_metadata,
                 warning,
-                has_admin_permissions,
+                permissions.has_admin_permissions,
                 pricing_info_model,
                 appearance,
             );
@@ -2766,7 +2797,7 @@ impl TeamsWidget {
                 team_metadata,
                 pricing_info_model,
                 appearance,
-                has_admin_permissions,
+                permissions.has_admin_permissions,
             );
             invitation_section.add_child(
                 Container::new(pricing_alert)
@@ -2776,12 +2807,17 @@ impl TeamsWidget {
         }
 
         // Invite by link section
-        // Only show invite-by-link if user is admin OR if invite links are enabled
-        if is_invite_link_enabled || has_admin_permissions {
+        // Only show invite-by-link if user is admin (so they can see the
+        // toggle, or why it's unavailable for a Private/Hidden team) OR if
+        // invite links are actually usable (enabled on a team whose
+        // visibility supports them).
+        if permissions.has_admin_permissions
+            || (team_metadata.visibility.supports_invite_link() && is_invite_link_enabled)
+        {
             invitation_section.add_child(self.render_invite_by_link_section(
                 team_metadata,
                 is_invite_link_enabled,
-                has_admin_permissions,
+                permissions,
                 view,
                 appearance,
                 chip_editor_style,
@@ -2803,7 +2839,7 @@ impl TeamsWidget {
         // team being eligible for discovery.
         let current_user_email = view.auth_state.user_email().unwrap_or_default();
         if team_metadata.billing_metadata.customer_type != CustomerType::Enterprise
-            && has_admin_permissions
+            && permissions.has_admin_permissions
             && team_metadata.is_eligible_for_discovery
         {
             invitation_section.add_child(self.render_discoverability_toggle_section(
@@ -2821,28 +2857,59 @@ impl TeamsWidget {
         &self,
         team: &Team,
         is_invite_link_enabled: bool,
-        has_admin_permissions: bool,
+        permissions: TeamInvitationPermissions,
         view: &TeamsPageView,
         appearance: &Appearance,
         chip_editor_style: UiComponentStyles,
     ) -> Box<dyn Element> {
+        let supports_invite_link = team.visibility.supports_invite_link();
         let mut section = Flex::column();
 
         // Header + admin-only subtext on the left, toggle on the right. The
         // text is stacked so the toggle centers against the whole block.
         let header = self.render_subsubsection_header("By link".to_owned(), appearance);
-        let text_column = if has_admin_permissions {
+        let text_column = if permissions.has_admin_permissions {
+            let instructions = if supports_invite_link {
+                self.render_sub_text(
+                    INVITE_LINK_TOGGLE_INSTRUCTIONS.into(),
+                    appearance,
+                    Some(Coords::uniform(0.).right(48.)),
+                )
+            } else {
+                let mut fragments = vec![FormattedTextFragment::plain_text(
+                    INVITE_LINK_UNAVAILABLE_INSTRUCTIONS,
+                )];
+                if permissions.is_workspace_admin {
+                    fragments.extend([
+                        FormattedTextFragment::plain_text(" Update team visibility in the "),
+                        FormattedTextFragment::hyperlink(
+                            "workspace admin panel",
+                            AdminActions::workspace_teams_admin_panel_link(),
+                        ),
+                        FormattedTextFragment::plain_text("."),
+                    ]);
+                }
+                FormattedTextElement::new(
+                    FormattedText::new([FormattedTextLine::Line(fragments)]),
+                    appearance.ui_font_size(),
+                    appearance.ui_font_family(),
+                    appearance.ui_font_family(),
+                    appearance
+                        .theme()
+                        .active_ui_text_color()
+                        .with_opacity(60)
+                        .into(),
+                    self.mouse_state_handles.workspace_admin_panel_link.clone(),
+                )
+                .with_hyperlink_font_color(appearance.theme().accent().into_solid())
+                .register_default_click_handlers(|url, _, ctx| {
+                    ctx.open_url(&url.url);
+                })
+                .finish()
+            };
             Flex::column()
                 .with_child(header)
-                .with_child(
-                    Container::new(self.render_sub_text(
-                        INVITE_LINK_TOGGLE_INSTRUCTIONS.into(),
-                        appearance,
-                        Some(Coords::uniform(0.).right(48.)),
-                    ))
-                    .with_padding_top(8.)
-                    .finish(),
-                )
+                .with_child(Container::new(instructions).with_padding_top(8.).finish())
                 .finish()
         } else {
             Flex::column().with_child(header).finish()
@@ -2854,16 +2921,24 @@ impl TeamsWidget {
             .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
             .with_child(Shrinkable::new(1., text_column).finish());
 
-        // Toggle on the right only renders if user is admin
-        if has_admin_permissions {
+        if permissions.has_admin_permissions {
             let team_uid = team.uid;
             let current_state = is_invite_link_enabled;
             let invite_by_link_toggle = appearance
                 .ui_builder()
                 .switch(self.mouse_state_handles.invite_by_link_toggle_state.clone())
-                .check(is_invite_link_enabled)
+                .check(supports_invite_link && is_invite_link_enabled)
+                .with_disabled(!supports_invite_link)
+                .with_disabled_styles(UiComponentStyles {
+                    background: Some(internal_colors::neutral_4(appearance.theme()).into()),
+                    foreground: Some(internal_colors::neutral_5(appearance.theme()).into()),
+                    ..Default::default()
+                })
                 .build()
                 .on_click(move |ctx, _, _| {
+                    if !supports_invite_link {
+                        return;
+                    }
                     ctx.dispatch_typed_action(TeamsPageAction::ToggleIsInviteLinkEnabled {
                         team_uid,
                         current_state,
@@ -2876,12 +2951,13 @@ impl TeamsWidget {
         section.add_child(invite_by_link_header_row.finish());
 
         // 3) Invite link + domain restrictions
-        // Only renders if invite by link is enabled
-        if is_invite_link_enabled {
+        // Only renders if invite by link is enabled and the team's visibility
+        // supports it.
+        if supports_invite_link && is_invite_link_enabled {
             section.add_child(self.render_copy_link_row(team, appearance));
 
             // Render invite link reset text if admin user
-            if has_admin_permissions {
+            if permissions.has_admin_permissions {
                 let team_uid = team.uid;
                 section.add_child(
                     Align::new(
@@ -2908,10 +2984,11 @@ impl TeamsWidget {
             }
 
             // Don't render restricted domains section if user is not an admin AND there are no domain restrictions
-            if has_admin_permissions || !team.invite_link_domain_restrictions.is_empty() {
+            if permissions.has_admin_permissions || !team.invite_link_domain_restrictions.is_empty()
+            {
                 section.add_child(self.render_approved_domains_section(
                     team,
-                    has_admin_permissions,
+                    permissions.has_admin_permissions,
                     view,
                     appearance,
                     chip_editor_style,
@@ -3600,6 +3677,42 @@ impl TeamsWidget {
                                 *EMAIL_INVITE_PENDING_COLOR,
                                 themes::theme::Fill::from(*EMAIL_INVITE_PENDING_COLOR)
                                     .with_opacity(30)
+                                    .into(),
+                                appearance.ui_font_size() - 1.,
+                                Weight::Normal,
+                            ),
+                        );
+                    }
+                    ItemState::WorkspaceOwner => {
+                        pending_and_close_row.add_child(
+                            self.render_state_chip(
+                                appearance,
+                                "WORKSPACE OWNER".into(),
+                                owner_state_chip_text_color(appearance.theme()),
+                                appearance
+                                    .theme()
+                                    .accent()
+                                    .with_opacity(OWNER_STATE_CHIP_ACCENT_OPACITY)
+                                    .into(),
+                                appearance.ui_font_size() - 1.,
+                                Weight::Normal,
+                            ),
+                        );
+                    }
+                    ItemState::WorkspaceAdmin => {
+                        pending_and_close_row.add_child(
+                            self.render_state_chip(
+                                appearance,
+                                "WORKSPACE ADMIN".into(),
+                                appearance
+                                    .theme()
+                                    .background()
+                                    .blend(&appearance.theme().foreground().with_opacity(60))
+                                    .into(),
+                                appearance
+                                    .theme()
+                                    .background()
+                                    .blend(&appearance.theme().foreground().with_opacity(25))
                                     .into(),
                                 appearance.ui_font_size() - 1.,
                                 Weight::Normal,

@@ -11435,6 +11435,7 @@ dependencies = [
  "log",
  "notify-debouncer-full",
  "once_cell",
+ "parking_lot",
  "serde",
  "serde_json",
  "strum 0.27.1",
@@ -15409,7 +15410,7 @@ dependencies = [
 [[package]]
 name = "warp-command-signatures"
 version = "0.0.0"
-source = "git+https://github.com/warpdotdev/command-signatures.git?rev=d79e09c43b64eb8e55a81fec088423aeba6a48cd#d79e09c43b64eb8e55a81fec088423aeba6a48cd"
+source = "git+https://github.com/warpdotdev/command-signatures.git?rev=ac69f9b00c48d6de229ba5905056d9302da1c5c4#ac69f9b00c48d6de229ba5905056d9302da1c5c4"
 dependencies = [
  "cfg-if",
  "itertools 0.10.5",
@@ -15427,7 +15428,7 @@ dependencies = [
 [[package]]
 name = "warp-completion-metadata"
 version = "0.0.0"
-source = "git+https://github.com/warpdotdev/command-signatures.git?rev=d79e09c43b64eb8e55a81fec088423aeba6a48cd#d79e09c43b64eb8e55a81fec088423aeba6a48cd"
+source = "git+https://github.com/warpdotdev/command-signatures.git?rev=ac69f9b00c48d6de229ba5905056d9302da1c5c4#ac69f9b00c48d6de229ba5905056d9302da1c5c4"
 dependencies = [
  "html-escape",
  "itertools 0.10.5",

@@ -343,3 +343,42 @@ mod team_settings_conversion {
         );
     }
 }
+
+mod team_visibility_conversion {
+    use warp_graphql::workspace::TeamVisibility as GqlTeamVisibility;
+
+    use crate::workspaces::team::TeamVisibility;
+
+    #[test]
+    fn maps_known_values() {
+        assert_eq!(
+            TeamVisibility::from(GqlTeamVisibility::Open),
+            TeamVisibility::Open
+        );
+        assert_eq!(
+            TeamVisibility::from(GqlTeamVisibility::Private),
+            TeamVisibility::Private
+        );
+        assert_eq!(
+            TeamVisibility::from(GqlTeamVisibility::Hidden),
+            TeamVisibility::Hidden
+        );
+    }
+
+    #[test]
+    fn fails_closed_on_unrecognized_value() {
+        // An unrecognized value must never be treated as Open, since that
+        // would surface the invite-by-link control the server doesn't
+        // actually support for it.
+        let visibility = TeamVisibility::from(GqlTeamVisibility::Other("future-value".to_string()));
+        assert_eq!(visibility, TeamVisibility::Private);
+        assert!(!visibility.supports_invite_link());
+    }
+
+    #[test]
+    fn only_open_supports_invite_link() {
+        assert!(TeamVisibility::Open.supports_invite_link());
+        assert!(!TeamVisibility::Private.supports_invite_link());
+        assert!(!TeamVisibility::Hidden.supports_invite_link());
+    }
+}

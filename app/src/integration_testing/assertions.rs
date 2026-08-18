@@ -9,7 +9,7 @@ use crate::server::cloud_objects::update_manager::UpdateManager;
 use crate::server::ids::ClientId;
 use crate::util::bindings::keybinding_name_to_display_string;
 use crate::workflows::workflow::Workflow;
-use crate::workspaces::team::Team;
+use crate::workspaces::team::{Team, TeamVisibility};
 use crate::workspaces::user_workspaces::UserWorkspaces;
 use crate::workspaces::workspace::Workspace;
 
@@ -60,6 +60,7 @@ pub fn join_a_workspace() -> TestStep {
                     settings: Default::default(),
                     is_eligible_for_discovery: false,
                     has_billing_history: false,
+                    visibility: TeamVisibility::Open,
                 }];
                 let workspaces: Vec<Workspace> = vec![Workspace {
                     uid: workspace_uid,

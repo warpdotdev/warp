@@ -3796,6 +3796,19 @@ type Team {
   """
   settings: TeamSettings!
   uid: ID!
+
+  """
+  Team visibility governs which workspace members can discover and join a team.
+  It is a new axis, orthogonal to workspace-level discoverability (is_discoverable).
+  Existing teams default to OPEN.
+  """
+  visibility: TeamVisibility!
+}
+
+enum TeamVisibility {
+  HIDDEN
+  OPEN
+  PRIVATE
 }
 
 """

@@ -41,14 +41,14 @@ use warp_graphql::workspace::{
     InviteLinkDomainRestriction as GqlInviteLinkDomainRestriction,
     MembershipRole as GqlMembershipRole, StringListSettingInfo as GqlStringListSettingInfo,
     Team as GqlTeam, TeamByoSettings as GqlTeamByoSettings, TeamMember as GqlTeamMember,
-    TeamSettings as GqlTeamSettings,
+    TeamSettings as GqlTeamSettings, TeamVisibility as GqlTeamVisibility,
     UgcCollectionEnablementSetting as GqlUgcCollectionEnablementSetting, Workspace as GqlWorkspace,
     WorkspaceMember as GqlWorkspaceMember, WorkspaceMemberUsageInfo as GqlWorkspaceMemberUsageInfo,
     WorkspaceSettings as GqlWorkspaceSettings,
     WriteToPtyAutonomyValue as GqlWriteToPtyAutonomyValue,
 };
 
-use super::team::{DiscoverableTeam, MembershipRole, Team, TeamMember};
+use super::team::{DiscoverableTeam, MembershipRole, Team, TeamMember, TeamVisibility};
 use super::user_workspaces::WorkspacesMetadataResponse;
 use super::workspace::{
     AIAutonomyPolicy, AddonCreditsSettings, AdminEnablementSetting, AiAutonomySettings,
@@ -190,6 +190,26 @@ impl From<MembershipRole> for GqlMembershipRole {
             MembershipRole::Owner => GqlMembershipRole::Owner,
             MembershipRole::Admin => GqlMembershipRole::Admin,
             MembershipRole::User => GqlMembershipRole::User,
+        }
+    }
+}
+
+impl From<GqlTeamVisibility> for TeamVisibility {
+    fn from(visibility: GqlTeamVisibility) -> Self {
+        match visibility {
+            GqlTeamVisibility::Open => TeamVisibility::Open,
+            GqlTeamVisibility::Private => TeamVisibility::Private,
+            GqlTeamVisibility::Hidden => TeamVisibility::Hidden,
+            GqlTeamVisibility::Other(value) => {
+                report_error!(
+                    "Invalid TeamVisibility from server; treating as Private",
+                    extra: { "value" => %value },
+                    warp_errors::ReportErrorLogMode::OncePerRun
+                );
+                // Fail closed: an unrecognized value must not be treated as Open,
+                // since that would surface the invite-by-link control.
+                TeamVisibility::Private
+            }
         }
     }
 }
@@ -1328,6 +1348,7 @@ impl Team {
             settings: team_settings_from_gql(gql_team.settings),
             is_eligible_for_discovery: gql_workspace.is_eligible_for_discovery,
             has_billing_history: gql_workspace.has_billing_history,
+            visibility: gql_team.visibility.into(),
         }
     }
 }
