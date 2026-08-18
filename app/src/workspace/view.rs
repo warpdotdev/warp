@@ -545,6 +545,12 @@ use crate::{
 };
 
 /// The padding that should be applied to the workspace as a whole.
+///
+/// Zero on web: browsers that round the viewport's corners clip this padding into a stray
+/// line along the top and left edges, so we rely on the browser's own edge there instead.
+#[cfg(target_family = "wasm")]
+pub const WORKSPACE_PADDING: f32 = 0.0;
+#[cfg(not(target_family = "wasm"))]
 pub const WORKSPACE_PADDING: f32 = 1.0;
 
 /// The minimum font size at which terminal text will be rendered.
