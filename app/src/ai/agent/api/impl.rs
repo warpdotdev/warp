@@ -131,6 +131,7 @@ pub async fn generate_multi_agent_output(
             },
             parent_agent_id: params.parent_agent_id.unwrap_or_default(),
             agent_name: params.agent_name.unwrap_or_default(),
+            team_uid: params.team_uid.unwrap_or_default(),
         }),
         existing_suggestions: params
             .existing_suggestions

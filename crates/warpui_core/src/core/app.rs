@@ -765,6 +765,17 @@ impl AppContext {
         self.windows.contains_key(&window_id)
     }
 
+    /// Returns the window currently containing the given view, if any.
+    ///
+    /// This is a general-purpose lookup for callers that only hold a
+    /// type-erased [`EntityId`] for a view (e.g. because the view's concrete
+    /// type isn't known at that call site) and so cannot construct a typed
+    /// [`WeakViewHandle`](crate::WeakViewHandle) to reuse its `window_id`
+    /// accessor.
+    pub fn window_id_for_view(&self, view_id: EntityId) -> Option<WindowId> {
+        self.view_to_window.get(&view_id).copied()
+    }
+
     /// Sets or clears the window for which focus changes should be suppressed.
     /// When set, all `ctx.focus()` calls targeting this window will be ignored.
     pub fn set_suppress_focus_for_window(&mut self, window_id: Option<WindowId>) {

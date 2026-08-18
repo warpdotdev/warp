@@ -843,6 +843,36 @@ fn test_window_team_assignment_inherits_from_source_or_default_team() {
 }
 
 #[test]
+fn test_team_uid_for_window_has_no_workspace_fallback_for_unmapped_window() {
+    let team = team_for_test();
+    let workspace = workspace_for_test(&team);
+
+    App::test((), |mut app| async move {
+        initialize_window_team_test_app(&mut app, vec![workspace]);
+
+        let unmapped_window_id = WindowId::new();
+        app.read(|ctx| {
+            let user_workspaces = UserWorkspaces::as_ref(ctx);
+            // Unlike `inherited_or_default_team_uid`, `team_uid_for_window` must
+            // not fall back to the workspace's first team for a window that was
+            // never registered. This is exactly the distinction
+            // `RequestParams::new` relies on to omit `team_uid` for a
+            // viewless/personal-context MAA request, instead of guessing an
+            // arbitrary team whose ordering need not match the server's own
+            // `teams[0]` fallback.
+            assert_eq!(
+                user_workspaces.team_uid_for_window(unmapped_window_id),
+                None
+            );
+            assert_eq!(
+                user_workspaces.inherited_or_default_team_uid(Some(unmapped_window_id)),
+                Some(team.uid)
+            );
+        });
+    })
+}
+
+#[test]
 fn warp_agent_cli_upgrade_link_is_channel_aware_and_user_bound() {
     let user_uid = UserUid::new("user-123");
 
