@@ -528,57 +528,6 @@ pub struct PromptInfo {
     pub prompt_snapshot: Option<String>,
 }
 
-/// Computes [`UserBlockCompleted::command`] lazily from the live block. See [`warp_util::lazy::Lazy`].
-fn compute_command(block: &Block) -> String {
-    block.command_to_string()
-}
-
-/// Computes [`UserBlockCompleted::command_with_obfuscated_secrets`] lazily from the live block.
-fn compute_command_with_obfuscated_secrets(block: &Block) -> String {
-    let mut command = block.command_with_secrets_obfuscated(false);
-    // If secret redaction is disabled, we manually scan for secrets and redact them.
-    if matches!(
-        block.prompt_and_command_grid().should_scan_for_secrets,
-        ObfuscateSecrets::No
-    ) {
-        redact_secrets(&mut command);
-    }
-    command
-}
-
-/// Computes [`UserBlockCompleted::output_truncated`] lazily from the live block.
-fn compute_output_truncated(block: &Block) -> String {
-    if block.is_ai_ugc_telemetry_enabled {
-        // If telemetry is enabled, we collect the full output but are limiting it to
-        // the first and last 2500 lines in case the block is very large.
-        block.output_grid().content_summary(2500, 2500, false)
-    } else {
-        block
-            .output_grid()
-            .contents_to_string(false, Some(MAX_SERIALIZED_OUTPUT_LINES))
-    }
-}
-
-/// Computes [`UserBlockCompleted::output_truncated_with_obfuscated_secrets`] lazily from the live
-/// block.
-fn compute_output_truncated_with_obfuscated_secrets(block: &Block) -> String {
-    let mut output = if block.is_ai_ugc_telemetry_enabled {
-        block.output_grid().content_summary(2500, 2500, true)
-    } else {
-        block
-            .output_grid()
-            .contents_to_string_force_secrets_obfuscated(false, Some(MAX_SERIALIZED_OUTPUT_LINES))
-    };
-    // If secret redaction is disabled, we manually scan for secrets and redact them.
-    if matches!(
-        block.output_grid().should_scan_for_secrets,
-        ObfuscateSecrets::No
-    ) {
-        redact_secrets(&mut output);
-    }
-    output
-}
-
 /// Resolution is keyed on `BlockId`, not `BlockIndex`: block removal (e.g. clearing the screen)
 /// can reindex the remaining blocks, so a `BlockIndex` captured at construction time may no
 /// longer point at the same block (or may silently resolve to a different one entirely) by the
@@ -595,6 +544,7 @@ fn resolve_and_compute<T: Default>(
                 "Tried to lazily compute a UserBlockCompleted field for a block that no longer exists",
                 extra: { "block_id" => ?id }
             );
+            debug_assert!(false, "The block should always exist for lazy computation");
             T::default()
         }
     }
@@ -640,7 +590,9 @@ impl From<&Block> for BlockType {
                         }),
                         Lazy::deferred({
                             let id = id.clone();
-                            move |block_list| resolve_and_compute(block_list, &id, compute_command)
+                            move |block_list| {
+                                resolve_and_compute(block_list, &id, Block::command_to_string)
+                            }
                         }),
                         Lazy::deferred({
                             let id = id.clone();
@@ -648,21 +600,25 @@ impl From<&Block> for BlockType {
                                 resolve_and_compute(
                                     block_list,
                                     &id,
-                                    compute_command_with_obfuscated_secrets,
+                                    Block::compute_command_with_obfuscated_secrets,
                                 )
                             }
                         }),
                         Lazy::deferred({
                             let id = id.clone();
                             move |block_list| {
-                                resolve_and_compute(block_list, &id, compute_output_truncated)
+                                resolve_and_compute(
+                                    block_list,
+                                    &id,
+                                    Block::compute_output_truncated,
+                                )
                             }
                         }),
                         Lazy::deferred(move |block_list| {
                             resolve_and_compute(
                                 block_list,
                                 &id,
-                                compute_output_truncated_with_obfuscated_secrets,
+                                Block::compute_output_truncated_with_obfuscated_secrets,
                             )
                         }),
                         block.agent_interaction_metadata().is_some(),
@@ -1856,18 +1812,8 @@ impl Block {
         self.header_grid.is_command_finished()
     }
 
-    pub fn command_and_output_with_secret_obfuscated(
-        &self,
-        include_escape_sequences: bool,
-    ) -> (String, String) {
-        let mut command = self.command_with_secrets_obfuscated(include_escape_sequences);
-        let mut output = self
-            .output_grid()
-            .contents_to_string_force_secrets_obfuscated(
-                include_escape_sequences,
-                Some(MAX_SERIALIZED_STYLIZED_OUTPUT_LINES),
-            );
-
+    fn compute_command_with_obfuscated_secrets(&self) -> String {
+        let mut command = self.command_with_secrets_obfuscated(false);
         // If secret redaction is disabled, we manually scan for secrets and redact them.
         if matches!(
             self.prompt_and_command_grid().should_scan_for_secrets,
@@ -1875,14 +1821,40 @@ impl Block {
         ) {
             redact_secrets(&mut command);
         }
+        command
+    }
+
+    fn compute_output_truncated(&self) -> String {
+        if self.is_ai_ugc_telemetry_enabled {
+            // If telemetry is enabled, we collect the full output but are limiting it to
+            // the first and last 2500 lines in case the block is very large.
+            self.output_grid().content_summary(2500, 2500, false)
+        } else {
+            self.output_grid()
+                .contents_to_string(false, Some(MAX_SERIALIZED_OUTPUT_LINES))
+        }
+    }
+
+    /// Computes [`UserBlockCompleted::output_truncated_with_obfuscated_secrets`] lazily from the live
+    /// block.
+    fn compute_output_truncated_with_obfuscated_secrets(&self) -> String {
+        let mut output = if self.is_ai_ugc_telemetry_enabled {
+            self.output_grid().content_summary(2500, 2500, true)
+        } else {
+            self.output_grid()
+                .contents_to_string_force_secrets_obfuscated(
+                    false,
+                    Some(MAX_SERIALIZED_OUTPUT_LINES),
+                )
+        };
+        // If secret redaction is disabled, we manually scan for secrets and redact them.
         if matches!(
             self.output_grid().should_scan_for_secrets,
             ObfuscateSecrets::No
         ) {
             redact_secrets(&mut output);
         }
-
-        (command, output)
+        output
     }
 
     pub fn prompt_grid(&self) -> &BlockGrid {
