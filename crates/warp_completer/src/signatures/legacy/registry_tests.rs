@@ -279,39 +279,100 @@ fn test_negative_cache_stops_growing_at_capacity() {
 #[test]
 fn test_negative_cache_evicts_in_lru_order() {
     // Regression test for APP-5431: once the negative cache is at capacity, inserting a new
-    // miss must evict the least-recently-used entry, not an arbitrary one.
+    // miss must evict the least-recently-used entry specifically. Critically, this re-touches
+    // the *oldest-inserted* entry before overflowing so a FIFO (or arbitrary-eviction) cache
+    // would fail this test: a FIFO cache would still evict "miss-0" since it only tracks
+    // insertion order and ignores the re-touch, whereas an LRU cache must evict "miss-1"
+    // instead, since "miss-1" is now the actual least-recently-used entry.
     let registry = create_test_command_registry([test_signature()]);
 
-    // Fill the negative cache to capacity with "miss-0", .., "miss-{MAX_CACHED_MISSES - 1}".
+    // Fill the negative cache to capacity with "miss-0", .., "miss-{MAX_CACHED_MISSES - 1}",
+    // in insertion order.
     for i in 0..MAX_CACHED_MISSES {
         assert_eq!(registry.signature(&format!("miss-{i}")), None);
     }
 
-    // Touch every entry except "miss-0" again, moving them all ahead of it in LRU order.
-    for i in 1..MAX_CACHED_MISSES {
-        assert_eq!(registry.signature(&format!("miss-{i}")), None);
-    }
+    // Touch only "miss-0" -- the oldest, and thus the next entry a FIFO cache would evict --
+    // moving it to the most-recently-used position.
+    assert_eq!(registry.signature("miss-0"), None);
 
-    // Inserting one more miss should evict "miss-0", the least-recently-used entry.
+    // Inserting one more miss should evict "miss-1", the least-recently-used entry, not
+    // "miss-0", which was just touched.
     assert_eq!(registry.signature("miss-overflow"), None);
-    assert!(
-        !registry
-            .signatures
-            .misses
-            .lock()
-            .unwrap()
-            .contains("miss-0"),
-        "the least-recently-used entry should have been evicted"
-    );
     assert!(
         registry
             .signatures
             .misses
             .lock()
             .unwrap()
-            .contains("miss-1"),
-        "a recently-touched entry should not have been evicted"
+            .contains("miss-0"),
+        "the just-touched entry should not have been evicted -- a FIFO cache would incorrectly \
+         evict it instead of `miss-1`"
     );
+    assert!(
+        !registry
+            .signatures
+            .misses
+            .lock()
+            .unwrap()
+            .contains("miss-1"),
+        "the least-recently-used entry should have been evicted"
+    );
+}
+
+#[test]
+fn test_oversized_later_token_does_not_bypass_the_length_guard() {
+    // Regression test for APP-5431: `maybe_load_replacement_signature` resolves a *later*
+    // token (e.g. resolving `git` from `sudo git`) through the same `SignatureCache::get` the
+    // top-level token goes through (`self.signatures.get(token)`, where `self.signatures` is
+    // the `SignatureCache`, not the raw `MemoMap`). An oversized later token must take the same
+    // length-guarded path as an oversized top-level token: no lowercase allocation, and no
+    // growth of either cache.
+    let sudo = warp_command_signatures::signature_by_name("sudo")
+        .expect("global command signatures should include 'sudo'");
+    let registry = create_test_command_registry([sudo]);
+    let positive_len_before = registry.signatures.signatures.len();
+    let negative_len_before = registry.signatures.misses.lock().unwrap().len();
+
+    let oversized_token = "a".repeat(MAX_CACHEABLE_COMMAND_LEN + 1);
+    let tokens = ["sudo", oversized_token.as_str()];
+
+    let found_signature = registry
+        .signature_from_tokens(
+            &tokens,
+            false,
+            TopLevelCommandCaseSensitivity::CaseSensitive,
+        )
+        .expect("sudo signature from tokens should exist");
+    assert_eq!(
+        found_signature.signature.name(),
+        "sudo",
+        "an oversized later token shouldn't resolve to a replacement signature"
+    );
+    assert_eq!(
+        registry.signatures.signatures.len(),
+        positive_len_before,
+        "looking up an oversized later token should not add an entry to the positive cache"
+    );
+    assert_eq!(
+        registry.signatures.misses.lock().unwrap().len(),
+        negative_len_before,
+        "looking up an oversized later token should not add an entry to the negative cache"
+    );
+
+    // Exercise the alias-expansion path too, since it resolves later tokens the same way.
+    let sudo = warp_command_signatures::signature_by_name("sudo")
+        .expect("global command signatures should include 'sudo'");
+    let ctx =
+        FakeCompletionContext::new(create_test_command_registry([sudo])).with_case_sensitivity();
+    let result = warpui_core::r#async::block_on(
+        ctx.command_registry()
+            .signature_with_alias_expansion(&tokens, false, &ctx),
+    );
+    let SignatureResult::Success(found_signature) = result else {
+        panic!("expected SignatureResult::Success");
+    };
+    assert_eq!(found_signature.signature.name(), "sudo");
 }
 
 #[test]

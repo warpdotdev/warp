@@ -497,11 +497,13 @@ impl CommandRegistry {
         self.signatures.get(name)
     }
 
-    /// Registers the given `Signature`.
+    /// Registers the given `Signature`, making it resolvable via `signature()` and friends.
     ///
-    /// Note the underlying map caches the lookup result for a given signature (regardless of
-    /// whether or not it is `Some` or `None`), which means that if there is already a cached
-    /// `None` value for the command corresponding to this signature, this is a no-op.
+    /// `get` always checks the positive cache before the negative one (see
+    /// `SignatureCache::misses`), so this takes effect immediately even if a lookup for this
+    /// name previously missed and is currently sitting in the negative cache -- there's no
+    /// stale `None` result to invalidate. If a signature is already registered for this name,
+    /// this is a no-op.
     pub fn register_signature(&self, signature: Signature) {
         self.signatures.insert(signature);
     }
