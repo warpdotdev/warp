@@ -3040,6 +3040,9 @@ macro_rules! delegate {
                 }
             },
             _ if $self.bootstrap_stage == BootstrapStage::ScriptExecution => {
+                if !$self.output_grid.started() {
+                    $self.output_grid.start();
+                }
                 $self.output_grid.$method($( $arg ),*)
             },
             _ => {
