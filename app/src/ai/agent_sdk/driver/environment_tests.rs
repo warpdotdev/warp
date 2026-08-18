@@ -617,6 +617,72 @@ fn no_checkout_ref_leaves_clone_on_default_branch() {
     );
 }
 
+/// Regression test for APP-5509: a `--filter=blob:none` clone must carry
+/// enough tree data that a path-limited `git log` never reaches the network.
+/// A regression to `--filter=tree:0` would instead try to lazily fetch a
+/// tree per commit walked, so repointing `origin` at an unreachable URL
+/// after the clone turns that regression into a fast failure here instead of
+/// the hang seen in production.
+#[test]
+fn blobless_clone_walks_path_limited_history_without_network() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+
+    let origin = root.join("origin.git");
+    fs::create_dir_all(&origin).unwrap();
+    git(&["init", "-b", "main", "--bare", "."], &origin);
+    git(&["config", "uploadpack.allowFilter", "true"], &origin);
+    let origin_url = format!("file://{}", origin.display());
+
+    let seed = root.join("seed");
+    fs::create_dir_all(&seed).unwrap();
+    git(&["init", "-b", "main", "."], &seed);
+    git(&["remote", "add", "origin", &origin_url], &seed);
+    for (contents, message) in [("one\n", "first"), ("one\ntwo\n", "second")] {
+        fs::write(seed.join("notes.md"), contents).unwrap();
+        git(&["add", "."], &seed);
+        git(&["commit", "-m", message], &seed);
+    }
+    git(&["push", "origin", "main"], &seed);
+
+    let repo_dir = root.join("clone");
+    git(
+        &[
+            "clone",
+            "--filter=blob:none",
+            &origin_url,
+            repo_dir.to_str().unwrap(),
+        ],
+        root,
+    );
+
+    // Simulate the origin becoming unreachable after the clone (e.g. the
+    // sandbox network being torn down), so a lazy tree fetch fails fast
+    // instead of hanging.
+    git(
+        &[
+            "remote",
+            "set-url",
+            "origin",
+            "https://127.0.0.1:1/unreachable.git",
+        ],
+        &repo_dir,
+    );
+
+    let output = Command::new("git")
+        .args(["--no-pager", "log", "--oneline", "--", "notes.md"])
+        .current_dir(&repo_dir)
+        .output()
+        .expect("git should be runnable");
+    assert!(
+        output.status.success(),
+        "path-limited git log must stay local on a blobless clone: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let commit_count = String::from_utf8(output.stdout).unwrap().lines().count();
+    assert_eq!(commit_count, 2, "expected both commits touching notes.md");
+}
+
 #[test]
 fn factory_clone_is_prepended_when_clone_values_are_present() {
     let mut setup_commands = vec!["make setup".to_string()];

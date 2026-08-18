@@ -559,8 +559,9 @@ pub(super) async fn clone_repo(
     }
 
     // Pin after clone or reuse when a ref was requested. A reused directory may
-    // still be on an old default-branch tip, and a fresh partial clone only
-    // fetched the default branch — fetch the ref, then detach to FETCH_HEAD.
+    // still be on an old default-branch tip, and a checkout_ref (SHA, branch,
+    // or tag) may not have existed yet, or may have moved, by the time the
+    // clone ran — fetch the ref, then detach to FETCH_HEAD.
     // When checkout_ref is unset, leave an existing directory untouched.
     if let Some(command) = checkout_command_for(repo, working_dir, shell_type) {
         let checkout_ref = repo.checkout_ref.as_deref().unwrap_or_default();
@@ -583,12 +584,11 @@ pub(super) async fn clone_repo(
 /// Build the `git fetch` + `git checkout` command that pins `repo`'s clone at
 /// its `checkout_ref`, or `None` when the repo has no ref to pin.
 ///
-/// A partial clone (`--filter=blob:none`) only fetches the default branch, so
-/// an arbitrary ref (commit SHA, branch, or tag) may not be present yet: fetch
-/// it first, then check out the resulting `FETCH_HEAD` detached. Checking out
-/// the original ref name can prefer a stale local branch or fail when the
-/// object only landed in `FETCH_HEAD`. Detached HEAD is expected and fine —
-/// trials never merge.
+/// The requested ref (commit SHA, branch, or tag) may not have existed yet,
+/// or may have moved, by the time the clone ran: fetch it first, then check
+/// out the resulting `FETCH_HEAD` detached. Checking out the original ref
+/// name can prefer a stale local branch or fail when the object only landed
+/// in `FETCH_HEAD`. Detached HEAD is expected and fine — trials never merge.
 fn checkout_command_for(
     repo: &SourceRepo,
     working_dir: &Path,
