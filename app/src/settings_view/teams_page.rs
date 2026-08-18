@@ -4134,7 +4134,7 @@ impl TeamsWidget {
                     ));
                     page.add_child(
                         Container::new(render_banner(Icon::Info, body, appearance))
-                            .with_padding_top(6.)
+                            .with_padding_top(12.)
                             .finish(),
                     );
                 }
