@@ -124,6 +124,7 @@ mod warp_agent_page;
 mod warp_drive_page;
 mod warpify_page;
 
+#[cfg(feature = "tui")]
 pub(crate) use billing_and_usage::billing_cycle_usage_common::{format_cost_cents, format_credits};
 pub use billing_and_usage_page::create_discount_badge;
 #[cfg(not(target_family = "wasm"))]
