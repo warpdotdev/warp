@@ -29266,12 +29266,6 @@ impl Workspace {
         self.remove_tab_without_undo(index, ctx);
     }
 
-    /// Performs the source-workspace cleanup indicated by `DropResult`.
-    /// Cross-workspace mutations (preview/target updates, focus) happen inside
-    /// `CrossWindowTabDrag::on_drop`; this method only touches `self`.
-    /// Indices of the tabs whose pane group is in `pane_group_ids`, ascending.
-    ///
-    /// The identity half of cross-window cleanup and snapshot filtering: the
     /// Number of tabs that belong to any group, for integration testing.
     ///
     /// Gated on `integration_tests` so it does not exist in shipped builds.
@@ -29310,6 +29304,10 @@ impl Workspace {
             .collect()
     }
 
+    /// Performs the source-workspace cleanup indicated by `DropResult`.
+    ///
+    /// Cross-workspace mutations (preview/target updates, focus) happen inside
+    /// `CrossWindowTabDrag::on_drop`; this method only touches `self`.
     pub(crate) fn handle_drop_result(&mut self, result: DropResult, ctx: &mut ViewContext<Self>) {
         match result {
             DropResult::NoOp => {}
