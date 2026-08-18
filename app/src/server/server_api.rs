@@ -44,6 +44,7 @@ use warp_core::context_flag::ContextFlag;
 use warp_core::telemetry::TelemetryEvent;
 use warp_errors::{AnyhowErrorExt, ErrorExt, register_error, report_error};
 use warp_managed_secrets::client::ManagedSecretsClient;
+use warp_server_client::HttpStatusError;
 use warp_server_client::auth::{AuthClientImpl, AuthEvent, EXPERIMENT_ID_HEADER};
 use warp_server_client::base_client::{
     AmbientHeaderPolicy, AuthenticatedGraphqlConfig, BaseClient, GraphqlRoutingConfig,
@@ -676,7 +677,11 @@ impl ServerApi {
         }
     }
 
-    /// Converts a non-success public API response into the most specific client error available.
+    /// Converts a non-success public API response into the most specific client error
+    /// available. The returned error always carries an [`HttpStatusError`] in its chain
+    /// (via [`anyhow::Error::context`]) so callers retrying through
+    /// [`is_transient_http_error`](super::retry_strategies::is_transient_http_error) fail
+    /// fast on a deterministic 4xx instead of defaulting to a transient retry.
     async fn error_from_response(response: http_client::Response) -> anyhow::Error {
         let status = response.status();
         let is_at_capacity = response
@@ -692,28 +697,32 @@ impl ServerApi {
 
         // Get the response text first since we may need to try multiple deserializations.
         let response_text = response.text().await.unwrap_or_default();
+        let status_error = HttpStatusError {
+            status: status.as_u16(),
+            body: response_text.clone(),
+        };
 
         // Check for AT_CAPACITY error code header.
         if is_at_capacity
             && let Ok(capacity_error) =
                 serde_json::from_str::<CloudAgentCapacityError>(&response_text)
         {
-            return capacity_error.into();
+            return anyhow::Error::new(status_error).context(capacity_error);
         }
         if status == StatusCode::TOO_MANY_REQUESTS && is_out_of_credits {
             let user_display_message = serde_json::from_str::<OutOfCreditsResponse>(&response_text)
                 .ok()
                 .and_then(|r| r.user_display_message);
-            return AIApiError::QuotaLimit {
+            return anyhow::Error::new(status_error).context(AIApiError::QuotaLimit {
                 user_display_message,
-            }
-            .into();
+            });
         }
 
         // Try to deserialize error response as { "error": "message" }
         match serde_json::from_str::<ClientError>(&response_text) {
-            Ok(error_response) => error_response.into(),
-            Err(_) => anyhow!("API request failed with status {status}"),
+            Ok(error_response) => anyhow::Error::new(status_error).context(error_response),
+            Err(_) => anyhow::Error::new(status_error)
+                .context(format!("API request failed with status {status}")),
         }
     }
 
@@ -1416,3 +1425,7 @@ impl Entity for ServerApiProvider {
 }
 
 impl SingletonEntity for ServerApiProvider {}
+
+#[cfg(test)]
+#[path = "server_api_tests.rs"]
+mod tests;
