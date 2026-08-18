@@ -34,25 +34,12 @@ fn track_longest_name(signature: &Signature, longest: &mut (usize, String)) {
 
 #[test]
 fn test_all_known_signature_names_are_within_the_length_cap() {
-    // `SignatureCache::get`'s oversized-token fast path assumes no name that can ever be
-    // dynamically resolved -- from the embedded signature corpus or from
-    // `CommandRegistry::register_signature` -- exceeds it. This test establishes that invariant
-    // by actually walking both sources, rather than assuming it: if
-    // a future signature (in the corpus, or a newly `register_signature`-ed one) is added with a
-    // name that violates it, this test fails loudly instead of that name silently becoming
-    // unresolvable via lookup.
     let mut longest = (0, String::new());
 
     for signature in warp_command_signatures::commands() {
         track_longest_name(&signature, &mut longest);
     }
 
-    // Mirrors `CommandRegistry::register_warp_signatures`: the only other names ever
-    // `register_signature`-ed in production. Uses the raw `CommandFactory::command()` rather
-    // than `Args::clap_command()`, since the latter only *hides* subcommands based on
-    // `FeatureFlag` state (which requires flags to be initialized, unavailable in this test
-    // environment) without changing any name -- so this still covers every name that
-    // `clap_command()` would produce, feature flags notwithstanding.
     for channel in [Channel::Stable, Channel::Preview, Channel::Dev] {
         let mut clap_cmd = <warp_cli::Args as clap::CommandFactory>::command();
         let signature = crate::signatures::clap::signature_from_clap_command(
@@ -65,9 +52,11 @@ fn test_all_known_signature_names_are_within_the_length_cap() {
     let (max_len, longest_name) = longest;
     assert!(
         max_len <= MAX_CACHEABLE_COMMAND_LEN,
-        "found a command/subcommand name of length {max_len} ({longest_name:?}), which exceeds \
-         MAX_CACHEABLE_COMMAND_LEN ({MAX_CACHEABLE_COMMAND_LEN}) -- SignatureCache::get's \
-         oversized-token fast path assumes this can't happen"
+        "found a command/subcommand name of length {max_len} ({longest_name:?}), longer than \
+         MAX_CACHEABLE_COMMAND_LEN ({MAX_CACHEABLE_COMMAND_LEN}); SignatureCache::get's \
+         oversized-token fast path assumes no such name exists and would make this one \
+         unresolvable -- raise MAX_CACHEABLE_COMMAND_LEN or add back a fallback lookup path for \
+         oversized tokens"
     );
 }
 
@@ -274,10 +263,6 @@ fn test_alias_expansion_path_skips_flag_with_value_before_subcommand() {
 
 #[test]
 fn test_oversized_command_is_not_cached_and_resolves_to_none() {
-    // Regression test for APP-5431: a pathologically large single "command" token (e.g. a large
-    // blob of text pasted into the terminal input line) must not grow the (append-only)
-    // positive cache, nor the bounded negative cache, and doesn't match any registered
-    // signature.
     let registry = create_test_command_registry([test_signature()]);
     let positive_len_before = registry.signatures.signatures.len();
     let negative_len_before = registry.signatures.misses.len();
@@ -299,9 +284,6 @@ fn test_oversized_command_is_not_cached_and_resolves_to_none() {
 
 #[test]
 fn test_misses_are_never_cached_in_the_positive_cache() {
-    // Regression test for APP-5431: the positive cache only grows via successful lookups (see
-    // `SignatureCache::signatures`'s doc comment), so a command that never resolves to a
-    // signature must not add an entry there, however many times it's looked up.
     let registry = create_test_command_registry([test_signature()]);
     let len_before = registry.signatures.signatures.len();
 
@@ -312,12 +294,6 @@ fn test_misses_are_never_cached_in_the_positive_cache() {
 
 #[test]
 fn test_oversized_later_token_does_not_bypass_the_length_guard() {
-    // Regression test for APP-5431: `maybe_load_replacement_signature` resolves a *later*
-    // token (e.g. resolving `git` from `sudo git`) through the same `SignatureCache::get` the
-    // top-level token goes through (`self.signatures.get(token)`, where `self.signatures` is
-    // the `SignatureCache`, not the raw `MemoMap`). An oversized later token must take the same
-    // length-guarded path as an oversized top-level token: no lowercase allocation, and no
-    // growth of either cache.
     let sudo = warp_command_signatures::signature_by_name("sudo")
         .expect("global command signatures should include 'sudo'");
     let registry = create_test_command_registry([sudo]);
@@ -350,7 +326,6 @@ fn test_oversized_later_token_does_not_bypass_the_length_guard() {
         "looking up an oversized later token should not add an entry to the negative cache"
     );
 
-    // Exercise the alias-expansion path too, since it resolves later tokens the same way.
     let sudo = warp_command_signatures::signature_by_name("sudo")
         .expect("global command signatures should include 'sudo'");
     let ctx =
@@ -369,11 +344,9 @@ fn test_oversized_later_token_does_not_bypass_the_length_guard() {
 fn test_ordinary_commands_still_resolve_and_are_cached() {
     let registry = create_test_command_registry([test_signature()]);
 
-    // A registered command resolves correctly, case-insensitively.
     let found = registry.signature("TEST");
     assert_eq!(found.map(|s| s.name.as_str()), Some("test"));
 
-    // Repeated lookups hit the same cached entry rather than growing the cache.
     let len_after_first_lookup = registry.signatures.signatures.len();
     assert_eq!(registry.signature("test"), found);
     assert_eq!(registry.signatures.signatures.len(), len_after_first_lookup);
@@ -381,13 +354,6 @@ fn test_ordinary_commands_still_resolve_and_are_cached() {
 
 #[test]
 fn test_registered_signature_longer_than_the_cap_is_unresolvable() {
-    // Regression test for APP-5431: `SignatureCache::get` now returns `None` outright for any
-    // token over `MAX_CACHEABLE_COMMAND_LEN`, on the strength of
-    // `test_all_known_signature_names_are_within_the_length_cap` establishing that no real
-    // signature ever has a name this long. An explicitly `register_signature`-ed signature with
-    // an artificially oversized name is therefore *not* retrievable through `signature()` --
-    // a deliberate, accepted tradeoff, not a real-world regression, since that invariant test
-    // would fail first if this ever mattered.
     let long_name = "a".repeat(MAX_CACHEABLE_COMMAND_LEN + 1);
     let registry = create_test_command_registry([signature_with_name(&long_name)]);
 
@@ -397,9 +363,6 @@ fn test_registered_signature_longer_than_the_cap_is_unresolvable() {
 #[cfg(windows)]
 #[test]
 fn test_exe_suffix_is_trimmed_before_the_length_check() {
-    // Regression test for APP-5431 (review finding): the ".exe" suffix must be trimmed *before*
-    // the length check runs. A command name exactly at the cap, looked up with ".exe" appended
-    // (so the raw token exceeds the cap), must still resolve via the normal lookup path.
     let max_length_name = "a".repeat(MAX_CACHEABLE_COMMAND_LEN);
     let registry = create_test_command_registry([signature_with_name(&max_length_name)]);
 

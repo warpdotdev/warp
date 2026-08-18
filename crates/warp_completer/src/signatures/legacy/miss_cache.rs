@@ -3,21 +3,9 @@ use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 const MAX_CACHED_MISSES: usize = 256;
 
-/// A bounded set of (lowercased) command names that recently failed to resolve to a signature,
-/// used by `SignatureCache::misses`.
-///
-/// This is a plain FIFO, not an LRU: once at capacity, inserting a new entry always evicts the
-/// *oldest-inserted* one, regardless of how recently any entry (including the one about to be
-/// evicted) was looked up again. `CommandRegistry` is a shared `Arc` behind a single global
-/// instance (see `CommandRegistry::global_instance`) that's called from multiple terminal
-/// sessions/panes concurrently, each generating completions on a background thread pool -- so
-/// this genuinely needs cross-thread synchronization, not just single-task interior mutability.
-/// But a negative cache is inherently approximate: a false negative (a miss this forgot) only
-/// costs one extra, cheap `lookup_fn` call, never a wrong answer. That's a much weaker
-/// requirement than an LRU implies, and dropping recency tracking is what makes a `RwLock` (an
-/// LRU would need every *hit* to also take a write lock, to move the entry to the front) the
-/// natural fit here, since a hit against `contains` becomes a pure read that never mutates
-/// anything -- the write lock is only ever needed for a genuinely new miss.
+/// A bounded, `RwLock`-guarded FIFO set of (lowercased) command names that recently failed to
+/// resolve to a signature. FIFO rather than LRU because a lookup here is a pure read that never
+/// needs to reorder anything, so the write lock is only needed for a genuinely new miss.
 pub(super) struct MissCache {
     capacity: usize,
     entries: RwLock<MissCacheEntries>,

@@ -32,23 +32,10 @@ struct SignatureCache {
     lookup_fn: Box<SignatureLookupFn>,
     /// A map from (lowercased) command name to its signature. The use of [`MemoMap`] here allows
     /// us to safely return references to the contained signatures (as the map internally is an
-    /// append-only structure). Only lookups that actually resolve to a signature are stored (see
-    /// `get`), which keeps this bounded by the number of distinct command names that can ever
-    /// resolve to something -- the fixed embedded corpus (1,167 top-level commands as of this
-    /// writing), plus any explicitly `insert`-ed signatures -- rather than by every distinct
-    /// token a user has ever typed or pasted. See APP-5431.
+    /// append-only structure).
     signatures: MemoMap<String, Signature>,
     /// A bounded set of (lowercased) command names that recently failed to resolve to a
-    /// signature -- see `MissCache`'s doc comment for why it's a plain `RwLock`-guarded FIFO
-    /// rather than an LRU. Unlike `signatures`, `get` never hands out a reference into this set
-    /// -- it only ever returns a `bool` -- so eviction is sound: there's no borrow that could
-    /// outlive an evicted entry, which is exactly what keeps `signatures` itself append-only.
-    /// That's also what makes this bounded convenience rather than a fix for a performance
-    /// problem: a miss is already cheap to redo (`lookup_fn` probes the embedded,
-    /// already-compiled signature corpus, which does a binary search with no filesystem I/O or
-    /// JSON parsing on a miss -- JSON parsing only happens once we know there's a hit), so this
-    /// cache exists to save a handful of redundant lookups for a token that's retried in quick
-    /// succession, not to avoid expensive rework. See APP-5431.
+    /// signature.
     misses: MissCache,
 }
 
