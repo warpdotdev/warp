@@ -262,6 +262,73 @@ impl SerializedBlock {
         };
         has_block_failed(self.exit_code, block_state)
     }
+
+    /// A best-effort plain-text approximation of this block's command line,
+    /// stripping ANSI/OSC escape sequences from the raw styled bytes. This is
+    /// a lossy shortcut, not the full ANSI-aware parsing `restore_block`
+    /// performs; it exists only to give a pane a usable tab title while its
+    /// real restoration is still deferred (see
+    /// `FeatureFlag::LazyBackgroundTabScrollbackRestore`), before its blocks
+    /// have ever been fed through the real terminal model.
+    pub fn plain_text_command_preview(&self) -> Option<String> {
+        if !self.did_execute {
+            return None;
+        }
+        let text = strip_ansi_escapes_for_preview(&self.stylized_command);
+        (!text.is_empty()).then_some(text)
+    }
+}
+
+/// Strips ANSI CSI/OSC escape sequences from `bytes` and returns the first
+/// non-blank line of the remaining printable text. Deliberately not a full
+/// VTE parser (which requires a live grid to interpret correctly); good
+/// enough for a short preview string, not for faithful rendering.
+fn strip_ansi_escapes_for_preview(bytes: &[u8]) -> String {
+    let mut result = String::new();
+    let mut i = 0;
+    while i < bytes.len() {
+        let byte = bytes[i];
+        if byte == 0x1b {
+            match bytes.get(i + 1) {
+                Some(b'[') => {
+                    // CSI: skip to and past the final byte in 0x40..=0x7e.
+                    i += 2;
+                    while i < bytes.len() && !(0x40..=0x7e).contains(&bytes[i]) {
+                        i += 1;
+                    }
+                    i = (i + 1).min(bytes.len());
+                }
+                Some(b']') => {
+                    // OSC: skip to and past the BEL or ST (ESC \) terminator.
+                    i += 2;
+                    while i < bytes.len() && bytes[i] != 0x07 {
+                        if bytes[i] == 0x1b && bytes.get(i + 1) == Some(&b'\\') {
+                            i += 2;
+                            break;
+                        }
+                        i += 1;
+                    }
+                    if i < bytes.len() && bytes[i] == 0x07 {
+                        i += 1;
+                    }
+                }
+                _ => i += 2,
+            }
+            continue;
+        }
+        if byte == b'\r' || byte == b'\n' {
+            if !result.trim().is_empty() {
+                break;
+            }
+            i += 1;
+            continue;
+        }
+        if byte.is_ascii_graphic() || byte == b' ' || byte == b'\t' {
+            result.push(byte as char);
+        }
+        i += 1;
+    }
+    result.trim().to_string()
 }
 
 /// We should only be serializing a block that has finished.

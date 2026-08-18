@@ -715,6 +715,113 @@ pub fn test_restore_completed_blocks() {
     ));
 }
 
+/// APP-5257: `apply_deferred_restored_blocks` backfills scrollback into an
+/// already-bootstrapped, live block list (mirroring how a background tab's
+/// deferred restoration is applied once it's activated). The already-active
+/// (empty, never-typed-into) block must not linger as visible clutter, the
+/// restored blocks must land ahead of a fresh active block, and each restored
+/// block must fire a `Restored` completion event just like eager restoration
+/// does.
+#[test]
+pub fn test_apply_deferred_restored_blocks_after_bootstrap() {
+    let (events_tx, events_rx) = async_channel::unbounded();
+    let channel_event_proxy = ChannelEventListener::builder_for_test()
+        .with_terminal_events_tx(events_tx)
+        .build();
+
+    // Simulates a background tab whose scrollback restoration was deferred at
+    // startup: the session still bootstraps eagerly (with no restored
+    // blocks), leaving a live, empty, ready-for-input block list.
+    let mut block_list = new_bootstrapped_block_list(None, None, channel_event_proxy);
+    let blocks_before_restore = block_list.blocks().len();
+    drain_terminal_events(&events_rx);
+
+    let serialized_block: SerializedBlockListItem =
+        SerializedBlock::new_for_test("i am".into(), "restored".into()).into();
+    let deferred_blocks = [serialized_block.clone(), serialized_block];
+
+    block_list.apply_deferred_restored_blocks(&deferred_blocks);
+
+    assert_eq!(block_list.blocks().len(), blocks_before_restore + 3);
+    assert!(block_list.blocks()[blocks_before_restore].is_restored());
+    assert!(block_list.blocks()[blocks_before_restore + 1].is_restored());
+    assert!(
+        block_list.blocks()[blocks_before_restore - 1].is_empty(&TranscriptScope::Terminal),
+        "the previously-active empty block must not become visible clutter"
+    );
+    assert!(
+        !block_list.active_block().finished(),
+        "a fresh active block should be ready for input after materializing"
+    );
+    assert!(block_list.is_restored_session());
+
+    let mut block_completed_events = Vec::new();
+    while let Ok(event) = events_rx.try_recv() {
+        if let Event::AfterBlockCompleted(block_completed_type) = event {
+            block_completed_events.push(block_completed_type);
+        }
+    }
+    assert_eq!(block_completed_events.len(), 2);
+    assert!(matches!(
+        block_completed_events[0].block_type,
+        BlockType::Restored
+    ));
+    assert!(matches!(
+        block_completed_events[1].block_type,
+        BlockType::Restored
+    ));
+}
+
+/// A second call after the first is fed no new blocks and must be a no-op.
+#[test]
+pub fn test_apply_deferred_restored_blocks_is_a_noop_when_given_no_blocks() {
+    let mut block_list =
+        new_bootstrapped_block_list(None, None, ChannelEventListener::new_for_test());
+    let blocks_before = block_list.blocks().len();
+
+    block_list.apply_deferred_restored_blocks(&[]);
+
+    assert_eq!(block_list.blocks().len(), blocks_before);
+    assert!(!block_list.is_restored_session());
+}
+
+/// APP-5257: a background tab's session stays live while its restoration is
+/// deferred, so it can produce genuine content (e.g. via synced input)
+/// before ever being activated. Applying the deferred (strictly older)
+/// blocks in that case must not force-finish or reorder the live, currently
+/// running command — the restoration must be dropped instead.
+#[test]
+pub fn test_apply_deferred_restored_blocks_does_not_corrupt_a_live_running_command() {
+    let mut block_list =
+        new_bootstrapped_block_list(None, None, ChannelEventListener::new_for_test());
+
+    block_list.start_active_block();
+    input_string(&mut block_list, "sleep 100");
+    block_list.preexec(Default::default());
+    assert!(block_list.active_block().started());
+    assert!(!block_list.active_block().finished());
+
+    let serialized_block: SerializedBlockListItem =
+        SerializedBlock::new_for_test("i am".into(), "restored".into()).into();
+
+    let applied = block_list.apply_deferred_restored_blocks(&[serialized_block]);
+
+    assert!(
+        !applied,
+        "deferred restoration must be dropped rather than corrupt a live, running command"
+    );
+    assert!(
+        !block_list.active_block().finished(),
+        "the live command must not be force-finished by a deferred restoration attempt"
+    );
+    assert_eq!(
+        block_list.active_block().command_to_string(),
+        "sleep 100",
+        "the live command's content must be untouched"
+    );
+    assert!(!block_list.is_restored_session());
+}
+
 #[test]
 pub fn test_restore_blocks_with_local_status() {
     let (events_tx, events_rx) = async_channel::unbounded();

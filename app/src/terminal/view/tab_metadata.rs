@@ -43,23 +43,32 @@ impl TerminalView {
     }
 
     pub fn last_completed_command_text(&self) -> Option<String> {
-        let model = self.model.lock();
-        model.block_list().blocks().iter().rev().find_map(|block| {
-            if block.finished()
-                && !block.is_background()
-                && !block.is_static()
-                && (block.bootstrap_stage().is_done() || block.is_restored())
-            {
-                let cmd = block.command_to_string();
-                if cmd.trim().is_empty() {
-                    None
+        let from_live_blocks = {
+            let model = self.model.lock();
+            model.block_list().blocks().iter().rev().find_map(|block| {
+                if block.finished()
+                    && !block.is_background()
+                    && !block.is_static()
+                    && (block.bootstrap_stage().is_done() || block.is_restored())
+                {
+                    let cmd = block.command_to_string();
+                    if cmd.trim().is_empty() {
+                        None
+                    } else {
+                        Some(cmd)
+                    }
                 } else {
-                    Some(cmd)
+                    None
                 }
-            } else {
-                None
-            }
-        })
+            })
+        };
+        from_live_blocks.or_else(|| self.pending_restoration_title_hint.clone())
+    }
+
+    /// Sets the tab-title fallback shown while this pane's scrollback
+    /// restoration is deferred. See `pending_restoration_title_hint`.
+    pub(crate) fn set_pending_restoration_title_hint(&mut self, hint: Option<String>) {
+        self.pending_restoration_title_hint = hint;
     }
 
     pub fn terminal_title_text(&self) -> String {

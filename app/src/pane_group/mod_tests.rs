@@ -258,6 +258,7 @@ fn mock_pane_group(app: &mut App, options: MockOptions) -> ViewHandle<PaneGroup>
                 options.layout,
                 block_lists,
                 None,
+                true,
                 ctx,
             )
         });
@@ -3806,6 +3807,7 @@ fn test_focused_pane_is_synchronized_with_application_focus() {
                         panes_layout,
                         block_lists,
                         None,
+                        true,
                         ctx,
                     )
                 });
@@ -3947,6 +3949,433 @@ fn test_undo_close_keeps_a_file_pane_watching_its_file() {
             assert!(
                 file_view.as_ref(ctx).file_id_for_test().is_none(),
                 "a permanently discarded pane should release its file"
+            );
+        });
+    });
+}
+
+/// APP-5257: restoring a `PanesLayout::Snapshot` for a tab other than the window's
+/// initially-active one, under `FeatureFlag::LazyBackgroundTabScrollbackRestore`, must:
+/// - still create the terminal session/shell eagerly (unaffected by the flag),
+/// - defer applying the persisted block into the live terminal view until the tab is
+///   activated,
+/// - round-trip the exact original snapshot if the tab is closed/persisted before ever
+///   being activated, and
+/// - apply the deferred restoration once `materialize_lazy_tab_restorations` runs (as
+///   `Workspace::set_active_tab_index` does on activation).
+#[test]
+fn test_lazy_background_tab_scrollback_restore() {
+    use crate::terminal::model::block::SerializedBlock;
+
+    let _flag = FeatureFlag::LazyBackgroundTabScrollbackRestore.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let uuid = Uuid::new_v4().as_bytes().to_vec();
+        let restored_block =
+            SerializedBlock::new_for_test(b"echo restored".to_vec(), b"restored\n".to_vec());
+        let mut block_lists = HashMap::new();
+        block_lists.insert(
+            PaneUuid(uuid.clone()),
+            vec![SerializedBlockListItem::Command {
+                block: Box::new(restored_block),
+            }],
+        );
+
+        let original_snapshot = TerminalPaneSnapshot {
+            uuid: uuid.clone(),
+            cwd: None,
+            shell_launch_data: None,
+            is_active: true,
+            is_read_only: false,
+            input_config: None,
+            llm_model_override: None,
+            active_profile_id: None,
+            conversation_ids_to_restore: Vec::new(),
+            active_conversation_id: None,
+        };
+        let root = PaneNodeSnapshot::Leaf(LeafSnapshot {
+            is_focused: true,
+            custom_vertical_tabs_title: None,
+            contents: LeafContents::Terminal(original_snapshot.clone()),
+        });
+
+        let tips_model = app.add_model(|_| TipsCompleted::default());
+        let (_, pane_group) =
+            app.add_window_with_bounds(WindowStyle::NotStealFocus, WindowBounds::Default, |ctx| {
+                let banner = ctx.add_model(|_| BannerState::default());
+                PaneGroup::new_with_panes_layout(
+                    tips_model,
+                    banner,
+                    ServerApiProvider::as_ref(ctx).get(),
+                    PanesLayout::Snapshot(Box::new(root)),
+                    Arc::new(block_lists),
+                    None,
+                    false, // is_active_tab: simulates a background tab at startup.
+                    ctx,
+                )
+            });
+
+        let pane_id = pane_group.read(&app, |panes, _| {
+            panes.pane_ids().next().expect("should have one pane")
+        });
+
+        let has_restored_command = |app: &App| {
+            pane_group.read(app, |panes, ctx| {
+                let terminal_view = panes
+                    .terminal_view_from_pane_id(pane_id, ctx)
+                    .expect("terminal pane should have a view");
+                let model = terminal_view.as_ref(ctx).model.lock();
+                model
+                    .block_list()
+                    .blocks()
+                    .iter()
+                    .any(|block| block.command_to_string().contains("echo restored"))
+            })
+        };
+
+        // The session/shell is created eagerly regardless of the flag: a terminal view
+        // exists, but the deferred block hasn't been applied yet.
+        assert!(
+            !has_restored_command(&app),
+            "background tab shouldn't have its restored block applied before activation"
+        );
+
+        // Snapshotting before activation must round-trip the exact original snapshot, so a
+        // never-activated tab's history isn't lost if the user quits.
+        pane_group.read(&app, |panes, ctx| {
+            let snapshot = panes.snapshot(ctx);
+            let PaneNodeSnapshot::Leaf(leaf) = snapshot else {
+                panic!("expected a leaf snapshot");
+            };
+            let LeafContents::Terminal(restored) = leaf.contents else {
+                panic!("expected terminal leaf contents");
+            };
+            assert_eq!(
+                restored, original_snapshot,
+                "snapshot should round-trip unchanged before activation"
+            );
+        });
+
+        // Activating the tab materializes the deferred restoration.
+        pane_group.update(&mut app, |panes, ctx| {
+            panes.materialize_lazy_tab_restorations(ctx);
+        });
+
+        assert!(
+            has_restored_command(&app),
+            "activation should apply the deferred restored block"
+        );
+
+        // Materializing again is a no-op (idempotent): the pending map was drained.
+        pane_group.update(&mut app, |panes, ctx| {
+            panes.materialize_lazy_tab_restorations(ctx);
+        });
+        assert!(has_restored_command(&app));
+    });
+}
+
+/// APP-5257: a background tab's title must not fall back to a generic
+/// placeholder just because its scrollback restoration is deferred, and the
+/// title after activation must match what the eager (flag-off) restoration
+/// path shows for the identical block — not merely "non-empty" or "cached
+/// from before materialization", which a weaker assertion could pass on
+/// while the real tab bar (fed by a live re-scan after materialization,
+/// not by the pending hint alone) shows something else entirely.
+#[test]
+fn test_lazy_background_tab_reports_a_title_while_pending_and_after_materializing() {
+    use crate::terminal::model::block::SerializedBlock;
+
+    fn restored_root(uuid: Vec<u8>) -> PaneNodeSnapshot {
+        PaneNodeSnapshot::Leaf(LeafSnapshot {
+            is_focused: true,
+            custom_vertical_tabs_title: None,
+            contents: LeafContents::Terminal(TerminalPaneSnapshot {
+                uuid,
+                cwd: None,
+                shell_launch_data: None,
+                is_active: true,
+                is_read_only: false,
+                input_config: None,
+                llm_model_override: None,
+                active_profile_id: None,
+                conversation_ids_to_restore: Vec::new(),
+                active_conversation_id: None,
+            }),
+        })
+    }
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        // The eager (flag-off, `is_active_tab: true`) reference: applies the
+        // identical block through the normal, always-worked restoration path.
+        let eager_uuid = Uuid::new_v4().as_bytes().to_vec();
+        let eager_root = restored_root(eager_uuid.clone());
+        let mut eager_block_lists = HashMap::new();
+        eager_block_lists.insert(
+            PaneUuid(eager_uuid),
+            vec![SerializedBlockListItem::Command {
+                block: Box::new(SerializedBlock::new_for_test(
+                    b"uname -a".to_vec(),
+                    b"Darwin\n".to_vec(),
+                )),
+            }],
+        );
+        let tips_model = app.add_model(|_| TipsCompleted::default());
+        let (_, eager_pane_group) =
+            app.add_window_with_bounds(WindowStyle::NotStealFocus, WindowBounds::Default, |ctx| {
+                let banner = ctx.add_model(|_| BannerState::default());
+                PaneGroup::new_with_panes_layout(
+                    tips_model,
+                    banner,
+                    ServerApiProvider::as_ref(ctx).get(),
+                    PanesLayout::Snapshot(Box::new(eager_root)),
+                    Arc::new(eager_block_lists),
+                    None,
+                    true, // is_active_tab: eager reference restores immediately.
+                    ctx,
+                )
+            });
+        let eager_pane_id = eager_pane_group.read(&app, |panes, _| {
+            panes.pane_ids().next().expect("should have one pane")
+        });
+        let eager_title = eager_pane_group.read(&app, |panes, ctx| {
+            panes
+                .terminal_view_from_pane_id(eager_pane_id, ctx)
+                .expect("terminal pane should have a view")
+                .as_ref(ctx)
+                .last_completed_command_text()
+        });
+        assert_eq!(
+            eager_title.as_deref(),
+            Some("uname -a"),
+            "sanity check: the eager reference path should show the command-derived title"
+        );
+
+        // The deferred (flag-on, `is_active_tab: false`) case under test.
+        let _flag = FeatureFlag::LazyBackgroundTabScrollbackRestore.override_enabled(true);
+        let deferred_uuid = Uuid::new_v4().as_bytes().to_vec();
+        let deferred_root = restored_root(deferred_uuid.clone());
+        let mut deferred_block_lists = HashMap::new();
+        deferred_block_lists.insert(
+            PaneUuid(deferred_uuid),
+            vec![SerializedBlockListItem::Command {
+                block: Box::new(SerializedBlock::new_for_test(
+                    b"uname -a".to_vec(),
+                    b"Darwin\n".to_vec(),
+                )),
+            }],
+        );
+        let tips_model = app.add_model(|_| TipsCompleted::default());
+        let (_, pane_group) =
+            app.add_window_with_bounds(WindowStyle::NotStealFocus, WindowBounds::Default, |ctx| {
+                let banner = ctx.add_model(|_| BannerState::default());
+                PaneGroup::new_with_panes_layout(
+                    tips_model,
+                    banner,
+                    ServerApiProvider::as_ref(ctx).get(),
+                    PanesLayout::Snapshot(Box::new(deferred_root)),
+                    Arc::new(deferred_block_lists),
+                    None,
+                    false, // is_active_tab: simulates a background tab at startup.
+                    ctx,
+                )
+            });
+
+        let pane_id = pane_group.read(&app, |panes, _| {
+            panes.pane_ids().next().expect("should have one pane")
+        });
+        let title = |app: &App| {
+            pane_group.read(app, |panes, ctx| {
+                panes
+                    .terminal_view_from_pane_id(pane_id, ctx)
+                    .expect("terminal pane should have a view")
+                    .as_ref(ctx)
+                    .last_completed_command_text()
+            })
+        };
+
+        assert_eq!(
+            title(&app).as_deref(),
+            eager_title.as_deref(),
+            "a pending background tab should report the same command-derived title the eager \
+             path shows, not a generic placeholder"
+        );
+
+        pane_group.update(&mut app, |panes, ctx| {
+            panes.materialize_lazy_tab_restorations(ctx);
+        });
+
+        assert_eq!(
+            title(&app).as_deref(),
+            eager_title.as_deref(),
+            "after materializing, the title must still match the eager path's title — asserting \
+             merely that a hint value survives is not enough, since the real tab bar re-derives \
+             this from the live block list after materialization"
+        );
+    });
+}
+
+/// APP-5257: permanently closing a background pane before it was ever
+/// activated must drop its pending lazy restoration entry, rather than
+/// leaking the stashed blocks/conversation payload.
+#[test]
+fn test_closing_pending_pane_drops_its_lazy_restoration() {
+    use crate::terminal::model::block::SerializedBlock;
+
+    let _flag = FeatureFlag::LazyBackgroundTabScrollbackRestore.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let uuid = Uuid::new_v4().as_bytes().to_vec();
+        let restored_block =
+            SerializedBlock::new_for_test(b"echo restored".to_vec(), b"restored\n".to_vec());
+        let mut block_lists = HashMap::new();
+        block_lists.insert(
+            PaneUuid(uuid.clone()),
+            vec![SerializedBlockListItem::Command {
+                block: Box::new(restored_block),
+            }],
+        );
+
+        let root = PaneNodeSnapshot::Leaf(LeafSnapshot {
+            is_focused: true,
+            custom_vertical_tabs_title: None,
+            contents: LeafContents::Terminal(TerminalPaneSnapshot {
+                uuid: uuid.clone(),
+                cwd: None,
+                shell_launch_data: None,
+                is_active: true,
+                is_read_only: false,
+                input_config: None,
+                llm_model_override: None,
+                active_profile_id: None,
+                conversation_ids_to_restore: Vec::new(),
+                active_conversation_id: None,
+            }),
+        });
+
+        let tips_model = app.add_model(|_| TipsCompleted::default());
+        let (_, pane_group) =
+            app.add_window_with_bounds(WindowStyle::NotStealFocus, WindowBounds::Default, |ctx| {
+                let banner = ctx.add_model(|_| BannerState::default());
+                PaneGroup::new_with_panes_layout(
+                    tips_model,
+                    banner,
+                    ServerApiProvider::as_ref(ctx).get(),
+                    PanesLayout::Snapshot(Box::new(root)),
+                    Arc::new(block_lists),
+                    None,
+                    false, // is_active_tab: simulates a background tab at startup.
+                    ctx,
+                )
+            });
+
+        let pane_id = pane_group.read(&app, |panes, _| {
+            panes.pane_ids().next().expect("should have one pane")
+        });
+
+        pane_group.read(&app, |panes, _| {
+            assert!(
+                panes
+                    .pending_lazy_terminal_restorations
+                    .contains_key(&pane_id),
+                "restoring a background tab should stash a pending entry for its pane"
+            );
+        });
+
+        pane_group.update(&mut app, |panes, ctx| {
+            panes.cleanup_closed_pane(pane_id, ctx);
+        });
+
+        pane_group.read(&app, |panes, _| {
+            assert!(
+                !panes
+                    .pending_lazy_terminal_restorations
+                    .contains_key(&pane_id),
+                "permanently closing a never-activated pane must drop its pending restoration, \
+                 not leak the stashed blocks/conversation payload"
+            );
+        });
+    });
+}
+
+/// APP-5257: `clean_up_panes` (not `cleanup_closed_pane`) is the real
+/// teardown path a closed tab reaches once `UndoCloseStack` discards it
+/// (its grace period expired, or the user disabled undo-close entirely).
+/// It must also release any never-activated pane's pending restoration.
+#[test]
+fn test_clean_up_panes_drops_pending_lazy_restorations() {
+    use crate::terminal::model::block::SerializedBlock;
+
+    let _flag = FeatureFlag::LazyBackgroundTabScrollbackRestore.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let uuid = Uuid::new_v4().as_bytes().to_vec();
+        let restored_block =
+            SerializedBlock::new_for_test(b"echo restored".to_vec(), b"restored\n".to_vec());
+        let mut block_lists = HashMap::new();
+        block_lists.insert(
+            PaneUuid(uuid.clone()),
+            vec![SerializedBlockListItem::Command {
+                block: Box::new(restored_block),
+            }],
+        );
+
+        let root = PaneNodeSnapshot::Leaf(LeafSnapshot {
+            is_focused: true,
+            custom_vertical_tabs_title: None,
+            contents: LeafContents::Terminal(TerminalPaneSnapshot {
+                uuid: uuid.clone(),
+                cwd: None,
+                shell_launch_data: None,
+                is_active: true,
+                is_read_only: false,
+                input_config: None,
+                llm_model_override: None,
+                active_profile_id: None,
+                conversation_ids_to_restore: Vec::new(),
+                active_conversation_id: None,
+            }),
+        });
+
+        let tips_model = app.add_model(|_| TipsCompleted::default());
+        let (_, pane_group) =
+            app.add_window_with_bounds(WindowStyle::NotStealFocus, WindowBounds::Default, |ctx| {
+                let banner = ctx.add_model(|_| BannerState::default());
+                PaneGroup::new_with_panes_layout(
+                    tips_model,
+                    banner,
+                    ServerApiProvider::as_ref(ctx).get(),
+                    PanesLayout::Snapshot(Box::new(root)),
+                    Arc::new(block_lists),
+                    None,
+                    false, // is_active_tab: simulates a background tab at startup.
+                    ctx,
+                )
+            });
+
+        pane_group.read(&app, |panes, _| {
+            assert!(
+                !panes.pending_lazy_terminal_restorations.is_empty(),
+                "restoring a background tab should stash a pending entry for its pane"
+            );
+        });
+
+        pane_group.update(&mut app, |panes, ctx| {
+            panes.clean_up_panes(ctx);
+        });
+
+        pane_group.read(&app, |panes, _| {
+            assert!(
+                panes.pending_lazy_terminal_restorations.is_empty(),
+                "the real tab-close teardown path must drop pending restorations for panes \
+                 that were never activated, not just cleanup_closed_pane's per-pane path"
             );
         });
     });

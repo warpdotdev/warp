@@ -966,6 +966,14 @@ pub enum FeatureFlag {
     /// Requires `OzHandoff` to also be enabled; a no-op for local runs and when
     /// `--no-snapshot` is set. Off by default while the coordinator rolls out.
     PeriodicHandoffCheckpoints,
+
+    /// When restoring a window's tabs at startup, skips feeding persisted
+    /// scrollback blocks and AI conversation history into the terminal
+    /// session of any tab that isn't the initially-active tab. The shell
+    /// still starts eagerly for every tab; only the (comparatively
+    /// expensive) text layout of restoring history is deferred until the
+    /// tab is first activated, at which point it's applied in full.
+    LazyBackgroundTabScrollbackRestore,
 }
 
 static FLAG_STATES: [AtomicBool; cardinality::<FeatureFlag>()] =

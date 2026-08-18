@@ -999,7 +999,7 @@ impl BlockList {
     }
 
     #[cfg(feature = "local_fs")]
-    pub(in crate::terminal) fn append_session_restoration_separator_to_block_list(
+    pub fn append_session_restoration_separator_to_block_list(
         &mut self,
         is_historical_conversation_restoration: bool,
     ) {
@@ -1011,6 +1011,64 @@ impl BlockList {
                 is_hidden: false,
             },
         );
+    }
+
+    /// Applies scrollback blocks whose restoration was deferred at startup.
+    /// No-ops if the live session is no longer pristine (a command has
+    /// already started in it): the restored content is strictly older than
+    /// anything the live session could have produced, and this list only
+    /// supports appending, so splicing it in now would force-finish and
+    /// misorder real, possibly still-running, output. Returns whether the
+    /// blocks were applied.
+    pub fn apply_deferred_restored_blocks(
+        &mut self,
+        restored_blocks: &[SerializedBlockListItem],
+    ) -> bool {
+        let valid_blocks: Vec<&SerializedBlock> = restored_blocks
+            .iter()
+            .filter_map(|item| match item {
+                SerializedBlockListItem::Command { block }
+                    if block.start_ts.is_some() && block.completed_ts.is_some() =>
+                {
+                    Some(block.as_ref())
+                }
+                _ => None,
+            })
+            .collect();
+
+        if valid_blocks.is_empty() {
+            return false;
+        }
+
+        // A still-bootstrapping session's active block can already be
+        // `started()` (e.g. the script-execution stage), which is expected
+        // and harmless to finish here. Only bail once bootstrapping is done
+        // and a real post-bootstrap command has genuinely started.
+        if self.is_bootstrapping_precmd_done() && self.active_block().started() {
+            report_error!(
+                "Dropping deferred scrollback restoration: session is no longer pristine"
+            );
+            return false;
+        }
+
+        self.is_restored_session = true;
+        self.restored_session_ts = valid_blocks.last().and_then(|block| block.completed_ts);
+
+        self.finish_active_block_before_followup_append();
+
+        let mut processor = Processor::new();
+        for block in valid_blocks {
+            // Tag as `RestoreBlocks` (matching eager restoration via
+            // `initialize`), not `PostBootstrapPrecmd` like
+            // `append_followup_shared_session_scrollback` uses: this content
+            // genuinely comes from a previous session, so it should render
+            // with the same "restored" treatment eager restoration gives it.
+            self.restore_block(block, BootstrapStage::RestoreBlocks, &mut processor);
+        }
+
+        self.ensure_active_block_after_shared_session_scrollback();
+        self.event_proxy.send_wakeup_event();
+        true
     }
 
     /// Inserts an inline banner _before_ the provided block_index.

@@ -633,7 +633,7 @@ impl TerminalView {
     /// In this case, we expect shell command blocks to already exist in the terminal model, since they must
     /// be restored before bootstrapping finishes.
     /// Then we need to order the AI blocks correctly relative to shell commands that exist in the model.
-    pub(super) fn restore_conversations_on_view_creation(
+    pub(crate) fn restore_conversations_on_view_creation(
         &mut self,
         conversation_restoration: ConversationRestorationInNewPaneType,
         ctx: &mut ViewContext<Self>,

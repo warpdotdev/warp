@@ -2870,6 +2870,12 @@ pub struct TerminalView {
     // we want to keep the title as the conversation title, so we should ignore the model event setting the title after bootstrapping finishes
     ignore_next_set_title_event: bool,
 
+    /// A tab-title fallback for a pane whose scrollback restoration was
+    /// deferred (see `FeatureFlag::LazyBackgroundTabScrollbackRestore`),
+    /// computed once from the still-pending blocks so the tab has a usable
+    /// label before those blocks are ever fed into this view's live model.
+    pending_restoration_title_hint: Option<String>,
+
     cli_subagent_views: HashMap<BlockId, ViewHandle<CLISubagentView>>,
     cli_subagent_controller: ModelHandle<CLISubagentController>,
     use_agent_footer: ViewHandle<UseAgentToolbar>,
@@ -4444,6 +4450,7 @@ impl TerminalView {
             current_repo_path: None,
             terminal_title: Default::default(),
             ignore_next_set_title_event: false,
+            pending_restoration_title_hint: None,
             cli_subagent_views: Default::default(),
             cli_subagent_controller,
             use_agent_footer: use_agent_button_bar,

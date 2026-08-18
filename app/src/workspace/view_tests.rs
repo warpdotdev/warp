@@ -341,6 +341,139 @@ fn restored_workspace(
     workspace
 }
 
+/// APP-5257: an end-to-end regression covering the actual
+/// `Workspace::configure_new_workspace` restore loop (not just
+/// `PaneGroup::new_with_panes_layout` in isolation). A prior version of this
+/// fix appeared to work at the `PaneGroup` level, but every restored tab was
+/// still activated as it was inserted (`add_tab_with_pane_layout`'s
+/// `activate_tab_internal` call), silently materializing every tab's
+/// deferred restoration during the loop and reclaiming nothing. This test
+/// fails if that regresses.
+#[test]
+fn test_restoring_a_window_defers_background_tab_scrollback_through_the_real_loop() {
+    use crate::terminal::model::block::SerializedBlock;
+
+    let _flag = FeatureFlag::LazyBackgroundTabScrollbackRestore.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let active_uuid = uuid::Uuid::new_v4().as_bytes().to_vec();
+        let background_uuid = uuid::Uuid::new_v4().as_bytes().to_vec();
+
+        let terminal_snapshot = |uuid: Vec<u8>| TerminalPaneSnapshot {
+            uuid,
+            cwd: None,
+            shell_launch_data: None,
+            is_active: true,
+            is_read_only: false,
+            input_config: None,
+            llm_model_override: None,
+            active_profile_id: None,
+            conversation_ids_to_restore: Vec::new(),
+            active_conversation_id: None,
+        };
+        let tab_snapshot = |uuid: Vec<u8>| TabSnapshot {
+            custom_title: None,
+            root: PaneNodeSnapshot::Leaf(LeafSnapshot {
+                is_focused: true,
+                custom_vertical_tabs_title: None,
+                contents: LeafContents::Terminal(terminal_snapshot(uuid)),
+            }),
+            default_directory_color: None,
+            selected_color: SelectedTabColor::Unset,
+            left_panel: None,
+            right_panel: None,
+            group_id: None,
+            pinned: false,
+        };
+
+        let window_snapshot = WindowSnapshot {
+            tabs: vec![
+                tab_snapshot(active_uuid.clone()),
+                tab_snapshot(background_uuid.clone()),
+            ],
+            active_tab_index: 0,
+            team_uid: None,
+            bounds: None,
+            fullscreen_state: Default::default(),
+            quake_mode: false,
+            universal_search_width: None,
+            warp_ai_width: None,
+            voltron_width: None,
+            warp_drive_index_width: None,
+            left_panel_open: false,
+            vertical_tabs_panel_open: false,
+            left_panel_width: None,
+            right_panel_width: None,
+            agent_management_filters: None,
+            tab_groups: Vec::new(),
+        };
+
+        let restored_block =
+            SerializedBlock::new_for_test(b"echo restored".to_vec(), b"restored\n".to_vec());
+        let mut block_lists = HashMap::new();
+        block_lists.insert(
+            PaneUuid(background_uuid),
+            vec![SerializedBlockListItem::Command {
+                block: Box::new(restored_block),
+            }],
+        );
+
+        let global_resource_handles = GlobalResourceHandles::mock(&mut app);
+        let (_, workspace) = app.add_window(WindowStyle::NotStealFocus, |ctx| {
+            Workspace::new(
+                global_resource_handles,
+                None,
+                NewWorkspaceSource::Restored {
+                    window_snapshot,
+                    block_lists: Arc::new(block_lists),
+                },
+                ctx,
+            )
+        });
+
+        let has_restored_command = |app: &App, tab_index: usize| {
+            workspace.read(app, |workspace, ctx| {
+                let pane_group = workspace.tabs[tab_index].pane_group.as_ref(ctx);
+                let pane_id = pane_group
+                    .pane_ids()
+                    .next()
+                    .expect("tab should have a pane");
+                let terminal_view = pane_group
+                    .terminal_view_from_pane_id(pane_id, ctx)
+                    .expect("terminal pane should have a view");
+                let model = terminal_view.as_ref(ctx).model.lock();
+                model
+                    .block_list()
+                    .blocks()
+                    .iter()
+                    .any(|block| block.command_to_string().contains("echo restored"))
+            })
+        };
+
+        // The critical assertion: restoring the whole window through the real
+        // loop must NOT have materialized the background tab's (tab 1)
+        // deferred restoration, even though every tab's `add_restored_tab`
+        // call ran during that same loop.
+        assert!(
+            !has_restored_command(&app, 1),
+            "the real configure_new_workspace loop must defer, not eagerly apply, a \
+             background tab's restoration"
+        );
+
+        // Activating the background tab through the public API must apply it.
+        workspace.update(&mut app, |workspace, ctx| {
+            workspace.set_active_tab_index(1, ctx);
+        });
+        assert!(
+            has_restored_command(&app, 1),
+            "activating the tab through the real workspace API must materialize its \
+             deferred restoration"
+        );
+    });
+}
+
 fn transferred_tab_workspace(
     app: &mut App,
     vertical_tabs_panel_open: bool,
