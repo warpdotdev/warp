@@ -38,6 +38,7 @@ use pathfinder_geometry::vector::vec2f;
 pub use pending_user_query_block::{PendingUserQueryBlock, PendingUserQueryBlockEvent};
 #[cfg(not(target_family = "wasm"))]
 use repo_metadata::repositories::DetectedRepositories;
+use rustc_hash::FxHashSet;
 use secret_redaction::*;
 use serde::Serialize;
 use settings::Setting as _;
@@ -944,7 +945,7 @@ pub struct AIBlock {
     context_model: ModelHandle<BlocklistAIContextModel>,
 
     /// The IDs of requested blocking actions rendered in this block.
-    requested_action_ids: HashSet<AIAgentActionId>,
+    requested_action_ids: FxHashSet<AIAgentActionId>,
 
     /// Map from a requested command action ID to its view handle and status.
     requested_commands: HashMap<AIAgentActionId, RequestedCommand>,
@@ -2030,7 +2031,7 @@ impl AIBlock {
         self.fetch_conversation_search_agent_run_titles(output, ctx);
 
         for action in output.actions() {
-            let new_action_ids: HashSet<AIAgentActionId> =
+            let new_action_ids: FxHashSet<AIAgentActionId> =
                 output.actions().map(|action| action.id.clone()).collect();
 
             #[cfg(feature = "integration_tests")]

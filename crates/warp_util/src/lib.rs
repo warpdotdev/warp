@@ -8,6 +8,7 @@ pub mod content_version;
 pub mod file;
 pub mod file_type;
 pub mod git;
+pub mod hashed;
 pub mod host_id;
 pub mod lazy;
 pub mod local_or_remote_path;

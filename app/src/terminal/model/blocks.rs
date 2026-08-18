@@ -9,6 +9,7 @@ use std::time::Duration;
 use anyhow::anyhow;
 use chrono::{DateTime, Local};
 use instant::SystemTime;
+use rustc_hash::FxHashMap;
 use selection::BlockListSelection;
 pub use selection::SelectionRange;
 use sum_tree::{Dimension, Item, SeekBias, SumTree};
@@ -267,7 +268,7 @@ pub enum AgentTranscriptNavigableItem {
 pub struct BlockList {
     blocks: Vec<Block>,
     block_heights: SumTree<BlockHeightItem>,
-    block_id_to_block_index: HashMap<BlockId, BlockIndex>,
+    block_id_to_block_index: FxHashMap<BlockId, BlockIndex>,
     size: SizeInfo,
     early_output: EarlyOutput,
 
@@ -676,7 +677,7 @@ impl BlockList {
         BlockList {
             blocks: vec![],
             block_heights,
-            block_id_to_block_index: HashMap::new(),
+            block_id_to_block_index: FxHashMap::default(),
             removable_blocklist_item_positions: HashMap::new(),
             active_gap: None,
             dirty_rich_content_items: HashSet::new(),

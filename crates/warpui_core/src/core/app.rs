@@ -600,8 +600,8 @@ pub struct AppContext {
     last_frame_position_cache: HashMap<WindowId, crate::presenter::PositionCache>,
     /// Last cursor position observed after scene layout, used to notify platform IME code only
     /// when layout moves the active cursor.
-    last_observed_active_cursor_positions: HashMap<WindowId, Option<CursorInfo>>,
-    pub(super) windows: HashMap<WindowId, Window>,
+    last_observed_active_cursor_positions: FxHashMap<WindowId, Option<CursorInfo>>,
+    pub(super) windows: FxHashMap<WindowId, Window>,
     pub(super) ref_counts: Arc<Mutex<RefCounts>>,
     pub(super) platform_delegate: Box<dyn platform::Delegate>,
 
