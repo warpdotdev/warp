@@ -197,6 +197,7 @@ libc = "0.2.81"
 libtest-mimic = "0.8.2"
 line-ending = "1.4.0"
 log = { version = "0.4", features = ["serde", "std"] }
+lru = "0.18.0"
 mermaid_to_svg = { git = "https://github.com/warpdotdev/mermaid-to-svg.git", rev = "8d3f789c2eb49335d7bf247a06bb649f59b6d4ed" }
 mime_guess = "2.0"
 minimp4 = "0.1.2"

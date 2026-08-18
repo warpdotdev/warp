@@ -1,6 +1,9 @@
 use std::collections::HashMap;
+use std::num::NonZeroUsize;
+use std::sync::Mutex;
 
 use itertools::Itertools;
+use lru::LruCache;
 use memo_map::MemoMap;
 use warp_command_signatures::{Argument, DynamicCompletionData, IsArgumentOptional, Signature};
 
@@ -25,9 +28,10 @@ type SignatureLookupFn = dyn 'static + Send + Sync + Fn(&str) -> Option<Signatur
 /// `CommandRegistry::signature_from_tokens` and friends), not just tokens we already know to be
 /// real command names. `SignatureCache::signatures` only caches successful lookups (see its doc
 /// comment for why), so a single pathologically large token (e.g. a large blob of text pasted
-/// into the terminal input line) can't grow the cache -- but lowercasing such a token on every
-/// keystroke would still be wasted work, so `get` avoids that too for tokens this long. See
-/// APP-5431.
+/// into the terminal input line) can't grow that map -- but lowercasing such a token on every
+/// keystroke would still be wasted work, and it must also never be admitted into
+/// `SignatureCache::misses` (see its doc comment for why), so `get` skips both for tokens this
+/// long. See APP-5431.
 ///
 /// Real command names are executable names, which common filesystems cap at 255 bytes/characters
 /// (e.g. Linux `NAME_MAX`, macOS APFS/HFS+, and Windows NTFS all use this limit), so no
@@ -37,6 +41,14 @@ type SignatureLookupFn = dyn 'static + Send + Sync + Fn(&str) -> Option<Signatur
 /// a sanity check, the longest name in the current embedded signature corpus is 43 characters,
 /// well under this cap.
 const MAX_CACHEABLE_COMMAND_LEN: usize = 255;
+
+/// Capacity of `SignatureCache::misses`. Kept small: the negative cache exists to save
+/// `lookup_fn` calls for a token that's been retried a handful of times in quick succession
+/// (e.g. a typo the user is correcting, or the same invalid token looked up again as the parser
+/// backtracks over the line), not to remember every miss for the life of the session. See
+/// `SignatureCache::misses`'s doc comment for why unbounded retention isn't needed for
+/// correctness.
+const MAX_CACHED_MISSES: usize = 256;
 
 /// A simple structure to cache parsed command signatures.  These are stored as
 /// JSON, so this makes it easy for us to lazily load and parse the JSON when
@@ -51,10 +63,21 @@ struct SignatureCache {
     /// us to safely return references to the contained signatures (as the map internally is an
     /// append-only structure). Only lookups that actually resolve to a signature are stored (see
     /// `get`), which keeps this bounded by the number of distinct command names that can ever
-    /// resolve to something -- the fixed embedded corpus, plus any explicitly `insert`-ed
-    /// signatures -- rather than by every distinct token a user has ever typed or pasted. See
-    /// APP-5431.
+    /// resolve to something -- the fixed embedded corpus (1,167 top-level commands as of this
+    /// writing), plus any explicitly `insert`-ed signatures -- rather than by every distinct
+    /// token a user has ever typed or pasted. See APP-5431.
     signatures: MemoMap<String, Signature>,
+    /// A bounded LRU set of (lowercased) command names that recently failed to resolve to a
+    /// signature. Unlike `signatures`, `get` never hands out a reference into this set -- it only
+    /// ever returns a `bool` -- so eviction is sound: there's no borrow that could outlive an
+    /// evicted entry, which is exactly what keeps `signatures` itself append-only. That's also
+    /// what makes this bounded convenience rather than a fix for a performance problem: a miss is
+    /// already cheap to redo (`lookup_fn` probes the embedded, already-compiled signature corpus,
+    /// which does a binary search with no filesystem I/O or JSON parsing on a miss -- JSON
+    /// parsing only happens once we know there's a hit), so this cache exists to save a handful
+    /// of redundant lookups for a token that's retried in quick succession, not to avoid
+    /// expensive rework. See APP-5431.
+    misses: Mutex<LruCache<String, ()>>,
 }
 
 impl SignatureCache {
@@ -62,6 +85,9 @@ impl SignatureCache {
         Self {
             lookup_fn,
             signatures: Default::default(),
+            misses: Mutex::new(LruCache::new(
+                NonZeroUsize::new(MAX_CACHED_MISSES).expect("MAX_CACHED_MISSES is non-zero"),
+            )),
         }
     }
 
@@ -77,7 +103,9 @@ impl SignatureCache {
             // `MAX_CACHEABLE_COMMAND_LEN`) by scanning the cache directly instead of hashing into
             // it. The length comparison short-circuits before any case folding, so this stays
             // cheap even though `command` may be huge, and it keeps an `insert`-ed signature
-            // whose name happens to exceed the cap retrievable.
+            // whose name happens to exceed the cap retrievable. This never touches `misses`: an
+            // oversized token must never be admitted there either, or the leak this cap exists to
+            // prevent would just move to the negative cache.
             return self
                 .signatures
                 .iter()
@@ -86,14 +114,31 @@ impl SignatureCache {
         }
 
         let command = command.to_lowercase();
-        // Only cache a lookup that actually resolves to a signature. `lookup_fn` probes the
-        // embedded, already-compiled signature corpus, which is cheap even on a miss (JSON
-        // parsing only happens once we know there's a hit), so there's no need to memoize a miss
-        // just to avoid redoing that work -- and doing so is what let every distinct token a user
-        // has ever typed grow this cache forever. See APP-5431.
-        self.signatures
-            .get_or_try_insert(command.as_str(), || (self.lookup_fn)(&command).ok_or(()))
-            .ok()
+
+        if let Some(signature) = self.signatures.get(command.as_str()) {
+            return Some(signature);
+        }
+
+        if self.lock_misses().get(command.as_str()).is_some() {
+            return None;
+        }
+
+        match (self.lookup_fn)(&command) {
+            Some(signature) => Some(
+                self.signatures
+                    .get_or_insert(command.as_str(), || signature),
+            ),
+            None => {
+                self.lock_misses().put(command, ());
+                None
+            }
+        }
+    }
+
+    fn lock_misses(&self) -> std::sync::MutexGuard<'_, LruCache<String, ()>> {
+        self.misses
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
     /// Inserts the given `Signature` into the underlying map, keyed by `Signature::name`.

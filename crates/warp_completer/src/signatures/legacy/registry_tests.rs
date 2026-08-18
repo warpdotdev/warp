@@ -2,7 +2,7 @@ use warp_command_signatures::{Priority, Signature};
 
 use crate::completer::testing::FakeCompletionContext;
 use crate::completer::{CompletionContext, TopLevelCommandCaseSensitivity};
-use crate::signatures::registry::{MAX_CACHEABLE_COMMAND_LEN, SignatureResult};
+use crate::signatures::registry::{MAX_CACHEABLE_COMMAND_LEN, MAX_CACHED_MISSES, SignatureResult};
 use crate::signatures::testing::{create_test_command_registry, test_signature};
 
 /// A minimal signature with the given `name`, for exercising `SignatureCache` boundary
@@ -225,30 +225,93 @@ fn test_alias_expansion_path_skips_flag_with_value_before_subcommand() {
 fn test_oversized_command_is_not_cached_and_resolves_to_none() {
     // Regression test for APP-5431: a pathologically large single "command" token (e.g. a large
     // blob of text pasted into the terminal input line) must not grow the (append-only)
-    // SignatureCache, and doesn't match any registered signature.
+    // positive cache, nor the bounded negative cache, and doesn't match any registered
+    // signature.
     let registry = create_test_command_registry([test_signature()]);
-    let len_before = registry.signatures.signatures.len();
+    let positive_len_before = registry.signatures.signatures.len();
+    let negative_len_before = registry.signatures.misses.lock().unwrap().len();
 
     let oversized_command = "a".repeat(MAX_CACHEABLE_COMMAND_LEN + 1);
     assert_eq!(registry.signature(&oversized_command), None);
     assert_eq!(
         registry.signatures.signatures.len(),
-        len_before,
-        "looking up an oversized command should not add an entry to the cache"
+        positive_len_before,
+        "looking up an oversized command should not add an entry to the positive cache"
+    );
+    assert_eq!(
+        registry.signatures.misses.lock().unwrap().len(),
+        negative_len_before,
+        "looking up an oversized command should not add an entry to the negative cache either -- \
+         that would just move the leak this cap exists to fix into the negative cache"
     );
 }
 
 #[test]
-fn test_misses_are_never_cached() {
-    // Regression test for APP-5431: the cache only grows via successful lookups (see
+fn test_misses_are_never_cached_in_the_positive_cache() {
+    // Regression test for APP-5431: the positive cache only grows via successful lookups (see
     // `SignatureCache::signatures`'s doc comment), so a command that never resolves to a
-    // signature must not add an entry, however many times it's looked up.
+    // signature must not add an entry there, however many times it's looked up.
     let registry = create_test_command_registry([test_signature()]);
     let len_before = registry.signatures.signatures.len();
 
     assert_eq!(registry.signature("not-a-real-command"), None);
     assert_eq!(registry.signature("not-a-real-command"), None);
     assert_eq!(registry.signatures.signatures.len(), len_before);
+}
+
+#[test]
+fn test_negative_cache_stops_growing_at_capacity() {
+    // Regression test for APP-5431: the negative cache (`SignatureCache::misses`) is a bounded
+    // LRU set, so looking up more distinct misses than `MAX_CACHED_MISSES` must not grow it
+    // past that capacity.
+    let registry = create_test_command_registry([test_signature()]);
+
+    for i in 0..MAX_CACHED_MISSES * 2 {
+        assert_eq!(registry.signature(&format!("not-a-real-command-{i}")), None);
+        assert!(registry.signatures.misses.lock().unwrap().len() <= MAX_CACHED_MISSES);
+    }
+    assert_eq!(
+        registry.signatures.misses.lock().unwrap().len(),
+        MAX_CACHED_MISSES
+    );
+}
+
+#[test]
+fn test_negative_cache_evicts_in_lru_order() {
+    // Regression test for APP-5431: once the negative cache is at capacity, inserting a new
+    // miss must evict the least-recently-used entry, not an arbitrary one.
+    let registry = create_test_command_registry([test_signature()]);
+
+    // Fill the negative cache to capacity with "miss-0", .., "miss-{MAX_CACHED_MISSES - 1}".
+    for i in 0..MAX_CACHED_MISSES {
+        assert_eq!(registry.signature(&format!("miss-{i}")), None);
+    }
+
+    // Touch every entry except "miss-0" again, moving them all ahead of it in LRU order.
+    for i in 1..MAX_CACHED_MISSES {
+        assert_eq!(registry.signature(&format!("miss-{i}")), None);
+    }
+
+    // Inserting one more miss should evict "miss-0", the least-recently-used entry.
+    assert_eq!(registry.signature("miss-overflow"), None);
+    assert!(
+        !registry
+            .signatures
+            .misses
+            .lock()
+            .unwrap()
+            .contains("miss-0"),
+        "the least-recently-used entry should have been evicted"
+    );
+    assert!(
+        registry
+            .signatures
+            .misses
+            .lock()
+            .unwrap()
+            .contains("miss-1"),
+        "a recently-touched entry should not have been evicted"
+    );
 }
 
 #[test]
