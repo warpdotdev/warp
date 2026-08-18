@@ -10,6 +10,14 @@ fn member(email: &str, role: MembershipRole) -> TeamMember {
         uid: UserUid::new(email),
         email: email.to_string(),
         role,
+        is_disabled: false,
+    }
+}
+
+fn disabled_member(email: &str, role: MembershipRole) -> TeamMember {
+    TeamMember {
+        is_disabled: true,
+        ..member(email, role)
     }
 }
 
@@ -53,6 +61,7 @@ fn workspace_with_member(
         uid: UserUid::new(email),
         email: email.to_string(),
         role,
+        is_disabled: false,
         usage_info: WorkspaceMemberUsageInfo {
             is_unlimited: true,
             request_limit: 0,
@@ -247,5 +256,58 @@ fn workspace_admin_can_cancel_pending_invite() {
     assert_eq!(
         action_labels(&items, "invitee@example.com"),
         vec!["Cancel invite"]
+    );
+}
+
+#[test]
+fn disabled_member_is_flagged_but_keeps_removal_action() {
+    let team = team_with_members(
+        vec![
+            member(ADMIN_EMAIL, MembershipRole::Admin),
+            disabled_member(MEMBER_EMAIL, MembershipRole::User),
+        ],
+        true,
+    );
+    let workspace = workspace_with_member(ADMIN_EMAIL, MembershipRole::User, true);
+
+    let items = TeamsPageView::team_to_item_list(&team, ADMIN_EMAIL, &workspace);
+
+    let disabled_item = items
+        .iter()
+        .find(|item| item.text == MEMBER_EMAIL)
+        .expect("disabled member should still be listed");
+    assert!(
+        disabled_item.is_disabled,
+        "a member whose account is disabled should be flagged for the dimmed/tooltip treatment"
+    );
+    // Same action set as an equivalent active member (see
+    // `team_admin_can_promote_and_remove_without_workspace_admin_role`):
+    // disabling an account must not change which actions are offered.
+    assert_eq!(
+        action_labels(&items, MEMBER_EMAIL),
+        vec!["Promote to admin", "Remove from team"]
+    );
+}
+
+#[test]
+fn active_member_is_not_flagged_disabled() {
+    let team = team_with_members(
+        vec![
+            member(ADMIN_EMAIL, MembershipRole::Admin),
+            member(MEMBER_EMAIL, MembershipRole::User),
+        ],
+        true,
+    );
+    let workspace = workspace_with_member(ADMIN_EMAIL, MembershipRole::User, true);
+
+    let items = TeamsPageView::team_to_item_list(&team, ADMIN_EMAIL, &workspace);
+
+    let active_item = items
+        .iter()
+        .find(|item| item.text == MEMBER_EMAIL)
+        .expect("member should be listed");
+    assert!(
+        !active_item.is_disabled,
+        "an active member's account must not be flagged disabled"
     );
 }

@@ -1933,6 +1933,7 @@ impl UserWorkspaces {
                 uid: owner_uid,
                 email: "test@example.com".to_string(),
                 role: MembershipRole::Owner,
+                is_disabled: false,
                 usage_info: WorkspaceMemberUsageInfo {
                     requests_used_since_last_refresh: 0,
                     request_limit: 1000,

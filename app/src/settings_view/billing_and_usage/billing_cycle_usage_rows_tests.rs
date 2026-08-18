@@ -119,12 +119,20 @@ fn member(uid: &str) -> WorkspaceMember {
         uid: UserUid::new(uid),
         email: format!("{uid}@warp.dev"),
         role: MembershipRole::User,
+        is_disabled: false,
         usage_info: WorkspaceMemberUsageInfo {
             is_unlimited: false,
             request_limit: 0,
             requests_used_since_last_refresh: 0,
             is_request_limit_prorated: false,
         },
+    }
+}
+
+fn disabled_member(uid: &str) -> WorkspaceMember {
+    WorkspaceMember {
+        is_disabled: true,
+        ..member(uid)
     }
 }
 
@@ -208,6 +216,47 @@ fn per_member_rows_do_not_mark_service_accounts_as_former_members() {
 
     assert_eq!(rows.len(), 1);
     assert!(rows[0].is_current_team_member);
+}
+
+#[test]
+fn per_member_rows_flag_disabled_members_from_the_roster() {
+    let rows = MemberUsageRow::for_each_member(
+        &[],
+        &[member(VIEWER_UID), disabled_member(OTHER_UID)],
+        SourceFilter::All,
+    );
+
+    assert!(
+        rows.iter()
+            .find(|row| row.subject_uid.as_deref() == Some(VIEWER_UID))
+            .is_some_and(|row| !row.is_disabled),
+        "an active member's row must not be flagged disabled"
+    );
+    assert!(
+        rows.iter()
+            .find(|row| row.subject_uid.as_deref() == Some(OTHER_UID))
+            .is_some_and(|row| row.is_disabled),
+        "a disabled member's row should carry the disabled flag for the dimmed/tooltip treatment"
+    );
+}
+
+#[test]
+fn per_member_rows_never_flag_departed_members_as_disabled() {
+    let entries = vec![entry(
+        AiCreditsUsageAndCostSubjectType::User,
+        Some(OTHER_UID),
+        AiCreditsUsageSource::Local,
+        20,
+        10,
+    )];
+
+    let rows = MemberUsageRow::for_each_member(&entries, &[member(VIEWER_UID)], SourceFilter::All);
+
+    assert!(
+        rows.iter()
+            .find(|row| row.subject_uid.as_deref() == Some(OTHER_UID))
+            .is_some_and(|row| !row.is_disabled)
+    );
 }
 
 #[test]
