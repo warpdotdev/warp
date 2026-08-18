@@ -1,10 +1,10 @@
-use std::collections::{HashMap, HashSet, VecDeque};
-use std::sync::RwLock;
+use std::collections::HashMap;
 
 use itertools::Itertools;
 use memo_map::MemoMap;
 use warp_command_signatures::{Argument, DynamicCompletionData, IsArgumentOptional, Signature};
 
+use super::miss_cache::MissCache;
 use crate::completer::{CommandExitStatus, CompletionContext, TopLevelCommandCaseSensitivity};
 use crate::parsers::SignatureAtTokenIndex;
 
@@ -19,110 +19,7 @@ pub enum SignatureResult<'a> {
 
 type SignatureLookupFn = dyn 'static + Send + Sync + Fn(&str) -> Option<Signature>;
 
-/// The longest a command name can be before `get` gives up on it outright, without ever
-/// resolving it against the (uncached) `lookup_fn`, lowercasing it, or consulting either cache.
-///
-/// `SignatureCache::get` is called with arbitrary tokens taken from the terminal input line (see
-/// `CommandRegistry::signature_from_tokens` and friends), not just tokens we already know to be
-/// real command names, so a single pathologically large token (e.g. a large blob of text pasted
-/// into the terminal input line) needs to be handled cheaply. See APP-5431.
-///
-/// Real command names are executable names, which common filesystems cap at 255 bytes/characters
-/// (e.g. Linux `NAME_MAX`, macOS APFS/HFS+, and Windows NTFS all use this limit), so no
-/// legitimate *dynamically resolved* command name can exceed this. This also holds for every
-/// name ever `register_signature`-ed in production (the Warp CLI's own command tree): see
-/// `test_all_known_signature_names_are_within_the_length_cap`, which walks both the embedded
-/// corpus and the Warp CLI's clap-derived signature and fails if that stops being true (the
-/// longest name found there is 59 characters, well under this cap). On the strength of that
-/// invariant, `get` simply returns `None` for a token this long -- an explicitly `insert`-ed
-/// signature with a name that happened to exceed this cap would become unresolvable via lookup,
-/// but that's a deliberate, tested tradeoff rather than a case that can occur today.
 const MAX_CACHEABLE_COMMAND_LEN: usize = 255;
-
-/// Capacity of `SignatureCache::misses`. Kept small: the negative cache exists to save
-/// `lookup_fn` calls for a token that's been retried a handful of times in quick succession
-/// (e.g. a typo the user is correcting, or the same invalid token looked up again as the parser
-/// backtracks over the line), not to remember every miss for the life of the session. See
-/// `SignatureCache::misses`'s doc comment for why unbounded retention isn't needed for
-/// correctness.
-const MAX_CACHED_MISSES: usize = 256;
-
-/// A bounded set of (lowercased) command names that recently failed to resolve to a signature,
-/// used by `SignatureCache::misses`.
-///
-/// This is a plain FIFO, not an LRU: once at capacity, inserting a new entry always evicts the
-/// *oldest-inserted* one, regardless of how recently any entry (including the one about to be
-/// evicted) was looked up again. `CommandRegistry` is a shared `Arc` behind a single global
-/// instance (see `CommandRegistry::global_instance`) that's called from multiple terminal
-/// sessions/panes concurrently, each generating completions on a background thread pool -- so
-/// this genuinely needs cross-thread synchronization, not just single-task interior mutability.
-/// But a negative cache is inherently approximate: a false negative (a miss this forgot) only
-/// costs one extra, cheap `lookup_fn` call, never a wrong answer. That's a much weaker
-/// requirement than an LRU implies, and dropping recency tracking is what makes a `RwLock` (an
-/// LRU would need every *hit* to also take a write lock, to move the entry to the front) the
-/// natural fit here, since a hit against `contains` becomes a pure read that never mutates
-/// anything -- the write lock is only ever needed for a genuinely new miss.
-struct MissCache {
-    capacity: usize,
-    entries: RwLock<MissCacheEntries>,
-}
-
-#[derive(Default)]
-struct MissCacheEntries {
-    /// Insertion order, oldest first, used to find the next entry to evict once at capacity.
-    order: VecDeque<String>,
-    /// The actual set of currently-remembered misses, for O(1) membership checks in `contains`.
-    set: HashSet<String>,
-}
-
-impl MissCache {
-    fn new(capacity: usize) -> Self {
-        Self {
-            capacity,
-            entries: RwLock::default(),
-        }
-    }
-
-    /// Returns `true` if `command` was recently recorded as a miss. A pure read: does not
-    /// affect eviction order.
-    fn contains(&self, command: &str) -> bool {
-        self.read().set.contains(command)
-    }
-
-    /// Returns the number of misses currently recorded, for tests.
-    #[cfg(test)]
-    fn len(&self) -> usize {
-        self.read().set.len()
-    }
-
-    /// Records `command` as a miss, evicting the oldest-recorded miss first if already at
-    /// capacity.
-    fn insert(&self, command: String) {
-        let mut entries = self.write();
-        if entries.set.contains(&command) {
-            return;
-        }
-        if entries.order.len() >= self.capacity
-            && let Some(oldest) = entries.order.pop_front()
-        {
-            entries.set.remove(&oldest);
-        }
-        entries.order.push_back(command.clone());
-        entries.set.insert(command);
-    }
-
-    fn read(&self) -> std::sync::RwLockReadGuard<'_, MissCacheEntries> {
-        self.entries
-            .read()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-    }
-
-    fn write(&self) -> std::sync::RwLockWriteGuard<'_, MissCacheEntries> {
-        self.entries
-            .write()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-    }
-}
 
 /// A simple structure to cache parsed command signatures.  These are stored as
 /// JSON, so this makes it easy for us to lazily load and parse the JSON when
@@ -160,7 +57,7 @@ impl SignatureCache {
         Self {
             lookup_fn,
             signatures: Default::default(),
-            misses: MissCache::new(MAX_CACHED_MISSES),
+            misses: MissCache::default(),
         }
     }
 
@@ -172,11 +69,11 @@ impl SignatureCache {
         };
 
         if command.len() > MAX_CACHEABLE_COMMAND_LEN {
-            // No known command/subcommand name comes anywhere close to this length (see
-            // `MAX_CACHEABLE_COMMAND_LEN`'s doc comment), so a token this long can never resolve
-            // to anything. Return before the lowercase allocation and before touching either
-            // cache -- in particular, an oversized token must never be admitted into `misses`,
-            // or the leak this cap exists to prevent would just move to the negative cache.
+            // No known command/subcommand name comes anywhere close to this length, so a token
+            // this long can never resolve to anything. Return before the lowercase allocation
+            // and before touching either cache -- in particular, an oversized token must never
+            // be admitted into `misses`, or the leak this cap exists to prevent would just move
+            // to the negative cache.
             return None;
         }
 

@@ -3,7 +3,7 @@ use warp_core::channel::Channel;
 
 use crate::completer::testing::FakeCompletionContext;
 use crate::completer::{CompletionContext, TopLevelCommandCaseSensitivity};
-use crate::signatures::registry::{MAX_CACHEABLE_COMMAND_LEN, MAX_CACHED_MISSES, SignatureResult};
+use crate::signatures::registry::{MAX_CACHEABLE_COMMAND_LEN, SignatureResult};
 use crate::signatures::testing::{create_test_command_registry, test_signature};
 
 /// A minimal signature with the given `name`, for exercising `SignatureCache` boundary
@@ -34,10 +34,10 @@ fn track_longest_name(signature: &Signature, longest: &mut (usize, String)) {
 
 #[test]
 fn test_all_known_signature_names_are_within_the_length_cap() {
-    // `SignatureCache::get`'s oversized-token fast path (see `MAX_CACHEABLE_COMMAND_LEN`'s doc
-    // comment) assumes no name that can ever be dynamically resolved -- from the embedded
-    // signature corpus or from `CommandRegistry::register_signature` -- exceeds it. This test
-    // establishes that invariant by actually walking both sources, rather than assuming it: if
+    // `SignatureCache::get`'s oversized-token fast path assumes no name that can ever be
+    // dynamically resolved -- from the embedded signature corpus or from
+    // `CommandRegistry::register_signature` -- exceeds it. This test establishes that invariant
+    // by actually walking both sources, rather than assuming it: if
     // a future signature (in the corpus, or a newly `register_signature`-ed one) is added with a
     // name that violates it, this test fails loudly instead of that name silently becoming
     // unresolvable via lookup.
@@ -311,53 +311,6 @@ fn test_misses_are_never_cached_in_the_positive_cache() {
 }
 
 #[test]
-fn test_negative_cache_stops_growing_at_capacity() {
-    // Regression test for APP-5431: the negative cache (`SignatureCache::misses`) is a bounded
-    // set, so looking up more distinct misses than `MAX_CACHED_MISSES` must not grow it past
-    // that capacity.
-    let registry = create_test_command_registry([test_signature()]);
-
-    for i in 0..MAX_CACHED_MISSES * 2 {
-        assert_eq!(registry.signature(&format!("not-a-real-command-{i}")), None);
-        assert!(registry.signatures.misses.len() <= MAX_CACHED_MISSES);
-    }
-    assert_eq!(registry.signatures.misses.len(), MAX_CACHED_MISSES);
-}
-
-#[test]
-fn test_negative_cache_evicts_in_fifo_order() {
-    // Regression test for APP-5431: the negative cache dropped strict LRU recency tracking for
-    // a simpler FIFO-order bounded set (see `MissCache`'s doc comment for why), so once at
-    // capacity, inserting a new miss must evict the *oldest-inserted* entry specifically --
-    // even if that entry was looked up again more recently than others, since a lookup against
-    // the negative cache is a pure read that never reorders anything.
-    let registry = create_test_command_registry([test_signature()]);
-
-    // Fill the negative cache to capacity with "miss-0", .., "miss-{MAX_CACHED_MISSES - 1}",
-    // in insertion order.
-    for i in 0..MAX_CACHED_MISSES {
-        assert_eq!(registry.signature(&format!("miss-{i}")), None);
-    }
-
-    // Repeatedly re-look-up the oldest entry. Under an LRU this would protect it from eviction,
-    // but FIFO eviction ignores lookups entirely.
-    for _ in 0..5 {
-        assert_eq!(registry.signature("miss-0"), None);
-    }
-
-    // Inserting one more miss should still evict "miss-0", not "miss-1".
-    assert_eq!(registry.signature("miss-overflow"), None);
-    assert!(
-        !registry.signatures.misses.contains("miss-0"),
-        "the oldest-inserted entry should have been evicted regardless of being looked up again"
-    );
-    assert!(
-        registry.signatures.misses.contains("miss-1"),
-        "a newer entry should not have been evicted"
-    );
-}
-
-#[test]
 fn test_oversized_later_token_does_not_bypass_the_length_guard() {
     // Regression test for APP-5431: `maybe_load_replacement_signature` resolves a *later*
     // token (e.g. resolving `git` from `sudo git`) through the same `SignatureCache::get` the
@@ -433,8 +386,8 @@ fn test_registered_signature_longer_than_the_cap_is_unresolvable() {
     // `test_all_known_signature_names_are_within_the_length_cap` establishing that no real
     // signature ever has a name this long. An explicitly `register_signature`-ed signature with
     // an artificially oversized name is therefore *not* retrievable through `signature()` --
-    // a deliberate, accepted tradeoff (see `MAX_CACHEABLE_COMMAND_LEN`'s doc comment), not a
-    // real-world regression, since that invariant test would fail first if this ever mattered.
+    // a deliberate, accepted tradeoff, not a real-world regression, since that invariant test
+    // would fail first if this ever mattered.
     let long_name = "a".repeat(MAX_CACHEABLE_COMMAND_LEN + 1);
     let registry = create_test_command_registry([signature_with_name(&long_name)]);
 
