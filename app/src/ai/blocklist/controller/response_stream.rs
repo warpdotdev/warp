@@ -49,8 +49,11 @@ const GEAP_REFRESH_REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::f
 /// `ResumeConversation` request the controller sends next. So the two share one counter
 /// rather than getting a budget each, and a mid-turn failure can no longer exhaust
 /// recovery in a single attempt.
+///
+/// `pub` only to match [`ResponseStream::new`], which takes one; every constructor and
+/// accessor is crate-internal.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct RecoveryBudget {
+pub struct RecoveryBudget {
     attempts_used: usize,
     resume_allowed: bool,
 }
