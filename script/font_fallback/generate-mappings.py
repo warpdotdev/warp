@@ -103,7 +103,11 @@ def get_default_fonts():
     return [TTFont(HACK_FONT_FILEPATH), TTFont(ROBOTO_FONT_FILEPATH)]
 
 
-# Returns a `TTFont` object for each fallback font, sorted by their global order.
+# Returns a `TTFont` object for each fallback font, sorted by their global order. Fonts
+# with the same global order (i.e. those not listed in `GLOBAL_ORDER`) are ordered
+# alphabetically by family name as a tie-break, so the resulting order - and therefore
+# which font wins a code point shared between two equal-priority fonts - is
+# deterministic and doesn't depend on filesystem directory-listing order.
 def get_fallback_fonts(fallback_fonts_dir):
     fonts = []
     for file in os.listdir(fallback_fonts_dir):
@@ -113,10 +117,10 @@ def get_fallback_fonts(fallback_fonts_dir):
 
             font_name = get_font_name(font)
             global_order = get_global_order(font_name)
-            fonts.append((font, global_order))
+            fonts.append((font, global_order, font_name))
 
-    fonts.sort(key=itemgetter(1))
-    return [font for (font, _) in fonts]
+    fonts.sort(key=itemgetter(1, 2))
+    return [font for (font, _, _) in fonts]
 
 
 def get_font_name(font):
