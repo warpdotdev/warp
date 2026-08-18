@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
+use std::sync::Arc;
 
 use anyhow::anyhow;
 use arborium::tree_sitter::{Parser, Query, QueryCursor, Tree};
@@ -36,13 +37,13 @@ pub async fn build_outline(
     // Add global gitignore, if it exists
     let (global_gitignore, _) = Gitignore::global();
     if !global_gitignore.is_empty() {
-        gitignores.push(global_gitignore);
+        gitignores.push(Arc::new(global_gitignore));
     }
 
     let gitignore_path = path.join(".gitignore");
     if gitignore_path.exists() {
         let (gitignore, _) = Gitignore::new(gitignore_path);
-        gitignores.push(gitignore);
+        gitignores.push(Arc::new(gitignore));
     }
 
     // First traverse the repo path to retrieve all files we want to parse.

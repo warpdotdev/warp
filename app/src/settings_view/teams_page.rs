@@ -37,8 +37,8 @@ use warpui::{
 use super::SettingsSection;
 use super::admin_actions::AdminActions;
 use super::settings_page::{
-    MatchData, PageType, SettingsPageMeta, SettingsPageViewHandle, SettingsWidget,
-    render_customer_type_badge, render_separator, render_sub_header,
+    MatchData, PageType, SettingsPageMeta, SettingsPageViewHandle, SettingsWidget, render_banner,
+    render_cta_banner, render_customer_type_badge, render_separator, render_sub_header,
 };
 use super::tab_menu::Tabs;
 use super::transfer_ownership_confirmation_modal::{
@@ -87,6 +87,14 @@ const TEAM_MEMBERS_HEADER_POSITION_ID: &str = "team_settings:team_members_header
 const TEAM_NAME_EDITOR_PLACEHOLDER_TEXT: &str = "Team name";
 const CREATE_TEAM_BUTTON_LEFT_PADDING: f32 = 10.;
 const CREATE_TEAM_DESCRIPTION: &str = "When you create a team, you can collaborate on agent-driven development by sharing cloud agent runs, environments, automations, and artifacts. You can also create a shared knowledge store for teammates and agents alike.";
+
+const OR_JOIN_TEAM_HEADER: &str = "Or, join an existing team within your company";
+const JOIN_TEAM_HEADER: &str = "Join an existing team within your company";
+const NO_JOINABLE_TEAMS_HEADER: &str = "There are currently no joinable teams.";
+const NO_TEAMS_TO_JOIN_DESCRIPTION: &str =
+    "Contact an admin to join a team to gain access to more features.";
+const ADMIN_PANEL_CTA_LINK_TEXT: &str = "Visit the admin panel";
+const ADMIN_PANEL_CTA_TRAILING_COPY: &str = "to manage and create new teams.";
 
 // Styling for team management page
 const LEAVE_TEAM_BUTTON_LABEL: &str = "Leave team";
@@ -385,6 +393,14 @@ enum GrowTeamWarningCta {
     None,
 }
 
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+enum TeamsPageSection {
+    CreateTeam,
+    AdminPanelCta,
+    JoinTeams { header: &'static str },
+    NoTeamsToJoin,
+}
+
 /// The order of the ItemState enum values determines the ordering of the members and
 /// invites list in the team management page (see `impl Ord for Item`` below).
 #[derive(Clone, PartialOrd, PartialEq, Eq, Ord)]
@@ -680,7 +696,10 @@ impl View for TeamsPageView {
     }
 
     fn on_focus(&mut self, focus_ctx: &FocusContext, ctx: &mut ViewContext<Self>) {
-        if focus_ctx.is_self_focused() && !self.user_workspaces.as_ref(ctx).has_teams() {
+        if focus_ctx.is_self_focused()
+            && !self.user_workspaces.as_ref(ctx).has_teams()
+            && self.renders_create_team_ui(ctx)
+        {
             ctx.focus(&self.create_team_editor);
             ctx.notify();
         }
@@ -1752,8 +1771,6 @@ impl TeamsPageView {
         }
     }
 
-    /// Find view handle of first input. If user team does not exist, this will default to
-    /// the create_team_editor.
     fn focus_on_next_input(&mut self, ctx: &mut ViewContext<Self>) {
         let workspaces: &UserWorkspaces = self.user_workspaces.as_ref(ctx);
 
@@ -1762,9 +1779,22 @@ impl TeamsPageView {
                 ctx.focus(&self.approve_domains_block_editor);
             }
             Some(_) => ctx.focus(&self.email_invites_block_editor),
-            None => ctx.focus(&self.create_team_editor),
+            None => {
+                if self.renders_create_team_ui(ctx) {
+                    ctx.focus(&self.create_team_editor);
+                }
+            }
         }
         ctx.notify();
+    }
+
+    fn renders_create_team_ui(&self, ctx: &AppContext) -> bool {
+        TeamsWidget::page_sections_for(
+            self.user_workspaces.as_ref(ctx).current_workspace(),
+            self.auth_state.user_email().as_deref(),
+            !self.discoverable_teams_states.is_empty(),
+        )
+        .contains(&TeamsPageSection::CreateTeam)
     }
 
     fn team_to_item_list(
@@ -4176,20 +4206,118 @@ impl TeamsWidget {
             .finish()
     }
 
-    fn render_create_team_page_with_banner(
+    fn page_sections_for(
+        workspace: Option<&Workspace>,
+        email: Option<&str>,
+        join_teams: bool,
+    ) -> Vec<TeamsPageSection> {
+        let mut sections = Vec::new();
+        if !workspace.is_some_and(Workspace::is_native_workspaces_enabled) {
+            sections.push(TeamsPageSection::CreateTeam);
+            if join_teams {
+                sections.push(TeamsPageSection::JoinTeams {
+                    header: OR_JOIN_TEAM_HEADER,
+                });
+            }
+            return sections;
+        }
+        let is_workspace_admin = workspace
+            .zip(email)
+            .is_some_and(|(workspace, email)| workspace.is_workspace_admin(email));
+        if join_teams {
+            sections.push(TeamsPageSection::JoinTeams {
+                header: JOIN_TEAM_HEADER,
+            });
+        } else if !is_workspace_admin {
+            sections.push(TeamsPageSection::NoTeamsToJoin);
+        }
+        if is_workspace_admin {
+            sections.push(TeamsPageSection::AdminPanelCta);
+        }
+        sections
+    }
+
+    fn render_teamless_page(
         &self,
         view: &TeamsPageView,
         appearance: &Appearance,
         app: &AppContext,
     ) -> Box<dyn Element> {
-        let mut column = Flex::column();
+        let sections = Self::page_sections_for(
+            view.user_workspaces.as_ref(app).current_workspace(),
+            view.auth_state.user_email().as_deref(),
+            !view.discoverable_teams_states.is_empty(),
+        );
 
-        column.add_child(self.render_create_team_page(view, appearance, app));
+        let mut page = Flex::column();
+        page.add_child(render_sub_header(appearance, "Teams".to_string(), None));
 
-        column.finish()
+        for (index, section) in sections.iter().enumerate() {
+            if index > 0 && matches!(sections[index - 1], TeamsPageSection::CreateTeam) {
+                page.add_child(render_separator(appearance));
+            }
+            match section {
+                TeamsPageSection::CreateTeam => {
+                    page.add_child(self.render_create_team_section(view, appearance, app));
+                }
+                TeamsPageSection::AdminPanelCta => {
+                    page.add_child(
+                        Container::new(render_cta_banner(
+                            Icon::Users,
+                            ADMIN_PANEL_CTA_LINK_TEXT,
+                            ADMIN_PANEL_CTA_TRAILING_COPY,
+                            TeamsPageAction::OpenWorkspaceAdminPanel,
+                            appearance,
+                        ))
+                        .with_padding_top(16.)
+                        .finish(),
+                    );
+                }
+                TeamsPageSection::JoinTeams { header } => {
+                    page.add_child(self.render_join_teams_section(view, appearance, header));
+                }
+                TeamsPageSection::NoTeamsToJoin => {
+                    let theme = appearance.theme();
+                    let body = Shrinkable::new(
+                        1.,
+                        Text::new(
+                            NO_TEAMS_TO_JOIN_DESCRIPTION.to_string(),
+                            appearance.ui_font_family(),
+                            appearance.ui_font_size(),
+                        )
+                        .with_color(theme.sub_text_color(theme.background()).into())
+                        .finish(),
+                    )
+                    .finish();
+                    page.add_child(self.render_sub_header_with_subtext_color(
+                        appearance,
+                        NO_JOINABLE_TEAMS_HEADER.to_string(),
+                    ));
+                    page.add_child(
+                        Container::new(render_banner(Icon::Info, body, appearance))
+                            .with_padding_top(12.)
+                            .finish(),
+                    );
+                }
+            }
+        }
+
+        page.finish()
     }
 
-    fn render_create_team_page(
+    fn render_join_teams_section(
+        &self,
+        view: &TeamsPageView,
+        appearance: &Appearance,
+        header: &str,
+    ) -> Box<dyn Element> {
+        Flex::column()
+            .with_child(self.render_sub_header_with_subtext_color(appearance, header.to_string()))
+            .with_child(self.render_team_discovery_section(view, appearance))
+            .finish()
+    }
+
+    fn render_create_team_section(
         &self,
         view: &TeamsPageView,
         appearance: &Appearance,
@@ -4197,8 +4325,6 @@ impl TeamsWidget {
     ) -> Box<dyn Element> {
         let mut page = Flex::column();
 
-        // Title, subtitle, and description
-        page.add_child(render_sub_header(appearance, "Teams".to_string(), None));
         page.add_child(
             self.render_sub_header_with_subtext_color(appearance, "Create a team".to_string()),
         );
@@ -4254,18 +4380,6 @@ impl TeamsWidget {
                 .with_padding_bottom(12.)
                 .finish(),
         );
-
-        if !view.discoverable_teams_states.is_empty() {
-            // Separator and subtitle
-            page.add_child(render_separator(appearance));
-            page.add_child(self.render_sub_header_with_subtext_color(
-                appearance,
-                "Or, join an existing team within your company".to_string(),
-            ));
-
-            // Team discovery
-            page.add_child(self.render_team_discovery_section(view, appearance));
-        }
 
         page.finish()
     }
@@ -4597,7 +4711,7 @@ impl SettingsWidget for TeamsWidget {
                 Some((team, workspace)) => {
                     self.render_team_management_page(team, workspace, view, appearance, app)
                 }
-                None => self.render_create_team_page_with_banner(view, appearance, app),
+                None => self.render_teamless_page(view, appearance, app),
             }
         } else {
             appearance

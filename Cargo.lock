@@ -11435,6 +11435,7 @@ dependencies = [
  "log",
  "notify-debouncer-full",
  "once_cell",
+ "parking_lot",
  "serde",
  "serde_json",
  "strum 0.27.1",

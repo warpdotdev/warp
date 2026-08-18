@@ -174,6 +174,7 @@ query GetWorkspacesMetadataForUser($requestContext: RequestContext!) {
           pendingEmailInvites {
             email
             expired
+            teamUid
           }
           inviteLinkDomainRestrictions {
             uid

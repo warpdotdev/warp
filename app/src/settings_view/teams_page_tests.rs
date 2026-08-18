@@ -243,11 +243,84 @@ fn current_user_gets_no_actions_against_their_own_row_as_workspace_admin() {
 }
 
 #[test]
+fn non_native_workspace_keeps_create_team_ui() {
+    let workspace = workspace_with_member(ADMIN_EMAIL, MembershipRole::Admin, false);
+
+    assert_eq!(
+        TeamsWidget::page_sections_for(Some(&workspace), Some(ADMIN_EMAIL), true),
+        vec![
+            TeamsPageSection::CreateTeam,
+            TeamsPageSection::JoinTeams {
+                header: OR_JOIN_TEAM_HEADER
+            }
+        ]
+    );
+    assert_eq!(
+        TeamsWidget::page_sections_for(Some(&workspace), Some(ADMIN_EMAIL), false),
+        vec![TeamsPageSection::CreateTeam]
+    );
+}
+
+#[test]
+fn unresolved_workspace_keeps_create_team_ui() {
+    assert_eq!(
+        TeamsWidget::page_sections_for(None, Some(MEMBER_EMAIL), false),
+        vec![TeamsPageSection::CreateTeam]
+    );
+}
+
+#[test]
+fn native_workspace_admin_gets_admin_panel_cta() {
+    let workspace = admin_workspace(ADMIN_EMAIL);
+
+    assert_eq!(
+        TeamsWidget::page_sections_for(Some(&workspace), Some(ADMIN_EMAIL), true),
+        vec![
+            TeamsPageSection::JoinTeams {
+                header: JOIN_TEAM_HEADER
+            },
+            TeamsPageSection::AdminPanelCta
+        ]
+    );
+    assert_eq!(
+        TeamsWidget::page_sections_for(Some(&workspace), Some(ADMIN_EMAIL), false),
+        vec![TeamsPageSection::AdminPanelCta]
+    );
+}
+
+#[test]
+fn native_workspace_member_gets_join_or_empty_state() {
+    let workspace = workspace_with_member(MEMBER_EMAIL, MembershipRole::User, true);
+
+    assert_eq!(
+        TeamsWidget::page_sections_for(Some(&workspace), Some(MEMBER_EMAIL), true),
+        vec![TeamsPageSection::JoinTeams {
+            header: JOIN_TEAM_HEADER
+        }]
+    );
+    assert_eq!(
+        TeamsWidget::page_sections_for(Some(&workspace), Some(MEMBER_EMAIL), false),
+        vec![TeamsPageSection::NoTeamsToJoin]
+    );
+}
+
+#[test]
+fn viewer_missing_from_the_workspace_roster_is_not_an_admin() {
+    let workspace = admin_workspace(ADMIN_EMAIL);
+
+    assert_eq!(
+        TeamsWidget::page_sections_for(Some(&workspace), None, false),
+        vec![TeamsPageSection::NoTeamsToJoin]
+    );
+}
+
+#[test]
 fn workspace_admin_can_cancel_pending_invite() {
     let mut team = team_with_members(vec![member(MEMBER_EMAIL, MembershipRole::User)], true);
     team.pending_email_invites.push(EmailInvite {
         invitee_email: "invitee@example.com".to_string(),
         expired: false,
+        team_uid: Some(1.into()),
     });
     let workspace = admin_workspace(MEMBER_EMAIL);
 

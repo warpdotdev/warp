@@ -241,6 +241,7 @@ impl Ord for WorkspaceMember {
 pub struct EmailInvite {
     pub invitee_email: String,
     pub expired: bool,
+    pub team_uid: Option<ServerId>,
 }
 
 impl PartialOrd for EmailInvite {

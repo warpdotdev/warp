@@ -99,6 +99,7 @@ mutation CreateTeam($input: CreateTeamInput!, $request_context: RequestContext!)
         pendingEmailInvites {
           email
           expired
+          teamUid
         }
         inviteLinkDomainRestrictions {
           uid

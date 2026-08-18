@@ -3,6 +3,7 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 
 use itertools::Itertools as _;
+use markdown_parser::{FormattedText, FormattedTextFragment, FormattedTextLine};
 use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::vec2f;
 use settings::Setting;
@@ -14,8 +15,9 @@ use warpui::elements::new_scrollable::{
 };
 use warpui::elements::{
     Align, Border, ChildAnchor, ChildView, ClippedScrollStateHandle, ConstrainedBox, Container,
-    CornerRadius, CrossAxisAlignment, Element, Empty, Expanded, Flex, Hoverable, MainAxisAlignment,
-    MainAxisSize, MouseStateHandle, NewScrollable, OffsetPositioning, ParentAnchor, ParentElement,
+    CornerRadius, CrossAxisAlignment, Element, Empty, Expanded, Flex, FormattedTextElement,
+    HighlightedHyperlink, Hoverable, HyperlinkLens, MainAxisAlignment, MainAxisSize,
+    MouseStateHandle, NewScrollable, OffsetPositioning, ParentAnchor, ParentElement,
     ParentOffsetBounds, Radius, SavePosition, ScrollTarget, ScrollToPositionMode, Shrinkable,
     SizeConstraintCondition, SizeConstraintSwitch, Stack, Text,
 };
@@ -395,6 +397,83 @@ pub fn render_separator(appearance: &Appearance) -> Box<dyn Element> {
     Container::new(Empty::new().finish())
         .with_border(Border::bottom(2.).with_border_fill(appearance.theme().outline()))
         .with_margin_bottom(HEADER_PADDING)
+        .finish()
+}
+
+/// A single line of sub-text whose leading phrase is a hyperlink dispatching `action`.
+pub fn render_cta_line<A: Action + Clone>(
+    link_text: &str,
+    trailing_copy: &str,
+    action: A,
+    font_size: f32,
+    appearance: &Appearance,
+) -> Box<dyn Element> {
+    let theme = appearance.theme();
+    let sub_text = theme.sub_text_color(theme.background());
+    FormattedTextElement::new(
+        FormattedText::new([FormattedTextLine::Line(vec![
+            FormattedTextFragment::hyperlink_action(link_text, action),
+            FormattedTextFragment::plain_text(format!(" {trailing_copy}")),
+        ])]),
+        font_size,
+        appearance.ui_font_family(),
+        appearance.ui_font_family(),
+        sub_text.into(),
+        HighlightedHyperlink::default(),
+    )
+    .with_no_text_wrapping()
+    .with_hyperlink_font_color(theme.accent().into_solid())
+    .register_default_click_handlers_with_action_support(|lens, event, ctx| match lens {
+        HyperlinkLens::Url(url) => ctx.open_url(url),
+        HyperlinkLens::Action(dispatched) => {
+            if let Some(action) = dispatched.as_any().downcast_ref::<A>() {
+                event.dispatch_typed_action(action.clone());
+            }
+        }
+    })
+    .finish()
+}
+
+pub fn render_cta_banner<A: Action + Clone>(
+    icon: Icon,
+    link_text: &str,
+    trailing_copy: &str,
+    action: A,
+    appearance: &Appearance,
+) -> Box<dyn Element> {
+    let body = render_cta_line(
+        link_text,
+        trailing_copy,
+        action,
+        appearance.ui_font_size(),
+        appearance,
+    );
+    render_banner(icon, body, appearance)
+}
+
+pub fn render_banner(
+    icon: Icon,
+    body: Box<dyn Element>,
+    appearance: &Appearance,
+) -> Box<dyn Element> {
+    let theme = appearance.theme();
+    let sub_text = theme.sub_text_color(theme.background());
+    let icon = ConstrainedBox::new(icon.to_warpui_icon(sub_text).finish())
+        .with_width(14.)
+        .with_height(14.)
+        .finish();
+
+    let row = Flex::row()
+        .with_main_axis_size(MainAxisSize::Max)
+        .with_cross_axis_alignment(CrossAxisAlignment::Center)
+        .with_child(Container::new(icon).with_margin_right(8.).finish())
+        .with_child(body)
+        .finish();
+
+    Container::new(row)
+        .with_background_color(theme.surface_1().into_solid())
+        .with_corner_radius(CornerRadius::with_all(Radius::Pixels(8.)))
+        .with_uniform_padding(12.)
         .finish()
 }
 
