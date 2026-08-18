@@ -76,8 +76,8 @@ use crate::ai::mcp::file_based_manager::{FileBasedMCPManager, FileBasedMCPManage
 use crate::ai::mcp::parsing::{ParsedTemplatableMCPServerResult, normalize_mcp_json, resolve_json};
 use crate::ai::mcp::templatable_manager::TemplatableMCPServerManagerEvent;
 use crate::ai::mcp::{
-    JSONMCPServer, MCPServerState, TemplatableMCPServerInstallation, TemplatableMCPServerManager,
-    VariableType, VariableValue, builtin,
+    EnvVarExpansionError, JSONMCPServer, MCPServerState, TemplatableMCPServerInstallation,
+    TemplatableMCPServerManager, VariableType, VariableValue, builtin,
 };
 use crate::ai::skills::{
     SkillManager, SkillWatcher, filter_skills_by_spec, read_skills_from_directories,
@@ -630,6 +630,8 @@ pub enum AgentDriverError {
     MCPJsonParseError(String),
     #[error("MCP server configuration is missing required variables")]
     MCPMissingVariables,
+    #[error("{0}")]
+    MCPEnvVarExpansionFailed(#[from] EnvVarExpansionError),
     #[error("Agent profile \"{0}\" not found")]
     ProfileError(String),
     #[error(
@@ -1502,6 +1504,13 @@ impl AgentDriver {
         Some(builtin::factory_mcp_installation(&token))
     }
 
+    /// Build installations from user-supplied MCP JSON (`--mcp`, or an agent config file's
+    /// `mcp_servers`).
+    ///
+    /// `env` and `headers` values get the same `${VAR}` expansion as MCP config files read from
+    /// disk: a factory file's secret reference is canonicalized server-side into a `${NAME}`
+    /// placeholder and the secret itself is injected into the run's environment, so without
+    /// expanding here the MCP process would receive the literal `${NAME}`.
     fn installations_from_user_mcp_json(
         json_str: &str,
     ) -> Result<Vec<TemplatableMCPServerInstallation>, AgentDriverError> {
@@ -1513,9 +1522,11 @@ impl AgentDriver {
         parsed_results
             .into_iter()
             .map(|result| {
-                result
+                let mut installation = result
                     .templatable_mcp_server_installation
-                    .ok_or(AgentDriverError::MCPMissingVariables)
+                    .ok_or(AgentDriverError::MCPMissingVariables)?;
+                installation.expand_env_var_placeholders()?;
+                Ok(installation)
             })
             .collect()
     }

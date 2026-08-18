@@ -20,14 +20,11 @@ use warpui::{Entity, ModelContext, ModelHandle, SingletonEntity};
 use watcher::HomeDirectoryWatcherEvent;
 
 use crate::HomeDirectoryWatcher;
-use crate::ai::mcp::parsing::normalize_codex_toml_to_json;
+use crate::ai::mcp::parsing::{normalize_codex_toml_to_json, substitute_env_vars};
 use crate::ai::mcp::{MCPProvider, ParsedTemplatableMCPServerResult, home_config_file_path};
 use crate::warp_managed_paths_watcher::{
     WarpManagedPathsWatcher, WarpManagedPathsWatcherEvent, warp_managed_mcp_config_path,
 };
-
-static ENV_VAR_REGEX: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"\$\{([^}]+)\}").expect("Regex is valid"));
 
 /// Matches home config paths that are exactly one directory deep (e.g. `.codex/config.toml`,
 /// `.warp/.mcp.json`), capturing the parent directory component.
@@ -647,31 +644,6 @@ fn providers_in_scope(
         }
         results.into_iter()
     })
-}
-
-/// Substitutes environment variables in the format ${VAR_NAME} in the given JSON string.
-/// Returns an error if any environment variable is not found, as the server cannot be started.
-fn substitute_env_vars(json_content: &str) -> Result<String, anyhow::Error> {
-    let mut result = json_content.to_string();
-
-    for capture in ENV_VAR_REGEX.captures_iter(json_content) {
-        if let Some(var_match) = capture.get(1) {
-            let var_name = var_match.as_str();
-            match std::env::var(var_name) {
-                Ok(value) if !value.is_empty() => {
-                    let placeholder = format!("${{{}}}", var_name);
-                    result = result.replace(&placeholder, &value);
-                }
-                _ => {
-                    return Err(anyhow::anyhow!(
-                        "Missing or empty environment variable: {var_name}"
-                    ));
-                }
-            }
-        }
-    }
-
-    Ok(result)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

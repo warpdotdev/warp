@@ -3,6 +3,7 @@ use warp_graphql::ai::{AgentTaskState, PlatformErrorCode};
 use super::classify_driver_error;
 use crate::ai::agent_sdk::driver::AgentDriverError;
 use crate::ai::agent_sdk::driver::terminal::{BootstrapError, ShareSessionError};
+use crate::ai::mcp::EnvVarExpansionError;
 
 fn assert_state_and_code(
     error: AgentDriverError,
@@ -151,6 +152,34 @@ fn mcp_startup_failed_is_failed_with_env_setup_and_per_server_details() {
         update
             .message
             .contains("- 'datadog' did not start within 20s")
+    );
+}
+
+#[test]
+fn mcp_env_var_expansion_failed_is_failed_with_env_setup_and_names_server_and_key() {
+    let (state, update) = classify_driver_error(&AgentDriverError::MCPEnvVarExpansionFailed(
+        EnvVarExpansionError {
+            server: "sentry".into(),
+            key: "Authorization".into(),
+            variable: "SENTRY_TOKEN".into(),
+        },
+    ));
+    assert_eq!(state, AgentTaskState::Failed);
+    assert_eq!(
+        update.error_code,
+        Some(PlatformErrorCode::EnvironmentSetupFailed)
+    );
+    // The user needs to know which server and which key to fix, and which variable to set.
+    assert!(update.message.contains("sentry"), "{}", update.message);
+    assert!(
+        update.message.contains("Authorization"),
+        "{}",
+        update.message
+    );
+    assert!(
+        update.message.contains("SENTRY_TOKEN"),
+        "{}",
+        update.message
     );
 }
 
