@@ -46,7 +46,7 @@ pub struct SystemInfo {
     system: sysinfo::System,
     /// Whether or not we've already emitted an event due to high memory usage.
     has_emitted_memory_warning_event: bool,
-    /// Set to the memory footprint (in bytes) that crossed `MEMORY_USAGE_WARNING_THRESHOLD` on the
+    /// Set to the memory footprint that crossed `MEMORY_USAGE_WARNING_THRESHOLD_BYTES` on the
     /// previous poll tick, while we wait for the next tick to confirm the spike is sustained rather
     /// than a transient blip.  `None` when there is no pending confirmation.
     pending_excessive_memory_footprint_bytes: Option<u64>,
