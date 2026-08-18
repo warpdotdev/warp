@@ -384,3 +384,23 @@ fn active_member_is_not_flagged_disabled() {
         "an active member's account must not be flagged disabled"
     );
 }
+
+#[test]
+fn disabled_row_renders_dimmed_and_tooltipped() {
+    let appearance = Appearance::mock();
+
+    assert_eq!(
+        item_row_text_color(&appearance, true),
+        appearance.theme().disabled_ui_text_color(),
+    );
+    assert_ne!(
+        item_row_text_color(&appearance, true),
+        item_row_text_color(&appearance, false),
+        "a disabled row must render in a visibly different color than an active row"
+    );
+    assert_eq!(
+        disabled_member_tooltip_text(true),
+        Some(DISABLED_MEMBER_TOOLTIP_TEXT)
+    );
+    assert_eq!(disabled_member_tooltip_text(false), None);
+}

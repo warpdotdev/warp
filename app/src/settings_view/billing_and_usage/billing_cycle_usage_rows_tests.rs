@@ -1,4 +1,9 @@
-use super::{MemberUsageRow, SourceFilter};
+use pathfinder_color::ColorU;
+
+use super::{
+    DISABLED_MEMBER_TOOLTIP_TEXT, MemberUsageRow, SourceFilter, dimmed_row_text_color,
+    disabled_member_tooltip_text,
+};
 use crate::auth::UserUid;
 use crate::workspaces::team::MembershipRole;
 use crate::workspaces::workspace::{
@@ -257,6 +262,20 @@ fn per_member_rows_never_flag_departed_members_as_disabled() {
             .find(|row| row.subject_uid.as_deref() == Some(OTHER_UID))
             .is_some_and(|row| !row.is_disabled)
     );
+}
+
+#[test]
+fn disabled_row_renders_dimmed_and_tooltipped() {
+    let main = ColorU::new(255, 255, 255, 255);
+    let dimmed = ColorU::new(128, 128, 128, 255);
+
+    assert_eq!(dimmed_row_text_color(main, dimmed, true), dimmed);
+    assert_eq!(dimmed_row_text_color(main, dimmed, false), main);
+    assert_eq!(
+        disabled_member_tooltip_text(true),
+        Some(DISABLED_MEMBER_TOOLTIP_TEXT)
+    );
+    assert_eq!(disabled_member_tooltip_text(false), None);
 }
 
 #[test]

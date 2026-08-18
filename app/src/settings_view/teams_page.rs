@@ -156,6 +156,18 @@ fn dim_color(color: ColorU) -> ColorU {
     ColorU::new(color.r, color.g, color.b, color.a / 2)
 }
 
+fn item_row_text_color(appearance: &Appearance, is_disabled: bool) -> themes::theme::Fill {
+    if is_disabled {
+        appearance.theme().disabled_ui_text_color()
+    } else {
+        appearance.theme().active_ui_text_color()
+    }
+}
+
+fn disabled_member_tooltip_text(is_disabled: bool) -> Option<&'static str> {
+    is_disabled.then_some(DISABLED_MEMBER_TOOLTIP_TEXT)
+}
+
 #[derive(Debug, Clone)]
 pub enum TeamsPageAction {
     LeaveTeam,
@@ -421,7 +433,6 @@ struct ItemAction {
     action: TeamsPageAction,
 }
 
-/// Per-row mouse state for an `Item` in `render_item_list`.
 #[derive(Clone, Default)]
 struct ItemMouseStates {
     action: MouseStateHandle,
@@ -3650,24 +3661,27 @@ impl TeamsWidget {
         view: &TeamsPageView,
         appearance: &Appearance,
     ) -> Box<dyn Element> {
+        debug_assert_eq!(
+            items.len(),
+            mouse_states.len(),
+            "item list ({}) and mouse-state vector ({}) diverged",
+            items.len(),
+            mouse_states.len()
+        );
         let all_items = items
             .iter()
             .sorted()
             .enumerate()
             .map(|(idx, item)| {
-                let handles = mouse_states.get(idx).cloned().unwrap_or_default();
+                let handles = mouse_states[idx].clone();
 
-                let text_color = if item.is_disabled {
-                    appearance.theme().disabled_ui_text_color()
-                } else {
-                    appearance.theme().active_ui_text_color()
-                };
+                let text_color = item_row_text_color(appearance, item.is_disabled);
                 let text_element = Text::new_inline(
                     item.text.clone(),
                     appearance.ui_font_family(),
                     appearance.ui_font_size() - 1.,
                 )
-                .with_color(text_color.into())
+                .with_color(text_color.into_solid())
                 .finish();
 
                 let mut row = Flex::row()
@@ -3891,17 +3905,16 @@ impl TeamsWidget {
 
                 // Overlay variant: the page renders inside a `Clipped` scroll viewport.
                 let row_content = row.finish();
-                let row_content = if item.is_disabled {
-                    appearance.ui_builder().overlay_tool_tip_on_element(
-                        DISABLED_MEMBER_TOOLTIP_TEXT.to_string(),
+                let row_content = match disabled_member_tooltip_text(item.is_disabled) {
+                    Some(tooltip_text) => appearance.ui_builder().overlay_tool_tip_on_element(
+                        tooltip_text.to_string(),
                         handles.disabled_tooltip.clone(),
                         row_content,
                         ParentAnchor::TopLeft,
                         ChildAnchor::BottomLeft,
                         vec2f(0., -5.),
-                    )
-                } else {
-                    row_content
+                    ),
+                    None => row_content,
                 };
 
                 let list_element =

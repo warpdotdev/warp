@@ -212,7 +212,6 @@ pub struct WorkspaceMember {
     pub uid: UserUid,
     pub email: String,
     pub role: MembershipRole,
-    /// Whether the user's account has been disabled server-side.
     pub is_disabled: bool,
     pub usage_info: WorkspaceMemberUsageInfo,
 }

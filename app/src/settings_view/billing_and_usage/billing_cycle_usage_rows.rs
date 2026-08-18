@@ -43,6 +43,14 @@ const OTHER_MEMBERS_KEY: &str = "__other_members__";
 
 const DISABLED_MEMBER_TOOLTIP_TEXT: &str = "This user's account is disabled";
 
+fn dimmed_row_text_color(main: ColorU, dimmed: ColorU, is_dimmed: bool) -> ColorU {
+    if is_dimmed { dimmed } else { main }
+}
+
+fn disabled_member_tooltip_text(is_disabled: bool) -> Option<&'static str> {
+    is_disabled.then_some(DISABLED_MEMBER_TOOLTIP_TEXT)
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum SourceFilter {
     #[default]
@@ -527,11 +535,11 @@ fn render_row_card(
             appearance.ui_font_family(),
             appearance.ui_font_size(),
         )
-        .with_color(if is_dimmed {
-            theme.sub_text_color(theme.background()).into()
-        } else {
-            main
-        })
+        .with_color(dimmed_row_text_color(
+            main,
+            theme.sub_text_color(theme.background()).into(),
+            is_dimmed,
+        ))
         .finish()
     };
 
@@ -629,19 +637,20 @@ fn render_row_card(
         .with_child(Container::new(cost_cluster).with_margin_left(6.).finish())
         .finish();
 
-    let name_row_element: Box<dyn Element> = if row.is_disabled {
-        let disabled_state =
-            mouse_states.tooltip_mouse_state(&format!("{}__disabled", row.subject_key));
-        appearance.ui_builder().overlay_tool_tip_on_element(
-            DISABLED_MEMBER_TOOLTIP_TEXT.to_string(),
-            disabled_state,
-            name_row.finish(),
-            ParentAnchor::TopLeft,
-            ChildAnchor::BottomLeft,
-            vec2f(0., -TOOLTIP_GAP),
-        )
-    } else {
-        name_row.finish()
+    let name_row_element: Box<dyn Element> = match disabled_member_tooltip_text(row.is_disabled) {
+        Some(tooltip_text) => {
+            let disabled_state =
+                mouse_states.tooltip_mouse_state(&format!("{}__disabled", row.subject_key));
+            appearance.ui_builder().overlay_tool_tip_on_element(
+                tooltip_text.to_string(),
+                disabled_state,
+                name_row.finish(),
+                ParentAnchor::TopLeft,
+                ChildAnchor::BottomLeft,
+                vec2f(0., -TOOLTIP_GAP),
+            )
+        }
+        None => name_row.finish(),
     };
 
     let body = Container::new(
