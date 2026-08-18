@@ -15521,7 +15521,6 @@ dependencies = [
  "itertools 0.14.0",
  "lazy_static",
  "log",
- "lru 0.18.0",
  "memo-map",
  "regex",
  "rquickjs",

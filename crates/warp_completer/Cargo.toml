@@ -23,7 +23,6 @@ instant.workspace = true
 itertools.workspace = true
 lazy_static.workspace = true
 log.workspace = true
-lru.workspace = true
 memo-map.workspace = true
 regex.workspace = true
 serde.workspace = true

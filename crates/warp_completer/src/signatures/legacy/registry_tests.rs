@@ -1,4 +1,5 @@
 use warp_command_signatures::{Priority, Signature};
+use warp_core::channel::Channel;
 
 use crate::completer::testing::FakeCompletionContext;
 use crate::completer::{CompletionContext, TopLevelCommandCaseSensitivity};
@@ -18,6 +19,56 @@ fn signature_with_name(name: &str) -> Signature {
         priority: Priority::default(),
         parser_directives: Default::default(),
     }
+}
+
+/// Recursively finds the longest `Signature::name` in `signature` or any of its (possibly
+/// nested) subcommands, updating `longest` in place if a longer one is found.
+fn track_longest_name(signature: &Signature, longest: &mut (usize, String)) {
+    if signature.name.len() > longest.0 {
+        *longest = (signature.name.len(), signature.name.clone());
+    }
+    for subcommand in signature.subcommands() {
+        track_longest_name(subcommand, longest);
+    }
+}
+
+#[test]
+fn test_all_known_signature_names_are_within_the_length_cap() {
+    // `SignatureCache::get`'s oversized-token fast path (see `MAX_CACHEABLE_COMMAND_LEN`'s doc
+    // comment) assumes no name that can ever be dynamically resolved -- from the embedded
+    // signature corpus or from `CommandRegistry::register_signature` -- exceeds it. This test
+    // establishes that invariant by actually walking both sources, rather than assuming it: if
+    // a future signature (in the corpus, or a newly `register_signature`-ed one) is added with a
+    // name that violates it, this test fails loudly instead of that name silently becoming
+    // unresolvable via lookup.
+    let mut longest = (0, String::new());
+
+    for signature in warp_command_signatures::commands() {
+        track_longest_name(&signature, &mut longest);
+    }
+
+    // Mirrors `CommandRegistry::register_warp_signatures`: the only other names ever
+    // `register_signature`-ed in production. Uses the raw `CommandFactory::command()` rather
+    // than `Args::clap_command()`, since the latter only *hides* subcommands based on
+    // `FeatureFlag` state (which requires flags to be initialized, unavailable in this test
+    // environment) without changing any name -- so this still covers every name that
+    // `clap_command()` would produce, feature flags notwithstanding.
+    for channel in [Channel::Stable, Channel::Preview, Channel::Dev] {
+        let mut clap_cmd = <warp_cli::Args as clap::CommandFactory>::command();
+        let signature = crate::signatures::clap::signature_from_clap_command(
+            &mut clap_cmd,
+            channel.cli_command_name(),
+        );
+        track_longest_name(&signature, &mut longest);
+    }
+
+    let (max_len, longest_name) = longest;
+    assert!(
+        max_len <= MAX_CACHEABLE_COMMAND_LEN,
+        "found a command/subcommand name of length {max_len} ({longest_name:?}), which exceeds \
+         MAX_CACHEABLE_COMMAND_LEN ({MAX_CACHEABLE_COMMAND_LEN}) -- SignatureCache::get's \
+         oversized-token fast path assumes this can't happen"
+    );
 }
 
 #[test]
@@ -229,7 +280,7 @@ fn test_oversized_command_is_not_cached_and_resolves_to_none() {
     // signature.
     let registry = create_test_command_registry([test_signature()]);
     let positive_len_before = registry.signatures.signatures.len();
-    let negative_len_before = registry.signatures.misses.lock().unwrap().len();
+    let negative_len_before = registry.signatures.misses.len();
 
     let oversized_command = "a".repeat(MAX_CACHEABLE_COMMAND_LEN + 1);
     assert_eq!(registry.signature(&oversized_command), None);
@@ -239,7 +290,7 @@ fn test_oversized_command_is_not_cached_and_resolves_to_none() {
         "looking up an oversized command should not add an entry to the positive cache"
     );
     assert_eq!(
-        registry.signatures.misses.lock().unwrap().len(),
+        registry.signatures.misses.len(),
         negative_len_before,
         "looking up an oversized command should not add an entry to the negative cache either -- \
          that would just move the leak this cap exists to fix into the negative cache"
@@ -262,28 +313,24 @@ fn test_misses_are_never_cached_in_the_positive_cache() {
 #[test]
 fn test_negative_cache_stops_growing_at_capacity() {
     // Regression test for APP-5431: the negative cache (`SignatureCache::misses`) is a bounded
-    // LRU set, so looking up more distinct misses than `MAX_CACHED_MISSES` must not grow it
-    // past that capacity.
+    // set, so looking up more distinct misses than `MAX_CACHED_MISSES` must not grow it past
+    // that capacity.
     let registry = create_test_command_registry([test_signature()]);
 
     for i in 0..MAX_CACHED_MISSES * 2 {
         assert_eq!(registry.signature(&format!("not-a-real-command-{i}")), None);
-        assert!(registry.signatures.misses.lock().unwrap().len() <= MAX_CACHED_MISSES);
+        assert!(registry.signatures.misses.len() <= MAX_CACHED_MISSES);
     }
-    assert_eq!(
-        registry.signatures.misses.lock().unwrap().len(),
-        MAX_CACHED_MISSES
-    );
+    assert_eq!(registry.signatures.misses.len(), MAX_CACHED_MISSES);
 }
 
 #[test]
-fn test_negative_cache_evicts_in_lru_order() {
-    // Regression test for APP-5431: once the negative cache is at capacity, inserting a new
-    // miss must evict the least-recently-used entry specifically. Critically, this re-touches
-    // the *oldest-inserted* entry before overflowing so a FIFO (or arbitrary-eviction) cache
-    // would fail this test: a FIFO cache would still evict "miss-0" since it only tracks
-    // insertion order and ignores the re-touch, whereas an LRU cache must evict "miss-1"
-    // instead, since "miss-1" is now the actual least-recently-used entry.
+fn test_negative_cache_evicts_in_fifo_order() {
+    // Regression test for APP-5431: the negative cache dropped strict LRU recency tracking for
+    // a simpler FIFO-order bounded set (see `MissCache`'s doc comment for why), so once at
+    // capacity, inserting a new miss must evict the *oldest-inserted* entry specifically --
+    // even if that entry was looked up again more recently than others, since a lookup against
+    // the negative cache is a pure read that never reorders anything.
     let registry = create_test_command_registry([test_signature()]);
 
     // Fill the negative cache to capacity with "miss-0", .., "miss-{MAX_CACHED_MISSES - 1}",
@@ -292,31 +339,21 @@ fn test_negative_cache_evicts_in_lru_order() {
         assert_eq!(registry.signature(&format!("miss-{i}")), None);
     }
 
-    // Touch only "miss-0" -- the oldest, and thus the next entry a FIFO cache would evict --
-    // moving it to the most-recently-used position.
-    assert_eq!(registry.signature("miss-0"), None);
+    // Repeatedly re-look-up the oldest entry. Under an LRU this would protect it from eviction,
+    // but FIFO eviction ignores lookups entirely.
+    for _ in 0..5 {
+        assert_eq!(registry.signature("miss-0"), None);
+    }
 
-    // Inserting one more miss should evict "miss-1", the least-recently-used entry, not
-    // "miss-0", which was just touched.
+    // Inserting one more miss should still evict "miss-0", not "miss-1".
     assert_eq!(registry.signature("miss-overflow"), None);
     assert!(
-        registry
-            .signatures
-            .misses
-            .lock()
-            .unwrap()
-            .contains("miss-0"),
-        "the just-touched entry should not have been evicted -- a FIFO cache would incorrectly \
-         evict it instead of `miss-1`"
+        !registry.signatures.misses.contains("miss-0"),
+        "the oldest-inserted entry should have been evicted regardless of being looked up again"
     );
     assert!(
-        !registry
-            .signatures
-            .misses
-            .lock()
-            .unwrap()
-            .contains("miss-1"),
-        "the least-recently-used entry should have been evicted"
+        registry.signatures.misses.contains("miss-1"),
+        "a newer entry should not have been evicted"
     );
 }
 
@@ -332,7 +369,7 @@ fn test_oversized_later_token_does_not_bypass_the_length_guard() {
         .expect("global command signatures should include 'sudo'");
     let registry = create_test_command_registry([sudo]);
     let positive_len_before = registry.signatures.signatures.len();
-    let negative_len_before = registry.signatures.misses.lock().unwrap().len();
+    let negative_len_before = registry.signatures.misses.len();
 
     let oversized_token = "a".repeat(MAX_CACHEABLE_COMMAND_LEN + 1);
     let tokens = ["sudo", oversized_token.as_str()];
@@ -355,7 +392,7 @@ fn test_oversized_later_token_does_not_bypass_the_length_guard() {
         "looking up an oversized later token should not add an entry to the positive cache"
     );
     assert_eq!(
-        registry.signatures.misses.lock().unwrap().len(),
+        registry.signatures.misses.len(),
         negative_len_before,
         "looking up an oversized later token should not add an entry to the negative cache"
     );
@@ -390,18 +427,18 @@ fn test_ordinary_commands_still_resolve_and_are_cached() {
 }
 
 #[test]
-fn test_registered_signature_longer_than_the_cap_still_resolves() {
-    // Regression test for APP-5431 (review finding): an explicitly registered signature must
-    // stay retrievable through `signature()` even if its name exceeds `MAX_CACHEABLE_COMMAND_LEN`
-    // -- the cap only governs whether a *dynamic* (uncached) lookup is attempted, not whether an
-    // already-registered signature can be found.
+fn test_registered_signature_longer_than_the_cap_is_unresolvable() {
+    // Regression test for APP-5431: `SignatureCache::get` now returns `None` outright for any
+    // token over `MAX_CACHEABLE_COMMAND_LEN`, on the strength of
+    // `test_all_known_signature_names_are_within_the_length_cap` establishing that no real
+    // signature ever has a name this long. An explicitly `register_signature`-ed signature with
+    // an artificially oversized name is therefore *not* retrievable through `signature()` --
+    // a deliberate, accepted tradeoff (see `MAX_CACHEABLE_COMMAND_LEN`'s doc comment), not a
+    // real-world regression, since that invariant test would fail first if this ever mattered.
     let long_name = "a".repeat(MAX_CACHEABLE_COMMAND_LEN + 1);
     let registry = create_test_command_registry([signature_with_name(&long_name)]);
 
-    assert_eq!(
-        registry.signature(&long_name).map(|s| s.name.as_str()),
-        Some(long_name.as_str())
-    );
+    assert_eq!(registry.signature(&long_name), None);
 }
 
 #[cfg(windows)]
