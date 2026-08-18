@@ -1,15 +1,19 @@
-use super::*;
 use futures::executor::block_on;
 use warp_graphql::ai::PlatformErrorCode;
 
+use super::*;
+
 fn dependency_error(retryable: bool) -> TaskGitCredentialsError {
     TaskGitCredentialsError::Platform {
-        message: "External dependency is unavailable.".to_string(),
+        message: "GitHub is temporarily unavailable.".to_string(),
         code: PlatformErrorCode::ResourceUnavailable,
         retryable,
-        detail: Some("GitHub is temporarily unavailable.".to_string()),
-        provider: Some("github".to_string()),
-        dependency: Some("github_api".to_string()),
+        detail: Some("Repository access could not be resolved.".to_string()),
+        metadata: std::collections::BTreeMap::from([
+            ("provider".to_string(), "github".to_string()),
+            ("resource".to_string(), "installation".to_string()),
+        ]),
+        debug: None,
     }
 }
 

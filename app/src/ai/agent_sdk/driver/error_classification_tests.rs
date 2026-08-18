@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use warp_graphql::ai::{AgentTaskState, PlatformErrorCode};
 
 use super::classify_driver_error;
@@ -25,11 +27,12 @@ fn retryable_dependency_credentials_failure_is_error_with_structured_metadata() 
             message: "External dependency is unavailable.".to_string(),
             code: PlatformErrorCode::ResourceUnavailable,
             retryable: true,
-            detail: Some(
-                "GitHub is temporarily unavailable while resolving repository access.".to_string(),
-            ),
-            provider: Some("github".to_string()),
-            dependency: Some("github_api".to_string()),
+            detail: Some("Repository access could not be resolved.".to_string()),
+            metadata: BTreeMap::from([
+                ("provider".to_string(), "github".to_string()),
+                ("resource".to_string(), "installation".to_string()),
+            ]),
+            debug: None,
         },
     ));
 
@@ -38,10 +41,15 @@ fn retryable_dependency_credentials_failure_is_error_with_structured_metadata() 
         update.error_code,
         Some(PlatformErrorCode::ResourceUnavailable)
     );
-    assert_eq!(update.retryable, Some(true));
-    assert_eq!(update.provider.as_deref(), Some("github"));
-    assert_eq!(update.dependency.as_deref(), Some("github_api"));
-    assert!(update.message.contains("GitHub is temporarily unavailable"));
+    let platform_error = update.platform_error.expect("structured platform error");
+    assert!(platform_error.retryable);
+    assert_eq!(platform_error.metadata["provider"], "github");
+    assert_eq!(platform_error.metadata["resource"], "installation");
+    assert!(
+        update
+            .message
+            .contains("Repository access could not be resolved")
+    );
 }
 
 #[test]
@@ -52,14 +60,17 @@ fn user_credentials_failure_remains_failed() {
             code: PlatformErrorCode::ResourceNotFound,
             retryable: false,
             detail: None,
-            provider: Some("github".to_string()),
-            dependency: Some("repository".to_string()),
+            metadata: BTreeMap::from([
+                ("provider".to_string(), "github".to_string()),
+                ("resource".to_string(), "repository".to_string()),
+            ]),
+            debug: None,
         },
     ));
 
     assert_eq!(state, AgentTaskState::Failed);
     assert_eq!(update.error_code, Some(PlatformErrorCode::ResourceNotFound));
-    assert_eq!(update.retryable, Some(false));
+    assert!(!update.platform_error.unwrap().retryable);
 }
 
 #[test]
@@ -71,7 +82,7 @@ fn credential_request_error_redacts_internal_cause_from_status() {
 
     assert_eq!(state, AgentTaskState::Error);
     assert_eq!(update.error_code, Some(PlatformErrorCode::InternalError));
-    assert_eq!(update.retryable, Some(true));
+    assert!(update.platform_error.unwrap().retryable);
     assert!(!update.message.contains(internal));
 }
 

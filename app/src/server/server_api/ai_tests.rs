@@ -1,6 +1,3 @@
-use crate::ai::agent_sdk::driver::git_credentials::{
-    GIT_CREDENTIALS_BOOTSTRAP_BACKOFF, fetch_with_retry,
-};
 use chrono::{TimeZone, Utc};
 use cynic::MutationBuilder;
 use futures::executor::block_on;
@@ -8,7 +5,8 @@ use itertools::Itertools;
 use mockito::{Matcher, Server};
 use warp_graphql::ai::{AgentTaskState, PlatformErrorCode};
 use warp_graphql::error::{
-    PlatformError as GraphqlPlatformError, UserFacingError, UserFacingErrorInterface,
+    PlatformError as GraphqlPlatformError, PlatformErrorInfo, PlatformErrorMetadata,
+    UserFacingError, UserFacingErrorInterface,
 };
 use warp_graphql::mutations::update_agent_task::{
     UpdateAgentTask, UpdateAgentTaskInput, UpdateAgentTaskVariables,
@@ -28,6 +26,9 @@ use super::{
     agent_task_status_message_input, build_fork_conversation_url, build_list_agent_runs_url,
     build_run_followup_url, parse_task_git_credentials_result,
 };
+use crate::ai::agent_sdk::driver::git_credentials::{
+    GIT_CREDENTIALS_BOOTSTRAP_BACKOFF, fetch_with_retry,
+};
 use crate::notebooks::NotebookId;
 use crate::server::server_api::presigned_upload::upload_to_target;
 
@@ -35,14 +36,23 @@ use crate::server::server_api::presigned_upload::upload_to_target;
 fn parses_structured_task_git_credentials_error() {
     let error = TaskGitCredentialsError::from_user_facing(UserFacingError {
         error: UserFacingErrorInterface::PlatformError(GraphqlPlatformError {
-            message: "External dependency is unavailable.".to_string(),
-            code: PlatformErrorCode::ResourceUnavailable,
-            retryable: true,
-            detail: Some(
-                "GitHub is temporarily unavailable while resolving repository access.".to_string(),
-            ),
-            provider: Some("github".to_string()),
-            dependency: Some("github_api".to_string()),
+            message: "GitHub is temporarily unavailable.".to_string(),
+            detail: Some("Repository access could not be resolved.".to_string()),
+            info: PlatformErrorInfo {
+                code: PlatformErrorCode::ResourceUnavailable,
+                retryable: true,
+                metadata: vec![
+                    PlatformErrorMetadata {
+                        key: "provider".to_string(),
+                        value: "github".to_string(),
+                    },
+                    PlatformErrorMetadata {
+                        key: "resource".to_string(),
+                        value: "installation".to_string(),
+                    },
+                ],
+                debug: None,
+            },
         }),
         response_context: ResponseContext {
             server_version: None,
@@ -55,18 +65,19 @@ fn parses_structured_task_git_credentials_error() {
             code,
             retryable,
             detail,
-            provider,
-            dependency,
+            metadata,
+            debug,
         } => {
-            assert_eq!(message, "External dependency is unavailable.");
+            assert_eq!(message, "GitHub is temporarily unavailable.");
             assert_eq!(code, PlatformErrorCode::ResourceUnavailable);
             assert!(retryable);
             assert_eq!(
                 detail.as_deref(),
-                Some("GitHub is temporarily unavailable while resolving repository access.")
+                Some("Repository access could not be resolved.")
             );
-            assert_eq!(provider.as_deref(), Some("github"));
-            assert_eq!(dependency.as_deref(), Some("github_api"));
+            assert_eq!(metadata["provider"], "github");
+            assert_eq!(metadata["resource"], "installation");
+            assert_eq!(debug, None);
         }
         error => panic!("expected structured platform error, got {error:?}"),
     }
@@ -78,12 +89,17 @@ const DEPENDENCY_CREDENTIALS_RESPONSE: &str = r#"{
             "__typename": "UserFacingError",
             "error": {
                 "__typename": "PlatformError",
-                "message": "External dependency is unavailable.",
-                "code": "RESOURCE_UNAVAILABLE",
-                "retryable": true,
-                "detail": "GitHub is temporarily unavailable while resolving repository access.",
-                "provider": "github",
-                "dependency": "github_api"
+                "message": "GitHub is temporarily unavailable.",
+                "detail": "Repository access could not be resolved.",
+                "info": {
+                    "code": "RESOURCE_UNAVAILABLE",
+                    "retryable": true,
+                    "metadata": [
+                        {"key": "provider", "value": "github"},
+                        {"key": "resource", "value": "installation"}
+                    ],
+                    "debug": null
+                }
             },
             "responseContext": {"serverVersion": null}
         }
@@ -188,8 +204,8 @@ fn serialized_dependency_exhaustion_reports_error_with_metadata() {
 
     assert!(payload.contains("RESOURCE_UNAVAILABLE"));
     assert!(payload.contains(r#""retryable":true"#));
-    assert!(payload.contains(r#""provider":"github""#));
-    assert!(payload.contains(r#""dependency":"github_api""#));
+    assert!(payload.contains(r#""key":"provider","value":"github""#));
+    assert!(payload.contains(r#""key":"resource","value":"installation""#));
     assert!(payload.contains(r#""taskState":"ERROR""#));
     assert!(!payload.contains("credential-token-that-must-not-be-reported"));
 }
@@ -217,9 +233,9 @@ fn serialized_user_error_fails_fast_and_reports_failed() {
     let (state, status) = error.task_status();
     assert_eq!(state, AgentTaskState::Failed);
     assert_eq!(status.error_code, Some(PlatformErrorCode::InvalidRequest));
-    assert_eq!(status.retryable, Some(false));
-    assert_eq!(status.provider, None);
-    assert_eq!(status.dependency, None);
+    let platform_error = status.platform_error.expect("structured platform error");
+    assert!(!platform_error.retryable);
+    assert!(platform_error.metadata.is_empty());
 }
 
 #[test]

@@ -290,15 +290,21 @@ fn log_task_git_credentials_failure(
         TaskGitCredentialsError::Platform {
             code,
             retryable,
-            provider,
-            dependency,
+            metadata,
+            debug,
             ..
         } => {
+            let provider = metadata
+                .get("provider")
+                .map(String::as_str)
+                .unwrap_or("unknown");
+            let resource = metadata
+                .get("resource")
+                .map(String::as_str)
+                .unwrap_or("unknown");
             log::warn!(
                 "{operation} failed (attempt {attempt}, code={code:?}, retryable={retryable}, \
-                 provider={}, dependency={}, retry_delay_seconds={})",
-                provider.as_deref().unwrap_or("unknown"),
-                dependency.as_deref().unwrap_or("unknown"),
+                 provider={provider}, resource={resource}, retry_delay_seconds={})",
                 retry_delay.map_or(0, |delay| delay.as_secs()),
             );
             tracing::warn!(
@@ -306,11 +312,17 @@ fn log_task_git_credentials_failure(
                 attempt,
                 error_code = ?code,
                 retryable,
-                provider = provider.as_deref().unwrap_or("unknown"),
-                dependency = dependency.as_deref().unwrap_or("unknown"),
+                provider,
+                resource,
                 retry_delay_seconds = retry_delay.map_or(0, |delay| delay.as_secs()),
                 "Task git credentials request failed"
             );
+            if let Some(debug) = debug {
+                safe_warn!(
+                    safe: ("{operation} staging debug details are redacted"),
+                    full: ("{operation} staging debug details: {debug}")
+                );
+            }
         }
         TaskGitCredentialsError::Request(source) => {
             safe_warn!(

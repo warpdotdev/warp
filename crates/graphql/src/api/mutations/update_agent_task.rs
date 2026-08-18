@@ -36,11 +36,22 @@ pub struct AgentTaskStatusMessageInput {
     pub error_code: Option<PlatformErrorCode>,
     pub message: String,
     #[cynic(skip_serializing_if = "Option::is_none")]
-    pub retryable: Option<bool>,
+    pub error: Option<PlatformErrorInput>,
+}
+
+#[derive(cynic::InputObject, Debug)]
+pub struct PlatformErrorInput {
+    pub code: PlatformErrorCode,
+    pub retryable: bool,
+    pub metadata: Vec<PlatformErrorMetadataInput>,
     #[cynic(skip_serializing_if = "Option::is_none")]
-    pub provider: Option<String>,
-    #[cynic(skip_serializing_if = "Option::is_none")]
-    pub dependency: Option<String>,
+    pub debug: Option<String>,
+}
+
+#[derive(cynic::InputObject, Debug)]
+pub struct PlatformErrorMetadataInput {
+    pub key: String,
+    pub value: String,
 }
 
 #[derive(cynic::QueryFragment, Debug)]

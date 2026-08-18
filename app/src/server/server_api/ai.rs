@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 #[cfg(not(target_family = "wasm"))]
 use std::path::Path;
 use std::time::Duration;
@@ -63,8 +63,8 @@ use warp_graphql::mutations::request_bonus::{
     ProvideNegativeFeedbackResponseForAiConversationVariables, RequestsRefundedResult,
 };
 use warp_graphql::mutations::update_agent_task::{
-    AgentTaskStatusMessageInput, UpdateAgentTask, UpdateAgentTaskInput, UpdateAgentTaskResult,
-    UpdateAgentTaskVariables,
+    AgentTaskStatusMessageInput, PlatformErrorInput, PlatformErrorMetadataInput, UpdateAgentTask,
+    UpdateAgentTaskInput, UpdateAgentTaskResult, UpdateAgentTaskVariables,
 };
 use warp_graphql::mutations::update_merkle_tree::{
     MerkleTreeNode, UpdateMerkleTree, UpdateMerkleTreeInput, UpdateMerkleTreeResult,
@@ -168,9 +168,13 @@ const AI_ASSISTANT_REQUEST_TIMEOUT_SECONDS: u64 = 30;
 pub struct TaskStatusUpdate {
     pub message: String,
     pub error_code: Option<PlatformErrorCode>,
-    pub retryable: Option<bool>,
-    pub provider: Option<String>,
-    pub dependency: Option<String>,
+    pub platform_error: Option<TaskPlatformError>,
+}
+
+pub struct TaskPlatformError {
+    pub code: PlatformErrorCode,
+    pub retryable: bool,
+    pub metadata: BTreeMap<String, String>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -178,11 +182,11 @@ pub enum TaskGitCredentialsError {
     #[error("{message}")]
     Platform {
         message: String,
+        detail: Option<String>,
         code: PlatformErrorCode,
         retryable: bool,
-        detail: Option<String>,
-        provider: Option<String>,
-        dependency: Option<String>,
+        metadata: BTreeMap<String, String>,
+        debug: Option<String>,
     },
     #[error("{message}")]
     Unstructured { message: String },
@@ -199,11 +203,16 @@ impl TaskGitCredentialsError {
         match error {
             UserFacingErrorInterface::PlatformError(error) => Self::Platform {
                 message: error.message,
-                code: error.code,
-                retryable: error.retryable,
                 detail: error.detail,
-                provider: error.provider,
-                dependency: error.dependency,
+                code: error.info.code,
+                retryable: error.info.retryable,
+                metadata: error
+                    .info
+                    .metadata
+                    .into_iter()
+                    .map(|entry| (entry.key, entry.value))
+                    .collect(),
+                debug: error.info.debug,
             },
             error => Self::Unstructured {
                 message: get_user_facing_error_message(UserFacingError {
@@ -235,8 +244,8 @@ impl TaskGitCredentialsError {
                 code,
                 retryable,
                 detail,
-                provider,
-                dependency,
+                metadata,
+                ..
             } => {
                 let message = match detail {
                     Some(detail) if !detail.is_empty() => format!("{message} ({detail})"),
@@ -263,9 +272,11 @@ impl TaskGitCredentialsError {
                     TaskStatusUpdate {
                         message,
                         error_code: Some(*code),
-                        retryable: Some(*retryable),
-                        provider: provider.clone(),
-                        dependency: dependency.clone(),
+                        platform_error: Some(TaskPlatformError {
+                            code: *code,
+                            retryable: *retryable,
+                            metadata: metadata.clone(),
+                        }),
                     },
                 )
             }
@@ -274,9 +285,11 @@ impl TaskGitCredentialsError {
                 TaskStatusUpdate {
                     message: message.clone(),
                     error_code: Some(PlatformErrorCode::InvalidRequest),
-                    retryable: Some(false),
-                    provider: None,
-                    dependency: None,
+                    platform_error: Some(TaskPlatformError {
+                        code: PlatformErrorCode::InvalidRequest,
+                        retryable: false,
+                        metadata: BTreeMap::new(),
+                    }),
                 },
             ),
             Self::Request(_) => (
@@ -284,9 +297,11 @@ impl TaskGitCredentialsError {
                 TaskStatusUpdate {
                     message: self.to_string(),
                     error_code: Some(PlatformErrorCode::InternalError),
-                    retryable: Some(true),
-                    provider: None,
-                    dependency: None,
+                    platform_error: Some(TaskPlatformError {
+                        code: PlatformErrorCode::InternalError,
+                        retryable: true,
+                        metadata: BTreeMap::new(),
+                    }),
                 },
             ),
         }
@@ -317,12 +332,20 @@ fn parse_task_git_credentials_result(
 }
 
 fn agent_task_status_message_input(update: TaskStatusUpdate) -> AgentTaskStatusMessageInput {
+    let error = update.platform_error.map(|error| PlatformErrorInput {
+        code: error.code,
+        retryable: error.retryable,
+        metadata: error
+            .metadata
+            .into_iter()
+            .map(|(key, value)| PlatformErrorMetadataInput { key, value })
+            .collect(),
+        debug: None,
+    });
     AgentTaskStatusMessageInput {
         message: update.message,
         error_code: update.error_code,
-        retryable: update.retryable,
-        provider: update.provider,
-        dependency: update.dependency,
+        error,
     }
 }
 fn public_api_user_query_mode(mode: UserQueryMode) -> &'static str {
@@ -349,9 +372,7 @@ impl TaskStatusUpdate {
         Self {
             message: message.into(),
             error_code: None,
-            retryable: None,
-            provider: None,
-            dependency: None,
+            platform_error: None,
         }
     }
 
@@ -360,9 +381,7 @@ impl TaskStatusUpdate {
         Self {
             message: message.into(),
             error_code: Some(error_code),
-            retryable: None,
-            provider: None,
-            dependency: None,
+            platform_error: None,
         }
     }
 }

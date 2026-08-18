@@ -12,11 +12,22 @@ pub struct UserFacingError {
 #[derive(cynic::QueryFragment, Debug)]
 pub struct PlatformError {
     pub message: String,
+    pub detail: Option<String>,
+    pub info: PlatformErrorInfo,
+}
+
+#[derive(cynic::QueryFragment, Debug)]
+pub struct PlatformErrorInfo {
     pub code: PlatformErrorCode,
     pub retryable: bool,
-    pub detail: Option<String>,
-    pub provider: Option<String>,
-    pub dependency: Option<String>,
+    pub metadata: Vec<PlatformErrorMetadata>,
+    pub debug: Option<String>,
+}
+
+#[derive(cynic::QueryFragment, Debug)]
+pub struct PlatformErrorMetadata {
+    pub key: String,
+    pub value: String,
 }
 
 #[derive(cynic::InlineFragments, Debug)]
