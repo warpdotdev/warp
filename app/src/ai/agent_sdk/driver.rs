@@ -193,29 +193,23 @@ const LEGACY_OZ_PARENT_LISTENER_MANAGED_EXTERNALLY_ENV: &str =
     "OZ_PARENT_LISTENER_MANAGED_EXTERNALLY";
 const LEGACY_OZ_PARENT_STATE_ROOT_ENV: &str = "OZ_PARENT_STATE_ROOT";
 
-/// Fixed, arbitrary namespace for [`ephemeral_mcp_installation_id`]. Never reused
-/// for anything else; only its stability across builds matters.
+/// Fixed namespace for [`ephemeral_mcp_installation_id`]. Arbitrary; never reused.
 const EPHEMERAL_MCP_INSTALLATION_NAMESPACE: Uuid = Uuid::from_bytes([
     0xf9, 0x79, 0x1a, 0x88, 0xff, 0xb7, 0x41, 0x88, 0xa6, 0x39, 0xa7, 0x2d, 0xf2, 0x94, 0x22, 0x3f,
 ]);
 
-/// Derives the installation id for an ephemeral MCP server resolved from a managed
-/// MCP client config (a well-known integration sentinel or a non-local managed MCP
-/// UUID).
+/// Installation id for an ephemeral MCP server (well-known sentinel or non-local
+/// managed MCP UUID) resolved from a managed MCP client config.
 ///
-/// When `task_id` is set (ambient/cloud runs), the id is deterministic: hashing the
-/// run id together with the requested spec token and the resolved server's own name
-/// means a run that resumes in a rebuilt sandbox re-resolves the *same* server to the
-/// *same* id, instead of a fresh random one every time. That stability matters
-/// because the id is echoed into the model's tool-call arguments and can persist in
-/// conversation history across a rebuild; a random id would silently go stale and
-/// the model's next reference to it would fail with "MCP server not found".
+/// With `task_id` (ambient/cloud runs), the id is deterministic: hashing run id +
+/// spec token + server name means a rebuilt sandbox re-resolves the same server to
+/// the same id. Ids can persist in the model's conversation history across a
+/// rebuild; a random id would go stale and fail as "MCP server not found".
 ///
-/// When `task_id` is `None` (local interactive sessions, which never rebuild a
-/// sandbox), a random id is used instead: a deterministic id keyed only on the spec
-/// token would collide across concurrent conversations resolving the same well-known
-/// id in the same process, since `TemplatableMCPServerManager` tracks installations
-/// in a single process-wide map keyed by this id.
+/// Without `task_id` (local sessions; no rebuilds), ids stay random: hashing only
+/// the spec token would collide across concurrent conversations in the same
+/// process, since `TemplatableMCPServerManager` keys installations by this id
+/// process-wide.
 fn ephemeral_mcp_installation_id(
     task_id: Option<AmbientAgentTaskId>,
     spec_token: &str,

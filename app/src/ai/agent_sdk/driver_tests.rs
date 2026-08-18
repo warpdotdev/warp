@@ -463,7 +463,7 @@ fn managed_command_config_missing_secret_leaves_placeholder() {
     }
 }
 
-// ── Ephemeral MCP installation id stability across sandbox rebuilds ────────
+// ── Ephemeral MCP installation ids: stable across rebuilds ─────────────────
 
 #[test]
 fn ephemeral_installation_id_is_stable_across_resolutions_for_same_run() {
@@ -471,8 +471,7 @@ fn ephemeral_installation_id_is_stable_across_resolutions_for_same_run() {
     let config_json =
         r#"{"mcpServers":{"slack":{"url":"https://app.warp.dev/mcp/integration-proxy/slack"}}}"#;
 
-    // Simulates the same run re-resolving the same well-known server on a rebuilt
-    // sandbox: two independent calls, same task_id and spec token.
+    // Same run re-resolving the same server after a rebuild.
     let first = AgentDriver::installations_from_managed_client_config_json(
         config_json,
         Some(task_id),
@@ -491,8 +490,7 @@ fn ephemeral_installation_id_is_stable_across_resolutions_for_same_run() {
     assert_eq!(
         first[0].uuid(),
         second[0].uuid(),
-        "the same run resolving the same well-known server must get the same id \
-         every time, or a stale id from before a sandbox rebuild goes unresolvable"
+        "same run + same server must yield the same id across rebuilds"
     );
 }
 
@@ -519,8 +517,7 @@ fn ephemeral_installation_id_differs_across_runs() {
     assert_ne!(
         a[0].uuid(),
         b[0].uuid(),
-        "different runs resolving the same well-known server must not collide, since \
-         TemplatableMCPServerManager tracks installations in a single process-wide map"
+        "different runs must not collide onto the same id"
     );
 }
 
@@ -548,7 +545,7 @@ fn ephemeral_installation_id_differs_across_servers_in_same_run() {
     assert_ne!(
         slack[0].uuid(),
         linear[0].uuid(),
-        "two different servers within the same run must not collide onto one id"
+        "different servers in one run must not collide onto the same id"
     );
 }
 
@@ -567,8 +564,7 @@ fn ephemeral_installation_id_is_random_without_task_id() {
     assert_ne!(
         first[0].uuid(),
         second[0].uuid(),
-        "local interactive sessions (no task_id) never rebuild a sandbox, so ids stay \
-         random to avoid colliding across concurrent conversations in the same process"
+        "no task_id means no rebuild to survive, so ids stay random"
     );
 }
 
