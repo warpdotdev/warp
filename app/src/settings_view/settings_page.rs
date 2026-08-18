@@ -400,26 +400,28 @@ pub fn render_separator(appearance: &Appearance) -> Box<dyn Element> {
         .finish()
 }
 
-pub fn render_cta_banner<A: Action + Clone>(
-    icon: Icon,
+/// A single line of sub-text whose leading phrase is a hyperlink dispatching `action`.
+pub fn render_cta_line<A: Action + Clone>(
     link_text: &str,
     trailing_copy: &str,
     action: A,
+    font_size: f32,
     appearance: &Appearance,
 ) -> Box<dyn Element> {
     let theme = appearance.theme();
     let sub_text = theme.sub_text_color(theme.background());
-    let body = FormattedTextElement::new(
+    FormattedTextElement::new(
         FormattedText::new([FormattedTextLine::Line(vec![
             FormattedTextFragment::hyperlink_action(link_text, action),
             FormattedTextFragment::plain_text(format!(" {trailing_copy}")),
         ])]),
-        appearance.ui_font_size(),
+        font_size,
         appearance.ui_font_family(),
         appearance.ui_font_family(),
         sub_text.into(),
         HighlightedHyperlink::default(),
     )
+    .with_no_text_wrapping()
     .with_hyperlink_font_color(theme.accent().into_solid())
     .register_default_click_handlers_with_action_support(|lens, event, ctx| match lens {
         HyperlinkLens::Url(url) => ctx.open_url(url),
@@ -429,8 +431,33 @@ pub fn render_cta_banner<A: Action + Clone>(
             }
         }
     })
-    .finish();
+    .finish()
+}
 
+pub fn render_cta_banner<A: Action + Clone>(
+    icon: Icon,
+    link_text: &str,
+    trailing_copy: &str,
+    action: A,
+    appearance: &Appearance,
+) -> Box<dyn Element> {
+    let body = render_cta_line(
+        link_text,
+        trailing_copy,
+        action,
+        appearance.ui_font_size(),
+        appearance,
+    );
+    render_banner(icon, body, appearance)
+}
+
+pub fn render_banner(
+    icon: Icon,
+    body: Box<dyn Element>,
+    appearance: &Appearance,
+) -> Box<dyn Element> {
+    let theme = appearance.theme();
+    let sub_text = theme.sub_text_color(theme.background());
     let icon = ConstrainedBox::new(icon.to_warpui_icon(sub_text).finish())
         .with_width(14.)
         .with_height(14.)

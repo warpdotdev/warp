@@ -35,7 +35,7 @@ use warpui::{
 use super::SettingsSection;
 use super::admin_actions::AdminActions;
 use super::settings_page::{
-    MatchData, PageType, SettingsPageMeta, SettingsPageViewHandle, SettingsWidget,
+    MatchData, PageType, SettingsPageMeta, SettingsPageViewHandle, SettingsWidget, render_banner,
     render_cta_banner, render_customer_type_badge, render_separator, render_sub_header,
 };
 use super::tab_menu::Tabs;
@@ -88,10 +88,11 @@ const CREATE_TEAM_DESCRIPTION: &str = "When you create a team, you can collabora
 
 const OR_JOIN_TEAM_HEADER: &str = "Or, join an existing team within your company";
 const JOIN_TEAM_HEADER: &str = "Join an existing team within your company";
+const NO_JOINABLE_TEAMS_HEADER: &str = "There are currently no joinable teams.";
 const NO_TEAMS_TO_JOIN_DESCRIPTION: &str =
-    "You have no available teams to join — contact an admin to add you to a team.";
+    "Contact an admin to join a team to gain access to more features.";
 const ADMIN_PANEL_CTA_LINK_TEXT: &str = "Visit the admin panel";
-const ADMIN_PANEL_CTA_TRAILING_COPY: &str = "to manage teams.";
+const ADMIN_PANEL_CTA_TRAILING_COPY: &str = "to manage and create new teams.";
 
 // Styling for team management page
 const LEAVE_TEAM_BUTTON_LABEL: &str = "Leave team";
@@ -4062,15 +4063,15 @@ impl TeamsWidget {
         let is_workspace_admin = workspace
             .zip(email)
             .is_some_and(|(workspace, email)| workspace.is_workspace_admin(email));
-        if is_workspace_admin {
-            sections.push(TeamsPageSection::AdminPanelCta);
-        }
         if join_teams {
             sections.push(TeamsPageSection::JoinTeams {
                 header: JOIN_TEAM_HEADER,
             });
         } else if !is_workspace_admin {
             sections.push(TeamsPageSection::NoTeamsToJoin);
+        }
+        if is_workspace_admin {
+            sections.push(TeamsPageSection::AdminPanelCta);
         }
         sections
     }
@@ -4107,7 +4108,7 @@ impl TeamsWidget {
                             TeamsPageAction::OpenWorkspaceAdminPanel,
                             appearance,
                         ))
-                        .with_padding_bottom(16.)
+                        .with_padding_top(16.)
                         .finish(),
                     );
                 }
@@ -4115,13 +4116,26 @@ impl TeamsWidget {
                     page.add_child(self.render_join_teams_section(view, appearance, header));
                 }
                 TeamsPageSection::NoTeamsToJoin => {
-                    page.add_child(
-                        Container::new(self.render_description(
+                    let theme = appearance.theme();
+                    let body = Shrinkable::new(
+                        1.,
+                        Text::new(
                             NO_TEAMS_TO_JOIN_DESCRIPTION.to_string(),
-                            appearance,
-                        ))
-                        .with_padding_top(6.)
+                            appearance.ui_font_family(),
+                            appearance.ui_font_size(),
+                        )
+                        .with_color(theme.sub_text_color(theme.background()).into())
                         .finish(),
+                    )
+                    .finish();
+                    page.add_child(self.render_sub_header_with_subtext_color(
+                        appearance,
+                        NO_JOINABLE_TEAMS_HEADER.to_string(),
+                    ));
+                    page.add_child(
+                        Container::new(render_banner(Icon::Info, body, appearance))
+                            .with_padding_top(6.)
+                            .finish(),
                     );
                 }
             }

@@ -264,10 +264,10 @@ fn native_workspace_admin_gets_admin_panel_cta() {
     assert_eq!(
         TeamsWidget::page_sections_for(Some(&workspace), Some(ADMIN_EMAIL), true),
         vec![
-            TeamsPageSection::AdminPanelCta,
             TeamsPageSection::JoinTeams {
                 header: JOIN_TEAM_HEADER
-            }
+            },
+            TeamsPageSection::AdminPanelCta
         ]
     );
     assert_eq!(
