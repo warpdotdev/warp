@@ -1249,6 +1249,23 @@ const SEARCH_IDLE_TIMEOUT: Duration = Duration::from_secs(5);
 /// document. Committing a `Rebuild` on its own guarantees any earlier op is durably committed (and
 /// so actually gets cleared) before the rebuild's clear runs, while ops requested after a `Rebuild`
 /// are still free to batch together in a later chunk.
+///
+/// A `Rebuild`'s own inserts are deliberately *not* further split into bounded sub-commits, even
+/// though that means one `Rebuild` can commit an arbitrarily large document set in a single
+/// writer transaction. Splitting it would not reduce peak memory at the layer that actually
+/// retains it: Tantivy's own add-document pipeline (`crossbeam_channel::bounded`, sized to
+/// `PIPELINE_MAX_SIZE_IN_DOCS` = 10,000 *documents*, not bytes -- see
+/// `tantivy::indexer::index_writer`) is drained continuously by background indexing threads,
+/// independent of when/whether we call `commit()`; `add_document` already blocks once that
+/// pipeline is full, so a single rebuild's transient footprint there is capped at ~10,000
+/// documents' worth of content regardless of how many `execute_operations` calls we split it
+/// across. `memory_budget` (see [`DEFAULT_MEMORY_BUDGET`]) similarly does not bound this: it caps
+/// each indexing thread's in-memory segment arena, a downstream and separate pool from the raw
+/// document pipeline. Splitting commits would only trade this (already-bounded) cost for a new
+/// one: concurrent searches observing a partially-rebuilt index between sub-commits. What the
+/// coalescing in [`AsyncSearcher::rebuild_index_async`] actually bounds -- and what the pipeline
+/// has no protection against on its own -- is *how many rebuilds' worth* of documents can be in
+/// flight at once; that is the fix for unbounded growth here, not commit granularity.
 fn resolve_batch(batch: Vec<QueuedOp>) -> Vec<Vec<SearcherEvent>> {
     let mut chunks = Vec::new();
     let mut current = Vec::new();
