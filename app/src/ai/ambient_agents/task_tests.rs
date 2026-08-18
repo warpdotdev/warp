@@ -170,6 +170,74 @@ fn ambient_agent_task_deserializes_orchestration_source() {
 }
 
 #[test]
+fn ambient_agent_task_deserializes_jira_source() {
+    let mut task = task_json_with_run_time("run_time", json!("PT1S"));
+    task["source"] = json!("JIRA");
+
+    let task: AmbientAgentTask = serde_json::from_value(task).unwrap();
+
+    assert_eq!(task.source, Some(AgentSource::Jira));
+    assert!(!task.blocks_cloud_followups());
+}
+
+#[test]
+fn ambient_agent_task_deserializes_gitlab_webhook_source() {
+    let mut task = task_json_with_run_time("run_time", json!("PT1S"));
+    task["source"] = json!("GITLAB_WEBHOOK");
+
+    let task: AmbientAgentTask = serde_json::from_value(task).unwrap();
+
+    assert_eq!(task.source, Some(AgentSource::GitLabWebhook));
+    assert!(task.blocks_cloud_followups());
+}
+
+#[test]
+fn ambient_agent_task_deserializes_run_scorer_source() {
+    let mut task = task_json_with_run_time("run_time", json!("PT1S"));
+    task["source"] = json!("RUN_SCORER");
+
+    let task: AmbientAgentTask = serde_json::from_value(task).unwrap();
+
+    assert_eq!(task.source, Some(AgentSource::RunScorer));
+    assert!(task.blocks_cloud_followups());
+}
+
+#[test]
+fn ambient_agent_task_deserializes_benchmark_trial_source() {
+    let mut task = task_json_with_run_time("run_time", json!("PT1S"));
+    task["source"] = json!("BENCHMARK_TRIAL");
+
+    let task: AmbientAgentTask = serde_json::from_value(task).unwrap();
+
+    assert_eq!(task.source, Some(AgentSource::BenchmarkTrial));
+    assert!(task.blocks_cloud_followups());
+}
+
+#[test]
+fn ambient_agent_task_deserializes_autofix_source_under_both_spellings() {
+    for wire_value in ["AUTOFIX", "SELF_IMPROVEMENT"] {
+        let mut task = task_json_with_run_time("run_time", json!("PT1S"));
+        task["source"] = json!(wire_value);
+
+        let task: AmbientAgentTask = serde_json::from_value(task).unwrap();
+
+        assert_eq!(task.source, Some(AgentSource::Autofix));
+        assert!(task.blocks_cloud_followups());
+    }
+    assert_eq!(AgentSource::Autofix.as_str(), "SELF_IMPROVEMENT");
+}
+
+#[test]
+fn ambient_agent_task_falls_back_to_none_for_unrecognized_source() {
+    let mut task = task_json_with_run_time("run_time", json!("PT1S"));
+    task["source"] = json!("SOME_FUTURE_SOURCE_THE_CLIENT_DOES_NOT_KNOW_ABOUT");
+
+    let task: AmbientAgentTask = serde_json::from_value(task).unwrap();
+
+    assert_eq!(task.source, None);
+}
+
+#[test]
 fn retained_failed_and_error_tasks_have_attachable_live_sessions() {
     let session_id = "22222222-2222-2222-2222-222222222222";
 
