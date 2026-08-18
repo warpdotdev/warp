@@ -344,6 +344,55 @@ fn a_local_terminal_reports_and_starts_the_sampler() {
     assert!(report.process.is_none());
 }
 
+/// A builtin or shell function runs in the shell process itself, which then
+/// holds the terminal. Sampling only descendants would show an empty tree while
+/// the command is busy.
+#[cfg(unix)]
+#[test]
+fn the_shell_joins_the_tree_when_it_holds_the_terminal() {
+    use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, System};
+
+    use super::{command_process_tree, process_group_of};
+
+    let mut system = System::new();
+    system.refresh_processes_specifics(
+        ProcessesToUpdate::All,
+        true, /* remove_dead_processes */
+        ProcessRefreshKind::nothing(),
+    );
+
+    // This test's own process stands in for the shell, so the process group it
+    // reports is a real one rather than a fabricated number.
+    let shell_pid = Pid::from_u32(std::process::id());
+    let shell_pgid = process_group_of(shell_pid).expect("the test process has a process group");
+
+    let tree = command_process_tree(&system, shell_pid, Some(shell_pgid));
+    assert!(tree.contains(&shell_pid));
+}
+
+#[cfg(unix)]
+#[test]
+fn the_shell_stays_out_of_the_tree_when_another_job_holds_the_terminal() {
+    use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, System};
+
+    use super::{command_process_tree, process_group_of};
+
+    let mut system = System::new();
+    system.refresh_processes_specifics(
+        ProcessesToUpdate::All,
+        true, /* remove_dead_processes */
+        ProcessRefreshKind::nothing(),
+    );
+
+    let shell_pid = Pid::from_u32(std::process::id());
+    let shell_pgid = process_group_of(shell_pid).expect("the test process has a process group");
+
+    // Any group other than the shell's stands for an external job holding the
+    // terminal; the shell is then only waiting on it.
+    let tree = command_process_tree(&system, shell_pid, Some(shell_pgid + 1));
+    assert!(!tree.contains(&shell_pid));
+}
+
 #[test]
 fn aggregate_state_prefers_the_strongest_evidence_of_progress() {
     assert_eq!(

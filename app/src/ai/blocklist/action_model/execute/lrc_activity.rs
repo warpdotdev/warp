@@ -1,23 +1,15 @@
-//! Collects evidence that an agent-monitored long-running command is still
-//! doing work.
+//! Samples the shell's process tree to describe whether an agent-monitored
+//! long-running command is still doing work.
 //!
-//! The agent decides whether to cancel a long-running command from the snapshot
-//! it is given. When that snapshot is only a terminal grid, a command that
-//! redirects its output to a file, suppresses output, or computes silently is
-//! indistinguishable from a hung one. This module adds process-tree evidence —
-//! CPU accrual, I/O writes, and churn in the set of live processes — so the
-//! agent can tell "silent" from "stuck".
+//! [`LrcActivityMonitor`] holds one entry per monitored command. While an agent
+//! action that can produce a snapshot is in flight, a sampler runs every
+//! [`SAMPLE_INTERVAL`] and records CPU time, bytes written, the number of live
+//! processes, and the foreground process state.
+//! [`LrcActivityMonitor::report`] folds everything accumulated since the
+//! previous report into the [`LrcActivity`] attached to a snapshot, including
+//! how long the tree has been idle.
 //!
-//! Sampling runs at a fixed 1 Hz for as long as an agent-monitored command is
-//! active, which is what makes the reported "seconds since last activity"
-//! wall-clock accurate regardless of how far apart the agent's polls are. The
-//! sampler is started when an agent action that can produce a snapshot begins
-//! and stops as soon as no monitored command remains, so ordinary terminal use
-//! pays nothing for it.
-//!
-//! Remote sessions are not monitored at all: their processes live on another
-//! host, so nothing observable here says anything about them. They report no
-//! activity, the same as an older client.
+//! Only local sessions are sampled; remote sessions report no activity.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -353,6 +345,10 @@ fn aggregate_state(states: &[LrcProcessState]) -> LrcProcessState {
 /// other children (background jobs, its own helpers). Pipeline members are
 /// siblings rather than descendants of the group leader, so the group is matched
 /// per process rather than by walking down from the leader.
+///
+/// The shell itself joins the tree when it holds the terminal, since builtins
+/// and shell functions run in that process and would otherwise leave the tree
+/// looking empty while the command is busy.
 fn command_process_tree(system: &System, shell_pid: Pid, foreground_pgid: Option<u32>) -> Vec<Pid> {
     let descendants = descendants_of(system, shell_pid);
 
@@ -360,11 +356,15 @@ fn command_process_tree(system: &System, shell_pid: Pid, foreground_pgid: Option
         return descendants.into_iter().collect();
     };
 
-    let in_foreground_group: Vec<Pid> = descendants
+    let mut in_foreground_group: Vec<Pid> = descendants
         .iter()
         .filter(|pid| process_group_of(**pid) == Some(pgid))
         .copied()
         .collect();
+
+    if process_group_of(shell_pid) == Some(pgid) {
+        in_foreground_group.push(shell_pid);
+    }
 
     // An empty result means the group is stale or unreadable rather than that
     // the command is gone, so fall back rather than under-report.

@@ -332,8 +332,6 @@ fn convert_input_to_user_input(
                             command_id: block_id.as_str().to_owned(),
                             is_alt_screen_active,
                             is_preempted: false,
-                            // A user-initiated query about a running CLI agent, not an
-                            // agent-monitored long-running command.
                             activity: None,
                         }),
                     }),
