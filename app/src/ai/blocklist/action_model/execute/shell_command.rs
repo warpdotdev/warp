@@ -976,14 +976,9 @@ fn decorate_requested_command_for_shell(
         // can block agent-driven commands. Prefixing the full command line with `nocorrect`
         // suppresses correction for this execution while preserving the user's shell state.
         //
-        // `nocorrect` cannot directly precede a parenthesized subshell, so for the pager-wrapped
-        // form we first run a no-op `:` command to flip the parser's nocorrect state and then run
-        // the real pipeline unchanged.
-        if disables_pager {
-            format!("nocorrect :; {command}")
-        } else {
-            format!("nocorrect {command}")
-        }
+        // Run a no-op `:` command after `nocorrect` so the parser's nocorrect state is set
+        // before arbitrary command syntax (simple commands, lists, subshells, loops, etc.).
+        format!("nocorrect :; {command}")
     } else {
         command
     }
