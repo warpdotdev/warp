@@ -173,7 +173,12 @@ pub(crate) const WARP_DRIVE_SYNC_TIMEOUT: Duration = Duration::from_secs(60);
 /// Maximum time to wait for an automatic error resume before propagating the error.
 /// If no follow-up status arrives within this window, the driver terminates with the
 /// original error so the CLI does not hang indefinitely.
-const AUTO_RESUME_TIMEOUT: Duration = Duration::from_secs(120);
+///
+/// This is re-armed per recovery attempt: a recovery that lands flips the conversation
+/// back to `InProgress`, which cancels the deadline, and a subsequent failure schedules a
+/// fresh one. So it bounds a single attempt, not the whole recovery chain — but a single
+/// attempt's wait (including the recovery backoff) still has to fit inside it.
+pub(crate) const AUTO_RESUME_TIMEOUT: Duration = Duration::from_secs(120);
 /// Signals to Claude child-harness hooks that Warp already owns the background
 /// message-listener lifecycle, so the plugin should reuse the shared state
 /// files instead of spawning and cleaning up its own listener.

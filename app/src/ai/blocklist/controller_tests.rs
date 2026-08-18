@@ -12,6 +12,7 @@ use crate::ai::agent::{
     AIAgentAttachment, AIAgentContext, AIAgentInput, CancellationReason, ImageContext,
     PassiveSuggestionTrigger, UserQueryMode,
 };
+use super::response_stream::RecoveryBudget;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::blocklist::{
     BlocklistAIHistoryEvent, BlocklistAIHistoryModel, PendingAttachment, PendingFile, RequestInput,
@@ -193,7 +194,8 @@ fn cancelling_conversation_aborts_pending_auto_resume() {
 
         terminal.update(&mut app, |terminal, ctx| {
             terminal.ai_controller().update(ctx, |controller, ctx| {
-                controller.schedule_auto_resume_after_error(conversation_id, ctx);
+                let recovery = RecoveryBudget::fresh().next_attempt();
+                controller.schedule_auto_resume_after_error(conversation_id, recovery, ctx);
                 assert!(
                     controller
                         .pending_auto_resume_handles
