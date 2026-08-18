@@ -95,7 +95,7 @@ fn block_working_directory_updated_does_not_drain_finish_senders() {
 fn decorate_requested_command_for_shell_prefixes_zsh_commands_with_nocorrect() {
     assert_eq!(
         decorate_requested_command_for_shell(Some(ShellType::Zsh), "zef file.md", false, true),
-        "nocorrect zef file.md"
+        "nocorrect :; zef file.md"
     );
 }
 
