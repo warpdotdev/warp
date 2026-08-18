@@ -16,8 +16,8 @@ use crate::system::memory_footprint;
 use crate::terminal::TerminalView;
 use crate::{TelemetryEvent, send_telemetry_from_app_ctx, send_telemetry_sync_from_ctx};
 
-/// The threshold at which we emit a memory usage warning.
-const MEMORY_USAGE_WARNING_THRESHOLD: Option<Byte> = byte_unit::Byte::GIGABYTE.multiply(10);
+/// The threshold at which we emit a memory usage warning, in bytes.
+const MEMORY_USAGE_WARNING_THRESHOLD_BYTES: u64 = Byte::GIGABYTE.as_u64() * 10;
 
 /// The refresh interval for system information, in seconds.
 const REFRESH_INTERVAL_S: usize = 5;
@@ -192,10 +192,7 @@ impl SystemInfo {
         // Use footprint (not RSS) for the threshold so we catch memory
         // that has been swapped out or compressed by the OS.
         let footprint_bytes = memory_footprint.as_u64();
-        let threshold_bytes = MEMORY_USAGE_WARNING_THRESHOLD
-            .expect("Threshold should not overflow u64")
-            .as_u64();
-        let is_excessive = footprint_bytes >= threshold_bytes;
+        let is_excessive = footprint_bytes >= MEMORY_USAGE_WARNING_THRESHOLD_BYTES;
 
         let Some(triggering_footprint_bytes) = self.pending_excessive_memory_footprint_bytes else {
             self.pending_excessive_memory_footprint_bytes = is_excessive.then_some(footprint_bytes);

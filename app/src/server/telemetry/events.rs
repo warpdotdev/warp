@@ -2178,7 +2178,7 @@ pub enum TelemetryEvent {
         /// vary by OS).  See `memory_footprint::memory_breakdown()`.
         memory_breakdown: serde_json::Value,
     },
-    /// Emitted when the OS memory footprint crossed `MEMORY_USAGE_WARNING_THRESHOLD` but had
+    /// Emitted when the OS memory footprint crossed `MEMORY_USAGE_WARNING_THRESHOLD_BYTES` but had
     /// already dropped back under it by the time we re-checked on the next poll tick, so the spike
     /// looks transient rather than sustained.
     TransientMemorySpike {
