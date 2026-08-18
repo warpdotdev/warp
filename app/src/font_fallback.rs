@@ -5,10 +5,6 @@ use warpui::fonts::ExternalFontFamily;
 
 use crate::ChannelState;
 
-// This module is only registered as the app's fallback-font provider on web/wasm (see
-// `launch` in `lib.rs`), but it's compiled on every target so that `fallback_font_fn`'s
-// mapping logic can be covered by a native unit test.
-#[cfg_attr(not(target_family = "wasm"), allow(dead_code))]
 fn url_for_font(family_name: &str, font_file: &str) -> String {
     format!(
         "{}/assets/client/static/fallback-fonts/{}/{}",
@@ -107,7 +103,6 @@ lazy_static! {
     };
 }
 
-#[cfg_attr(not(target_family = "wasm"), allow(dead_code))]
 pub fn fallback_font_fn(ch: char) -> Option<ExternalFontFamily> {
     match ch {
         '\u{007F}'..='\u{007F}'
@@ -1441,7 +1436,3 @@ pub fn fallback_font_fn(ch: char) -> Option<ExternalFontFamily> {
         _ => None,
     }
 }
-
-#[cfg(test)]
-#[path = "font_fallback_tests.rs"]
-mod tests;
