@@ -118,6 +118,7 @@ impl<T, S> Lazy<T, S> {
 
     /// Returns the already-computed value without requiring a `&S`, or `None` if it hasn't been
     /// computed (or provided) yet.
+    #[cfg(test)]
     pub fn get_if_cached(&self) -> Option<&T> {
         self.0.cell.get()
     }
