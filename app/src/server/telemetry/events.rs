@@ -2178,16 +2178,13 @@ pub enum TelemetryEvent {
         /// vary by OS).  See `memory_footprint::memory_breakdown()`.
         memory_breakdown: serde_json::Value,
     },
-    /// Emitted when the OS memory footprint crossed
-    /// `MEMORY_USAGE_WARNING_THRESHOLD` but had already dropped back under it
-    /// by the time we re-checked on the next poll tick, so we skip sending
-    /// `MemoryUsageHigh` (and the associated Sentry heap-dump report) for
-    /// what looks like a short-lived spike.
+    /// Emitted when the OS memory footprint crossed `MEMORY_USAGE_WARNING_THRESHOLD` but had
+    /// already dropped back under it by the time we re-checked on the next poll tick, so the spike
+    /// looks transient rather than sustained.
     TransientMemorySpike {
-        /// The OS memory footprint (bytes) that crossed the threshold.
+        /// The OS footprint, not RSS.
         triggering_footprint_bytes: u64,
-        /// The OS memory footprint (bytes) re-measured at confirmation time,
-        /// after which we determined the spike was no longer excessive.
+        /// The OS footprint, not RSS, at confirmation time.
         confirmation_footprint_bytes: u64,
     },
     EnvVarCollectionInvoked(EnvVarTelemetryMetadata),

@@ -46,10 +46,9 @@ pub struct SystemInfo {
     system: sysinfo::System,
     /// Whether or not we've already emitted an event due to high memory usage.
     has_emitted_memory_warning_event: bool,
-    /// Set to the memory footprint (in bytes) that crossed
-    /// `MEMORY_USAGE_WARNING_THRESHOLD` on the previous poll tick, while we
-    /// wait for the next tick to confirm the spike is sustained rather than a
-    /// transient blip. `None` when there is no pending confirmation.
+    /// Set to the memory footprint (in bytes) that crossed `MEMORY_USAGE_WARNING_THRESHOLD` on the
+    /// previous poll tick, while we wait for the next tick to confirm the spike is sustained rather
+    /// than a transient blip.  `None` when there is no pending confirmation.
     pending_excessive_memory_footprint_bytes: Option<u64>,
     /// A circular buffer storing resource usage data.
     stats: StatsBuffer,
@@ -175,86 +174,79 @@ impl SystemInfo {
     /// The Rudderstack telemetry event still reports `rss` so existing
     /// dashboards are unaffected.
     ///
-    /// A crossing of the threshold is only reported once it's *confirmed*:
-    /// still excessive on the very next poll tick (`REFRESH_INTERVAL` later),
-    /// rather than on the tick that first observed it. That way a short-lived
-    /// spike that's freed moments later -- which would otherwise produce a
-    /// Sentry event and heap profile that are worthless because the memory is
-    /// already gone -- is skipped instead of reported.  A skip does not
-    /// consume `has_emitted_memory_warning_event`, so an early transient spike
-    /// doesn't silence the process for the rest of its lifetime.
+    /// A crossing of the threshold is only reported once it's confirmed still excessive on the next
+    /// poll tick, rather than on the tick that first observed it, so a short-lived spike that's
+    /// freed moments later is skipped instead of producing a worthless Sentry event and heap
+    /// profile.  A skip does not consume `has_emitted_memory_warning_event`, so an early transient
+    /// spike doesn't silence the process for the rest of its lifetime.
     fn check_for_excessive_memory_usage(
         &mut self,
         rss: Byte,
         memory_footprint: Byte,
         ctx: &mut ModelContext<Self>,
     ) {
+        if self.has_emitted_memory_warning_event {
+            return;
+        }
+
+        // Use footprint (not RSS) for the threshold so we catch memory
+        // that has been swapped out or compressed by the OS.
+        let footprint_bytes = memory_footprint.as_u64();
         let threshold_bytes = MEMORY_USAGE_WARNING_THRESHOLD
             .expect("Threshold should not overflow u64")
             .as_u64();
-        // Use footprint (not RSS) for the threshold so we catch memory that
-        // has been swapped out or compressed by the OS.
-        let footprint_bytes = memory_footprint.as_u64();
+        let is_excessive = footprint_bytes >= threshold_bytes;
 
-        let (has_emitted_memory_warning_event, pending, decision) = decide_memory_warning(
-            self.has_emitted_memory_warning_event,
-            self.pending_excessive_memory_footprint_bytes,
-            footprint_bytes,
-            threshold_bytes,
-        );
-        self.has_emitted_memory_warning_event = has_emitted_memory_warning_event;
-        self.pending_excessive_memory_footprint_bytes = pending;
+        let Some(triggering_footprint_bytes) = self.pending_excessive_memory_footprint_bytes else {
+            self.pending_excessive_memory_footprint_bytes = is_excessive.then_some(footprint_bytes);
+            return;
+        };
+        self.pending_excessive_memory_footprint_bytes = None;
 
-        match decision {
-            MemoryWarningDecision::NoAction => {}
-            MemoryWarningDecision::Transient {
-                triggering_footprint_bytes,
-                confirmation_footprint_bytes,
-            } => {
-                log::info!(
-                    "Memory footprint returned to {confirmation_footprint_bytes} bytes, back \
-                     under the excessive-usage threshold, before confirming a spike that had \
-                     crossed it at {triggering_footprint_bytes} bytes; skipping the \
-                     excessive-memory-usage report for what looks like a transient spike."
-                );
-                send_telemetry_sync_from_ctx!(
-                    TelemetryEvent::TransientMemorySpike {
-                        triggering_footprint_bytes,
-                        confirmation_footprint_bytes,
-                    },
-                    ctx
-                );
-            }
-            MemoryWarningDecision::Confirmed => {
-                // Collect a detailed memory breakdown for diagnostics.
-                let memory_breakdown = memory_footprint::memory_breakdown();
-
-                // If we're tracking heap usage and detect excessive memory
-                // usage, dump and upload the current heap profiling data.
-                #[cfg(feature = "heap_usage_tracking")]
-                {
-                    let breakdown_for_sentry = memory_breakdown.clone();
-                    ctx.spawn(
-                        crate::profiling::dump_jemalloc_heap_profile(breakdown_for_sentry),
-                        |_, _, _| {},
-                    );
-                }
-
-                // Send a telemetry event indicating that memory usage is
-                // extreme.  Report RSS here to keep Rudderstack dashboards
-                // consistent.
-                let total_application_usage_bytes = rss.as_u64();
-                send_telemetry_sync_from_ctx!(
-                    TelemetryEvent::MemoryUsageHigh {
-                        total_application_usage_bytes,
-                        memory_breakdown,
-                    },
-                    ctx
-                );
-
-                ctx.emit(SystemInfoEvent::MemoryUsageHigh);
-            }
+        if !is_excessive {
+            log::info!(
+                "Memory footprint returned to {footprint_bytes} bytes, back under the \
+                 excessive-usage threshold, before confirming a spike that had crossed it at \
+                 {triggering_footprint_bytes} bytes; skipping the excessive-memory-usage report \
+                 for what looks like a transient spike."
+            );
+            send_telemetry_sync_from_ctx!(
+                TelemetryEvent::TransientMemorySpike {
+                    triggering_footprint_bytes,
+                    confirmation_footprint_bytes: footprint_bytes,
+                },
+                ctx
+            );
+            return;
         }
+
+        // Collect a detailed memory breakdown for diagnostics.
+        let memory_breakdown = memory_footprint::memory_breakdown();
+
+        // If we're tracking heap usage and detect excessive memory usage,
+        // dump and upload the current heap profiling data.
+        #[cfg(feature = "heap_usage_tracking")]
+        {
+            let breakdown_for_sentry = memory_breakdown.clone();
+            ctx.spawn(
+                crate::profiling::dump_jemalloc_heap_profile(breakdown_for_sentry),
+                |_, _, _| {},
+            );
+        }
+
+        // Send a telemetry event indicating that memory usage is extreme.
+        // Report RSS here to keep Rudderstack dashboards consistent.
+        let total_application_usage_bytes = rss.as_u64();
+        send_telemetry_sync_from_ctx!(
+            TelemetryEvent::MemoryUsageHigh {
+                total_application_usage_bytes,
+                memory_breakdown,
+            },
+            ctx
+        );
+
+        ctx.emit(SystemInfoEvent::MemoryUsageHigh);
+        self.has_emitted_memory_warning_event = true;
     }
 
     /// Returns the pid of the current process.
@@ -306,70 +298,6 @@ impl Entity for SystemInfo {
 }
 
 impl SingletonEntity for SystemInfo {}
-
-/// The outcome of examining the current memory footprint against any pending
-/// unconfirmed threshold crossing from the previous poll tick.
-#[derive(Debug, PartialEq, Eq)]
-enum MemoryWarningDecision {
-    /// Nothing to report: either the footprint isn't excessive, or this is
-    /// the first tick observing a crossing (still awaiting confirmation).
-    NoAction,
-    /// A crossing observed on the previous tick is back under the threshold
-    /// now, so it looks like a transient spike rather than sustained usage.
-    Transient {
-        triggering_footprint_bytes: u64,
-        confirmation_footprint_bytes: u64,
-    },
-    /// A crossing observed on the previous tick is still over the threshold
-    /// on this subsequent tick, confirming sustained excessive usage.
-    Confirmed,
-}
-
-/// Decides what to do about the current memory footprint, owning the full
-/// state machine: the once-per-process report latch and the pending-crossing
-/// state from the previous poll tick. Returns the new latch value and
-/// pending-crossing state (to be stored back for the next tick) and the
-/// decision for this tick.
-///
-/// A crossing of `threshold_bytes` is only reported once it's *sustained*:
-/// still over the threshold on the very next poll tick, rather than on the
-/// tick that first observed it. That keeps a single instantaneous blip from
-/// generating a report, while still reacting within one extra poll interval.
-/// Only a `Confirmed` decision sets the latch; `Transient` clears the
-/// pending-crossing state but leaves the latch unset, so a later, distinct
-/// sustained crossing can still be confirmed.
-fn decide_memory_warning(
-    has_emitted_memory_warning_event: bool,
-    pending_footprint_bytes: Option<u64>,
-    footprint_bytes: u64,
-    threshold_bytes: u64,
-) -> (bool, Option<u64>, MemoryWarningDecision) {
-    if has_emitted_memory_warning_event {
-        return (
-            true,
-            pending_footprint_bytes,
-            MemoryWarningDecision::NoAction,
-        );
-    }
-
-    let is_excessive = footprint_bytes >= threshold_bytes;
-
-    match pending_footprint_bytes {
-        None => {
-            let pending = is_excessive.then_some(footprint_bytes);
-            (false, pending, MemoryWarningDecision::NoAction)
-        }
-        Some(_) if is_excessive => (true, None, MemoryWarningDecision::Confirmed),
-        Some(triggering_footprint_bytes) => (
-            false,
-            None,
-            MemoryWarningDecision::Transient {
-                triggering_footprint_bytes,
-                confirmation_footprint_bytes: footprint_bytes,
-            },
-        ),
-    }
-}
 
 /// Helper structure for making resource usage reports.
 struct ResourceUsageReporter {
