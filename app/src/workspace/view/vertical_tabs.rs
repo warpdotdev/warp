@@ -1,7 +1,7 @@
 pub mod telemetry;
 
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
@@ -1161,12 +1161,18 @@ impl VerticalTabsPanelState {
         });
     }
 
-    /// Returns the indices (in original order) of tab groups that have at least
-    /// one pane matching the current search query. Returns all indices when the
-    /// query is empty.
+    /// Returns the indices (in original order) of tabs that match the current
+    /// search query, either through their own text or by belonging to a tab
+    /// group whose displayed name matches. Returns all indices when the query
+    /// is empty.
+    ///
+    /// This drives tab cycling under an active search, so it must admit exactly
+    /// the tabs `render_groups` renders — otherwise the panel would show tabs
+    /// the next/previous-tab keybindings refuse to visit.
     pub(super) fn matching_tab_indices(
         &self,
         tabs: &[TabData],
+        tab_groups: &HashMap<TabGroupId, TabGroup>,
         active_tab_index: usize,
         app: &AppContext,
     ) -> Vec<usize> {
@@ -1174,6 +1180,7 @@ impl VerticalTabsPanelState {
             return (0..tabs.len()).collect();
         }
         let query_lower = self.search_query.to_lowercase();
+        let matched_groups = matched_group_ids(tab_groups, &query_lower);
         let resolved_mode = resolve_vertical_tabs_mode(app);
         let display_granularity = match resolved_mode {
             VerticalTabsResolvedMode::Panes => VerticalTabsDisplayGranularity::Panes,
@@ -1184,6 +1191,10 @@ impl VerticalTabsPanelState {
         tabs.iter()
             .enumerate()
             .filter(|(tab_index, tab)| {
+                // A group-name match admits every member, regardless of its own text.
+                if tab_admitted_by_group_name(tab.group_id, &matched_groups) {
+                    return true;
+                }
                 let pane_group = tab.pane_group.as_ref(app);
                 let visible_pane_ids = pane_group.visible_pane_ids();
                 match resolved_mode {
@@ -1782,7 +1793,7 @@ fn render_groups(
             .collect()
     } else {
         let query_lower = query.to_lowercase();
-        workspace
+        let own_matches: Vec<(usize, Option<Vec<PaneId>>)> = workspace
             .tabs
             .iter()
             .enumerate()
@@ -1883,7 +1894,15 @@ fn render_groups(
                     }
                 }
             })
-            .collect()
+            .collect();
+
+        // A query matching a group's name reveals every tab under that group,
+        // even members whose own text does not match.
+        let matched_groups = matched_group_ids(&workspace.tab_groups, &query_lower);
+        let tab_group_ids: Vec<Option<TabGroupId>> =
+            workspace.tabs.iter().map(|tab| tab.group_id).collect();
+
+        merge_group_name_matches(&tab_group_ids, &matched_groups, own_matches)
     };
 
     if visible_tabs.is_empty() {
@@ -1931,7 +1950,14 @@ fn render_groups(
                 .get(&gid)
                 .map(|group| (gid, group.clone()))
         }) {
-            Some((group_id, group)) => {
+            Some((group_id, mut group)) => {
+                // While a search is active, render every surviving group
+                // expanded so its matches are visible without a click. This
+                // only mutates the local clone — the stored `collapsed` flag is
+                // untouched, so clearing the query restores the real state.
+                if !query.is_empty() {
+                    group.collapsed = false;
+                }
                 // Members are a contiguous subslice of `visible_tabs`.
                 let run_len = visible_tabs[i..]
                     .iter()
@@ -2789,10 +2815,7 @@ fn render_grouped_tabs_header(
         if let Some(editor) = rename_editor.filter(|_| is_being_renamed) {
             render_inline_tab_rename_editor(editor, appearance, app)
         } else {
-            let title_text = group
-                .name
-                .clone()
-                .unwrap_or_else(|| "New Group".to_string());
+            let title_text = group_display_name(group);
             Text::new_inline(title_text, font_family, 12.)
                 .with_clip(ClipConfig::ellipsis())
                 .with_color(main_text_color.into())
@@ -4007,6 +4030,88 @@ fn should_show_tab_group_header(
     visible_pane_count: usize,
 ) -> bool {
     has_custom_title || is_being_renamed || visible_pane_count > 1
+}
+
+/// Header text for a tab group the user has never named.
+const UNTITLED_GROUP_NAME: &str = "New Group";
+
+/// The group title as displayed in the panel header, including the fallback
+/// used for a group the user has never named. Search matches against this so a
+/// query matches what is actually on screen.
+fn group_display_name(group: &TabGroup) -> String {
+    group
+        .name
+        .clone()
+        .unwrap_or_else(|| UNTITLED_GROUP_NAME.to_string())
+}
+
+/// The ids of every tab group whose displayed name contains `query_lower`.
+///
+/// Shared by the two search filter sites — the rendered list in `render_groups`
+/// and the tab-navigation list in `matching_tab_indices` — so the tabs you can
+/// see under a query and the tabs you can cycle to cannot disagree.
+fn matched_group_ids(
+    tab_groups: &HashMap<TabGroupId, TabGroup>,
+    query_lower: &str,
+) -> HashSet<TabGroupId> {
+    tab_groups
+        .iter()
+        .filter(|(_, group)| {
+            group_display_name(group)
+                .to_lowercase()
+                .contains(query_lower)
+        })
+        .map(|(group_id, _)| *group_id)
+        .collect()
+}
+
+/// Whether a tab is admitted by its group's name matching the query, rather
+/// than by its own text. Ungrouped tabs are never admitted this way.
+fn tab_admitted_by_group_name(
+    group_id: Option<TabGroupId>,
+    matched_groups: &HashSet<TabGroupId>,
+) -> bool {
+    group_id.is_some_and(|id| matched_groups.contains(&id))
+}
+
+/// Force-includes every member of a name-matched tab group into the search
+/// results, so matching a group by name reveals all the tabs under it.
+///
+/// `own_matches` holds the tabs that matched the query on their own text, as
+/// `(tab index, matching pane ids)` where `None` means "render all pane rows".
+/// Output stays ordered by tab index: `render_groups` collapses a group's
+/// members into one container by scanning a contiguous run, so an out-of-order
+/// entry would split the group across several rendered containers.
+///
+/// A member already present from its own text match is upgraded to `None`
+/// rather than duplicated — a group-name match shows whole tabs, not
+/// pane-filtered slices of them.
+fn merge_group_name_matches(
+    tab_group_ids: &[Option<TabGroupId>],
+    matched_groups: &HashSet<TabGroupId>,
+    own_matches: Vec<(usize, Option<Vec<PaneId>>)>,
+) -> Vec<(usize, Option<Vec<PaneId>>)> {
+    if matched_groups.is_empty() {
+        return own_matches;
+    }
+
+    let mut merged: Vec<(usize, Option<Vec<PaneId>>)> = Vec::with_capacity(own_matches.len());
+    let mut own_matches = own_matches.into_iter().peekable();
+
+    for (tab_index, group_id) in tab_group_ids.iter().enumerate() {
+        let in_matched_group = tab_admitted_by_group_name(*group_id, matched_groups);
+        let own_match = own_matches.next_if(|(index, _)| *index == tab_index);
+
+        match (in_matched_group, own_match) {
+            // The group name matched, so the whole tab is shown regardless of
+            // whether it also matched on its own text.
+            (true, _) => merged.push((tab_index, None)),
+            (false, Some(own_match)) => merged.push(own_match),
+            (false, None) => {}
+        }
+    }
+
+    merged
 }
 
 fn search_fragments_contain_query(fragments: &[String], query_lower: &str) -> bool {
