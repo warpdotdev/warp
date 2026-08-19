@@ -532,22 +532,26 @@ pub struct PromptInfo {
 /// can reindex the remaining blocks, so a `BlockIndex` captured at construction time may no
 /// longer point at the same block (or may silently resolve to a different one entirely) by the
 /// time a deferred field is first read, possibly much later.
-fn resolve_and_compute<T: Default>(
-    block_list: &BlockList,
-    id: &BlockId,
-    compute: impl FnOnce(&Block) -> T,
-) -> T {
-    match block_list.block_with_id(id) {
-        Some(block) => compute(block),
-        None => {
-            report_error!(
-                "Tried to lazily compute a UserBlockCompleted field for a block that no longer exists",
-                extra: { "block_id" => ?id }
-            );
-            debug_assert!(false, "The block should always exist for lazy computation");
-            T::default()
-        }
-    }
+macro_rules! lazy_block_field {
+    ($id:ident, $body:expr) => {{
+        let id = $id.clone();
+        Lazy::deferred(move |block_list: &BlockList| {
+            match block_list.block_with_id(&id) {
+                Some(block) => $body(block),
+                None => {
+                    report_error!(
+                        "Tried to lazily compute a UserBlockCompleted field for a block that no longer exists",
+                        extra: {
+                            "block_id" => ?id,
+                            "compute_call" => stringify!($body),
+                        }
+                    );
+                    debug_assert!(false, "The block should always exist for lazy computation");
+                    Default::default()
+                }
+            }
+        })
+    }};
 }
 
 impl From<&Block> for BlockType {
@@ -582,45 +586,14 @@ impl From<&Block> for BlockType {
                     let id = block.id().clone();
                     BlockType::User(UserBlockCompleted::new(
                         index,
-                        Lazy::deferred({
-                            let id = id.clone();
-                            move |block_list| {
-                                resolve_and_compute(block_list, &id, |block| Arc::new(block.into()))
-                            }
-                        }),
-                        Lazy::deferred({
-                            let id = id.clone();
-                            move |block_list| {
-                                resolve_and_compute(block_list, &id, Block::command_to_string)
-                            }
-                        }),
-                        Lazy::deferred({
-                            let id = id.clone();
-                            move |block_list| {
-                                resolve_and_compute(
-                                    block_list,
-                                    &id,
-                                    Block::compute_command_with_obfuscated_secrets,
-                                )
-                            }
-                        }),
-                        Lazy::deferred({
-                            let id = id.clone();
-                            move |block_list| {
-                                resolve_and_compute(
-                                    block_list,
-                                    &id,
-                                    Block::compute_output_truncated,
-                                )
-                            }
-                        }),
-                        Lazy::deferred(move |block_list| {
-                            resolve_and_compute(
-                                block_list,
-                                &id,
-                                Block::compute_output_truncated_with_obfuscated_secrets,
-                            )
-                        }),
+                        lazy_block_field!(id, |block| Arc::new(SerializedBlock::from(block))),
+                        lazy_block_field!(id, Block::command_to_string),
+                        lazy_block_field!(id, Block::compute_command_with_obfuscated_secrets),
+                        lazy_block_field!(id, Block::compute_output_truncated),
+                        lazy_block_field!(
+                            id,
+                            Block::compute_output_truncated_with_obfuscated_secrets
+                        ),
                         block.agent_interaction_metadata().is_some(),
                         block.command_start_time(),
                         block.output_grid().len() as u64,
