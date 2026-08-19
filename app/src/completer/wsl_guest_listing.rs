@@ -9,7 +9,7 @@ use warpui::r#async::FutureExt as AsyncFutureExt;
 use crate::completer::SessionContext;
 use crate::terminal::model::session::ExecuteCommandOptions;
 
-const GUEST_LISTING_TIMEOUT: Duration = Duration::from_millis(300);
+const GUEST_LISTING_TIMEOUT: Duration = Duration::from_millis(500);
 
 #[cfg_attr(not(windows), allow(dead_code))]
 pub(super) async fn list_entries(

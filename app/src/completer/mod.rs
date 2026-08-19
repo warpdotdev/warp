@@ -486,19 +486,6 @@ find -L . -maxdepth 1 -not -type d -print0
 /// file entries, or `None` if the output doesn't match that script's guaranteed wire format --
 /// a dirs list, a `\0` separator, and a files list, with every entry (including the separator
 /// and, when the files list is non-empty, its own entries) `\0`-terminated.
-///
-/// This matters because a command can report success while its captured output was truncated
-/// (e.g. cut off before the separator or the second `find` pass ever ran). Without validating
-/// the shape, a truncation like `./only-dir\0` is indistinguishable from a real, complete
-/// "one directory, no files" listing, and a truncation to nothing at all reads as a real empty
-/// directory -- exactly the "empty-but-successful listing mistaken for a real empty directory"
-/// case callers need to treat as a failure, not a result worth caching.
-///
-/// Operates on the command's raw bytes rather than requiring the whole output to be valid UTF-8:
-/// Linux filenames may contain arbitrary non-UTF-8 byte sequences, and requiring the entire
-/// buffer to decode would silently empty the whole listing over one oddly-named file. A segment
-/// that isn't valid UTF-8 is dropped on its own instead -- that's a different, unrelated failure
-/// mode from a malformed/truncated wire format.
 fn parse_ls_script_output(output: &[u8]) -> Option<Vec<EngineDirEntry>> {
     let mut entries = Vec::new();
     let mut segments = output.split(|&byte| byte == b'\0');
