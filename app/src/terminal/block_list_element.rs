@@ -3071,21 +3071,12 @@ impl BlockListElement {
     }
 }
 
-/// The cursor shape to paint as in-grid block-cursor contrast styling for the command grid
-/// (i.e. the `visible_cursor_shape` argument to `BlockGrid::draw`), or `None` if the block
-/// should not show a cursor there. Mirrors the condition used for the overlay cursor so a
-/// block that should no longer render a cursor (e.g. once finished) does not leave a
-/// residual cursor-cell highlight behind, even though `TermMode::SHOW_CURSOR` remains set on
-/// the grid (see CORE-3798).
 fn command_grid_visible_cursor_shape(block: &Block) -> Option<CursorShape> {
     block
         .is_command_cursor_visible()
         .then(|| block.prompt_and_command_grid().cursor_style().shape)
 }
 
-/// The cursor shape to paint as in-grid block-cursor contrast styling for the output grid.
-/// See `command_grid_visible_cursor_shape` for why this is gated the same way as the
-/// overlay cursor.
 fn output_grid_visible_cursor_shape(block: &Block) -> Option<CursorShape> {
     block
         .is_output_cursor_visible()
