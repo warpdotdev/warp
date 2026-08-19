@@ -2249,8 +2249,11 @@ impl AIConversation {
             self.conversation_usage_metadata.context_window_usage =
                 usage_metadata.context_window_usage;
             self.conversation_usage_metadata.credits_spent = usage_metadata.credits_spent;
-            self.conversation_usage_metadata.platform_credits_spent =
-                usage_metadata.platform_credits_spent;
+            #[allow(deprecated)]
+            {
+                self.conversation_usage_metadata.platform_credits_spent =
+                    usage_metadata.platform_credits_spent;
+            }
             let llm_preferences = LLMPreferences::as_ref(ctx);
             self.conversation_usage_metadata.token_usage =
                 footer_model_token_usage(&usage_metadata, llm_preferences);
