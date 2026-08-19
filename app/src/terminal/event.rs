@@ -288,17 +288,11 @@ pub struct BlockWorkingDirectoryUpdatedEvent {
 
 #[derive(Clone, Debug)]
 /// Contents of a normal block that a user executed.
-///
-/// `serialized_block`, `command`, `command_with_obfuscated_secrets`, `output_truncated`, and
-/// `output_truncated_with_obfuscated_secrets` are all computed lazily: each defers looking up the
-/// live `Block` and computing its value until first read. This result will then be cached and accessed
-/// directly in subsequent reads
 pub struct UserBlockCompleted {
     pub index: BlockIndex,
 
-    /// The block's serialized representation. Despite being cheap to clone once computed (it's
-    /// wrapped in an `Arc`), computing it in the first place is not: like the other fields below,
-    /// it's deferred until the first read.
+    /// The block's serialized representation. Cheap to clone once computed, since it's wrapped
+    /// in an `Arc`.
     pub serialized_block: Lazy<Arc<SerializedBlock>, BlockList>,
 
     /// The input lines for a block without any escape sequences.
