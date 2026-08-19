@@ -146,6 +146,7 @@ pub enum WorkspaceAction {
     /// (see #9351). The context-menu path keeps using `RenamePane(locator)`.
     RenameActivePane,
     SetActiveTabName(String),
+    CycleActiveTabColor,
     /// Sets the manual color override for the active tab.
     ///
     /// - `Color(_)` — apply that color.
@@ -744,6 +745,12 @@ pub enum WorkspaceAction {
     /// Reset the orchestration launch modal dismissed state (for debugging)
     #[cfg(debug_assertions)]
     ResetOrchestrationLaunchModalState,
+    /// Open the Warp Agent CLI Launch Modal (for debugging)
+    #[cfg(debug_assertions)]
+    OpenAgentCliLaunchModal,
+    /// Reset the Warp Agent CLI launch modal dismissed state (for debugging)
+    #[cfg(debug_assertions)]
+    ResetAgentCliLaunchModalState,
     /// Open the Feature Intro Modal (for debugging)
     #[cfg(debug_assertions)]
     OpenFeatureIntroModal,
@@ -944,6 +951,7 @@ impl WorkspaceAction {
             | RenameActiveTab
             | RenameActivePane
             | SetActiveTabName(_)
+            | CycleActiveTabColor
             | SetActiveTabColor(_)
             | CloseTab(_)
             | CloseActiveTab
@@ -1219,6 +1227,8 @@ impl WorkspaceAction {
             | ResetOpenWarpLaunchModalState
             | OpenOrchestrationLaunchModal
             | ResetOrchestrationLaunchModalState
+            | OpenAgentCliLaunchModal
+            | ResetAgentCliLaunchModalState
             | OpenFeatureIntroModal
             | ResetFeatureIntroModalState
             | OpenAutoHandoffSleepModal

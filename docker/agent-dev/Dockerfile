@@ -1,5 +1,8 @@
 FROM ubuntu:24.04
 
+# Opt into the agent entrypoint's non-root rollout gate (see warp-agent-docker's README).
+ENV WARP_AGENT_NONROOT=1
+
 ENV RUSTUP_HOME=/usr/local/rustup
 ENV CARGO_HOME=/usr/local/cargo
 ENV TFENV_ROOT=/usr/local/tfenv
@@ -7,9 +10,20 @@ ENV PATH=/usr/local/cargo/bin:/usr/local/go/bin:/usr/local/tfenv/bin:$PATH
 
 # This set of packages is adapted from ./script/bootstrap in warp-internal and warp-server.
 # It doesn't include *everything* (ex. no wgslfmt), but is enough to build and test Warp.
-# Note: currently, only x86_64 builds are supported.
 
 # Install system-level packages. These are needed to build on Linux, and/or to run integration tests.
+#
+# postgresql/postgresql-client: `postgresql`'s postinst initializes a default
+# cluster (16/main) but does not start it, since /usr/sbin/policy-rc.d blocks
+# service startup during container builds. To use a local server, start the
+# existing cluster and create your own role/db, e.g.:
+#   sudo pg_ctlcluster 16 main start
+#   sudo -u postgres createuser -s "$(whoami)" && sudo -u postgres createdb "$(whoami)"
+# postgresql-16-pgvector: warp-server's migrations run `CREATE EXTENSION IF
+# NOT EXISTS vector` (db/migrations/20241011184444_enable_pgvector.sql), so a
+# local cluster needs pgvector to run migrations. The other extensions
+# warp-server uses (pg_trgm, pgcrypto) already ship as part of postgresql-16
+# itself, so they need no extra package here.
 RUN set -eux; \
   apt-get update; \
   apt-get install -y --no-install-recommends \
@@ -20,6 +34,7 @@ RUN set -eux; \
     libwayland-client0 libwayland-egl1 \
     mesa-vulkan-drivers libegl1 \
     libsqlite3-dev libpq-dev libmysqlclient-dev \
+    postgresql postgresql-client postgresql-16-pgvector \
     ca-certificates \
     openssh-client netcat-openbsd lsof \
     xvfb
@@ -35,8 +50,8 @@ RUN set -eux; \
 # Install go and go command-line tools we use.
 RUN set -eux; \
   dpkgArch="$(dpkg --print-architecture)"; ARCH="${dpkgArch##*-}"; \
-  curl --proto '=https' --tlsv1.2 -fsSLO https://go.dev/dl/go1.26.1.linux-$ARCH.tar.gz; \
-  tar -C /usr/local -xzf go1.26.1.linux-$ARCH.tar.gz; \
+  curl --proto '=https' --tlsv1.2 -fsSLO https://go.dev/dl/go1.26.5.linux-$ARCH.tar.gz; \
+  tar -C /usr/local -xzf go1.26.5.linux-$ARCH.tar.gz; \
   go version; \
   go env -w "GOPRIVATE=github.com/warpdotdev/*"; \
   CGO_ENABLED=0 go install -tags='no_clickhouse no_libsql no_mssql no_mysql no_sqlite3 no_vertica no_ydb' github.com/pressly/goose/v3/cmd/goose@v3.24.1; \
@@ -47,11 +62,32 @@ RUN set -eux; \
   echo "Installed protoc-gen-go"; \
   go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.2.0; \
   echo "Installed protoc-gen-go-grpc"; \
-  rm go1.26.1.linux-$ARCH.tar.gz
+  rm go1.26.5.linux-$ARCH.tar.gz
 
-# Install golangci-lint
-RUN curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/HEAD/install.sh | sh -s -- -b /usr/local/go/bin v2.6.1 \
+# Install golangci-lint. It refuses to load a config that targets a newer Go
+# release than the one golangci-lint itself was built with, so this pin has to
+# keep up with the Go toolchain above.
+RUN curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/HEAD/install.sh | sh -s -- -b /usr/local/go/bin v2.12.2 \
     && golangci-lint --version
+
+# Preinstall the static tokenizers library so Go cgo builds that link
+# -ltokenizers resolve it from the default search path. A checkout that ships its
+# own copy still wins, since cgo passes its -L first. Keep the pin in step with
+# what consuming builds expect.
+RUN set -eux; \
+  tokenizers_version=v1.27.0; \
+  case "$(dpkg --print-architecture)" in \
+    amd64) tokenizers_asset='libtokenizers.linux-x86_64.tar.gz';; \
+    arm64) tokenizers_asset='libtokenizers.linux-arm64.tar.gz';; \
+    *) echo "no libtokenizers release for $(dpkg --print-architecture)" >&2; exit 1;; \
+  esac; \
+  tokenizers_tmp="$(mktemp -d)"; \
+  curl --proto '=https' --tlsv1.2 -fsSL \
+    "https://github.com/daulet/tokenizers/releases/download/$tokenizers_version/$tokenizers_asset" \
+    -o "$tokenizers_tmp/libtokenizers.tar.gz"; \
+  tar -xzf "$tokenizers_tmp/libtokenizers.tar.gz" -C "$tokenizers_tmp"; \
+  install -m 0644 "$tokenizers_tmp/libtokenizers.a" /usr/local/lib/libtokenizers.a; \
+  rm -rf "$tokenizers_tmp"
 
 # Install Node
 # Adapted from https://github.com/nodejs/docker-node/blob/eda40f3c41d33cb595232cb7000ab31af1ce2f02/25/bookworm/Dockerfile#L8-L17
@@ -88,7 +124,7 @@ RUN cd ./setup && ./script/linux/install_test_deps
 RUN set -eux; \
   install -d -m 0755 /usr/share/keyrings; \
   curl -fsSL https://packages.cloud.google.com/apt/doc/apt-key.gpg \
-    | gpg --dearmor -o /usr/share/keyrings/cloud.google.gpg; \
+    | gpg --batch --yes --dearmor -o /usr/share/keyrings/cloud.google.gpg; \
   echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] https://packages.cloud.google.com/apt cloud-sdk main" \
     > /etc/apt/sources.list.d/google-cloud-sdk.list; \
   apt-get update; \

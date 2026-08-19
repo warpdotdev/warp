@@ -483,7 +483,7 @@ impl TuiTerminalSessionView {
                         let url = pr.url.clone();
                         FooterSegment::GitHubPullRequest(self.github_pr_link.render(
                             format!("PR #{}", pr.number),
-                            ctx,
+                            builder.muted_text_style(),
                             move |event_ctx, _| {
                                 event_ctx.dispatch_typed_action(TuiTerminalSessionAction::OpenUrl(
                                     url.clone(),

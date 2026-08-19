@@ -343,7 +343,7 @@ fn apply_geap_mint_result_inner(
             GeapRefreshOutcome::Refreshed
         }
         Err(err) => {
-            report_error!("GEAP: credential mint failed", extra: { "error" => ?err });
+            report_error!(anyhow::Error::new(err.clone()).context("GEAP: credential mint failed"));
             match previous {
                 // A failed background re-mint keeps the previous token — even
                 // near/past expiry (Google remains the authority on validity;

@@ -326,11 +326,11 @@ impl TerminalView {
                 Ok(()) => {
                     log::info!("Prepared Docker Sandbox environment");
                 }
+                // The bootstrap and environment-preparation failure paths above
+                // already report the underlying typed error; this sink only logs
+                // to avoid double-reporting the same failure to Sentry.
                 Err(err) => {
-                    report_error!(
-                        "Docker Sandbox environment setup failed",
-                        extra: { "error" => %err }
-                    );
+                    log::warn!("Docker Sandbox environment setup failed: {err}");
                 }
             },
         );

@@ -238,8 +238,14 @@ impl View {
         let binding_source = ctx.add_model(|_| BindingSource::None);
         let session_source = ctx.add_model(|_| SessionSource::None);
 
+        let window_id = ctx.window_id();
         let data_source_store = ctx.add_model(|ctx| {
-            DataSourceStore::new(binding_source.clone(), session_source.clone(), ctx)
+            DataSourceStore::new(
+                binding_source.clone(),
+                session_source.clone(),
+                window_id,
+                ctx,
+            )
         });
 
         ctx.observe(&binding_source, |me, _, ctx| {
@@ -328,6 +334,14 @@ impl View {
             .into_iter()
             .flat_map(|results| results.iter())
             .map(|item| &item.search_result)
+    }
+
+    #[cfg(feature = "integration_tests")]
+    pub fn selected_search_result<'a>(
+        &'a self,
+        app: &'a AppContext,
+    ) -> Option<&'a QueryResult<CommandPaletteItemAction>> {
+        self.search_bar_state.as_ref(app).selected_result()
     }
 
     /// Set the active query filter in the search bar to be `filter`.

@@ -830,11 +830,11 @@ impl LLMPreferences {
     }
 
     /// Returns `LLMInfo` for the currently selected LLM to be used for Agent Mode.
-    fn get_preferred_base_model(
-        &self,
-        app: &AppContext,
+    fn get_preferred_base_model<'a>(
+        &'a self,
+        app: &'a AppContext,
         terminal_view_id: Option<EntityId>,
-    ) -> &LLMInfo {
+    ) -> &'a LLMInfo {
         if let Some(terminal_view_id) = terminal_view_id {
             let raw_override = self.base_llm_for_terminal_view.get(&terminal_view_id);
             if let Some(llm_id) = raw_override
@@ -844,6 +844,17 @@ impl LLMPreferences {
                 return llm_info;
             }
         }
+
+        self.get_active_profile_base_model(app, terminal_view_id)
+    }
+
+    /// Returns the active execution profile's effective base model without applying a
+    /// terminal-view override.
+    pub fn get_active_profile_base_model<'a>(
+        &'a self,
+        app: &'a AppContext,
+        terminal_view_id: Option<EntityId>,
+    ) -> &'a LLMInfo {
         let profile = AIExecutionProfilesModel::as_ref(app).active_profile(terminal_view_id, app);
 
         profile
@@ -948,6 +959,11 @@ impl LLMPreferences {
             })
             .chain(self.custom_llm_choices(app))
             .chain(self.custom_router_choices())
+    }
+
+    #[cfg(any(test, feature = "test-util"))]
+    pub fn add_agent_mode_model_for_test(&mut self, llm: LLMInfo) {
+        self.models_by_feature.agent_mode.choices.push(llm);
     }
 
     /// Returns the set of LLMs available for coding.
@@ -1436,15 +1452,8 @@ impl LLMPreferences {
         terminal_view_id: EntityId,
         ctx: &mut ModelContext<Self>,
     ) {
-        let profile =
-            AIExecutionProfilesModel::as_ref(ctx).active_profile(Some(terminal_view_id), ctx);
-
-        let profile_default_model_id = profile
-            .data()
-            .base_model
-            .as_ref()
-            .and_then(|id| self.models_by_feature.agent_mode.info_for_id(id))
-            .unwrap_or_else(|| self.models_by_feature.agent_mode.default_llm_info())
+        let profile_default_model_id = self
+            .get_active_profile_base_model(ctx, Some(terminal_view_id))
             .id
             .clone();
 

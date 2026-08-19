@@ -672,6 +672,9 @@ pub enum FeatureFlag {
     /// Enables the orchestration launch modal announcing multi-agent orchestration features.
     OrchestrationLaunchModal,
 
+    /// Enables the launch modal announcing the Warp Agent CLI.
+    AgentCliLaunchModal,
+
     /// Updated tab styling (background colors, border, close button positioning, margins).
     NewTabStyling,
 
@@ -707,6 +710,19 @@ pub enum FeatureFlag {
     /// registers an orchestrator for the owner-side ancestor stream so it
     /// receives events for children created out-of-band (Oz CLI / web API).
     WaitForEventsParentRegistration,
+
+    /// Gates the client-side multi-level orchestration surfaces: child
+    /// conversations auto-executing their own `run_agents` calls and the
+    /// confirmation-card disclosure that launched agents may start
+    /// children of their own. When disabled, a child's `run_agents` call
+    /// fails gracefully instead of presenting a card in a hidden pane.
+    MultiLevelOrchestration,
+
+    /// Gates the unified orchestration child-tracking stack: a single
+    /// `OrchestrationChildTracker` as the sole entry point for child state,
+    /// one `include_self` ancestor SSE per parent family, and a single
+    /// `is_remote_child` placeholder flavor for both owner and viewer.
+    OrchestrationUnifiedStack,
 
     /// Shows a pending user query indicator during summarization when a follow-up
     /// prompt is queued via `/fork-and-compact` or `/compact-and`.
@@ -933,12 +949,32 @@ pub enum FeatureFlag {
     /// setup or API key required.
     FactoryMcp,
 
-    /// Gates the TUI cost footer's credits⇄dollars toggle. When enabled (dogfood
-    /// / staging and local/dev builds), the footer usage entry follows the
-    /// persisted `agents.usage_display_mode` setting and is click-to-toggleable
-    /// between credits and dollars. When disabled (prod/stable), the footer
-    /// falls back to a static, non-interactive credits total.
-    TuiCostTransparency,
+    /// Gates client-side display of the real dollar cost (from `RequestCost.cost_in_cents`)
+    /// alongside credits in the GUI footer and TUI. Mirrors the server-side
+    /// `PricingTransparencyEnabled` flag in warp-server, but is a fully independent
+    /// flag — the two do not sync automatically. Consolidated from the former
+    /// `TuiCostTransparency` flag: when enabled (dogfood/staging and local/dev
+    /// builds), the TUI footer usage entry follows the persisted
+    /// `agents.usage_display_mode` setting and is click-to-toggleable between
+    /// credits and dollars; when disabled (prod/stable), it falls back to a
+    /// static, non-interactive credits total. Will also gate the GUI footer's
+    /// dollar display once that's built.
+    PricingTransparency,
+
+    /// Enables periodic workspace-handoff checkpoints during a cloud agent run,
+    /// rather than only uploading a workspace snapshot once at end-of-run.
+    /// Requires `OzHandoff` to also be enabled; a no-op for local runs and when
+    /// `--no-snapshot` is set. Off by default while the coordinator rolls out.
+    PeriodicHandoffCheckpoints,
+
+    /// Observes Ctrl-C (`0x03`) written on the shared-session viewer input
+    /// path to a terminal with a working, rich-status-capable CLI agent
+    /// session (e.g. Claude Code). Arms a short grace window; if no further
+    /// plugin activity is seen, the session (and its ambient task) resolves
+    /// to `Cancelled`. Purely client-side status synthesis: the keystroke is
+    /// always forwarded unchanged and the harness process/sandbox are never
+    /// signaled or torn down.
+    CtrlCCancelsThirdPartyHarness,
 }
 
 static FLAG_STATES: [AtomicBool; cardinality::<FeatureFlag>()] =
@@ -1009,11 +1045,13 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::PromptCacheExpiryWarning,
     FeatureFlag::JupyterNotebookRendering,
     FeatureFlag::WaitForEventsParentRegistration,
+    FeatureFlag::MultiLevelOrchestration,
+    FeatureFlag::OrchestrationUnifiedStack,
     FeatureFlag::McpJsonTreeView,
     FeatureFlag::BoxDrawingGlyphs,
-    FeatureFlag::WellKnownMcpIds,
-    FeatureFlag::FactoryMcp,
-    FeatureFlag::TuiCostTransparency,
+    FeatureFlag::PricingTransparency,
+    FeatureFlag::PeriodicHandoffCheckpoints,
+    FeatureFlag::CtrlCCancelsThirdPartyHarness,
 ];
 
 /// Features enabled for feature preview build users (e.g.: Friends of Warp).

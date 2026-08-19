@@ -106,10 +106,13 @@ pub struct GeapMintBinding {
     pub federation: GeapFederation,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum LoadGeapCredentialsError {
+    #[error("failed to mint a Warp identity token: {detail}")]
     MintIdentityToken { detail: String },
+    #[error("STS token exchange failed (status={status:?}): {detail}")]
     ExchangeToken { status: Option<u16>, detail: String },
+    #[error("service account impersonation failed (status={status:?}): {detail}")]
     ImpersonateServiceAccount { status: Option<u16>, detail: String },
 }
 

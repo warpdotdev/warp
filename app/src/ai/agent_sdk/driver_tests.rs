@@ -28,22 +28,27 @@ use warp_util::standardized_path::StandardizedPath;
 use warpui::{App, SingletonEntity as _};
 
 use super::{
-    AgentDriver, AgentDriverError, IdleTimeoutSender,
+    AgentDriver, AgentDriverError, CLIAgentSessionStatus, IdleTimeoutSender,
     LEGACY_OZ_PARENT_LISTENER_MANAGED_EXTERNALLY_ENV, LEGACY_OZ_PARENT_STATE_ROOT_ENV,
     OZ_MESSAGE_LISTENER_MANAGED_EXTERNALLY_ENV, OZ_MESSAGE_LISTENER_STATE_ROOT_ENV,
-    build_secret_env_vars,
+    PlatformErrorCode, SDKConversationOutputStatus, build_secret_env_vars,
+    idle_window_for_cli_session_status, idle_window_for_terminal_status,
+    setup_failure_status_update, terminal_status_log_outcome,
 };
 use crate::ai::agent::task::TaskId;
 use crate::ai::agent::{
     AIAgentActionResult, AIAgentActionResultType, AIAgentInput, AIAgentOutput,
-    AIAgentOutputMessage, ArtifactCreatedData, MessageId, UploadArtifactResult,
+    AIAgentOutputMessage, ArtifactCreatedData, CancellationReason, MessageId, RenderableAIError,
+    UploadArtifactResult,
 };
 use crate::ai::agent_sdk::task_env_vars;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::cloud_environments::{GithubRepo, SourceRepo};
 use crate::ai::mcp::JSONTransportType;
+use crate::ai::mcp::builtin::{FACTORY_MCP_INSTALLATION_UUID, FACTORY_MCP_SERVER_NAME};
 use crate::ai::mcp::parsing::normalize_mcp_json;
 use crate::ai::skills::SkillManager;
+use crate::auth::credentials::Credentials;
 use crate::server::server_api::managed_mcp::MockManagedMcpClient;
 use crate::test_util::terminal::{add_window_with_terminal, initialize_app_for_terminal_view};
 
@@ -174,6 +179,7 @@ fn managed_resolver_local_uuid_does_not_call_managed_client() {
         &[MCPSpec::Uuid(uuid)],
         &local_installed_uuids,
         Arc::new(mock),
+        None,
     ))
     .unwrap();
 
@@ -198,6 +204,7 @@ fn managed_resolver_non_local_uuid_calls_managed_client() {
         &[MCPSpec::Uuid(uuid)],
         &HashSet::new(),
         Arc::new(mock),
+        None,
     ))
     .unwrap();
 
@@ -221,6 +228,7 @@ fn well_known_spec_resolves_via_managed_client() {
         &[MCPSpec::WellKnown("linear".to_string())],
         &HashSet::new(),
         Arc::new(mock),
+        None,
     ))
     .unwrap();
 
@@ -242,6 +250,7 @@ fn well_known_resolution_failure_skips_server() {
         &[MCPSpec::WellKnown("linear".to_string())],
         &HashSet::new(),
         Arc::new(mock),
+        None,
     ))
     .unwrap();
 
@@ -274,6 +283,7 @@ fn well_known_resolution_failure_does_not_drop_other_specs() {
         ],
         &HashSet::new(),
         Arc::new(mock),
+        None,
     ))
     .unwrap();
 
@@ -291,6 +301,7 @@ fn well_known_spec_is_skipped_when_flag_disabled() {
         &[MCPSpec::WellKnown("linear".to_string())],
         &HashSet::new(),
         Arc::new(mock),
+        None,
     ))
     .unwrap();
 
@@ -302,6 +313,8 @@ fn well_known_spec_is_skipped_when_flag_disabled() {
 fn managed_command_config_env_placeholder_uses_local_secret() {
     let installations = AgentDriver::installations_from_managed_client_config_json(
         r#"{"mcpServers":{"GitHub MCP":{"command":"npx","env":{"API_TOKEN":"{{API_TOKEN}}"}}}}"#,
+        None,
+        "github",
     )
     .unwrap();
     let rendered = render_installations(
@@ -321,6 +334,8 @@ fn managed_command_config_env_placeholder_uses_local_secret() {
 fn managed_command_config_arg_placeholder_uses_local_secret() {
     let installations = AgentDriver::installations_from_managed_client_config_json(
         r#"{"mcpServers":{"GitHub MCP":{"command":"npx","args":["--token={{API_TOKEN}}"]}}}"#,
+        None,
+        "github",
     )
     .unwrap();
     let rendered = render_installations(
@@ -340,6 +355,8 @@ fn managed_command_config_arg_placeholder_uses_local_secret() {
 fn managed_command_config_preserves_literal_env_when_synthesizing_arg_placeholder() {
     let installations = AgentDriver::installations_from_managed_client_config_json(
         r#"{"mcpServers":{"GitHub MCP":{"command":"npx","args":["--token={{API_TOKEN}}"],"env":{"LOG_LEVEL":"info"}}}}"#,
+        None,
+        "github",
     )
     .unwrap();
     let rendered = render_installations(
@@ -360,6 +377,8 @@ fn managed_command_config_preserves_literal_env_when_synthesizing_arg_placeholde
 fn managed_url_config_preserves_proxy_url_and_header() {
     let installations = AgentDriver::installations_from_managed_client_config_json(
         r#"{"mcpServers":{"GitHub MCP":{"url":"https://proxy.example/mcp","headers":{"Authorization":"Bearer proxy-token"}}}}"#,
+        None,
+        "github",
     )
     .unwrap();
     let rendered = render_installations(installations, HashMap::new());
@@ -382,6 +401,8 @@ fn managed_url_config_preserves_header_despite_colliding_local_secret() {
     // happens to share the header's key name (`apply_secrets` implicit key-name match).
     let installations = AgentDriver::installations_from_managed_client_config_json(
         r#"{"mcpServers":{"GitHub MCP":{"url":"https://proxy.example/mcp","headers":{"Authorization":"Bearer proxy-token"}}}}"#,
+        None,
+        "github",
     )
     .unwrap();
     let rendered = render_installations(
@@ -407,6 +428,8 @@ fn managed_command_config_preserves_literal_env_despite_colliding_local_secret()
     // shares the env key name.
     let installations = AgentDriver::installations_from_managed_client_config_json(
         r#"{"mcpServers":{"GitHub MCP":{"command":"npx","env":{"LOG_LEVEL":"info"}}}}"#,
+        None,
+        "github",
     )
     .unwrap();
     let rendered = render_installations(
@@ -426,6 +449,8 @@ fn managed_command_config_preserves_literal_env_despite_colliding_local_secret()
 fn managed_command_config_missing_secret_leaves_placeholder() {
     let installations = AgentDriver::installations_from_managed_client_config_json(
         r#"{"mcpServers":{"GitHub MCP":{"command":"npx","args":["--token={{API_TOKEN}}"]}}}"#,
+        None,
+        "github",
     )
     .unwrap();
     let rendered = render_installations(installations, HashMap::new());
@@ -436,6 +461,164 @@ fn managed_command_config_missing_secret_leaves_placeholder() {
         }
         other => panic!("expected CLI server, got {other:?}"),
     }
+}
+
+// ── Ephemeral MCP installation ids: stable across rebuilds ─────────────────
+
+#[test]
+fn ephemeral_installation_id_is_stable_across_resolutions_for_same_run() {
+    let task_id: AmbientAgentTaskId = "550e8400-e29b-41d4-a716-446655440010".parse().unwrap();
+    let config_json =
+        r#"{"mcpServers":{"slack":{"url":"https://app.warp.dev/mcp/integration-proxy/slack"}}}"#;
+
+    // Same run re-resolving the same server after a rebuild.
+    let first = AgentDriver::installations_from_managed_client_config_json(
+        config_json,
+        Some(task_id),
+        "slack",
+    )
+    .unwrap();
+    let second = AgentDriver::installations_from_managed_client_config_json(
+        config_json,
+        Some(task_id),
+        "slack",
+    )
+    .unwrap();
+
+    assert_eq!(first.len(), 1);
+    assert_eq!(second.len(), 1);
+    assert_eq!(
+        first[0].uuid(),
+        second[0].uuid(),
+        "same run + same server must yield the same id across rebuilds"
+    );
+}
+
+#[test]
+fn ephemeral_installation_id_differs_across_runs() {
+    let task_id_a: AmbientAgentTaskId = "550e8400-e29b-41d4-a716-446655440011".parse().unwrap();
+    let task_id_b: AmbientAgentTaskId = "550e8400-e29b-41d4-a716-446655440012".parse().unwrap();
+    let config_json =
+        r#"{"mcpServers":{"slack":{"url":"https://app.warp.dev/mcp/integration-proxy/slack"}}}"#;
+
+    let a = AgentDriver::installations_from_managed_client_config_json(
+        config_json,
+        Some(task_id_a),
+        "slack",
+    )
+    .unwrap();
+    let b = AgentDriver::installations_from_managed_client_config_json(
+        config_json,
+        Some(task_id_b),
+        "slack",
+    )
+    .unwrap();
+
+    assert_ne!(
+        a[0].uuid(),
+        b[0].uuid(),
+        "different runs must not collide onto the same id"
+    );
+}
+
+#[test]
+fn ephemeral_installation_id_differs_across_servers_in_same_run() {
+    let task_id: AmbientAgentTaskId = "550e8400-e29b-41d4-a716-446655440013".parse().unwrap();
+    let slack_config =
+        r#"{"mcpServers":{"slack":{"url":"https://app.warp.dev/mcp/integration-proxy/slack"}}}"#;
+    let linear_config =
+        r#"{"mcpServers":{"linear":{"url":"https://app.warp.dev/mcp/integration-proxy/linear"}}}"#;
+
+    let slack = AgentDriver::installations_from_managed_client_config_json(
+        slack_config,
+        Some(task_id),
+        "slack",
+    )
+    .unwrap();
+    let linear = AgentDriver::installations_from_managed_client_config_json(
+        linear_config,
+        Some(task_id),
+        "linear",
+    )
+    .unwrap();
+
+    assert_ne!(
+        slack[0].uuid(),
+        linear[0].uuid(),
+        "different servers in one run must not collide onto the same id"
+    );
+}
+
+#[test]
+fn ephemeral_installation_id_is_random_without_task_id() {
+    let config_json =
+        r#"{"mcpServers":{"slack":{"url":"https://app.warp.dev/mcp/integration-proxy/slack"}}}"#;
+
+    let first =
+        AgentDriver::installations_from_managed_client_config_json(config_json, None, "slack")
+            .unwrap();
+    let second =
+        AgentDriver::installations_from_managed_client_config_json(config_json, None, "slack")
+            .unwrap();
+
+    assert_ne!(
+        first[0].uuid(),
+        second[0].uuid(),
+        "no task_id means no rebuild to survive, so ids stay random"
+    );
+}
+
+// ── Built-in Factory MCP injection tests ────────────────────────────────────
+
+fn api_key_credentials() -> Credentials {
+    Credentials::ApiKey {
+        key: "wk-test-key".to_string(),
+        owner_type: None,
+    }
+}
+
+#[test]
+fn builtin_factory_mcp_attaches_with_api_key_credentials() {
+    let _flag = FeatureFlag::FactoryMcp.override_enabled(true);
+
+    let installation =
+        AgentDriver::builtin_factory_mcp_for_run(Some(&api_key_credentials()), &HashSet::new())
+            .expect("built-in Factory MCP should attach when eligible");
+
+    assert_eq!(installation.uuid(), FACTORY_MCP_INSTALLATION_UUID);
+    assert_eq!(
+        installation.templatable_mcp_server().name,
+        FACTORY_MCP_SERVER_NAME
+    );
+}
+
+#[test]
+fn builtin_factory_mcp_skipped_when_flag_disabled() {
+    let _flag = FeatureFlag::FactoryMcp.override_enabled(false);
+
+    assert!(
+        AgentDriver::builtin_factory_mcp_for_run(Some(&api_key_credentials()), &HashSet::new())
+            .is_none()
+    );
+}
+
+#[test]
+fn builtin_factory_mcp_skipped_without_credentials() {
+    let _flag = FeatureFlag::FactoryMcp.override_enabled(true);
+
+    assert!(AgentDriver::builtin_factory_mcp_for_run(None, &HashSet::new()).is_none());
+}
+
+#[test]
+fn builtin_factory_mcp_skipped_on_name_collision() {
+    let _flag = FeatureFlag::FactoryMcp.override_enabled(true);
+    // A user-configured server named `warp-factory` wins over the built-in.
+    let taken_server_names = HashSet::from([FACTORY_MCP_SERVER_NAME.to_string()]);
+
+    assert!(
+        AgentDriver::builtin_factory_mcp_for_run(Some(&api_key_credentials()), &taken_server_names)
+            .is_none()
+    );
 }
 
 #[test]
@@ -450,6 +633,7 @@ fn managed_resolution_failure_includes_uid_and_message() {
         &[MCPSpec::Uuid(uuid)],
         &HashSet::new(),
         Arc::new(mock),
+        None,
     ))
     .unwrap_err();
 
@@ -575,6 +759,206 @@ fn idle_timeout_sender_complete_with_optional_idle_some_then_cancel_invalidates_
     // Sender was never consumed by the cancelled timer, so the channel is
     // still open but empty.
     assert_eq!(rx.try_recv().unwrap(), None);
+}
+
+// ── Terminal-status idle window routing ──────────────────────────────────────────
+
+fn error_status() -> SDKConversationOutputStatus {
+    SDKConversationOutputStatus::Error {
+        error: RenderableAIError::InternalWarpError,
+    }
+}
+
+#[test]
+fn terminal_error_defers_by_idle_on_fail() {
+    // The agent process is the shared-session sharer, so a failed run must be able to outlive
+    // its own failure for the session to stay attachable while the sandbox is retained.
+    let window =
+        idle_window_for_terminal_status(&error_status(), None, Some(Duration::from_secs(15 * 60)));
+
+    assert_eq!(window, Some(Duration::from_secs(15 * 60)));
+}
+
+#[test]
+fn terminal_error_exits_immediately_without_idle_on_fail() {
+    let window =
+        idle_window_for_terminal_status(&error_status(), Some(Duration::from_secs(45 * 60)), None);
+
+    assert_eq!(
+        window, None,
+        "--idle-on-complete must not act as a fallback for a terminal error"
+    );
+}
+
+#[test]
+fn non_error_completion_defers_by_idle_on_complete() {
+    // The failure window must not leak into the success/blocked/cancelled lifecycle.
+    let cases = [
+        ("success", SDKConversationOutputStatus::Success),
+        (
+            "blocked",
+            SDKConversationOutputStatus::Blocked {
+                blocked_action: "approve".to_string(),
+            },
+        ),
+        (
+            "cancelled",
+            SDKConversationOutputStatus::Cancelled {
+                reason: CancellationReason::ManuallyCancelled,
+            },
+        ),
+    ];
+
+    for (label, status) in cases {
+        let window = idle_window_for_terminal_status(
+            &status,
+            Some(Duration::from_secs(45 * 60)),
+            Some(Duration::from_secs(15 * 60)),
+        );
+
+        assert_eq!(
+            window,
+            Some(Duration::from_secs(45 * 60)),
+            "unexpected window for {label}"
+        );
+    }
+}
+
+#[test]
+fn setup_failure_is_reported_as_an_environment_setup_failure() {
+    // Not just a label: `TaskStatusMessage::is_environment_setup_failure` matches this variant
+    // alone, and the cloud-continuation resolver uses it to decide that a setup failure with no
+    // conversation gets a tombstone with no continue CTA. A generic code silently reroutes those
+    // runs into continuation handling that has nothing to continue.
+    let status = setup_failure_status_update("Environment setup failed: bad command".to_string());
+
+    assert_eq!(
+        status.error_code,
+        Some(PlatformErrorCode::EnvironmentSetupFailed)
+    );
+}
+
+#[test]
+fn debug_window_refresh_uses_the_most_recently_armed_outcome() {
+    // A run can fail, be resumed, and fail again. The refresh subscription is installed once and
+    // outlives each individual failure, so refreshing must reschedule the *current* outcome; an
+    // outcome captured at first arm would exit the run reporting the earlier failure.
+    let (tx, rx) = oneshot::channel::<SDKConversationOutputStatus>();
+    let idle_timeout = IdleTimeoutSender::new(tx);
+
+    idle_timeout.arm_refreshable(Duration::from_secs(15 * 60), error_status());
+    idle_timeout.arm_refreshable(
+        Duration::ZERO,
+        SDKConversationOutputStatus::Blocked {
+            blocked_action: "second failure".to_string(),
+        },
+    );
+
+    assert_eq!(
+        idle_timeout.refresh(),
+        Some(Duration::ZERO),
+        "refresh should reschedule using the window most recently armed"
+    );
+
+    // Awaited rather than polled: the reschedule completes on a timer task, so a `try_recv` here
+    // races it and only passes when the machine is idle.
+    let blocked_action = match block_on(rx) {
+        Ok(SDKConversationOutputStatus::Blocked { blocked_action }) => Some(blocked_action),
+        _ => None,
+    };
+    assert_eq!(
+        blocked_action.as_deref(),
+        Some("second failure"),
+        "refresh rescheduled a stale outcome instead of the most recent failure"
+    );
+}
+
+#[test]
+fn debug_window_refresh_is_inert_before_anything_is_armed() {
+    let (tx, _rx) = oneshot::channel::<SDKConversationOutputStatus>();
+    let idle_timeout = IdleTimeoutSender::new(tx);
+
+    assert_eq!(idle_timeout.refresh(), None);
+}
+
+#[test]
+fn cancelling_the_idle_timeout_stops_a_later_refresh_from_resurrecting_it() {
+    // A follow-up cancels the pending exit, but the viewer-input subscription outlives that
+    // cancellation. Without clearing the armed outcome, typing in the session afterwards would
+    // reschedule the old failure and exit the run mid-follow-up.
+    let (tx, mut rx) = oneshot::channel::<SDKConversationOutputStatus>();
+    let idle_timeout = IdleTimeoutSender::new(tx);
+
+    // Long enough that the armed timer cannot fire before the cancellation below, which would
+    // otherwise make this race under load rather than test the cancellation.
+    idle_timeout.arm_refreshable(Duration::from_secs(60), error_status());
+    idle_timeout.cancel_idle_timeout();
+
+    assert_eq!(
+        idle_timeout.refresh(),
+        None,
+        "a cancelled debug window must not be refreshable"
+    );
+    assert!(
+        matches!(rx.try_recv(), Ok(None)),
+        "the run must not have been ended by the cancelled window"
+    );
+}
+
+#[test]
+fn failed_cli_harness_session_defers_by_idle_on_fail() {
+    // The flag lives on `warp agent run`, so it has to behave the same whichever harness the run
+    // uses; a failed CLI session is the same "process is the session sharer" situation.
+    let idle_on_complete = Some(Duration::from_secs(45 * 60));
+    let idle_on_fail = Some(Duration::from_secs(15 * 60));
+
+    let failed = CLIAgentSessionStatus::Failed {
+        error_type: None,
+        message: Some("boom".to_string()),
+    };
+    assert_eq!(
+        idle_window_for_cli_session_status(&failed, idle_on_complete, idle_on_fail),
+        idle_on_fail
+    );
+    assert_eq!(
+        idle_window_for_cli_session_status(&failed, idle_on_complete, None),
+        None,
+        "--idle-on-complete must not act as a fallback for a failed CLI session"
+    );
+    assert_eq!(
+        idle_window_for_cli_session_status(
+            &CLIAgentSessionStatus::Success,
+            idle_on_complete,
+            idle_on_fail
+        ),
+        idle_on_complete
+    );
+    assert_eq!(
+        idle_window_for_cli_session_status(
+            &CLIAgentSessionStatus::InProgress,
+            idle_on_complete,
+            idle_on_fail
+        ),
+        None
+    );
+    assert_eq!(
+        idle_window_for_cli_session_status(
+            &CLIAgentSessionStatus::Cancelled,
+            idle_on_complete,
+            idle_on_fail
+        ),
+        idle_on_complete,
+        "a Ctrl-C cancellation is a non-error completion, like Success or Blocked"
+    );
+}
+
+#[test]
+fn terminal_status_log_outcome_labels_are_low_cardinality() {
+    assert_eq!(
+        terminal_status_log_outcome(&SDKConversationOutputStatus::Success),
+        "non_error_completion"
+    );
+    assert_eq!(terminal_status_log_outcome(&error_status()), "error");
 }
 
 #[test]
@@ -1253,6 +1637,162 @@ fn write_skill_file(repo: &Path, name: &str) {
     let skill_dir = repo.join(".agents").join("skills").join(name);
     fs::create_dir_all(&skill_dir).unwrap();
     fs::write(skill_dir.join("SKILL.md"), format!("Skill: {name}.")).unwrap();
+}
+
+/// Write a minimal SKILL.md at `{skills_dir}/{name}/SKILL.md`.
+/// This is the flat layout expected by `WARP_SKILL_DIRS` (no `.agents/skills` wrapper).
+fn write_flat_skill(skills_dir: &Path, name: &str) {
+    let skill_dir = skills_dir.join(name);
+    fs::create_dir_all(&skill_dir).unwrap();
+    fs::write(
+        skill_dir.join("SKILL.md"),
+        format!("---\nname: {name}\ndescription: Skill {name}.\n---\n\n# {name}\n"),
+    )
+    .unwrap();
+}
+
+/// Verifies that `load_skills_dirs` reads skills from the `WARP_SKILL_DIRS` environment
+/// variable and registers them in the personal (home) bucket so they are always in scope,
+/// regardless of the current working directory.
+#[test]
+#[serial_test::serial]
+fn warp_skill_dirs_env_loads_skills_as_home_tier() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+
+        let temp = TempDir::new().unwrap();
+        let working_dir = dunce::canonicalize(temp.path()).unwrap();
+
+        // Create two separate flat skills directories (no .agents/skills prefix).
+        let skills_dir_a = working_dir.join("extra-skills-a");
+        let skills_dir_b = working_dir.join("extra-skills-b");
+        write_flat_skill(&skills_dir_a, "env-skill-a1");
+        write_flat_skill(&skills_dir_a, "env-skill-a2");
+        write_flat_skill(&skills_dir_b, "env-skill-b1");
+
+        // Point WARP_SKILL_DIRS at both directories.
+        let skills_dirs_value = format!("{},{}", skills_dir_a.display(), skills_dir_b.display());
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::set_var("WARP_SKILL_DIRS", &skills_dirs_value) };
+
+        let terminal_view = add_window_with_terminal(&mut app, None);
+        let driver_handle = app.add_model(|ctx| {
+            let terminal_driver =
+                super::terminal::TerminalDriver::create_from_existing_view(terminal_view, ctx);
+            AgentDriver::new_for_test(working_dir.clone(), terminal_driver, ctx)
+        });
+
+        let (done_tx, done_rx) = futures::channel::oneshot::channel::<()>();
+        driver_handle.update(&mut app, |_, ctx| {
+            let spawner = ctx.spawner();
+            ctx.spawn(
+                async move {
+                    AgentDriver::load_skills_dirs(&spawner).await;
+                    let _ = done_tx.send(());
+                },
+                |_, _, _| {},
+            );
+        });
+        done_rx.await.expect("loading task should complete");
+
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::remove_var("WARP_SKILL_DIRS") };
+
+        // Skills from WARP_SKILL_DIRS are home-tier, so they appear for any working directory.
+        // Use None cwd — home skills are included regardless of is_cloud_environment.
+        let skill_names = SkillManager::handle(&app).read(&app, |manager: &SkillManager, ctx| {
+            manager
+                .get_skills_for_working_directory(None, ctx)
+                .into_iter()
+                .map(|s| s.name.clone())
+                .collect::<Vec<_>>()
+        });
+
+        assert!(
+            skill_names.contains(&"env-skill-a1".to_string()),
+            "'env-skill-a1' from WARP_SKILL_DIRS should be loaded; got: {skill_names:?}"
+        );
+        assert!(
+            skill_names.contains(&"env-skill-a2".to_string()),
+            "'env-skill-a2' from WARP_SKILL_DIRS should be loaded; got: {skill_names:?}"
+        );
+        assert!(
+            skill_names.contains(&"env-skill-b1".to_string()),
+            "'env-skill-b1' from WARP_SKILL_DIRS should be loaded; got: {skill_names:?}"
+        );
+
+        // Verify the skills have Home scope (personal tier).
+        let scope_check = SkillManager::handle(&app).read(&app, |manager: &SkillManager, ctx| {
+            use ai::skills::SkillScope;
+            manager
+                .get_skills_for_working_directory(None, ctx)
+                .into_iter()
+                .filter(|s| s.name.starts_with("env-skill-"))
+                .all(|s| s.scope == SkillScope::Home)
+        });
+        assert!(
+            scope_check,
+            "all WARP_SKILL_DIRS skills must have SkillScope::Home"
+        );
+    });
+}
+
+/// Verifies that relative `WARP_SKILL_DIRS` entries are resolved against the driver's
+/// working directory rather than the process's current working directory (which
+/// `prepare_environment` may have changed).
+#[test]
+#[serial_test::serial]
+fn warp_skill_dirs_env_relative_entries_resolve_against_working_dir() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+
+        let temp = TempDir::new().unwrap();
+        let working_dir = dunce::canonicalize(temp.path()).unwrap();
+
+        // Create a flat skills directory inside the working dir and reference it by
+        // relative path only. No `rel-skills` directory exists under the process cwd,
+        // so this only loads if resolution is anchored at the driver's working dir.
+        write_flat_skill(&working_dir.join("rel-skills"), "env-skill-rel");
+
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::set_var("WARP_SKILL_DIRS", "rel-skills") };
+
+        let terminal_view = add_window_with_terminal(&mut app, None);
+        let driver_handle = app.add_model(|ctx| {
+            let terminal_driver =
+                super::terminal::TerminalDriver::create_from_existing_view(terminal_view, ctx);
+            AgentDriver::new_for_test(working_dir.clone(), terminal_driver, ctx)
+        });
+
+        let (done_tx, done_rx) = futures::channel::oneshot::channel::<()>();
+        driver_handle.update(&mut app, |_, ctx| {
+            let spawner = ctx.spawner();
+            ctx.spawn(
+                async move {
+                    AgentDriver::load_skills_dirs(&spawner).await;
+                    let _ = done_tx.send(());
+                },
+                |_, _, _| {},
+            );
+        });
+        done_rx.await.expect("loading task should complete");
+
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::remove_var("WARP_SKILL_DIRS") };
+
+        let skill_names = SkillManager::handle(&app).read(&app, |manager: &SkillManager, ctx| {
+            manager
+                .get_skills_for_working_directory(None, ctx)
+                .into_iter()
+                .map(|s| s.name.clone())
+                .collect::<Vec<_>>()
+        });
+
+        assert!(
+            skill_names.contains(&"env-skill-rel".to_string()),
+            "'env-skill-rel' should load via a relative WARP_SKILL_DIRS entry resolved against the driver's working dir; got: {skill_names:?}"
+        );
+    });
 }
 
 #[test]

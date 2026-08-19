@@ -30,7 +30,6 @@ use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
 use crate::ai::harness_availability::HarnessAvailabilityModel;
 use crate::ai::llms::{LLMId, LLMPreferences};
 use crate::ai::mcp::templatable_manager::TemplatableMCPServerManager;
-#[cfg(feature = "voice_input")]
 use crate::ai::request_usage_model::AIRequestUsageModel;
 use crate::auth::AuthStateProvider;
 use crate::auth::auth_manager::AuthManager;
@@ -38,6 +37,7 @@ use crate::cloud_object::model::persistence::CloudModel;
 use crate::code_review::git_repo_model::GitRepoModels;
 use crate::network::NetworkStatus;
 use crate::persistence::PersistenceWriter;
+use crate::server::experiments::ServerExperiments;
 use crate::server::server_api::ServerApiProvider;
 use crate::server::sync_queue::SyncQueue;
 #[cfg(feature = "voice_input")]
@@ -63,7 +63,9 @@ use crate::tui_onboarding_markers::TuiOnboardingMarkers;
 use crate::user_config::WarpConfig;
 #[cfg(feature = "voice_input")]
 use crate::voice::transcriber::VoiceTranscriber;
+use crate::workspaces::team::{MembershipRole, Team, TeamMember};
 use crate::workspaces::user_workspaces::UserWorkspaces;
+use crate::workspaces::workspace::Workspace;
 
 /// Builds a history model with persisted AI queries for TUI tests.
 pub fn blocklist_ai_history_model_with_queries(queries: Vec<String>) -> BlocklistAIHistoryModel {
@@ -264,6 +266,28 @@ pub fn register_tui_input_mode_test_settings(ctx: &mut AppContext) {
     });
 }
 
+pub fn set_tui_default_team_admin_for_test(ctx: &mut AppContext) {
+    let auth = AuthStateProvider::as_ref(ctx).get();
+    let user_uid = auth.user_id().expect("test user should have an id");
+    let user_email = auth.user_email().expect("test user should have an email");
+    let mut team = Team::from_local_cache(123.into(), "test team".to_owned(), None, None, None);
+    team.members.push(TeamMember {
+        uid: user_uid,
+        email: user_email,
+        role: MembershipRole::Owner,
+    });
+    let workspace = Workspace::from_local_cache(
+        "workspace_uid123456789".to_owned().into(),
+        "test workspace".to_owned(),
+        Some(vec![team]),
+    );
+    let workspace_uid = workspace.uid;
+    UserWorkspaces::handle(ctx).update(ctx, |workspaces, ctx| {
+        workspaces.update_workspaces(vec![workspace], ctx);
+        workspaces.set_current_workspace_uid(workspace_uid, ctx);
+    });
+}
+
 /// Queues an action as the active confirmation request for a TUI view test.
 pub fn queue_tui_permission_action(
     action_model: &mut BlocklistAIActionModel,
@@ -317,11 +341,11 @@ pub fn register_tui_session_view_test_singletons(app: &mut warpui::App) {
     app.add_singleton_model(|ctx| {
         AIExecutionProfilesModel::new(&LaunchMode::new_for_unit_test(), ctx)
     });
+    app.add_singleton_model(|ctx| {
+        AIRequestUsageModel::new(ServerApiProvider::as_ref(ctx).get_ai_client(), ctx)
+    });
     #[cfg(feature = "voice_input")]
     {
-        app.add_singleton_model(|ctx| {
-            AIRequestUsageModel::new(ServerApiProvider::as_ref(ctx).get_ai_client(), ctx)
-        });
         app.add_singleton_model(voice_input::VoiceInput::new);
         app.add_singleton_model(|ctx| {
             VoiceTranscriber::new(Arc::new(ServerVoiceTranscriber::new(
@@ -351,6 +375,7 @@ pub fn register_tui_session_view_test_singletons(app: &mut warpui::App) {
     app.add_singleton_model(|_| {
         crate::GlobalResourceHandlesProvider::new(global_resources.clone())
     });
+    app.add_singleton_model(|ctx| ServerExperiments::new_from_cache(vec![], ctx));
 
     app.add_singleton_model(crate::tui::TuiMcpManager::new_for_test);
     app.add_singleton_model(crate::tui::TuiUserInfoManager::new_for_test);

@@ -339,9 +339,10 @@ impl<'a> CodebaseIndexSyncOperation<'a> {
             }) {
                 Ok(res) => res,
                 Err(err) => {
-                    report_error!(
-                        anyhow::anyhow!("{err:?}").context("Failed to generate embeddings")
-                    );
+                    // `err` is a registered error still needed below to build
+                    // `SyncOperationError::ServerSyncError`, so it's reported borrowed to
+                    // keep it typed.
+                    report_error!(&err);
                     if files_need_resync.is_empty() {
                         return Err(SyncOperationError::ServerSyncError(err));
                     } else {
@@ -418,9 +419,10 @@ impl<'a> CodebaseIndexSyncOperation<'a> {
             }) {
                 Ok(res) => res,
                 Err(err) => {
-                    report_error!(
-                        anyhow::anyhow!("{err:?}").context("Failed to sync intermediate node")
-                    );
+                    // `err` is a registered error still needed below to build
+                    // `SyncOperationError::ServerSyncError`, so it's reported borrowed to
+                    // keep it typed.
+                    report_error!(&err);
                     if files_need_resync.is_empty() {
                         return Err(SyncOperationError::ServerSyncError(err));
                     } else {

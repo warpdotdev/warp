@@ -1,5 +1,4 @@
 use std::borrow::Cow;
-use std::fmt;
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 use warpui_core::color::ColorU;
@@ -9,26 +8,14 @@ use super::OPAQUE;
 const SHORT_COLOR_LEN: usize = 3;
 const FULL_COLOR_LEN: usize = 6;
 
-#[derive(PartialEq, Eq, Debug, Clone)]
+#[derive(PartialEq, Eq, Debug, Clone, thiserror::Error)]
 pub enum HexColorError {
+    #[error("Expected hex color string starting with #.")]
     HashPrefix,
+    #[error("Expected hex color string starting with # followed by 3 or 6 characters.")]
     InvalidLength,
+    #[error("Invalid hex color string")]
     InvalidValue,
-}
-
-impl fmt::Display for HexColorError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            HexColorError::HashPrefix => {
-                write!(f, "Expected hex color string starting with #.")
-            }
-            HexColorError::InvalidLength => write!(
-                f,
-                "Expected hex color string starting with # followed by 3 or 6 characters."
-            ),
-            HexColorError::InvalidValue => write!(f, "Invalid hex color string"),
-        }
-    }
 }
 
 pub fn coloru_from_hex_string(s: &str) -> Result<ColorU, HexColorError> {

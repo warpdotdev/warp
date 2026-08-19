@@ -16,7 +16,7 @@ use unindent::Unindent;
 #[cfg(feature = "voice_input")]
 use voice_input::VoiceInputToggledFrom;
 use warp_completer::completer::{
-    EngineFileType, Match, MatchStrategy, MatchedSuggestion, Priority, Suggestion,
+    EngineFileType, Match, MatchStrategy, MatchedSuggestion, PathSeparators, Priority, Suggestion,
     SuggestionResults, SuggestionType,
 };
 use warp_completer::meta::Span;
@@ -331,6 +331,7 @@ pub fn initialize_app(app: &mut App) {
     app.add_singleton_model(|_| WorkspaceRegistry::new());
     app.add_singleton_model(|_| ToastStack);
     app.add_singleton_model(|_| PricingInfoModel::new());
+    app.add_singleton_model(crate::ai::pricing_promotion::PricingPromotionState::new);
     app.add_singleton_model(ByoLlmAuthBannerSessionState::new);
     app.add_singleton_model(|_| {
         crate::ai::ambient_agents::github_auth_notifier::GitHubAuthNotifier::new()
@@ -524,11 +525,11 @@ fn argument_suggestion(name: impl Into<SmolStr>) -> MatchedSuggestion {
 
 /// Creates a [`MatchedSuggestion`] for a file completion result.
 /// Specifically, we ensure the replacement is the entire path
-/// while the display text is just the string after the last slash.
+/// while the display text is just the string after the last valid path separator.
 fn file_suggestion(path: impl Into<SmolStr>) -> MatchedSuggestion {
     let replacement = path.into();
     let display = replacement
-        .rsplit(std::path::MAIN_SEPARATOR)
+        .rsplit(PathSeparators::for_os().all)
         .next()
         .map(Into::into)
         .unwrap_or_else(|| replacement.clone());

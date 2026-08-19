@@ -218,6 +218,84 @@ impl TuiView for TextView {
 impl TypedActionView for TextView {
     type Action = ();
 }
+struct PresentedFocusRoot {
+    visible: crate::ViewHandle<TextView>,
+}
+
+impl Entity for PresentedFocusRoot {
+    type Event = ();
+}
+
+impl TuiView for PresentedFocusRoot {
+    fn ui_name() -> &'static str {
+        "PresentedFocusRoot"
+    }
+
+    fn child_view_ids(&self, _app: &AppContext) -> Vec<crate::EntityId> {
+        vec![self.visible.id()]
+    }
+
+    fn render(&self, _: &AppContext) -> Box<dyn TuiElement> {
+        TuiChildView::new(&self.visible).finish()
+    }
+}
+
+impl TypedActionView for PresentedFocusRoot {
+    type Action = ();
+}
+
+#[test]
+fn draw_preserves_focus_outside_the_presented_tree_by_default() {
+    App::test((), |mut app| async move {
+        let (window_id, _) = app.update(|ctx| ctx.add_tui_window(window_options(), |_| TextView));
+        let visible = app.update(|ctx| ctx.add_tui_view(window_id, |_| TextView));
+        let hidden = app.update(|ctx| ctx.add_tui_view(window_id, |_| TextView));
+        let visible_for_root = visible.clone();
+        let root = app.update(|ctx| {
+            ctx.add_tui_view(window_id, move |_| PresentedFocusRoot {
+                visible: visible_for_root,
+            })
+        });
+        let terminal = TestTerminal::new(TuiSize::new(20, 3));
+        let mut screen = TuiScreen::new(window_id, root, terminal);
+
+        visible.update(&mut app, |_, ctx| ctx.focus_self());
+        app.update(|ctx| screen.draw(ctx)).unwrap();
+        hidden.update(&mut app, |_, ctx| ctx.focus_self());
+        app.update(|ctx| screen.draw(ctx)).unwrap();
+
+        assert!(app.read(|ctx| hidden.is_focused(ctx)));
+    });
+}
+
+#[test]
+fn opt_in_draw_repairs_focus_owned_by_a_view_outside_the_presented_tree() {
+    App::test((), |mut app| async move {
+        let (window_id, _) = app.update(|ctx| ctx.add_tui_window(window_options(), |_| TextView));
+        let visible = app.update(|ctx| ctx.add_tui_view(window_id, |_| TextView));
+        let hidden = app.update(|ctx| ctx.add_tui_view(window_id, |_| TextView));
+        let visible_for_root = visible.clone();
+        let root = app.update(|ctx| {
+            ctx.add_tui_view(window_id, move |_| PresentedFocusRoot {
+                visible: visible_for_root,
+            })
+        });
+        let terminal = TestTerminal::new(TuiSize::new(20, 3));
+        let mut screen = TuiScreen::new(window_id, root.clone(), terminal)
+            .with_focus_policy(TuiFocusPolicy::PresentedTree);
+
+        visible.update(&mut app, |_, ctx| ctx.focus_self());
+        app.update(|ctx| screen.draw(ctx)).unwrap();
+        assert!(screen.presenter.presented_views.contains(&root.id()));
+        assert!(screen.presenter.presented_views.contains(&visible.id()));
+        assert!(!screen.presenter.presented_views.contains(&hidden.id()));
+
+        hidden.update(&mut app, |_, ctx| ctx.focus_self());
+        assert!(app.read(|ctx| hidden.is_focused(ctx)));
+        app.update(|ctx| screen.draw(ctx)).unwrap();
+        assert!(app.read(|ctx| root.is_focused(ctx)));
+    });
+}
 
 struct RepaintingElement {
     size: Option<TuiSize>,

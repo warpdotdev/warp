@@ -33,7 +33,9 @@ use warpui_core::elements::tui::{
 };
 use warpui_core::{AppContext, Entity, ModelHandle, TuiView, ViewContext};
 
-use crate::autoupdate::{TuiAutoupdateStatus, TuiAutoupdater, TuiAutoupdaterEvent};
+use crate::autoupdate::{
+    HOMEBREW_UPDATE_STATUS, TuiAutoupdateStatus, TuiAutoupdater, TuiAutoupdaterEvent,
+};
 use crate::tui_builder::TuiUiBuilder;
 use crate::ui::{abbreviate_home_prefix, append_welcome_capability_section, render_welcome_title};
 use crate::zero_state_animation::{
@@ -877,6 +879,7 @@ fn autoupdate_status_label(status: TuiAutoupdateStatus) -> Option<&'static str> 
         TuiAutoupdateStatus::UpToDate => Some("up to date"),
         TuiAutoupdateStatus::Failed => Some("automatic update failed"),
         TuiAutoupdateStatus::PendingRestart => Some("update installed, restart to apply"),
+        TuiAutoupdateStatus::UpdateAvailable => Some(HOMEBREW_UPDATE_STATUS),
     }
 }
 
@@ -901,7 +904,8 @@ fn render_version_line(builder: &TuiUiBuilder, app: &AppContext) -> Box<dyn TuiE
         TuiAutoupdateStatus::Idle => unreachable!("idle status has no label"),
         TuiAutoupdateStatus::Checking
         | TuiAutoupdateStatus::Updating
-        | TuiAutoupdateStatus::UpToDate => muted,
+        | TuiAutoupdateStatus::UpToDate
+        | TuiAutoupdateStatus::UpdateAvailable => muted,
         TuiAutoupdateStatus::Failed => builder.error_text_style(),
         TuiAutoupdateStatus::PendingRestart => builder.success_glyph_style(),
     };

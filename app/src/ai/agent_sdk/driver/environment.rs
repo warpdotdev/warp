@@ -147,6 +147,52 @@ pub(super) fn merge_repos_deduped(
     Ok(merged)
 }
 
+/// Environment variable carrying the authenticated remote URL of a Factory's
+/// definition repository. Dispatch attaches it only to runs that execute as a
+/// Factory agent whose Factory definition lives in a Warp-managed repository.
+const FACTORY_REPO_CLONE_URL_ENV_VAR: &str = "WARP_FACTORY_REPO_CLONE_URL";
+
+/// Environment variable carrying the directory, relative to the working
+/// directory, that the Factory definition repository is cloned into.
+const FACTORY_REPO_DIR_ENV_VAR: &str = "WARP_FACTORY_REPO_DIR";
+
+/// Prepends the setup command that clones a Factory's definition repository
+/// when the dispatch attached the clone variables to this run, so the checkout
+/// exists before user-declared setup commands run.
+pub(super) fn prepend_factory_definition_clone(setup_commands: &mut Vec<String>) {
+    let clone_url = std::env::var(FACTORY_REPO_CLONE_URL_ENV_VAR).unwrap_or_default();
+    let clone_dir = std::env::var(FACTORY_REPO_DIR_ENV_VAR).unwrap_or_default();
+    prepend_factory_definition_clone_for_values(&clone_url, &clone_dir, setup_commands);
+}
+
+fn prepend_factory_definition_clone_for_values(
+    clone_url: &str,
+    clone_dir: &str,
+    setup_commands: &mut Vec<String>,
+) {
+    if clone_url.trim().is_empty() || clone_dir.trim().is_empty() {
+        return;
+    }
+    // Environments provisioned before run-scoped cloning still persist their
+    // own copy of the clone command; leave that copy in charge rather than
+    // attempting the checkout twice.
+    if setup_commands
+        .iter()
+        .any(|command| command.contains(FACTORY_REPO_CLONE_URL_ENV_VAR))
+    {
+        return;
+    }
+    // The command expands the variables in the session shell instead of
+    // inlining their values so the credential-bearing URL never appears in
+    // command text. There is deliberately no existence guard: a bare clone
+    // into an already-present target directory fails, which is treated as a
+    // fatal setup-command error upstream.
+    setup_commands.insert(
+        0,
+        format!("git clone \"${FACTORY_REPO_CLONE_URL_ENV_VAR}\" \"${FACTORY_REPO_DIR_ENV_VAR}\""),
+    );
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn prepare_environment_impl(
     spawner: &ModelSpawner<TerminalDriver>,
@@ -314,6 +360,9 @@ fn record_codebase_indexing(
             .is_err()
         {
             log::warn!(
+                "Timed out waiting for codebase index sync; continuing without guaranteed codebase context",
+            );
+            tracing::warn!(
                 "Timed out waiting for codebase index sync; continuing without guaranteed codebase context",
             );
         }

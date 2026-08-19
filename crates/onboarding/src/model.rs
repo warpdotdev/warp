@@ -238,6 +238,39 @@ impl CreditPurchaseState {
     }
 }
 
+/// The user's arm in the server-assigned "Choose how to start" option-count
+/// experiment (REV-1939). The arm is snapshotted onto onboarding state just
+/// before the post-auth offer is shown and then frozen for that exposure.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ChooseHowToStartExperimentArm {
+    /// No arm assigned (ineligible user, no server state, or ambiguous state).
+    /// Renders the safe two-option layout.
+    #[default]
+    Unassigned,
+    /// The two-option control: no ad-hoc credit-pack purchase UI.
+    Control,
+    /// The experiment: the credit-pack purchase options are shown up front.
+    Experiment,
+}
+
+impl ChooseHowToStartExperimentArm {
+    /// The stable `experiment_arm` value reported on onboarding telemetry.
+    pub fn telemetry_value(self) -> &'static str {
+        match self {
+            ChooseHowToStartExperimentArm::Unassigned => "unassigned",
+            ChooseHowToStartExperimentArm::Control => "control",
+            ChooseHowToStartExperimentArm::Experiment => "experiment",
+        }
+    }
+
+    /// Whether this arm surfaces the ad-hoc credit-pack purchase UI. Only the
+    /// experiment arm does; control and unassigned users get the two-option
+    /// layout even when packs are loaded.
+    pub fn shows_credit_packs(self) -> bool {
+        matches!(self, ChooseHowToStartExperimentArm::Experiment)
+    }
+}
+
 /// Which opt-out entry point opened the "Are you sure you don't want AI?" modal.
 /// Determines where "Give me AI features" routes the user on cancel.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -292,10 +325,14 @@ pub(crate) struct OnboardingStateModel {
     /// supplied by the app crate from server pricing. Empty until pricing has
     /// been fetched, which hides the buy-credits option entirely.
     credit_pack_options: Vec<CreditPackOption>,
+    pricing_promotion_message: Option<String>,
     /// Index into `credit_pack_options` of the pack the user has selected.
     selected_credit_pack_index: usize,
     /// Progress of a credit purchase started from the offer slide.
     credit_purchase_state: CreditPurchaseState,
+    /// The server-assigned "Choose how to start" experiment arm, snapshotted
+    /// just before the post-auth offer is shown.
+    choose_how_to_start_experiment_arm: ChooseHowToStartExperimentArm,
 }
 
 impl OnboardingStateModel {
@@ -322,8 +359,10 @@ impl OnboardingStateModel {
             offer_variant: None,
             no_ai_confirmation: None,
             credit_pack_options: Vec::new(),
+            pricing_promotion_message: None,
             selected_credit_pack_index: 0,
             credit_purchase_state: CreditPurchaseState::default(),
+            choose_how_to_start_experiment_arm: ChooseHowToStartExperimentArm::default(),
         }
     }
 
@@ -333,6 +372,38 @@ impl OnboardingStateModel {
 
     pub(crate) fn offer_variant(&self) -> Option<OfferVariant> {
         self.offer_variant
+    }
+
+    pub(crate) fn choose_how_to_start_experiment_arm(&self) -> ChooseHowToStartExperimentArm {
+        self.choose_how_to_start_experiment_arm
+    }
+
+    /// Snapshots the server-assigned experiment arm onto onboarding state.
+    /// Idempotent: a repeat of the current arm is a no-op so a late server
+    /// refresh can't churn the view mid-exposure.
+    pub(crate) fn set_choose_how_to_start_experiment_arm(
+        &mut self,
+        arm: ChooseHowToStartExperimentArm,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        if self.choose_how_to_start_experiment_arm == arm {
+            return;
+        }
+        self.choose_how_to_start_experiment_arm = arm;
+        ctx.notify();
+    }
+
+    /// The `experiment_arm` to report on this offer's telemetry, or `None` when
+    /// the current offer isn't the arm-experiment surface (so unrelated events
+    /// never gain a spurious `experiment_arm` key).
+    ///
+    /// `offer_variant` is sticky once set, so the step is checked too: backing
+    /// out of the offer (`PostAuthOffer` → `ThemePicker`) must not leak the arm
+    /// onto the non-offer slide views that follow (spec invariant #6).
+    pub(crate) fn offer_experiment_arm(&self) -> Option<&'static str> {
+        (self.step == OnboardingStep::PostAuthOffer
+            && matches!(self.offer_variant, Some(OfferVariant::ChooseHowToStart)))
+        .then(|| self.choose_how_to_start_experiment_arm.telemetry_value())
     }
 
     pub(crate) fn show_post_auth_offer(
@@ -482,6 +553,22 @@ impl OnboardingStateModel {
         &self.credit_pack_options
     }
 
+    pub(crate) fn pricing_promotion_message(&self) -> Option<&str> {
+        self.pricing_promotion_message.as_deref()
+    }
+
+    pub(crate) fn set_pricing_promotion_message(
+        &mut self,
+        message: Option<String>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        if self.pricing_promotion_message == message {
+            return;
+        }
+        self.pricing_promotion_message = message;
+        ctx.notify();
+    }
+
     /// Replaces the offered credit packs. Keeps the user's selection when it
     /// still points at a pack, otherwise falls back to the first one.
     pub(crate) fn set_credit_pack_options(
@@ -563,19 +650,44 @@ impl OnboardingStateModel {
         ctx.notify();
     }
 
-    /// Reports whether the user can make an AI request, observed on a refresh
-    /// while checkout is pending. Deliberately the generic availability answer
-    /// rather than "did these particular credits land": onboarding only needs
-    /// to avoid letting through someone who still can't use AI.
+    /// Reports whether the user can make an AI request. The AI-sell offer
+    /// exists to get the user AI usage, so observing that they now have it is
+    /// the whole completion condition — a plan or a one-time pack, bought in
+    /// the client or on the web. Onboarding deliberately does not track which
+    /// purchase landed, so a user who leaves through one call to action and
+    /// buys through another is still let through.
     pub(crate) fn on_credit_availability_observed(
         &mut self,
         available: bool,
         ctx: &mut ModelContext<Self>,
     ) {
-        if self.credit_purchase_state != CreditPurchaseState::AwaitingCheckout || !available {
+        if !available || !self.is_showing_ai_sell_offer() {
             return;
         }
-        self.on_credit_purchase_completed(ctx);
+        self.finish_ai_sell_offer(ctx);
+    }
+
+    /// A web checkout reported success through the desktop hand-off. The grant
+    /// can lag the redirect, so the hand-off itself is trusted rather than
+    /// waiting for an availability read. Returns whether an AI-sell offer
+    /// consumed the signal.
+    pub(crate) fn on_checkout_succeeded(&mut self, ctx: &mut ModelContext<Self>) -> bool {
+        if !self.is_showing_ai_sell_offer() {
+            return false;
+        }
+        self.finish_ai_sell_offer(ctx);
+        true
+    }
+
+    /// Whether an onboarding screen whose purpose is to sell AI usage is on
+    /// screen. The head-start offer is excluded: it ships with AI usage already
+    /// on the account, so availability there says nothing about whether the
+    /// user has made their choice yet.
+    fn is_showing_ai_sell_offer(&self) -> bool {
+        self.step == OnboardingStep::PostAuthOffer
+            && self
+                .offer_variant
+                .is_some_and(OfferVariant::supports_credit_packs)
     }
 
     /// The credits landed — either charged synchronously or granted after the
@@ -584,6 +696,12 @@ impl OnboardingStateModel {
         if !self.credit_purchase_state.is_in_flight() {
             return;
         }
+        self.finish_ai_sell_offer(ctx);
+    }
+
+    /// Clears any in-flight purchase and reports that the user can now use AI,
+    /// so onboarding moves past the offer.
+    fn finish_ai_sell_offer(&mut self, ctx: &mut ModelContext<Self>) {
         self.credit_purchase_state = CreditPurchaseState::Idle;
         ctx.emit(OnboardingStateEvent::CreditPurchaseCompleted);
         ctx.notify();
@@ -596,6 +714,19 @@ impl OnboardingStateModel {
             return;
         }
         self.credit_purchase_state = CreditPurchaseState::Failed;
+        ctx.notify();
+    }
+
+    /// Drops a checkout that is only waiting for the browser round-trip back to
+    /// `Idle` so a changed selection can start a fresh purchase. Called when the
+    /// user changes their offer selection: an abandoned or backgrounded checkout
+    /// must not trap them on "Waiting for checkout\u{2026}". A mutation still in
+    /// flight (`Purchasing`) is deliberately left untouched.
+    pub(crate) fn reset_pending_checkout(&mut self, ctx: &mut ModelContext<Self>) {
+        if self.credit_purchase_state != CreditPurchaseState::AwaitingCheckout {
+            return;
+        }
+        self.credit_purchase_state = CreditPurchaseState::Idle;
         ctx.notify();
     }
 
@@ -1225,91 +1356,34 @@ impl OnboardingStateModel {
         self.step = step;
 
         let account_first = warp_core::features::FeatureFlag::AccountFirstOnboarding.is_enabled();
-        match step {
+        let slide_name = match step {
             OnboardingStep::Intro => {
-                send_telemetry_from_ctx!(
-                    OnboardingEvent::SlideViewed {
-                        slide_name: if account_first { "welcome" } else { "intro" }.to_string(),
-                    },
-                    ctx
-                );
+                if account_first {
+                    "welcome"
+                } else {
+                    "intro"
+                }
             }
-            OnboardingStep::PostAuthOffer => {
-                let variant = self
-                    .offer_variant
-                    .expect("offer variant is selected before entering the post-auth offer");
-                send_telemetry_from_ctx!(
-                    OnboardingEvent::SlideViewed {
-                        slide_name: variant.slide_name().to_string(),
-                    },
-                    ctx
-                );
-            }
-            OnboardingStep::ThemePicker => {
-                send_telemetry_from_ctx!(
-                    OnboardingEvent::SlideViewed {
-                        slide_name: "theme_picker".to_string(),
-                    },
-                    ctx
-                );
-            }
-            OnboardingStep::Intention => {
-                send_telemetry_from_ctx!(
-                    OnboardingEvent::SlideViewed {
-                        slide_name: "intention".to_string(),
-                    },
-                    ctx
-                );
-            }
-            OnboardingStep::AiSetup => {
-                send_telemetry_from_ctx!(
-                    OnboardingEvent::SlideViewed {
-                        slide_name: "ai_setup".to_string(),
-                    },
-                    ctx
-                );
-            }
-            OnboardingStep::AiAccess => {
-                send_telemetry_from_ctx!(
-                    OnboardingEvent::SlideViewed {
-                        slide_name: "ai_access".to_string(),
-                    },
-                    ctx
-                );
-            }
-            OnboardingStep::Customize => {
-                send_telemetry_from_ctx!(
-                    OnboardingEvent::SlideViewed {
-                        slide_name: "customize".to_string(),
-                    },
-                    ctx
-                );
-            }
-            OnboardingStep::Agent => {
-                send_telemetry_from_ctx!(
-                    OnboardingEvent::SlideViewed {
-                        slide_name: "agent".to_string(),
-                    },
-                    ctx
-                );
-            }
-            OnboardingStep::ThirdParty => {
-                send_telemetry_from_ctx!(
-                    OnboardingEvent::SlideViewed {
-                        slide_name: "third_party".to_string(),
-                    },
-                    ctx
-                );
-            }
-            OnboardingStep::Project => {
-                send_telemetry_from_ctx!(
-                    OnboardingEvent::SlideViewed {
-                        slide_name: "project".to_string(),
-                    },
-                    ctx
-                );
-            }
-        }
+            OnboardingStep::PostAuthOffer => self
+                .offer_variant
+                .expect("offer variant is selected before entering the post-auth offer")
+                .slide_name(),
+            OnboardingStep::ThemePicker => "theme_picker",
+            OnboardingStep::Intention => "intention",
+            OnboardingStep::AiSetup => "ai_setup",
+            OnboardingStep::AiAccess => "ai_access",
+            OnboardingStep::Customize => "customize",
+            OnboardingStep::Agent => "agent",
+            OnboardingStep::ThirdParty => "third_party",
+            OnboardingStep::Project => "project",
+        };
+        send_telemetry_from_ctx!(
+            OnboardingEvent::SlideViewed {
+                slide_name: slide_name.to_string(),
+                experiment_arm: self.offer_experiment_arm().map(str::to_string),
+            },
+            ctx
+        );
 
         ctx.emit(OnboardingStateEvent::SelectedSlideChanged);
         ctx.notify();
@@ -1405,6 +1479,7 @@ impl OnboardingStateModel {
                 slide_name: slide_name.to_string(),
                 action: action.to_string(),
                 account_class: None,
+                experiment_arm: self.offer_experiment_arm().map(str::to_string),
             },
             ctx
         );

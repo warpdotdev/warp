@@ -1484,6 +1484,7 @@ impl TerminalModel {
         if self.handled_exit {
             return;
         }
+        log::debug!("Terminal model exiting: reason={reason:?}");
         let transition = self.plan_lifecycle_transition(LifecycleInput::Exit, None, None, None);
 
         self.handled_exit = true;

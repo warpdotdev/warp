@@ -325,6 +325,7 @@ impl LocalAgentTaskSyncModel {
                         session_id,
                         server_conversation_token.clone(),
                         status_message,
+                        None,
                     )
                     .await;
                 if let Err(err) = &result {
@@ -581,6 +582,10 @@ fn map_cli_session_status(
         CLIAgentSessionStatus::Blocked { message } => (
             AgentTaskState::Blocked,
             message.as_ref().map(TaskStatusUpdate::message),
+        ),
+        CLIAgentSessionStatus::Cancelled => (
+            AgentTaskState::Cancelled,
+            Some(TaskStatusUpdate::message("Cancelled by user")),
         ),
     }
 }

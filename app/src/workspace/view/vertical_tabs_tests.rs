@@ -15,7 +15,8 @@ use super::{
     pane_ids_for_display_granularity, pane_search_text_fragments, preferred_agent_tab_titles,
     push_normalized_unique_summary_label, search_fragments_contain_query,
     select_summary_pane_kind_icons, should_keep_detail_sidecar_visible_for_mouse_position,
-    should_show_tab_group_header, sort_summary_primary_labels_status_first, summary_overflow_count,
+    should_show_tab_group_header, shows_synced_inputs_indicator,
+    sort_summary_primary_labels_status_first, summary_overflow_count,
     summary_search_text_fragments, terminal_kind_badge_label, terminal_primary_line_data,
     terminal_pull_request_badge_label, terminal_search_text_fragments,
     terminal_title_fallback_font, uses_outer_group_container, visible_pane_ids_for_detail_target,
@@ -153,8 +154,8 @@ fn summary_pane_kind_icons_distinguish_ambient_claude_from_local_claude() {
 #[test]
 fn preferred_agent_tab_titles_default_to_title_like_text() {
     let agent_text = TerminalAgentText {
-        conversation_display_title: Some("Generated Oz title".to_string()),
-        conversation_latest_user_prompt: Some("Latest Oz prompt".to_string()),
+        conversation_display_title: Some("Generated Warp Agent title".to_string()),
+        conversation_latest_user_prompt: Some("Latest Warp Agent prompt".to_string()),
         cli_agent_title: Some("CLI summary".to_string()),
         cli_agent_latest_user_prompt: Some("Latest CLI prompt".to_string()),
         is_oz_agent: true,
@@ -164,7 +165,7 @@ fn preferred_agent_tab_titles_default_to_title_like_text() {
     assert_eq!(
         preferred_agent_tab_titles(&agent_text, AgentTabTextPreference::ConversationTitle),
         (
-            Some("Generated Oz title".to_string()),
+            Some("Generated Warp Agent title".to_string()),
             Some("CLI summary".to_string())
         )
     );
@@ -223,8 +224,8 @@ fn terminal_primary_line_uses_terminal_title_when_disabled_cli_has_only_prompt()
 #[test]
 fn preferred_agent_tab_titles_use_latest_prompt_when_enabled() {
     let agent_text = TerminalAgentText {
-        conversation_display_title: Some("Generated Oz title".to_string()),
-        conversation_latest_user_prompt: Some("Latest Oz prompt".to_string()),
+        conversation_display_title: Some("Generated Warp Agent title".to_string()),
+        conversation_latest_user_prompt: Some("Latest Warp Agent prompt".to_string()),
         cli_agent_title: Some("CLI summary".to_string()),
         cli_agent_latest_user_prompt: Some("Latest CLI prompt".to_string()),
         is_oz_agent: true,
@@ -234,7 +235,7 @@ fn preferred_agent_tab_titles_use_latest_prompt_when_enabled() {
     assert_eq!(
         preferred_agent_tab_titles(&agent_text, AgentTabTextPreference::LatestUserPrompt),
         (
-            Some("Latest Oz prompt".to_string()),
+            Some("Latest Warp Agent prompt".to_string()),
             Some("Latest CLI prompt".to_string())
         )
     );
@@ -295,7 +296,7 @@ fn terminal_primary_line_uses_cli_prompt_when_enabled_cli_is_long_running() {
 #[test]
 fn preferred_agent_tab_titles_fall_back_when_preferred_text_is_missing() {
     let agent_text = TerminalAgentText {
-        conversation_display_title: Some("Generated Oz title".to_string()),
+        conversation_display_title: Some("Generated Warp Agent title".to_string()),
         conversation_latest_user_prompt: None,
         cli_agent_title: None,
         cli_agent_latest_user_prompt: Some("Latest CLI prompt".to_string()),
@@ -306,7 +307,7 @@ fn preferred_agent_tab_titles_fall_back_when_preferred_text_is_missing() {
     assert_eq!(
         preferred_agent_tab_titles(&agent_text, AgentTabTextPreference::LatestUserPrompt),
         (
-            Some("Generated Oz title".to_string()),
+            Some("Generated Warp Agent title".to_string()),
             Some("Latest CLI prompt".to_string())
         )
     );
@@ -1147,6 +1148,26 @@ fn sort_summary_primary_labels_moves_status_first_and_preserves_order() {
 }
 
 #[test]
+fn synced_inputs_indicator_shows_on_synced_terminal_rows() {
+    assert!(shows_synced_inputs_indicator(true, true, true));
+}
+
+#[test]
+fn synced_inputs_indicator_hidden_when_tab_is_not_synced() {
+    assert!(!shows_synced_inputs_indicator(true, false, true));
+}
+
+#[test]
+fn synced_inputs_indicator_respects_tab_indicators_setting() {
+    assert!(!shows_synced_inputs_indicator(true, true, false));
+}
+
+#[test]
+fn synced_inputs_indicator_hidden_on_non_terminal_rows() {
+    assert!(!shows_synced_inputs_indicator(false, true, true));
+}
+
+#[test]
 fn summary_search_fragments_include_hidden_overflow_values() {
     let summary = VerticalTabsSummaryData {
         primary_labels: vec![
@@ -1154,7 +1175,7 @@ fn summary_search_fragments_include_hidden_overflow_values() {
                 text: "Claude".to_string(),
                 status: Some(ConversationStatus::InProgress),
             },
-            label("Oz"),
+            label("Warp Agent"),
             label("cargo"),
             label("code review"),
             label("hidden work"),

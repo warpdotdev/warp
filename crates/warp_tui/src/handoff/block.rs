@@ -186,11 +186,8 @@ impl TuiHandoffBlock {
     }
 
     fn handle_model_event(&mut self, event: &TuiHandoffModelEvent, ctx: &mut ViewContext<Self>) {
-        if let TuiHandoffModelEvent::Changed { focus_block } = event {
+        if let TuiHandoffModelEvent::Changed { .. } = event {
             self.refresh_selector(ctx);
-            if *focus_block {
-                ctx.focus_self();
-            }
             ctx.notify();
         }
     }
@@ -461,9 +458,13 @@ impl TuiHandoffBlock {
                         .with_style(builder.primary_text_style())
                         .finish(),
                 )
-                .child(self.link.render(url.clone(), ctx, move |event_ctx, _| {
-                    event_ctx.dispatch_typed_action(TuiHandoffBlockAction::OpenRun);
-                }))
+                .child(self.link.render(
+                    url.clone(),
+                    builder.muted_text_style(),
+                    move |event_ctx, _| {
+                        event_ctx.dispatch_typed_action(TuiHandoffBlockAction::OpenRun);
+                    },
+                ))
                 .finish(),
             TuiHandoffPhase::Persisted { .. } => TuiFlex::column().finish(),
         }
@@ -559,7 +560,7 @@ impl TuiHandoffBlock {
             ))
             .child(horizontally_centered(self.link.render(
                 url.to_owned(),
-                ctx,
+                builder.muted_text_style(),
                 move |event_ctx, _| {
                     event_ctx.dispatch_typed_action(TuiHandoffBlockAction::OpenRun);
                 },

@@ -70,6 +70,17 @@ pub trait TuiTerminal {
     fn writer(&mut self) -> &mut dyn Write;
 }
 
+/// Controls whether a TUI driver constrains keyboard focus to views embedded in
+/// the most recently presented frame.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum TuiFocusPolicy {
+    /// Preserve app-managed focus even when its view is not currently presented.
+    #[default]
+    Unrestricted,
+    /// Return focus to the root when the focused view is outside the presented tree.
+    PresentedTree,
+}
+
 /// The rendering half of the TUI: owns the presenter, renderer, and host
 /// terminal for one window and paints that window's view tree. Kept separate
 /// from input dispatch so the invalidation-driven redraw (which paints inside
@@ -80,6 +91,7 @@ struct TuiScreen<T, R: TuiTerminal> {
     presenter: TuiPresenter,
     renderer: TuiFrameRenderer,
     terminal: R,
+    focus_policy: TuiFocusPolicy,
     /// Synthesizes multi-click counts for left mouse presses, which crossterm
     /// does not report.
     click_tracker: ClickTracker,
@@ -100,10 +112,16 @@ impl<T: TuiView, R: TuiTerminal> TuiScreen<T, R> {
             presenter: TuiPresenter::new(),
             renderer: TuiFrameRenderer::new(),
             terminal,
+            focus_policy: TuiFocusPolicy::default(),
             click_tracker: ClickTracker::default(),
             shift_key_tracker: ShiftKeyTracker::default(),
             last_mouse_position: None,
         }
+    }
+
+    fn with_focus_policy(mut self, focus_policy: TuiFocusPolicy) -> Self {
+        self.focus_policy = focus_policy;
+        self
     }
 
     fn size(&self) -> io::Result<TuiSize> {
@@ -139,6 +157,9 @@ impl<T: TuiView, R: TuiTerminal> TuiScreen<T, R> {
             self.presenter
                 .invalidate(&invalidation, ctx, self.window_id);
             frame = Some(self.presenter.present(ctx, &self.root_view, area));
+            if self.focus_policy == TuiFocusPolicy::PresentedTree {
+                self.repair_focus_outside_presented_tree(ctx);
+            }
             self.replay_mouse_position(ctx);
         }
         let frame = frame.expect("loop always presents at least once");
@@ -147,6 +168,14 @@ impl<T: TuiView, R: TuiTerminal> TuiScreen<T, R> {
         self.renderer
             .draw(&mut writer, &frame.buffer, frame.cursor)?;
         Ok(frame.repaint_at)
+    }
+    fn repair_focus_outside_presented_tree(&mut self, ctx: &mut AppContext) {
+        let Some(focused_view_id) = ctx.focused_view_id(self.window_id) else {
+            return;
+        };
+        if !self.presenter.presented_views.contains(&focused_view_id) {
+            self.root_view.update(ctx, |_, ctx| ctx.focus_self());
+        }
     }
 
     /// Redispatches the last known pointer position as a synthetic
@@ -600,6 +629,7 @@ pub fn spawn_tui_driver<T: TuiView>(
     ctx: &mut AppContext,
     window_id: WindowId,
     root_view: ViewHandle<T>,
+    focus_policy: TuiFocusPolicy,
     report_modifier_key_lifecycle: bool,
     freeze_repaints_when_unfocused: bool,
 ) -> io::Result<TuiDriverHandle> {
@@ -608,11 +638,10 @@ pub fn spawn_tui_driver<T: TuiView>(
     // The presenter + renderer + terminal live behind an `Rc<RefCell<_>>` owned
     // by the invalidation callback. The input path never borrows it, so painting
     // inside `flush_effects` can't collide with dispatch.
-    let screen = Rc::new(RefCell::new(TuiScreen::new(
-        window_id,
-        root_view,
-        CrosstermTerminal::new(),
-    )));
+    let screen = Rc::new(RefCell::new(
+        TuiScreen::new(window_id, root_view, CrosstermTerminal::new())
+            .with_focus_policy(focus_policy),
+    ));
 
     // Repaint scheduling: at most one pending timer, held in this slot. Every
     // draw reports the earliest element-requested repaint deadline for the
@@ -639,7 +668,10 @@ pub fn spawn_tui_driver<T: TuiView>(
                 &freeze_repaints_when_unfocused,
                 ctx,
             ) {
-                report_error!(anyhow::Error::new(error).context("failed to draw a TUI frame"));
+                report_error!(
+                    anyhow::Error::new(error).context("failed to draw a TUI frame"),
+                    warp_errors::ReportErrorLogMode::OncePerRun
+                );
             }
         });
     }
@@ -667,18 +699,22 @@ pub fn spawn_tui_driver<T: TuiView>(
     // never blocked waiting for input.
     let reader = thread::Builder::new()
         .name("warp-tui-input".to_owned())
-        .spawn(move || loop {
-            match event::read() {
-                Ok(event) => {
-                    // The reader runs on a dedicated thread, so blocking on the
-                    // send is fine; an error means the receiver was dropped.
-                    if block_on(sender.send(event)).is_err() {
+        .spawn(move || {
+            loop {
+                match event::read() {
+                    Ok(event) => {
+                        // The reader runs on a dedicated thread, so blocking on the
+                        // send is fine; an error means the receiver was dropped.
+                        if block_on(sender.send(event)).is_err() {
+                            break;
+                        }
+                    }
+                    Err(error) => {
+                        report_error!(
+                            anyhow::Error::new(error).context("failed to read a terminal event")
+                        );
                         break;
                     }
-                }
-                Err(error) => {
-                    report_error!("failed to read a terminal event", extra: { "error" => %error });
-                    break;
                 }
             }
         })?;
@@ -781,7 +817,10 @@ fn draw_and_schedule_repaint<T: TuiView, R: TuiTerminal + 'static>(
                         &freeze_repaints_when_unfocused,
                         ctx,
                     ) {
-                        report_error!("failed to draw a TUI frame", extra: { "error" => %error });
+                        report_error!(
+                            anyhow::Error::new(error).context("failed to draw a TUI frame"),
+                            warp_errors::ReportErrorLogMode::OncePerRun
+                        );
                     }
                 });
             })

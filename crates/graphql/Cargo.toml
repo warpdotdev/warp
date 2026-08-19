@@ -22,6 +22,7 @@ reqwest.workspace = true
 serde.workspace = true
 thiserror.workspace = true
 warp_core.workspace = true
+warp_errors = { workspace = true, features = ["reqwest-errors"] }
 warp_graphql_schema.workspace = true
 websocket = {path = "../websocket"}
 

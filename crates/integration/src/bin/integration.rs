@@ -258,6 +258,7 @@ fn register_tests() -> HashMap<&'static str, BoxedBuilderFn> {
     register_test!(test_bash_bootstraps_with_prompt_command_array);
     register_test!(test_bash_bootstraps_with_prompt_command_array_that_sets_ps1);
     register_test!(test_zsh_bootstraps_with_nounset_option);
+    register_test!(test_zsh_cursor_mode_vi_bindings_do_not_corrupt_commands);
     register_test!(test_ssh_wrapper_into_bash);
     register_test!(test_ssh_wrapper_into_zsh);
     register_test!(test_ssh_into_fish);
@@ -358,6 +359,7 @@ fn register_tests() -> HashMap<&'static str, BoxedBuilderFn> {
 
     register_test!(test_context_chips_prompt_at_bootstrap);
 
+    register_test!(test_cycle_active_tab_color_with_keybinding);
     register_test!(test_active_session_follows_focus);
     register_test!(test_tab_context_menu_copies_metadata);
     register_test!(test_vertical_tab_context_menu_copies_metadata);
@@ -414,6 +416,18 @@ fn register_tests() -> HashMap<&'static str, BoxedBuilderFn> {
     register_test!(test_settings_error_banner_on_reload_with_invalid_toml);
     register_test!(test_settings_error_banner_on_reload_with_invalid_value);
 
+    // Settings sidebar navigation and search
+    register_test!(test_settings_mouse_navigation_through_umbrella);
+    register_test!(test_settings_keyboard_navigation_down_into_collapsed_umbrella);
+    register_test!(test_settings_keyboard_navigation_up_into_collapsed_umbrella);
+    register_test!(test_settings_keyboard_navigation_after_manual_collapse);
+    register_test!(test_settings_search_filters_top_level_pages);
+    register_test!(test_settings_search_filters_subpages);
+    register_test!(test_settings_search_subpage_still_renders_content);
+    register_test!(test_settings_search_clear_restores_umbrella_state);
+    register_test!(test_settings_search_preserved_on_sidebar_click);
+    register_test!(test_settings_agent_mcp_servers_renders_standalone_page);
+
     register_test!(test_middle_click_paste);
 
     register_test!(test_copy_selection_within_ai_block);
@@ -437,6 +451,7 @@ fn register_tests() -> HashMap<&'static str, BoxedBuilderFn> {
     register_test!(test_selection_last_to_ai_semantic);
     register_test!(test_selection_last_to_ai_lines);
     register_test!(test_restored_ai_block_renders_mermaid_and_local_images);
+    register_test!(test_cancelled_run_agents_card_renders_cancelled_state);
 
     register_test!(test_agent_mode_pane_minimum_size);
     register_test!(test_git_prompt_chips);

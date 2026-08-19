@@ -509,6 +509,8 @@ crash_reporting = [
 creating_shared_sessions = []
 cross_repo_context = []
 codebase_index_persistence = ["full_source_code_embedding"]
+well_known_mcp_ids = []
+factory_mcp = []
 default = [
     "agent_mode",
     "osc_hyperlinks",
@@ -639,6 +641,7 @@ default = [
     "oz_launch_modal",
     "open_warp_launch_modal",
     "orchestration_launch_modal",
+    "agent_cli_launch_modal",
     "new_tab_styling",
     "richtext_multiselect",
     "inline_profile_selector",
@@ -706,6 +709,8 @@ default = [
     "cloud_runners",
     "cloud_agent_runners",
     "file_backed_execution_profiles",
+    "well_known_mcp_ids",
+    "factory_mcp",
 ]
 # Enable this feature to automatically perform heap profiling.  NOTE: This will
 # substantially slow down program execution.
@@ -999,6 +1004,7 @@ oz_identity_federation = []
 oz_launch_modal = []
 open_warp_launch_modal = []
 orchestration_launch_modal = []
+agent_cli_launch_modal = []
 new_tab_styling = []
 file_based_mcp = []
 skill_arguments = []

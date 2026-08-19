@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use anyhow::Result;
@@ -12,6 +12,8 @@ use warpui::{
     WindowId,
 };
 
+#[cfg(test)]
+use super::team::TeamVisibility;
 use super::team::{DiscoverableTeam, MembershipRole, Team};
 #[cfg(test)]
 use super::workspace::WorkspaceMemberUsageInfo;
@@ -73,6 +75,8 @@ pub enum UserWorkspacesEvent {
     TransferTeamOwnershipRejected(anyhow::Error),
     SetTeamMemberRoleSuccess,
     SetTeamMemberRoleRejected(anyhow::Error),
+    RemoveUserFromTeamSuccess,
+    RemoveUserFromTeamRejected(anyhow::Error),
     UpdateWorkspaceSettingsSuccess,
     UpdateWorkspaceSettingsRejected(anyhow::Error),
     AiOveragesUpdated,
@@ -88,6 +92,11 @@ pub enum UserWorkspacesEvent {
     TeamsChanged,
     /// Fired when the selected workspace actually changes to a different one.
     CurrentWorkspaceChanged,
+    /// Fired when a single window's team assignment changes. Windows are independent, so
+    /// subscribers that hold per-window state must only react to their own window.
+    WindowTeamChanged {
+        window_id: WindowId,
+    },
     CodebaseContextEnablementChanged,
     /// Fired when a service agreement's sunsetted_to_build_ts field is updated.
     SunsettedToBuildDataUpdated,
@@ -238,6 +247,33 @@ impl UserWorkspaces {
         )
     }
 
+    pub fn warp_agent_cli_upgrade_link(user_id: Option<UserUid>) -> String {
+        let upgrade_link = user_id.map_or_else(
+            || {
+                format!(
+                    "{}{}",
+                    ChannelState::server_root_url().trim_end_matches('/'),
+                    STRIPE_SUBSCRIPTION_INTERVAL_PAGE_PREFIX
+                )
+            },
+            Self::upgrade_link,
+        );
+        format!("{upgrade_link}?source=warp-agent-cli")
+    }
+    pub fn admin_billing_link_for_team(team_uid: ServerId) -> String {
+        format!(
+            "{}/admin/{team_uid}/billing",
+            ChannelState::server_root_url().trim_end_matches('/')
+        )
+    }
+
+    pub fn admin_billing_link_for_default_team(&self, user_email: &str) -> Option<String> {
+        let team_uid = self.inherited_or_default_team_uid(None)?;
+        self.team_from_uid(team_uid)
+            .filter(|team| team.has_admin_permissions(user_email))
+            .map(|_| Self::admin_billing_link_for_team(team_uid))
+    }
+
     pub fn team_from_uid(&self, team_uid: ServerId) -> Option<&Team> {
         self.current_workspace()
             .and_then(|w| w.teams.iter().find(|t| t.uid == team_uid))
@@ -249,7 +285,11 @@ impl UserWorkspaces {
         team_uid: Option<ServerId>,
         ctx: &mut ModelContext<Self>,
     ) {
+        let previous_team_uid = self.team_uid_for_window(window_id);
         self.window_team_uids.entry(window_id).or_insert(team_uid);
+        if self.team_uid_for_window(window_id) != previous_team_uid {
+            ctx.emit(UserWorkspacesEvent::WindowTeamChanged { window_id });
+        }
         ctx.notify();
     }
     pub fn inherited_or_default_team_uid(
@@ -274,6 +314,7 @@ impl UserWorkspaces {
         let window_team_uid = self.window_team_uids.entry(window_id).or_default();
         if window_team_uid.is_none() {
             *window_team_uid = Some(team_uid);
+            ctx.emit(UserWorkspacesEvent::WindowTeamChanged { window_id });
             ctx.notify();
         }
     }
@@ -308,7 +349,9 @@ impl UserWorkspaces {
             .and_then(|window_id| self.team_for_window(window_id))
     }
 
-    fn reconcile_window_team_assignments(&mut self) {
+    /// Returns the windows whose team assignment changed.
+    #[must_use]
+    fn reconcile_window_team_assignments(&mut self) -> Vec<WindowId> {
         let team_uids = self
             .current_workspace()
             .map(|workspace| {
@@ -321,10 +364,21 @@ impl UserWorkspaces {
             .unwrap_or_default();
         let fallback_team_uid = team_uids.first().copied();
 
-        for window_team_uid in self.window_team_uids.values_mut() {
-            if window_team_uid.is_none_or(|team_uid| !team_uids.contains(&team_uid)) {
+        let mut reassigned_windows = Vec::new();
+        for (window_id, window_team_uid) in self.window_team_uids.iter_mut() {
+            if window_team_uid.is_none_or(|team_uid| !team_uids.contains(&team_uid))
+                && *window_team_uid != fallback_team_uid
+            {
                 *window_team_uid = fallback_team_uid;
+                reassigned_windows.push(*window_id);
             }
+        }
+        reassigned_windows
+    }
+
+    fn emit_window_team_changed(windows: Vec<WindowId>, ctx: &mut ModelContext<Self>) {
+        for window_id in windows {
+            ctx.emit(UserWorkspacesEvent::WindowTeamChanged { window_id });
         }
     }
 
@@ -333,6 +387,17 @@ impl UserWorkspaces {
             .iter()
             .flat_map(|w| w.teams.iter())
             .find(|t| t.uid == team_uid)
+    }
+
+    /// The teams [`Self::owner_to_space`] recognizes. An owner naming a team outside this set
+    /// resolves to the shared space instead of that team's space, so a change here remaps
+    /// objects between spaces without any of them changing.
+    pub fn team_uids_across_all_workspaces(&self) -> HashSet<ServerId> {
+        self.workspaces
+            .iter()
+            .flat_map(|workspace| workspace.teams.iter())
+            .map(|team| team.uid)
+            .collect()
     }
 
     pub fn workspace_from_uid(&self, workspace_uid: WorkspaceUid) -> Option<&Workspace> {
@@ -483,6 +548,15 @@ impl UserWorkspaces {
             .or_else(|| self.current_workspace_billing_metadata())
     }
 
+    pub fn is_custom_llm_enabled_for_team(&self, team: Option<&Team>) -> bool {
+        team.map(Team::is_custom_llm_enabled)
+            .or_else(|| {
+                self.current_workspace()
+                    .map(Workspace::is_custom_llm_enabled)
+            })
+            .unwrap_or(false)
+    }
+
     /// The add-on credits purchase policy for the current viewer context: the
     /// current workspace's policy when one exists, else the user-level policy
     /// from the workspaces-metadata response (how teamless users get one).
@@ -529,8 +603,9 @@ impl UserWorkspaces {
     ) {
         let changed = *self.current_workspace_uid != Some(workspace_uid);
         *self.current_workspace_uid = Some(workspace_uid);
-        self.reconcile_window_team_assignments();
+        let reassigned_windows = self.reconcile_window_team_assignments();
         self.notify_and_emit_teams_changed(ctx);
+        Self::emit_window_team_changed(reassigned_windows, ctx);
         if changed {
             ctx.emit(UserWorkspacesEvent::CurrentWorkspaceChanged);
         }
@@ -961,8 +1036,9 @@ impl UserWorkspaces {
         let sunsetted_to_build_changed = self.has_sunsetted_to_build_data_changed(&workspaces);
 
         *self.workspaces = workspaces;
-        self.reconcile_window_team_assignments();
+        let reassigned_windows = self.reconcile_window_team_assignments();
         self.notify_and_emit_teams_changed(ctx);
+        Self::emit_window_team_changed(reassigned_windows, ctx);
 
         if sunsetted_to_build_changed {
             ctx.emit(UserWorkspacesEvent::SunsettedToBuildDataUpdated);
@@ -1096,6 +1172,21 @@ impl UserWorkspaces {
         self.notify_and_emit_teams_changed(ctx);
     }
 
+    fn on_remove_user_from_team(
+        &mut self,
+        result: Result<WorkspacesMetadataWithPricing>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        match result {
+            Err(err) => ctx.emit(UserWorkspacesEvent::RemoveUserFromTeamRejected(err)),
+            Ok(result) => {
+                self.on_workspaces_updated(Ok(result), ctx);
+                ctx.emit(UserWorkspacesEvent::RemoveUserFromTeamSuccess);
+            }
+        };
+        ctx.notify();
+    }
+
     pub fn remove_user_from_team(
         &mut self,
         user_uid: UserUid,
@@ -1110,7 +1201,7 @@ impl UserWorkspaces {
                     .remove_user_from_team(user_uid, team_uid, entrypoint)
                     .await
             },
-            Self::on_workspaces_updated,
+            Self::on_remove_user_from_team,
         );
     }
 
@@ -1723,6 +1814,24 @@ impl UserWorkspaces {
             .unwrap_or(true)
     }
 
+    /// Whether invite links are enabled for the current workspace. This is a
+    /// workspace-level setting; the teams-settings page reads it from here rather
+    /// than from the `Team` struct.
+    pub fn is_invite_link_enabled(&self) -> bool {
+        self.current_workspace()
+            .map(|workspace| workspace.settings.is_invite_link_enabled)
+            .unwrap_or(false)
+    }
+
+    /// Whether the current workspace's team is discoverable. This is a
+    /// workspace-level setting; the teams-settings page reads it from here rather
+    /// than from the `Team` struct.
+    pub fn is_discoverable(&self) -> bool {
+        self.current_workspace()
+            .map(|workspace| workspace.settings.is_discoverable)
+            .unwrap_or(false)
+    }
+
     /// Returns the codebase context settings, taking into account the organization,
     /// global AI settings, and codebase-specific settings.
     /// Prefer this function to determine whether to show indexing-related functionality.
@@ -1808,16 +1917,17 @@ impl UserWorkspaces {
             teams: vec![Team {
                 uid: ServerId::from(2),
                 name: "Test Team".to_string(),
+                settings: Default::default(),
                 color: None,
-                organization_settings: workspace_settings.clone(),
                 billing_metadata: BillingMetadata::default(),
                 members: vec![],
-                invite_code: None,
+                invite_link: None,
                 pending_email_invites: vec![],
                 invite_link_domain_restrictions: vec![],
                 stripe_customer_id: None,
                 is_eligible_for_discovery: false,
                 has_billing_history: false,
+                visibility: TeamVisibility::Open,
             }],
             members: vec![WorkspaceMember {
                 uid: owner_uid,
@@ -1835,7 +1945,6 @@ impl UserWorkspaces {
             billing_cycle_usage: None,
             has_billing_history: false,
             settings: workspace_settings,
-            invite_code: None,
             invite_link_domain_restrictions: vec![],
             pending_email_invites: vec![],
             is_eligible_for_discovery: false,

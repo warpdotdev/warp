@@ -24,7 +24,7 @@ use warp_core::telemetry::TelemetryEvent as _;
 use warp_errors::report_error;
 use warpui::SingletonEntity as _;
 use warpui_core::platform::{TerminationMode, WindowStyle};
-use warpui_core::runtime::spawn_tui_driver;
+use warpui_core::runtime::{TuiFocusPolicy, spawn_tui_driver};
 use warpui_core::{AddWindowOptions, AppContext, ModelHandle, ViewHandle};
 
 use crate::clipboard::copy_to_clipboard;
@@ -265,6 +265,7 @@ fn init(
         ctx,
         window_id,
         root.clone(),
+        TuiFocusPolicy::PresentedTree,
         modifier_key_lifecycle_enabled,
         freeze_repaints_when_unfocused,
     ) {
