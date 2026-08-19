@@ -1197,12 +1197,13 @@ struct SequencedEvent {
 ///
 /// The marker carries no payload -- the rebuild itself lives in `SearcherProducerState`, not in
 /// the channel -- so it is only ever used to wake the writer. `rebuild_index_async` enqueues one
-/// only when none is already outstanding (`SearcherProducerState::rebuild_marker_outstanding`),
-/// so at most one `RebuildMarker` is ever in flight regardless of how many times a rebuild is
-/// requested before the writer wakes up. This is what keeps the notification mechanism itself
-/// bounded, matching the bound already placed on `pending_rebuild`: without it, a burst of
-/// rebuild requests would enqueue a marker per request, growing the channel without limit even
-/// though each marker is tiny -- the same failure class this ticket exists to eliminate.
+/// only on the transition from no rebuild pending to one being pending (checking
+/// `pending_rebuild.is_some()` before overwriting it), so at most one `RebuildMarker` is ever in
+/// flight regardless of how many times a rebuild is requested before the writer wakes up. This
+/// is what keeps the notification mechanism itself bounded, matching the bound already placed on
+/// `pending_rebuild`: without it, a burst of rebuild requests would enqueue a marker per
+/// request, growing the channel without limit even though each marker is tiny -- the same
+/// failure class this ticket exists to eliminate.
 enum QueuedItem {
     Event(SequencedEvent),
     RebuildMarker,
@@ -1228,9 +1229,6 @@ struct PendingRebuild {
 struct SearcherProducerState {
     next_sequence: Sequence,
     pending_rebuild: Option<PendingRebuild>,
-    /// Whether a [`QueuedItem::RebuildMarker`] is currently outstanding on the events channel.
-    /// See [`QueuedItem`].
-    rebuild_marker_outstanding: bool,
 }
 
 const SEARCH_ASYNC_BATCH_INTERVAL: Duration = Duration::from_millis(75);
@@ -1315,7 +1313,7 @@ fn merge_with_rebuild(
 }
 
 async fn process_searcher_events(
-    events_rx: async_channel::Receiver<QueuedItem>,
+    rx: async_channel::Receiver<QueuedItem>,
     producer_state: Arc<Mutex<SearcherProducerState>>,
     writer_handle: SearcherWriterHandle,
 ) {
@@ -1325,48 +1323,56 @@ async fn process_searcher_events(
         let mut batch_started = false;
         let mut hit_idle_timeout = false;
 
-        let mut timer = Timer::never().fuse();
-        let mut idle_timer = Timer::at(Instant::now() + SEARCH_IDLE_TIMEOUT).fuse();
-        loop {
-            futures::select! {
-                item = events_rx.recv().fuse() => {
-                    match item {
-                        Ok(item) => {
-                            if !batch_started {
-                                // If we're starting a batch, set a timer to cut off the batch after
-                                // a period of time.
-                                batch_started = true;
-                                timer = Timer::at(Instant::now() + SEARCH_ASYNC_BATCH_INTERVAL).fuse();
-                                // Unset the idle timer, so that it doesn't interfere with the batch.
-                                idle_timer = Timer::never().fuse();
-                            }
-                            match item {
-                                QueuedItem::Event(event) => {
-                                    batch.push(event);
-                                    // If we get a decent batch size, process immediately.
-                                    if batch.len() >= SEARCH_ASYNC_MAX_BATCH_SIZE {
-                                        break;
-                                    }
+        // If a rebuild is already pending as this cycle begins, there is nothing to wait for:
+        // process it immediately rather than entering the wait loop below. Without this, a
+        // rebuild's wake-up marker could be drained (and so discarded, since the marker carries
+        // no data) by an *earlier* cycle's post-take drain before this cycle got a chance to see
+        // the rebuild it was announcing, which would otherwise delay -- not lose -- that rebuild
+        // until the next real event or the idle timeout.
+        if producer_state.lock().pending_rebuild.is_none() {
+            let mut timer = Timer::never().fuse();
+            let mut idle_timer = Timer::at(Instant::now() + SEARCH_IDLE_TIMEOUT).fuse();
+            loop {
+                futures::select! {
+                    item = rx.recv().fuse() => {
+                        match item {
+                            Ok(item) => {
+                                if !batch_started {
+                                    // If we're starting a batch, set a timer to cut off the batch after
+                                    // a period of time.
+                                    batch_started = true;
+                                    timer = Timer::at(Instant::now() + SEARCH_ASYNC_BATCH_INTERVAL).fuse();
+                                    // Unset the idle timer, so that it doesn't interfere with the batch.
+                                    idle_timer = Timer::never().fuse();
                                 }
-                                // Nothing to push: `pending_rebuild` is always re-checked below
-                                // regardless of what woke us, so the marker itself carries no
-                                // data. It rides the same batching timer as regular events
-                                // rather than forcing immediate processing.
-                                QueuedItem::RebuildMarker => {}
+                                match item {
+                                    QueuedItem::Event(event) => {
+                                        batch.push(event);
+                                        // If we get a decent batch size, process immediately.
+                                        if batch.len() >= SEARCH_ASYNC_MAX_BATCH_SIZE {
+                                            break;
+                                        }
+                                    }
+                                    // Nothing to push: `pending_rebuild` is always re-checked below
+                                    // regardless of what woke us, so the marker itself carries no
+                                    // data. It rides the same batching timer as regular events
+                                    // rather than forcing immediate processing.
+                                    QueuedItem::RebuildMarker => {}
+                                }
+                            }
+                            Err(async_channel::RecvError) => {
+                                running = false;
+                                break;
                             }
                         }
-                        Err(async_channel::RecvError) => {
-                            running = false;
-                            break;
-                        }
+                    },
+                    _ = timer => {
+                        break;
                     }
-                },
-                _ = timer => {
-                    break;
-                }
-                _ = idle_timer => {
-                    hit_idle_timeout = true;
-                    break;
+                    _ = idle_timer => {
+                        hit_idle_timeout = true;
+                        break;
+                    }
                 }
             }
         }
@@ -1381,13 +1387,8 @@ async fn process_searcher_events(
         // exists to close, since an event that had already been allocated a lower sequence
         // number but not yet published could then land in this batch and be misapplied after a
         // rebuild it actually preceded.
-        let rebuild = {
-            let mut state = producer_state.lock();
-            let rebuild = state.pending_rebuild.take();
-            state.rebuild_marker_outstanding = false;
-            rebuild
-        };
-        while let Ok(item) = events_rx.try_recv() {
+        let rebuild = producer_state.lock().pending_rebuild.take();
+        while let Ok(item) = rx.try_recv() {
             if let QueuedItem::Event(event) = item {
                 batch.push(event);
             }
@@ -1427,7 +1428,6 @@ impl<C: SearchSchemaConfig> AsyncSearcher<C> {
         let producer_state = Arc::new(Mutex::new(SearcherProducerState {
             next_sequence: 0,
             pending_rebuild: None,
-            rebuild_marker_outstanding: false,
         }));
         background_executor
             .spawn(process_searcher_events(
@@ -1527,20 +1527,18 @@ impl<C: SearchSchemaConfig> AsyncSearcher<C> {
             let mut state = self.producer_state.lock();
             let sequence = state.next_sequence;
             state.next_sequence += 1;
+            // Whether a marker is already outstanding is inferred from `pending_rebuild` itself
+            // -- checked here, before it gets overwritten below -- rather than tracked in a
+            // separate flag: only the transition from no rebuild pending to one being pending
+            // needs to enqueue a marker (see `QueuedItem::RebuildMarker`). If one is already
+            // pending, the background writer will pick up the document set we just stored when
+            // it wakes for that marker, so sending a second one would be redundant.
+            let needs_marker = state.pending_rebuild.is_none();
             state.pending_rebuild = Some(PendingRebuild {
                 sequence,
                 documents,
             });
-            // Only the transition from no-marker-outstanding to marker-outstanding needs to
-            // enqueue one: see `QueuedItem::RebuildMarker`. If one is already outstanding, the
-            // background writer will pick up the document set we just stored when it wakes for
-            // that marker, so sending a second one would be redundant.
-            if state.rebuild_marker_outstanding {
-                false
-            } else {
-                state.rebuild_marker_outstanding = true;
-                true
-            }
+            needs_marker
         };
         if needs_marker {
             block_on(self.tx.send(QueuedItem::RebuildMarker))

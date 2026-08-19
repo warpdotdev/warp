@@ -1,5 +1,7 @@
 use std::sync::Arc;
+use std::time::Duration;
 
+use instant::Instant;
 use itertools::Itertools;
 use parking_lot::Mutex;
 use tantivy::tokenizer::{TextAnalyzer, Token};
@@ -8,8 +10,8 @@ use warpui_core::r#async::executor::Background;
 use crate::define_search_schema;
 use crate::searcher::{
     AsyncSearcher, CustomTokenizer, FullTextSearchDocumentEntry, FullTextSearchFieldValue,
-    MIN_MEMORY_BUDGET, QueuedItem, SearchSchemaConfig, SearcherEvent, SearcherProducerState,
-    SimpleFullTextSearcher, merge_with_rebuild,
+    MIN_MEMORY_BUDGET, PendingRebuild, QueuedItem, SearchDocumentEntry, SearchSchemaConfig,
+    SearcherEvent, SearcherProducerState, SimpleFullTextSearcher, merge_with_rebuild,
 };
 
 /// Builds an [`AsyncSearcher`] with no background writer draining its channel, so a test can
@@ -26,7 +28,6 @@ fn async_searcher_without_background_writer<C: SearchSchemaConfig>(
     let producer_state = Arc::new(Mutex::new(SearcherProducerState {
         next_sequence: 0,
         pending_rebuild: None,
-        rebuild_marker_outstanding: false,
     }));
     (
         AsyncSearcher {
@@ -40,19 +41,12 @@ fn async_searcher_without_background_writer<C: SearchSchemaConfig>(
 
 /// Drains everything published so far -- both the events channel and the pending rebuild slot --
 /// and merges it into per-commit chunks, exactly as the background writer does with a batch it
-/// has drained. Mirrors the real writer's take-before-drain order (see `process_searcher_events`)
-/// and clears `rebuild_marker_outstanding` the same way, so a subsequent rebuild request in the
-/// same test enqueues its own fresh marker.
+/// has drained. Mirrors the real writer's take-before-drain order (see `process_searcher_events`).
 fn drain_pending_chunks<C: SearchSchemaConfig>(
     searcher: &AsyncSearcher<C>,
     events_rx: &async_channel::Receiver<QueuedItem>,
 ) -> Vec<Vec<SearcherEvent>> {
-    let rebuild = {
-        let mut state = searcher.producer_state.lock();
-        let rebuild = state.pending_rebuild.take();
-        state.rebuild_marker_outstanding = false;
-        rebuild
-    };
+    let rebuild = searcher.producer_state.lock().pending_rebuild.take();
     let mut batch = Vec::new();
     while let Ok(item) = events_rx.try_recv() {
         if let QueuedItem::Event(event) = item {
@@ -731,5 +725,83 @@ fn test_searcher_async_rebuild_marker_stays_coalesced_across_supersession() {
         queued_items.len(),
         1,
         "a rebuild requested after the marker was consumed must enqueue a fresh marker"
+    );
+}
+
+/// Polls `converged` at a short interval until it returns `true` or `deadline` elapses. Returns
+/// whether it converged in time.
+fn poll_until(deadline: Duration, mut converged: impl FnMut() -> bool) -> bool {
+    let start = Instant::now();
+    loop {
+        if converged() {
+            return true;
+        }
+        if start.elapsed() >= deadline {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+/// Regression test for a latency hazard identified while simplifying the wake-up accounting for
+/// [`QueuedItem::RebuildMarker`]: since the background writer takes the pending rebuild and
+/// drains the events channel as two separate (non-atomic) steps, a rebuild whose marker gets
+/// drained -- and so discarded, since the marker carries no data -- before the *next* cycle
+/// exists to notice the rebuild it announced would otherwise sit unapplied until the next real
+/// event or the 5-second idle timeout (`SEARCH_IDLE_TIMEOUT`). `process_searcher_events` closes
+/// this by checking whether a rebuild is already pending *before* waiting on the channel at all,
+/// at the top of every cycle.
+///
+/// Rather than racing real wall-clock timing against the background writer to try to land in
+/// that narrow window (which is unreliable: in practice the writer is back to idly waiting long
+/// before a next request arrives, so the race almost never reproduces), this stores a pending
+/// rebuild directly in `producer_state` without going through `rebuild_index_async` at all --
+/// deliberately bypassing the marker mechanism entirely, so no marker is ever sent for it. That
+/// is exactly the state a rebuild would be left in if its marker had been silently swallowed:
+/// `pending_rebuild` is `Some`, but nothing is going to arrive on the channel to announce it.
+/// This still requires the real background writer (not the synchronous test harness used
+/// elsewhere in this file), since the fix lives in that writer's wait/skip logic. The assertion
+/// is a bounded poll well under the idle timeout, so this test fails (times out) if the fix
+/// regresses, rather than passing on a technicality.
+#[test]
+fn test_searcher_async_rebuild_is_not_delayed_when_its_marker_is_never_sent() {
+    define_search_schema!(
+        schema_name: TEST_SCHEMA,
+        config_name: SchemaConfig,
+        search_doc: SearchDoc,
+        identifying_doc: IdentifyingDoc,
+        search_fields: [name: 1.0],
+        id_fields: [id: u64]
+    );
+
+    let background_executor = Arc::new(Background::default());
+    let searcher_async =
+        TEST_SCHEMA.create_async_searcher(MIN_MEMORY_BUDGET, background_executor.clone());
+
+    {
+        let mut state = searcher_async.producer_state.lock();
+        let sequence = state.next_sequence;
+        state.next_sequence += 1;
+        state.pending_rebuild = Some(PendingRebuild {
+            sequence,
+            documents: vec![
+                SearchDoc {
+                    name: "stranded rebuild".to_owned(),
+                    id: 1,
+                }
+                .into_document_entry(),
+            ],
+        });
+    }
+
+    let converged = poll_until(Duration::from_secs(2), || {
+        searcher_async
+            .get_all_documents()
+            .is_ok_and(|docs| docs.len() == 1 && docs[0].name == "stranded rebuild")
+    });
+    assert!(
+        converged,
+        "a pending rebuild whose wake-up marker was never sent must still be applied promptly, \
+         not delayed until the idle timeout"
     );
 }
