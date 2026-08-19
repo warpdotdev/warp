@@ -1,14 +1,10 @@
 //! Ambient agent task types and utilities.
 
-use std::collections::HashSet;
-use std::sync::LazyLock;
-
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
 #[cfg(not(target_family = "wasm"))]
 pub use cloud_object_models::HarnessModelConfig;
 pub use cloud_object_models::{AgentConfigSnapshot, HarnessAuthSecretsConfig, HarnessConfig};
 use iso8601_duration::Duration as Iso8601Duration;
-use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use session_sharing_protocol::common::SessionId;
 use url::Url;
@@ -169,19 +165,6 @@ impl ExecutionLocation {
     }
 }
 
-/// Returns `true` the first time this process sees `source`, and records it so that
-/// subsequent calls with the same value return `false`.
-///
-/// This deserializer runs on every task in every list/poll response, so logging
-/// unconditionally would trade one flood (Sentry events) for another (log lines /
-/// crash-reporting breadcrumbs) the moment an old client meets a newer server. Keying
-/// by the source string, rather than a single per-callsite flag, still surfaces a
-/// second, distinct unknown value.
-fn is_first_occurrence_of_unknown_source(source: &str) -> bool {
-    static SEEN: LazyLock<Mutex<HashSet<String>>> = LazyLock::new(|| Mutex::new(HashSet::new()));
-    SEEN.lock().insert(source.to_string())
-}
-
 fn deserialize_ambient_agent_source<'de, D>(
     deserializer: D,
 ) -> Result<Option<AgentSource>, D::Error>
@@ -210,12 +193,7 @@ where
             "AUTOFIX" | "SELF_IMPROVEMENT" => Some(AgentSource::Autofix),
             "BENCHMARK_TRIAL" => Some(AgentSource::BenchmarkTrial),
             _ => {
-                // Expected drift: the server can add a source before this client
-                // knows about it. Keep the soft fallback to `None` and only log
-                // locally instead of paging Sentry for something no one can fix.
-                if is_first_occurrence_of_unknown_source(&s) {
-                    log::warn!("Unknown AmbientAgentSource: {s}");
-                }
+                log::warn!("Unknown AmbientAgentSource: {s}");
                 None
             }
         },
