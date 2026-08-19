@@ -11,7 +11,7 @@ use cloud_object_models::CodeForge;
 use futures::channel::oneshot;
 use futures::future::join_all;
 use repo_metadata::repositories::{DetectedRepositories, RepoDetectionSource};
-use warp_cli::agent::{Harness, RepositoryForge, RepositoryHeadOverride, RepositoryHeadRef};
+use warp_cli::agent::{Harness, RepositoryForge, RepositoryHeadOverride};
 use warp_completer::completer::{CommandExitStatus, CommandOutput};
 use warp_core::command::ExitCode;
 use warp_core::{safe_info, safe_warn};
@@ -33,10 +33,13 @@ pub enum PrepareEnvironmentError {
     InvalidRuntimeState,
     #[error("Failed to clone {repo_name}")]
     CloneRepo { repo_name: String },
+    #[error("Failed to check out {checkout_ref} in {repo_name}")]
+    CheckoutFailed {
+        repo_name: String,
+        checkout_ref: String,
+    },
     #[error("Invalid repository HEAD overrides: {reason}")]
     InvalidRepositoryHeadOverrides { reason: String },
-    #[error("Failed to prepare repositories: {repo_names}")]
-    PrepareRepositories { repo_names: String },
     #[error("Failed to remove origins from environment repositories")]
     RemoveRepositoryOrigins,
     #[error("Failed to run setup command: {command}")]
@@ -197,9 +200,8 @@ async fn prepare_environment_impl(
     if !source_repos.is_empty() {
         setup_events
             .record_result(SetupStep::EnvironmentRepoClone, async {
-                prepare_repositories(
-                    source_repos,
-                    repository_head_overrides,
+                clone_repos(
+                    &apply_repository_head_overrides(source_repos, repository_head_overrides),
                     working_dir,
                     spawner,
                 )
@@ -367,6 +369,22 @@ fn head_override_for_repo<'a>(
         .find(|head_override| head_override_matches_repo(head_override, repo))
 }
 
+fn apply_repository_head_overrides(
+    repos: &[SourceRepo],
+    overrides: &[RepositoryHeadOverride],
+) -> Vec<SourceRepo> {
+    repos
+        .iter()
+        .cloned()
+        .map(|repo| match head_override_for_repo(overrides, &repo) {
+            Some(head_override) => {
+                repo.with_checkout_ref(Some(head_override.head.value().to_string()))
+            }
+            None => repo,
+        })
+        .collect()
+}
+
 async fn active_shell_type(spawner: &ModelSpawner<TerminalDriver>) -> ShellType {
     spawner
         .spawn(|driver, ctx| {
@@ -378,180 +396,6 @@ async fn active_shell_type(spawner: &ModelSpawner<TerminalDriver>) -> ShellType 
         .unwrap_or(ShellType::Bash)
 }
 
-fn build_parallel_prepare_command(
-    repos: &[SourceRepo],
-    overrides: &[RepositoryHeadOverride],
-    shell_type: ShellType,
-) -> String {
-    let mut script = String::from(
-        r#"set +e
-failed=0
-pids=""
-tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/warp-repo-logs.XXXXXX")"
-cleanup_repo_logs() {
-  rm -rf "$tmp_dir"
-}
-trap cleanup_repo_logs EXIT
-clone_repo() {
-  repo_name="$1"
-  repo_url="$2"
-  target="$3"
-  if [ -d "$target" ]; then
-    printf '%s\n' "Repository directory $target already exists, skipping clone..."
-    return 0
-  fi
-  printf '%s\n' "Cloning repository $repo_name..."
-  git clone --filter=tree:0 "$repo_url" "$target"
-}
-verify_shallow_checkout() {
-  repo_name="$1"
-  target="$2"
-  shallow="$(git -C "$target" rev-parse --is-shallow-repository)" || return 1
-  if [ "$shallow" != "true" ]; then
-    printf '%s\n' "Overridden repository $repo_name is not shallow" >&2
-    return 1
-  fi
-  reachable_commits="$(git -C "$target" rev-list --count HEAD --all)" || return 1
-  if [ "$reachable_commits" != "1" ]; then
-    printf '%s\n' "Overridden repository $repo_name exposes $reachable_commits commits, expected exactly 1" >&2
-    return 1
-  fi
-}
-checkout_commit() {
-  repo_name="$1"
-  repo_url="$2"
-  target="$3"
-  commit_sha="$4"
-  if [ -e "$target" ]; then
-    printf '%s\n' "Verifying existing repository $repo_name at $commit_sha..."
-  else
-    printf '%s\n' "Initializing repository $repo_name at $commit_sha..."
-    git init --quiet "$target" || return 1
-    git -C "$target" remote add origin "$repo_url" || return 1
-    git -C "$target" fetch --depth=1 origin "$commit_sha" || return 1
-    git -C "$target" checkout --detach "$commit_sha" || return 1
-  fi
-  if ! git -C "$target" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-    printf '%s\n' "Overridden repository path $target is not a Git repository" >&2
-    return 1
-  fi
-  actual_sha="$(git -C "$target" rev-parse HEAD)" || return 1
-  if [ "$actual_sha" != "$commit_sha" ]; then
-    printf '%s\n' "Repository $repo_name is at $actual_sha, expected $commit_sha" >&2
-    return 1
-  fi
-  if git -C "$target" symbolic-ref --quiet HEAD >/dev/null 2>&1; then
-    printf '%s\n' "Repository $repo_name must use a detached HEAD for a commit override" >&2
-    return 1
-  fi
-  verify_shallow_checkout "$repo_name" "$target"
-}
-checkout_branch() {
-  repo_name="$1"
-  repo_url="$2"
-  target="$3"
-  branch="$4"
-  if [ -e "$target" ]; then
-    printf '%s\n' "Verifying existing repository $repo_name at branch $branch..."
-  else
-    printf '%s\n' "Cloning repository $repo_name at branch $branch..."
-    git clone --filter=tree:0 --depth=1 --single-branch --branch "$branch" "$repo_url" "$target" || return 1
-  fi
-  if ! git -C "$target" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-    printf '%s\n' "Overridden repository path $target is not a Git repository" >&2
-    return 1
-  fi
-  actual_branch="$(git -C "$target" symbolic-ref --quiet --short HEAD)" || return 1
-  if [ "$actual_branch" != "$branch" ]; then
-    printf '%s\n' "Repository $repo_name is on branch $actual_branch, expected $branch" >&2
-    return 1
-  fi
-  verify_shallow_checkout "$repo_name" "$target"
-}
-"#,
-    );
-
-    let mut log_outputs = String::new();
-    for (index, repo) in repos.iter().enumerate() {
-        let repo_name = format!("{}/{}", repo.owner, repo.repo);
-        let escaped_repo_name = shell_escape_single_quotes(&repo_name, ShellType::Bash);
-        let escaped_repo_url = shell_escape_single_quotes(&repo.https_clone_url(), ShellType::Bash);
-        let escaped_target = shell_escape_single_quotes(&repo.repo, ShellType::Bash);
-        let log_var = format!("log_file_{index}");
-        script.push_str(&format!("{log_var}=\"$tmp_dir/repo-{index}.log\"\n"));
-        match head_override_for_repo(overrides, repo).map(|head_override| &head_override.head) {
-            Some(RepositoryHeadRef::CommitSha(commit_sha)) => {
-                let escaped_commit_sha = shell_escape_single_quotes(commit_sha, ShellType::Bash);
-                script.push_str(&format!(
-                    "checkout_commit '{escaped_repo_name}' '{escaped_repo_url}' '{escaped_target}' '{escaped_commit_sha}' >\"${log_var}\" 2>&1 &\n"
-                ));
-            }
-            Some(RepositoryHeadRef::Branch(branch)) => {
-                let escaped_branch = shell_escape_single_quotes(branch, ShellType::Bash);
-                script.push_str(&format!(
-                    "checkout_branch '{escaped_repo_name}' '{escaped_repo_url}' '{escaped_target}' '{escaped_branch}' >\"${log_var}\" 2>&1 &\n"
-                ));
-            }
-            None => {
-                script.push_str(&format!(
-                    "clone_repo '{escaped_repo_name}' '{escaped_repo_url}' '{escaped_target}' >\"${log_var}\" 2>&1 &\n"
-                ));
-            }
-        }
-        script.push_str("pids=\"$pids $!\"\n");
-        log_outputs.push_str(&format!(
-            "printf '%s\\n' '===== {escaped_repo_name} ====='\n\
-             if [ -s \"${log_var}\" ]; then\n\
-             \tcat \"${log_var}\"\n\
-             else\n\
-             \tprintf '%s\\n' '(no output)'\n\
-             fi\n"
-        ));
-    }
-
-    script.push_str(
-        r#"for pid in $pids; do
-  if ! wait "$pid"; then
-    failed=1
-  fi
-done
-"#,
-    );
-    script.push_str(&log_outputs);
-    script.push_str(
-        r#"
-exit "$failed"
-"#,
-    );
-
-    let escaped_script = shell_escape_single_quotes(&script, shell_type);
-    format!("sh -c '{escaped_script}'")
-}
-
-async fn prepare_repositories(
-    repos: &[SourceRepo],
-    overrides: &[RepositoryHeadOverride],
-    working_dir: &Path,
-    spawner: &ModelSpawner<TerminalDriver>,
-) -> Result<(), PrepareEnvironmentError> {
-    if overrides.is_empty() {
-        clone_repos(repos, working_dir, spawner).await?;
-    } else {
-        let shell_type = active_shell_type(spawner).await;
-        let command = build_parallel_prepare_command(repos, overrides, shell_type);
-        let exit_code = execute_command(command, spawner).await?;
-        if exit_code != 0.into() {
-            return Err(PrepareEnvironmentError::PrepareRepositories {
-                repo_names: repos
-                    .iter()
-                    .map(|repo| format!("{}/{}", repo.owner, repo.repo))
-                    .collect::<Vec<_>>()
-                    .join(", "),
-            });
-        }
-    }
-    Ok(())
-}
 fn build_remove_repository_origins_command(
     repos: &[SourceRepo],
     working_dir: &Path,
@@ -604,12 +448,17 @@ clone_repo() {
   repo_name="$1"
   repo_url="$2"
   target="$3"
+  checkout_ref="$4"
   if [ -d "$target" ]; then
     printf '%s\n' "Repository directory $target already exists, skipping clone..."
-    return 0
+  else
+    printf '%s\n' "Cloning repository $repo_name..."
+    git clone --filter=tree:0 "$repo_url" "$target" || return 1
   fi
-  printf '%s\n' "Cloning repository $repo_name..."
-  git clone --filter=tree:0 "$repo_url" "$target"
+  if [ -n "$checkout_ref" ]; then
+    printf '%s\n' "Checking out $checkout_ref in $repo_name..."
+    git -C "$target" fetch --filter=tree:0 origin "$checkout_ref" && git -C "$target" checkout --detach FETCH_HEAD
+  fi
 }
 "#,
     );
@@ -621,10 +470,14 @@ clone_repo() {
         let escaped_repo_name = shell_escape_single_quotes(&repo_name, ShellType::Bash);
         let escaped_repo_url = shell_escape_single_quotes(&repo_url, ShellType::Bash);
         let escaped_target = shell_escape_single_quotes(&repo.repo, ShellType::Bash);
+        let escaped_checkout_ref = shell_escape_single_quotes(
+            repo.checkout_ref.as_deref().unwrap_or_default(),
+            ShellType::Bash,
+        );
         let log_var = format!("log_file_{index}");
         script.push_str(&format!(
             "{log_var}=\"$tmp_dir/repo-{index}.log\"\n\
-             clone_repo '{escaped_repo_name}' '{escaped_repo_url}' '{escaped_target}' >\"${log_var}\" 2>&1 &\n"
+             clone_repo '{escaped_repo_name}' '{escaped_repo_url}' '{escaped_target}' '{escaped_checkout_ref}' >\"${log_var}\" 2>&1 &\n"
         ));
         script.push_str("pids=\"$pids $!\"\n");
         log_outputs.push_str(&format!(
@@ -760,7 +613,52 @@ pub(super) async fn clone_repo(
         );
     }
 
+    if let Some(command) = checkout_command_for(repo, working_dir, shell_type) {
+        let checkout_ref = repo.checkout_ref.as_deref().unwrap_or_default();
+        safe_info!(
+            safe: ("Checking out pinned ref for repository"),
+            full: ("Checking out {checkout_ref} for {repo_name}")
+        );
+        let exit_code = execute_command(command, spawner).await?;
+        checkout_result(&repo_name, checkout_ref, exit_code)?;
+
+        safe_info!(
+            safe: ("Successfully checked out pinned ref"),
+            full: ("Successfully checked out {checkout_ref} for {repo_name}")
+        );
+    }
+
     Ok(())
+}
+
+fn checkout_command_for(
+    repo: &SourceRepo,
+    working_dir: &Path,
+    shell_type: ShellType,
+) -> Option<String> {
+    let checkout_ref = repo.checkout_ref.as_deref()?;
+    let repo_dir = working_dir.join(&repo.repo);
+    let escaped_dir = shell_escape_single_quotes(&repo_dir.to_string_lossy(), shell_type);
+    let escaped_ref = shell_escape_single_quotes(checkout_ref, shell_type);
+    Some(format!(
+        "git -C '{escaped_dir}' fetch --filter=tree:0 origin '{escaped_ref}' && \
+         git -C '{escaped_dir}' checkout --detach FETCH_HEAD"
+    ))
+}
+
+fn checkout_result(
+    repo_name: &str,
+    checkout_ref: &str,
+    exit_code: ExitCode,
+) -> Result<(), PrepareEnvironmentError> {
+    if exit_code == 0.into() {
+        Ok(())
+    } else {
+        Err(PrepareEnvironmentError::CheckoutFailed {
+            repo_name: repo_name.to_string(),
+            checkout_ref: checkout_ref.to_string(),
+        })
+    }
 }
 
 /// Register a cloned source repository with `DetectedRepositories` so that the

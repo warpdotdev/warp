@@ -1,14 +1,12 @@
-use std::fs;
 use std::path::Path;
 
 use cloud_object_models::CodeForge;
-use command::blocking::Command as BlockingCommand;
-use tempfile::TempDir;
 use warp_cli::agent::{RepositoryForge, RepositoryHeadOverride, RepositoryHeadRef};
 
 use super::{
-    build_parallel_clone_command, build_parallel_prepare_command,
-    build_remove_repository_origins_command, single_repo_name, validate_repository_head_overrides,
+    apply_repository_head_overrides, build_parallel_clone_command,
+    build_remove_repository_origins_command, checkout_command_for, single_repo_name,
+    validate_repository_head_overrides,
 };
 use crate::ai::cloud_environments::{AmbientAgentEnvironment, SourceRepo};
 use crate::terminal::shell::ShellType;
@@ -45,20 +43,6 @@ fn environment_with_repos(repos: Vec<SourceRepo>) -> AmbientAgentEnvironment {
         AmbientAgentEnvironment::new(String::new(), None, vec![], String::new(), vec![]);
     environment.source_repos = Some(repos);
     environment
-}
-fn git_stdout(dir: &Path, args: &[&str]) -> String {
-    let output = BlockingCommand::new("git")
-        .current_dir(dir)
-        .args(args)
-        .output()
-        .unwrap();
-    assert!(
-        output.status.success(),
-        "git {} failed: {}",
-        args.join(" "),
-        String::from_utf8_lossy(&output.stderr)
-    );
-    String::from_utf8(output.stdout).unwrap().trim().to_string()
 }
 
 #[test]
@@ -133,6 +117,95 @@ fn parallel_clone_command_runs_repos_in_background_and_waits() {
 }
 
 #[test]
+fn parallel_clone_command_threads_checkout_ref_and_pins_after_clone() {
+    let repos = vec![
+        SourceRepo::new(
+            CodeForge::GitHub,
+            "warpdotdev".to_string(),
+            "warp".to_string(),
+        )
+        .with_checkout_ref(Some("abc123".to_string())),
+        SourceRepo::new(
+            CodeForge::GitLab,
+            "platform/backend".to_string(),
+            "api".to_string(),
+        )
+        .with_checkout_ref(Some("feature".to_string())),
+    ];
+
+    let command = build_parallel_clone_command(&repos, ShellType::Bash);
+
+    assert!(command.contains("checkout_ref=\"$4\""));
+    assert!(command.contains("'abc123'"));
+    assert!(command.contains("'feature'"));
+    assert!(command.contains("if [ -n \"$checkout_ref\" ]; then"));
+    assert!(command.contains(
+        "git -C \"$target\" fetch --filter=tree:0 origin \"$checkout_ref\" && git -C \"$target\" checkout --detach FETCH_HEAD"
+    ));
+}
+
+#[test]
+fn checkout_command_checks_out_fetch_head_not_ref_name() {
+    let repo = SourceRepo::new(
+        CodeForge::GitHub,
+        "warpdotdev".to_string(),
+        "warp".to_string(),
+    )
+    .with_checkout_ref(Some("feature".to_string()));
+
+    let command = checkout_command_for(&repo, Path::new("/workspace"), ShellType::Bash).unwrap();
+
+    assert!(command.contains("git -C '/workspace/warp' fetch --filter=tree:0 origin 'feature'"));
+    assert!(command.contains("checkout --detach FETCH_HEAD"));
+    assert!(!command.contains("checkout --detach 'feature'"));
+}
+
+#[test]
+fn checkout_command_absent_when_no_ref() {
+    let repo = SourceRepo::new(
+        CodeForge::GitHub,
+        "warpdotdev".to_string(),
+        "warp".to_string(),
+    );
+    assert!(checkout_command_for(&repo, Path::new("/workspace"), ShellType::Bash).is_none());
+}
+
+#[test]
+fn head_overrides_replace_checkout_ref_only_for_matching_repos() {
+    let repos = vec![
+        SourceRepo::new(
+            CodeForge::GitHub,
+            "warpdotdev".to_string(),
+            "warp".to_string(),
+        )
+        .with_checkout_ref(Some("abc123".to_string())),
+        SourceRepo::new(
+            CodeForge::GitHub,
+            "warpdotdev".to_string(),
+            "warp-server".to_string(),
+        )
+        .with_checkout_ref(Some("old-pin".to_string())),
+    ];
+    let overrides = vec![
+        commit_head_override(
+            RepositoryForge::GitHub,
+            "warpdotdev",
+            "warp",
+            "0123456789abcdef0123456789abcdef01234567",
+        ),
+        branch_head_override(RepositoryForge::GitHub, "warpdotdev", "unused", "develop"),
+    ];
+
+    let prepared = apply_repository_head_overrides(&repos, &overrides);
+
+    assert_eq!(
+        prepared[0].checkout_ref.as_deref(),
+        Some("0123456789abcdef0123456789abcdef01234567")
+    );
+    assert_eq!(prepared[1].checkout_ref.as_deref(), Some("old-pin"));
+}
+
+#[test]
 fn repository_head_override_validation_rejects_duplicates_and_mismatches() {
     let environment = environment_with_repos(vec![SourceRepo::new(
         CodeForge::GitHub,
@@ -188,313 +261,40 @@ fn repository_head_override_validation_accepts_partial_multi_repo_sets() {
 }
 
 #[test]
-fn commit_override_uses_exact_shallow_detached_checkout() {
+fn applied_head_overrides_are_threaded_through_the_existing_clone_command() {
     let repos = vec![
         SourceRepo::new(
             CodeForge::GitHub,
             "warpdotdev".to_string(),
             "warp".to_string(),
-        ),
-        SourceRepo::new(
-            CodeForge::GitLab,
-            "platform/backend".to_string(),
-            "api".to_string(),
-        ),
-    ];
-    let checkouts = vec![
-        commit_head_override(
-            RepositoryForge::GitHub,
-            "warpdotdev",
-            "warp",
-            "0123456789abcdef0123456789abcdef01234567",
-        ),
-        commit_head_override(
-            RepositoryForge::GitLab,
-            "platform/backend",
-            "api",
-            "89abcdef0123456789abcdef0123456789abcdef",
-        ),
-    ];
-
-    let command = build_parallel_prepare_command(&repos, &checkouts, ShellType::Bash);
-
-    assert!(command.contains("https://github.com/warpdotdev/warp.git"));
-    assert!(command.contains("https://gitlab.com/platform/backend/api.git"));
-    assert_eq!(command.matches("checkout_commit '").count(), 2);
-    assert_eq!(command.matches("2>&1 &").count(), 2);
-    assert!(command.contains("fetch --depth=1 origin \"$commit_sha\""));
-    assert!(command.contains("checkout --detach \"$commit_sha\""));
-    assert!(command.contains("rev-parse --is-inside-work-tree"));
-    assert!(command.contains("[ \"$actual_sha\" != \"$commit_sha\" ]"));
-    assert!(command.contains("symbolic-ref --quiet HEAD"));
-    assert!(command.contains("rev-parse --is-shallow-repository"));
-    assert!(command.contains("rev-list --count HEAD --all"));
-    assert!(command.contains("[ \"$reachable_commits\" != \"1\" ]"));
-    assert!(command.contains("return 1"));
-    assert!(!command.contains("fetch origin HEAD"));
-    assert!(!command.contains("checkout main"));
-}
-
-#[test]
-fn branch_override_and_default_branch_clone_can_be_mixed() {
-    let repos = vec![
-        SourceRepo::new(
-            CodeForge::GitHub,
-            "warpdotdev".to_string(),
-            "warp".to_string(),
-        ),
+        )
+        .with_checkout_ref(Some("abc123".to_string())),
         SourceRepo::new(
             CodeForge::GitHub,
             "warpdotdev".to_string(),
             "warp-server".to_string(),
-        ),
+        )
+        .with_checkout_ref(Some("old-pin".to_string())),
     ];
-    let checkouts = vec![branch_head_override(
+    let overrides = vec![branch_head_override(
         RepositoryForge::GitHub,
         "warpdotdev",
         "warp",
         "develop",
     )];
+    let command = build_parallel_clone_command(
+        &apply_repository_head_overrides(&repos, &overrides),
+        ShellType::Bash,
+    );
 
-    let command = build_parallel_prepare_command(&repos, &checkouts, ShellType::Bash);
-
-    assert_eq!(command.matches("checkout_branch '").count(), 1);
     assert!(command.contains("'develop'"));
+    assert!(!command.contains("'abc123'"));
+    assert!(command.contains("'old-pin'"));
     assert!(command.contains(
-        "git clone --filter=tree:0 --depth=1 --single-branch --branch \"$branch\" \"$repo_url\" \"$target\""
+        "git -C \"$target\" fetch --filter=tree:0 origin \"$checkout_ref\" && git -C \"$target\" checkout --detach FETCH_HEAD"
     ));
-    assert!(!command.contains("ls-remote"));
-    assert_eq!(command.matches("clone_repo '").count(), 1);
-    assert!(command.contains("warpdotdev/warp-server"));
-}
-
-#[test]
-fn commit_override_verifies_existing_directories_instead_of_skipping() {
-    let repos = vec![SourceRepo::new(
-        CodeForge::GitHub,
-        "warpdotdev".to_string(),
-        "warp".to_string(),
-    )];
-    let checkouts = vec![commit_head_override(
-        RepositoryForge::GitHub,
-        "warpdotdev",
-        "warp",
-        "0123456789abcdef0123456789abcdef01234567",
-    )];
-
-    let command = build_parallel_prepare_command(&repos, &checkouts, ShellType::Bash);
-
-    assert!(command.contains("if [ -e \"$target\" ]"));
-    assert!(command.contains("Verifying existing repository"));
-    assert!(command.contains("Overridden repository path $target is not a Git repository"));
-    assert!(command.contains("expected $commit_sha"));
-    assert!(command.contains("must use a detached HEAD"));
-    assert!(command.contains("is not shallow"));
-    assert!(command.contains("expected exactly 1"));
-}
-
-#[test]
-fn commit_override_fails_for_existing_repository_at_wrong_head() {
-    let workspace = TempDir::new().unwrap();
-    let repo_dir = workspace.path().join("warp");
-    fs::create_dir(&repo_dir).unwrap();
-    for args in [
-        vec!["init", "-q"],
-        vec!["config", "user.email", "test@example.com"],
-        vec!["config", "user.name", "Test"],
-    ] {
-        let output = BlockingCommand::new("git")
-            .current_dir(&repo_dir)
-            .args(args)
-            .output()
-            .unwrap();
-        assert!(output.status.success());
-    }
-    fs::write(repo_dir.join("README.md"), "existing checkout\n").unwrap();
-    for args in [
-        vec!["add", "README.md"],
-        vec!["commit", "-q", "-m", "existing"],
-    ] {
-        let output = BlockingCommand::new("git")
-            .current_dir(&repo_dir)
-            .args(args)
-            .output()
-            .unwrap();
-        assert!(output.status.success());
-    }
-
-    let repos = vec![SourceRepo::new(
-        CodeForge::GitHub,
-        "warpdotdev".to_string(),
-        "warp".to_string(),
-    )];
-    let checkouts = vec![commit_head_override(
-        RepositoryForge::GitHub,
-        "warpdotdev",
-        "warp",
-        "0000000000000000000000000000000000000000",
-    )];
-    let command = build_parallel_prepare_command(&repos, &checkouts, ShellType::Bash);
-
-    let output = BlockingCommand::new("sh")
-        .arg("-c")
-        .arg(command)
-        .current_dir(workspace.path())
-        .output()
-        .unwrap();
-
-    assert!(!output.status.success());
-    assert!(
-        String::from_utf8_lossy(&output.stdout).contains("expected"),
-        "unexpected command output: {}",
-        String::from_utf8_lossy(&output.stdout)
-    );
-}
-
-#[test]
-fn commit_override_rejects_full_repo_at_matching_detached_head() {
-    let workspace = TempDir::new().unwrap();
-    let repo_dir = workspace.path().join("warp");
-    fs::create_dir(&repo_dir).unwrap();
-    for args in [
-        vec!["init", "-q"],
-        vec!["config", "user.email", "test@example.com"],
-        vec!["config", "user.name", "Test"],
-    ] {
-        let output = BlockingCommand::new("git")
-            .current_dir(&repo_dir)
-            .args(args)
-            .output()
-            .unwrap();
-        assert!(output.status.success());
-    }
-    fs::write(repo_dir.join("README.md"), "full checkout\n").unwrap();
-    for args in [vec!["add", "README.md"], vec!["commit", "-q", "-m", "full"]] {
-        let output = BlockingCommand::new("git")
-            .current_dir(&repo_dir)
-            .args(args)
-            .output()
-            .unwrap();
-        assert!(output.status.success());
-    }
-    let pinned_sha = git_stdout(&repo_dir, &["rev-parse", "HEAD"]);
-    let checkout = BlockingCommand::new("git")
-        .current_dir(&repo_dir)
-        .args(["checkout", "--detach", &pinned_sha])
-        .output()
-        .unwrap();
-    assert!(checkout.status.success());
-
-    let repos = vec![SourceRepo::new(
-        CodeForge::GitHub,
-        "warpdotdev".to_string(),
-        "warp".to_string(),
-    )];
-    let checkouts = vec![commit_head_override(
-        RepositoryForge::GitHub,
-        "warpdotdev",
-        "warp",
-        &pinned_sha,
-    )];
-    let command = build_parallel_prepare_command(&repos, &checkouts, ShellType::Bash);
-
-    let output = BlockingCommand::new("sh")
-        .arg("-c")
-        .arg(command)
-        .current_dir(workspace.path())
-        .output()
-        .unwrap();
-
-    assert!(!output.status.success());
-    assert!(
-        String::from_utf8_lossy(&output.stdout).contains("is not shallow"),
-        "unexpected command output: {}",
-        String::from_utf8_lossy(&output.stdout)
-    );
-}
-
-#[test]
-fn commit_override_rejects_shallow_repo_with_history_ref() {
-    let workspace = TempDir::new().unwrap();
-    let repo_dir = workspace.path().join("warp");
-    fs::create_dir(&repo_dir).unwrap();
-    for args in [
-        vec!["init", "-q"],
-        vec!["config", "user.email", "test@example.com"],
-        vec!["config", "user.name", "Test"],
-    ] {
-        let output = BlockingCommand::new("git")
-            .current_dir(&repo_dir)
-            .args(args)
-            .output()
-            .unwrap();
-        assert!(output.status.success());
-    }
-    fs::write(repo_dir.join("README.md"), "first\n").unwrap();
-    for args in [
-        vec!["add", "README.md"],
-        vec!["commit", "-q", "-m", "first"],
-    ] {
-        let output = BlockingCommand::new("git")
-            .current_dir(&repo_dir)
-            .args(args)
-            .output()
-            .unwrap();
-        assert!(output.status.success());
-    }
-    let first_sha = git_stdout(&repo_dir, &["rev-parse", "HEAD"]);
-    fs::write(repo_dir.join("README.md"), "second\n").unwrap();
-    for args in [
-        vec!["add", "README.md"],
-        vec!["commit", "-q", "-m", "second"],
-    ] {
-        let output = BlockingCommand::new("git")
-            .current_dir(&repo_dir)
-            .args(args)
-            .output()
-            .unwrap();
-        assert!(output.status.success());
-    }
-    let pinned_sha = git_stdout(&repo_dir, &["rev-parse", "HEAD"]);
-    for args in [
-        vec!["checkout", "--detach", &pinned_sha],
-        vec!["branch", "exposed-history", &first_sha],
-    ] {
-        let output = BlockingCommand::new("git")
-            .current_dir(&repo_dir)
-            .args(args)
-            .output()
-            .unwrap();
-        assert!(output.status.success());
-    }
-    fs::write(repo_dir.join(".git/shallow"), format!("{pinned_sha}\n")).unwrap();
-
-    let repos = vec![SourceRepo::new(
-        CodeForge::GitHub,
-        "warpdotdev".to_string(),
-        "warp".to_string(),
-    )];
-    let checkouts = vec![commit_head_override(
-        RepositoryForge::GitHub,
-        "warpdotdev",
-        "warp",
-        &pinned_sha,
-    )];
-    let command = build_parallel_prepare_command(&repos, &checkouts, ShellType::Bash);
-
-    let output = BlockingCommand::new("sh")
-        .arg("-c")
-        .arg(command)
-        .current_dir(workspace.path())
-        .output()
-        .unwrap();
-
-    assert!(!output.status.success());
-    assert!(
-        String::from_utf8_lossy(&output.stdout).contains("exposes 2 commits"),
-        "unexpected command output: {}",
-        String::from_utf8_lossy(&output.stdout)
-    );
+    assert!(!command.contains("checkout_commit"));
+    assert!(!command.contains("checkout_branch"));
 }
 
 #[test]

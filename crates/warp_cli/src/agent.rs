@@ -57,6 +57,14 @@ pub enum RepositoryHeadRef {
     Branch(String),
 }
 
+impl RepositoryHeadRef {
+    pub fn value(&self) -> &str {
+        match self {
+            Self::CommitSha(value) | Self::Branch(value) => value,
+        }
+    }
+}
+
 /// Server-supplied override for an environment repository's initial HEAD.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
