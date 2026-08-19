@@ -567,6 +567,61 @@ fn test_background_block() {
 }
 
 #[test]
+fn test_background_block_cursor_hidden_after_finish() {
+    let mut block = TestBlockBuilder::new().build();
+
+    block.start_background(None);
+    assert_eq!(block.state(), BlockState::Background);
+
+    // While the background block is still running, its output-grid cursor renders
+    // (SHOW_CURSOR is on by default); the command grid is never active in the
+    // background state, so its cursor never renders.
+    assert!(block.is_output_cursor_visible());
+    assert!(!block.is_command_cursor_visible());
+
+    for c in "background output".chars() {
+        block.input(c);
+    }
+    block.finish(0);
+
+    // Once the background block finishes, its cursor must stop rendering entirely.
+    // Otherwise a residual cursor is painted in the finished block, alongside the
+    // one in the input editor or the next block (CORE-3798).
+    assert!(!block.is_output_cursor_visible());
+    assert!(!block.is_command_cursor_visible());
+}
+
+#[test]
+pub fn test_command_cursor_visible_only_while_active_and_long_running() {
+    warpui::r#async::block_on(async {
+        let mut block = TestBlockBuilder::new().build();
+
+        block.prompt_only_precmd(PromptMetadata::default());
+        block.start();
+        for c in "command".chars() {
+            block.input(c);
+        }
+
+        // Not yet long-running, so the command cursor should not render (avoids jitter
+        // while the pty is initializing).
+        assert!(!block.is_command_cursor_visible());
+
+        let duration = LONG_RUNNING_COMMAND_DURATION_MS + 1;
+        warpui::r#async::Timer::after(Duration::from_millis(duration)).await;
+
+        assert!(block.is_command_cursor_visible());
+
+        block.preexec(Default::default());
+        // Once the command grid is no longer the active grid, its cursor stops
+        // rendering even though the block is still long-running.
+        assert!(!block.is_command_cursor_visible());
+
+        block.finish(0);
+        assert!(!block.is_command_cursor_visible());
+    });
+}
+
+#[test]
 pub fn test_block_duration_formatting() {
     // .01 seconds
     let d1 = chrono::Duration::milliseconds(10);
