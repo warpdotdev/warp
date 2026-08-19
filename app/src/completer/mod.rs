@@ -1,6 +1,9 @@
 #[cfg(feature = "completions_v2")]
 mod js;
-#[cfg(windows)]
+// Not `#[cfg(windows)]`: the module has no Windows-only code, and gating it out entirely would
+// mean its tests -- including the guest-listing happy path and the fallback signal -- never run
+// on any real CI target, only via manual local un-gating. Only the call site below, where
+// `is_wsl()` is only ever true on a Windows session, is gated.
 mod wsl_guest_listing;
 
 use std::collections::{HashMap, HashSet};
@@ -24,6 +27,7 @@ use warpui::{AppContext, SingletonEntity};
 
 use crate::safe_warn;
 use crate::terminal::model::session::{ExecuteCommandOptions, Session, SessionType};
+use crate::util::AsciiDebug;
 use crate::workflows::aliases::WorkflowAliases;
 
 lazy_static! {
@@ -143,7 +147,13 @@ impl SessionContext {
                 match command_output_result {
                     Ok(command_output) => match command_output.status {
                         CommandExitStatus::Success => {
-                            parse_ls_script_output(command_output.output())
+                            parse_ls_script_output(command_output.output()).unwrap_or_else(|| {
+                                log::warn!(
+                                    "Executing `ls` on remote box returned malformed or truncated output: `{:?}`",
+                                    AsciiDebug(command_output.output())
+                                );
+                                vec![]
+                            })
                         }
                         CommandExitStatus::Failure => {
                             safe_warn!(
@@ -477,29 +487,55 @@ find -L . -maxdepth 1 -not -type d -print0
 }
 
 /// Parses the null-delimited output of the script `ls_script_for_dir` builds into directory and
-/// file entries.
+/// file entries, or `None` if the output doesn't match that script's guaranteed wire format --
+/// a dirs list, a `\0` separator, and a files list, with every entry (including the separator
+/// and, when the files list is non-empty, its own entries) `\0`-terminated.
+///
+/// This matters because a command can report success while its captured output was truncated
+/// (e.g. cut off before the separator or the second `find` pass ever ran). Without validating
+/// the shape, a truncation like `./only-dir\0` is indistinguishable from a real, complete
+/// "one directory, no files" listing, and a truncation to nothing at all reads as a real empty
+/// directory -- exactly the "empty-but-successful listing mistaken for a real empty directory"
+/// case callers need to treat as a failure, not a result worth caching.
 ///
 /// Operates on the command's raw bytes rather than requiring the whole output to be valid UTF-8:
 /// Linux filenames may contain arbitrary non-UTF-8 byte sequences, and requiring the entire
 /// buffer to decode would silently empty the whole listing over one oddly-named file. A segment
-/// that isn't valid UTF-8 is dropped on its own instead.
-fn parse_ls_script_output(output: &[u8]) -> Vec<EngineDirEntry> {
+/// that isn't valid UTF-8 is dropped on its own instead -- that's a different, unrelated failure
+/// mode from a malformed/truncated wire format.
+fn parse_ls_script_output(output: &[u8]) -> Option<Vec<EngineDirEntry>> {
     let mut entries = Vec::new();
     let mut segments = output.split(|&byte| byte == b'\0');
 
     let dirs = segments
         .by_ref()
         // We use two consecutive null characters to separate files and folders, so detect that
-        // here. Note that take_while consumes the first entry that returns false.
+        // here. Note that take_while consumes the first entry that returns false -- the
+        // dirs/files separator itself.
         .take_while(|segment| !segment.is_empty())
         .filter_map(|segment| dir_entry_from_segment(segment, EngineFileType::Directory));
     entries.extend(dirs);
 
-    let files =
-        segments.filter_map(|segment| dir_entry_from_segment(segment, EngineFileType::File));
-    entries.extend(files);
+    // What's left after the separator is the files list followed by its own trailing `\0`,
+    // which `find -print0` guarantees on every complete pass, empty or not (an empty pass
+    // contributes no bytes of its own, but the separator's `\0` is still the final byte). If
+    // nothing is left at all, the separator was never reached: the output was truncated before
+    // the second `find` pass ran, or was empty to begin with. If the last remaining segment
+    // isn't empty, the files list itself was cut off mid-entry. Either way, this isn't a real,
+    // complete listing.
+    let remaining: Vec<&[u8]> = segments.collect();
+    let (last, files) = remaining.split_last()?;
+    if !last.is_empty() {
+        return None;
+    }
 
-    entries
+    entries.extend(
+        files
+            .iter()
+            .filter_map(|segment| dir_entry_from_segment(segment, EngineFileType::File)),
+    );
+
+    Some(entries)
 }
 
 /// Converts one `\0`-delimited `find -print0` segment into an entry, or `None` if it's the `.`

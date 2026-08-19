@@ -23,11 +23,24 @@ const GUEST_LISTING_TIMEOUT: Duration = Duration::from_secs(5);
 /// Returns `None` on any failure (timeout, non-zero exit, or output the parser can't use) so the
 /// caller can fall back to the host listing. A slow or failing guest must never leave the user
 /// with fewer completions than the host-only listing already provides.
+#[cfg_attr(not(windows), allow(dead_code))]
 pub(super) async fn list_entries(
     session_context: &SessionContext,
     directory: &TypedPath<'_>,
 ) -> Option<Vec<EngineDirEntry>> {
     let script = super::ls_script_for_dir(directory)?;
+    run_guest_listing(session_context, &script, GUEST_LISTING_TIMEOUT).await
+}
+
+/// Runs `script` against the guest and parses its output, subject to `timeout`. Split out from
+/// [`list_entries`] purely so tests can exercise the timeout branch deterministically -- a short
+/// `timeout` against a script guaranteed to outlast it -- rather than waiting out the real,
+/// multi-second production budget against a real WSL host this environment doesn't have.
+async fn run_guest_listing(
+    session_context: &SessionContext,
+    script: &str,
+    timeout: Duration,
+) -> Option<Vec<EngineDirEntry>> {
     let env_vars = session_context
         .session
         .path()
@@ -37,19 +50,28 @@ pub(super) async fn list_entries(
     let started = Instant::now();
     let result = session_context
         .session
-        .execute_command(&script, None, env_vars, ExecuteCommandOptions::default())
-        .with_timeout(GUEST_LISTING_TIMEOUT)
+        .execute_command(script, None, env_vars, ExecuteCommandOptions::default())
+        .with_timeout(timeout)
         .await;
     let elapsed_ms = started.elapsed().as_millis();
 
     match result {
         Ok(Ok(output)) if output.status == CommandExitStatus::Success => {
-            let entries = super::parse_ls_script_output(output.output());
-            log::debug!(
-                "[APP-3993 wsl-list] ok entries={} elapsed_ms={elapsed_ms}",
-                entries.len()
-            );
-            Some(entries)
+            match super::parse_ls_script_output(output.output()) {
+                Some(entries) => {
+                    log::debug!(
+                        "[APP-3993 wsl-list] ok entries={} elapsed_ms={elapsed_ms}",
+                        entries.len()
+                    );
+                    Some(entries)
+                }
+                None => {
+                    log::warn!(
+                        "[APP-3993 wsl-list] malformed or truncated output elapsed_ms={elapsed_ms}, falling back to host listing"
+                    );
+                    None
+                }
+            }
         }
         Ok(Ok(_)) => {
             log::warn!(

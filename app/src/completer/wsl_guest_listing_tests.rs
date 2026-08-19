@@ -1,6 +1,7 @@
 use std::collections::HashSet;
 use std::iter::FromIterator;
 use std::sync::Arc;
+use std::time::Duration;
 
 use typed_path::{TypedPath, TypedPathBuf};
 use warp_completer::completer::EngineDirEntry;
@@ -40,11 +41,11 @@ fn test_wsl_like_session() -> Session {
 /// directory reached only by traversing a symlink -- the "completing inside a symlinked
 /// directory" case the host cannot handle at all over `\wsl$`.
 ///
-/// Unix-only, matching `test_session_context_follows_symlinked_directories_remotely` in
-/// `test.rs`: this module only ever compiles on Windows, so on a real run this test only
-/// exercises the mechanism when the host itself is also Unix-like enough to create symlinks the
-/// same way WSL's guest does (i.e. when temporarily un-gated for local verification, as this
-/// PR's own testing notes describe doing for the Windows-only module as a whole).
+/// This module isn't `#[cfg(windows)]` (only the call site in `mod.rs` is, since `is_wsl()` is
+/// only ever true on a Windows session), so this runs on real Unix CI, unlike a module-wide
+/// gate that would only ever exercise this test via manual local un-gating. Still Unix-only,
+/// matching `test_session_context_follows_symlinked_directories_remotely` in `test.rs`, since
+/// `sandbox.ln`'s Windows symlink behavior isn't relied on there either.
 #[cfg(unix)]
 #[test]
 fn test_list_entries_follows_symlinks_and_succeeds() {
@@ -93,6 +94,30 @@ fn test_list_entries_returns_none_on_guest_failure() {
         let ctx = test_session_context(test_wsl_like_session(), directory.to_path_buf(), &app);
 
         let result = warpui::r#async::block_on(super::list_entries(&ctx, &directory));
+        assert_eq!(result, None);
+    });
+}
+
+/// A guest command that runs past its budget must signal the fallback too, the same as a hard
+/// failure. Goes through `run_guest_listing` directly with a short timeout against a script
+/// guaranteed to outlast it, rather than waiting out the real multi-second production budget
+/// (`GUEST_LISTING_TIMEOUT`) against a real WSL host this environment doesn't have -- that's the
+/// entire reason `run_guest_listing` takes `timeout` as a parameter instead of always using the
+/// production constant.
+#[test]
+fn test_run_guest_listing_returns_none_on_timeout() {
+    App::test((), |app| async move {
+        let ctx = test_session_context(
+            test_wsl_like_session(),
+            TypedPath::unix("/").to_path_buf(),
+            &app,
+        );
+
+        let result = warpui::r#async::block_on(super::run_guest_listing(
+            &ctx,
+            "sleep 1",
+            Duration::from_millis(20),
+        ));
         assert_eq!(result, None);
     });
 }

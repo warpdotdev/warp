@@ -505,7 +505,9 @@ pub fn test_parse_ls_script_output_splits_dirs_and_files() {
     let output = b"./foo\0.\0\0./bar.txt\0./baz.txt\0";
 
     assert_eq!(
-        HashSet::<EngineDirEntry>::from_iter(super::parse_ls_script_output(output)),
+        HashSet::<EngineDirEntry>::from_iter(
+            super::parse_ls_script_output(output).expect("well-formed output should parse")
+        ),
         HashSet::from_iter([
             EngineDirEntry::test_dir("foo"),
             EngineDirEntry::test_file("bar.txt"),
@@ -523,10 +525,69 @@ pub fn test_parse_ls_script_output_drops_only_the_non_utf8_entry() {
     output.push(0);
 
     assert_eq!(
-        HashSet::<EngineDirEntry>::from_iter(super::parse_ls_script_output(&output)),
+        HashSet::<EngineDirEntry>::from_iter(
+            super::parse_ls_script_output(&output)
+                .expect("a non-UTF-8 entry shouldn't fail parsing")
+        ),
         HashSet::from_iter([
             EngineDirEntry::test_dir("good_dir"),
             EngineDirEntry::test_file("good_file.txt"),
         ])
     );
+}
+
+/// A directory with zero files still produces a well-formed, complete wire format (the dirs
+/// list, the separator, and the files list's own -- here absent -- terminator), which must
+/// parse as a real, empty-of-files listing rather than as truncated.
+#[test]
+pub fn test_parse_ls_script_output_zero_files_is_a_real_listing() {
+    let output = b"./only-dir\0\0";
+
+    assert_eq!(
+        super::parse_ls_script_output(output)
+            .expect("a complete one-dir/zero-file output should parse"),
+        vec![EngineDirEntry::test_dir("only-dir")]
+    );
+}
+
+/// A completely empty directory (no dirs, no files) still produces the separator alone, which
+/// must parse as a real empty listing rather than as truncated -- distinct from genuinely empty
+/// command output below, which has no separator at all.
+#[test]
+pub fn test_parse_ls_script_output_empty_directory_is_a_real_listing() {
+    let output = b"\0";
+
+    assert_eq!(
+        super::parse_ls_script_output(output)
+            .expect("a lone separator should parse as an empty directory"),
+        Vec::<EngineDirEntry>::new()
+    );
+}
+
+/// Regression test for the review finding on this PR: output truncated right after the dirs
+/// list -- missing the separator and the entire files pass -- must not be mistaken for a
+/// complete "one directory, no files" listing. Byte-for-byte, this differs from the real one-
+/// dir/zero-file case above only in that the separator's `\0` never arrived.
+#[test]
+pub fn test_parse_ls_script_output_truncated_before_separator_fails() {
+    let output = b"./only-dir\0";
+
+    assert_eq!(super::parse_ls_script_output(output), None);
+}
+
+/// Regression test for the review finding on this PR: entirely empty command output (the
+/// command reported success but captured zero bytes) must not be mistaken for a real empty
+/// directory listing.
+#[test]
+pub fn test_parse_ls_script_output_empty_output_fails() {
+    assert_eq!(super::parse_ls_script_output(b""), None);
+}
+
+/// Output truncated mid-entry in the files list (no trailing `\0` at all) must also fail rather
+/// than silently dropping the partial entry and reporting the files seen so far as complete.
+#[test]
+pub fn test_parse_ls_script_output_truncated_mid_file_entry_fails() {
+    let output = b"./dir\0\0./whole_file.txt\0./partial_fil";
+
+    assert_eq!(super::parse_ls_script_output(output), None);
 }
