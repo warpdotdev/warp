@@ -6,9 +6,7 @@ Code reference: [`2fe6a4f567928c6f11b74021e55092e5f3e5bd79`](https://github.com/
 
 ## Context
 
-Rendered Markdown in local files and notebooks uses `RichTextEditorView`. Mouse-up currently converts the mouse modifiers into `EditorViewAction::MaybeOpenFileOrUrl`, but Alt/Option is discarded one layer earlier: `RichTextElement::handle_left_mouse_up` forwards only `cmd` and `shift` through the shared `RichTextAction::left_mouse_up` trait ([`crates/editor/src/render/element/mod.rs:349-356`](https://github.com/warpdotdev/warp/blob/2fe6a4f567928c6f11b74021e55092e5f3e5bd79/crates/editor/src/render/element/mod.rs#L349-L356), [`crates/editor/src/render/element/mod.rs:672-697`](https://github.com/warpdotdev/warp/blob/2fe6a4f567928c6f11b74021e55092e5f3e5bd79/crates/editor/src/render/element/mod.rs#L672-L697)). Both `RichTextEditorView` and `CodeEditorView` implement that trait, so its signature cannot be changed in only the notebook crate ([`app/src/notebooks/editor/view.rs:3409-3569`](https://github.com/warpdotdev/warp/blob/2fe6a4f567928c6f11b74021e55092e5f3e5bd79/app/src/notebooks/editor/view.rs#L3409-L3569), [`app/src/code/editor/view/actions.rs:1162-1270`](https://github.com/warpdotdev/warp/blob/2fe6a4f567928c6f11b74021e55092e5f3e5bd79/app/src/code/editor/view/actions.rs#L1162-L1270)).
-
-`RichTextEditorView::left_mouse_down` already receives full `ModifiersState`, but currently interprets every Alt/Option press as rich-text multiselect before mouse-up can decide to open a link. `maybe_open_file_or_url` later suppresses opening when the editor no longer has one cursor. The alternate gesture therefore needs a pressed-link state established on mouse-down, not only an extra bit on the final action. After that gate, `maybe_open_file_or_url` gives detected file paths priority and routes URL links through `NotebookLinks` ([`app/src/notebooks/editor/view.rs:1911-1993`](https://github.com/warpdotdev/warp/blob/2fe6a4f567928c6f11b74021e55092e5f3e5bd79/app/src/notebooks/editor/view.rs#L1911-L1993)).
+Rendered Markdown in local files and notebooks uses `RichTextEditorView`. Activating a URL without the existing direct-open modifier creates a `LinkToolTipConfig`, resolves the raw target through `NotebookLinks`, and renders the existing link tooltip. The tooltip keeps the resolved target as its main link and adds Copy, Edit, and any `LinkTarget::secondary_action` buttons ([`app/src/notebooks/editor/view.rs:1907-2005`](https://github.com/warpdotdev/warp/blob/2fe6a4f567928c6f11b74021e55092e5f3e5bd79/app/src/notebooks/editor/view.rs#L1907-L2005), [`app/src/notebooks/editor/view.rs:2280-2485`](https://github.com/warpdotdev/warp/blob/2fe6a4f567928c6f11b74021e55092e5f3e5bd79/app/src/notebooks/editor/view.rs#L2280-L2485)). `LinkTarget::Url` deliberately has no current secondary action, so the remote URL remains the primary target ([`app/src/notebooks/link.rs:25-66`](https://github.com/warpdotdev/warp/blob/2fe6a4f567928c6f11b74021e55092e5f3e5bd79/app/src/notebooks/link.rs#L25-L66)). Read-only/selectable editors currently bypass the tooltip and open every URL directly, so the Markdown Viewer needs a narrowly configured exception for eligible repository links without changing comment chips or other selectable consumers. The local-repository action should extend this established tooltip pattern rather than claim a new mouse gesture or modify the shared rich-text event boundary.
 
 `NotebookLinks::resolve` intentionally parses valid URLs before local paths, so an HTTP repository-browser URL always becomes `LinkTarget::Url` and opens through `ctx.open_url` ([`app/src/notebooks/link.rs:124-160`](https://github.com/warpdotdev/warp/blob/2fe6a4f567928c6f11b74021e55092e5f3e5bd79/app/src/notebooks/link.rs#L124-L160), [`app/src/notebooks/link.rs:253-299`](https://github.com/warpdotdev/warp/blob/2fe6a4f567928c6f11b74021e55092e5f3e5bd79/app/src/notebooks/link.rs#L253-L299)). Local file opening already centralizes the configured editor/Markdown Viewer choice and avoids handing executable-looking files to an unsafe system-default handler ([`app/src/notebooks/link.rs:353-400`](https://github.com/warpdotdev/warp/blob/2fe6a4f567928c6f11b74021e55092e5f3e5bd79/app/src/notebooks/link.rs#L353-L400)); the new path must finish through that code rather than introducing another opener.
 
@@ -20,23 +18,24 @@ Agent rich output has a separate detected-link and click path that opens `Detect
 
 ## Proposed changes
 
-### 1. Preserve full mouse-up modifiers and establish a pressed-link gesture
+### 1. Add a contextual action to the existing link tooltip
 
-At the shared editor boundary:
+In `app/src/notebooks/link.rs`:
 
-- Change `RichTextAction::left_mouse_up` in `crates/editor/src/render/element/mod.rs` to receive copyable `ModifiersState` rather than separate `cmd` and `shift` booleans, and pass the full value from `RichTextElement::handle_left_mouse_up`.
-- Update both implementations. `CodeEditorViewAction` reads the same `cmd`/`shift` bits it uses today and otherwise remains behaviorally unchanged. `EditorViewAction::MaybeOpenFileOrUrl` receives explicit `primary_modifier` and `alt` fields, or the small copied modifier value.
-- Update direct trait/element tests so macOS Command+Option and Windows/Linux Control+Alt reach the rich-text action without changing code-editor mouse behavior.
+- Add a context-level eligibility method on `NotebookLinks` that obtains the current eligible local base directory, asks `DetectedRepositories` for the containing repository root, and calls the pure parser from section 2 with the root's final directory name.
+- Eligibility succeeds when the parser returns at least one syntactically possible path candidate. It must not stat, canonicalize, or open any candidate; a file may disappear, be ambiguous, or never have existed after the action is shown.
+- Return only availability to the view. Do not retain the repository root or candidate paths in tooltip state, because the full action must re-read current context and revalidate the filesystem when selected.
 
 In `app/src/notebooks/editor/view.rs`:
 
-- Add invocation-local `PendingAlternateLinkPress` state containing the raw target plus the existing hit-tested `block_start` and pressed `char_offset`. Set it only when primary+Alt mouse-down hits an HTTP(S) rendered link. Do not reduce identity to the URL alone: two separately rendered links may share a target.
-- For that eligible press, do not start Alt multiselect. Alt-only and primary+Alt over non-link or non-HTTP(S) content retain the current multiselect path.
-- On mouse-up, require the same raw target and block, and require the selection to remain the single cursor anchored by that press; a changed character offset that produced a range is a selection, not a click. Clear the pending state after mouse-up, drag selection, cancellation, focus loss, or content reset so it cannot be replayed against a later render.
-- Preserve the existing primary-modifier behavior for anchors, local files, editable-link tooltips, and normal URL opening.
-- Treat `primary_modifier && alt` as the local-repository alternate action only for that confirmed pending HTTP(S) link.
+- Extend `LinkToolTipConfig` with contextual **Open local file** availability while retaining the raw URL and existing resolved `LinkTarget` state.
+- Add a `RepositoryLinkTooltipMode` field to `RichTextEditorView`, initialized to `Disabled` by `RichTextEditorView::new`, plus a narrow setter used by owning surfaces after construction. `FileNotebookView` selects `SelectableFileViewer`, which both enables the contextual action and permits a plain eligible link click to open the tooltip while the editor is selectable. `NotebookView` and `AIDocumentView` select `ExistingTooltipsOnly`, which adds the action only when their normal interaction already opens a tooltip. Apply the owning surface's mode every time it installs or replaces an editor; in particular, `AIDocumentView::refresh`/`set_editor_model` must configure the replacement editor rather than relying on the constructor's initial handle. Every other consumer, including selectable comment chips, remains `Disabled`; no `RichTextEditorConfig` struct literal changes or broad selectable behavior changes are required. Existing `cmd`/primary-modifier direct-open behavior remains unchanged.
+- Add a dedicated `EditorViewAction` for selecting **Open local file** and a persistent `MouseStateHandle` created with the view's other tooltip handles.
+- Render the new `ButtonVariant::Text` action beside the existing tooltip actions only when the context-level eligibility check succeeds. Give it the visible label and accessibility content `Open local file`.
+- Keep the main resolved URL, Copy, Edit, and `LinkTarget::secondary_action` behavior unchanged. Do not reinterpret the remote URL as `LinkTarget::LocalFile` and do not add this contextual operation to `LinkTarget::secondary_action`, which describes actions intrinsic to an already-resolved target.
+- Subscribe `RichTextEditorView` directly to its `NotebookLinks` model. On `LinkEvent::RefreshLinks`, recompute availability for any open tooltip from its raw URL and notify the view; leave all other link events to the existing pane subscriptions. Treat the rendered flag only as discoverability state; the click handler never trusts it as authorization to open a path.
 
-Do not add a key binding or setting. This is pointer state already available at the event boundary.
+Do not change `RichTextAction`, mouse-down/up dispatch, multiselect behavior, key bindings, or settings. Existing direct-open modifiers remain available for their existing targets, and Command+Option/Control+Alt remains unclaimed by this feature.
 
 ### 2. Validate the original encoded URL and add a pure path extractor
 
@@ -70,27 +69,29 @@ The helper:
 
 Add `NotebookLinks::resolve_repository_url_as_local_file`:
 
-1. Extend `SessionSource` with an explicit `Unavailable` state. `FileNotebookView::open_remote` and `open_static` set it before making the new content interactive, clearing either the initial `Active` source or a previous local `Target`. Local file context sets `Target` as today; plans/notebooks intentionally retain `Active`. `Unavailable`, remote sessions, and non-local filesystem builds fail before repository or candidate filesystem lookup.
-2. Require a local session and base directory from the eligible source, then ask `DetectedRepositories` for the local root containing that exact base directory. This makes a file-backed Markdown viewer use the repository containing the document, while an unbound plan/notebook uses the active local terminal repository.
-3. Take the root's final directory name and pass it with the parsed URL to the pure extractor.
-4. Join each relative candidate to the root and asynchronously obtain canonical paths for the root and candidates.
-5. Retain only candidates whose metadata describes a regular file and whose canonical path starts with the canonical root. This rejects traversal and symlink escapes while still allowing an in-repository symlink whose canonical target remains in the repository.
-6. Require exactly one distinct canonical match. Zero or multiple matches return a non-match error rather than picking a suffix.
-7. Return the existing `LinkTarget::LocalFile` with the verified canonical candidate as `path`, `line_and_column: None`, the current session, and `is_markdown` derived from that canonical path. Never return the original joined path or symlink alias after validating a different canonical path.
+1. Extend `SessionSource` with an explicit `Unavailable` state. `FileNotebookView::open_remote` and `open_static` set it before making the new content interactive, clearing either the initial `Active` source or a previous local `Target`. Local file context sets `Target` as today; normal local plans/notebooks retain `Active`. `Unavailable`, remote sessions, and non-local filesystem builds fail before repository or candidate filesystem lookup.
+2. Add a separate repository-link-action availability flag to `NotebookLinks`, defaulting to enabled and consulted only by the new eligibility/resolution methods. Disabling it must not alter existing URL, local-path, anchor, or shared-session link resolution. Its setter emits `LinkEvent::RefreshLinks` when the value changes.
+3. `AIDocumentView` disables that feature-specific flag before the first render when its conversation is already being viewed through a shared session. Make `BlocklistAIHistoryModel::set_viewing_shared_session_for_conversation` publish a focused event carrying the conversation id and new viewing state, and have `AIDocumentView` update the flag when the matching conversation enters or leaves shared-session viewing. This provides an observable transition seam without changing existing shared-session link behavior.
+4. Require a local session and base directory from the eligible source, then ask `DetectedRepositories` for the local root containing that exact base directory. This makes a file-backed Markdown viewer use the repository containing the document, while an unbound plan/notebook uses the active local terminal repository.
+5. Take the root's final directory name and pass it with the parsed URL to the pure extractor.
+6. Join each relative candidate to the root and asynchronously obtain canonical paths for the root and candidates.
+7. Retain only candidates whose metadata describes a regular file and whose canonical path starts with the canonical root. This rejects traversal and symlink escapes while still allowing an in-repository symlink whose canonical target remains in the repository.
+8. Require exactly one distinct canonical match. Zero or multiple matches return a non-match error rather than picking a suffix.
+9. Return the existing `LinkTarget::LocalFile` with the verified canonical candidate as `path`, `line_and_column: None`, the current session, and `is_markdown` derived from that canonical path. Never return the original joined path or symlink alias after validating a different canonical path.
 
 Use a dedicated error enum that distinguishes unsupported URL, missing local repository context, invalid/unsafe path, and missing/non-file target for tests and coarse telemetry. Do not include sensitive paths or the source URL in safe logs.
 
 This removes the actionable symlink-retarget validation/open gap while retaining the existing path-based opener. It does not introduce a file-descriptor lease or claim atomicity against a concurrent mutation of the already-canonical path after resolution; that broader filesystem capability is outside this first pass.
 
-### 4. Route success through the existing opener and failure through one toast
+### 4. Route the tooltip action through the existing opener and one failure toast
 
-In `RichTextEditorView::maybe_open_url`:
+When `RichTextEditorView` handles the dedicated **Open local file** action:
 
-- For a confirmed pending primary+Alt HTTP(S) press, pass the original raw link target to `resolve_repository_url_as_local_file`.
+- Pass the tooltip's original raw link target to `resolve_repository_url_as_local_file`. That method must repeat the local-context and pure-parser checks before touching the candidate filesystem, so a stale tooltip cannot reuse an old repository association.
 - On success, call `NotebookLinks::open` with the returned target so editor preferences and executable-file safety remain centralized.
 - On every expected resolution failure, add one ephemeral `No matching local file found` toast to the current window.
-- Consume the alternate action in both success and failure cases. Never fall back to `ctx.open_url`; an accidental fallback would make a failed local-only request navigate away.
-- Do not change tooltip state, selection, focus, clipboard, or document contents.
+- Consume the tooltip action in both success and failure cases. Never fall back to `ctx.open_url`; the tooltip's main link remains the only route that opens the remote URL.
+- Do not change selection, focus, clipboard, or document contents. If the link or repository context changes while the tooltip is open, use current state or fail closed rather than opening a stale target.
 
 Unexpected I/O failures may be logged at a non-sensitive level and use the same toast. No URL or local path is included in telemetry or logs.
 
@@ -100,7 +101,7 @@ To make the same centralized opener complete for plans, add a `NotebookLinks` ge
 
 This change applies to `RichTextEditorView` consumers with an eligible local `NotebookLinks` context: local Markdown Viewer and local plans/notebooks. The only plan-specific plumbing is the missing `NotebookLinks` pane subscription described above. Do not modify `app/src/util/link_detection.rs` or Agent block-list click handlers in this PR. The latter lack the same document/repository context and would otherwise turn this into a cross-renderer feature.
 
-No feature flag is necessary: normal link behavior is unchanged, failure is non-destructive, and the new branch runs only for a previously unused modifier combination.
+No feature flag is necessary: the main link target and all unrelated link behavior remain unchanged, failure is non-destructive, and the new branch runs only when the user selects a context-gated action in an existing tooltip.
 
 ## Testing and validation
 
@@ -130,42 +131,55 @@ Using a temporary repository fixture and a local test session:
 - switching one file pane from local content to remote content cannot reuse the prior local target, and a fresh remote pane cannot use an active local terminal repository;
 - success preserves the current session and sets no line/column selector.
 
+### Tooltip eligibility tests
+
+Cover PRODUCT invariants 1–8 and 21:
+
+- a supported GitHub/GitLab file URL with eligible local repository context exposes **Open local file** when the pure parser returns at least one candidate, even when the candidate does not exist yet;
+- ordinary web URLs, malformed/unsupported provider shapes, non-HTTP(S) targets, missing repository detection, unavailable/remote context, and browser/WASM builds do not expose the action;
+- eligibility performs no candidate metadata or canonicalization calls;
+- changing or clearing the link context refreshes the open tooltip's availability, and selecting a previously rendered action still revalidates current context;
+- a conversation already in shared-session viewer state initializes with the repository action disabled; entering that state later removes the action from an open tooltip and performs no local candidate lookup; leaving it re-enables only the feature-specific gate;
+- shared-session transitions do not change existing `NotebookLinks::resolve` results for URLs, local paths, or anchors;
+- the main URL target and existing Copy, Edit, and target-specific secondary actions are unchanged.
+
 ### Editor interaction tests
 
 Extend `app/src/notebooks/editor/view_tests.rs`:
 
-- full modifiers survive `RichTextElement` dispatch for the notebook implementation while CodeEditor behavior remains unchanged;
-- primary+Alt mouse-down/up on the same eligible HTTP link opens the local file event and does not open the URL;
-- failure produces the toast and does not open the URL;
-- normal click, primary-only click, local-file links, anchors, and non-links retain their existing behavior;
-- Alt-only multiselect remains available, while primary+Alt over an eligible HTTP link does not create an extra cursor;
-- primary+Alt over non-link or non-HTTP(S) content preserves existing multiselect/selection behavior;
-- non-link mouse-down followed by link mouse-up, different-link down/up, a drag-created selection, focus loss, and content reset suppress and clear the pending action;
+- clicking an eligible HTTP link in the local Markdown Viewer opens the existing tooltip with **Open local file** and does not change the main link target;
+- ordinary selectable web links and selectable comment-chip links retain direct-open behavior, while existing modified direct-open clicks bypass the tooltip as before;
+- replacing an `AIDocumentView` editor during refresh preserves `ExistingTooltipsOnly` on the new editor handle;
+- pointer and keyboard activation of **Open local file** open the local file event and do not open the URL;
+- missing, ambiguous, or newly unavailable targets produce the toast and do not open the URL;
+- ordinary web URLs, local-file links, anchors, non-links, normal URL activation, and existing modified clicks retain their current behavior;
+- Copy, Edit, and existing target-specific secondary actions continue to dispatch their original actions;
 - FilePane, NotebookPane, and AIDocumentPane receive the successful `NotebookLinks` event and forward the same canonical target to the pane group.
 
 Run:
 
 ```bash
 cargo nextest run -p warp -E 'test(link) | test(markdown_anchor)'
-cargo nextest run -p warp_editor -E 'test(mouse)'
+cargo nextest run -p warp_editor -E 'test(link) | test(mouse)'
 ./script/format
 cargo clippy --workspace --all-targets --all-features --tests -- -D warnings
 git diff --check
 ```
 
-Manually open a local Markdown file containing one GitHub file link, one missing link, and one ordinary web link. Record that normal click opens the browser, primary+Alt opens the checkout file, and primary+Alt on the missing link stays in Warp and shows the toast.
+Manually open a local Markdown file containing one existing GitHub file link, one syntactically eligible missing link, and one ordinary web link. Record that a plain click shows the existing link tooltip with **Open local file** only for the two repository-browser links; its main link still opens the browser; the local action opens the existing checkout file; the missing target shows the toast; and the ordinary web link still opens directly. Also verify that an eligible link in a selectable comment chip retains its existing direct-open behavior. Capture the tooltip and the end-to-end success/failure behavior in screenshots or a short recording.
 
 ## Parallelization
 
-Use one implementation worktree, `codex/gh13434-local-markdown-links`. The shared editor trait/dispatcher, both action implementations, pressed-link state, resolver, remote-context transition, and pane subscription form one behavior chain; splitting them across branches would make intermediate states uncompilable or untestable. A second local validation agent can independently review the finished diff and run the targeted tests after the implementation branch is coherent.
+Use one implementation worktree, `codex/gh13434-local-markdown-links`. Tooltip eligibility, the pure parser, resolver, remote-context transition, and pane subscription form one behavior chain; splitting them across branches would make intermediate states difficult to validate without duplicating fixtures. A second local validation agent can independently review the finished diff and run the targeted tests after the implementation branch is coherent.
 
 ## Risks and mitigations
 
 - **Opening a file outside the repository:** canonicalize both paths and require the target to remain under the canonical root.
 - **Remote/local path confusion:** require a local session and local repository root; never reinterpret a remote session's path on the host filesystem.
 - **Provider URL ambiguity or parser normalization:** validate and bound the original encoded path before generic URL parsing, support only the documented GitHub/GitLab shapes and exact repository segment, and fail closed.
-- **Unexpected browser navigation after failure:** consume the alternate gesture before async resolution and never fall back to normal URL opening.
-- **Rich-text selection regression:** preserve full modifiers through the shared trait, record the pressed link on mouse-down, and suppress Alt multiselect only for the confirmed alternate-link gesture.
+- **Unexpected browser navigation after failure:** keep the contextual button separate from the main URL action and never fall back to normal URL opening.
+- **Tooltip false positives or stale context:** use the strict pure parser only for discoverability, then repeat context, canonical-path, and regular-file validation when the user selects the action.
+- **Tooltip regression:** preserve the existing main target, Copy, Edit, and target-specific secondary actions and add focused interaction coverage for each.
 - **Symlink retarget between validation and opening:** pass the verified canonical file to the existing opener, never the joined alias. Atomic protection against a later mutation of that canonical path would require a file-descriptor-based opening contract and remains out of scope.
 - **Oversized crafted links:** enforce URL byte, decoded path byte, segment, and candidate limits before allocating suffixes or touching the candidate filesystem.
 - **Scope expansion across renderers:** leave Agent rich output and generic detected-link code untouched.
@@ -173,5 +187,5 @@ Use one implementation worktree, `codex/gh13434-local-markdown-links`. The share
 ## Follow-ups
 
 - Evaluate Agent Mode rich-output support once it has an explicit repository-context contract.
-- Evaluate line/column fragments and an accessible non-pointer action separately.
+- Evaluate line/column fragments separately.
 - Add providers only with deterministic URL-shape tests rather than a suffix-search fallback.
