@@ -3,14 +3,18 @@ use std::path::{Path, PathBuf};
 
 use cloud_object_models::CodeForge;
 use command::blocking::Command;
+use regex::Regex;
+use serial_test::serial;
 use tempfile::TempDir;
 use warp_core::command::ExitCode;
 
 use super::{
-    PrepareEnvironmentError, build_parallel_clone_command, checkout_command_for, checkout_result,
-    merge_repos_deduped, single_repo_name,
+    MAX_SETUP_COMMAND_OUTPUT_BYTES, PrepareEnvironmentError, build_parallel_clone_command,
+    checkout_command_for, checkout_result, merge_repos_deduped,
+    redact_and_truncate_setup_command_output, single_repo_name, truncate_setup_command_output,
 };
 use crate::ai::cloud_environments::SourceRepo;
+use crate::terminal::model::secrets::set_user_and_enterprise_secret_regexes;
 use crate::terminal::shell::ShellType;
 
 #[test]
@@ -213,6 +217,98 @@ fn checkout_command_absent_when_no_ref() {
         "warp".to_string(),
     );
     assert!(checkout_command_for(&repo, Path::new("/tmp/work"), ShellType::Bash).is_none());
+}
+
+#[test]
+fn setup_command_error_includes_command_output() {
+    // Regression: the failed setup command's output must be surfaced in the
+    // error message so the failure is debuggable. Before the fix the
+    // `SetupCommand` error carried only the command text.
+    let error = PrepareEnvironmentError::SetupCommand {
+        command: "npm ci".to_string(),
+        output: "npm ERR! missing script: build".to_string(),
+    };
+    let message = error.to_string();
+    assert!(
+        message.contains("npm ci"),
+        "message should name the command: {message}"
+    );
+    assert!(
+        message.contains("npm ERR! missing script: build"),
+        "message should include the failed command's output: {message}"
+    );
+}
+
+#[test]
+fn setup_command_error_without_output_keeps_command_only_message() {
+    // When no output could be captured, the message is unchanged from the
+    // original command-only form.
+    let error = PrepareEnvironmentError::SetupCommand {
+        command: "make".to_string(),
+        output: String::new(),
+    };
+    assert_eq!(error.to_string(), "Failed to run setup command: make");
+}
+
+#[test]
+fn truncate_setup_command_output_keeps_short_output_and_trims_trailing_whitespace() {
+    assert_eq!(
+        truncate_setup_command_output("line 1\nline 2\n\n"),
+        "line 1\nline 2"
+    );
+}
+
+// #[serial] because the secret regexes configured below are global state.
+#[test]
+#[serial]
+fn setup_command_output_is_secret_redacted() {
+    // block_output_plaintext does NOT mask secrets in the default (non-Asterisks)
+    // session mode used by cloud/agent setup, so the captured output must be
+    // redacted before it reaches logs / Sentry / the task status. Configure a
+    // secret pattern (a GitHub classic PAT), mirroring how these are populated
+    // from privacy settings in production.
+    set_user_and_enterprise_secret_regexes(
+        [&Regex::new(r"\bghp_[A-Za-z0-9_]{36}\b").expect("pattern should compile")],
+        std::iter::empty(),
+    );
+
+    let token = "ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghij";
+    let output = format!("Cloning into 'repo'...\nremote: using token {token}\nfatal: auth failed");
+
+    let redacted = redact_and_truncate_setup_command_output(&output);
+
+    assert!(
+        !redacted.contains(token),
+        "captured setup-command output must not contain the raw secret: {redacted}"
+    );
+    assert!(
+        redacted.contains(&"*".repeat(token.len())),
+        "the secret must be replaced with the redaction character: {redacted}"
+    );
+    // Non-secret context is preserved so the failure stays debuggable.
+    assert!(
+        redacted.contains("fatal: auth failed"),
+        "non-secret output should be preserved: {redacted}"
+    );
+}
+
+#[test]
+fn truncate_setup_command_output_keeps_tail_and_marks_truncation() {
+    let long = "a".repeat(MAX_SETUP_COMMAND_OUTPUT_BYTES + 500);
+    let truncated = truncate_setup_command_output(&long);
+
+    let tail = truncated
+        .strip_prefix("…(truncated)\n")
+        .expect("over-long output is marked as truncated");
+    assert_eq!(
+        tail.len(),
+        MAX_SETUP_COMMAND_OUTPUT_BYTES,
+        "only the bounded tail is retained"
+    );
+    assert!(
+        long.ends_with(tail),
+        "the retained slice is the tail of the original output"
+    );
 }
 
 #[test]

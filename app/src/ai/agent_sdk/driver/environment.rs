@@ -21,12 +21,21 @@ use super::AgentDriverError;
 #[cfg(feature = "local_fs")]
 use super::cache_setup;
 use super::terminal::TerminalDriver;
+use crate::ai::agent::redaction::redact_secrets;
 use crate::ai::agent_sdk::setup_observability::{SetupClientEventReporter, SetupStep};
 use crate::ai::cloud_environments::{CodeForge, SourceRepo};
+use crate::terminal::model::block::BlockId;
 use crate::terminal::model::session::command_executor::shell_escape_single_quotes;
 use crate::terminal::shell::ShellType;
 
 const CODEBASE_INDEX_SYNC_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// Upper bound on the number of bytes of a failed setup command's output that
+/// we attach to [`PrepareEnvironmentError::SetupCommand`]. The output flows
+/// into logs and the user-facing FAILED task status, so we keep it bounded to
+/// avoid bloating either. We keep the **tail** of the output, since the actual
+/// error a command reports is almost always at the end.
+const MAX_SETUP_COMMAND_OUTPUT_BYTES: usize = 4096;
 
 #[derive(Debug, thiserror::Error)]
 pub enum PrepareEnvironmentError {
@@ -39,8 +48,8 @@ pub enum PrepareEnvironmentError {
         repo_name: String,
         checkout_ref: String,
     },
-    #[error("Failed to run setup command: {command}")]
-    SetupCommand { command: String },
+    #[error("{}", format_setup_command_failure(.command, .output))]
+    SetupCommand { command: String, output: String },
     #[error("Failed to change directory into {repo_name}")]
     ChangeDirectory { repo_name: String },
     #[error(
@@ -53,6 +62,59 @@ pub enum PrepareEnvironmentError {
     },
     #[error("Terminal driver error while preparing environment: {source}")]
     TerminalDriver { source: AgentDriverError },
+}
+
+/// Render the display message for [`PrepareEnvironmentError::SetupCommand`].
+///
+/// When the failed command's output could be captured, it's appended after the
+/// command text so the failure is debuggable in the log and the FAILED task
+/// status. When no output was captured (empty), the message is identical to the
+/// original command-only form.
+fn format_setup_command_failure(command: &str, output: &str) -> String {
+    if output.is_empty() {
+        format!("Failed to run setup command: {command}")
+    } else {
+        format!("Failed to run setup command: {command}\nCommand output:\n{output}")
+    }
+}
+
+/// Redact secrets from a failed setup command's captured output and bound it
+/// for attaching to [`PrepareEnvironmentError::SetupCommand`].
+///
+/// The captured output is **not** guaranteed to be secret-masked at the source:
+/// [`TerminalDriver::block_output_plaintext`] only visually obfuscates secrets
+/// when the session grid is in the `Asterisks` obfuscation mode, which is off by
+/// default for cloud / agent setup sessions. Since this text flows through
+/// [`PrepareEnvironmentError::SetupCommand`]'s message into the run log, Sentry
+/// (`report_error!`), and the FAILED task status (`report_driver_error`), redact
+/// it explicitly with the grid-independent regex redactor — the same pattern
+/// used for [`TerminalDriver`]'s stored `last_command`. Redaction runs on the
+/// **full** output before truncation so a secret straddling the truncation cut
+/// point cannot survive in the retained tail.
+fn redact_and_truncate_setup_command_output(output: &str) -> String {
+    let mut redacted = output.to_string();
+    redact_secrets(&mut redacted);
+    truncate_setup_command_output(&redacted)
+}
+
+/// Truncate a failed setup command's captured output so it stays bounded when
+/// attached to [`PrepareEnvironmentError::SetupCommand`] (it flows into logs and
+/// the task status). Keeps the **tail** — the error a command reports is almost
+/// always at the end — and prepends a marker when anything was dropped. Trailing
+/// whitespace is trimmed so a mostly-empty grid doesn't pad the message.
+fn truncate_setup_command_output(output: &str) -> String {
+    let trimmed = output.trim_end();
+    if trimmed.len() <= MAX_SETUP_COMMAND_OUTPUT_BYTES {
+        return trimmed.to_string();
+    }
+
+    // Keep the last MAX_SETUP_COMMAND_OUTPUT_BYTES bytes, snapping the start to
+    // a UTF-8 char boundary so we never split a multi-byte character.
+    let mut start = trimmed.len() - MAX_SETUP_COMMAND_OUTPUT_BYTES;
+    while start < trimmed.len() && !trimmed.is_char_boundary(start) {
+        start += 1;
+    }
+    format!("…(truncated)\n{}", &trimmed[start..])
 }
 
 /// Prepare a cloud agent environment within a terminal session. This will:
@@ -282,10 +344,22 @@ async fn prepare_environment_impl(
                         full: ("Running setup command: {command}")
                     );
 
-                    let exit_code = execute_command(command, spawner).await?;
+                    let (exit_code, block_id) =
+                        execute_command_with_block(command, spawner).await?;
                     if exit_code != 0.into() {
+                        // Capture the failed command's block output (ANSI-stripped)
+                        // so the failure is debuggable. It is secret-redacted and
+                        // truncated before being stored, since it reaches logs,
+                        // Sentry, and the task status. Best-effort: an unavailable
+                        // block just yields empty output and the command-only
+                        // message.
+                        let output = fetch_block_output(block_id, spawner)
+                            .await
+                            .map(|output| redact_and_truncate_setup_command_output(&output))
+                            .unwrap_or_default();
                         return Err(PrepareEnvironmentError::SetupCommand {
                             command: command_for_error,
+                            output,
                         });
                     }
 
@@ -783,7 +857,22 @@ async fn execute_command(
     command: String,
     spawner: &ModelSpawner<TerminalDriver>,
 ) -> Result<ExitCode, PrepareEnvironmentError> {
-    spawner
+    let (exit_code, _block_id) = execute_command_with_block(command, spawner).await?;
+    Ok(exit_code)
+}
+
+/// Execute a command in the context of a terminal session, returning both its
+/// [`ExitCode`] and the [`BlockId`] of the terminal block it ran in.
+///
+/// The block id lets callers retrieve the command's output after completion
+/// (e.g. to surface a failed setup command's output via
+/// [`fetch_block_output`]). Most callers only need the exit code and go through
+/// [`execute_command`], which discards the block id.
+async fn execute_command_with_block(
+    command: String,
+    spawner: &ModelSpawner<TerminalDriver>,
+) -> Result<(ExitCode, BlockId), PrepareEnvironmentError> {
+    let command_handle = spawner
         .spawn(move |terminal_driver, ctx| terminal_driver.execute_command(&command, ctx))
         .await
         .map_err(|_| PrepareEnvironmentError::InvalidRuntimeState)?
@@ -795,12 +884,38 @@ async fn execute_command(
         .map_err(|error| match error {
             AgentDriverError::InvalidRuntimeState => PrepareEnvironmentError::InvalidRuntimeState,
             source => PrepareEnvironmentError::TerminalDriver { source },
-        })?
+        })?;
+
+    // Capture the block id before awaiting the exit code, since awaiting
+    // consumes the handle.
+    let block_id = command_handle.block_id().clone();
+    let exit_code = command_handle.await.map_err(|error| match error {
+        AgentDriverError::InvalidRuntimeState => PrepareEnvironmentError::InvalidRuntimeState,
+        source => PrepareEnvironmentError::TerminalDriver { source },
+    })?;
+
+    Ok((exit_code, block_id))
+}
+
+/// Fetch the full visible plaintext output of a completed terminal block
+/// (ANSI-stripped). Returns `None` when the block can't be found or the driver
+/// spawn fails, so callers treat missing output as best-effort rather than an
+/// error.
+///
+/// Note: secrets are **not** reliably masked here —
+/// [`TerminalDriver::block_output_plaintext`] only obfuscates them when the
+/// session grid is in `Asterisks` mode (off by default for cloud / agent
+/// sessions). Callers that persist this text must redact it themselves (see
+/// [`redact_and_truncate_setup_command_output`]).
+async fn fetch_block_output(
+    block_id: BlockId,
+    spawner: &ModelSpawner<TerminalDriver>,
+) -> Option<String> {
+    spawner
+        .spawn(move |driver, ctx| driver.block_output_plaintext(&block_id, ctx))
         .await
-        .map_err(|error| match error {
-            AgentDriverError::InvalidRuntimeState => PrepareEnvironmentError::InvalidRuntimeState,
-            source => PrepareEnvironmentError::TerminalDriver { source },
-        })
+        .ok()
+        .flatten()
 }
 
 /// Change the current directory in the context of a terminal session (using `cd {dir}`).
