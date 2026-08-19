@@ -29,7 +29,7 @@ use warp_multi_agent_api::{Task, ToolType, message};
 use warpui::r#async::{SpawnedFutureHandle, Timer};
 use warpui::{AppContext, Entity, EntityId, ModelContext, ModelHandle, SingletonEntity};
 
-use self::response_stream::{RecoveryBudget, ResponseStream, ResponseStreamEvent};
+use self::response_stream::{PendingResume, RecoveryBudget, ResponseStream, ResponseStreamEvent};
 use super::action_model::{BlocklistAIActionEvent, BlocklistAIActionModel};
 use super::context_model::{BlocklistAIContextModel, PendingAttachment, PendingFile};
 use super::conversation_selection::{ConversationSelectionEvent, ConversationSelectionHandle};
@@ -68,7 +68,6 @@ use crate::network::NetworkStatus;
 use crate::notebooks::editor::model::FileLinkResolutionContext;
 use crate::persistence::ModelEvent;
 use crate::send_telemetry_from_ctx;
-use crate::server::retry_strategies::backoff_after_attempts;
 use crate::server::server_api::AIApiError;
 #[cfg(not(target_family = "wasm"))]
 use crate::server::server_api::ServerApiProvider;
@@ -1982,24 +1981,20 @@ impl BlocklistAIController {
         }
     }
 
+    /// Resumes the conversation with a request that is not itself recovering another, so it
+    /// starts with a full recovery budget. Automatic resumes go through
+    /// [`Self::resume_conversation_with_recovery_budget`] instead, to inherit the failed
+    /// request's remaining budget.
     pub fn resume_conversation(
         &mut self,
         conversation_id: AIConversationId,
-        can_attempt_resume_on_error: bool,
-        is_auto_resume_after_error: bool,
         additional_context: Vec<AIAgentContext>,
         ctx: &mut ModelContext<Self>,
     ) {
-        // A resume requested from outside starts a new turn, so it gets a full budget.
-        let recovery = if can_attempt_resume_on_error {
-            RecoveryBudget::fresh()
-        } else {
-            RecoveryBudget::fresh().without_resume()
-        };
         self.resume_conversation_with_recovery_budget(
             conversation_id,
-            recovery,
-            is_auto_resume_after_error,
+            RecoveryBudget::fresh(),
+            /*is_auto_resume_after_error*/ false,
             additional_context,
             ctx,
         );
@@ -2080,11 +2075,12 @@ impl BlocklistAIController {
         );
     }
 
-    /// Schedules an auto-resume-after-error for the conversation, once the shared recovery
-    /// backoff has elapsed, the network is online, and the auto-handoff sleep modal is
-    /// closed, so the resume doesn't race the user's enable/dismiss decision on wake.
+    /// Schedules an auto-resume-after-error for the conversation, once the recovery backoff
+    /// carried by `resume` has elapsed, the network is online, and the auto-handoff sleep
+    /// modal is closed, so the resume doesn't race the user's enable/dismiss decision on
+    /// wake.
     ///
-    /// `recovery` is the failed request's budget with this resume already charged against
+    /// `resume` carries the failed request's budget with this resume already charged against
     /// it, so the resumed request continues the same bounded chain instead of getting a
     /// fresh budget. The backoff matters as much as the extra attempts: without it, a
     /// resume fires ~1s after the reset and lands right back in the rolling deploy that
@@ -2092,10 +2088,11 @@ impl BlocklistAIController {
     fn schedule_auto_resume_after_error(
         &mut self,
         conversation_id: AIConversationId,
-        recovery: RecoveryBudget,
+        resume: PendingResume,
         ctx: &mut ModelContext<Self>,
     ) {
-        let backoff = backoff_after_attempts(recovery.attempts_used());
+        let backoff = resume.backoff();
+        let recovery = resume.recovery();
         let wait_for_online = NetworkStatus::as_ref(ctx).wait_until_online();
         let wait_for_modal_closed =
             OneTimeModalModel::as_ref(ctx).wait_until_auto_handoff_sleep_modal_closed();
@@ -3187,14 +3184,9 @@ impl BlocklistAIController {
                 // Before cleaning up the response stream, check if we should attempt to resume.
                 // The resume inherits the failed request's remaining recovery budget, so
                 // retries and resumes stay bounded by one shared counter.
-                let pending_resume_recovery = {
-                    let stream = response_stream.as_ref(ctx);
-                    stream
-                        .should_resume_conversation_after_stream_finished()
-                        .then(|| stream.recovery_budget_for_resume())
-                };
-                if let Some(recovery) = pending_resume_recovery {
-                    self.schedule_auto_resume_after_error(conversation_id, recovery, ctx);
+                let pending_resume = response_stream.as_ref(ctx).pending_resume();
+                if let Some(resume) = pending_resume {
+                    self.schedule_auto_resume_after_error(conversation_id, resume, ctx);
                 }
 
                 // Clean up the response stream tracking entry now that the stream is complete.

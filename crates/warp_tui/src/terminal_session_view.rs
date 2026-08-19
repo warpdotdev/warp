@@ -1178,13 +1178,7 @@ impl TuiTerminalSessionView {
                 .collect()
         };
         self.ai_controller.update(ctx, |controller, ctx| {
-            controller.resume_conversation(
-                conversation_id,
-                /*can_attempt_resume_on_error*/ true,
-                /*is_auto_resume_after_error*/ false,
-                resume_context,
-                ctx,
-            );
+            controller.resume_conversation(conversation_id, resume_context, ctx);
         });
     }
     fn handle_block_completed(&mut self, block_id: &BlockId, ctx: &mut ViewContext<Self>) {

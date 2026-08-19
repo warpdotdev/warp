@@ -6,7 +6,7 @@ use uuid::Uuid;
 use warp_multi_agent_api::response_event;
 use warpui::{App, SingletonEntity};
 
-use super::response_stream::RecoveryBudget;
+use super::response_stream::{PendingResume, RecoveryBudget};
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent::task::TaskId;
 use crate::ai::agent::{
@@ -194,8 +194,11 @@ fn cancelling_conversation_aborts_pending_auto_resume() {
 
         terminal.update(&mut app, |terminal, ctx| {
             terminal.ai_controller().update(ctx, |controller, ctx| {
-                let recovery = RecoveryBudget::fresh().next_attempt();
-                controller.schedule_auto_resume_after_error(conversation_id, recovery, ctx);
+                let resume = PendingResume::new_for_test(
+                    RecoveryBudget::fresh().next_attempt(),
+                    std::time::Duration::from_millis(1),
+                );
+                controller.schedule_auto_resume_after_error(conversation_id, resume, ctx);
                 assert!(
                     controller
                         .pending_auto_resume_handles

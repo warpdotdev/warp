@@ -55,11 +55,11 @@ Non-goals:
 
 ### Bounded failure
 
-9. Recovery is bounded by one budget of 3 attempts for the whole turn, shared between in-request retries and automatic resumes. A resumed request may itself be recovered, but only out of what is left of that budget — so a turn that keeps failing recovers at most 3 times in total, however those attempts are split between retries and resumes. ([REMOTE-2269](https://linear.app/warpdotdev/issue/REMOTE-2269/allow-multiple-resume-attempts) raised this from "at most one automatic resume", which left a mid-turn failure with an effective budget of one attempt.)
+9. Recovery is bounded by one budget of 3 attempts per request, shared between in-request retries and automatic resumes. A resumed request may itself be recovered, but only out of what is left of that budget — so a failing request is recovered at most 3 times, however those attempts are split between retries and resumes. The budget is per request, not per turn: a turn spans many requests (every tool-result round trip is its own) and each starts with a full budget, as it did before retries and resumes were unified. ([REMOTE-2269](https://linear.app/warpdotdev/issue/REMOTE-2269/allow-multiple-resume-attempts) raised this from "at most one automatic resume", which left a post-action failure with an effective budget of one attempt.)
 
 10. If recovery is exhausted, the run ends with a terminal error and the message "Warp lost connection while receiving the agent response. This is usually temporary." There is no retry storm: each attempt waits a jittered exponential backoff first (~0.5s, ~1s, ~2s), so a persistent outage produces at most 3 spaced attempts before the terminal failure rather than an immediate re-send into the same failure window.
 
-11. A cloud run held open for recovery waits at most 120 seconds per recovery attempt; the deadline is re-armed each time an attempt starts, so a turn that recovers repeatedly is not killed by the cumulative wait. If a single attempt does not restore progress within that window, the run ends with the last recorded error.
+11. A cloud run held open for recovery waits at most 120 seconds per recovery attempt: the deadline is armed when an attempt fails and cancelled when the next one lands, so a request that recovers repeatedly is not killed by the cumulative wait. If a single attempt does not restore progress within that window, the run ends with the last recorded error.
 
 12. Application-level failures are never auto-recovered: out-of-credits and server-overload failures end the turn immediately with their specific messages (a recovery attempt would fail identically or add load the server shed). Non-transient errors (4xx, malformed responses) likewise fail immediately.
 

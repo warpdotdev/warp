@@ -22,7 +22,8 @@ use crate::send_telemetry_from_ctx;
 use crate::server::retry_strategies::backoff_after_attempts;
 use crate::server::server_api::{AIApiError, ServerApiProvider};
 
-/// Maximum number of recovery attempts spent on one turn before the failure is surfaced.
+/// Maximum number of recovery attempts spent on one request before the failure is
+/// surfaced.
 ///
 /// Retries (the same request re-sent) and resumes (a fresh `ResumeConversation` request)
 /// draw from this single budget. Giving resumes their own one-shot allowance, as this code
@@ -42,13 +43,17 @@ const GROK_REFRESH_REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::f
 #[cfg(not(target_family = "wasm"))]
 const GEAP_REFRESH_REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
-/// The retry/resume recovery budget for one turn, carried forward across every request
-/// that recovers it.
+/// The recovery budget for one request and the retries and resumes that recover it,
+/// carried forward across each of those attempts.
 ///
 /// A retry keeps the budget inside the same [`ResponseStream`]; a resume hands it to the
 /// `ResumeConversation` request the controller sends next. So the two share one counter
-/// rather than getting a budget each, and a mid-turn failure can no longer exhaust
-/// recovery in a single attempt.
+/// rather than getting a budget each, and a failure can no longer exhaust recovery in a
+/// single attempt.
+///
+/// The scope is one request, not one agent turn: a turn spans many MAA requests (every
+/// tool-result round trip is its own), and each starts with a [`Self::fresh`] budget, as it
+/// did before retries and resumes were unified.
 ///
 /// `pub` only to match [`ResponseStream::new`], which takes one; every constructor and
 /// accessor is crate-internal.
@@ -59,7 +64,7 @@ pub struct RecoveryBudget {
 }
 
 impl RecoveryBudget {
-    /// A full budget, for the first request of a turn.
+    /// A full budget, for a request that is not itself recovering another.
     pub(crate) fn fresh() -> Self {
         Self {
             attempts_used: 0,
@@ -76,7 +81,7 @@ impl RecoveryBudget {
         }
     }
 
-    /// Recovery attempts — retries and resumes — already spent on this turn.
+    /// Recovery attempts — retries and resumes — already spent recovering this request.
     pub(crate) fn attempts_used(self) -> usize {
         self.attempts_used
     }
@@ -91,6 +96,35 @@ impl RecoveryBudget {
 
     fn has_remaining(self) -> bool {
         self.attempts_used < MAX_RECOVERY_ATTEMPTS
+    }
+}
+
+/// A conversation resume scheduled for a failed request: the budget the resumed request
+/// runs with, and how long to wait before sending it.
+///
+/// The wait is decided here, where the recovery decision is made, rather than recomputed
+/// at send time — the schedule is jittered, so recomputing would produce a different
+/// duration than the one that was logged.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PendingResume {
+    recovery: RecoveryBudget,
+    backoff: Duration,
+}
+
+impl PendingResume {
+    /// The budget the resumed request runs with, already charged for this resume.
+    pub(crate) fn recovery(self) -> RecoveryBudget {
+        self.recovery
+    }
+
+    /// How long to wait before sending the resume.
+    pub(crate) fn backoff(self) -> Duration {
+        self.backoff
+    }
+
+    #[cfg(test)]
+    pub(crate) fn new_for_test(recovery: RecoveryBudget, backoff: Duration) -> Self {
+        Self { recovery, backoff }
     }
 }
 
@@ -146,7 +180,7 @@ impl FailReason {
 /// (after a backoff, or once connectivity returns). After actions have streamed,
 /// re-sending is unsafe, so recovery uses a fresh `ResumeConversation` request. Both draw
 /// from `recovery`, so the kind of recovery available can change mid-chain without handing
-/// the turn a second budget.
+/// the request a second budget.
 fn recovery_action(
     has_received_client_actions: bool,
     is_recoverable: bool,
@@ -155,6 +189,13 @@ fn recovery_action(
 ) -> RecoveryAction {
     if !is_recoverable {
         return RecoveryAction::Fail(FailReason::NotRecoverable);
+    }
+    // Checked ahead of the budget so a request that could never have resumed reports that,
+    // rather than whichever constraint happens to bind first: a passive request that spent
+    // its budget on pre-action retries and then fails post-action is blocked by both, and
+    // the ineligibility is the one worth knowing.
+    if has_received_client_actions && !recovery.resume_allowed {
+        return RecoveryAction::Fail(FailReason::ResumeNotAllowed);
     }
     if !recovery.has_remaining() {
         return RecoveryAction::Fail(FailReason::BudgetExhausted);
@@ -166,11 +207,7 @@ fn recovery_action(
             RecoveryAction::RetryWhenOnline
         };
     }
-    if recovery.resume_allowed {
-        RecoveryAction::Resume
-    } else {
-        RecoveryAction::Fail(FailReason::ResumeNotAllowed)
-    }
+    RecoveryAction::Resume
 }
 
 /// Whether a failed attempt is being recovered or surfaced.
@@ -212,9 +249,15 @@ impl ResponseStreamId {
 pub struct ResponseStream {
     id: ResponseStreamId,
     params: api::RequestParams,
-    /// The turn's shared retry/resume budget, inherited from the request this one recovers
-    /// (if any) and charged for each retry sent from this stream.
+    /// The shared retry/resume budget for this request, inherited from the request this one
+    /// recovers (if any) and charged for each retry sent from this stream.
     recovery: RecoveryBudget,
+    /// In-request retries sent from this stream.
+    ///
+    /// Deliberately not derived from [`Self::recovery`]: that budget is inherited across a
+    /// resume, so it counts attempts made before this request existed and would overstate
+    /// the retries this request actually needed.
+    retries_sent: usize,
     start_time: DateTime<Local>,
     time_to_latest_event: TimeDelta,
     cancellation_tx: Option<oneshot::Sender<()>>,
@@ -226,12 +269,12 @@ pub struct ResponseStream {
     /// AI identifiers for telemetry emission
     ai_identifiers: AIIdentifiers,
 
-    /// Whether we should attempt to resume the conversation after the stream finishes.
+    /// The resume to send once the stream finishes, if one was scheduled.
     ///
     /// This is set when a transient network/server failure occurs after client actions
     /// have been received (so an in-request retry is unsafe) and the shared recovery
-    /// budget still permits a resume.
-    should_resume_conversation_after_stream_finished: bool,
+    /// budget still permits a resume. Per-attempt state: a retry supersedes it.
+    pending_resume: Option<PendingResume>,
 
     /// Whether a `StreamFinished` event was received for the current request. A
     /// stream that completes without one was truncated in transit.
@@ -274,13 +317,14 @@ impl ResponseStream {
             id,
             params: api::RequestParams::new_for_test(),
             recovery: RecoveryBudget::fresh().without_resume(),
+            retries_sent: 0,
             start_time: Local::now(),
             time_to_latest_event: TimeDelta::seconds(0),
             cancellation_tx: Some(cancellation_tx),
             original_error: None,
             has_received_client_actions: false,
             ai_identifiers: AIIdentifiers::default(),
-            should_resume_conversation_after_stream_finished: false,
+            pending_resume: None,
             stream_finished_received: false,
             error_event_emitted: false,
             deferred_retry_pending: false,
@@ -306,10 +350,11 @@ impl ResponseStream {
             time_to_latest_event: TimeDelta::seconds(0),
             cancellation_tx: Some(cancellation_tx),
             recovery,
+            retries_sent: 0,
             original_error: None,
             has_received_client_actions: false,
             ai_identifiers,
-            should_resume_conversation_after_stream_finished: false,
+            pending_resume: None,
             stream_finished_received: false,
             error_event_emitted: false,
             deferred_retry_pending: false,
@@ -323,13 +368,14 @@ impl ResponseStream {
 
     /// Returns true if we should attempt to resume the conversation after the stream finishes.
     pub fn should_resume_conversation_after_stream_finished(&self) -> bool {
-        self.should_resume_conversation_after_stream_finished
+        self.pending_resume.is_some()
     }
 
-    /// The budget the follow-up resume runs with: this turn's budget with the resume
-    /// itself charged against it, so the resume can't restart recovery from scratch.
-    pub(super) fn recovery_budget_for_resume(&self) -> RecoveryBudget {
-        self.recovery.next_attempt()
+    /// The resume to send once the stream finishes, if one was scheduled. It carries this
+    /// request's budget with the resume already charged against it, so the resumed request
+    /// can't restart recovery from scratch.
+    pub(super) fn pending_resume(&self) -> Option<PendingResume> {
+        self.pending_resume
     }
 
     /// Whether the request that just failed was the turn's own request or an automatic
@@ -363,11 +409,17 @@ impl ResponseStream {
 
     fn retry(&mut self, ctx: &mut ModelContext<Self>) {
         self.recovery = self.recovery.next_attempt();
+        self.retries_sent += 1;
         // Reset per-attempt state for the new attempt.
         self.has_received_client_actions = false;
         self.stream_finished_received = false;
         self.error_event_emitted = false;
         self.deferred_retry_pending = false;
+        // A retry supersedes any resume this stream had scheduled. Unreachable today (the
+        // eventsource closes on its first error, so a `Resume` decision is never followed by
+        // another error on the same stream), but that depends on a transport detail several
+        // crates away, and the retry backoff widens the window it holds in.
+        self.pending_resume = None;
 
         let (cancellation_tx, cancellation_rx) = oneshot::channel();
         if let Some(old_cancellation_tx) = self.cancellation_tx.take() {
@@ -414,23 +466,27 @@ impl ResponseStream {
                 // The controller sends the resume once this stream finishes, after the same
                 // backoff a retry would take. The failure is still surfaced, but as a
                 // non-terminal `TransientError`, so the UI suppresses the banner.
-                self.log_recovery(action, "after_stream_finished", error);
-                self.should_resume_conversation_after_stream_finished = true;
+                let delay = backoff_after_attempts(self.recovery.attempts_used() + 1);
+                self.pending_resume = Some(PendingResume {
+                    recovery: self.recovery.next_attempt(),
+                    backoff: delay,
+                });
+                self.log_recovery(action, &format!("after_stream_finished+{delay:?}"), error);
                 self.error_event_emitted = true;
-                self.report_request_failure(error, is_online);
+                self.report_request_failure(error, is_online, self.recovery.attempts_used() + 1);
                 RecoveryOutcome::Surfaced
             }
             RecoveryAction::Fail(reason) => {
                 log::warn!(
                     "MultiAgent request failed; not recovering: recovery={} reason={} \
-                     attempts_used={}/{MAX_RECOVERY_ATTEMPTS} failed_request={} - Error: {error:?}",
+                     attempt={}/{MAX_RECOVERY_ATTEMPTS} failed_request={} - Error: {error:?}",
                     action.log_label(),
                     reason.log_label(),
                     self.recovery.attempts_used(),
                     self.failed_request_label(),
                 );
                 self.error_event_emitted = true;
-                self.report_request_failure(error, is_online);
+                self.report_request_failure(error, is_online, self.recovery.attempts_used());
                 RecoveryOutcome::Surfaced
             }
         }
@@ -592,7 +648,11 @@ impl ResponseStream {
     fn surface_grok_refresh_failure(&mut self, request_id: Uuid, ctx: &mut ModelContext<Self>) {
         let error = Arc::new(AIApiError::GrokSubscriptionTokenRefreshFailed);
         self.error_event_emitted = true;
-        self.report_request_failure(&error, NetworkStatus::as_ref(ctx).is_online());
+        self.report_request_failure(
+            &error,
+            NetworkStatus::as_ref(ctx).is_online(),
+            self.recovery.attempts_used(),
+        );
         ctx.emit(ResponseStreamEvent::ReceivedEvent(Consumable::new(Err(
             error,
         ))));
@@ -668,7 +728,11 @@ impl ResponseStream {
                 // in-stream error events.)
                 let error = Arc::new(AIApiError::Other(anyhow!(e)));
                 self.error_event_emitted = true;
-                self.report_request_failure(&error, NetworkStatus::as_ref(ctx).is_online());
+                self.report_request_failure(
+                    &error,
+                    NetworkStatus::as_ref(ctx).is_online(),
+                    self.recovery.attempts_used(),
+                );
                 ctx.emit(ResponseStreamEvent::ReceivedEvent(Consumable::new(Err(
                     error,
                 ))));
@@ -711,12 +775,12 @@ impl ResponseStream {
                                 Some(warp_multi_agent_api::response_event::stream_finished::Reason::Done(_)) | None
                             ) {
                                 // Emit retry success telemetry if this was a successful completion after retries
-                                if self.recovery.attempts_used() > 0
+                                if self.retries_sent > 0
                                     && let Some(original_error) = &self.original_error {
                                         send_telemetry_from_ctx!(
                                             crate::TelemetryEvent::AgentModeRequestRetrySucceeded {
                                                 identifiers: self.ai_identifiers.clone(),
-                                                retry_count: self.recovery.attempts_used(),
+                                                retry_count: self.retries_sent,
                                                 original_error: original_error.clone(),
                                             },
                                             ctx
@@ -779,7 +843,17 @@ impl ResponseStream {
 
     /// Reports a non-retried request failure to crash reporting with classification
     /// tags.
-    fn report_request_failure(&self, error: &Arc<AIApiError>, is_online: bool) {
+    ///
+    /// `recovery_attempt` is the attempt this failure sits at, counted the same way the
+    /// recovery log line counts it: the attempt a scheduled resume is about to make, or the
+    /// attempts already spent when the failure is terminal. Passing it in rather than
+    /// deriving it here keeps the two surfaces from disagreeing by one for one failure.
+    fn report_request_failure(
+        &self,
+        error: &Arc<AIApiError>,
+        is_online: bool,
+        recovery_attempt: usize,
+    ) {
         #[cfg(feature = "crash_reporting")]
         sentry::with_scope(
             |scope| {
@@ -791,7 +865,7 @@ impl ResponseStream {
                 scope.set_tag("is_recoverable", error.is_recoverable());
                 scope.set_tag(
                     "will_attempt_resume",
-                    self.should_resume_conversation_after_stream_finished,
+                    self.should_resume_conversation_after_stream_finished(),
                 );
                 scope.set_tag("is_online", is_online);
                 scope.set_tag("failed_request", self.failed_request_label());
@@ -802,10 +876,10 @@ impl ResponseStream {
                     extra: {
                         "has_received_client_actions" => self.has_received_client_actions,
                         "is_recoverable" => error.is_recoverable(),
-                        "will_attempt_resume" => self.should_resume_conversation_after_stream_finished,
+                        "will_attempt_resume" => self.should_resume_conversation_after_stream_finished(),
                         "is_online" => is_online,
                         "failed_request" => self.failed_request_label(),
-                        "recovery_attempts_used" => self.recovery.attempts_used(),
+                        "recovery_attempt" => recovery_attempt,
                         "max_recovery_attempts" => MAX_RECOVERY_ATTEMPTS,
                         "error_debug" => %format!("{error:?}"),
                     }
@@ -819,10 +893,10 @@ impl ResponseStream {
                 extra: {
                     "has_received_client_actions" => self.has_received_client_actions,
                     "is_recoverable" => error.is_recoverable(),
-                    "will_attempt_resume" => self.should_resume_conversation_after_stream_finished,
+                    "will_attempt_resume" => self.should_resume_conversation_after_stream_finished(),
                     "is_online" => is_online,
                     "failed_request" => self.failed_request_label(),
-                    "recovery_attempts_used" => self.recovery.attempts_used(),
+                    "recovery_attempt" => recovery_attempt,
                     "max_recovery_attempts" => MAX_RECOVERY_ATTEMPTS,
                     "error_debug" => %format!("{error:?}"),
                 }

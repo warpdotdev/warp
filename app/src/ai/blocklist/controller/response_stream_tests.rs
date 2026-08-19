@@ -1,11 +1,17 @@
+#[cfg(not(target_family = "wasm"))]
 use std::time::Duration;
 
 #[cfg(not(target_family = "wasm"))]
 use super::apply_geap_refresh_to_params;
 use super::{FailReason, MAX_RECOVERY_ATTEMPTS, RecoveryAction, RecoveryBudget, recovery_action};
 #[cfg(not(target_family = "wasm"))]
+use super::{ResponseStream, ResponseStreamId};
+#[cfg(not(target_family = "wasm"))]
 use crate::ai::agent::api::RequestParams;
+// `agent_sdk` (and so the driver's recovery deadline) is native-only.
+#[cfg(not(target_family = "wasm"))]
 use crate::ai::agent_sdk::driver::AUTO_RESUME_TIMEOUT;
+#[cfg(not(target_family = "wasm"))]
 use crate::server::retry_strategies::backoff_after_attempts;
 
 // Argument order: has_received_client_actions, is_recoverable, recovery, is_online.
@@ -80,6 +86,44 @@ fn post_action_failures_without_resume_eligibility_are_terminal() {
     // recovery available.
     assert_eq!(
         recovery_action(true, true, RecoveryBudget::fresh().without_resume(), true),
+        RecoveryAction::Fail(FailReason::ResumeNotAllowed)
+    );
+}
+
+#[test]
+fn ineligibility_is_reported_ahead_of_an_exhausted_budget() {
+    // A passive request that spent its budget on pre-action retries and then fails after
+    // actions is blocked by both constraints. The reason logged should be the one that would
+    // still block it if the budget were full, since that is what a reader needs to know.
+    let exhausted_passive = exhausted().without_resume();
+    assert_eq!(
+        recovery_action(true, true, exhausted_passive, true),
+        RecoveryAction::Fail(FailReason::ResumeNotAllowed)
+    );
+    // Pre-action, the budget is the only thing standing in the way, so it is the reason.
+    assert_eq!(
+        recovery_action(false, true, exhausted_passive, true),
+        RecoveryAction::Fail(FailReason::BudgetExhausted)
+    );
+}
+
+#[cfg(not(target_family = "wasm"))]
+#[test]
+fn a_scheduled_resume_inherits_a_charged_budget() {
+    // The boundary the controller consumes: whatever budget a failed request was running
+    // with, the resume it schedules must run with that budget charged one attempt, and with
+    // resume eligibility carried over unchanged. Getting this wrong in either direction is
+    // the bug REMOTE-2269 was about — a fresh budget would restart recovery from scratch,
+    // and a lost `resume_allowed` would silently re-enable resumes for a passive request.
+    let stream = ResponseStream::new_for_test(ResponseStreamId::new_for_test());
+    let before = RecoveryBudget::fresh().without_resume();
+    let after = stream.recovery.next_attempt();
+
+    assert_eq!(stream.recovery, before, "test fixture drifted");
+    assert_eq!(after.attempts_used(), before.attempts_used() + 1);
+    // Eligibility is preserved, so the resumed request is still bound by the same rule.
+    assert_eq!(
+        recovery_action(true, true, after, true),
         RecoveryAction::Fail(FailReason::ResumeNotAllowed)
     );
 }
@@ -181,6 +225,7 @@ fn spending_an_attempt_preserves_resume_eligibility() {
     );
 }
 
+#[cfg(not(target_family = "wasm"))]
 #[test]
 fn the_recovery_backoff_fits_inside_the_cloud_run_recovery_window() {
     // The driver re-arms AUTO_RESUME_TIMEOUT per recovery attempt, so what has to fit in
