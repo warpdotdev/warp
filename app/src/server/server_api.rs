@@ -379,14 +379,55 @@ pub enum TranscribeError {
     ServerOverloaded,
 
     #[error("Internal error occurred at transport layer.")]
-    Transport,
+    Transport(#[source] reqwest::Error),
+
+    #[error("Failed with status code {0}")]
+    ErrorStatus(http::StatusCode),
 
     #[error("Failed to deserialize JSON.")]
-    Deserialization,
+    Deserialization(#[source] DeserializationError),
 
     #[error(transparent)]
     Other(#[from] anyhow::Error),
 }
+
+impl TranscribeError {
+    fn from_json_error(err: reqwest::Error) -> Self {
+        if err.is_decode() {
+            #[cfg(not(target_family = "wasm"))]
+            {
+                use std::error::Error as _;
+                let mut source = err.source();
+                while let Some(underlying) = source {
+                    if underlying.is::<hyper::Error>() {
+                        return TranscribeError::Transport(err);
+                    }
+                    source = underlying.source();
+                }
+            }
+            return TranscribeError::Deserialization(DeserializationError::Transport(err));
+        }
+        TranscribeError::Transport(err)
+    }
+}
+
+impl ErrorExt for TranscribeError {
+    fn is_actionable(&self) -> bool {
+        match self {
+            TranscribeError::Transport(error) => error.is_actionable(),
+            TranscribeError::ErrorStatus(status) => {
+                !status.is_server_error() && *status != http::StatusCode::TOO_MANY_REQUESTS
+            }
+            TranscribeError::Other(error) => error.is_actionable(),
+            TranscribeError::Deserialization(error) => match error {
+                DeserializationError::Json(_) => true,
+                DeserializationError::Transport(error) => error.is_actionable(),
+            },
+            TranscribeError::QuotaLimit | TranscribeError::ServerOverloaded => false,
+        }
+    }
+}
+register_error!(TranscribeError);
 
 /// An API wrapper struct with methods to requests to warp-server.
 ///
@@ -1130,7 +1171,7 @@ impl ServerApi {
                         Ok(output_response) => Ok(output_response),
                         Err(e) => {
                             log::warn!("Failed to deserialize response: {e:?}");
-                            Err(TranscribeError::Deserialization)
+                            Err(TranscribeError::from_json_error(e))
                         }
                     }
                 } else if res.status() == http::StatusCode::TOO_MANY_REQUESTS {
@@ -1145,13 +1186,14 @@ impl ServerApi {
                         Err(TranscribeError::ServerOverloaded)
                     }
                 } else {
-                    log::warn!("Non-success status code received: {}", res.status());
-                    Err(TranscribeError::Transport)
+                    let status = res.status();
+                    log::warn!("Non-success status code received: {status}");
+                    Err(TranscribeError::ErrorStatus(status))
                 }
             }
             Err(e) => {
                 log::warn!("Error while sending request: {e:?}");
-                Err(TranscribeError::Transport)
+                Err(TranscribeError::Transport(e))
             }
         }
     }
