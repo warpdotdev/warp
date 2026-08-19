@@ -22,6 +22,32 @@ pub const CLOUD_AGENT_ID_HEADER: &str = "X-Warp-Cloud-Agent-ID";
 /// Header used to communicate the source of an agent run.
 pub const AGENT_SOURCE_HEADER: &str = "X-Oz-Api-Source";
 
+/// Shared handle for the UID of the team that outbound authenticated GraphQL v2
+/// requests should identify as active, via [`http_client::headers::WARP_ACTIVE_TEAM_UID`].
+/// `None` (the default) omits the header entirely, which is a no-op against current
+/// server behavior.
+///
+/// Cloning shares the same underlying cell. This is the one seam whoever decides what
+/// "active" means (e.g. the focused window's team today, possibly a persisted
+/// preference later) should update via [`Self::set`]; the header-attachment logic in
+/// [`BaseClient::graphql_request_options`] never needs to change to accommodate a new
+/// definition.
+#[derive(Clone, Default)]
+pub struct ActiveTeamUid(Arc<RwLock<Option<String>>>);
+
+impl ActiveTeamUid {
+    /// Returns the currently active team UID, or `None` if no team is active.
+    pub fn get(&self) -> Option<String> {
+        self.0.read().clone()
+    }
+
+    /// Sets the currently active team UID. Pass `None` to clear it, so that outbound
+    /// GraphQL requests omit the active-team header entirely.
+    pub fn set(&self, team_uid: Option<String>) {
+        *self.0.write() = team_uid;
+    }
+}
+
 /// IDs in the staging database that were created specifically for evals.
 ///
 /// Keep this list in sync with `script/populate_agent_mode_eval_user.sql` in warp-server.
@@ -112,6 +138,7 @@ pub struct BaseClient {
     auth_session: Arc<AuthSession>,
     ambient_workload_token: Arc<Mutex<Option<warp_isolation_platform::WorkloadToken>>>,
     ambient_agent_task_id: Arc<RwLock<Option<String>>>,
+    active_team_uid: ActiveTeamUid,
     agent_source: Option<String>,
     graphql_routing: GraphqlRoutingConfig,
     authenticated_graphql: AuthenticatedGraphqlConfig,
@@ -168,6 +195,7 @@ impl BaseClient {
             auth_session,
             ambient_workload_token: Arc::new(Mutex::new(None)),
             ambient_agent_task_id: Arc::new(RwLock::new(None)),
+            active_team_uid: ActiveTeamUid::default(),
             agent_source,
             graphql_routing,
             authenticated_graphql,
@@ -185,6 +213,7 @@ impl BaseClient {
             AMBIENT_WORKLOAD_TOKEN_HEADER,
             CLOUD_AGENT_ID_HEADER,
             AGENT_SOURCE_HEADER,
+            http_client::headers::WARP_ACTIVE_TEAM_UID,
         ]
         .iter()
         .any(|reserved| name.eq_ignore_ascii_case(reserved))
@@ -243,6 +272,14 @@ impl BaseClient {
     /// Sets the default cloud-agent identifier inherited by subsequent requests.
     pub fn set_ambient_agent_task_id(&self, task_id: Option<String>) {
         *self.ambient_agent_task_id.write() = task_id;
+    }
+
+    /// Returns a handle to the active-team UID cell consulted by
+    /// [`Self::graphql_request_options`]. Whoever determines what "active" means (e.g.
+    /// the app's focused window) should call [`ActiveTeamUid::set`] on this handle to
+    /// keep it current; this client only reads it.
+    pub fn active_team_uid_handle(&self) -> ActiveTeamUid {
+        self.active_team_uid.clone()
     }
 
     /// Returns an ambient agent workload token when the current runtime can issue one.
@@ -334,6 +371,12 @@ impl BaseClient {
             self.ambient_headers(AmbientHeaderPolicy::inherit_all())
                 .await?,
         );
+        if let Some(team_uid) = self.active_team_uid.get() {
+            options.headers.insert(
+                http_client::headers::WARP_ACTIVE_TEAM_UID.to_string(),
+                team_uid,
+            );
+        }
         Ok(options)
     }
 

@@ -7,6 +7,8 @@ use warp_core::features::FeatureFlag;
 use warp_core::settings::{ChangeEventReason, Setting};
 use warp_errors::report_error;
 use warp_graphql::workspace::FeatureModelChoice;
+use warp_server_client::base_client::ActiveTeamUid;
+use warpui::windowing::{StateEvent, WindowManager};
 use warpui::{
     AppContext, Entity, ModelContext, SingletonEntity, Tracked, ViewContext, WeakViewHandle,
     WindowId,
@@ -119,6 +121,10 @@ pub struct UserWorkspaces {
     user_purchase_policy: Option<PurchaseAddOnCreditsPolicy>,
     team_client: Arc<dyn TeamClient>,
     workspace_client: Arc<dyn WorkspaceClient>,
+    /// Kept in sync with the focused window's current team assignment, so that
+    /// `BaseClient::graphql_request_options` can attach it to outbound GraphQL v2
+    /// requests. See [`Self::sync_active_team_uid`].
+    active_team_uid: ActiveTeamUid,
 }
 
 /// Represents the workspaces a user potentially has access to.
@@ -175,6 +181,7 @@ impl UserWorkspaces {
             user_purchase_policy: None,
             team_client,
             workspace_client,
+            active_team_uid: ActiveTeamUid::default(),
         }
     }
 
@@ -193,6 +200,7 @@ impl UserWorkspaces {
         workspace_client: Arc<dyn WorkspaceClient>,
         cached_workspaces: Vec<Workspace>,
         current_workspace_uid: Option<WorkspaceUid>,
+        active_team_uid: ActiveTeamUid,
         ctx: &mut ModelContext<Self>,
     ) -> Self {
         ctx.subscribe_to_model(&ServerExperiments::handle(ctx), |me, _, event, ctx| {
@@ -217,7 +225,17 @@ impl UserWorkspaces {
             }
         });
 
-        Self {
+        // Keep the active-team header seam current whenever the focused window changes
+        // (e.g. the user switches windows, or Warp gains/loses focus). Changes to a
+        // window's team assignment itself (e.g. `register_window`,
+        // `reconcile_window_team_assignments`) resync separately below, since they don't
+        // necessarily change which window is focused.
+        ctx.subscribe_to_model(&WindowManager::handle(ctx), |me, _, event, ctx| {
+            let StateEvent::ValueChanged { .. } = event;
+            me.sync_active_team_uid(ctx);
+        });
+
+        let me = Self {
             current_workspace_uid: current_workspace_uid.into(),
             workspaces: cached_workspaces.into(),
             window_team_uids: Default::default(),
@@ -225,7 +243,33 @@ impl UserWorkspaces {
             user_purchase_policy: None,
             team_client,
             workspace_client,
-        }
+            active_team_uid,
+        };
+        me.sync_active_team_uid(ctx);
+        me
+    }
+
+    /// Refreshes the active-team header seam (see [`Self::active_team_uid`]) from the
+    /// focused window's current team assignment. Reuses [`Self::team_for_window`]: a
+    /// window with no assignment, or a stale assignment `reconcile_window_team_assignments`
+    /// hasn't (yet) corrected to a fallback team, resolves to no active team rather than
+    /// this method inventing its own fallback.
+    fn sync_active_team_uid(&self, ctx: &AppContext) {
+        let team_uid = ctx
+            .windows()
+            .state()
+            .active_window
+            .and_then(|window_id| self.team_for_window(window_id))
+            .map(|team| team.uid.to_string());
+        self.active_team_uid.set(team_uid);
+    }
+
+    /// Returns the current value of the active-team header seam. Test-only:
+    /// production code should never need to read this back, only
+    /// `BaseClient::graphql_request_options` does, via [`ActiveTeamUid::get`].
+    #[cfg(test)]
+    fn active_team_uid_for_test(&self) -> Option<String> {
+        self.active_team_uid.get()
     }
 
     pub fn upgrade_link(user_id: UserUid) -> String {
@@ -289,6 +333,7 @@ impl UserWorkspaces {
         self.window_team_uids.entry(window_id).or_insert(team_uid);
         if self.team_uid_for_window(window_id) != previous_team_uid {
             ctx.emit(UserWorkspacesEvent::WindowTeamChanged { window_id });
+            self.sync_active_team_uid(ctx);
         }
         ctx.notify();
     }
@@ -315,6 +360,7 @@ impl UserWorkspaces {
         if window_team_uid.is_none() {
             *window_team_uid = Some(team_uid);
             ctx.emit(UserWorkspacesEvent::WindowTeamChanged { window_id });
+            self.sync_active_team_uid(ctx);
             ctx.notify();
         }
     }
@@ -606,6 +652,7 @@ impl UserWorkspaces {
         let reassigned_windows = self.reconcile_window_team_assignments();
         self.notify_and_emit_teams_changed(ctx);
         Self::emit_window_team_changed(reassigned_windows, ctx);
+        self.sync_active_team_uid(ctx);
         if changed {
             ctx.emit(UserWorkspacesEvent::CurrentWorkspaceChanged);
         }
@@ -1039,6 +1086,7 @@ impl UserWorkspaces {
         let reassigned_windows = self.reconcile_window_team_assignments();
         self.notify_and_emit_teams_changed(ctx);
         Self::emit_window_team_changed(reassigned_windows, ctx);
+        self.sync_active_team_uid(ctx);
 
         if sunsetted_to_build_changed {
             ctx.emit(UserWorkspacesEvent::SunsettedToBuildDataUpdated);

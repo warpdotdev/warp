@@ -272,6 +272,34 @@ fn test_mismatched_state_with_different_user_uid_emits_invalid_state_parameter()
     });
 }
 
+/// `log_out` must clear the active-team header seam so a subsequent session
+/// (even before its own `UserWorkspaces` resync happens) never sends
+/// GraphQL v2 requests carrying the outgoing session's team UID.
+#[test]
+fn test_log_out_clears_active_team_uid() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        app.update(|ctx| {
+            warpui_extras::secure_storage::register_noop("warp_test", ctx);
+        });
+
+        let active_team_uid =
+            app.read(|ctx| ServerApiProvider::as_ref(ctx).active_team_uid_handle());
+        active_team_uid.set(Some("stale-team".to_string()));
+
+        AuthManager::handle(&app).update(&mut app, |auth_manager, ctx| {
+            auth_manager.log_out(ctx);
+        });
+
+        assert_eq!(
+            active_team_uid.get(),
+            None,
+            "log_out should clear the active-team header seam"
+        );
+    });
+}
+
 /// `log_out` must clear any pending CSRF state from an auth flow that was
 /// started but never completed, so the token cannot be replayed against the
 /// next session in the same process.

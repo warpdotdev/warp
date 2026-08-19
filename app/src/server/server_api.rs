@@ -1456,6 +1456,15 @@ impl ServerApiProvider {
         self.server_api.owned_http_client()
     }
 
+    /// Returns a handle to the active-team UID cell that GraphQL v2 requests
+    /// attach as the `X-Warp-Active-Team-UID` header. Whoever determines what
+    /// "active" means (currently, the focused window's team; see
+    /// [`crate::workspaces::user_workspaces::UserWorkspaces`]) should keep this
+    /// handle current via [`warp_server_client::base_client::ActiveTeamUid::set`].
+    pub fn active_team_uid_handle(&self) -> warp_server_client::base_client::ActiveTeamUid {
+        self.server_api.active_team_uid_handle()
+    }
+
     #[cfg_attr(target_family = "wasm", expect(dead_code))]
     pub fn get_harness_support_client(&self) -> Arc<dyn harness_support::HarnessSupportClient> {
         self.server_api.clone()

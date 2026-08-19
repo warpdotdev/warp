@@ -411,6 +411,17 @@ impl AuthManager {
                     llms,
                 } = user_output.into();
 
+                // A fresh login or account switch (not a token refresh of the same
+                // session) may follow a different identity than whatever session
+                // last set the active-team header. Clear it before any of the
+                // GraphQL work below starts (team/cloud-object polling, AI usage
+                // refresh, etc.), so this session's first requests never carry
+                // over a previous account's team; `UserWorkspaces` repopulates it
+                // once fresh workspace and window state arrive.
+                if !from_refresh {
+                    self.server_api.active_team_uid_handle().set(None);
+                }
+
                 self.complete_authentication(user.clone(), credentials, ctx);
 
                 self.set_needs_reauth(false, ctx);
@@ -637,6 +648,12 @@ impl AuthManager {
     /// it doesn't shut down any other user-dependent parts of the app.
     /// TODO(jeff): Can we move those pieces in here?
     pub(super) fn log_out(&mut self, ctx: &mut ModelContext<Self>) {
+        // Clear the active-team header seam before credentials are torn down, so no
+        // outbound GraphQL request beyond this point can still carry the outgoing
+        // session's team. `UserWorkspaces` repopulates it once the next session's
+        // workspace and window state arrive.
+        self.server_api.active_team_uid_handle().set(None);
+
         // Clear any dangling CSRF token from an auth flow that was started but never
         // completed before this logout, so it can't be replayed against the next session
         // in the same process.

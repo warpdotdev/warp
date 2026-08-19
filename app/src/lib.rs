@@ -1725,6 +1725,7 @@ pub(crate) fn initialize_app(
             server_api_provider.as_ref(ctx).get_workspace_client(),
             cached_workspaces,
             current_workspace_uid,
+            server_api_provider.as_ref(ctx).active_team_uid_handle(),
             ctx,
         )
     });

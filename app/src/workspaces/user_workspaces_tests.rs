@@ -42,6 +42,7 @@ use warp_graphql::workspace::{
     WriteToPtyAutonomyValue as GqlWriteToPtyAutonomyValue,
     WriteToPtySettingInfo as GqlWriteToPtySettingInfo,
 };
+use warpui::windowing::WindowManager;
 use warpui::{AddSingletonModel, App, WindowId};
 use warpui_extras::user_preferences;
 
@@ -1061,6 +1062,161 @@ fn test_window_team_assignment_reconciles_when_current_workspace_changes() {
             assert_eq!(
                 UserWorkspaces::as_ref(ctx).team_uid_for_window(window_id),
                 Some(second_team.uid)
+            );
+        });
+    })
+}
+
+/// The active-team header seam must track the *focused* window's team, and
+/// only the focused window's: assigning a team to an unfocused window must
+/// not change it.
+#[test]
+fn test_active_team_uid_follows_focused_window_team_assignment() {
+    let first_team = team_for_test();
+    let mut second_team = team_for_test();
+    second_team.uid = 456.into();
+    let mut workspace = workspace_for_test(&first_team);
+    workspace.teams.push(second_team.clone());
+
+    App::test((), |mut app| async move {
+        initialize_window_team_test_app(&mut app, vec![workspace]);
+
+        let focused_window_id = WindowId::new();
+        let unfocused_window_id = WindowId::new();
+
+        // No window is focused yet, so there is no active team.
+        app.read(|ctx| {
+            assert_eq!(UserWorkspaces::as_ref(ctx).active_team_uid_for_test(), None);
+        });
+
+        WindowManager::handle(&app).update(&mut app, |windowing_state, _| {
+            windowing_state.overwrite_for_test(windowing_state.stage(), Some(focused_window_id));
+        });
+
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.set_team_for_window(focused_window_id, second_team.uid, ctx);
+            user_workspaces.set_team_for_window(unfocused_window_id, first_team.uid, ctx);
+        });
+
+        app.read(|ctx| {
+            assert_eq!(
+                UserWorkspaces::as_ref(ctx).active_team_uid_for_test(),
+                Some(second_team.uid.to_string()),
+                "the active team must follow the focused window's assignment only"
+            );
+        });
+
+        // Moving focus to the other window must resync to its team. In
+        // production this happens automatically via the `WindowManager`
+        // subscription in `UserWorkspaces::new` (not exercised by the mock
+        // constructor used here); drive the same `sync_active_team_uid` call
+        // through a mutation that's guaranteed to fire it.
+        WindowManager::handle(&app).update(&mut app, |windowing_state, _| {
+            windowing_state.overwrite_for_test(windowing_state.stage(), Some(unfocused_window_id));
+        });
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.register_window(WindowId::new(), Some(first_team.uid), ctx);
+        });
+        app.read(|ctx| {
+            assert_eq!(
+                UserWorkspaces::as_ref(ctx).active_team_uid_for_test(),
+                Some(first_team.uid.to_string())
+            );
+        });
+    })
+}
+
+/// A never-registered focused window, or one whose assigned team was never
+/// part of the current workspace, must resolve to no active team rather than
+/// falling back to some other team -- this is the load-bearing safety
+/// property that keeps the header a strict no-op rather than a source of
+/// misattributed (and potentially unauthorized) requests. Note that this is
+/// distinct from `reconcile_window_team_assignments` (exercised by
+/// `test_active_team_uid_resyncs_after_workspace_reconciliation` below),
+/// which proactively reassigns a stale window to a fallback team; this test
+/// only covers assignments reconciliation hasn't (yet) touched.
+#[test]
+fn test_active_team_uid_omits_unmapped_and_never_valid_focused_window() {
+    let team = team_for_test();
+    let workspace = workspace_for_test(&team);
+
+    App::test((), |mut app| async move {
+        initialize_window_team_test_app(&mut app, vec![workspace]);
+
+        let unmapped_window_id = WindowId::new();
+        let never_valid_window_id = WindowId::new();
+        let departed_team_uid = 456.into();
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.register_window(never_valid_window_id, Some(departed_team_uid), ctx);
+        });
+
+        // Focus the never-registered window and drive a resync via an
+        // unrelated, guaranteed-changing mutation.
+        WindowManager::handle(&app).update(&mut app, |windowing_state, _| {
+            windowing_state.overwrite_for_test(windowing_state.stage(), Some(unmapped_window_id));
+        });
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.register_window(WindowId::new(), Some(team.uid), ctx);
+        });
+        app.read(|ctx| {
+            assert_eq!(
+                UserWorkspaces::as_ref(ctx).active_team_uid_for_test(),
+                None,
+                "an unmapped focused window must have no active team"
+            );
+        });
+
+        // Focus the window whose assigned team was never part of the
+        // workspace, and resync again.
+        WindowManager::handle(&app).update(&mut app, |windowing_state, _| {
+            windowing_state
+                .overwrite_for_test(windowing_state.stage(), Some(never_valid_window_id));
+        });
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.register_window(WindowId::new(), Some(team.uid), ctx);
+        });
+        app.read(|ctx| {
+            assert_eq!(
+                UserWorkspaces::as_ref(ctx).active_team_uid_for_test(),
+                None,
+                "a focused window whose assigned team isn't part of the current workspace must \
+                 omit the header, not fall back"
+            );
+        });
+    })
+}
+
+/// Switching the current workspace reconciles window-team assignments
+/// (`reconcile_window_team_assignments`) before the resync runs, so the
+/// active team must reflect the *reconciled* team for the focused window --
+/// mirroring `test_window_team_assignment_reconciles_when_current_workspace_changes`.
+#[test]
+fn test_active_team_uid_resyncs_after_workspace_reconciliation() {
+    let first_team = team_for_test();
+    let first_workspace = workspace_for_test(&first_team);
+    let mut second_team = team_for_test();
+    second_team.uid = 456.into();
+    let mut second_workspace = workspace_for_test(&second_team);
+    second_workspace.uid = "workspace_uid987654321".to_string().into();
+    let second_workspace_uid = second_workspace.uid;
+
+    App::test((), |mut app| async move {
+        initialize_window_team_test_app(&mut app, vec![first_workspace, second_workspace]);
+
+        let window_id = WindowId::new();
+        WindowManager::handle(&app).update(&mut app, |windowing_state, _| {
+            windowing_state.overwrite_for_test(windowing_state.stage(), Some(window_id));
+        });
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.register_window(window_id, None, ctx);
+            user_workspaces.set_current_workspace_uid(second_workspace_uid, ctx);
+        });
+
+        app.read(|ctx| {
+            assert_eq!(
+                UserWorkspaces::as_ref(ctx).active_team_uid_for_test(),
+                Some(second_team.uid.to_string()),
+                "switching the current workspace must resync the focused window's reconciled team"
             );
         });
     })
