@@ -22,38 +22,86 @@ const DIVIDER: &str = "|";
 const DIVIDER_PADDING_LEFT: u16 = 1;
 const DIVIDER_PADDING_RIGHT: u16 = 2;
 const ELLIPSIS: &str = "...";
+/// Gap between breadcrumb tabs and between the last breadcrumb and the main tab.
+const BREADCRUMB_GAP_COLUMNS: u16 = 1;
 
 /// Stable tab data rendered by [`TuiTabBarView`].
 #[derive(Clone, PartialEq)]
 pub struct TuiTab {
     pub key: String,
     pub label: String,
-    leading: Option<TuiTabLeading>,
+    leading: Option<TuiTabAdornment>,
+    trailing: Option<TuiTabAdornment>,
+    /// Per-tab label cap that overrides the config-wide
+    /// `maximum_label_columns` when present.
+    max_label_columns: Option<u16>,
+    /// Whether the tab can be selected. A non-selectable tab still renders
+    /// (e.g. a sessionless drill-down anchor framing its level) but is
+    /// skipped by keyboard navigation and ignores clicks.
+    selectable: bool,
 }
 
-/// Styled text rendered before a tab label.
+/// Styled text rendered before or after a tab label.
 #[derive(Clone, PartialEq)]
-struct TuiTabLeading {
+struct TuiTabAdornment {
     text: String,
     style: TuiStyle,
 }
 
 impl TuiTab {
-    /// Creates a tab with stable identity and no leading text.
+    /// Creates a tab with stable identity and no adornments.
     pub fn new(key: impl Into<String>, label: impl Into<String>) -> Self {
         Self {
             key: key.into(),
             label: label.into(),
             leading: None,
+            trailing: None,
+            max_label_columns: None,
+            selectable: true,
         }
+    }
+
+    /// Marks whether the tab can be selected via navigation or clicks.
+    pub fn with_selectable(mut self, selectable: bool) -> Self {
+        self.selectable = selectable;
+        self
     }
 
     /// Adds styled text rendered immediately before the tab label.
     pub fn with_leading_text(mut self, text: impl Into<String>, style: TuiStyle) -> Self {
-        self.leading = Some(TuiTabLeading {
+        self.leading = Some(TuiTabAdornment {
             text: text.into(),
             style,
         });
+        self
+    }
+
+    /// Adds styled text rendered immediately after the tab label (e.g. a
+    /// subtree rollup badge). The trailing text shares the tab's click target.
+    pub fn with_trailing_text(mut self, text: impl Into<String>, style: TuiStyle) -> Self {
+        self.trailing = Some(TuiTabAdornment {
+            text: text.into(),
+            style,
+        });
+        self
+    }
+
+    /// Caps this tab's label independently of the config-wide maximum.
+    pub fn with_max_label_columns(mut self, columns: u16) -> Self {
+        self.max_label_columns = Some(columns);
+        self
+    }
+
+    /// Replaces the label, e.g. when a narrow variant collapses a tab to its
+    /// leading adornment alone.
+    pub fn with_label(mut self, label: impl Into<String>) -> Self {
+        self.label = label.into();
+        self
+    }
+
+    /// Drops the trailing adornment.
+    pub fn without_trailing(mut self) -> Self {
+        self.trailing = None;
         self
     }
 }
@@ -73,6 +121,9 @@ pub struct TuiTabBarStyles {
 #[derive(Clone, PartialEq)]
 pub struct TuiTabBarConfig {
     pub leading: Option<String>,
+    /// Selectable ancestor chips rendered between the leading text and the
+    /// main tab. Part of the fixed (non-paginating) prefix.
+    pub breadcrumb_tabs: Vec<TuiTab>,
     pub main_tab: Option<TuiTab>,
     pub tabs: Vec<TuiTab>,
     pub selected_key: Option<String>,
@@ -83,6 +134,19 @@ pub struct TuiTabBarConfig {
     pub tab_padding_columns: u16,
     pub secondary_gap_columns: u16,
     pub styles: TuiTabBarStyles,
+    /// Width-bounded presentation variants applied below their exclusive
+    /// width bounds, narrowest bound winning. Each variant must contain the
+    /// same tab keys as the base config; a variant's own `narrow_variants`
+    /// are ignored.
+    pub narrow_variants: Vec<TuiTabBarNarrowVariant>,
+}
+
+/// One width-bounded presentation alternative for a [`TuiTabBarConfig`].
+#[derive(Clone, PartialEq)]
+pub struct TuiTabBarNarrowVariant {
+    /// The variant applies when the available width is strictly below this.
+    pub max_width_exclusive: u16,
+    pub config: TuiTabBarConfig,
 }
 
 impl TuiTabBarConfig {
@@ -90,6 +154,7 @@ impl TuiTabBarConfig {
     pub fn new(tabs: Vec<TuiTab>) -> Self {
         Self {
             leading: None,
+            breadcrumb_tabs: Vec::new(),
             main_tab: None,
             tabs,
             selected_key: None,
@@ -100,7 +165,16 @@ impl TuiTabBarConfig {
             tab_padding_columns: 1,
             secondary_gap_columns: 1,
             styles: TuiTabBarStyles::default(),
+            narrow_variants: Vec::new(),
         }
+    }
+
+    /// All rendered tabs in row order: breadcrumbs, main tab, then secondary.
+    fn row_tabs(&self) -> impl Iterator<Item = &TuiTab> {
+        self.breadcrumb_tabs
+            .iter()
+            .chain(self.main_tab.iter())
+            .chain(self.tabs.iter())
     }
 }
 
@@ -119,13 +193,11 @@ impl<K> Default for TuiTabBarPagingState<K> {
 
 impl<K> TuiTabBarPagingState<K> {
     /// Preserves the page beginning at `anchor` instead of revealing selection.
+    ///
+    /// Automatic reveal resumes when the owner drops the level's paging state
+    /// entirely (see `TuiOrchestrationModel::focus_conversation_session`).
     pub(crate) fn set_explicit_anchor(&mut self, anchor: K) {
         self.explicit_anchor = Some(anchor);
-    }
-
-    /// Resumes automatic selected-tab reveal.
-    pub(crate) fn clear_explicit_anchor(&mut self) {
-        self.explicit_anchor = None;
     }
 }
 
@@ -280,24 +352,27 @@ impl TuiTabBarView {
         self.config.main_tab.is_some() || !self.config.tabs.is_empty()
     }
 
-    /// Resolves the adjacent tab in semantic order, wrapping at either end.
+    /// Resolves the adjacent tab in rendered row order — breadcrumbs, main
+    /// tab, then the secondary tabs — wrapping at either end and skipping
+    /// non-selectable tabs so navigation can never dead-end on them.
     pub fn navigation_target(&self, direction: TuiTabBarNavigationDirection) -> Option<String> {
-        let order = self
-            .config
-            .main_tab
-            .iter()
-            .chain(self.config.tabs.iter())
-            .map(|tab| &tab.key)
-            .collect::<Vec<_>>();
+        let order = self.config.row_tabs().collect::<Vec<_>>();
         let selected = self.config.selected_key.as_ref()?;
-        let selected_index = order.iter().position(|key| *key == selected)?;
-        let target_index = match direction {
-            TuiTabBarNavigationDirection::Previous => {
-                selected_index.checked_sub(1).unwrap_or(order.len() - 1)
+        let selected_index = order.iter().position(|tab| &tab.key == selected)?;
+        let mut target_index = selected_index;
+        for _ in 0..order.len() {
+            target_index = match direction {
+                TuiTabBarNavigationDirection::Previous => {
+                    target_index.checked_sub(1).unwrap_or(order.len() - 1)
+                }
+                TuiTabBarNavigationDirection::Next => (target_index + 1) % order.len(),
+            };
+            let target = order[target_index];
+            if target.selectable {
+                return Some(target.key.clone());
             }
-            TuiTabBarNavigationDirection::Next => (selected_index + 1) % order.len(),
-        };
-        order.get(target_index).map(|key| (*key).clone())
+        }
+        None
     }
 
     /// Returns the stable key at one edge of the secondary-tab collection.
@@ -309,31 +384,49 @@ impl TuiTabBarView {
         .map(|tab| tab.key.clone())
     }
 
-    /// Returns the configured main-tab's stable key, if any.
+    /// Returns the currently selected tab's stable key, if any.
+    pub(crate) fn selected_key(&self) -> Option<&str> {
+        self.config.selected_key.as_deref()
+    }
+
+    /// Returns the stable key of the orchestration tree root: the first
+    /// breadcrumb while the bar is drilled below the root, otherwise the
+    /// main tab.
     ///
     /// Callers (e.g. the terminal-session Escape binding) use this to return
-    /// focus to the root/main agent without duplicating tab-bar configuration.
-    pub(crate) fn main_tab_key(&self) -> Option<String> {
-        self.config.main_tab.as_ref().map(|tab| tab.key.clone())
+    /// focus to the root agent without duplicating tab-bar configuration.
+    pub(crate) fn tree_root_key(&self) -> Option<String> {
+        self.config
+            .breadcrumb_tabs
+            .first()
+            .or(self.config.main_tab.as_ref())
+            .map(|tab| tab.key.clone())
     }
 }
 
-/// Validates tab identities and label widths, returning the live key set.
+/// Validates tab identities and label widths across the base configuration
+/// and every narrow variant, returning the union of live keys.
 fn validated_live_keys(config: &TuiTabBarConfig) -> Result<HashSet<String>, TuiTabBarConfigError> {
     let mut live_keys = HashSet::new();
-    for tab in config.main_tab.iter().chain(config.tabs.iter()) {
-        if !live_keys.insert(tab.key.clone()) {
-            return Err(TuiTabBarConfigError::DuplicateKey(tab.key.clone()));
+    for config in
+        std::iter::once(config).chain(config.narrow_variants.iter().map(|variant| &variant.config))
+    {
+        let mut config_keys = HashSet::new();
+        for tab in config.row_tabs() {
+            if !config_keys.insert(tab.key.clone()) {
+                return Err(TuiTabBarConfigError::DuplicateKey(tab.key.clone()));
+            }
+            let required = minimum_visible_label_width(tab);
+            let configured = configured_label_width(tab, config);
+            if configured < required {
+                return Err(TuiTabBarConfigError::LabelWidthTooSmall {
+                    key: tab.key.clone(),
+                    configured,
+                    required,
+                });
+            }
         }
-        let required = minimum_visible_label_width(tab);
-        let configured = configured_label_width(tab, config);
-        if configured < required {
-            return Err(TuiTabBarConfigError::LabelWidthTooSmall {
-                key: tab.key.clone(),
-                configured,
-                required,
-            });
-        }
+        live_keys.extend(config_keys);
     }
     Ok(live_keys)
 }
@@ -372,29 +465,67 @@ impl TypedActionView for TuiTabBarView {
     }
 }
 
-/// Builds precomposed page alternatives and selects between them during layout.
+/// Builds precomposed page alternatives — across every narrow variant's
+/// width segment and the base configuration — and selects between them
+/// during layout.
 fn render_tab_bar(
     config: &TuiTabBarConfig,
     mouse_states: &HashMap<String, MouseStateHandle>,
     previous_overflow_mouse_state: &MouseStateHandle,
     next_overflow_mouse_state: &MouseStateHandle,
 ) -> Box<dyn TuiElement> {
-    let (default_page, transitions) = page_variant_transitions(config);
-    let conditional_children = transitions
-        .into_iter()
-        .map(|(width, page)| {
-            (
+    let mut variants = config.narrow_variants.iter().collect::<Vec<_>>();
+    variants.sort_by_key(|variant| variant.max_width_exclusive);
+
+    let mut conditional_children = Vec::new();
+    let mut segment_start = 0u16;
+    for variant in variants {
+        if variant.max_width_exclusive <= segment_start {
+            continue;
+        }
+        let (transitions, final_page) = page_transitions_in_range(
+            &variant.config,
+            segment_start,
+            Some(variant.max_width_exclusive),
+        );
+        for (width, page) in transitions {
+            conditional_children.push((
                 TuiSizeConstraintCondition::WidthLessThan(width),
                 render_page(
-                    config,
+                    &variant.config,
                     page,
                     mouse_states,
                     previous_overflow_mouse_state,
                     next_overflow_mouse_state,
                 ),
-            )
-        })
-        .collect::<Vec<_>>();
+            ));
+        }
+        conditional_children.push((
+            TuiSizeConstraintCondition::WidthLessThan(variant.max_width_exclusive),
+            render_page(
+                &variant.config,
+                final_page,
+                mouse_states,
+                previous_overflow_mouse_state,
+                next_overflow_mouse_state,
+            ),
+        ));
+        segment_start = variant.max_width_exclusive;
+    }
+
+    let (transitions, default_page) = page_transitions_in_range(config, segment_start, None);
+    for (width, page) in transitions {
+        conditional_children.push((
+            TuiSizeConstraintCondition::WidthLessThan(width),
+            render_page(
+                config,
+                page,
+                mouse_states,
+                previous_overflow_mouse_state,
+                next_overflow_mouse_state,
+            ),
+        ));
+    }
     TuiSizeConstraintSwitch::new(
         render_page(
             config,
@@ -432,9 +563,16 @@ fn render_page(
         );
     }
 
-    if let Some(main_tab) = &config.main_tab {
-        row.add_child(render_tab(config, main_tab, false, mouse_states));
-        if !config.tabs.is_empty() {
+    if !config.breadcrumb_tabs.is_empty() || config.main_tab.is_some() {
+        let mut prefix = TuiFlex::row().with_spacing(BREADCRUMB_GAP_COLUMNS);
+        for breadcrumb in &config.breadcrumb_tabs {
+            prefix.add_child(render_tab(config, breadcrumb, false, mouse_states));
+        }
+        if let Some(main_tab) = &config.main_tab {
+            prefix.add_child(render_tab(config, main_tab, false, mouse_states));
+        }
+        row.add_child(prefix.finish());
+        if config.main_tab.is_some() && !config.tabs.is_empty() {
             row.add_child(render_divider(config.styles.chrome));
         }
     }
@@ -510,7 +648,7 @@ fn render_tab(
         tab_style
     };
 
-    let content_count = usize::from(tab.leading.is_some()) + usize::from(!tab.label.is_empty());
+    let content_count = tab_content_count(tab);
     let mut content = TuiFlex::row().with_spacing(u16::from(content_count > 1));
     if let Some(leading) = &tab.leading {
         content.add_child(
@@ -521,18 +659,29 @@ fn render_tab(
         );
     }
 
-    let label = TuiConstrainedBox::new(
-        TuiText::new(tab.label.clone())
-            .with_style(label_style)
-            .truncate_with_ellipsis()
-            .finish(),
-    )
-    .with_max_cols(configured_label_width(tab, config))
-    .finish();
-    if flexible_label {
-        content = content.flex_child(label);
-    } else {
-        content.add_child(label);
+    if !tab.label.is_empty() {
+        let label = TuiConstrainedBox::new(
+            TuiText::new(tab.label.clone())
+                .with_style(label_style)
+                .truncate_with_ellipsis()
+                .finish(),
+        )
+        .with_max_cols(configured_label_width(tab, config))
+        .finish();
+        if flexible_label {
+            content = content.flex_child(label);
+        } else {
+            content.add_child(label);
+        }
+    }
+
+    if let Some(trailing) = &tab.trailing {
+        content.add_child(
+            TuiText::new(trailing.text.clone())
+                .with_style(trailing.style)
+                .truncate()
+                .finish(),
+        );
     }
 
     let mut container =
@@ -540,9 +689,13 @@ fn render_tab(
     if let Some(background) = tab_style.bg {
         container = container.with_background(background);
     }
-    let key = tab.key.clone();
 
-    TuiHoverable::new(state, container.finish())
+    let hoverable = TuiHoverable::new(state, container.finish());
+    if !tab.selectable {
+        return hoverable.finish();
+    }
+    let key = tab.key.clone();
+    hoverable
         .on_click(move |event_ctx, _| {
             event_ctx.dispatch_typed_action(TuiTabBarAction::SelectTab(key.clone()));
         })
@@ -645,30 +798,38 @@ fn page_variant_at_width(config: &TuiTabBarConfig, width: u16) -> PageVariant {
     page
 }
 
-/// Returns the widest page and each narrower width-specific alternative.
-fn page_variant_transitions(config: &TuiTabBarConfig) -> (PageVariant, Vec<(u16, PageVariant)>) {
+/// Returns the page transitions of `config` within a width interval:
+/// pairs of (exclusive upper width, page shown below it) plus the page shown
+/// from the last transition up to `upper_exclusive` (or unbounded when
+/// `None`). The interval starts at `lower_inclusive`.
+fn page_transitions_in_range(
+    config: &TuiTabBarConfig,
+    lower_inclusive: u16,
+    upper_exclusive: Option<u16>,
+) -> (Vec<(u16, PageVariant)>, PageVariant) {
     let mut boundaries = (0..config.tabs.len())
         .flat_map(|start| {
             (1..=config.tabs.len().saturating_sub(start))
                 .map(move |count| minimum_row_width(config, start, count))
         })
+        .filter(|boundary| {
+            *boundary > lower_inclusive && upper_exclusive.is_none_or(|upper| *boundary < upper)
+        })
         .collect::<Vec<_>>();
     boundaries.sort_unstable();
     boundaries.dedup();
 
-    let mut page = page_variant_at_width(config, 0);
+    let mut page = page_variant_at_width(config, lower_inclusive);
     let mut transitions = Vec::new();
     for boundary in boundaries {
         let next_page = page_variant_at_width(config, boundary);
         if next_page == page {
             continue;
         }
-        if boundary > 0 {
-            transitions.push((boundary, page));
-        }
+        transitions.push((boundary, page));
         page = next_page;
     }
-    (page, transitions)
+    (transitions, page)
 }
 
 /// Packs one page beginning at `start`, without resolving its previous page.
@@ -756,6 +917,11 @@ fn fixed_prefix_width(config: &TuiTabBarConfig) -> u16 {
         .as_deref()
         .map(text_width)
         .unwrap_or_default();
+    for breadcrumb in &config.breadcrumb_tabs {
+        width = width
+            .saturating_add(natural_tab_width(breadcrumb, config))
+            .saturating_add(BREADCRUMB_GAP_COLUMNS);
+    }
     if let Some(main_tab) = &config.main_tab {
         width = width.saturating_add(natural_tab_width(main_tab, config));
         if !config.tabs.is_empty() {
@@ -770,8 +936,8 @@ fn fixed_prefix_width(config: &TuiTabBarConfig) -> u16 {
 
 /// Maximum display-cell width assigned to a tab label.
 fn configured_label_width(tab: &TuiTab, config: &TuiTabBarConfig) -> u16 {
-    config
-        .maximum_label_columns
+    tab.max_label_columns
+        .or(config.maximum_label_columns)
         .unwrap_or_else(|| text_width(&tab.label))
         .min(text_width(&tab.label))
 }
@@ -807,17 +973,25 @@ fn minimum_visible_label_width(tab: &TuiTab) -> u16 {
     label_width.min(ellipsis_width.saturating_add(first_grapheme_width))
 }
 
-/// Counts non-label cells: horizontal padding, leading text, and its separator.
+/// Counts a tab's rendered content pieces: leading text, label, trailing text.
+fn tab_content_count(tab: &TuiTab) -> usize {
+    usize::from(tab.leading.is_some())
+        + usize::from(!tab.label.is_empty())
+        + usize::from(tab.trailing.is_some())
+}
+
+/// Counts non-label cells: horizontal padding, adornments, and separators.
 fn tab_fixed_columns(tab: &TuiTab, padding_columns: u16) -> u16 {
-    let leading_columns = tab
+    let adornment_columns = tab
         .leading
-        .as_ref()
-        .map(|leading| text_width(&leading.text))
-        .unwrap_or_default();
-    let content_count = usize::from(tab.leading.is_some()) + usize::from(!tab.label.is_empty());
+        .iter()
+        .chain(tab.trailing.iter())
+        .map(|adornment| text_width(&adornment.text))
+        .fold(0u16, u16::saturating_add);
+    let content_count = tab_content_count(tab);
     padding_columns
         .saturating_mul(2)
-        .saturating_add(leading_columns)
+        .saturating_add(adornment_columns)
         .saturating_add(u16::try_from(content_count.saturating_sub(1)).unwrap_or(u16::MAX))
 }
 

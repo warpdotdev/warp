@@ -378,7 +378,10 @@ fn repo_failure_continues_and_global_still_executes() {
                 let mut calls = destructive_calls.borrow_mut();
                 *calls += 1;
                 if *calls == 1 {
-                    futures::future::ready(Err(CacheSetupError::NonzeroExit { exit_code: Some(1) }))
+                    futures::future::ready(Err(CacheSetupError::NonzeroExit {
+                        exit_code: Some(1),
+                        stderr: "repository mount failed".to_owned(),
+                    }))
                 } else {
                     futures::future::ready(Ok(response(&["cargo"], &[], &[])))
                 }
@@ -588,27 +591,46 @@ fn scratch_directories_are_unique_0700_outside_repo_and_retained() {
     }
 }
 
-#[test]
-fn process_runner_classifies_spawn_nonzero_and_timeout() {
-    let missing = block_on(run_command_with_timeout(
-        Command::new_with_process_group("/definitely/missing/spacectl"),
-        Duration::from_millis(50),
-    ));
-    assert_eq!(missing, Err(CacheSetupError::SpawnFailed));
+/// A budget no spawn or immediate exit can plausibly exceed, used by the tests that classify a
+/// finished process. They assert on the classification, not on the clock, so the timeout must
+/// never be the thing that wins the race — process-spawn latency varies by orders of magnitude
+/// under load, and a tight budget made this suite flaky on Windows CI.
+const UNREACHABLE_TIMEOUT: Duration = Duration::from_secs(300);
 
+#[test]
+fn process_runner_classifies_spawn_failed() {
+    let result = block_on(run_command_with_timeout(
+        Command::new_with_process_group("/definitely/missing/spacectl"),
+        UNREACHABLE_TIMEOUT,
+    ));
+    assert_eq!(result, Err(CacheSetupError::SpawnFailed));
+}
+
+#[test]
+fn process_runner_classifies_nonzero_exit() {
     let mut nonzero = Command::new_with_process_group("sh");
-    nonzero.args(["-c", "exit 17"]);
+    nonzero.args(["-c", "printf 'mount failed' >&2; exit 17"]);
     assert_eq!(
-        block_on(run_command_with_timeout(nonzero, Duration::from_secs(1))),
+        block_on(run_command_with_timeout(nonzero, UNREACHABLE_TIMEOUT)),
         Err(CacheSetupError::NonzeroExit {
-            exit_code: Some(17)
+            exit_code: Some(17),
+            stderr: "mount failed".to_owned(),
         })
     );
+}
 
+#[test]
+fn process_runner_classifies_timeout() {
+    // This must stay a shell builtin loop rather than a shelled-out `sleep`: process-group kill
+    // is Unix-only (see the `TODO(roland)` in `Command::new_with_process_group`), so on Windows a
+    // subprocess spawned by `sh` could survive when only the immediate `sh` process is killed.
     let mut timeout = Command::new_with_process_group("sh");
-    timeout.args(["-c", "sleep 1"]);
+    timeout.args(["-c", "while :; do :; done"]);
     assert_eq!(
-        block_on(run_command_with_timeout(timeout, Duration::from_millis(10))),
+        block_on(run_command_with_timeout(
+            timeout,
+            Duration::from_millis(100)
+        )),
         Err(CacheSetupError::Timeout)
     );
 }
@@ -632,7 +654,13 @@ fn timeout_returns_bounded_when_descendant_keeps_stdout_open() {
 fn cache_setup_error_variants_have_expected_is_actionable_classification() {
     assert!(!CacheSetupError::RootCreationFailed.is_actionable());
     assert!(!CacheSetupError::SpawnFailed.is_actionable());
-    assert!(!CacheSetupError::NonzeroExit { exit_code: Some(1) }.is_actionable());
+    assert!(
+        !CacheSetupError::NonzeroExit {
+            exit_code: Some(1),
+            stderr: String::new(),
+        }
+        .is_actionable()
+    );
     assert!(!CacheSetupError::Timeout.is_actionable());
     assert!(CacheSetupError::JsonParseFailed.is_actionable());
     assert!(CacheSetupError::EnvExportFailed.is_actionable());
@@ -645,6 +673,7 @@ fn failure_categories_are_preserved() {
         CacheSetupError::SpawnFailed,
         CacheSetupError::NonzeroExit {
             exit_code: Some(17),
+            stderr: "mount failed".to_owned(),
         },
         CacheSetupError::Timeout,
     ] {

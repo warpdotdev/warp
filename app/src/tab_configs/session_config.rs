@@ -39,7 +39,7 @@ impl SessionType {
     pub(crate) fn icon(&self) -> Icon {
         match self {
             SessionType::Terminal => Icon::Terminal,
-            SessionType::Oz => Icon::Oz,
+            SessionType::Oz => Icon::Agent,
             SessionType::CliAgent(agent) => agent.icon().unwrap_or(Icon::Terminal),
         }
     }
@@ -48,7 +48,7 @@ impl SessionType {
     pub(crate) fn pill_label(&self) -> &'static str {
         match self {
             SessionType::Terminal => "Terminal",
-            SessionType::Oz => "Built in agent",
+            SessionType::Oz => "Warp Agent",
             SessionType::CliAgent(CLIAgent::Claude) => "Claude",
             SessionType::CliAgent(CLIAgent::Codex) => "Codex",
             SessionType::CliAgent(CLIAgent::Gemini) => "Gemini",

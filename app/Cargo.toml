@@ -467,7 +467,7 @@ embed-resource = "3.0"
 
 # Note that we support channel-specific enables for these features
 [features]
-tui = ["warpui_core/tui", "voice_input"]
+tui = ["warpui_core/tui"]
 ai_resume_button = []
 autoupdate = []
 figma_detection = []
@@ -509,8 +509,11 @@ crash_reporting = [
 creating_shared_sessions = []
 cross_repo_context = []
 codebase_index_persistence = ["full_source_code_embedding"]
+well_known_mcp_ids = []
+factory_mcp = []
 default = [
     "agent_mode",
+    "osc_hyperlinks",
     "viewing_shared_sessions",
     "render_continuous_block_selections_with_single_border",
     "shared_with_me",
@@ -579,7 +582,6 @@ default = [
     "mcp_oauth",
     "expand_edit_to_pane",
     "fallback_model_load_output_messaging",
-    "api_key_authentication",
     "api_key_management",
     "summarization_cancellation_confirmation",
     "ui_zoom",
@@ -601,6 +603,7 @@ default = [
     "mcp_grouped_server_context",
     "fork_from_command",
     "context_window_usage_v2",
+    "context_window_usage_breakdown",
     "ambient_agents_command_line",
     "ambient_agents_image_upload",
     "scheduled_ambient_agents",
@@ -638,6 +641,7 @@ default = [
     "oz_launch_modal",
     "open_warp_launch_modal",
     "orchestration_launch_modal",
+    "agent_cli_launch_modal",
     "new_tab_styling",
     "richtext_multiselect",
     "inline_profile_selector",
@@ -697,12 +701,16 @@ default = [
     "solo_user_byok",
     "custom_model_routers",
     "supergrok",
+    "gemini_enterprise",
     "billing_and_usage_page_v2",
     "remote_code_review",
     "git_operations_in_code_review",
     "terminal_lifecycle_recovery",
     "cloud_runners",
     "cloud_agent_runners",
+    "file_backed_execution_profiles",
+    "well_known_mcp_ids",
+    "factory_mcp",
 ]
 # Enable this feature to automatically perform heap profiling.  NOTE: This will
 # substantially slow down program execution.
@@ -942,7 +950,6 @@ code_review_save_changes = []
 remote_code_review = []
 file_tree = []
 code_launch_modal = []
-api_key_authentication = []
 api_key_management = []
 diff_set_as_context = []
 discard_per_file_and_all_changes = []
@@ -997,6 +1004,7 @@ oz_identity_federation = []
 oz_launch_modal = []
 open_warp_launch_modal = []
 orchestration_launch_modal = []
+agent_cli_launch_modal = []
 new_tab_styling = []
 file_based_mcp = []
 skill_arguments = []

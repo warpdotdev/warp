@@ -29,6 +29,7 @@ use crate::ai::agent_tips::AITipModel;
 use crate::ai::ambient_agents::github_auth_notifier::GitHubAuthNotifier;
 use crate::ai::blocklist::agent_view::orchestration_pill_bar_model::OrchestrationPillBarModel;
 use crate::ai::blocklist::{BlocklistAIHistoryModel, BlocklistAIPermissions};
+use crate::ai::cloud_environments::CloudEnvironmentCatalog;
 use crate::ai::document::ai_document_model::AIDocumentModel;
 use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
 use crate::ai::facts::manager::AIFactManager;
@@ -104,6 +105,7 @@ pub(crate) fn initialize_app(app: &mut App) {
     app.add_singleton_model(|_| SystemStats::new());
     app.add_singleton_model(SyncQueue::mock);
     app.add_singleton_model(CloudModel::mock);
+    app.add_singleton_model(CloudEnvironmentCatalog::new);
     app.add_singleton_model(UserWorkspaces::default_mock);
     app.add_singleton_model(|_ctx| UserProfiles::new(Vec::new()));
     app.add_singleton_model(TeamTesterStatus::mock);
@@ -237,6 +239,7 @@ pub(crate) fn initialize_app(app: &mut App) {
     app.add_singleton_model(|ctx| PersistedWorkspace::new(vec![], HashMap::new(), None, ctx));
     app.add_singleton_model(|_| ProjectContextModel::default());
     app.add_singleton_model(|_| PricingInfoModel::new());
+    app.add_singleton_model(crate::ai::pricing_promotion::PricingPromotionState::new);
     app.add_singleton_model(AIDocumentModel::new);
     app.add_singleton_model(|_| History::new(vec![]));
 
@@ -264,6 +267,59 @@ pub(crate) fn mock_workspace(app: &mut App) -> ViewHandle<Workspace> {
         )
     });
     workspace
+}
+
+#[test]
+fn test_open_new_window_for_team_reuses_existing_team_window() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let source_workspace = mock_workspace(&mut app);
+        let existing_team_workspace = mock_workspace(&mut app);
+        let existing_team_window_id =
+            existing_team_workspace.update(&mut app, |_, ctx| ctx.window_id());
+        let team_uid: ServerId = 123.into();
+        app.update(|ctx| {
+            UserWorkspaces::handle(ctx).update(ctx, |user_workspaces, ctx| {
+                user_workspaces.register_window(existing_team_window_id, Some(team_uid), ctx);
+            });
+        });
+        let initial_window_count = app.window_ids().len();
+
+        source_workspace.update(&mut app, |workspace, ctx| {
+            workspace.handle_action(&WorkspaceAction::OpenNewWindowForTeam { team_uid }, ctx);
+        });
+
+        assert_eq!(app.window_ids().len(), initial_window_count);
+    });
+}
+
+#[test]
+fn test_open_new_window_for_team_creates_window_when_team_has_none() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let source_workspace = mock_workspace(&mut app);
+        let team_uid: ServerId = 123.into();
+        let initial_window_count = app.window_ids().len();
+
+        source_workspace.update(&mut app, |workspace, ctx| {
+            workspace.handle_action(&WorkspaceAction::OpenNewWindowForTeam { team_uid }, ctx);
+        });
+
+        assert_eq!(app.window_ids().len(), initial_window_count + 1);
+        app.read(|ctx| {
+            assert_eq!(
+                ctx.window_ids()
+                    .filter(|window_id| {
+                        UserWorkspaces::as_ref(ctx).team_uid_for_window(*window_id)
+                            == Some(team_uid)
+                    })
+                    .count(),
+                1
+            );
+        });
+    });
 }
 
 fn restored_workspace(
@@ -295,6 +351,7 @@ fn transferred_tab_workspace(
             global_resource_handles,
             None,
             NewWorkspaceSource::TransferredTab {
+                source_window_id: ctx.window_id(),
                 tab_color: None,
                 custom_title: None,
                 left_panel_open: false,
@@ -955,6 +1012,107 @@ fn test_open_file_notebook_focuses_existing_markdown_pane() {
     });
 }
 
+/// Regression test for the agent file-range preview's "Open file" button: the
+/// handler used to zero out `range_start`, so consumers that read the jump
+/// target off the `CodeSource` opened the file at the top.
+#[cfg(feature = "local_fs")]
+#[test]
+fn test_open_file_with_target_event_preserves_requested_line() {
+    use crate::code::editor_management::CodeManager;
+    use crate::code::global_buffer_model::GlobalBufferModel;
+    use crate::terminal::local_shell::LocalShellState;
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        app.add_singleton_model(|_| CodeManager::default());
+        app.add_singleton_model(|_| LocalShellState::NotLoaded);
+        app.add_singleton_model(GlobalBufferModel::new);
+        let workspace = mock_workspace(&mut app);
+        let temp_dir = TempDir::new().expect("failed to create temp dir");
+        let code_path = temp_dir.path().join("main.rs");
+        let contents: String = (1..=80).map(|line| format!("// line {line}\n")).collect();
+        std::fs::write(&code_path, contents).expect("failed to write code file");
+
+        let range_start = LineAndColumnArg {
+            line_num: 42,
+            column_num: None,
+        };
+
+        workspace.update(&mut app, |workspace, ctx| {
+            let pane_group = workspace.active_tab_pane_group().clone();
+            workspace.handle_file_tree_event(
+                pane_group,
+                &crate::pane_group::Event::OpenFileWithTarget {
+                    path: code_path.clone(),
+                    target: FileTarget::CodeEditor(EditorLayout::SplitPane),
+                    line_col: Some(range_start),
+                },
+                ctx,
+            );
+        });
+
+        workspace.read(&app, |workspace, ctx| {
+            let pane_group = workspace.active_tab_pane_group().as_ref(ctx);
+            let code_panes = pane_group.code_panes(ctx).collect_vec();
+            assert_eq!(code_panes.len(), 1);
+            assert_eq!(
+                *code_panes[0].1.as_ref(ctx).source(),
+                CodeSource::Link {
+                    path: code_path.clone(),
+                    range_start: Some(range_start),
+                    range_end: None,
+                }
+            );
+        });
+    });
+}
+
+/// Regression test for the raw-code toggle: the notebook-viewer target used to
+/// drop the `CodeSource` outright, so the raw view always started at line 1.
+#[cfg(feature = "local_fs")]
+#[test]
+fn test_open_markdown_viewer_target_preserves_requested_line() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let workspace = mock_workspace(&mut app);
+        let temp_dir = TempDir::new().expect("failed to create temp dir");
+        let markdown_path = temp_dir.path().join("README.md");
+        std::fs::write(&markdown_path, "# Test\n").expect("failed to write markdown file");
+
+        let range_start = LineAndColumnArg {
+            line_num: 12,
+            column_num: None,
+        };
+
+        workspace.update(&mut app, |workspace, ctx| {
+            let pane_group = workspace.active_tab_pane_group().clone();
+            workspace.handle_file_tree_event(
+                pane_group,
+                &crate::pane_group::Event::OpenFileWithTarget {
+                    path: markdown_path.clone(),
+                    target: FileTarget::MarkdownViewer(EditorLayout::SplitPane),
+                    line_col: Some(range_start),
+                },
+                ctx,
+            );
+        });
+
+        workspace.read(&app, |workspace, ctx| {
+            let pane_group = workspace.active_tab_pane_group().as_ref(ctx);
+            let markdown_panes = pane_group.file_notebook_panes(ctx).collect_vec();
+            assert_eq!(markdown_panes.len(), 1);
+            assert_eq!(
+                markdown_panes[0].1.as_ref(ctx).code_source(),
+                Some(&CodeSource::Link {
+                    path: markdown_path.clone(),
+                    range_start: Some(range_start),
+                    range_end: None,
+                })
+            );
+        });
+    });
+}
+
 #[cfg(feature = "local_fs")]
 #[test]
 fn test_worktree_sidecar_search_editor_enter_executes_selection() {
@@ -1482,6 +1640,181 @@ fn test_set_active_tab_color() {
             assert_eq!(
                 workspace.tabs[active].selected_color,
                 SelectedTabColor::Unset,
+            );
+        });
+    });
+}
+
+#[test]
+fn test_cycle_active_tab_color_uses_resolved_color_and_only_mutates_the_active_tab() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let workspace = mock_workspace(&mut app);
+
+        workspace.update(&mut app, |workspace, ctx| {
+            workspace.add_terminal_tab(false, ctx);
+            let active = workspace.active_tab_index;
+            let inactive = 0;
+            workspace.tabs[inactive].selected_color =
+                SelectedTabColor::Color(AnsiColorIdentifier::Magenta);
+            workspace.tabs[inactive].in_multi_selection = true;
+            workspace.tabs[active].in_multi_selection = true;
+
+            workspace.handle_action(&WorkspaceAction::CycleActiveTabColor, ctx);
+            assert_eq!(
+                workspace.tabs[active].selected_color,
+                SelectedTabColor::Color(AnsiColorIdentifier::Red),
+                "an uncolored active tab should start at red"
+            );
+            workspace.handle_action(&WorkspaceAction::CycleActiveTabColor, ctx);
+            assert_eq!(
+                workspace.tabs[active].selected_color,
+                SelectedTabColor::Color(AnsiColorIdentifier::Green),
+                "red should advance to green"
+            );
+            workspace.handle_action(&WorkspaceAction::CycleActiveTabColor, ctx);
+            assert_eq!(
+                workspace.tabs[active].selected_color,
+                SelectedTabColor::Color(AnsiColorIdentifier::Yellow),
+                "green should advance to yellow"
+            );
+            workspace.handle_action(&WorkspaceAction::CycleActiveTabColor, ctx);
+            assert_eq!(
+                workspace.tabs[active].selected_color,
+                SelectedTabColor::Color(AnsiColorIdentifier::Blue),
+                "yellow should advance to blue"
+            );
+            workspace.handle_action(&WorkspaceAction::CycleActiveTabColor, ctx);
+            assert_eq!(
+                workspace.tabs[active].selected_color,
+                SelectedTabColor::Color(AnsiColorIdentifier::Magenta),
+                "blue should advance to magenta"
+            );
+            workspace.tabs[active].default_directory_color = Some(AnsiColorIdentifier::Yellow);
+            workspace.handle_action(&WorkspaceAction::CycleActiveTabColor, ctx);
+            assert_eq!(
+                workspace.tabs[active].selected_color,
+                SelectedTabColor::Color(AnsiColorIdentifier::Cyan),
+                "magenta should advance to cyan"
+            );
+            workspace.handle_action(&WorkspaceAction::CycleActiveTabColor, ctx);
+            assert_eq!(
+                workspace.tabs[active].selected_color,
+                SelectedTabColor::Cleared,
+                "cyan should advance to an explicit clear"
+            );
+            assert_eq!(
+                workspace.tabs[active].color(),
+                None,
+                "an explicit clear should suppress the directory-derived color"
+            );
+            workspace.handle_action(&WorkspaceAction::CycleActiveTabColor, ctx);
+            assert_eq!(
+                workspace.tabs[active].selected_color,
+                SelectedTabColor::Color(AnsiColorIdentifier::Red),
+                "the invocation after an explicit clear should restart at red"
+            );
+
+            assert_eq!(
+                workspace.tabs[inactive].selected_color,
+                SelectedTabColor::Color(AnsiColorIdentifier::Magenta),
+                "the inactive tab should not change"
+            );
+            assert!(workspace.tabs[inactive].in_multi_selection);
+            assert!(workspace.tabs[active].in_multi_selection);
+
+            workspace.tabs[active].selected_color = SelectedTabColor::Unset;
+            workspace.handle_action(&WorkspaceAction::CycleActiveTabColor, ctx);
+            assert_eq!(
+                workspace.tabs[active].selected_color,
+                SelectedTabColor::Color(AnsiColorIdentifier::Blue),
+                "a directory-derived yellow should advance to blue"
+            );
+
+            workspace.active_tab_index = workspace.tabs.len();
+            let active_selection = workspace.tabs[active].selected_color;
+            let inactive_selection = workspace.tabs[inactive].selected_color;
+            workspace.handle_action(&WorkspaceAction::CycleActiveTabColor, ctx);
+            workspace.active_tab_index = active;
+            assert_eq!(workspace.tabs[active].selected_color, active_selection);
+            assert_eq!(workspace.tabs[inactive].selected_color, inactive_selection);
+        });
+    });
+}
+
+#[test]
+fn test_cycle_active_tab_color_mutates_group_color_without_member_overrides() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let workspace = mock_workspace(&mut app);
+
+        workspace.update(&mut app, |workspace, ctx| {
+            workspace.add_terminal_tab(false, ctx);
+            workspace.add_terminal_tab(false, ctx);
+            let active = workspace.active_tab_index;
+            let grouped_sibling = active - 1;
+            let unrelated = 0;
+
+            let mut group = TabGroup::new();
+            let group_id = group.id;
+            group.color = SelectedTabColor::Color(AnsiColorIdentifier::Yellow);
+            workspace.tab_groups.insert(group_id, group);
+            let mut unrelated_group = TabGroup::new();
+            let unrelated_group_id = unrelated_group.id;
+            unrelated_group.color = SelectedTabColor::Color(AnsiColorIdentifier::Magenta);
+            workspace
+                .tab_groups
+                .insert(unrelated_group_id, unrelated_group);
+            workspace.tabs[active].group_id = Some(group_id);
+            workspace.tabs[grouped_sibling].group_id = Some(group_id);
+            workspace.tabs[active].selected_color =
+                SelectedTabColor::Color(AnsiColorIdentifier::Magenta);
+            workspace.tabs[grouped_sibling].selected_color =
+                SelectedTabColor::Color(AnsiColorIdentifier::Green);
+            workspace.tabs[unrelated].selected_color =
+                SelectedTabColor::Color(AnsiColorIdentifier::Red);
+            workspace.tabs[active].in_multi_selection = true;
+            workspace.tabs[unrelated].in_multi_selection = true;
+
+            workspace.handle_action(&WorkspaceAction::CycleActiveTabColor, ctx);
+
+            assert_eq!(
+                workspace.tab_groups[&group_id].color,
+                SelectedTabColor::Color(AnsiColorIdentifier::Blue),
+                "the active tab's group should advance from yellow to blue"
+            );
+            assert_eq!(
+                workspace.tabs[active].selected_color,
+                SelectedTabColor::Color(AnsiColorIdentifier::Magenta),
+                "the active member override should remain unchanged"
+            );
+            assert_eq!(
+                workspace.tabs[grouped_sibling].selected_color,
+                SelectedTabColor::Color(AnsiColorIdentifier::Green),
+                "the sibling member override should remain unchanged"
+            );
+            assert_eq!(
+                workspace.tabs[unrelated].selected_color,
+                SelectedTabColor::Color(AnsiColorIdentifier::Red),
+                "an unrelated tab should remain unchanged"
+            );
+            assert_eq!(
+                workspace.tab_groups[&unrelated_group_id].color,
+                SelectedTabColor::Color(AnsiColorIdentifier::Magenta),
+                "an unrelated group should remain unchanged"
+            );
+            assert!(workspace.tabs[active].in_multi_selection);
+            assert!(workspace.tabs[unrelated].in_multi_selection);
+
+            workspace.tab_groups.get_mut(&group_id).unwrap().color =
+                SelectedTabColor::Color(AnsiColorIdentifier::Cyan);
+            workspace.handle_action(&WorkspaceAction::CycleActiveTabColor, ctx);
+            assert_eq!(
+                workspace.tab_groups[&group_id].color,
+                SelectedTabColor::Cleared,
+                "cyan should explicitly clear the group color"
             );
         });
     });

@@ -79,8 +79,8 @@ impl platform::Delegate for IntegrationTestDelegate {
         self.app_delegate.set_cursor_shape(cursor)
     }
 
-    fn open_url(&self, _: &str) {
-        // no-op
+    fn open_url(&self, _: &str) -> bool {
+        true
     }
 
     fn open_file_path(&self, _: &Path) {
@@ -217,8 +217,8 @@ impl platform::Delegate for AppDelegate {
     fn get_cursor_shape(&self) -> Cursor {
         unimplemented!("only implemented in tests")
     }
-    fn open_url(&self, url: &str) {
-        Window::open_url(url);
+    fn open_url(&self, url: &str) -> bool {
+        Window::open_url(url)
     }
 
     fn open_file_path(&self, path: &Path) {

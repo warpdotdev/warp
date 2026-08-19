@@ -82,9 +82,19 @@ impl<'a> RunBuilder<'a> {
             .char_index(glyph.start)
             .unwrap_or_else(|| self.str_index_map.num_chars());
 
+        // `glyph.x` / `glyph.y` are the pen position — where the glyph's cell starts after
+        // accumulating advances. The shaper's GPOS placement lives separately in
+        // `x_offset` / `y_offset`, expressed in em units, and must be folded in or every
+        // zero-advance combining mark lands at the pen instead of on its base. That is what
+        // made Thai stack wrong: in "พี่" both ◌ี and ◌้ came back at x = the base's advance
+        // and y = 0, i.e. side by side after the consonant rather than stacked above it.
+        // Sign convention and the font_size scaling follow `LayoutGlyph::physical` upstream.
+        let gpos_x_offset = glyph.font_size * glyph.x_offset;
+        let gpos_y_offset = glyph.font_size * glyph.y_offset;
+
         self.glyphs_in_current_run.push(Glyph {
             id: glyph.glyph_id as u32,
-            position_along_baseline: vec2f(glyph.x, glyph.y),
+            position_along_baseline: vec2f(glyph.x + gpos_x_offset, glyph.y - gpos_y_offset),
             index: glyph_char_index,
             width: glyph.w,
         });

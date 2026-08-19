@@ -87,10 +87,15 @@ runs:
           rust
           ${{ inputs.target_os == 'macos' && 'brew' || '' }}
 
+    # The script pins the binstall version, verifies the archive against an
+    # in-repo SHA-256, retries transient download failures, and skips the
+    # download entirely when the pinned version is already present (e.g.
+    # restored from a runner cache).
     - name: Install cargo-binstall
-      uses: cargo-bins/cargo-binstall@dc19f1e48450eefe5a29b8da6c6b00a87d730b37 # v1.18.1
-      env:
-        BINSTALL_VERSION: 1.14.4
+      shell: bash
+      run: |
+        cd "${{ steps.repo-root.outputs.path }}"
+        ./script/install_cargo_binstall
 
     # Load the SSH key needed to clone the private warp-channel-config repo. Only
     # run in warpdotdev/warp-internal; elsewhere (mirrors, fork PRs) this is a no-op

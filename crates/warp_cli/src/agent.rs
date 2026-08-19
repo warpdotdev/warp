@@ -216,7 +216,7 @@ impl Harness {
 
     pub fn display_name(self) -> &'static str {
         match self {
-            Self::Oz => "Oz",
+            Self::Oz => "Warp Agent",
             Self::Claude => "Claude Code",
             Self::OpenCode => "OpenCode",
             Self::Gemini => "Gemini CLI",
@@ -281,9 +281,9 @@ pub enum AgentProfileCommand {
 /// Agent-related subcommands.
 #[derive(Debug, Clone, Subcommand)]
 pub enum AgentCommand {
-    /// Run a new Oz agent.
+    /// Run a new Warp Agent.
     Run(RunAgentArgs),
-    /// Dispatch an Oz agent that runs remotely.
+    /// Dispatch a cloud agent.
     RunCloud(RunCloudArgs),
     /// Manage agent profiles.
     #[command(subcommand)]
@@ -402,6 +402,29 @@ pub struct RunAgentArgs {
     )]
     pub idle_on_complete: Option<humantime::Duration>,
 
+    /// Keep the agent's session open after the conversation ends in a terminal error, so a human
+    /// can attach to the failed run and debug in it. The agent process is the shared-session
+    /// sharer, so without this the session dies with the process.
+    ///
+    /// An idle window, not a fixed one: a follow-up cancels the pending exit.
+    ///
+    /// Deliberately separate from `--idle-on-complete`, which covers the success/blocked/cancelled
+    /// lifecycle. Neither flag is a fallback for the other.
+    ///
+    /// Cloud workers set this through `OZ_IDLE_ON_FAIL` rather than the flag, so that a pinned
+    /// CLI predating this option ignores it instead of rejecting an unknown argument.
+    ///
+    /// You can optionally provide a duration (e.g. `--idle-on-fail 10m`).
+    #[arg(
+        long = "idle-on-fail",
+        value_name = "DURATION",
+        env = "OZ_IDLE_ON_FAIL",
+        num_args = 0..=1,
+        default_missing_value = "15m",
+        hide = true
+    )]
+    pub idle_on_fail: Option<humantime::Duration>,
+
     #[command(flatten)]
     pub snapshot: SnapshotArgs,
     /// Identifier for the task that spawned this agent, used to report progress.
@@ -448,7 +471,7 @@ pub struct RunAgentArgs {
 
     /// Execution harness for the agent run.
     ///
-    /// "oz" (default) uses Warp's built-in agent infrastructure.
+    /// "oz" (default) uses Warp Agent.
     /// "claude" delegates to the `claude` CLI.
     #[arg(long = "harness", value_name = "HARNESS", default_value_t = Harness::Oz, hide = true)]
     pub harness: Harness,
@@ -535,6 +558,23 @@ pub struct RunCloudArgs {
     /// Name for this agent task.
     #[arg(long = "name", short = 'n')]
     pub name: Option<String>,
+
+    /// Title for this agent task and its conversation.
+    ///
+    /// Unlike `--name`, which sets the agent configuration name, `--title`
+    /// controls the task and conversation title shown for the run. When
+    /// spawning a factory sibling, pass the child task title here.
+    #[arg(long = "title", value_name = "TITLE")]
+    pub title: Option<String>,
+
+    /// Run ID of the parent run that is spawning this run.
+    ///
+    /// Setting this makes the new run an orchestration child of the given
+    /// parent: it inherits the parent's lineage (depth, root run) and scope,
+    /// is attributed to the ORCHESTRATION source, and is tracked on the parent
+    /// run. Pass the current run ID when a factory foreman spawns a sibling.
+    #[arg(long = "parent-run-id", value_name = "RUN_ID")]
+    pub parent_run_id: Option<String>,
 
     /// MCP servers to start before executing the agent.
     ///

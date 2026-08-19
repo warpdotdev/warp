@@ -79,11 +79,11 @@ fn tui_commands_have_typed_identities_and_explicit_surface_support() {
             SlashCommandKind::ExportToClipboard,
         ),
         (&*commands::EXPORT_TO_FILE, SlashCommandKind::ExportToFile),
+        (&*commands::MOVE_TO_CLOUD, SlashCommandKind::MoveToCloud),
         (&commands::AUTO_APPROVE, SlashCommandKind::AutoApprove),
         (&commands::MCP, SlashCommandKind::Mcp),
         (&commands::EXIT, SlashCommandKind::Exit),
         (&commands::LOGOUT, SlashCommandKind::Logout),
-        (&commands::VERSION, SlashCommandKind::Version),
         (&commands::VIEW_LOGS, SlashCommandKind::ViewLogs),
         (&commands::VOICE, SlashCommandKind::Voice),
         (&commands::THEME, SlashCommandKind::Theme),
@@ -98,7 +98,8 @@ fn tui_commands_have_typed_identities_and_explicit_surface_support() {
 
     let command = &*commands::ORCHESTRATE;
     assert_eq!(command.kind, SlashCommandKind::Orchestrate);
-    assert!(!command.supports_surface(settings::SettingsMode::Tui));
+    assert!(command.supports_surface(settings::SettingsMode::Tui));
+    assert!(command.supports_surface(settings::SettingsMode::Gui));
 }
 
 #[test]
@@ -134,21 +135,6 @@ fn logout_command_executes_immediately_and_takes_no_argument() {
         SlashCommandSelectionBehavior::Execute
     );
     assert_eq!(commands::LOGOUT.availability, Availability::ALWAYS);
-}
-
-#[test]
-fn version_command_executes_immediately_and_takes_no_argument() {
-    use super::{SlashCommandSelectionBehavior, slash_command_selection_behavior};
-
-    assert_eq!(commands::VERSION.kind, SlashCommandKind::Version);
-    assert!(commands::VERSION.argument.is_none());
-    assert!(!slash_command_is_submitted_as_prompt(&commands::VERSION));
-    assert_eq!(
-        slash_command_selection_behavior(&commands::VERSION),
-        SlashCommandSelectionBehavior::Execute
-    );
-    assert_eq!(commands::VERSION.availability, Availability::ALWAYS);
-    assert!(commands::VERSION.supports_surface(settings::SettingsMode::Tui));
 }
 
 #[test]

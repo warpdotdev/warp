@@ -15,7 +15,7 @@ pub static AGENT: LazyLock<StaticCommand> = LazyLock::new(|| StaticCommand {
     description: "Start a new conversation",
     kind: SlashCommandKind::Agent,
     supported_surfaces: SlashCommandSurfaces::GuiAndTui {
-        icon_path: "bundled/svg/oz.svg",
+        icon_path: "bundled/svg/warp-3.svg",
     },
     availability: Availability::AI_ENABLED.union(Availability::NOT_CLOUD_AGENT),
     auto_enter_ai_mode: false,
@@ -27,7 +27,7 @@ pub static CLOUD_AGENT: LazyLock<StaticCommand> = LazyLock::new(|| StaticCommand
     description: "Start a new cloud agent conversation",
     kind: SlashCommandKind::CloudAgent,
     supported_surfaces: SlashCommandSurfaces::GuiOnly {
-        icon_path: "bundled/svg/oz-cloud.svg",
+        icon_path: "bundled/svg/warp-3.svg",
     },
     availability: Availability::AI_ENABLED.union(Availability::NOT_CLOUD_AGENT),
     auto_enter_ai_mode: false,
@@ -42,6 +42,24 @@ pub const ADD_MCP: StaticCommand = StaticCommand {
         icon_path: "bundled/svg/dataflow.svg",
     },
     availability: Availability::AI_ENABLED,
+    auto_enter_ai_mode: false,
+    argument: None,
+};
+pub const RESET_STATUSLINE: StaticCommand = StaticCommand {
+    name: "/reset-statusline",
+    description: "Reset the statusline to its default items and ordering",
+    kind: SlashCommandKind::ResetStatusline,
+    supported_surfaces: SlashCommandSurfaces::TuiOnly,
+    availability: Availability::ALWAYS,
+    auto_enter_ai_mode: false,
+    argument: None,
+};
+pub const STATUSLINE: StaticCommand = StaticCommand {
+    name: "/statusline",
+    description: "Configure the statusline",
+    kind: SlashCommandKind::Statusline,
+    supported_surfaces: SlashCommandSurfaces::TuiOnly,
+    availability: Availability::ALWAYS,
     auto_enter_ai_mode: false,
     argument: None,
 };
@@ -99,6 +117,45 @@ pub const NATURAL_LANGUAGE_DETECTION: StaticCommand = StaticCommand {
     auto_enter_ai_mode: false,
     argument: None,
 };
+
+pub const API_KEYS: StaticCommand = StaticCommand {
+    name: "/api-keys",
+    description: "View and manage API keys",
+    kind: SlashCommandKind::ApiKeys,
+    supported_surfaces: SlashCommandSurfaces::TuiOnly,
+    availability: Availability::AI_ENABLED,
+    auto_enter_ai_mode: false,
+    argument: None,
+};
+
+pub const CONNECT_GROK: StaticCommand = StaticCommand {
+    name: "/connect-grok",
+    description: "Connect your Grok (X Premium / SuperGrok) account",
+    kind: SlashCommandKind::ConnectGrok,
+    supported_surfaces: SlashCommandSurfaces::TuiOnly,
+    availability: Availability::AI_ENABLED,
+    auto_enter_ai_mode: false,
+    argument: None,
+};
+
+pub const MANAGE_BILLING: StaticCommand = StaticCommand {
+    name: "/manage-billing",
+    description: "Open the team billing page in your browser",
+    kind: SlashCommandKind::ManageBilling,
+    supported_surfaces: SlashCommandSurfaces::TuiOnly,
+    availability: Availability::ALWAYS,
+    auto_enter_ai_mode: false,
+    argument: None,
+};
+pub const UPGRADE: StaticCommand = StaticCommand {
+    name: "/upgrade",
+    description: "Open the Warp upgrade page in your browser",
+    kind: SlashCommandKind::Upgrade,
+    supported_surfaces: SlashCommandSurfaces::TuiOnly,
+    availability: Availability::ALWAYS,
+    auto_enter_ai_mode: false,
+    argument: None,
+};
 pub const THEME: StaticCommand = StaticCommand {
     name: "/theme",
     description: "Set color theme",
@@ -123,10 +180,10 @@ pub const EXIT: StaticCommand = StaticCommand {
     argument: None,
 };
 
-pub const VERSION: StaticCommand = StaticCommand {
-    name: "/version",
-    description: "Show the Warp version",
-    kind: SlashCommandKind::Version,
+pub const STATUS: StaticCommand = StaticCommand {
+    name: "/status",
+    description: "Show session and account status",
+    kind: SlashCommandKind::Status,
     supported_surfaces: SlashCommandSurfaces::TuiOnly,
     availability: Availability::ALWAYS,
     auto_enter_ai_mode: false,
@@ -301,9 +358,9 @@ pub static FORK: LazyLock<StaticCommand> = LazyLock::new(|| {
     let hint_text = "<optional prompt to send in forked conversation>";
     StaticCommand {
         name: "/fork",
-        description: "Fork the current conversation in a new pane or a new tab",
+        description: "Fork the current conversation",
         kind: SlashCommandKind::Fork,
-        supported_surfaces: SlashCommandSurfaces::GuiOnly {
+        supported_surfaces: SlashCommandSurfaces::GuiAndTui {
             icon_path: "bundled/svg/arrow-split.svg",
         },
         availability: Availability::AGENT_VIEW
@@ -319,7 +376,7 @@ pub static MOVE_TO_CLOUD: LazyLock<StaticCommand> = LazyLock::new(|| StaticComma
     name: "/handoff",
     description: "Hand off this conversation to a cloud agent",
     kind: SlashCommandKind::MoveToCloud,
-    supported_surfaces: SlashCommandSurfaces::GuiOnly {
+    supported_surfaces: SlashCommandSurfaces::GuiAndTui {
         icon_path: "bundled/svg/upload-cloud-01.svg",
     },
     availability: Availability::AGENT_VIEW
@@ -475,12 +532,28 @@ pub static NEW: LazyLock<StaticCommand> = LazyLock::new(|| StaticCommand {
     argument: Some(Argument::optional().with_execute_on_selection()),
 });
 
+pub const CLEAR: StaticCommand = StaticCommand {
+    name: "/clear",
+    description: "Clear the transcript and start a new conversation (alias for /agent)",
+    kind: SlashCommandKind::Clear,
+    supported_surfaces: SlashCommandSurfaces::TuiOnly,
+    availability: Availability::NO_LRC_CONTROL
+        .union(Availability::AI_ENABLED)
+        .union(Availability::NOT_CLOUD_AGENT),
+    auto_enter_ai_mode: false,
+    argument: Some(Argument {
+        hint_text: None,
+        is_optional: true,
+        should_execute_on_selection: true,
+    }),
+};
+
 pub static MODEL: LazyLock<StaticCommand> = LazyLock::new(|| StaticCommand {
     name: "/model",
     description: "Switch the base agent model",
     kind: SlashCommandKind::Model,
     supported_surfaces: SlashCommandSurfaces::GuiAndTui {
-        icon_path: "bundled/svg/oz.svg",
+        icon_path: "bundled/svg/warp-3.svg",
     },
     availability: Availability::AGENT_VIEW | Availability::AI_ENABLED,
     auto_enter_ai_mode: true,
@@ -492,7 +565,7 @@ pub static HOST: LazyLock<StaticCommand> = LazyLock::new(|| StaticCommand {
     description: "Switch the cloud agent execution host",
     kind: SlashCommandKind::Host,
     supported_surfaces: SlashCommandSurfaces::GuiOnly {
-        icon_path: "bundled/svg/oz-cloud.svg",
+        icon_path: "bundled/svg/warp-3.svg",
     },
     availability: Availability::AGENT_VIEW
         | Availability::AI_ENABLED
@@ -506,7 +579,7 @@ pub static HARNESS: LazyLock<StaticCommand> = LazyLock::new(|| StaticCommand {
     description: "Switch the cloud agent harness",
     kind: SlashCommandKind::Harness,
     supported_surfaces: SlashCommandSurfaces::GuiOnly {
-        icon_path: "bundled/svg/oz.svg",
+        icon_path: "bundled/svg/warp-3.svg",
     },
     availability: Availability::AGENT_VIEW
         | Availability::AI_ENABLED
@@ -563,8 +636,8 @@ pub static ORCHESTRATE: LazyLock<StaticCommand> = LazyLock::new(|| StaticCommand
     name: ORCHESTRATE_NAME,
     description: "Break a task into subtasks and run them in parallel with multiple agents",
     kind: SlashCommandKind::Orchestrate,
-    supported_surfaces: SlashCommandSurfaces::GuiOnly {
-        icon_path: "bundled/svg/oz.svg",
+    supported_surfaces: SlashCommandSurfaces::GuiAndTui {
+        icon_path: "bundled/svg/warp-3.svg",
     },
     availability: Availability::LOCAL | Availability::AI_ENABLED,
     auto_enter_ai_mode: true,
@@ -683,9 +756,9 @@ pub static CONTINUE_LOCALLY: LazyLock<StaticCommand> = LazyLock::new(|| {
 
 pub const USAGE: StaticCommand = StaticCommand {
     name: "/usage",
-    description: "Open billing and usage settings",
+    description: "View account and credit usage",
     kind: SlashCommandKind::Usage,
-    supported_surfaces: SlashCommandSurfaces::GuiOnly {
+    supported_surfaces: SlashCommandSurfaces::GuiAndTui {
         icon_path: "bundled/svg/bar-chart-04.svg",
     },
     availability: Availability::AI_ENABLED,
@@ -785,6 +858,28 @@ pub static EXPORT_TO_FILE: LazyLock<StaticCommand> = LazyLock::new(|| StaticComm
     argument: Some(Argument::optional().with_hint_text("<optional filename>")),
 });
 
+pub const VIM_MODE: StaticCommand = StaticCommand {
+    name: "/vim-mode",
+    description: "Toggle Vim mode",
+    kind: SlashCommandKind::VimMode,
+    supported_surfaces: SlashCommandSurfaces::TuiOnly,
+    availability: Availability::ALWAYS,
+    auto_enter_ai_mode: false,
+    argument: None,
+};
+
+pub const COPY_DEBUGGING_ID: StaticCommand = StaticCommand {
+    name: "/copy-debugging-id",
+    description: "Copy debugging information for this conversation",
+    kind: SlashCommandKind::CopyDebuggingId,
+    supported_surfaces: SlashCommandSurfaces::GuiAndTui {
+        icon_path: "bundled/svg/copy.svg",
+    },
+    availability: Availability::ACTIVE_CONVERSATION,
+    auto_enter_ai_mode: false,
+    argument: None,
+};
+
 pub static COMMAND_REGISTRY: LazyLock<Registry> = LazyLock::new(Registry::new);
 
 /// A unique identifier for a static slash command.
@@ -816,7 +911,7 @@ impl Default for Registry {
 impl Registry {
     pub fn new() -> Self {
         let mut commands = HashMap::new();
-        for command in all_commands(settings::settings_mode()) {
+        for command in all_commands_for_all_surfaces() {
             debug_assert!(
                 !command
                     .availability
@@ -854,7 +949,15 @@ impl Registry {
     }
 }
 
+#[cfg(test)]
 fn all_commands(settings_mode: settings::SettingsMode) -> Vec<StaticCommand> {
+    all_commands_for_all_surfaces()
+        .into_iter()
+        .filter(|command| command.supports_surface(settings_mode))
+        .collect()
+}
+
+fn all_commands_for_all_surfaces() -> Vec<StaticCommand> {
     let mut commands = vec![
         ADD_MCP,
         ADD_PROMPT.clone(),
@@ -865,24 +968,33 @@ fn all_commands(settings_mode: settings::SettingsMode) -> Vec<StaticCommand> {
         FEEDBACK.clone(),
         INDEX,
         INIT,
+        API_KEYS,
+        CONNECT_GROK,
+        UPGRADE,
+        MANAGE_BILLING,
         LOGOUT,
         MCP,
         OPEN_PROJECT_RULES,
         OPEN_MCP_SERVERS,
         OPEN_RULES,
         AGENT.clone(),
+        CLEAR,
         NEW.clone(),
         PLAN.clone(),
         RENAME_CONVERSATION.clone(),
         RENAME_TAB.clone(),
         SET_TAB_COLOR.clone(),
+        STATUSLINE,
+        RESET_STATUSLINE,
         NATURAL_LANGUAGE_DETECTION,
         THEME,
+        VIM_MODE,
         USAGE,
         CONVERSATIONS,
         EXPORT_TO_CLIPBOARD,
+        COPY_DEBUGGING_ID,
         MODEL.clone(),
-        VERSION,
+        STATUS,
         VIEW_LOGS,
         VOICE,
     ];
@@ -980,7 +1092,6 @@ fn all_commands(settings_mode: settings::SettingsMode) -> Vec<StaticCommand> {
         commands.push(HARNESS.clone());
         commands.push(ENVIRONMENT.clone());
     }
-    commands.retain(|command| command.supports_surface(settings_mode));
 
     commands
 }

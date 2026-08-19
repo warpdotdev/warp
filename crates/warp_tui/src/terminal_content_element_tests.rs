@@ -15,8 +15,9 @@ use warpui_core::elements::tui::{
     TuiPaintSurface, TuiPoint, TuiScene, TuiScreenPoint, TuiScreenPosition, TuiScreenRect, TuiSize,
     TuiZIndex,
 };
-use warpui_core::event::{KeyEventDetails, ModifiersState};
+use warpui_core::event::{KeyEventDetails, KeyState, ModifiersState};
 use warpui_core::keymap::Keystroke;
+use warpui_core::platform::keyboard::KeyCode;
 use warpui_core::{App, AppContext};
 
 use super::{
@@ -249,6 +250,25 @@ fn dispatch_reports_only_input_that_can_echo_as_typeahead() {
         });
     });
 }
+/// A process that never asked for modifier reports must see none, and the event
+/// must stay unhandled so the rest of the tree can still observe it — modifier
+/// events carry no pointer position, so they are not mouse reports either.
+#[test]
+fn unrequested_modifier_reports_are_not_forwarded_or_consumed() {
+    App::test((), |app| async move {
+        app.read(|app| {
+            assert!(!dispatch_pty_input(
+                &TuiEvent::ModifierKeyChanged {
+                    key_code: KeyCode::ShiftLeft,
+                    state: KeyState::Pressed,
+                },
+                input_matching_model(),
+                app,
+            ));
+        });
+    });
+}
+
 #[test]
 fn sgr_mouse_events_use_area_relative_coordinates() {
     let area = bounds(10, 5, 20, 10);

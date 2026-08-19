@@ -30,7 +30,9 @@ use command::Stdio;
 use command::r#async::Command;
 use futures_lite::future;
 use is_executable::IsExecutable as _;
+use itertools::Itertools;
 use sha2::{Digest, Sha256};
+use warp_core::safe_info;
 use warp_errors::{ErrorExt, register_error};
 
 pub mod spacectl;
@@ -38,6 +40,7 @@ pub mod spacectl;
 use spacectl::{MountResponse, run_spacectl_mount};
 
 const SPACECTL_TIMEOUT: Duration = Duration::from_secs(60);
+const MAX_CAPTURED_STDERR_BYTES: usize = 4 * 1024;
 
 /// Identifiers for a code repository.
 ///
@@ -235,7 +238,10 @@ pub enum CacheSetupError {
     #[error("failed to spawn spacectl")]
     SpawnFailed,
     #[error("spacectl exited unsuccessfully")]
-    NonzeroExit { exit_code: Option<i32> },
+    NonzeroExit {
+        exit_code: Option<i32>,
+        stderr: String,
+    },
     #[error("failed to parse spacectl JSON output")]
     JsonParseFailed,
     #[error("spacectl timed out")]
@@ -258,7 +264,7 @@ impl CacheSetupError {
 
     pub fn exit_code(&self) -> Option<i32> {
         match self {
-            Self::NonzeroExit { exit_code } => *exit_code,
+            Self::NonzeroExit { exit_code, .. } => *exit_code,
             Self::RootCreationFailed
             | Self::SpawnFailed
             | Self::JsonParseFailed
@@ -453,7 +459,7 @@ async fn run_command_with_timeout(
     command
         .kill_on_drop(true)
         .stdout(Stdio::piped())
-        .stderr(Stdio::null());
+        .stderr(Stdio::piped());
     let output = async {
         command
             .output()
@@ -468,9 +474,20 @@ async fn run_command_with_timeout(
     if !output.status.success() {
         return Err(CacheSetupError::NonzeroExit {
             exit_code: output.status.code(),
+            stderr: bounded_stderr(&output.stderr),
         });
     }
     Ok(output.stdout)
+}
+
+fn bounded_stderr(stderr: &[u8]) -> String {
+    let truncated = stderr.len() > MAX_CAPTURED_STDERR_BYTES;
+    let stderr = &stderr[..stderr.len().min(MAX_CAPTURED_STDERR_BYTES)];
+    let mut stderr = String::from_utf8_lossy(stderr).trim_end().to_owned();
+    if truncated {
+        stderr.push_str("\n[stderr truncated]");
+    }
+    stderr
 }
 
 /// Set up build caching on the current host. See the crate-level documentation for a description
@@ -553,6 +570,7 @@ where
         Ok(Some(plan)) => plan,
         Ok(None) => return report,
         Err(error) => {
+            tracing::error!(error = ?error, "Cache planning failed");
             report.invocations.push(failed_invocation(
                 CacheScope::Global,
                 Vec::new(),
@@ -582,6 +600,10 @@ where
                 Duration::ZERO,
             )
         } else {
+            safe_info!(
+                safe: ("Mounting cache modes {:?} for scope kind '{}'", configuration.modes, configuration.scope.kind()),
+                full: ("Mounting cache modes {:?} for {:?}", configuration.modes, configuration.scope)
+            );
             run_spacectl_mount(
                 configuration.scope.clone(),
                 configuration.modes.clone(),
@@ -595,6 +617,8 @@ where
         };
 
         if let Some(response) = &invocation.response {
+            tracing::info!(cache_result = ?response.output, modes = ?response.input.modes, scope = ?configuration.scope, "Mounted cache paths");
+
             match &configuration.scope {
                 CacheScope::Repository { .. } => {
                     for (name, value) in &response.output.add_envs {
@@ -660,13 +684,19 @@ where
 /// - `~/.cargo/registry` => `/cache/shared/$HOME/.cargo/registry`
 /// - `/workspace/repo-a/target` => `/cache/<repo-a-key>/target`
 /// - `/workspace/repo-b/target` => `/cache/<repo-b-key>/target`
+#[tracing::instrument(skip_all, fields(tags.cloud_agent = true, additional_global_modes = tracing::field::Empty, resolved_modes = tracing::field::Empty))]
 fn construct_plan(
     cache_root: PathBuf,
     mut detections: Vec<DetectedCacheModes>,
     additional_global_modes: Vec<String>,
 ) -> Result<Option<CacheSetupPlan>, CacheSetupError> {
+    tracing::Span::current().record(
+        "additional_global_modes",
+        additional_global_modes.iter().join(", "),
+    );
     for detection in &mut detections {
         detection.modes = canonical_modes(std::mem::take(&mut detection.modes));
+        tracing::info!(modes = ?detection.modes, repo_key = %detection.key, "Adding detected cache modes");
     }
     let mut global_modes = BTreeSet::new();
     for detection in &detections {
@@ -705,6 +735,7 @@ fn construct_plan(
             .expect("repository configuration")
             .cmp(right.scope.repo_key().expect("repository configuration"))
     });
+    tracing::Span::current().record("resolved_modes", global_modes.iter().join(", "));
     configurations.push(CacheConfiguration {
         scope: CacheScope::Global,
         cwd: scratch,

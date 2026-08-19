@@ -910,6 +910,11 @@ fn default_orchestration_collapsible_state(expanded: bool) -> CollapsibleElement
 
 pub struct AIBlock {
     model: Rc<dyn AIBlockModel<View = AIBlock>>,
+
+    /// Cached result of `model.request_type(app).is_passive()`. Safe to cache because whether a
+    /// conversation is passive or active is fixed at exchange creation and never changes for the
+    /// lifetime of the block (see `is_passive_conversation`).
+    is_passive: bool,
     terminal_model: Arc<FairMutex<TerminalModel>>,
     client_ids: ClientIdentifiers,
     profile_image_path: Option<String>,
@@ -988,6 +993,11 @@ pub struct AIBlock {
     /// This is only set to Some if no new content is expected to be received and all
     /// requested actions and requested commands are completed or cancelled.
     finish_reason: Option<FinishReason>,
+
+    /// `true` while agent-view Cmd-Up/Cmd-Down transcript navigation targets this block's user
+    /// query. Renders a navigation ring around the query row so the stop stays visibly
+    /// identifiable even when the viewport doesn't move.
+    is_agent_transcript_navigation_target: bool,
 
     directory_context: DirectoryContext,
     view_id: EntityId,
@@ -1485,8 +1495,11 @@ impl AIBlock {
             comment_states.insert(id, state);
         }
 
+        let is_passive = model.request_type(ctx).is_passive();
+
         let mut me = Self {
             model,
+            is_passive,
             terminal_model,
             client_ids,
             profile_image_path: user_avatar_info.profile_image_path,
@@ -1506,6 +1519,7 @@ impl AIBlock {
             num_attached_context_blocks,
             has_attached_context_selected_text,
             finish_reason: None,
+            is_agent_transcript_navigation_target: false,
             directory_context: DirectoryContext { pwd, home_dir },
             view_id: ctx.view_id(),
             detected_links_state,
@@ -1838,6 +1852,7 @@ impl AIBlock {
 
         self.client_ids.conversation_id = new_conversation_id;
         self.model = new_model;
+        self.is_passive = self.model.request_type(ctx).is_passive();
         let user_avatar_info = user_avatar_info_for_ai_block(self.model.as_ref(), ctx);
         self.profile_image_path = user_avatar_info.profile_image_path;
         self.user_display_name = user_avatar_info.display_name;
@@ -1929,6 +1944,7 @@ impl AIBlock {
                     let output = output.get();
                     self.handle_updated_output(&output, ctx);
                 }
+                self.notify_run_agents_card_views(ctx);
                 self.spawn_link_detection(ctx);
                 self.finish(FinishReason::Cancelled, ctx);
 
@@ -1966,6 +1982,7 @@ impl AIBlock {
                 );
                 self.maybe_create_aws_bedrock_credentials_error_view(&error, ctx);
                 self.maybe_create_gemini_enterprise_credentials_error_view(&error, ctx);
+                self.notify_run_agents_card_views(ctx);
                 // There are no actions to be taken in this block, it is finished.
                 self.finish(FinishReason::Error, ctx);
             }
@@ -2137,8 +2154,10 @@ impl AIBlock {
                     };
                     self.handle_mcp_tool_stream_update(
                         action_id,
+                        name,
                         &command_text,
                         display_input,
+                        *server_id,
                         ctx,
                     );
                 }
@@ -2984,12 +3003,14 @@ impl AIBlock {
             //
             // These correspond to AI blocks with a successfully received suggested code diff or
             // unit test suggestion.
-            !self.model.request_type(app).is_passive()
+            !self.is_passive
         }
     }
 
-    pub fn is_passive_conversation(&self, app: &AppContext) -> bool {
-        self.model.request_type(app).is_passive()
+    /// Returns `true` if this block's conversation was started from a passive entrypoint (e.g. a
+    /// suggested code diff or unit test suggestion), as opposed to a directly-issued user query.
+    pub fn is_passive_conversation(&self) -> bool {
+        self.is_passive
     }
 
     fn handle_code_section_stream_update(
@@ -3622,15 +3643,19 @@ impl AIBlock {
     fn handle_mcp_tool_stream_update(
         &mut self,
         action_id: &AIAgentActionId,
+        tool_name: &str,
         command_text: &str,
         mcp_args: serde_json::Value,
+        server_id: Option<uuid::Uuid>,
         ctx: &mut ViewContext<Self>,
     ) {
         match self.requested_mcp_tools.get_mut(action_id) {
             Some(requested_mcp_tool) => {
                 requested_mcp_tool.view.update(ctx, |view, ctx| {
                     view.apply_streamed_update(command_text, ctx);
+                    view.update_mcp_tool_name(tool_name);
                     view.update_mcp_request(mcp_args);
+                    view.update_mcp_server_id(server_id);
                     ctx.notify();
                 });
             }
@@ -3651,7 +3676,9 @@ impl AIBlock {
                         ctx,
                     );
                     view.apply_streamed_update(command_text, ctx);
+                    view.update_mcp_tool_name(tool_name);
                     view.update_mcp_request(mcp_args);
+                    view.update_mcp_server_id(server_id);
                     view
                 });
                 let action_id_clone = action_id.clone();
@@ -4127,7 +4154,9 @@ impl AIBlock {
                 ctx.emit(AIBlockEvent::RunAwsLoginCommand);
             }
             AwsBedrockCredentialsErrorEvent::ConfigureLoginCommand => {
-                ctx.dispatch_typed_action(&WorkspaceAction::ShowSettingsPageWithSearch {
+                // Defer so Workspace is not opened while AIBlock is still mid-subscription.
+                // Synchronous dispatch here can panic with "Circular view update".
+                ctx.dispatch_typed_action_deferred(WorkspaceAction::ShowSettingsPageWithSearch {
                     search_query: "aws bedrock".to_string(),
                     section: Some(SettingsSection::WarpAgent),
                 });
@@ -4167,7 +4196,9 @@ impl AIBlock {
                 }
             }
             GeminiEnterpriseCredentialsErrorEvent::OpenSettings => {
-                ctx.dispatch_typed_action(&WorkspaceAction::ShowSettingsPageWithSearch {
+                // Defer so Workspace is not opened while AIBlock is still mid-subscription.
+                // Synchronous dispatch here can panic with "Circular view update".
+                ctx.dispatch_typed_action_deferred(WorkspaceAction::ShowSettingsPageWithSearch {
                     search_query: "gemini enterprise".to_string(),
                     section: Some(SettingsSection::WarpAgent),
                 });
@@ -4466,6 +4497,23 @@ impl AIBlock {
             .inputs_to_render(app)
             .iter()
             .any(|input| input.display_query().is_some())
+    }
+
+    /// `true` while agent-view transcript navigation targets this block's user query.
+    pub fn is_agent_transcript_navigation_target(&self) -> bool {
+        self.is_agent_transcript_navigation_target
+    }
+
+    /// Flags or unflags this block as the transcript navigation target.
+    pub fn set_agent_transcript_navigation_target(
+        &mut self,
+        is_target: bool,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if self.is_agent_transcript_navigation_target != is_target {
+            self.is_agent_transcript_navigation_target = is_target;
+            ctx.notify();
+        }
     }
 
     /// `true` if the AI block is "finished".
@@ -6352,6 +6400,26 @@ pub enum AIBlockAction {
     },
 }
 
+#[cfg(feature = "local_fs")]
+fn open_code_action_event(
+    source: &CodeSource,
+    layout: crate::util::file::external_editor::settings::EditorLayout,
+) -> AIBlockEvent {
+    match source {
+        CodeSource::Link {
+            path, range_start, ..
+        } => AIBlockEvent::OpenDetectedFilePath {
+            absolute_path: path.clone(),
+            line_and_column_num: *range_start,
+            target_override: None,
+        },
+        _ => AIBlockEvent::OpenCodeInWarp {
+            source: source.clone(),
+            layout,
+        },
+    }
+}
+
 impl TypedActionView for AIBlock {
     type Action = AIBlockAction;
 
@@ -6852,12 +6920,10 @@ impl TypedActionView for AIBlock {
 
                 #[cfg(feature = "local_fs")]
                 {
-                    ctx.emit(AIBlockEvent::OpenCodeInWarp {
-                        source: source.clone(),
-                        layout: *crate::util::file::external_editor::EditorSettings::as_ref(ctx)
-                            .open_file_layout
-                            .value(),
-                    })
+                    let layout = *crate::util::file::external_editor::EditorSettings::as_ref(ctx)
+                        .open_file_layout
+                        .value();
+                    ctx.emit(open_code_action_event(source, layout));
                 }
             }
             AIBlockAction::ToggleTodoListExpanded(id) => {
@@ -7180,6 +7246,17 @@ impl AIBlock {
             }
         });
         self.run_agents_card_views.insert(action_id.clone(), view);
+    }
+
+    /// Re-renders the orchestrate cards after the block's output stream ends
+    /// without succeeding. A `RunAgents` tool call that was still streaming at
+    /// that point never reaches the action queue, so it produces no action
+    /// result and no event of its own; without this nudge its card would keep
+    /// rendering the "Configuring agents…" placeholder forever.
+    fn notify_run_agents_card_views(&self, ctx: &mut ViewContext<Self>) {
+        for view in self.run_agents_card_views.values().cloned().collect_vec() {
+            view.update(ctx, |_, ctx| ctx.notify());
+        }
     }
 }
 #[cfg(test)]

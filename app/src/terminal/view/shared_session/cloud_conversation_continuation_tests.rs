@@ -40,6 +40,31 @@ enum AuthFixture {
     LoggedOut,
 }
 
+#[test]
+fn routing_allows_live_input_only_for_executable_shared_session_role() {
+    App::test((), |mut app| async move {
+        let task_id = ambient_task_id(1);
+        let reader = ambient_pane_model(task_id, SharedSessionStatus::reader());
+        let executor = ambient_pane_model(task_id, SharedSessionStatus::executor());
+        app.update(|ctx| {
+            assert_eq!(
+                resolve_ai_query_routing(EntityId::new(), None, &reader, ctx),
+                AIQueryRouting::LiveRemoteVm {
+                    is_executor: false,
+                    ambient_agent_task_id: Some(task_id),
+                }
+            );
+            assert_eq!(
+                resolve_ai_query_routing(EntityId::new(), None, &executor, ctx),
+                AIQueryRouting::LiveRemoteVm {
+                    is_executor: true,
+                    ambient_agent_task_id: Some(task_id),
+                }
+            );
+        });
+    });
+}
+
 #[derive(Clone, Copy)]
 enum ConversationPermissionFixture {
     CurrentUserOwner,
@@ -178,6 +203,7 @@ fn ambient_agent_task(
         run_time: Some("PT1S".parse().unwrap()),
         status_message: None,
         source: None,
+        execution_location: None,
         session_id: None,
         session_link: None,
         creator: Some(TaskPrincipalInfo {
@@ -235,7 +261,7 @@ impl AmbientAgentTaskTestExt for AmbientAgentTask {
     }
 }
 
-fn current_team_uid() -> ServerId {
+fn test_team_uid() -> ServerId {
     ServerId::from(123)
 }
 
@@ -249,7 +275,7 @@ fn workspaces_for_permission_fixture(
                 ServerId::from(456).into(),
                 "Test Workspace".to_string(),
                 Some(vec![Team::from_local_cache(
-                    current_team_uid(),
+                    test_team_uid(),
                     "Test Team".to_string(),
                     None,
                     None,
@@ -277,6 +303,7 @@ fn server_conversation_metadata(
             context_window_usage: 0.0,
             credits_spent: 0.0,
             platform_credits_spent: 0.0,
+            total_provider_cost_in_cents: None,
             credits_spent_for_last_block: None,
             token_usage: vec![],
             tool_usage_metadata: Default::default(),
@@ -312,13 +339,13 @@ fn server_permissions(permissions_fixture: ConversationPermissionFixture) -> Ser
             user_uid: UserUid::new("other-user"),
         },
         ConversationPermissionFixture::CurrentTeamOwner => Owner::Team {
-            team_uid: current_team_uid(),
+            team_uid: test_team_uid(),
         },
     };
     let guests = match permissions_fixture {
         ConversationPermissionFixture::CurrentTeamEditorGuest => vec![ServerObjectGuest {
             subject: ServerGuestSubject::Team {
-                team_uid: current_team_uid(),
+                team_uid: test_team_uid(),
             },
             access_level: AccessLevel::Editor,
             source: None,
@@ -351,6 +378,67 @@ fn missing_task_returns_error() {
                 ctx,
             );
             assert_eq!(state, Err(CloudConversationContinuationError::MissingTask));
+        });
+    });
+}
+
+#[test]
+fn routing_is_live_remote_vm_for_retained_failed_execution() {
+    App::test((), |mut app| async move {
+        let TestHandles {
+            terminal_view_id,
+            task_id,
+        } = setup_app(
+            &mut app,
+            AuthFixture::LoggedIn,
+            AIAgentHarness::Oz,
+            ConversationPermissionFixture::CurrentUserOwner,
+        );
+        let mut task = active_ambient_agent_task(task_id);
+        task.state = AmbientAgentTaskState::Error;
+        AgentConversationsModel::handle(&app).update(&mut app, |model, _| {
+            model.insert_task_for_test(task);
+        });
+        let model = ambient_pane_model(task_id, SharedSessionStatus::NotShared);
+
+        app.update(|ctx| {
+            assert_eq!(
+                resolve_ai_query_routing(terminal_view_id, None, &model, ctx),
+                AIQueryRouting::LiveRemoteVm {
+                    is_executor: false,
+                    ambient_agent_task_id: Some(task_id),
+                }
+            );
+        });
+    });
+}
+
+#[test]
+fn routing_starts_new_cloud_vm_for_ended_failed_execution() {
+    App::test((), |mut app| async move {
+        let TestHandles {
+            terminal_view_id,
+            task_id,
+        } = setup_app(
+            &mut app,
+            AuthFixture::LoggedIn,
+            AIAgentHarness::Oz,
+            ConversationPermissionFixture::CurrentUserOwner,
+        );
+        let mut task =
+            ambient_agent_task(task_id, CONVERSATION_TOKEN, AmbientAgentTaskState::Failed);
+        task.session_link = Some("https://example.com/session/stale".to_string());
+        task.is_sandbox_running = false;
+        AgentConversationsModel::handle(&app).update(&mut app, |model, _| {
+            model.insert_task_for_test(task);
+        });
+        let model = ambient_pane_model(task_id, SharedSessionStatus::NotShared);
+
+        app.update(|ctx| {
+            assert_eq!(
+                resolve_ai_query_routing(terminal_view_id, None, &model, ctx),
+                AIQueryRouting::NewCloudVm { task_id }
+            );
         });
     });
 }
@@ -684,6 +772,24 @@ fn missing_metadata_returns_error() {
 }
 
 #[test]
+fn completed_child_presentation_requires_edit_access() {
+    assert_eq!(
+        completed_child_presentation(ConversationAccess::Edit, false),
+        CompletedChildPresentation::Continuation
+    );
+    for access in [ConversationAccess::ViewOnly, ConversationAccess::Unknown] {
+        assert_eq!(
+            completed_child_presentation(access, false),
+            CompletedChildPresentation::PassiveTranscript
+        );
+    }
+    assert_eq!(
+        completed_child_presentation(ConversationAccess::Edit, true),
+        CompletedChildPresentation::PassiveTranscript
+    );
+}
+
+#[test]
 fn owned_oz_task_without_metadata_shows_inline_followup_input() {
     App::test((), |mut app| async move {
         let TestHandles {
@@ -736,6 +842,28 @@ fn owned_third_party_task_without_metadata_shows_continue_in_cloud_tombstone() {
     });
 }
 
+/// With `TaskScope` removed, task ownership under `OrchestrationUnifiedStack`
+/// reduces to the same `creator.uid == current_user_uid` check as the
+/// flag-OFF path; owned tasks fall back to the metadata-free continuation
+/// path when no server conversation metadata is available yet.
+#[test]
+fn owned_task_without_metadata_allows_metadata_free_fallback() {
+    let _unified_stack = FeatureFlag::OrchestrationUnifiedStack.override_enabled(true);
+    App::test((), |mut app| async move {
+        let TestHandles {
+            terminal_view_id,
+            task_id,
+        } = setup_owned_task_without_server_metadata(&mut app);
+
+        app.update(|ctx| {
+            assert_eq!(
+                resolve_cloud_conversation_continuation_ui_state(terminal_view_id, task_id, ctx),
+                Ok(CloudConversationContinuationUiState::FollowupInput)
+            );
+        });
+    });
+}
+
 #[test]
 fn active_task_execution_returns_error() {
     App::test((), |mut app| async move {
@@ -759,6 +887,67 @@ fn active_task_execution_returns_error() {
             assert_eq!(
                 state,
                 Err(CloudConversationContinuationError::ActiveTaskExecution)
+            );
+        });
+    });
+}
+#[test]
+fn retained_failed_task_execution_returns_active_execution_error() {
+    App::test((), |mut app| async move {
+        let TestHandles {
+            terminal_view_id,
+            task_id,
+        } = setup_app(
+            &mut app,
+            AuthFixture::LoggedIn,
+            AIAgentHarness::Oz,
+            ConversationPermissionFixture::CurrentUserOwner,
+        );
+        let mut task = active_ambient_agent_task(task_id);
+        task.state = AmbientAgentTaskState::Failed;
+        AgentConversationsModel::handle(&app).update(&mut app, |model, _| {
+            model.insert_task_for_test(task);
+        });
+
+        app.update(|ctx| {
+            let state =
+                resolve_cloud_conversation_continuation_ui_state(terminal_view_id, task_id, ctx);
+
+            assert_eq!(
+                state,
+                Err(CloudConversationContinuationError::ActiveTaskExecution)
+            );
+        });
+    });
+}
+
+#[test]
+fn ended_failed_task_uses_ordinary_cloud_continuation() {
+    App::test((), |mut app| async move {
+        let TestHandles {
+            terminal_view_id,
+            task_id,
+        } = setup_app(
+            &mut app,
+            AuthFixture::LoggedIn,
+            AIAgentHarness::Oz,
+            ConversationPermissionFixture::CurrentUserOwner,
+        );
+        let mut task =
+            ambient_agent_task(task_id, CONVERSATION_TOKEN, AmbientAgentTaskState::Failed);
+        task.session_link = Some("https://example.com/session/stale".to_string());
+        task.is_sandbox_running = false;
+        AgentConversationsModel::handle(&app).update(&mut app, |model, _| {
+            model.insert_task_for_test(task);
+        });
+
+        app.update(|ctx| {
+            let state =
+                resolve_cloud_conversation_continuation_ui_state(terminal_view_id, task_id, ctx);
+
+            assert_eq!(
+                state,
+                Ok(CloudConversationContinuationUiState::FollowupInput)
             );
         });
     });

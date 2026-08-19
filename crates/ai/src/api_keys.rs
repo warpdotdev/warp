@@ -4,15 +4,23 @@ use std::time::{Duration, SystemTime};
 use futures::channel::oneshot;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
+use warp_core::send_telemetry_from_ctx;
 use warp_errors::report_error;
 use warp_multi_agent_api as api;
 use warpui_core::{Entity, ModelContext, SingletonEntity};
 use warpui_extras::secure_storage::{self, AppContextExt};
 
+use crate::LLMProvider;
 pub use crate::aws_credentials::{AwsCredentials, AwsCredentialsState};
+#[cfg(not(target_family = "wasm"))]
+pub use crate::geap_credentials::GeapRefreshOutcome;
 pub use crate::geap_credentials::{
-    GEAP_REFRESH_LEAD_TIME, GeapCredentials, GeapCredentialsState, GeapFederation, GeapMintBinding,
-    LoadGeapCredentialsError,
+    GEAP_MINT_FAILURE_COOLDOWN, GEAP_REFRESH_LEAD_TIME, GeapCredentials, GeapCredentialsState,
+    GeapFederation, GeapMintBinding, LoadGeapCredentialsError,
+};
+use crate::telemetry::{
+    AITelemetryEvent, ProviderCredentialTelemetryAction, ProviderCredentialTelemetryKind,
+    ProviderCredentialTelemetryProvider,
 };
 
 const SECURE_STORAGE_KEY: &str = "AiApiKeys";
@@ -247,6 +255,18 @@ pub struct ApiKeyManager {
     /// refresh is running. Always cleared when the refresh finishes.
     #[cfg(not(target_family = "wasm"))]
     pub(crate) grok_refresh_waiters: Option<Vec<oneshot::Sender<GrokRefreshOutcome>>>,
+    /// Coordinates request-time GEAP refreshes. Installed by the mint kickoff
+    /// itself (see `install_geap_refresh_waiter`) immediately before the state
+    /// transitions to `Refreshing`, and taken when the mint completes, so
+    /// `Some` means a mint is in flight *by construction* rather than by
+    /// convention. Holds the completion senders for requests blocked on it;
+    /// may be empty for a proactive mint with no waiters.
+    #[cfg(not(target_family = "wasm"))]
+    pub(crate) geap_refresh_waiters: Option<Vec<oneshot::Sender<GeapRefreshOutcome>>>,
+    /// When the last GEAP mint failed, if one has. The timestamp is what
+    /// suppresses repeated request-time waits.
+    #[cfg(not(target_family = "wasm"))]
+    pub(crate) geap_last_mint_failure: Option<SystemTime>,
     pub(crate) aws_credentials_state: AwsCredentialsState,
     aws_credentials_refresh_strategy: AwsCredentialsRefreshStrategy,
     /// In-memory Gemini Enterprise (GEAP) credential state.
@@ -262,6 +282,44 @@ pub struct CustomEndpointParams {
     pub models: Vec<(String, Option<String>, Option<String>)>,
     pub schema: CustomEndpointSchema,
 }
+fn provider_credential_action(is_present: bool) -> ProviderCredentialTelemetryAction {
+    if is_present {
+        ProviderCredentialTelemetryAction::Added
+    } else {
+        ProviderCredentialTelemetryAction::Removed
+    }
+}
+
+fn provider_telemetry_provider(
+    provider: LLMProvider,
+) -> Option<ProviderCredentialTelemetryProvider> {
+    match provider {
+        LLMProvider::OpenAI => Some(ProviderCredentialTelemetryProvider::OpenAi),
+        LLMProvider::Anthropic => Some(ProviderCredentialTelemetryProvider::Anthropic),
+        LLMProvider::Google => Some(ProviderCredentialTelemetryProvider::Google),
+        LLMProvider::Xai => Some(ProviderCredentialTelemetryProvider::Xai),
+        LLMProvider::Unknown => None,
+    }
+}
+
+fn send_provider_credential_telemetry(
+    provider: LLMProvider,
+    credential_kind: ProviderCredentialTelemetryKind,
+    action: ProviderCredentialTelemetryAction,
+    ctx: &mut ModelContext<ApiKeyManager>,
+) {
+    let Some(provider) = provider_telemetry_provider(provider) else {
+        return;
+    };
+    send_telemetry_from_ctx!(
+        AITelemetryEvent::ProviderCredentialChanged {
+            provider,
+            credential_kind,
+            action,
+        },
+        ctx
+    );
+}
 
 impl ApiKeyManager {
     pub fn new(ctx: &mut ModelContext<Self>) -> Self {
@@ -274,6 +332,10 @@ impl ApiKeyManager {
             grok_refresh_allowed: false,
             #[cfg(not(target_family = "wasm"))]
             grok_refresh_waiters: None,
+            #[cfg(not(target_family = "wasm"))]
+            geap_refresh_waiters: None,
+            #[cfg(not(target_family = "wasm"))]
+            geap_last_mint_failure: None,
             aws_credentials_state: AwsCredentialsState::Missing,
             aws_credentials_refresh_strategy: AwsCredentialsRefreshStrategy::default(),
             geap_credentials_state: GeapCredentialsState::Missing,
@@ -284,6 +346,58 @@ impl ApiKeyManager {
 
     pub fn keys(&self) -> &ApiKeys {
         &self.keys
+    }
+
+    /// Reloads API keys after another process updates the active secure-storage namespace.
+    ///
+    /// GUI edits mutate this manager directly before persisting, so they do not
+    /// need to reload. TUI setup commands run in a separate process and notify
+    /// the live TUI to refresh its cached keys after a successful write.
+    pub fn reload_keys_from_secure_storage(&mut self, ctx: &mut ModelContext<Self>) {
+        let keys = Self::load_keys_from_secure_storage(ctx);
+        if self.keys == keys {
+            return;
+        }
+        self.keys = keys;
+        ctx.emit(ApiKeyManagerEvent::KeysUpdated);
+    }
+
+    /// Persists a provider API key before publishing the updated in-memory value.
+    pub fn persist_provider_key(
+        &mut self,
+        provider: LLMProvider,
+        key: Option<String>,
+        ctx: &mut ModelContext<Self>,
+    ) -> anyhow::Result<()> {
+        let was_present = provider.api_key(&self.keys).is_some();
+        let mut keys = self.keys.clone();
+        if !provider.set_api_key(&mut keys, key) {
+            return Err(anyhow::anyhow!(
+                "{} does not support pasted API keys",
+                provider.display_name()
+            ));
+        }
+        let json = serde_json::to_string(&keys)
+            .map_err(|error| anyhow::Error::new(error).context("Failed to serialize API keys"))?;
+        ctx.secure_storage()
+            .write_value(SECURE_STORAGE_KEY, &json)
+            .map_err(|error| {
+                anyhow::Error::new(error).context("Failed to write API keys to secure storage")
+            })?;
+        if self.keys != keys {
+            let is_present = provider.api_key(&keys).is_some();
+            self.keys = keys;
+            ctx.emit(ApiKeyManagerEvent::KeysUpdated);
+            if was_present != is_present {
+                send_provider_credential_telemetry(
+                    provider,
+                    ProviderCredentialTelemetryKind::PastedKey,
+                    provider_credential_action(is_present),
+                    ctx,
+                );
+            }
+        }
+        Ok(())
     }
 
     /// The currently stored xAI/Grok OAuth tokens, if the user has connected a
@@ -314,33 +428,42 @@ impl ApiKeyManager {
         if self.grok_tokens == tokens {
             return;
         }
+        let was_connected = self.grok_tokens.is_some();
+        let is_connected = tokens.is_some();
         self.grok_tokens = tokens;
         ctx.emit(ApiKeyManagerEvent::KeysUpdated);
         self.write_grok_tokens_to_secure_storage(ctx);
+        if was_connected != is_connected {
+            send_provider_credential_telemetry(
+                LLMProvider::Xai,
+                ProviderCredentialTelemetryKind::Oauth,
+                provider_credential_action(is_connected),
+                ctx,
+            );
+        }
     }
 
-    pub fn set_google_key(&mut self, key: Option<String>, ctx: &mut ModelContext<Self>) {
-        self.keys.google = key;
+    pub fn set_provider_key(
+        &mut self,
+        provider: LLMProvider,
+        key: Option<String>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let was_present = provider.api_key(&self.keys).is_some();
+        if !provider.set_api_key(&mut self.keys, key) {
+            return;
+        }
         ctx.emit(ApiKeyManagerEvent::KeysUpdated);
         self.write_keys_to_secure_storage(ctx);
-    }
-
-    pub fn set_anthropic_key(&mut self, key: Option<String>, ctx: &mut ModelContext<Self>) {
-        self.keys.anthropic = key;
-        ctx.emit(ApiKeyManagerEvent::KeysUpdated);
-        self.write_keys_to_secure_storage(ctx);
-    }
-
-    pub fn set_openai_key(&mut self, key: Option<String>, ctx: &mut ModelContext<Self>) {
-        self.keys.openai = key;
-        ctx.emit(ApiKeyManagerEvent::KeysUpdated);
-        self.write_keys_to_secure_storage(ctx);
-    }
-
-    pub fn set_open_router_key(&mut self, key: Option<String>, ctx: &mut ModelContext<Self>) {
-        self.keys.open_router = key;
-        ctx.emit(ApiKeyManagerEvent::KeysUpdated);
-        self.write_keys_to_secure_storage(ctx);
+        let is_present = provider.api_key(&self.keys).is_some();
+        if was_present != is_present {
+            send_provider_credential_telemetry(
+                provider,
+                ProviderCredentialTelemetryKind::PastedKey,
+                provider_credential_action(is_present),
+                ctx,
+            );
+        }
     }
 
     pub fn add_custom_endpoint(
@@ -440,22 +563,6 @@ impl ApiKeyManager {
 
     pub fn aws_credentials_state(&self) -> &AwsCredentialsState {
         &self.aws_credentials_state
-    }
-
-    pub fn set_geap_credentials_state(
-        &mut self,
-        state: GeapCredentialsState,
-        ctx: &mut ModelContext<Self>,
-    ) {
-        if self.geap_credentials_state == state {
-            return;
-        }
-        self.geap_credentials_state = state;
-        ctx.emit(ApiKeyManagerEvent::KeysUpdated);
-    }
-
-    pub fn geap_credentials_state(&self) -> &GeapCredentialsState {
-        &self.geap_credentials_state
     }
 
     pub fn aws_credentials_refresh_strategy(&self) -> AwsCredentialsRefreshStrategy {
@@ -575,26 +682,11 @@ impl ApiKeyManager {
 
         // Gemini Enterprise (GEAP) credentials attach only when the caller's
         // gate is on AND the stored token was minted for that same
-        // (user, audience, SA) binding.
-        let google_cloud_credentials: Option<
-            api::request::settings::api_keys::GoogleCloudCredentials,
-        > = geap_binding
+        // (user, audience, SA) binding. `geap_credentials_for_request` is the
+        // single source of truth for that rule (see `crate::geap_credentials`).
+        let google_cloud_credentials = geap_binding
             .as_ref()
-            .and_then(|binding| match self.geap_credentials_state {
-                GeapCredentialsState::Loaded {
-                    ref credentials,
-                    ref minted_for,
-                    ..
-                } if minted_for == binding => credentials
-                    .access_token_for_request()
-                    .map(|_| credentials.clone().into()),
-                GeapCredentialsState::Refreshing {
-                    previous: Some((ref credentials, ref minted_for)),
-                } if minted_for == binding => credentials
-                    .access_token_for_request()
-                    .map(|_| credentials.clone().into()),
-                _ => None,
-            });
+            .and_then(|binding| self.geap_credentials_for_request(binding));
 
         if anthropic.is_empty()
             && openai.is_empty()

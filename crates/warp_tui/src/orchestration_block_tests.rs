@@ -5,14 +5,15 @@ use ai::agent::orchestration_config::{
     OrchestrationConfig, OrchestrationConfigStatus, OrchestrationExecutionMode,
 };
 use warp::tui_export::{
-    AIActionStatus, AIAgentAction, AIAgentActionId, AIAgentActionType, Appearance,
-    AuthSecretSelection, OptionRow, OptionSnapshot, OptionSourceStatus, OrchestrationConfigState,
-    OrchestrationEditState, RunAgentsAgentRunConfig, RunAgentsExecutionMode, RunAgentsRequest,
-    TaskId,
+    AIActionStatus, AIAgentAction, AIAgentActionId, AIAgentActionType, AIConversationId,
+    Appearance, AuthSecretSelection, OptionRow, OptionSnapshot, OptionSourceStatus,
+    OrchestrationConfigState, OrchestrationEditState, RunAgentsAgentRunConfig,
+    RunAgentsExecutionMode, RunAgentsRequest, TaskId, register_tui_session_view_test_singletons,
 };
+use warp_core::features::FeatureFlag;
 use warpui::platform::WindowStyle;
 use warpui::{AddWindowOptions, App, ViewHandle};
-use warpui_core::elements::tui::TuiRect;
+use warpui_core::elements::tui::{TuiBufferExt, TuiRect};
 use warpui_core::keymap::Keystroke;
 use warpui_core::presenter::tui::TuiPresenter;
 use warpui_core::{TuiView as _, TypedActionView as _, WindowInvalidation};
@@ -46,14 +47,30 @@ fn request(harness: &str, execution_mode: RunAgentsExecutionMode) -> RunAgentsRe
 }
 
 #[test]
-fn only_the_model_page_is_searchable() {
+fn environment_selector_is_searchable() {
+    App::test((), |mut app| async move {
+        let (block, _) = test_block(&mut app, &request("oz", remote("env-1", "warp")));
+        block.update(&mut app, |block, ctx| {
+            block.open_page(ConfigPage::Environment, ctx);
+        });
+        let selector = app.read(|ctx| block.as_ref(ctx).selector.clone());
+        assert!(
+            selector
+                .read(&app, |selector, _| selector.search_field_for_test())
+                .is_some()
+        );
+    });
+}
+
+#[test]
+fn environment_and_model_pages_are_searchable() {
+    assert!(ConfigPage::Environment.is_searchable());
     assert!(ConfigPage::Model.is_searchable());
     for page in [
         ConfigPage::Location,
         ConfigPage::Harness,
         ConfigPage::ApiKey,
         ConfigPage::Host,
-        ConfigPage::Environment,
     ] {
         assert!(!page.is_searchable(), "{page:?}");
     }
@@ -297,18 +314,21 @@ impl OrchestrationBlockController for TestController {
         }
     }
 
+    fn accept_disabled_reason(
+        &self,
+        _state: &OrchestrationConfigState,
+        _ctx: &warpui::AppContext,
+    ) -> Option<String> {
+        self.accept_error.borrow().clone()
+    }
+
     fn accept(
         &self,
         _action_id: &AIAgentActionId,
         request: RunAgentsRequest,
-        _state: &OrchestrationConfigState,
         _ctx: &mut warpui::AppContext,
-    ) -> Result<(), String> {
-        if let Some(reason) = self.accept_error.borrow().clone() {
-            return Err(reason);
-        }
+    ) {
         self.executed_requests.borrow_mut().push(request);
-        Ok(())
     }
 }
 
@@ -329,6 +349,7 @@ fn test_block(
     request: &RunAgentsRequest,
 ) -> (ViewHandle<TuiOrchestrationBlock>, Rc<TestController>) {
     app.add_singleton_model(|_| Appearance::mock());
+    app.update(warp_core::telemetry::testing::MockTelemetryContextProvider::register);
     let action = AIAgentAction {
         id: AIAgentActionId::from("run-agents-1".to_string()),
         task_id: TaskId::new("task-1".to_string()),
@@ -348,6 +369,7 @@ fn test_block(
         );
         ctx.add_typed_action_tui_view(window_id, move |ctx| {
             TuiOrchestrationBlock::from_parts(
+                AIConversationId::new(),
                 action,
                 &request,
                 None,
@@ -369,6 +391,82 @@ fn act(
     action: TuiOrchestrationBlockAction,
 ) {
     block.update(app, |block, ctx| block.handle_action(&action, ctx));
+}
+
+/// Builds an interactive block backed by the full session-view singleton set,
+/// so the acceptance card body (harness/model labels) can actually render.
+fn renderable_test_block(app: &mut App) -> ViewHandle<TuiOrchestrationBlock> {
+    register_tui_session_view_test_singletons(app);
+    let request = request("oz", RunAgentsExecutionMode::Local);
+    let action = AIAgentAction {
+        id: AIAgentActionId::from("run-agents-1".to_string()),
+        task_id: TaskId::new("task-1".to_string()),
+        action: AIAgentActionType::RunAgents(request.clone()),
+        requires_result: true,
+    };
+    let controller: Rc<dyn OrchestrationBlockController> = Rc::new(TestController::default());
+    app.update(|ctx| {
+        let (window_id, _) = ctx.add_tui_window(
+            AddWindowOptions {
+                window_style: WindowStyle::NotStealFocus,
+                ..Default::default()
+            },
+            |_| TestHostView,
+        );
+        ctx.add_typed_action_tui_view(window_id, move |ctx| {
+            TuiOrchestrationBlock::from_parts(
+                AIConversationId::new(),
+                action,
+                &request,
+                None,
+                controller,
+                Some("auto".to_string()),
+                false,
+                Vec::new(),
+                ctx,
+            )
+        })
+    })
+}
+
+fn rendered_block_lines(block: &ViewHandle<TuiOrchestrationBlock>, app: &App) -> Vec<String> {
+    app.read(|ctx| {
+        TuiPresenter::new()
+            .present_element(
+                block.as_ref(ctx).render(ctx),
+                TuiRect::new(0, 0, 80, 12),
+                ctx,
+            )
+            .buffer
+            .to_lines()
+    })
+}
+
+#[test]
+fn acceptance_card_discloses_nested_children_only_with_multi_level_enabled() {
+    let disclosure = "These agents may start their own child agents.";
+    {
+        let _flag = FeatureFlag::MultiLevelOrchestration.override_enabled(true);
+        App::test((), |mut app| async move {
+            let block = renderable_test_block(&mut app);
+            let lines = rendered_block_lines(&block, &app);
+            assert!(
+                lines.iter().any(|line| line.contains(disclosure)),
+                "acceptance card must carry the multi-level disclosure: {lines:?}"
+            );
+        });
+    }
+    {
+        let _flag = FeatureFlag::MultiLevelOrchestration.override_enabled(false);
+        App::test((), |mut app| async move {
+            let block = renderable_test_block(&mut app);
+            let lines = rendered_block_lines(&block, &app);
+            assert!(
+                !lines.iter().any(|line| line.contains("child agents")),
+                "the disclosure is gated on the multi-level flag: {lines:?}"
+            );
+        });
+    }
 }
 
 #[test]
@@ -657,6 +755,29 @@ fn confirming_a_search_result_returns_focus_to_the_acceptance_card() {
             CardMode::Acceptance
         );
         assert_eq!(app.focused_view_id(window_id), Some(block.id()));
+    });
+}
+
+#[test]
+fn background_page_invalidation_does_not_take_focus() {
+    App::test((), |mut app| async move {
+        let (block, _) = test_block(&mut app, &request("oz", RunAgentsExecutionMode::Local));
+        block.update(&mut app, |block, ctx| {
+            block.open_page(ConfigPage::Model, ctx);
+        });
+        let window_id = block.read(&app, |_, ctx| block.window_id(ctx));
+        let focus_target = app.update(|ctx| ctx.add_tui_view(window_id, |_| TestHostView));
+        focus_target.update(&mut app, |_, ctx| ctx.focus_self());
+
+        block.update(&mut app, |block, ctx| {
+            block.return_to_acceptance(ctx);
+        });
+
+        assert!(app.read(|ctx| focus_target.is_focused(ctx)));
+        assert_eq!(
+            block.read(&app, |block, _| block.mode),
+            CardMode::Acceptance
+        );
     });
 }
 #[test]

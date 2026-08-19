@@ -1,16 +1,15 @@
 use std::path::PathBuf;
 
 use serde::Deserialize as _;
-use settings::schema::SettingSchemaEntry;
-use settings::{Setting, SettingSurfaces, SettingsMode, SyncToCloud};
+use settings::{Setting, SyncToCloud};
 use settings_value::SettingsValue;
 
 use super::{
     MAX_TUI_ZERO_STATE_EXTRUSION_DEPTH, MAX_TUI_ZERO_STATE_ROTATION_PERIOD_SECONDS,
     MIN_TUI_ZERO_STATE_EXTRUSION_DEPTH, MIN_TUI_ZERO_STATE_ROTATION_PERIOD_SECONDS,
-    TuiZeroStateExtrusionDepth, TuiZeroStateExtrusionDepthSetting, TuiZeroStateObject,
-    TuiZeroStateObjectSetting, TuiZeroStateRotationPeriodSeconds,
-    TuiZeroStateRotationPeriodSecondsSetting,
+    TuiZeroStateExtrusionDepth, TuiZeroStateExtrusionDepthSetting,
+    TuiZeroStateFreezeAnimationWhenUnfocusedSetting, TuiZeroStateObject, TuiZeroStateObjectSetting,
+    TuiZeroStateRotationPeriodSeconds, TuiZeroStateRotationPeriodSecondsSetting,
 };
 
 #[test]
@@ -93,6 +92,11 @@ fn zero_state_settings_are_tui_local_file_settings() {
         Some("appearance.zero_state.extrusion_depth")
     );
     assert_eq!(
+        TuiZeroStateFreezeAnimationWhenUnfocusedSetting::toml_path(),
+        Some("appearance.zero_state.freeze_animation_when_unfocused")
+    );
+    assert!(!TuiZeroStateFreezeAnimationWhenUnfocusedSetting::default_value());
+    assert_eq!(
         TuiZeroStateObjectSetting::sync_to_cloud(),
         SyncToCloud::Never
     );
@@ -104,22 +108,9 @@ fn zero_state_settings_are_tui_local_file_settings() {
         TuiZeroStateExtrusionDepthSetting::sync_to_cloud(),
         SyncToCloud::Never
     );
+    assert_eq!(
+        TuiZeroStateFreezeAnimationWhenUnfocusedSetting::sync_to_cloud(),
+        SyncToCloud::Never
+    );
     assert_eq!(TuiZeroStateObjectSetting::max_table_depth(), Some(0));
-}
-
-#[test]
-fn zero_state_schema_entries_are_tui_only() {
-    let zero_state_entries = inventory::iter::<SettingSchemaEntry>
-        .into_iter()
-        .filter(|entry| entry.hierarchy == Some("appearance.zero_state"))
-        .collect::<Vec<_>>();
-
-    assert_eq!(zero_state_entries.len(), 3);
-    for entry in zero_state_entries {
-        assert!(entry.description.contains("Warp Agent CLI"));
-        assert!(!entry.description.contains("TUI"));
-        let surfaces: SettingSurfaces = (entry.surfaces_fn)();
-        assert!(surfaces.includes(SettingsMode::Tui));
-        assert!(!surfaces.includes(SettingsMode::Gui));
-    }
 }

@@ -4,19 +4,24 @@ use std::process::Child;
 use std::time::Duration;
 use std::{fs, thread};
 
+use channel_versions::{ChannelVersion, ChannelVersions, VersionInfo};
 use command::blocking::Command;
 use instant::Instant;
 use warp_core::channel::Channel;
 
 use super::{
-    CURRENT_LINK_NAME, InstallLayout, InstallLock, LOCK_FILE_NAME, LOCK_OWNER_FILE_NAME,
+    CURRENT_POINTER_NAME, InstallLayout, InstallMethod, TuiAutoupdateStatus, UpdateOutcome,
     VERSION_LEASES_DIR_NAME, VersionDirState, VersionLease, create_unique_staging_dir_with,
-    download_endpoint, is_complete_version_dir, version_dir_state,
+    download_endpoint, homebrew_update_outcome, is_complete_version_dir, is_safe_version_component,
+    latest_version_for, prune_old_versions, settled_status, version_dir_state,
 };
 #[cfg(unix)]
 use super::{
-    StagedUpdate, finalize_staged_version, install_update, point_current_at, prune_old_versions,
+    InstallLock, LOCK_FILE_NAME, LOCK_OWNER_FILE_NAME, StagedUpdate, finalize_staged_version,
+    install_update, point_current_at,
 };
+#[cfg(windows)]
+use super::{PREVIOUS_POINTER_NAME, installer_dir_argument};
 
 const BINARY_NAME: &str = "warp-tui-dev";
 const HELPER_MODE_ENV: &str = "WARP_TUI_AUTOUPDATE_HELPER_MODE";
@@ -32,11 +37,93 @@ fn temp_root(name: &str) -> tempfile::TempDir {
         .unwrap()
 }
 
+#[test]
+fn failed_check_replaces_stale_up_to_date_status() {
+    let result: anyhow::Result<UpdateOutcome> = Err(anyhow::anyhow!("dns lookup failed"));
+
+    assert_eq!(
+        settled_status(&result, TuiAutoupdateStatus::UpToDate),
+        TuiAutoupdateStatus::Failed
+    );
+}
+
+#[test]
+fn failed_check_preserves_pending_restart_status() {
+    let result: anyhow::Result<UpdateOutcome> = Err(anyhow::anyhow!("dns lookup failed"));
+
+    assert_eq!(
+        settled_status(&result, TuiAutoupdateStatus::PendingRestart),
+        TuiAutoupdateStatus::PendingRestart
+    );
+}
+
+#[test]
+fn homebrew_update_is_presented_without_installing() {
+    let outcome = homebrew_update_outcome(
+        "v0.2026.07.22.18.00.stable_00",
+        "v0.2026.07.29.18.00.stable_00".to_owned(),
+    )
+    .unwrap();
+
+    assert!(matches!(
+        outcome,
+        UpdateOutcome::UpdateAvailable { ref version }
+            if version == "v0.2026.07.29.18.00.stable_00"
+    ));
+    assert_eq!(
+        settled_status(&Ok(outcome), TuiAutoupdateStatus::UpToDate),
+        TuiAutoupdateStatus::UpdateAvailable
+    );
+}
+
+#[test]
+fn homebrew_update_check_never_offers_rollbacks() {
+    let outcome = homebrew_update_outcome(
+        "v0.2026.07.29.18.00.stable_00",
+        "v0.2026.07.22.18.00.stable_00".to_owned(),
+    )
+    .unwrap();
+
+    assert!(matches!(
+        outcome,
+        UpdateOutcome::UpToDate { version }
+            if version == "v0.2026.07.29.18.00.stable_00"
+    ));
+}
+
+#[test]
+fn version_directory_names_are_single_safe_components() {
+    for valid in ["v0.2026.07.28.12.00.dev_00", "preview-1", "A"] {
+        assert!(is_safe_version_component(valid), "{valid}");
+    }
+    for invalid in [
+        "",
+        ".",
+        "..",
+        "v1..dev",
+        "../v1",
+        "nested/v1",
+        "nested\\v1",
+        "version:stream",
+        "CON",
+        "trailing.",
+        "contains space",
+    ] {
+        assert!(!is_safe_version_component(invalid), "{invalid}");
+    }
+}
+fn set_current(layout: &InstallLayout, version: &str) {
+    #[cfg(unix)]
+    point_current_at(layout, version).unwrap();
+    #[cfg(windows)]
+    fs::write(&layout.current_pointer, version).unwrap();
+}
+
 fn layout(root: &Path, running_version: &str) -> InstallLayout {
     InstallLayout {
         root: root.to_path_buf(),
         versions_dir: root.join("versions"),
-        current_link: root.join(CURRENT_LINK_NAME),
+        current_pointer: root.join(CURRENT_POINTER_NAME),
         running_version_dir: root.join("versions").join(running_version),
         binary_name: BINARY_NAME.to_owned(),
     }
@@ -104,7 +191,7 @@ fn detects_managed_install_layout() {
         Path::new("/home/user/.warp/tui/versions")
     );
     assert_eq!(
-        layout.current_link,
+        layout.current_pointer,
         Path::new("/home/user/.warp/tui/current")
     );
     assert_eq!(
@@ -112,6 +199,59 @@ fn detects_managed_install_layout() {
         Path::new("/home/user/.warp/tui/versions/v0.2026.01.01.00.00.dev_00")
     );
     assert_eq!(layout.binary_name, BINARY_NAME);
+}
+
+#[test]
+fn detects_homebrew_cask_installations_across_supported_prefixes() {
+    for exe in [
+        "/opt/homebrew/Caskroom/warp-agent-cli/v1/warp-tui-stable",
+        "/usr/local/Caskroom/warp-agent-cli/v1/warp-tui-stable",
+        "/home/linuxbrew/.linuxbrew/Caskroom/warp-agent-cli/v1/warp-tui-stable",
+    ] {
+        assert_eq!(
+            InstallMethod::from_canonical_exe_path(Path::new(exe)),
+            InstallMethod::Homebrew,
+            "{exe}"
+        );
+    }
+}
+
+#[test]
+fn rejects_unrelated_homebrew_casks_and_binary_names() {
+    for exe in [
+        "/opt/homebrew/Caskroom/other/v1/warp-tui-stable",
+        "/opt/homebrew/Caskroom/warp-agent-cli/v1/warp-preview",
+        "/opt/homebrew/bin/warp-tui-stable",
+    ] {
+        assert_eq!(
+            InstallMethod::from_canonical_exe_path(Path::new(exe)),
+            InstallMethod::Unmanaged,
+            "{exe}"
+        );
+    }
+}
+
+/// `Path::canonicalize` hands back `\\?\C:\...` on Windows. Passing that
+/// through to Inno Setup makes it reject `/DIR` and exit with code 3, so the
+/// prefix has to be stripped before the installer sees it.
+#[cfg(windows)]
+#[test]
+fn installer_dir_argument_strips_verbatim_prefix() {
+    assert_eq!(
+        installer_dir_argument(Path::new(r"\\?\C:\Users\dev\AppData\Local\Warp\tui-dev"))
+            .to_string_lossy(),
+        r"/DIR=C:\Users\dev\AppData\Local\Warp\tui-dev"
+    );
+}
+
+#[cfg(windows)]
+#[test]
+fn installer_dir_argument_preserves_plain_paths() {
+    assert_eq!(
+        installer_dir_argument(Path::new(r"C:\Users\dev\AppData\Local\Warp\tui-dev"))
+            .to_string_lossy(),
+        r"/DIR=C:\Users\dev\AppData\Local\Warp\tui-dev"
+    );
 }
 
 #[test]
@@ -148,6 +288,49 @@ fn uses_channel_specific_download_endpoints() {
 }
 
 #[test]
+fn uses_channel_specific_tui_versions() {
+    fn channel_version(version: &str, tui_version: Option<&str>) -> ChannelVersion {
+        let mut version_info = VersionInfo::new(version.to_owned());
+        version_info.tui_version = tui_version.map(ToOwned::to_owned);
+        ChannelVersion::new(version_info)
+    }
+
+    let versions = ChannelVersions {
+        dev: channel_version("dev_app", Some("dev_tui")),
+        preview: channel_version("preview_app", Some("preview_tui")),
+        stable: channel_version("stable_app", Some("stable_tui")),
+        changelogs: None,
+    };
+
+    assert_eq!(
+        latest_version_for(Channel::Dev, &versions).unwrap(),
+        "dev_tui"
+    );
+    assert_eq!(
+        latest_version_for(Channel::Preview, &versions).unwrap(),
+        "preview_tui"
+    );
+    assert_eq!(
+        latest_version_for(Channel::Stable, &versions).unwrap(),
+        "stable_tui"
+    );
+}
+
+#[test]
+fn falls_back_to_app_version_when_tui_version_is_omitted() {
+    let versions = ChannelVersions {
+        dev: ChannelVersion::new(VersionInfo::new("dev_app".to_owned())),
+        preview: ChannelVersion::new(VersionInfo::new("preview_app".to_owned())),
+        stable: ChannelVersion::new(VersionInfo::new("stable_app".to_owned())),
+        changelogs: None,
+    };
+
+    assert_eq!(
+        latest_version_for(Channel::Preview, &versions).unwrap(),
+        "preview_app"
+    );
+}
+#[test]
 fn complete_versions_require_real_binary_and_resources() {
     let root = temp_root("complete");
     let layout = layout(root.path(), "A");
@@ -163,6 +346,7 @@ fn complete_versions_require_real_binary_and_resources() {
         version_dir_state(&layout, &version_dir).unwrap(),
         VersionDirState::Invalid
     );
+    #[cfg(not(windows))]
     assert_eq!(
         fs::read_to_string(version_dir.join(BINARY_NAME)).unwrap(),
         "original"
@@ -210,7 +394,7 @@ fn finalized_unlaunched_version_is_marked_and_reclaimed() {
     let root = temp_root("finalized-marker");
     let layout = layout(root.path(), "A");
     create_complete_version(root.path(), "A", "A");
-    point_current_at(&layout, "A").unwrap();
+    set_current(&layout, "A");
 
     let staging_dir = root.path().join("versions/.staging-B");
     let payload_dir = staging_dir.join("payload");
@@ -227,7 +411,7 @@ fn finalized_unlaunched_version_is_marked_and_reclaimed() {
     assert!(lease_path(root.path(), "B").is_file());
 
     create_complete_version(root.path(), "C", "C");
-    point_current_at(&layout, "C").unwrap();
+    set_current(&layout, "C");
     prune_old_versions(&layout, "C");
     assert!(!version_dir.exists());
 }
@@ -265,7 +449,6 @@ fn completed_version_is_reused_and_invalid_version_is_not_replaced() {
     assert!(super::current_points_at(&layout, "A"));
 }
 
-#[cfg(unix)]
 #[test]
 fn live_versions_are_retained_and_reclaimed_after_exit() {
     let root = temp_root("gc");
@@ -274,7 +457,7 @@ fn live_versions_are_retained_and_reclaimed_after_exit() {
     create_complete_version(root.path(), "C", "C");
     create_complete_version(root.path(), "legacy", "legacy");
     let layout = layout(root.path(), "C");
-    point_current_at(&layout, "C").unwrap();
+    set_current(&layout, "C");
 
     let a_ready = root.path().join("a-ready");
     let a_release = root.path().join("a-release");
@@ -306,7 +489,6 @@ fn live_versions_are_retained_and_reclaimed_after_exit() {
     assert!(root.path().join("versions/legacy").is_dir());
 }
 
-#[cfg(unix)]
 #[test]
 fn current_version_is_rechecked_before_gc_deletion() {
     let root = temp_root("gc-current");
@@ -315,7 +497,7 @@ fn current_version_is_rechecked_before_gc_deletion() {
     fs::create_dir_all(root.path().join(VERSION_LEASES_DIR_NAME)).unwrap();
     fs::write(lease_path(root.path(), "A"), "").unwrap();
     let layout = layout(root.path(), "C");
-    point_current_at(&layout, "A").unwrap();
+    set_current(&layout, "A");
 
     prune_old_versions(&layout, "C");
     assert!(root.path().join("versions/A").is_dir());
@@ -347,6 +529,27 @@ fn startup_fails_closed_if_gc_wins_the_lease_race() {
     assert!(child.wait().unwrap().success());
 }
 
+#[cfg(windows)]
+#[test]
+fn windows_gc_retains_rollback_version() {
+    let root = temp_root("windows-rollback-gc");
+    let layout = layout(root.path(), "C");
+    for version in ["A", "B", "C"] {
+        create_complete_version(root.path(), version, version);
+        fs::create_dir_all(root.path().join(VERSION_LEASES_DIR_NAME)).unwrap();
+        fs::write(lease_path(root.path(), version), "").unwrap();
+    }
+    fs::write(&layout.current_pointer, "C").unwrap();
+    fs::write(root.path().join(PREVIOUS_POINTER_NAME), "B").unwrap();
+
+    prune_old_versions(&layout, "C");
+
+    assert!(!root.path().join("versions/A").exists());
+    assert!(root.path().join("versions/B").exists());
+    assert!(root.path().join("versions/C").exists());
+}
+
+#[cfg(unix)]
 #[test]
 fn directory_install_lock_is_cross_process_and_token_owned() {
     let root = temp_root("install-lock");
@@ -374,6 +577,7 @@ fn directory_install_lock_is_cross_process_and_token_owned() {
     assert!(root.path().join(LOCK_FILE_NAME).is_dir());
 }
 
+#[cfg(unix)]
 #[test]
 fn install_lock_migrates_stale_legacy_file_and_directory() {
     for representation in ["file", "directory"] {
@@ -399,6 +603,7 @@ fn install_lock_migrates_stale_legacy_file_and_directory() {
     }
 }
 
+#[cfg(unix)]
 #[test]
 fn fresh_legacy_install_lock_is_contention() {
     let root = temp_root("fresh-legacy-lock");
@@ -430,6 +635,7 @@ fn lease_process_helper() {
             let result = VersionLease::acquire(&layout(&root, &version));
             fs::write(&ready, if result.is_ok() { "acquired" } else { "error" }).unwrap();
         }
+        #[cfg(unix)]
         "hold-install-lock" => {
             let lock = InstallLock::acquire(&root).unwrap().unwrap();
             fs::write(&ready, "locked").unwrap();

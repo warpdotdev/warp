@@ -283,8 +283,6 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::ConversationApi,
         #[cfg(feature = "code_launch_modal")]
         FeatureFlag::CodeLaunchModal,
-        #[cfg(feature = "api_key_authentication")]
-        FeatureFlag::APIKeyAuthentication,
         #[cfg(feature = "api_key_management")]
         FeatureFlag::APIKeyManagement,
         #[cfg(feature = "mcp_oauth")]
@@ -311,6 +309,10 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::SummarizationConversationCommand,
         #[cfg(feature = "mcp_grouped_server_context")]
         FeatureFlag::MCPGroupedServerContext,
+        #[cfg(feature = "well_known_mcp_ids")]
+        FeatureFlag::WellKnownMcpIds,
+        #[cfg(feature = "factory_mcp")]
+        FeatureFlag::FactoryMcp,
         #[cfg(feature = "web_search_ui")]
         FeatureFlag::WebSearchUI,
         #[cfg(feature = "web_fetch_ui")]
@@ -413,6 +415,8 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::OpenWarpLaunchModal,
         #[cfg(feature = "orchestration_launch_modal")]
         FeatureFlag::OrchestrationLaunchModal,
+        #[cfg(feature = "agent_cli_launch_modal")]
+        FeatureFlag::AgentCliLaunchModal,
         #[cfg(feature = "new_tab_styling")]
         FeatureFlag::NewTabStyling,
         #[cfg(feature = "skill_arguments")]

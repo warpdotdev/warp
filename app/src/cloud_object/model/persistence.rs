@@ -96,6 +96,8 @@ pub enum CloudModelEvent {
     },
     /// The initial bulk load of cloud objects from the server has completed.
     InitialLoadCompleted,
+    /// Environment last-task timestamps fetched outside the generic cloud-object sync were merged.
+    EnvironmentLastTaskRunTimestampsUpdated,
 }
 
 enum FolderOpenState {
@@ -269,7 +271,7 @@ impl CloudModel {
     ) {
         if let Some(object) = self.objects_by_id.get_mut(uid)
             && let Some(conflicting_revision) = object.conflicting_object_revision()
-            && let Some(current_revision) = object.metadata().revision.clone()
+            && let Some(current_revision) = object.metadata().revision
         {
             // If the pending conflict is out of date compared to the current revision, clear it.
             // If we received the RTC update for an edit before the server response, the
@@ -771,6 +773,7 @@ impl CloudModel {
                 object.metadata_mut().last_task_run_ts = Some(timestamp.into());
             }
         }
+        ctx.emit(CloudModelEvent::EnvironmentLastTaskRunTimestampsUpdated);
         ctx.notify();
     }
 

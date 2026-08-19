@@ -521,7 +521,7 @@ impl DefaultSessionMode {
         match self {
             DefaultSessionMode::Terminal => "Terminal",
             DefaultSessionMode::Agent => "Agent",
-            DefaultSessionMode::CloudAgent => "Cloud Oz",
+            DefaultSessionMode::CloudAgent => "Cloud agent",
             DefaultSessionMode::TabConfig => "Tab Config",
             DefaultSessionMode::DockerSandbox => "Local Docker Sandbox",
         }
@@ -666,6 +666,145 @@ settings::macros::implement_setting_for_enum!(
     toml_path: "agents.usage_display_mode",
     description: "Which unit the usage entry displays in Warp Agent CLI: credits or provider cost.",
 );
+/// One configurable item in the Warp Agent CLI statusline.
+#[derive(
+    Debug,
+    serde::Serialize,
+    serde::Deserialize,
+    PartialEq,
+    Eq,
+    Copy,
+    Clone,
+    Hash,
+    schemars::JsonSchema,
+    settings_value::SettingsValue,
+)]
+#[schemars(
+    description = "A configurable item in the Warp Agent CLI statusline.",
+    rename_all = "snake_case"
+)]
+#[serde(rename_all = "snake_case")]
+pub enum TuiStatuslineItem {
+    AutoApprove,
+    /// Vim mode indicator (NOR/INS/VIS/V-L/REP); hidden when vim mode is disabled.
+    VimModeIndicator,
+    Model,
+    WorkingDirectory,
+    GitBranch,
+    GitBranchStatus,
+    GitDiffStatus,
+    GitHubPullRequest,
+    CreditUsage,
+    ContextWindowUsage,
+    Date,
+    #[schemars(rename = "time_12_hour")]
+    Time12Hour,
+    #[schemars(rename = "time_24_hour")]
+    Time24Hour,
+    AgentTodoList,
+    VoiceInput,
+}
+
+impl TuiStatuslineItem {
+    pub const ALL: [Self; 15] = [
+        Self::AutoApprove,
+        Self::VimModeIndicator,
+        Self::Model,
+        Self::WorkingDirectory,
+        Self::GitBranch,
+        Self::GitBranchStatus,
+        Self::GitDiffStatus,
+        Self::GitHubPullRequest,
+        Self::CreditUsage,
+        Self::ContextWindowUsage,
+        Self::Date,
+        Self::Time12Hour,
+        Self::Time24Hour,
+        Self::AgentTodoList,
+        Self::VoiceInput,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::AutoApprove => "Auto-approve indicator",
+            Self::VimModeIndicator => "Vim mode indicator",
+            Self::Model => "Model",
+            Self::WorkingDirectory => "Working directory",
+            Self::GitBranch => "Git branch",
+            Self::GitBranchStatus => "Git branch status",
+            Self::GitDiffStatus => "Git diff status",
+            Self::GitHubPullRequest => "GitHub pull request",
+            Self::CreditUsage => "Credit usage",
+            Self::ContextWindowUsage => "Context window usage",
+            Self::Date => "Date",
+            Self::Time12Hour => "Time (12 hour format)",
+            Self::Time24Hour => "Time (24 hour format)",
+            Self::AgentTodoList => "Agent to-do list",
+            Self::VoiceInput => "Voice input",
+        }
+    }
+}
+
+/// Ordered and enabled items in the Warp Agent CLI statusline.
+#[derive(
+    Debug,
+    serde::Serialize,
+    serde::Deserialize,
+    PartialEq,
+    Eq,
+    Clone,
+    schemars::JsonSchema,
+    settings_value::SettingsValue,
+)]
+pub struct TuiStatuslineConfig {
+    pub order: Vec<TuiStatuslineItem>,
+    pub enabled: Vec<TuiStatuslineItem>,
+}
+
+impl Default for TuiStatuslineConfig {
+    fn default() -> Self {
+        Self {
+            order: TuiStatuslineItem::ALL.to_vec(),
+            enabled: vec![
+                TuiStatuslineItem::AutoApprove,
+                TuiStatuslineItem::VimModeIndicator,
+                TuiStatuslineItem::Model,
+                TuiStatuslineItem::WorkingDirectory,
+                TuiStatuslineItem::GitBranch,
+                TuiStatuslineItem::GitDiffStatus,
+            ],
+        }
+    }
+}
+
+impl TuiStatuslineConfig {
+    /// Returns a complete, duplicate-free catalog and a valid enabled subset.
+    pub fn normalized(&self) -> Self {
+        let is_legacy_config = !self.order.contains(&TuiStatuslineItem::VimModeIndicator);
+        let mut order = Vec::with_capacity(TuiStatuslineItem::ALL.len());
+        for item in self.order.iter().copied().chain(TuiStatuslineItem::ALL) {
+            if TuiStatuslineItem::ALL.contains(&item) && !order.contains(&item) {
+                order.push(item);
+            }
+        }
+
+        let mut enabled = Vec::with_capacity(self.enabled.len());
+        for item in self.enabled.iter().copied() {
+            if order.contains(&item) && !enabled.contains(&item) {
+                enabled.push(item);
+            }
+        }
+        if is_legacy_config {
+            enabled.insert(0, TuiStatuslineItem::VimModeIndicator);
+        }
+
+        Self { order, enabled }
+    }
+
+    pub fn is_enabled(&self, item: TuiStatuslineItem) -> bool {
+        self.enabled.contains(&item)
+    }
+}
 
 impl TuiUsageDisplayMode {
     /// The other unit — clicking the usage entry flips to this.
@@ -1324,6 +1463,18 @@ define_settings_group!(AISettings, settings: [
     //
     // TUI-only and file-backed so the choice persists across TUI sessions.
     usage_display_mode: TuiUsageDisplayMode,
+    // Ordered visibility configuration for the TUI's bottom statusline.
+    // TUI-only and local so separate devices can use different terminal layouts.
+    tui_statusline: TuiStatusline {
+        type: TuiStatuslineConfig,
+        default: TuiStatuslineConfig::default(),
+        supported_platforms: SupportedPlatforms::ALL,
+        sync_to_cloud: SyncToCloud::Never,
+        surface: settings::SettingSurfaces::TUI,
+        private: false,
+        toml_path: "agents.statusline",
+        description: "Controls the order and visibility of Warp Agent CLI statusline items.",
+    },
     // Whether or not the profile-level command autoexecution speedbump has been shown.
     //
     // Not a user-visible setting - we model it as a setting so we can track how often
@@ -1594,6 +1745,20 @@ define_settings_group!(AISettings, settings: [
     }
 
     // This is not a user-visible setting - it's merely a one-time flag to track if the
+    // Warp Agent CLI launch modal has been shown to the user.
+    //
+    // We model it as a setting so it's only shown once to a given user regardless of the number of
+    // devices they use.
+    did_check_to_trigger_agent_cli_launch_modal: DidShowAgentCliLaunchModal {
+        type: bool,
+        default: false,
+        supported_platforms: SupportedPlatforms::ALL,
+        sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::No),
+        surface: settings::SettingSurfaces::GUI,
+        private: true,
+    }
+
+    // This is not a user-visible setting - it's merely a one-time flag to track if the
     // free-AI-removal notice modal has been shown to (or silently marked as seen for) the user.
     //
     // We model it as a setting so it's only shown once to a given user regardless of the number of
@@ -1607,7 +1772,7 @@ define_settings_group!(AISettings, settings: [
         private: true,
     }
 
-    // Used to determine whether the "What's new in Oz" section of the agent view
+    // Used to determine whether the "Latest updates" section of the agent view
     // zero state is expanded or collapsed by default.
     should_expand_oz_updates: ShouldExpandOzUpdates {
         type: bool,
@@ -1618,7 +1783,7 @@ define_settings_group!(AISettings, settings: [
         private: true,
     }
 
-    // Used to determine whether the "What's new in Oz" section of the agent view
+    // Used to determine whether the "Latest updates" section of the agent view
     // zero state is shown or hidden.
     should_show_oz_updates_in_zero_state: ShouldShowOzUpdatesInZeroState {
         type: bool,
@@ -1637,7 +1802,7 @@ define_settings_group!(AISettings, settings: [
         default: false,
         supported_platforms: SupportedPlatforms::ALL,
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
-        surface: settings::SettingSurfaces::GUI,
+        surface: settings::SettingSurfaces::ALL,
         private: false,
         storage_key: "CanUseWarpCreditsWithByok",
         toml_path: "cloud_platform.third_party_api_keys.can_use_warp_credits_with_byok",
@@ -1838,6 +2003,18 @@ define_settings_group!(AISettings, settings: [
         private: false,
         toml_path: "agents.warp_agent.input.include_agent_commands_in_history",
         description: "Whether agent-executed commands are included in command history.",
+    }
+
+    // Whether fast forward / auto-approve can run commands that match the command denylist.
+    auto_approve_bypasses_command_denylist: AutoApproveBypassesCommandDenylist {
+        type: bool,
+        default: true,
+        supported_platforms: SupportedPlatforms::ALL,
+        sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        surface: settings::SettingSurfaces::ALL,
+        private: false,
+        toml_path: "agents.warp_agent.other.auto_approve_bypasses_command_denylist",
+        description: "Whether auto-approve bypasses the command denylist.",
     }
 
     // Controls whether the conversation history view appears in the tools panel.

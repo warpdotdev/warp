@@ -514,7 +514,7 @@ impl AmbientAgentRunner {
                 prompt,
                 mode,
                 config,
-                title: None,
+                title: args.title,
                 team: match (args.scope.team, args.scope.personal) {
                     (true, _) => Some(true),
                     (_, true) => Some(false),
@@ -524,7 +524,7 @@ impl AmbientAgentRunner {
                 skill,
                 attachments,
                 interactive: None,
-                parent_run_id: None,
+                parent_run_id: args.parent_run_id,
                 runtime_skills: vec![],
                 referenced_attachments: vec![],
                 conversation_id: args.conversation,
@@ -583,7 +583,7 @@ impl AmbientAgentRunner {
                             }
                             AmbientAgentEvent::TimedOut => {
                                 let task_id_str = spawned_task_id.as_ref().map_or_else(|| "unknown".to_string(), |id| id.to_string());
-                                println!("Agent session with run ID {task_id_str} is not ready after {}s. Check for a sharing link in the ambient agent management panel. See https://docs.warp.dev/agent-platform/cloud-agents/managing-cloud-agents for details.", TASK_STATUS_POLLING_DURATION.as_secs());
+                                println!("Agent session with run ID {task_id_str} is not ready after {}s. Check for a sharing link in the ambient agent management panel. See https://docs.warp.dev/platform/managing-cloud-agents for details.", TASK_STATUS_POLLING_DURATION.as_secs());
                             }
                         },
                         Err(err) => {

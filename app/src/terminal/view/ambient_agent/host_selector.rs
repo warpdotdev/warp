@@ -12,6 +12,7 @@ use warpui::elements::{
     ParentOffsetBounds, Stack,
 };
 use warpui::fonts::{Properties, Weight};
+use warpui::text_layout::ClipConfig;
 use warpui::{
     AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle,
 };
@@ -298,6 +299,8 @@ fn build_menu_items(
             .with_font_size_override(ITEM_FONT_SIZE)
             .with_padding_override(ITEM_VERTICAL_PADDING, MENU_HORIZONTAL_PADDING)
             .with_override_hover_background_color(hover_background)
+            // Ellipsize long worker names so they don't overflow into the right-side badge.
+            .with_clip_config(ClipConfig::ellipsis())
             .with_on_select_action(HostSelectorAction::SelectHost(host));
         if let Some(badge) = badge {
             fields = fields.with_right_side_label(

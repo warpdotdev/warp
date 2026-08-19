@@ -12,7 +12,7 @@ use warpui_core::{App, TuiView as _, TypedActionView as _, ViewHandle};
 
 use super::{TuiAskQuestionView, TuiAskQuestionViewAction};
 use crate::option_selector::TuiOptionSelectorAction;
-use crate::test_fixtures::add_test_action_model;
+use crate::test_fixtures::{TestHostView, add_test_action_model};
 
 fn question(
     id: &str,
@@ -21,6 +21,17 @@ fn question(
     supports_other: bool,
     options: &[&str],
 ) -> AskUserQuestionItem {
+    question_with_recommended(id, text, is_multiselect, supports_other, options, &[])
+}
+
+fn question_with_recommended(
+    id: &str,
+    text: &str,
+    is_multiselect: bool,
+    supports_other: bool,
+    options: &[&str],
+    recommended_indices: &[usize],
+) -> AskUserQuestionItem {
     AskUserQuestionItem {
         question_id: id.to_owned(),
         question: text.to_owned(),
@@ -28,9 +39,10 @@ fn question(
             is_multiselect,
             options: options
                 .iter()
-                .map(|label| AskUserQuestionOption {
+                .enumerate()
+                .map(|(i, label)| AskUserQuestionOption {
                     label: (*label).to_owned(),
-                    recommended: false,
+                    recommended: recommended_indices.contains(&i),
                 })
                 .collect(),
             supports_other,
@@ -100,6 +112,8 @@ fn queue_question_action(app: &mut App, view: &ViewHandle<TuiAskQuestionView>) {
     action_model.update(app, |model, ctx| {
         queue_tui_permission_action(model, action, conversation_id, ctx);
     });
+    let selector = app.read(|ctx| view.as_ref(ctx).selector.clone());
+    selector.update(app, |_, ctx| ctx.focus_self());
 }
 
 fn present_active_view(app: &mut App, view: &ViewHandle<TuiAskQuestionView>) {
@@ -158,18 +172,18 @@ fn active_card_matches_question_panel_structure() {
         assert_eq!(
             lines,
             [
-                "┌──────────────────────────────────────────────────────────────────────────────┐",
-                "│                                                                              │",
-                "│ ■ Agent questions                                                 ← 1 of 2 → │",
-                "│                                                                              │",
-                "│ Which targets should be tested? (select all that apply)                      │",
-                "│ (1) [ ] Stable                                                               │",
-                "│ (2) [ ] Nightly                                                              │",
-                "│ (3) [ ] Other…                                                               │",
-                "│                                                                              │",
-                "│ Shift + Enter to advance Enter or number to select Ctrl + C to cancel questi │",
-                "│                                                                              │",
-                "└──────────────────────────────────────────────────────────────────────────────┘",
+                "▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁",
+                "▏                                                                              ▕",
+                "▏ ■ Agent questions                                                 ← 1 of 2 → ▕",
+                "▏                                                                              ▕",
+                "▏ Which targets should be tested? (select all that apply)                      ▕",
+                "▏ (1) [ ] Stable                                                               ▕",
+                "▏ (2) [ ] Nightly                                                              ▕",
+                "▏ (3) [ ] Other…                                                               ▕",
+                "▏                                                                              ▕",
+                "▏ Shift + Enter to advance Enter or number to select Ctrl + C to cancel questi ▕",
+                "▏                                                                              ▕",
+                "▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔",
             ]
         );
     });
@@ -194,6 +208,118 @@ fn focusing_an_active_question_delegates_to_the_selector() {
         view.update(&mut app, |_, ctx| ctx.focus_self());
 
         assert!(app.read(|ctx| selector.is_focused(ctx)));
+    });
+}
+
+#[test]
+fn question_blocking_transition_does_not_replace_existing_focus() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        let action_model = add_test_action_model(&mut app);
+        let conversation_id = AIConversationId::new();
+        let action_id = AIAgentActionId::from("background-question".to_owned());
+        let questions = vec![question(
+            "single",
+            "Which shell?",
+            false,
+            false,
+            &["zsh", "fish"],
+        )];
+        let action = AIAgentAction {
+            id: action_id.clone(),
+            task_id: TaskId::new("task".to_owned()),
+            action: AIAgentActionType::AskUserQuestion {
+                questions: questions.clone(),
+            },
+            requires_result: true,
+        };
+        let action_model_for_view = action_model.clone();
+        let (window_id, foreground, _question_view) = app.update(|ctx| {
+            let (window_id, foreground) = ctx.add_tui_window(
+                AddWindowOptions {
+                    window_style: WindowStyle::NotStealFocus,
+                    ..Default::default()
+                },
+                |_| TestHostView,
+            );
+            let question_view = ctx.add_typed_action_tui_view(window_id, move |ctx| {
+                TuiAskQuestionView::new(
+                    action_model_for_view,
+                    conversation_id,
+                    action_id,
+                    questions,
+                    ctx,
+                )
+            });
+            foreground.update(ctx, |_, ctx| ctx.focus_self());
+            (window_id, foreground, question_view)
+        });
+
+        action_model.update(&mut app, |model, ctx| {
+            queue_tui_permission_action(model, action, conversation_id, ctx);
+        });
+
+        assert_eq!(
+            app.read(|ctx| ctx.focused_view_id(window_id)),
+            Some(foreground.id()),
+            "a blocked question in a background session must not replace foreground focus"
+        );
+    });
+}
+
+#[test]
+fn already_blocked_question_does_not_replace_existing_focus_when_materialized() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        let action_model = add_test_action_model(&mut app);
+        let conversation_id = AIConversationId::new();
+        let action_id = AIAgentActionId::from("materialized-background-question".to_owned());
+        let questions = vec![question(
+            "single",
+            "Which shell?",
+            false,
+            false,
+            &["zsh", "fish"],
+        )];
+        let action = AIAgentAction {
+            id: action_id.clone(),
+            task_id: TaskId::new("task".to_owned()),
+            action: AIAgentActionType::AskUserQuestion {
+                questions: questions.clone(),
+            },
+            requires_result: true,
+        };
+        let (window_id, foreground) = app.update(|ctx| {
+            ctx.add_tui_window(
+                AddWindowOptions {
+                    window_style: WindowStyle::NotStealFocus,
+                    ..Default::default()
+                },
+                |_| TestHostView,
+            )
+        });
+        action_model.update(&mut app, |model, ctx| {
+            queue_tui_permission_action(model, action, conversation_id, ctx);
+        });
+        let action_model_for_view = action_model.clone();
+        app.update(|ctx| {
+            foreground.update(ctx, |_, ctx| ctx.focus_self());
+            ctx.add_typed_action_tui_view(window_id, move |ctx| {
+                TuiAskQuestionView::new(
+                    action_model_for_view,
+                    conversation_id,
+                    action_id,
+                    questions,
+                    ctx,
+                )
+            });
+        });
+
+        assert_eq!(
+            app.read(|ctx| ctx.focused_view_id(window_id)),
+            Some(foreground.id()),
+            "materializing an already-blocked background question must preserve foreground focus"
+        );
     });
 }
 #[test]
@@ -574,6 +700,45 @@ fn navigating_away_from_a_cleared_other_editor_removes_the_previous_answer() {
             assert_eq!(view.session.current_question_index(), 1);
             assert!(view.session.draft_for_question(0).is_none());
         });
+    });
+}
+
+#[test]
+fn recommended_option_renders_recommended_badge() {
+    App::test((), |mut app| async move {
+        let (_, view) = add_view(
+            &mut app,
+            vec![question_with_recommended(
+                "q1",
+                "Which shell?",
+                false,
+                false,
+                &["zsh", "fish", "bash"],
+                &[1], // fish is recommended
+            )],
+        );
+
+        let lines = render_active_lines(&mut app, &view);
+        // The recommended option should have "  (recommended)" appended.
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("fish") && line.contains("(recommended)")),
+            "expected a line with 'fish  (recommended)' but got: {lines:#?}"
+        );
+        // Non-recommended options must not show the badge.
+        assert!(
+            lines
+                .iter()
+                .all(|line| !line.contains("zsh") || !line.contains("(recommended)")),
+            "expected zsh not to have (recommended) but got: {lines:#?}"
+        );
+        assert!(
+            lines
+                .iter()
+                .all(|line| !line.contains("bash") || !line.contains("(recommended)")),
+            "expected bash not to have (recommended) but got: {lines:#?}"
+        );
     });
 }
 

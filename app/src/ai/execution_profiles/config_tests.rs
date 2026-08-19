@@ -1,6 +1,29 @@
+use schemars::JsonSchema as _;
 use settings_value::SettingsValue as _;
 
 use super::*;
+
+#[test]
+fn context_window_limit_schema_has_description() {
+    let mut generator = schemars::SchemaGenerator::default();
+    let schema = ExecutionProfileFile::json_schema(&mut generator);
+    let value = schemars::Schema::to_value(schema);
+    let props = value
+        .pointer("/properties/context_window_limit")
+        .expect("context_window_limit should be a property");
+    let description = props
+        .get("description")
+        .and_then(|d| d.as_str())
+        .expect("context_window_limit should have a description");
+    assert!(
+        description.contains("model-dependent"),
+        "description should mention model-dependent range, got: {description}"
+    );
+    assert!(
+        description.contains("server-side"),
+        "description should mention server-side determination, got: {description}"
+    );
+}
 
 #[test]
 fn file_collection_round_trips_multiple_profiles() {

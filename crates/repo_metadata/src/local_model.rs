@@ -564,7 +564,7 @@ impl LocalRepoMetadataModel {
                 watcher.update(ctx, |watcher, _ctx| {
                     std::mem::drop(watcher.register_path(
                         target_dir,
-                        repo_watch_filter(Vec::new(), Vec::new()),
+                        repo_watch_filter(target_dir.clone(), Vec::new(), Vec::new()),
                         RecursiveMode::NonRecursive,
                     ));
                 });
@@ -971,7 +971,7 @@ impl LocalRepoMetadataModel {
                     }
                     std::mem::drop(watcher.register_path(
                         &watch_path,
-                        repo_watch_filter(gitignores, force_included_paths),
+                        repo_watch_filter(watch_path.clone(), gitignores, force_included_paths),
                         recursive_mode,
                     ));
                 });
@@ -1267,7 +1267,8 @@ impl LocalRepoMetadataModel {
             }
             _ => None,
         };
-        let mut gitignores = state.gitignores.clone();
+        // Tree building mutates the gitignore stack as it descends, so this needs an owned Vec.
+        let mut gitignores = state.gitignores.as_ref().clone();
         let dir_path_for_build = dir_path.to_local_path_lossy();
         let repo_root_for_build = repo_root.clone();
         let dir_path_for_completion = dir_path.clone();
@@ -1415,7 +1416,7 @@ impl LocalRepoMetadataModel {
             watcher.update(ctx, |watcher, _ctx| {
                 std::mem::drop(watcher.register_path(
                     &local_path,
-                    repo_watch_filter(gitignores, force_included_paths),
+                    repo_watch_filter(local_path.clone(), gitignores, force_included_paths),
                     RecursiveMode::NonRecursive,
                 ));
             });
@@ -1502,7 +1503,7 @@ impl LocalRepoMetadataModel {
     /// (and watched) on demand when the user expands it via `load_directory`.
     async fn compute_file_tree_mutations(
         update: &RepoUpdate,
-        gitignores: &[Gitignore],
+        gitignores: &[Arc<Gitignore>],
         force_included_paths: &[PathBuf],
         standing_query_definitions: &StandingQueryDefinitions,
         lazy_load: bool,
@@ -1804,7 +1805,7 @@ impl LocalRepoMetadataModel {
     }
 
     /// Checks if a path matches any of the gitignore patterns
-    fn path_is_ignored(path: &Path, gitignores: &[Gitignore]) -> bool {
+    fn path_is_ignored(path: &Path, gitignores: &[Arc<Gitignore>]) -> bool {
         // Check if any component of the path is .git
         if path
             .components()

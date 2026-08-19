@@ -87,3 +87,27 @@ fn move_without_press_records_point_but_no_release_matches() {
     session.record_press_or_move(PointerEventKind::Move, None, Vector2I::new(9, 9));
     assert_eq!(session.record_release(MouseButton::Left), None);
 }
+
+#[test]
+fn scroll_sample_updates_release_point_without_claiming_a_button() {
+    let session = PointerSession::new();
+    session.record_press_or_move(
+        PointerEventKind::Down,
+        Some(MouseButton::Left),
+        Vector2I::new(1, 2),
+    );
+    // The pointer warps to the wheel point before scrolling, so a later
+    // release is recorded there.
+    session.record_press_or_move(PointerEventKind::Scroll, None, Vector2I::new(7, 8));
+    assert_eq!(
+        session.record_release(MouseButton::Left),
+        Some(Vector2I::new(7, 8))
+    );
+}
+
+#[test]
+fn scroll_sample_without_press_claims_no_button() {
+    let session = PointerSession::new();
+    session.record_press_or_move(PointerEventKind::Scroll, None, Vector2I::new(9, 9));
+    assert_eq!(session.record_release(MouseButton::Left), None);
+}

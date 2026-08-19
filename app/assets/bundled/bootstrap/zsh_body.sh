@@ -296,6 +296,16 @@ if [[ -z $WARP_BOOTSTRAPPED ]]; then
     GIT_OPTIONAL_LOCKS=0 command git "$@"
   }
 
+  # Clears the line editor's buffer and, if the active keymap is "vicmd" (vi command/normal
+  # mode), switches back to "viins" (its insert companion).
+  function warp_kill_buffer_and_reset_insert_mode () {
+    zle kill-buffer
+    if [[ $KEYMAP == vicmd ]]; then
+      zle -K viins
+    fi
+  }
+  zle -N warp_kill_buffer_and_reset_insert_mode
+
   # Note that this is very performance sensitive code, so try not to
   # invoke any external commands in here.
   warp_precmd () {
@@ -347,8 +357,19 @@ if [[ -z $WARP_BOOTSTRAPPED ]]; then
       # Reset the custom kill-buffer binding as the user's zshrc (which is sourced after zshrc_warp)
       # could have added a bindkey. This won't have any user-impact because these shortcuts are only run
       # in the context of the zsh line editor, which isn't displayed in Warp.
-      bindkey -r '^P'
-      bindkey '^P' kill-buffer
+      #
+      # We explicitly rebind on every standard keymap (not just "main", which is only a link to
+      # whichever of emacs/viins is currently selected) because a user's rc file can switch editing
+      # modes after we've bound "main" (e.g. `bindkey -v`, as used by the "cursor_mode" zsh function
+      # and by prezto). `bindkey -v` re-links "main" to "viins" and leaves "vicmd" (vi command mode)
+      # bound to its default of up-history. If the active keymap when Warp sends its pre-command ^P
+      # ends up being one we didn't rebind, the clear becomes a no-op and any leftover bootstrap bytes
+      # still sitting in the line editor's buffer get echoed alongside the next command.
+      # See https://github.com/warpdotdev/warp/issues/7099.
+      local warp_keymap
+      for warp_keymap in main emacs viins vicmd; do
+        bindkey -M "$warp_keymap" '^P' warp_kill_buffer_and_reset_insert_mode 2>/dev/null || :
+      done
 
       # Reset the custom input-reporting binding as well, in case it was overridden
       # by the user's zshrc.
@@ -978,7 +999,7 @@ if [[ -z $WARP_BOOTSTRAPPED ]]; then
           # Hex-encode the ZSH environment script we use to bootstrap remote zsh b/c it contains control characters
           # We decode on the SSH server using xxd if its available, otherwise fall back to a for-loop over each byte
           # and use printf to convert back to plaintext
-          local zsh_env_script=$(printf '%s' 'unsetopt ZLE; unset RCS; unset GLOBAL_RCS; WARP_SESSION_ID='$remote_session_id'; WARP_USING_WINDOWS_CON_PTY=@@USING_CON_PTY_BOOLEAN@@; _hostname=$(command -pv hostname >/dev/null 2>&1 && command -p hostname 2>/dev/null || command -p uname -n); _user=$(command -pv whoami >/dev/null 2>&1 && command -p whoami 2>/dev/null || echo $USER); _msg=$(printf "{\"hook\": \"InitShell\", \"value\": {\"session_id\": $WARP_SESSION_ID, \"shell\": \"zsh\", \"user\": \"%s\", \"hostname\": \"%s\"}}" "$_user" "$_hostname" | command -p od -An -v -tx1 | command -p tr -d '"'"' \n'"'"'); printf '"'"'\e]9278;d;%s\x07'"'"' $_msg; unset _hostname _user _msg' | command -p od -An -v -tx1 | command -p tr -d ' \n')
+          local zsh_env_script=$(printf '%s' 'unsetopt ZLE RCS GLOBAL_RCS; WARP_SESSION_ID='$remote_session_id'; WARP_USING_WINDOWS_CON_PTY=@@USING_CON_PTY_BOOLEAN@@; _hostname=$(command -pv hostname >/dev/null 2>&1 && command -p hostname 2>/dev/null || command -p uname -n); _user=$(command -pv whoami >/dev/null 2>&1 && command -p whoami 2>/dev/null || echo $USER); _msg=$(printf "{\"hook\": \"InitShell\", \"value\": {\"session_id\": $WARP_SESSION_ID, \"shell\": \"zsh\", \"user\": \"%s\", \"hostname\": \"%s\"}}" "$_user" "$_hostname" | command -p od -An -v -tx1 | command -p tr -d '"'"' \n'"'"'); printf '"'"'\e]9278;d;%s\x07'"'"' $_msg; unset _hostname _user _msg' | command -p od -An -v -tx1 | command -p tr -d ' \n')
 
           # Optionally attach to an existing ControlMaster the user already
           # runs for this destination instead of creating our own. Resolve
