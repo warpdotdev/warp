@@ -4159,6 +4159,61 @@ fn test_interaction_state() {
 }
 
 #[test]
+fn test_single_line_editor_drops_typed_line_breaks() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let (_, editor) = app.add_window(WindowStyle::NotStealFocus, |ctx| {
+            let mut editor = EditorView::single_line(Default::default(), ctx);
+            editor.user_insert("glm-5.2:cloud", ctx);
+            // Windows reports "\r" as the typed text for Enter; when the key event goes
+            // unhandled it is dispatched as typed characters.
+            editor.user_insert("\r", ctx);
+            editor.user_insert("\r\n", ctx);
+            editor
+        });
+
+        editor.read(&app, |editor, ctx| {
+            assert_eq!(editor.buffer_text(ctx), "glm-5.2:cloud");
+        });
+    });
+}
+
+#[test]
+fn test_single_line_editor_keeps_text_around_a_line_break() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let (_, editor) = app.add_window(WindowStyle::NotStealFocus, |ctx| {
+            let mut editor = EditorView::single_line(Default::default(), ctx);
+            editor.user_insert("gl\rm", ctx);
+            editor
+        });
+
+        editor.read(&app, |editor, ctx| {
+            assert_eq!(editor.buffer_text(ctx), "glm");
+        });
+    });
+}
+
+#[test]
+fn test_multi_line_editor_still_accepts_typed_newlines() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let (_, editor) = app.add_window(WindowStyle::NotStealFocus, |ctx| {
+            let mut editor = EditorView::new(Default::default(), ctx);
+            editor.user_insert("first\nsecond", ctx);
+            editor
+        });
+
+        editor.read(&app, |editor, ctx| {
+            assert_eq!(editor.buffer_text(ctx), "first\nsecond");
+        });
+    });
+}
+
+#[test]
 fn test_select_next_occurrence() {
     App::test((), |mut app| async move {
         initialize_app(&mut app);
