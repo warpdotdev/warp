@@ -2334,12 +2334,12 @@ fn test_background_blocks_finished() {
 }
 
 /// Regression test: `UserBlockCompleted`'s deferred fields must resolve by the block's stable
-/// `BlockId`, not by the `BlockIndex` captured at construction time. Removing blocks (e.g.
-/// clearing the screen) can reassign a removed block's old index to an entirely different block;
-/// resolving by index alone would silently return that unrelated block's data instead of
-/// detecting that the original block is gone.
+/// `BlockId`, not by the `BlockIndex` captured at construction time. Removing an earlier block
+/// (e.g. clearing agent-attached command blocks) shifts every later block's `BlockIndex` down;
+/// resolving by the stale index alone would silently return whatever block now occupies it,
+/// even though the original block is still alive elsewhere in the list.
 #[test]
-fn deferred_fields_resolve_by_block_id_not_stale_index() {
+fn deferred_fields_resolve_by_block_id_after_reindex() {
     let (events_tx, events_rx) = async_channel::unbounded();
     let event_proxy = ChannelEventListener::builder_for_test()
         .with_terminal_events_tx(events_tx)
@@ -2352,6 +2352,13 @@ fn deferred_fields_resolve_by_block_id_not_stale_index() {
     command_finished_and_precmd(model.lock().block_list_mut());
     // Flush events from bootstrapping.
     while let Ok(_event) = events_rx.try_recv() {}
+
+    // A throwaway block that will be removed later, to reindex everything after it.
+    let throwaway_index = insert_block(
+        model.lock().block_list_mut(),
+        "throwaway_command\n",
+        "throwaway_output\n",
+    );
 
     let first_index = insert_block(
         model.lock().block_list_mut(),
@@ -2370,38 +2377,40 @@ fn deferred_fields_resolve_by_block_id_not_stale_index() {
     let first_completed =
         first_completed.expect("expected an AfterBlockCompleted event for the first block");
 
-    // Resetting the screen removes every block except the current (empty) active one and
-    // reassigns indices starting from zero, so `first_index` will soon belong to an unrelated
-    // block.
+    insert_block(
+        model.lock().block_list_mut(),
+        "second_command\n",
+        "second_output\n",
+    );
+
+    // Removing the throwaway block shifts every later block's `BlockIndex` down by one, so
+    // `first_completed`'s original index now belongs to "second_command" instead -- while the
+    // original block itself is still alive, just at a new index.
     model
         .lock()
         .block_list_mut()
-        .clear_screen(ClearMode::ResetAndClear);
-    assert_eq!(model.lock().block_list().active_block().index(), 0.into());
+        .remove_command_blocks_at_indices(vec![throwaway_index]);
 
-    // Insert enough new blocks that a genuinely different command ends up at `first_index`.
-    let mut collided = false;
-    for i in 0..4 {
-        let index = insert_block(
-            model.lock().block_list_mut(),
-            &format!("colliding_command_{i}\n"),
-            &format!("colliding_output_{i}\n"),
-        );
-        collided |= index == first_index;
-    }
-    assert!(
-        collided,
-        "expected a new, unrelated block to land at the original block's index"
+    // Confirm the collision: a genuinely different, still-existing block now sits at
+    // `first_index`.
+    assert_eq!(
+        model
+            .lock()
+            .block_list()
+            .block_at(first_index)
+            .expect("a block should still exist at the reused index")
+            .command_to_string(),
+        "second_command"
     );
 
-    // The original block no longer exists, so its fields must fall back to their defaults rather
-    // than resolving to the unrelated block that now sits at the same index.
+    // Despite that, resolving `first_completed`'s deferred fields (by its stable `BlockId`, not
+    // the stale `first_index`) must still return its own data.
     assert_eq!(
         first_completed.command.get_with(|compute| {
             let model = model.lock();
             compute(model.block_list())
         }),
-        ""
+        "first_command"
     );
     assert_eq!(
         first_completed
@@ -2410,7 +2419,7 @@ fn deferred_fields_resolve_by_block_id_not_stale_index() {
                 let model = model.lock();
                 compute(model.block_list())
             }),
-        ""
+        "first_output"
     );
 }
 
