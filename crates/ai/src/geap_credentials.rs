@@ -106,11 +106,8 @@ pub struct GeapMintBinding {
     pub federation: GeapFederation,
 }
 
-// `detail` carries the raw provider response body (Google STS/IAM), which can
-// include user- or workspace-identifying content, so it must never appear in
-// `Display`/`Debug`-derived reporting text — only `user_facing()` decides what
-// reaches the UI, and it never echoes `detail` either. Keep the messages below
-// static so `report_error!` can report this type directly without leaking it.
+// Keep every message static: `detail` carries the raw Google STS/IAM response
+// body, so interpolating it would leak it to Sentry via `report_error!`.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum LoadGeapCredentialsError {
     #[error("failed to mint a Warp identity token")]

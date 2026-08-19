@@ -465,9 +465,6 @@ impl ResponseStream {
                 // a transient network failure. Surface the original error and finish
                 // terminally. (HTTP send failures don't take this path — they arrive as
                 // in-stream error events.)
-                //
-                // `report_request_failure` below is the single sink for this error;
-                // don't also report it here, or it double-reports the same failure.
                 let error = Arc::new(AIApiError::Other(
                     anyhow::Error::new(e).context("Failed to send request to multi-agent API"),
                 ));
