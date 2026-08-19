@@ -1,7 +1,7 @@
 use pathfinder_geometry::vector::Vector2F;
+use warpui::SingletonEntity;
 use warpui::integration::TestStep;
 use warpui::windowing::WindowManager;
-use warpui::SingletonEntity;
 
 use crate::ai::blocklist::agent_view::AgentInputFooterEvent;
 use crate::ai::blocklist::{InputConfig, InputType};
@@ -11,13 +11,13 @@ use crate::integration_testing::terminal::assert_context_menu_is_open;
 use crate::integration_testing::view_getters::{
     single_input_view_for_tab, single_terminal_view, single_terminal_view_for_tab,
 };
+use crate::terminal::CLIAgent;
 use crate::terminal::cli_agent_sessions::{
     CLIAgentInputEntrypoint, CLIAgentInputState, CLIAgentSession, CLIAgentSessionContext,
     CLIAgentSessionStatus, CLIAgentSessionsModel,
 };
 use crate::terminal::input::models::InlineModelSelectorTab;
 use crate::terminal::view::TerminalAction;
-use crate::terminal::CLIAgent;
 
 /// Opens the CLI-agent Rich Input for the terminal view at `tab_index`.
 pub fn open_cli_agent_rich_input(tab_index: usize) -> TestStep {

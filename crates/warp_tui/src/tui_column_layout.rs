@@ -1,8 +1,6 @@
 //! Shared width allocation and text formatting for two-column TUI rows.
 
-use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
-
-const ELLIPSIS: &str = "...";
+use warpui_core::elements::tui::{text_width, truncate_with_ellipsis};
 
 /// Width policy for a group of two-column rows.
 #[derive(Clone, Copy)]
@@ -52,12 +50,12 @@ pub(crate) fn tui_two_column_layout<'a>(
         longest_first_columns = Some(
             longest_first_columns
                 .unwrap_or_default()
-                .max(UnicodeWidthStr::width(first)),
+                .max(usize::from(text_width(first))),
         );
         longest_second_columns = Some(
             longest_second_columns
                 .unwrap_or_default()
-                .max(UnicodeWidthStr::width(second)),
+                .max(usize::from(text_width(second))),
         );
     }
 
@@ -117,32 +115,10 @@ pub(crate) fn format_tui_first_column(text: &str, layout: TuiTwoColumnLayout) ->
     let content_columns = first_columns.saturating_sub(gap_columns);
     let mut formatted = truncate_with_ellipsis(text, content_columns);
     if layout.show_second {
-        let formatted_columns = UnicodeWidthStr::width(formatted.as_str());
+        let formatted_columns = usize::from(text_width(&formatted));
         formatted.push_str(&" ".repeat(first_columns - formatted_columns));
     }
     formatted
-}
-
-/// Truncates `text` to `maximum_columns`, using as much of `...` as fits.
-fn truncate_with_ellipsis(text: &str, maximum_columns: usize) -> String {
-    if UnicodeWidthStr::width(text) <= maximum_columns {
-        return text.to_owned();
-    }
-
-    let ellipsis_columns = UnicodeWidthStr::width(ELLIPSIS).min(maximum_columns);
-    let prefix_columns = maximum_columns - ellipsis_columns;
-    let mut prefix = String::new();
-    let mut prefix_width = 0;
-    for character in text.chars() {
-        let character_width = UnicodeWidthChar::width(character).unwrap_or_default();
-        if prefix_width + character_width > prefix_columns {
-            break;
-        }
-        prefix.push(character);
-        prefix_width += character_width;
-    }
-    prefix.push_str(&".".repeat(ellipsis_columns));
-    prefix
 }
 
 #[cfg(test)]

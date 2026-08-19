@@ -1,4 +1,4 @@
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use warp_cli::agent::Harness;
 use warp_graphql::managed_secrets::ManagedSecretType;
 use warp_managed_secrets::ManagedSecretValue;
@@ -35,12 +35,11 @@ pub fn learn_more_url_for_harness(harness: Harness) -> &'static str {
     }
 }
 
-const DEFAULT_LEARN_MORE_URL: &str =
-    "https://docs.warp.dev/agent-platform/cloud-agents/harnesses/authentication/";
+const DEFAULT_LEARN_MORE_URL: &str = "https://docs.warp.dev/platform/harnesses/authentication/";
 const CODEX_LEARN_MORE_URL: &str =
-    "https://docs.warp.dev/agent-platform/cloud-agents/harnesses/authentication/#connecting-codex-credentials";
+    "https://docs.warp.dev/platform/harnesses/authentication/#connecting-codex-credentials";
 const CLAUDE_LEARN_MORE_URL: &str =
-    "https://docs.warp.dev/agent-platform/cloud-agents/harnesses/authentication/#connecting-claude-code-credentials";
+    "https://docs.warp.dev/platform/harnesses/authentication/#connecting-claude-code-credentials";
 
 pub fn build_managed_secret_value(
     info: &AuthSecretTypeInfo,

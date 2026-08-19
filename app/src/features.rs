@@ -63,6 +63,8 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::DefaultWaterfallMode,
         #[cfg(feature = "settings_file")]
         FeatureFlag::SettingsFile,
+        #[cfg(feature = "file_backed_execution_profiles")]
+        FeatureFlag::FileBackedExecutionProfiles,
         #[cfg(feature = "rect_selection")]
         FeatureFlag::RectSelection,
         #[cfg(feature = "alacritty_settings_import")]
@@ -85,6 +87,10 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::CloudEnvironments,
         #[cfg(feature = "cloud_runners")]
         FeatureFlag::CloudRunners,
+        #[cfg(feature = "cloud_agent_runners")]
+        FeatureFlag::CloudAgentRunners,
+        #[cfg(feature = "account_first_onboarding")]
+        FeatureFlag::AccountFirstOnboarding,
         #[cfg(all(feature = "simulate_github_unauthed", debug_assertions))]
         FeatureFlag::SimulateGithubUnauthed,
         #[cfg(feature = "session_sharing_acls")]
@@ -277,8 +283,6 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::ConversationApi,
         #[cfg(feature = "code_launch_modal")]
         FeatureFlag::CodeLaunchModal,
-        #[cfg(feature = "api_key_authentication")]
-        FeatureFlag::APIKeyAuthentication,
         #[cfg(feature = "api_key_management")]
         FeatureFlag::APIKeyManagement,
         #[cfg(feature = "mcp_oauth")]
@@ -305,6 +309,10 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::SummarizationConversationCommand,
         #[cfg(feature = "mcp_grouped_server_context")]
         FeatureFlag::MCPGroupedServerContext,
+        #[cfg(feature = "well_known_mcp_ids")]
+        FeatureFlag::WellKnownMcpIds,
+        #[cfg(feature = "factory_mcp")]
+        FeatureFlag::FactoryMcp,
         #[cfg(feature = "web_search_ui")]
         FeatureFlag::WebSearchUI,
         #[cfg(feature = "web_fetch_ui")]
@@ -407,6 +415,8 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::OpenWarpLaunchModal,
         #[cfg(feature = "orchestration_launch_modal")]
         FeatureFlag::OrchestrationLaunchModal,
+        #[cfg(feature = "agent_cli_launch_modal")]
+        FeatureFlag::AgentCliLaunchModal,
         #[cfg(feature = "new_tab_styling")]
         FeatureFlag::NewTabStyling,
         #[cfg(feature = "skill_arguments")]
@@ -417,8 +427,6 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::ConversationsAsContext,
         #[cfg(feature = "incremental_auto_reload")]
         FeatureFlag::IncrementalAutoReload,
-        #[cfg(feature = "run_agents_tool")]
-        FeatureFlag::RunAgentsTool,
         #[cfg(feature = "wait_for_events_parent_registration")]
         FeatureFlag::WaitForEventsParentRegistration,
         #[cfg(feature = "pending_user_query_indicator")]
@@ -507,6 +515,10 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::NldPromptHistoryMatch,
         #[cfg(feature = "prompt_cache_expiry_warning")]
         FeatureFlag::PromptCacheExpiryWarning,
+        #[cfg(feature = "osc_hyperlinks")]
+        FeatureFlag::OscHyperlinks,
+        #[cfg(feature = "terminal_lifecycle_recovery")]
+        FeatureFlag::TerminalLifecycleRecovery,
     ]);
 
     flags

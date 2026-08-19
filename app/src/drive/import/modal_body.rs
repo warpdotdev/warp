@@ -7,8 +7,8 @@ use warpui::elements::{
     Align, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Flex, MainAxisAlignment,
     MainAxisSize, MouseStateHandle, ParentElement, Radius,
 };
-use warpui::platform::file_picker::FilePickerError;
 use warpui::platform::Cursor;
+use warpui::platform::file_picker::FilePickerError;
 use warpui::ui_components::button::{ButtonVariant, TextAndIcon, TextAndIconAlignment};
 use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
 use warpui::{
@@ -17,7 +17,7 @@ use warpui::{
 
 use super::modal::BODY_HEIGHT;
 use super::nodes::{
-    expand_dirs, parse_file, FileContent, FileId, FileUploadState, FolderId, UploadResult,
+    FileContent, FileId, FileUploadState, FolderId, UploadResult, expand_dirs, parse_file,
 };
 use super::queue::{ImportQueue, ImportQueueArgs, ImportQueueEvent, ParentId, RequestContent};
 use crate::appearance::Appearance;

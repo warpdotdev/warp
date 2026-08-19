@@ -13,9 +13,9 @@ use warpui::App;
 use watcher::HomeDirectoryWatcher;
 
 use super::{
-    format_upload_artifact_text, parsed_skill_for_common_locations, read_skill_display_text,
-    should_decorate_recorded_use_computer, start_recording_card_text, stop_recording_card_text,
-    RecordingCardText,
+    RecordingCardText, format_upload_artifact_text, parsed_skill_for_common_locations,
+    read_skill_display_text, should_decorate_recorded_use_computer, start_recording_card_text,
+    stop_recording_card_text,
 };
 use crate::ai::agent::{
     RecordingStarted, RecordingStopped, StartRecordingResult, StopRecordingResult,

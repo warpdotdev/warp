@@ -4,7 +4,7 @@ use rangemap::RangeMap;
 use unindent::Unindent as _;
 use warp_editor::multiline::{MultilineStr, MultilineString};
 
-use super::{compute_unified_diff, DiffModel};
+use super::{DiffModel, compute_unified_diff};
 use crate::code::editor::diff::ChangeType;
 
 #[test]
@@ -384,7 +384,10 @@ fn test_unified_diff() {
             "test.rs",
         )
         .await;
-        assert_eq!(diff.unified_diff, "--- test.rs\n+++ test.rs\n@@ -1,3 +1,4 @@\n-Hello World\n+Hallo Welt\n This is the second line.\n-This is the third.\n+This is life.\n+Moar and more\n");
+        assert_eq!(
+            diff.unified_diff,
+            "--- test.rs\n+++ test.rs\n@@ -1,3 +1,4 @@\n-Hello World\n+Hallo Welt\n This is the second line.\n-This is the third.\n+This is life.\n+Moar and more\n"
+        );
         assert_eq!(diff.lines_added, 3);
         assert_eq!(diff.lines_removed, 2);
     });

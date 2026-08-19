@@ -1,5 +1,5 @@
 use super::{
-    format_tui_first_column, tui_two_column_layout, TuiTwoColumnConstraints, TuiTwoColumnLayout,
+    TuiTwoColumnConstraints, TuiTwoColumnLayout, format_tui_first_column, tui_two_column_layout,
 };
 
 const CONSTRAINTS: TuiTwoColumnConstraints = TuiTwoColumnConstraints {

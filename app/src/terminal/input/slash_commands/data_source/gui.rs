@@ -14,16 +14,16 @@ use super::{
 use crate::ai::agent::conversation::AIConversationId;
 #[cfg(not(target_family = "wasm"))]
 use crate::ai::agent_conversations_model::AgentConversationsModel;
-use crate::ai::blocklist::agent_view::{AgentViewController, AgentViewControllerEvent};
-use crate::ai::blocklist::block::cli_controller::CLISubagentController;
 #[cfg(not(target_family = "wasm"))]
 use crate::ai::blocklist::BlocklistAIHistoryModel;
+use crate::ai::blocklist::agent_view::{AgentViewController, AgentViewControllerEvent};
+use crate::ai::blocklist::block::cli_controller::CLISubagentController;
+use crate::search::SyncDataSource;
 use crate::search::data_source::{Query, QueryResult};
 use crate::search::mixer::DataSourceRunErrorWrapper;
-use crate::search::slash_command_menu::static_commands::commands::{self, COMMAND_REGISTRY};
-use crate::search::slash_command_menu::static_commands::Availability;
 use crate::search::slash_command_menu::StaticCommand;
-use crate::search::SyncDataSource;
+use crate::search::slash_command_menu::static_commands::Availability;
+use crate::search::slash_command_menu::static_commands::commands::{self, COMMAND_REGISTRY};
 use crate::settings::{
     InputSettings, InputSettingsChangedEvent, PrivacySettings, PrivacySettingsChangedEvent,
 };
@@ -157,7 +157,8 @@ impl GuiSlashCommandDataSource {
     pub(crate) fn command_is_active(&self, command: &StaticCommand, ctx: &AppContext) -> bool {
         let availability = self.availability(ctx);
         let gates = self.common_command_gates(ctx);
-        self.command_passes_common_gates(command, availability, &gates)
+        command.supports_gui()
+            && self.command_passes_common_gates(command, availability, &gates)
             && self.command_passes_gui_gates(
                 command,
                 availability,
@@ -173,7 +174,8 @@ impl GuiSlashCommandDataSource {
             COMMAND_REGISTRY
                 .all_commands_by_id()
                 .filter(|(_, command)| {
-                    self.command_passes_common_gates(command, availability, &gates)
+                    command.supports_gui()
+                        && self.command_passes_common_gates(command, availability, &gates)
                         && self.command_passes_gui_gates(
                             command,
                             availability,

@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use lazy_static::lazy_static;
-use pathfinder_geometry::vector::{vec2f, Vector2F};
+use pathfinder_geometry::vector::{Vector2F, vec2f};
 use settings::ToggleableSetting;
 use warp::cmd_or_ctrl_shift;
 use warp::features::FeatureFlag;
@@ -21,11 +21,11 @@ use warp::settings::SelectionSettings;
 use warp_multi_agent_api as api;
 use warpui_core::integration::TestStep;
 use warpui_core::text::SelectionType;
-use warpui_core::{async_assert, Event, SingletonEntity};
+use warpui_core::{Event, SingletonEntity, async_assert};
 
 use super::new_builder;
-use crate::util::skip_if_powershell_core_2303;
 use crate::Builder;
+use crate::util::skip_if_powershell_core_2303;
 
 cfg_if::cfg_if! {
     if #[cfg(any(target_os = "linux", target_os = "freebsd"))] {
@@ -222,6 +222,61 @@ pub fn test_restored_ai_block_renders_mermaid_and_local_images() -> Builder {
                         async_assert!(
                             view.last_ai_block().is_some(),
                             "Restored AI block should exist"
+                        )
+                    })
+                }),
+        )
+}
+
+/// Renders an orchestrate card whose `run_agents` tool call was still streaming
+/// when the conversation was cancelled. The call never reaches the action
+/// queue, so it has no action status and the card must fall back to its
+/// terminal cancelled state instead of the "Configuring agents…" placeholder.
+pub fn test_cancelled_run_agents_card_renders_cancelled_state() -> Builder {
+    new_builder()
+        .with_real_display()
+        // A dummy AI block is not attached to an agent view conversation, so with
+        // `AgentView` on it is filtered out of the terminal transcript and never
+        // renders. The user preference is the only override that wins over the
+        // flag state the app installs during startup.
+        .with_step(
+            TestStep::new("Render AI blocks inline in the blocklist").with_action(|_, _, _| {
+                FeatureFlag::AgentView.set_user_preference(false);
+            }),
+        )
+        .with_step(wait_until_bootstrapped_single_pane_for_tab(0))
+        .with_step(clear_blocklist_to_remove_bootstrapped_blocks())
+        .with_step(execute_echo_str(0, "orchestrate card repro"))
+        .with_step(
+            new_step_with_default_assertions("Insert cancelled orchestrate AI block").with_action(
+                |app, window_id, _| {
+                    let terminal_view = single_terminal_view_for_tab(app, window_id, 0);
+                    terminal_view.update(app, |view, ctx| {
+                        view.insert_dummy_cancelled_run_agents_ai_block(
+                            "Can you parallelize the migration?".to_owned(),
+                            "Splitting the migration across three agents.".to_owned(),
+                            vec![
+                                "schema-migration".to_owned(),
+                                "api-handlers".to_owned(),
+                                "integration-tests".to_owned(),
+                            ],
+                            ctx,
+                        );
+                    });
+                },
+            ),
+        )
+        .with_step(
+            TestStep::new("Capture the cancelled orchestrate card")
+                .set_timeout(Duration::from_secs(20))
+                .set_post_step_pause(Duration::from_secs(3))
+                .with_take_screenshot("run_agents_cancelled_card.png")
+                .add_assertion(|app, window_id| {
+                    let terminal_view = single_terminal_view_for_tab(app, window_id, 0);
+                    terminal_view.read(app, |view, _ctx| {
+                        async_assert!(
+                            view.last_ai_block().is_some(),
+                            "Cancelled orchestrate AI block should exist"
                         )
                     })
                 }),

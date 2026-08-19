@@ -1,6 +1,6 @@
 use std::fmt::{Display, Formatter};
 
-use enum_iterator::{all, Sequence};
+use enum_iterator::{Sequence, all};
 use serde::{Deserialize, Serialize};
 use settings::macros::define_settings_group;
 use settings::{RespectUserSyncSetting, Setting as _, SupportedPlatforms, SyncToCloud};
@@ -206,7 +206,7 @@ define_settings_group!(AppEditorSettings, settings: [
         default: false,
         supported_platforms: SupportedPlatforms::ALL,
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
-        surface: settings::SettingSurfaces::GUI,
+        surface: settings::SettingSurfaces::ALL,
         private: false,
         toml_path: "text_editing.vim_mode_enabled",
         description: "Whether Vim keybindings are enabled.",

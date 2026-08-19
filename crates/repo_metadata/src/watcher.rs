@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::pin::Pin;
 
 #[cfg(feature = "local_fs")]
-use futures::{future::OptionFuture, FutureExt as _};
+use futures::{FutureExt as _, future::OptionFuture};
 use warp_util::standardized_path::StandardizedPath;
 use warpui_core::{Entity, ModelContext, ModelHandle, SingletonEntity, WeakModelHandle};
 
@@ -14,6 +14,8 @@ use crate::{RepoMetadataError, Repository};
 
 cfg_if::cfg_if! {
     if #[cfg(feature = "local_fs")] {
+        use std::sync::Arc;
+
         use ignore::gitignore::Gitignore;
         use watcher::{BulkFilesystemWatcher, BulkFilesystemWatcherEvent};
         use crate::entry::{
@@ -38,6 +40,8 @@ pub struct DirectoryWatcher {
     /// The filesystem watcher for monitoring changes.
     #[cfg(feature = "local_fs")]
     watcher: Option<ModelHandle<BulkFilesystemWatcher>>,
+    #[cfg(test)]
+    stopped_watching_paths: Vec<StandardizedPath>,
 
     /// Handle to the internal processing queue model that orders scan & update tasks.
     processing_queue: ModelHandle<TaskQueue>,
@@ -73,6 +77,8 @@ impl DirectoryWatcher {
             directories: Default::default(),
             #[cfg(feature = "local_fs")]
             watcher: Some(fs_watcher),
+            #[cfg(test)]
+            stopped_watching_paths: Vec::new(),
             processing_queue,
             force_included_paths: Vec::new(),
         }
@@ -98,6 +104,8 @@ impl DirectoryWatcher {
             directories: Default::default(),
             #[cfg(feature = "local_fs")]
             watcher: Some(fs_watcher),
+            #[cfg(test)]
+            stopped_watching_paths: Vec::new(),
             processing_queue,
             force_included_paths: Vec::new(),
         }
@@ -171,10 +179,11 @@ impl DirectoryWatcher {
             );
             let wt_std = StandardizedPath::from_local_canonicalized(wt_dir.as_path()).ok();
             for repo_handle in self.directories.values() {
-                if let Some(ext) = repo_handle.as_ref(ctx).external_git_directory() {
-                    if wt_std.as_ref() == Some(ext) && !affected.iter().any(|r| r == repo_handle) {
-                        affected.push(repo_handle.clone());
-                    }
+                if let Some(ext) = repo_handle.as_ref(ctx).external_git_directory()
+                    && wt_std.as_ref() == Some(ext)
+                    && !affected.iter().any(|r| r == repo_handle)
+                {
+                    affected.push(repo_handle.clone());
                 }
             }
         } else if is_remote_tracking_ref(git_path) {
@@ -198,19 +207,18 @@ impl DirectoryWatcher {
             );
             let standardized = StandardizedPath::from_local_canonicalized(git_path).ok();
             if let Some(ref std_path) = standardized {
-                if let Some(repo) = self.find_containing_directory(std_path) {
-                    if !affected.iter().any(|r| r == &repo) {
-                        affected.push(repo);
-                    }
+                if let Some(repo) = self.find_containing_directory(std_path)
+                    && !affected.iter().any(|r| r == &repo)
+                {
+                    affected.push(repo);
                 }
                 for repo_handle in self.directories.values() {
                     let common = repo_handle.read(ctx, |repo, _| repo.common_git_dir());
-                    if let Ok(common_std) = StandardizedPath::try_from_local(common.as_path()) {
-                        if std_path.starts_with(&common_std)
-                            && !affected.iter().any(|r| r == repo_handle)
-                        {
-                            affected.push(repo_handle.clone());
-                        }
+                    if let Ok(common_std) = StandardizedPath::try_from_local(common.as_path())
+                        && std_path.starts_with(&common_std)
+                        && !affected.iter().any(|r| r == repo_handle)
+                    {
+                        affected.push(repo_handle.clone());
                     }
                 }
             }
@@ -236,10 +244,10 @@ impl DirectoryWatcher {
                 git_path.display()
             );
             let standardized = StandardizedPath::from_local_canonicalized(git_path).ok();
-            if let Some(ref std_path) = standardized {
-                if let Some(repo) = self.find_containing_directory(std_path) {
-                    affected.push(repo);
-                }
+            if let Some(ref std_path) = standardized
+                && let Some(repo) = self.find_containing_directory(std_path)
+            {
+                affected.push(repo);
             }
         }
 
@@ -293,8 +301,8 @@ impl DirectoryWatcher {
         if let Some(repository_handle) = self.directories.get(&repository_path).cloned() {
             log::debug!("Using already-registered repository");
             if let Some(external_git_directory) = external_git_directory {
-                repository_handle.update(ctx, |repository, _ctx| {
-                    repository.enrich_external_git_directory(external_git_directory)
+                repository_handle.update(ctx, |repository, ctx| {
+                    repository.enrich_external_git_directory(external_git_directory, ctx)
                 });
             }
             return Ok(repository_handle);
@@ -322,9 +330,9 @@ impl DirectoryWatcher {
     pub(crate) fn start_watching_directories(
         &mut self,
         directory_paths: Vec<StandardizedPath>,
-        gitignores: Vec<Gitignore>,
+        gitignores: Vec<Arc<Gitignore>>,
         ctx: &mut ModelContext<Self>,
-    ) -> impl Future<Output = Result<(), RepoMetadataError>> {
+    ) -> impl Future<Output = Result<(), RepoMetadataError>> + use<> {
         let futures: Vec<_> = directory_paths
             .into_iter()
             .map(|path| self.start_watching_directory(&path, gitignores.clone(), ctx))
@@ -345,9 +353,9 @@ impl DirectoryWatcher {
     pub(crate) fn start_watching_directory(
         &mut self,
         directory_path: &StandardizedPath,
-        gitignores: Vec<Gitignore>,
+        gitignores: Vec<Arc<Gitignore>>,
         ctx: &mut ModelContext<Self>,
-    ) -> impl Future<Output = Result<(), RepoMetadataError>> {
+    ) -> impl Future<Output = Result<(), RepoMetadataError>> + use<> {
         let local_path = directory_path.to_local_path();
         let registration_future = if let Some(ref watcher) = self.watcher {
             if let Some(local_path) = local_path.clone() {
@@ -363,7 +371,7 @@ impl DirectoryWatcher {
 
                     Some(watcher.register_path(
                         &local_path,
-                        repo_watch_filter(gitignores, force_included_paths),
+                        repo_watch_filter(local_path.clone(), gitignores, force_included_paths),
                         RecursiveMode::Recursive,
                     ))
                 })
@@ -397,6 +405,8 @@ impl DirectoryWatcher {
         directory_path: &StandardizedPath,
         ctx: &mut ModelContext<Self>,
     ) -> impl Future<Output = Result<(), anyhow::Error>> {
+        #[cfg(test)]
+        self.stopped_watching_paths.push(directory_path.clone());
         cfg_if::cfg_if! {
             if #[cfg(feature = "local_fs")] {
                 let local_path = directory_path.to_local_path();
@@ -431,6 +441,29 @@ impl DirectoryWatcher {
             }
         }
     }
+    #[cfg(feature = "local_fs")]
+    pub(crate) fn stop_watching_unused_git_directories(
+        &mut self,
+        repository_root_to_stop: &StandardizedPath,
+        directory_paths: Vec<StandardizedPath>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        for path in directory_paths {
+            let is_still_used = self
+                .directories
+                .iter()
+                .any(|(root_dir, repository_handle)| {
+                    root_dir != repository_root_to_stop
+                        && repository_handle.read(ctx, |repository, _| {
+                            repository.has_git_repository_subscribers()
+                                && repository.git_watch_paths().contains(&path)
+                        })
+                });
+            if !is_still_used {
+                std::mem::drop(self.stop_watching_directory(&path, ctx));
+            }
+        }
+    }
 
     /// Handles events from the internal task queue.
     fn handle_queue_event(
@@ -453,7 +486,12 @@ impl DirectoryWatcher {
         repos_to_refresh_tracked_remote_ref: &mut HashSet<ModelHandle<Repository>>,
         ctx: &ModelContext<Self>,
     ) {
-        let affected = self.find_repos_for_git_event(path, ctx);
+        let mut affected = self.find_repos_for_git_event(path, ctx);
+        affected.retain(|repository| {
+            repository.read(ctx, |repository, _| {
+                repository.has_git_repository_subscribers()
+            })
+        });
         let is_commit = is_commit_related_git_file(path);
         let is_lock = is_index_lock_file(path);
         let is_remote_ref = is_remote_tracking_ref(path);
@@ -609,12 +647,13 @@ impl DirectoryWatcher {
 
         self.processing_queue.update(ctx, |queue, ctx| {
             for (repo_handle, repo_update) in repo_updates {
-                let subscriber_ids = repo_handle.read(ctx, |repo, _| repo.get_subscriber_ids());
-                for subscriber_id in subscriber_ids {
+                let subscriber_updates =
+                    repo_handle.read(ctx, |repo, _| repo.subscriber_updates(&repo_update));
+                for (subscriber_id, subscriber_update) in subscriber_updates {
                     queue.enqueue_incremental_update(
                         repo_handle.downgrade(),
                         subscriber_id,
-                        repo_update.clone(),
+                        subscriber_update,
                         ctx,
                     );
                 }

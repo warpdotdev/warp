@@ -15,16 +15,16 @@ use sum_tree::{Dimension, Item, SeekBias, SumTree};
 use warp_core::command::ExitCode;
 use warp_core::features::FeatureFlag;
 use warp_terminal::model::{KeyboardModes, KeyboardModesApplyBehavior};
-use warpui::color::ColorU;
 use warpui::r#async::executor::Background;
+use warpui::color::ColorU;
 use warpui::units::{IntoLines, IntoPixels, Lines};
-use warpui::{record_trace_event, AppContext, EntityId, ViewHandle};
+use warpui::{AppContext, EntityId, ViewHandle, record_trace_event};
 
 use super::ansi::{Handler, InputBufferValue};
 use super::block::{BlockId, BlockSize, BlockState, SerializedAIMetadata};
 use super::early_output::EarlyOutput;
-use super::grid::grid_handler::{FragmentBoundary, GridHandler, Link, PossiblePath};
 use super::grid::RespectDisplayedOutput;
+use super::grid::grid_handler::{FragmentBoundary, GridHandler, Link, PossiblePath};
 use super::image_map::StoredImageMetadata;
 use super::kitty::{KittyAction, KittyResponse};
 use super::lifecycle::NextBlockIdDisposition;
@@ -32,8 +32,8 @@ use super::rich_content::RichContentType;
 use super::secrets::RespectObfuscatedSecrets;
 use super::selection::ScrollDelta;
 use super::terminal_model::RangeInModel;
-use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent::AIAgentActionId;
+use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::blocklist::{AIBlock, SerializedBlockListItem};
 use crate::terminal::block_filter::BlockFilterQuery;
 use crate::terminal::block_list_element::GridType;
@@ -46,7 +46,9 @@ use crate::terminal::model::ansi::{
     CursorShape, CursorStyle, LineClearMode, Mode, PrecmdValue, PreexecValue, Processor,
     PromptMetadata, StandardCharset, TabulationClearMode,
 };
-use crate::terminal::model::block::{AgentViewVisibility, Block, SerializedBlock, TranscriptScope};
+use crate::terminal::model::block::{
+    AgentViewVisibility, Block, InteractionMode, SerializedBlock, TranscriptScope,
+};
 use crate::terminal::model::blockgrid::BlockGrid;
 use crate::terminal::model::bootstrap::BootstrapStage;
 use crate::terminal::model::grid::Dimensions;
@@ -82,6 +84,10 @@ pub struct RichContentItem {
     /// The conversation ID of the active agent view when this rich content was created, if any.
     pub agent_view_conversation_id: Option<AIConversationId>,
     pub should_hide: bool,
+    /// Whether this AI rich-content item is a navigable user-query/prompt segment for
+    /// agent-view Cmd-Up/Cmd-Down. Agent-reply / tool-result AI blocks mount as separate
+    /// `RichContentType::AIBlock` items and must leave this false.
+    pub is_agent_transcript_user_query: bool,
 }
 
 impl RichContentItem {
@@ -91,12 +97,29 @@ impl RichContentItem {
         agent_view_conversation_id: Option<AIConversationId>,
         should_hide: bool,
     ) -> Self {
+        Self::new_with_agent_transcript_user_query(
+            content_type,
+            view_id,
+            agent_view_conversation_id,
+            should_hide,
+            false,
+        )
+    }
+
+    pub fn new_with_agent_transcript_user_query(
+        content_type: Option<RichContentType>,
+        view_id: EntityId,
+        agent_view_conversation_id: Option<AIConversationId>,
+        should_hide: bool,
+        is_agent_transcript_user_query: bool,
+    ) -> Self {
         Self {
             content_type,
             view_id,
             last_laid_out_height: BlockHeight::from(1.0),
             agent_view_conversation_id,
             should_hide,
+            is_agent_transcript_user_query,
         }
     }
 
@@ -227,6 +250,18 @@ pub struct BlockScrollPosition {
 pub enum RemovableBlocklistItem {
     InlineBanner(InlineBannerId),
     RichContent(EntityId),
+}
+
+/// A chronologically ordered, keyboard-navigable item in an agent-view transcript.
+///
+/// Used by Cmd-Up / Cmd-Down to move across user prompts (AI blocks) and eligible
+/// user-executed shell blocks while skipping agent tool-call/result command blocks.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+pub enum AgentTranscriptNavigableItem {
+    /// A mounted AI rich-content block (user query / agent exchange prompt).
+    AiBlock { view_id: EntityId },
+    /// A visible user-executed shell command block.
+    ShellBlock(BlockIndex),
 }
 
 pub struct BlockList {
@@ -524,7 +559,7 @@ impl BlockHeight {
 /// Delegate for `BlockList` that delegates the method to either the early output
 /// model (if between blocks) or the active block
 macro_rules! delegate {
-    ($self:ident.$method:ident( $( $arg:expr ),* )) => {
+    ($self:ident.$method:ident( $( $arg:expr_2021 ),* )) => {
         if $self.is_early_output() {
             EarlyOutput::handler($self).$method($( $arg ),*)
         } else {
@@ -537,7 +572,7 @@ macro_rules! delegate {
 /// block and optionally updates block heights if the active block's height was changed by the
 /// method.
 macro_rules! delegate_to_block {
-    ($self:ident.$method:ident( $( $arg:expr ),* )) => {
+    ($self:ident.$method:ident( $( $arg:expr_2021 ),* )) => {
         $self.active_block_mut().$method($( $arg ),*)
     };
 }
@@ -761,7 +796,9 @@ impl BlockList {
                 self.finish_active_block_before_followup_append();
                 self.restore_block(block, BootstrapStage::PostBootstrapPrecmd, &mut processor);
             } else {
-                log::warn!("A non-active follow-up scrollback block was either not started or not completed");
+                log::warn!(
+                    "A non-active follow-up scrollback block was either not started or not completed"
+                );
             }
         }
 
@@ -1730,17 +1767,17 @@ impl BlockList {
             if let RemovableBlocklistItem::RichContent(view_id) = item {
                 let mut cursor = self.block_heights.cursor::<TotalIndex, ()>();
                 cursor.seek(index, SeekBias::Right);
-                if let Some(BlockHeightItem::RichContent(rich_content)) = cursor.item() {
-                    if rich_content.content_type.is_some_and(|content_type| {
+                if let Some(BlockHeightItem::RichContent(rich_content)) = cursor.item()
+                    && rich_content.content_type.is_some_and(|content_type| {
                         matches!(
                             content_type,
                             RichContentType::AIBlock
                                 | RichContentType::EnterAgentView
                                 | RichContentType::InlineAgentViewHeader
                         )
-                    }) {
-                        self.dirty_rich_content_items.insert(*view_id);
-                    }
+                    })
+                {
+                    self.dirty_rich_content_items.insert(*view_id);
                 }
             }
         }
@@ -1770,10 +1807,9 @@ impl BlockList {
                     origin_conversation_id,
                     ..
                 } = block.agent_view_visibility()
+                    && *origin_conversation_id == conversation_id
                 {
-                    if *origin_conversation_id == conversation_id {
-                        continue;
-                    }
+                    continue;
                 }
                 block.add_pending_conversation_id(conversation_id);
                 modified_blocks.push((block_id.clone(), block.agent_view_visibility().clone()));
@@ -1794,10 +1830,9 @@ impl BlockList {
                 origin_conversation_id,
                 ..
             } = block.agent_view_visibility()
+                && *origin_conversation_id == conversation_id
             {
-                if *origin_conversation_id == conversation_id {
-                    continue;
-                }
+                continue;
             }
             block.add_attached_conversation_id(conversation_id);
         }
@@ -1815,10 +1850,10 @@ impl BlockList {
     ) -> Vec<(BlockId, AgentViewVisibility)> {
         let mut modified_blocks = Vec::new();
         for block_id in block_ids {
-            if let Some(block) = self.mut_block_from_id(block_id) {
-                if block.remove_pending_conversation_id(conversation_id) {
-                    modified_blocks.push((block_id.clone(), block.agent_view_visibility().clone()));
-                }
+            if let Some(block) = self.mut_block_from_id(block_id)
+                && block.remove_pending_conversation_id(conversation_id)
+            {
+                modified_blocks.push((block_id.clone(), block.agent_view_visibility().clone()));
             }
         }
         modified_blocks
@@ -2126,6 +2161,94 @@ impl BlockList {
         None
     }
 
+    /// Chronological navigable targets for Cmd-Up/Cmd-Down in the active agent view.
+    ///
+    /// Includes mounted AI blocks that represent user prompts/queries and eligible
+    /// user-executed shell command blocks. Skips agent-reply AI segments, tool-call
+    /// results mounted as AI blocks, agent-requested/monitored shell commands, hidden
+    /// items, gaps, banners, and other non-navigable rich content.
+    pub fn agent_transcript_navigable_items(&self) -> Vec<AgentTranscriptNavigableItem> {
+        let mut items = Vec::new();
+        // Match production block_heights traversal: seek left to the first item, then
+        // read `item`/`start` before advancing with `next`. Do not call `next` before the
+        // loop (that invalidates `start` and panics with "Must seek before calling...").
+        let mut cursor = self
+            .block_heights
+            .cursor::<TotalIndex, BlockHeightSummary>();
+        cursor.seek(&TotalIndex(0), SeekBias::Left);
+        while let Some(item) = cursor.item() {
+            match item {
+                BlockHeightItem::RichContent(rich_content)
+                    if !rich_content.should_hide
+                        && rich_content.last_laid_out_height > BlockHeight::zero()
+                        && rich_content
+                            .content_type
+                            .is_some_and(|content_type| content_type.is_ai_block())
+                        // Only user-query AI segments are stops. A single Agent Mode
+                        // tool-call exchange mounts multiple AIBlock rich-content items
+                        // (query + post-tool agent reply); the reply must not stop Cmd-Up.
+                        && rich_content.is_agent_transcript_user_query =>
+                {
+                    items.push(AgentTranscriptNavigableItem::AiBlock {
+                        view_id: rich_content.view_id,
+                    });
+                }
+                BlockHeightItem::Block(_) => {
+                    // `start().block_count` is the index of the current block item.
+                    let block_index = BlockIndex::from(cursor.start().block_count);
+                    if let Some(block) = self.block_at(block_index)
+                        && BlockFilter::commands().matches(block, &self.transcript_scope)
+                        // Agent run-shell / monitored commands use InteractionMode::Agent even
+                        // after unhide or without a requested_command_action_id.
+                        && matches!(block.interaction_mode(), InteractionMode::User(_))
+                    {
+                        items.push(AgentTranscriptNavigableItem::ShellBlock(block_index));
+                    }
+                }
+                BlockHeightItem::RichContent(_)
+                | BlockHeightItem::Gap(_)
+                | BlockHeightItem::RestoredBlockSeparator { .. }
+                | BlockHeightItem::InlineBanner { .. }
+                | BlockHeightItem::SubshellSeparator { .. } => {}
+            }
+            cursor.next();
+        }
+        items
+    }
+
+    /// Updates whether an AI rich-content item is a navigable user-query segment.
+    /// Used when streaming exchange inputs become renderable after initial mount.
+    pub fn set_agent_transcript_user_query_for_rich_content(
+        &mut self,
+        rich_content_view_id: EntityId,
+        is_agent_transcript_user_query: bool,
+    ) {
+        let Some(&index) = self
+            .removable_blocklist_item_positions
+            .get(&RemovableBlocklistItem::RichContent(rich_content_view_id))
+        else {
+            return;
+        };
+
+        self.block_heights = {
+            let mut cursor = self.block_heights.cursor::<TotalIndex, ()>();
+            let mut new_tree = cursor.slice(&index, SeekBias::Right);
+
+            if let Some(BlockHeightItem::RichContent(item)) = cursor.item() {
+                new_tree.push(BlockHeightItem::RichContent(RichContentItem {
+                    is_agent_transcript_user_query,
+                    ..*item
+                }));
+                cursor.next();
+            }
+
+            new_tree.push_tree(cursor.suffix());
+            new_tree
+        };
+
+        self.event_proxy.send_wakeup_event();
+    }
+
     /// Return the height of the last non hidden rich content block after a block index. If there is no non hidden rich content block, return None.
     pub fn last_non_hidden_rich_content_block_after_block(
         &self,
@@ -2265,32 +2388,21 @@ impl BlockList {
                             is_hidden: transcript_scope.is_conversation(),
                         });
                     }
-                    BlockHeightItem::RichContent(RichContentItem {
-                        content_type,
-                        view_id,
-                        agent_view_conversation_id,
-                        last_laid_out_height,
-                        ..
-                    }) => {
+                    BlockHeightItem::RichContent(item) => {
                         let should_hide = RichContentItem {
-                            content_type: *content_type,
-                            view_id: *view_id,
-                            last_laid_out_height: *last_laid_out_height,
-                            agent_view_conversation_id: *agent_view_conversation_id,
                             should_hide: false,
+                            ..*item
                         }
                         .should_hide_for_transcript_scope(transcript_scope);
                         let updated_height = rich_content_heights
-                            .and_then(|heights| heights.get(view_id))
+                            .and_then(|heights| heights.get(&item.view_id))
                             .copied()
-                            .unwrap_or(*last_laid_out_height);
+                            .unwrap_or(item.last_laid_out_height);
 
                         new_sum_tree.push(BlockHeightItem::RichContent(RichContentItem {
-                            content_type: *content_type,
-                            view_id: *view_id,
                             last_laid_out_height: updated_height,
-                            agent_view_conversation_id: *agent_view_conversation_id,
                             should_hide,
+                            ..*item
                         }));
                     }
                     BlockHeightItem::RestoredBlockSeparator {
@@ -2626,7 +2738,7 @@ impl BlockList {
     pub fn possible_file_paths_at_point(
         &self,
         point: WithinBlock<Point>,
-    ) -> impl Iterator<Item = WithinBlock<PossiblePath>> {
+    ) -> impl Iterator<Item = WithinBlock<PossiblePath>> + use<> {
         let block_grid = if point.is_in_command_content() {
             self.blocks[point.block_index.0].prompt_and_command_grid()
         } else {
@@ -2664,6 +2776,38 @@ impl BlockList {
                 block_index: point.block_index,
                 grid: point.grid,
             })
+    }
+
+    /// Like [`Self::url_at_point`] but for OSC 8 hyperlinks. Returns the
+    /// contiguous span of cells around `point` that share a `HyperlinkId`,
+    /// along with the URI those cells link to. The URI is owned by the
+    /// block's `HyperlinkRegistry` — the caller gets a clone.
+    pub fn hyperlink_at_point(
+        &self,
+        point: &WithinBlock<Point>,
+    ) -> Option<(WithinBlock<Link>, String)> {
+        let block_grid = match point.grid {
+            GridType::Output => self.blocks.get(point.block_index.0)?.output_grid(),
+            GridType::PromptAndCommand => self
+                .blocks
+                .get(point.block_index.0)?
+                .prompt_and_command_grid(),
+            GridType::Prompt | GridType::Rprompt => return None,
+        };
+
+        let link = block_grid.grid_handler.hyperlink_at_point(point.inner)?;
+        let uri = block_grid
+            .grid_handler
+            .hyperlink_uri_at_point(point.inner)?
+            .to_owned();
+        Some((
+            WithinBlock {
+                inner: link,
+                block_index: point.block_index,
+                grid: point.grid,
+            },
+            uri,
+        ))
     }
 
     pub fn is_bootstrapped(&self) -> bool {
@@ -2726,18 +2870,18 @@ impl BlockList {
         if let Some(is_local) = restored_block_was_local {
             block.set_restored_block_was_local(is_local);
         }
-        if !self.blocks.is_empty() && self.active_block().is_for_in_band_command {
-            if let Some(CachedPromptData {
+        if !self.blocks.is_empty()
+            && self.active_block().is_for_in_band_command
+            && let Some(CachedPromptData {
                 prompt_grid,
                 rprompt_grid,
                 ..
             }) = &self.cached_prompt_data
-            {
-                let prompt_grid = prompt_grid.clone();
-                let rprompt_grid = rprompt_grid.clone();
-                log::debug!("Initializing new block using cached prompt grids");
-                block.set_prompt_grids_from_cached_data(prompt_grid, rprompt_grid);
-            }
+        {
+            let prompt_grid = prompt_grid.clone();
+            let rprompt_grid = rprompt_grid.clone();
+            log::debug!("Initializing new block using cached prompt grids");
+            block.set_prompt_grids_from_cached_data(prompt_grid, rprompt_grid);
         }
 
         if self.is_executing_oz_environment_startup_commands {
@@ -3112,11 +3256,11 @@ impl BlockList {
         // Set the completed_ts to the saved completed_ts _after_ `finish`ing the block (which would have set its own completed_ts).
         self.active_block_mut().override_completed_ts(completed_ts);
 
-        if let Some(prompt_snapshot) = &block.prompt_snapshot {
-            if let Ok(prompt_snapshot) = serde_json::from_str(prompt_snapshot) {
-                log::debug!("Restored prompt: {prompt_snapshot:?}");
-                self.active_block_mut().set_prompt_snapshot(prompt_snapshot);
-            }
+        if let Some(prompt_snapshot) = &block.prompt_snapshot
+            && let Ok(prompt_snapshot) = serde_json::from_str(prompt_snapshot)
+        {
+            log::debug!("Restored prompt: {prompt_snapshot:?}");
+            self.active_block_mut().set_prompt_snapshot(prompt_snapshot);
         }
     }
 
@@ -3596,7 +3740,9 @@ impl BlockList {
 
 impl ansi::Handler for BlockList {
     fn set_title(&mut self, _: Option<String>) {
-        report_error!("Handler method BlockList::set_title should never be called. This should be handled by TerminalModel.");
+        report_error!(
+            "Handler method BlockList::set_title should never be called. This should be handled by TerminalModel."
+        );
     }
 
     fn set_cursor_style(&mut self, style: Option<CursorStyle>) {
@@ -3609,6 +3755,10 @@ impl ansi::Handler for BlockList {
 
     fn input(&mut self, c: char) {
         delegate!(self.input(c));
+    }
+
+    fn set_hyperlink(&mut self, hyperlink: Option<warp_terminal::model::ansi::Hyperlink>) {
+        delegate!(self.set_hyperlink(hyperlink));
     }
 
     fn goto(&mut self, row: VisibleRow, col: usize) {
@@ -3874,11 +4024,15 @@ impl ansi::Handler for BlockList {
     }
 
     fn push_title(&mut self) {
-        report_error!("Handler method BlockList::push_title should never be called. This should be handled by TerminalModel.");
+        report_error!(
+            "Handler method BlockList::push_title should never be called. This should be handled by TerminalModel."
+        );
     }
 
     fn pop_title(&mut self) {
-        report_error!("Handler method BlockList::pop_title should never be called. This should be handled by TerminalModel.");
+        report_error!(
+            "Handler method BlockList::pop_title should never be called. This should be handled by TerminalModel."
+        );
     }
 
     fn text_area_size_pixels<W: io::Write>(&mut self, writer: &mut W) {

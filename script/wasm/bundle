@@ -20,10 +20,22 @@ CARGO_TARGET_DIR="$WORKSPACE_ROOT_DIR/target/wasm32-unknown-unknown"
 
 # By default we build dev bundles.
 RELEASE_CHANNEL="dev"
-# TODO: We should enable crash_reporting and before enabling for trusted testers.
+# TODO: We should enable crash_reporting before enabling for trusted testers.
 # https://linear.app/warpdotdev/issue/PLAT-428/crash-reporting-on-web
 FEATURES="release_bundle,gui"
+FEATURES_ADDITIONS=()
 DEBUG=false
+append_features() {
+  local feature
+  local -a requested_features
+
+  IFS=',' read -r -a requested_features <<< "$1"
+  for feature in "${requested_features[@]}"; do
+    if [[ -n "$feature" && ",$FEATURES," != *",$feature,"* ]]; then
+      FEATURES="${FEATURES:+$FEATURES,}$feature"
+    fi
+  done
+}
 
 PARAMS=""
 while (( "$#" )); do
@@ -67,7 +79,17 @@ while (( "$#" )); do
       ;;
     --features)
       if [ -n "$2" ] && [ "${2:0:1}" != "-" ]; then
-        echo "Setting features to $2"
+        FEATURES_ADDITIONS+=("$2")
+        shift 2
+      else
+        echo "Error: Argument for $1 is missing" >&2
+        exit 1
+      fi
+      ;;
+    --override-features)
+      if [ -n "$2" ] && [ "${2:0:1}" != "-" ]; then
+        # Use this only when intentionally replacing the release and channel
+        # defaults (including local's remote_tty).
         FEATURES_OVERRIDE=$2
         shift 2
       else
@@ -132,7 +154,28 @@ fi
 
 if [ -n "${FEATURES_OVERRIDE+x}" ]; then
   FEATURES="$FEATURES_OVERRIDE"
+else
+  for features in "${FEATURES_ADDITIONS[@]}"; do
+    append_features "$features"
+  done
 fi
+
+# These cargo features were removed and replaced by environment variables read
+# by warp-channel-config. Intercept them after merging --features additions so
+# that existing invocations keep working without dropping bundle defaults.
+for mapping in \
+    "with_local_server:WITH_LOCAL_SERVER" \
+    "with_local_session_sharing_server:WITH_LOCAL_SESSION_SHARING_SERVER" \
+    "with_sandbox_telemetry:WITH_SANDBOX_TELEMETRY"; do
+    feature="${mapping%%:*}"
+    env_var="${mapping##*:}"
+    if [[ ",$FEATURES," =~ ,"$feature", ]]; then
+        export "$env_var"=1
+        FEATURES="$(echo "$FEATURES" | sed "s/,$feature,/,/; s/^$feature,//; s/,$feature$//; s/^$feature$//")"
+        FEATURES="$(echo "$FEATURES" | sed 's/,,*/,/g; s/^,//; s/,$//')"
+        echo "Note: '$feature' is no longer a cargo feature; setting $env_var=1 instead."
+    fi
+done
 
 # If we only want to check that compilation will succeed, perform the checks
 # then exit.  We use this script to invoke `cargo check` to ensure that we are

@@ -5,6 +5,7 @@
 //! at `WARP_MOCK_RECORDING_FIXTURE`, and `WARP_MOCK_RECORDING_STOPPED_EARLY`
 //! exercises the partial-recording copy.
 
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock};
 
 use async_trait::async_trait;
@@ -38,6 +39,14 @@ impl crate::Recorder for Recorder {
             width: 1280,
             height: 720,
             exit_state: Arc::new(Mutex::new(None)),
+            // The mock never spawns a capture process; the widened handle fields
+            // are populated so the literal compiles on macOS, and
+            // `cleanup_on_drop = false` makes `Drop` a no-op (no partial output
+            // to remove).
+            path: PathBuf::new(),
+            started_at: Instant::now(),
+            process: None,
+            cleanup_on_drop: false,
         })
     }
 

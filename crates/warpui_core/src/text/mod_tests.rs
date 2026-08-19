@@ -1,5 +1,8 @@
 use super::point::Point;
-use super::{char_slice, count_chars_up_to_byte, str_to_byte_vec, BufferIndex, TextBuffer};
+use super::{
+    BufferIndex, TextBuffer, byte_offset_for_char_offset, char_slice, count_chars_up_to_byte,
+    str_to_byte_vec,
+};
 
 #[test]
 fn test_str_to_byte_vec() {
@@ -42,6 +45,23 @@ fn test_char_slice() {
     assert_eq!(char_slice("The end: 🫥??", 10, 12), Some("??"));
 
     assert_eq!(char_slice("🫥", 0, 0), Some(""));
+}
+#[test]
+fn test_byte_offset_for_char_offset() {
+    let text = "abc🔥abc☄️abc😬";
+    assert_eq!(byte_offset_for_char_offset(text, 0.into()), Some(0.into()));
+    assert_eq!(
+        byte_offset_for_char_offset(text, 4.into()),
+        Some("abc🔥".len().into())
+    );
+    assert_eq!(
+        byte_offset_for_char_offset(text, text.chars().count().into()),
+        Some(text.len().into())
+    );
+    assert_eq!(
+        byte_offset_for_char_offset(text, (text.chars().count() + 1).into()),
+        None
+    );
 }
 
 #[test]

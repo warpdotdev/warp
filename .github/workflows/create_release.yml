@@ -118,7 +118,7 @@ jobs:
       - name: Create GitHub release
         if: ${{ steps.set_publish.outputs.should_publish == 'true' }}
         id: create_release
-        uses: softprops/action-gh-release@da05d552573ad5aba039eaac05058a918a7bf631 # v2.2.2
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
         with:
           name: ${{ steps.get-config.outputs.release_base_name }} ${{ steps.create_branch_and_tag.outputs.tag }}
           tag_name: ${{ steps.create_branch_and_tag.outputs.tag }}
@@ -129,7 +129,7 @@ jobs:
 
       - name: Create Sentry release
         if: ${{ steps.set_publish.outputs.should_publish == 'true' }}
-        uses: getsentry/action-release@5657c9e888b4e2cc85f4d29143ea4131fde4a73a # v3.6.0
+        uses: getsentry/action-release@ff07929a6537bac57790c3451cf4d364aca38528 # v3.7.0
         env:
           SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_RELEASE_TOKEN }}
           SENTRY_ORG: warpdotdev
@@ -169,7 +169,7 @@ jobs:
 
       # Install go toolchain, as it may be needed for some build steps.
       - name: Setup Go
-        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version: stable
 
@@ -202,7 +202,7 @@ jobs:
 
       - name: Add DMG to GitHub release assets
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
-        uses: softprops/action-gh-release@da05d552573ad5aba039eaac05058a918a7bf631 # v2.2.2
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
         with:
           tag_name: ${{ needs.prepare_release.outputs.release_tag }}
           files: ${{ steps.bundle_app.outputs.dmg_path }}
@@ -224,7 +224,7 @@ jobs:
 
       - name: Upload DMG as workflow artifact
         if: ${{ needs.prepare_release.outputs.should_publish != 'true' }}
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: release-macos-${{ matrix.arch }}-${{ steps.get-config.outputs.channel }}
           path: ${{ steps.bundle_app.outputs.dmg_path }}
@@ -258,7 +258,7 @@ jobs:
             ${{ steps.bundle_app.outputs.frameworks_dir }}
 
       - name: Archive ${{ matrix.arch }} build artifacts for universal build
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: macos-${{ matrix.arch }}-${{ steps.get-config.outputs.channel }}
           retention-days: 1
@@ -285,7 +285,7 @@ jobs:
 
       # Install go toolchain, as it may be needed for some build steps.
       - name: Setup Go
-        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version: stable
 
@@ -353,7 +353,7 @@ jobs:
       - name: Add DMG to GitHub release assets
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
         id: upload_github_assets
-        uses: softprops/action-gh-release@da05d552573ad5aba039eaac05058a918a7bf631 # v2.2.2
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
         # Continue if the upload fails; the next step will retry it.
         continue-on-error: true
         with:
@@ -367,7 +367,7 @@ jobs:
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' && steps.upload_github_assets.outcome == 'failure' }}
         # Continue if the upload fails; the next step will retry it.
         continue-on-error: true
-        uses: softprops/action-gh-release@da05d552573ad5aba039eaac05058a918a7bf631 # v2.2.2
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
         with:
           tag_name: ${{ needs.prepare_release.outputs.release_tag }}
           files: ${{ steps.bundle_app.outputs.dmg_path }}
@@ -377,7 +377,7 @@ jobs:
         id: upload_github_assets_retry2
         # If the first attempt failed, try again.
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' && steps.upload_github_assets_retry.outcome == 'failure' }}
-        uses: softprops/action-gh-release@da05d552573ad5aba039eaac05058a918a7bf631 # v2.2.2
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
         with:
           tag_name: ${{ needs.prepare_release.outputs.release_tag }}
           files: ${{ steps.bundle_app.outputs.dmg_path }}
@@ -402,7 +402,7 @@ jobs:
 
       - name: Upload DMG as workflow artifact
         if: ${{ needs.prepare_release.outputs.should_publish != 'true' }}
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: release-macos-universal-${{ steps.get-config.outputs.channel }}
           path: ${{ steps.bundle_app.outputs.dmg_path }}
@@ -436,7 +436,7 @@ jobs:
 
       # Install go toolchain, as it may be needed for some build steps.
       - name: Setup Go
-        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version: stable
 
@@ -468,7 +468,7 @@ jobs:
 
       - name: Add CLI to GitHub release assets
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
-        uses: softprops/action-gh-release@da05d552573ad5aba039eaac05058a918a7bf631 # v2.2.2
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
         with:
           tag_name: ${{ needs.prepare_release.outputs.release_tag }}
           files: oz-${{ steps.get-config.outputs.channel }}-macos-${{ matrix.arch }}.tar.gz
@@ -490,7 +490,7 @@ jobs:
 
       - name: Upload CLI as workflow artifact
         if: ${{ needs.prepare_release.outputs.should_publish != 'true' }}
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: release-macos-cli-${{ matrix.arch }}-${{ steps.get-config.outputs.channel }}
           path: oz-${{ steps.get-config.outputs.channel }}-macos-${{ matrix.arch }}.tar.gz
@@ -515,9 +515,7 @@ jobs:
     name: Build Release (macOS TUI ${{ matrix.arch }})
     runs-on: macos-26-xlarge
     needs: prepare_release
-    # The Warp TUI is currently a dev-only, macOS-only artifact. Keep this job
-    # scoped to the dev channel; it rides the existing nightly dev cut.
-    if: ${{ inputs.build_macos != false && inputs.channel == 'dev' }}
+    if: ${{ inputs.build_macos != false }}
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -542,7 +540,7 @@ jobs:
 
       # Install go toolchain, as it may be needed for some build steps.
       - name: Setup Go
-        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version: stable
 
@@ -567,6 +565,33 @@ jobs:
           WARP_NOTARIZATION_APPLE_ID: ${{ secrets.WARP_NOTARIZATION_APPLE_ID }}
           WARP_NOTARIZATION_PASSWORD: ${{ secrets.WARP_NOTARIZATION_PASSWORD }}
 
+      - name: Set up Sentry CLI
+        if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
+        uses: matbour/setup-sentry-cli@3e938c54b3018bdd019973689ef984e033b0454b # v2.0.0
+        with:
+          token: ${{ secrets.SENTRY_RELEASE_TOKEN }}
+          organization: warpdotdev
+          project: ${{ steps.get-config.outputs.sentry_project }}
+
+      - name: Verify and upload TUI debugging symbols to Sentry
+        if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
+        run: |
+          binary_path="${{ steps.bundle_tui.outputs.binary_path }}"
+          dsym_path="${{ steps.bundle_tui.outputs.dsym_path }}"
+          test -n "$dsym_path"
+          test -d "$dsym_path"
+
+          binary_uuid="$(dwarfdump --uuid "$binary_path" | awk '{print $2}')"
+          dsym_uuid="$(dwarfdump --uuid "$dsym_path" | awk '{print $2}')"
+          test -n "$binary_uuid"
+          test "$binary_uuid" = "$dsym_uuid"
+
+          dsym_dwarf_path="$(find "$dsym_path/Contents/Resources/DWARF" -type f -print -quit)"
+          test -n "$dsym_dwarf_path"
+          sentry-cli debug-files check "$dsym_dwarf_path"
+          sentry-cli upload-dif "$dsym_path"
+        shell: bash
+
       - name: Package TUI binary
         run: |
           mv ${{ steps.bundle_tui.outputs.binary_path }} warp-tui-${{ steps.get-config.outputs.channel }}
@@ -574,7 +599,7 @@ jobs:
 
       - name: Add TUI to GitHub release assets
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
-        uses: softprops/action-gh-release@da05d552573ad5aba039eaac05058a918a7bf631 # v2.2.2
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
         with:
           tag_name: ${{ needs.prepare_release.outputs.release_tag }}
           files: warp-tui-${{ steps.get-config.outputs.channel }}-macos-${{ matrix.arch }}.tar.gz
@@ -600,6 +625,115 @@ jobs:
         with:
           name: release-macos-tui-${{ matrix.arch }}-${{ steps.get-config.outputs.channel }}
           path: warp-tui-${{ steps.get-config.outputs.channel }}-macos-${{ matrix.arch }}.tar.gz
+
+  release_linux_tui:
+    name: Build Release (Linux TUI ${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    needs: prepare_release
+    if: ${{ inputs.build_linux != false }}
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: namespace-profile-ubuntu-20-04
+          - arch: aarch64
+            runner: namespace-profile-ubuntu-20-04-arm
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+
+      - uses: ./.github/actions/prepare_environment
+        with:
+          target_os: linux
+          is_self_hosted: false
+          ref: ${{ needs.prepare_release.outputs.release_branch }}
+          install_release_deps: true
+          ssh_key: ${{ secrets.WARP_CHANNEL_CONFIG_ACCESS_SSH_KEY }}
+
+      # Install gcc 10, as gcc 9.5 has a bug with memcmp that is incompatible
+      # with aws-lc-rs (see https://gcc.gnu.org/bugzilla/show_bug.cgi?id=95189).
+      - name: Install and configure gcc-10
+        run: |
+          sudo apt update
+          sudo apt install -y gcc-10 g++-10
+          sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-10 60 --slave /usr/bin/g++ g++ /usr/bin/g++-10
+          gcc --version
+          g++ --version
+
+      - name: Get channel configuration
+        id: get-config
+        uses: ./.github/actions/get_channel_config/
+        with:
+          config_file: ${{ env.CONFIG_FILE }}
+          channel: ${{ inputs.channel }}
+
+      # Namespace's User Bundled Cache persists target/ between jobs on the same profile.
+      - name: Clean stale bundle output
+        run: |
+          if [[ -d target ]]; then
+            find target -path '*/bundle/linux' -type d -prune -exec rm -rf {} +
+          fi
+        shell: bash
+
+      - name: Bundle TUI
+        id: bundle_tui
+        run: script/bundle --channel "$CHANNEL" --artifact tui --arch "${{ matrix.arch }}"
+        shell: bash
+        env:
+          CHANNEL: ${{ steps.get-config.outputs.channel }}
+          GIT_RELEASE_TAG: ${{ needs.prepare_release.outputs.release_tag }}
+
+      - name: Package and validate TUI tarball
+        run: |
+          archive="warp-tui-${CHANNEL}-linux-${{ matrix.arch }}.tar.gz"
+          bundle_dir="$(dirname "${{ steps.bundle_tui.outputs.executable_path }}")"
+          tar czf "$archive" -C "$bundle_dir" "warp-tui-${CHANNEL}" resources
+
+          test -x "$bundle_dir/warp-tui-${CHANNEL}"
+          test -s "$bundle_dir/resources/settings_schema.json"
+          test -s "$bundle_dir/resources/THIRD_PARTY_LICENSES.txt"
+          grep -q "\"warp_version\": \"${GIT_RELEASE_TAG}\"" \
+            "$bundle_dir/resources/bundled/metadata/version.json"
+
+          archive_listing="${RUNNER_TEMP}/warp-tui-${CHANNEL}-linux-${{ matrix.arch }}-contents.txt"
+          tar tzf "$archive" > "$archive_listing"
+          grep -Fqx "warp-tui-${CHANNEL}" "$archive_listing"
+          grep -Fqx "resources/settings_schema.json" "$archive_listing"
+          grep -Fqx "resources/THIRD_PARTY_LICENSES.txt" "$archive_listing"
+        shell: bash
+        env:
+          CHANNEL: ${{ steps.get-config.outputs.channel }}
+          GIT_RELEASE_TAG: ${{ needs.prepare_release.outputs.release_tag }}
+
+      - name: Add TUI to GitHub release assets
+        if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
+        with:
+          tag_name: ${{ needs.prepare_release.outputs.release_tag }}
+          files: warp-tui-${{ steps.get-config.outputs.channel }}-linux-${{ matrix.arch }}.tar.gz
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
+        with:
+          credentials_json: ${{ secrets.GOOGLE_APPLICATION_CREDENTIALS }}
+
+      - name: Upload TUI to Google Cloud Storage
+        if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
+        uses: google-github-actions/upload-cloud-storage@e95a15f226403ed658d3e65f40205649f342ba2c # v1
+        with:
+          path: warp-tui-${{ steps.get-config.outputs.channel }}-linux-${{ matrix.arch }}.tar.gz
+          destination: warp-releases/${{ steps.get-config.outputs.channel }}/${{ needs.prepare_release.outputs.release_tag }}/tui/linux/${{ matrix.arch }}
+          headers: |-
+            cache-control: ${{ steps.get-config.outputs.gcs_cache_control_value }}
+
+      - name: Upload TUI as workflow artifact
+        if: ${{ needs.prepare_release.outputs.should_publish != 'true' }}
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: release-linux-tui-${{ matrix.arch }}-${{ steps.get-config.outputs.channel }}
+          path: warp-tui-${{ steps.get-config.outputs.channel }}-linux-${{ matrix.arch }}.tar.gz
 
   release_linux_x86:
     name: Build Release (Linux x86_64)
@@ -734,7 +868,7 @@ jobs:
       - name: Add packages to GitHub release assets
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
         id: upload_github_assets
-        uses: softprops/action-gh-release@da05d552573ad5aba039eaac05058a918a7bf631 # v2.2.2
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
         with:
           tag_name: ${{ needs.prepare_release.outputs.release_tag }}
           files: ${{ steps.bundle_app.outputs.packages_dir }}/*
@@ -757,7 +891,7 @@ jobs:
 
       - name: Upload packages as workflow artifact
         if: ${{ needs.prepare_release.outputs.should_publish != 'true' }}
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: release-linux-x86_64-${{ steps.get-config.outputs.channel }}
           path: ${{ steps.bundle_app.outputs.packages_dir }}
@@ -893,7 +1027,7 @@ jobs:
       - name: Add CLI packages to GitHub release assets
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
         id: upload_github_assets
-        uses: softprops/action-gh-release@da05d552573ad5aba039eaac05058a918a7bf631 # v2.2.2
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
         with:
           tag_name: ${{ needs.prepare_release.outputs.release_tag }}
           files: ${{ steps.bundle_cli.outputs.packages_dir }}/*
@@ -916,7 +1050,7 @@ jobs:
 
       - name: Add CLI tar.gz to GitHub release assets
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
-        uses: softprops/action-gh-release@da05d552573ad5aba039eaac05058a918a7bf631 # v2.2.2
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
         with:
           tag_name: ${{ needs.prepare_release.outputs.release_tag }}
           files: oz-${{ steps.get-config.outputs.channel }}-linux-x86_64.tar.gz
@@ -933,7 +1067,7 @@ jobs:
 
       - name: Upload CLI packages as workflow artifact
         if: ${{ needs.prepare_release.outputs.should_publish != 'true' }}
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: release-linux-cli-x86_64-${{ steps.get-config.outputs.channel }}
           path: |
@@ -1031,7 +1165,7 @@ jobs:
           PACKAGES_DIR: ${{steps.build_app.outputs.packages_dir}}
 
       - name: Archive build files
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: built-arm64-linux-${{steps.get-config.outputs.channel}}
           retention-days: 1
@@ -1106,7 +1240,7 @@ jobs:
           PACKAGES_DIR: ${{steps.build_cli.outputs.packages_dir}}
 
       - name: Archive build files
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: built-arm64-linux-cli-${{steps.get-config.outputs.channel}}
           retention-days: 1
@@ -1309,14 +1443,14 @@ jobs:
 
       - name: Add app packages to GitHub release assets
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
-        uses: softprops/action-gh-release@da05d552573ad5aba039eaac05058a918a7bf631 # v2.2.2
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
         with:
           tag_name: ${{ needs.prepare_release.outputs.release_tag }}
           files: ${{ steps.bundle_app.outputs.packages_dir }}/*
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Add CLI packages to GitHub release assets
-        uses: softprops/action-gh-release@da05d552573ad5aba039eaac05058a918a7bf631 # v2.2.2
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' && steps.bundle_cli.outputs.packages_dir != steps.bundle_app.outputs.packages_dir }}
         with:
           tag_name: ${{ needs.prepare_release.outputs.release_tag }}
@@ -1325,7 +1459,7 @@ jobs:
 
       - name: Add CLI tar.gz to GitHub release assets
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
-        uses: softprops/action-gh-release@da05d552573ad5aba039eaac05058a918a7bf631 # v2.2.2
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
         with:
           tag_name: ${{ needs.prepare_release.outputs.release_tag }}
           files: oz-${{ steps.get-config.outputs.channel }}-linux-aarch64.tar.gz
@@ -1368,7 +1502,7 @@ jobs:
 
       - name: Upload packages as workflow artifact
         if: ${{ needs.prepare_release.outputs.should_publish != 'true' }}
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: release-linux-arm64-${{ steps.get-config.outputs.channel }}
           path: |
@@ -1436,7 +1570,7 @@ jobs:
       - name: Add packages to GitHub release assets
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
         id: upload_github_assets
-        uses: softprops/action-gh-release@da05d552573ad5aba039eaac05058a918a7bf631 # v2.2.2
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
         with:
           tag_name: ${{ needs.prepare_release.outputs.release_tag }}
           files: ${{ steps.bundle_app.outputs.packages_dir }}/*
@@ -1484,10 +1618,141 @@ jobs:
 
       - name: Upload web bundle as workflow artifact
         if: ${{ needs.prepare_release.outputs.should_publish != 'true' }}
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: release-web-${{ steps.get-config.outputs.channel }}
           path: ${{ steps.bundle_app.outputs.packages_dir }}
+
+  release_windows_tui:
+    name: Build Release (Windows TUI ${{ matrix.arch }})
+    runs-on: windows-latest-large
+    needs: prepare_release
+    if: ${{ inputs.build_windows != false }}
+    timeout-minutes: 150
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            release_arch: x86_64
+          - arch: arm64
+            release_arch: aarch64
+    env:
+      TRUSTED_SIGNING_ENDPOINT: https://eus.codesigning.azure.net/
+      TRUSTED_SIGNING_ACCOUNT: warpdotdev
+      TRUSTED_SIGNING_CERT_PROFILE: warpterminal
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+
+      - uses: ./.github/actions/prepare_environment
+        with:
+          target_os: windows
+          cache_key: tui-${{ matrix.arch }}
+          is_self_hosted: false
+          ref: ${{ needs.prepare_release.outputs.release_branch }}
+          install_release_deps: true
+          ssh_key: ${{ secrets.WARP_CHANNEL_CONFIG_ACCESS_SSH_KEY }}
+      - name: Add arm64 target
+        if: ${{ matrix.arch == 'arm64' }}
+        run: rustup target add aarch64-pc-windows-msvc
+        shell: bash
+
+      - name: Get channel configuration
+        id: get-config
+        uses: ./.github/actions/get_channel_config/
+        with:
+          config_file: ${{ env.CONFIG_FILE }}
+          channel: ${{ inputs.channel }}
+
+      - name: Test Windows TUI installer
+        if: ${{ matrix.arch == 'x64' }}
+        run: ./script/windows/test_tui_installer.ps1
+        shell: pwsh
+
+      - name: Build Warp Agent CLI
+        id: build_tui
+        run: script/bundle --artifact tui --channel "$CHANNEL" --skip_build_installer --arch ${{ matrix.arch }}
+        shell: bash
+        env:
+          CHANNEL: ${{ steps.get-config.outputs.channel }}
+          GIT_RELEASE_TAG: ${{ needs.prepare_release.outputs.release_tag }}
+
+      - name: Sign Warp Agent CLI and PTY executables
+        uses: azure/artifact-signing-action@b443cf8ea4124818d2ea9f043cba29fc3ec47b16 # v1.2.0
+        with:
+          azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          azure-client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
+          endpoint: ${{ env.TRUSTED_SIGNING_ENDPOINT }}
+          trusted-signing-account-name: ${{ env.TRUSTED_SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ env.TRUSTED_SIGNING_CERT_PROFILE }}
+          files: ${{ steps.build_tui.outputs.binary_path }}
+          files-folder: ${{ github.workspace }}\app\assets\windows\${{ matrix.arch }}
+          files-folder-filter: dll,exe
+          files-folder-recurse: true
+          files-folder-depth: 2
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+      - name: Build sign-tool command for Inno Setup
+        id: setup_signing
+        shell: pwsh
+        run: ./script/windows/build_inno_sign_tool_command.ps1
+
+      - name: Bundle signed Warp Agent CLI installer
+        id: bundle_tui
+        run: script/bundle --artifact tui --channel "$CHANNEL" --skip_build_binary --require_signatures --arch ${{ matrix.arch }}
+        shell: bash
+        env:
+          CHANNEL: ${{ steps.get-config.outputs.channel }}
+          GIT_RELEASE_TAG: ${{ needs.prepare_release.outputs.release_tag }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          SIGN_TOOL_CMD: ${{ steps.setup_signing.outputs.sign_tool_cmd }}
+      - name: Add TUI installer to GitHub release assets
+        if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
+        with:
+          tag_name: ${{ needs.prepare_release.outputs.release_tag }}
+          files: ${{ steps.bundle_tui.outputs.installer_path }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
+        with:
+          credentials_json: ${{ secrets.GOOGLE_APPLICATION_CREDENTIALS }}
+
+      - name: Upload TUI installer to Google Cloud Storage
+        if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
+        uses: google-github-actions/upload-cloud-storage@e95a15f226403ed658d3e65f40205649f342ba2c # v1
+        with:
+          path: ${{ steps.bundle_tui.outputs.installer_path }}
+          destination: warp-releases/${{ steps.get-config.outputs.channel }}/${{ needs.prepare_release.outputs.release_tag }}/tui/windows/${{ matrix.release_arch }}
+          headers: |-
+            cache-control: ${{ steps.get-config.outputs.gcs_cache_control_value }}
+
+      - name: Verify TUI installer in Google Cloud Storage
+        if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
+        run: |
+          installer_name="$(basename "$INSTALLER_PATH")"
+          curl.exe --fail --silent --show-error --head \
+            "https://releases.warp.dev/${CHANNEL}/${RELEASE_TAG}/tui/windows/${RELEASE_ARCH}/${installer_name}"
+        shell: bash
+        env:
+          INSTALLER_PATH: ${{ steps.bundle_tui.outputs.installer_path }}
+          CHANNEL: ${{ steps.get-config.outputs.channel }}
+          RELEASE_TAG: ${{ needs.prepare_release.outputs.release_tag }}
+          RELEASE_ARCH: ${{ matrix.release_arch }}
+
+      - name: Upload Windows TUI installer
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: release-windows-tui-${{ matrix.arch }}-${{ steps.get-config.outputs.channel }}
+          path: |
+            ${{ steps.bundle_tui.outputs.installer_path }}
+            ${{ steps.bundle_tui.outputs.pdb_file_path }}
+          if-no-files-found: error
 
   release_windows:
     name: Build Release (Windows ${{ matrix.arch }})
@@ -1566,22 +1831,7 @@ jobs:
       - name: Build sign-tool command for Inno Setup
         id: setup_signing
         shell: pwsh
-        run: |
-          $Dlib = (Get-ChildItem -Recurse "$env:LOCALAPPDATA" -Filter "Azure.CodeSigning.Dlib.dll" -ErrorAction SilentlyContinue |
-            Where-Object { $_.FullName -match 'x64' } | Select-Object -First 1).FullName
-          if (-not $Dlib) { throw "Azure.CodeSigning.Dlib.dll not found — did the earlier signing action run?" }
-          Write-Output "Dlib: $Dlib"
-          $SignTool = (Get-ChildItem -Recurse "C:\Program Files (x86)\Windows Kits" -Filter "signtool.exe" |
-            Where-Object { $_.FullName -match 'x64' } | Sort-Object FullName -Descending | Select-Object -First 1).FullName
-          if (-not $SignTool) { throw "signtool.exe not found in Windows SDK" }
-          Write-Output "SignTool: $SignTool"
-          # Add signtool's directory to PATH so the ISCC sign command can reference it as just "signtool.exe".
-          # Embedded quotes in the /Scodesign= value break PowerShell's native-command argument passing to ISCC.
-          (Split-Path $SignTool) >> $env:GITHUB_PATH
-          $MetadataPath = "${{ runner.temp }}\tsc-metadata.json"
-          @{Endpoint=$env:TRUSTED_SIGNING_ENDPOINT;CodeSigningAccountName=$env:TRUSTED_SIGNING_ACCOUNT;CertificateProfileName=$env:TRUSTED_SIGNING_CERT_PROFILE} |
-            ConvertTo-Json | Set-Content $MetadataPath
-          "sign_tool_cmd=signtool.exe sign /v /fd SHA256 /tr http://timestamp.acs.microsoft.com /td SHA256 /dlib $Dlib /dmdf $MetadataPath `$f" >> $env:GITHUB_OUTPUT
+        run: ./script/windows/build_inno_sign_tool_command.ps1
 
       - name: Bundle app
         id: bundle_app
@@ -1622,7 +1872,7 @@ jobs:
       - name: Add installer to GitHub release assets
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
         id: upload_github_assets
-        uses: softprops/action-gh-release@da05d552573ad5aba039eaac05058a918a7bf631 # v2.2.2
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
         with:
           tag_name: ${{ needs.prepare_release.outputs.release_tag }}
           files: ${{ steps.bundle_app.outputs.installer_path }}
@@ -1647,7 +1897,7 @@ jobs:
 
       - name: Upload installer as workflow artifact
         if: ${{ needs.prepare_release.outputs.should_publish != 'true' }}
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: release-windows-${{ matrix.arch }}-${{ steps.get-config.outputs.channel }}
           path: ${{ steps.bundle_app.outputs.installer_path }}
@@ -1661,10 +1911,12 @@ jobs:
       - release_macos_universal
       - release_macos_cli
       - release_macos_tui
+      - release_linux_tui
       - release_linux_x86
       - release_linux_arm
       - release_linux_cli_x86
       - release_web
+      - release_windows_tui
       - release_windows
     if: ${{ always() && needs.prepare_release.outputs.should_publish == 'true' }}
     steps:
@@ -1682,10 +1934,11 @@ jobs:
           if [[ ${{ needs.release_macos_cli.result }} != 'success' ]]; then
             FAILED+=('MacOS CLI')
           fi
-          # The TUI job only runs on the dev channel, so only treat it as a
-          # failure there (it is intentionally skipped elsewhere).
-          if [[ ${{ needs.release_macos_tui.result }} != 'success' && ${{ inputs.channel }} == 'dev' ]]; then
+          if [[ ${{ needs.release_macos_tui.result }} != 'success' ]]; then
             FAILED+=('MacOS TUI')
+          fi
+          if [[ ${{ needs.release_linux_tui.result }} != 'success' ]]; then
+            FAILED+=('Linux TUI')
           fi
           if [[ ${{ needs.release_linux_x86.result }} != 'success' ]]; then
               FAILED+=("Linux x86_64")
@@ -1702,6 +1955,9 @@ jobs:
           if [[ ${{ needs.release_windows.result }} != 'success' ]]; then
               FAILED+=("Windows")
           fi
+          if [[ ${{ needs.release_windows_tui.result }} != 'success' ]]; then
+              FAILED+=("Windows TUI")
+          fi
 
           if (( ${#FAILED[@]} )); then
             printf -v FORMATTED "%s, " "${FAILED[@]}"
@@ -1709,15 +1965,46 @@ jobs:
           fi
 
       - name: Send Slack notification if unsuccessful
-        uses: slackapi/slack-github-action@410ae57cff5c6b682b106440be0e6c7eb8c98c9d # v1.16.0
+        uses: slackapi/slack-github-action@0d95c9a7becc1e6e297d76df9bc735c44f4cbcbc # v3.0.5
         if: ${{ steps.failed_releases.outputs.failed != '' }}
         with:
-          channel-id: "#oncall-client"
-          # Follows https://api.slack.com/reference/surfaces/formatting#mentioning-users.
-          # S06N82RS7FA is the user group ID for @oncall-client-eng.
-          slack-message: "Failed to create ${{ steps.failed_releases.outputs.failed }} release artifacts for ${{ inputs.channel }}. See https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}. cc: <!subteam^S06N82RS7FA>"
+          # Fail the step when Slack rejects the message.
+          errors: true
+          method: chat.postMessage
+          token: ${{ secrets.ACTION_MONITORING_SLACK }}
+          payload: |
+            channel: "#oncall-client"
+            # Follows https://api.slack.com/reference/surfaces/formatting#mentioning-users.
+            # S06N82RS7FA is the user group ID for @oncall-client-eng.
+            text: "Failed to create ${{ steps.failed_releases.outputs.failed }} release artifacts for ${{ inputs.channel }}. See https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}. cc: <!subteam^S06N82RS7FA>"
+
+  gate_tui_release_artifacts:
+    name: Gate changelog publication on TUI release artifacts
+    runs-on: ubuntu-latest
+    needs:
+      - prepare_release
+      - release_macos_tui
+      - release_linux_tui
+      - release_windows_tui
+    if: ${{ always() }}
+    steps:
+      - name: Verify TUI release artifacts
+        shell: bash
         env:
-          SLACK_BOT_TOKEN: ${{ secrets.ACTION_MONITORING_SLACK }}
+          SHOULD_PUBLISH: ${{ needs.prepare_release.outputs.should_publish }}
+          MACOS_TUI_RESULT: ${{ needs.release_macos_tui.result }}
+          LINUX_TUI_RESULT: ${{ needs.release_linux_tui.result }}
+          WINDOWS_TUI_RESULT: ${{ needs.release_windows_tui.result }}
+        run: |
+          if [[ "$SHOULD_PUBLISH" != "true" ]]; then
+            exit 0
+          fi
+          if [[ "$MACOS_TUI_RESULT" != "success" ||
+                "$LINUX_TUI_RESULT" != "success" ||
+                "$WINDOWS_TUI_RESULT" != "success" ]]; then
+            echo "::error::TUI release artifacts were not published successfully (macOS: $MACOS_TUI_RESULT, Linux: $LINUX_TUI_RESULT, Windows: $WINDOWS_TUI_RESULT)"
+            exit 1
+          fi
 
   generate_changelogs:
     name: Generate Changelogs
@@ -1733,6 +2020,7 @@ jobs:
       - release_linux_cli_x86
       - release_web
       - release_windows
+      - gate_tui_release_artifacts
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         name: Checkout sources
@@ -1773,7 +2061,7 @@ jobs:
       - name: Upload raw Markdown changelog artifact (stable only)
         if: inputs.channel == 'stable'
         id: upload_changelog_draft_markdown
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: changelog-draft-markdown
           path: ${{ runner.temp }}/changelog-draft/changelog-draft.md
@@ -1803,36 +2091,40 @@ jobs:
           channel: ${{ inputs.channel }}
           github_auth_token: ${{ steps.github_app_auth.outputs.token }}
           version: ${{ needs.prepare_release.outputs.release_tag }}
+      - name: Add TUI updates to legacy changelog (non-stable only)
+        if: inputs.channel != 'stable'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ steps.github_app_auth.outputs.token }}
+          LEGACY_CHANGELOG: ${{ steps.legacy_changelog.outputs.changelog }}
+        run: |
+          CHANGELOG_DIR="${{ runner.temp }}/changelog-draft"
+          LEGACY_CHANGELOG_FILE="$CHANGELOG_DIR/changelog-legacy.json"
+          mkdir -p "$CHANGELOG_DIR"
+          printf '%s\n' "$LEGACY_CHANGELOG" > "$LEGACY_CHANGELOG_FILE"
+          python3 .agents/skills/changelog-draft/scripts/add_tui_updates.py \
+            --input "$LEGACY_CHANGELOG_FILE" \
+            --output "$CHANGELOG_DIR/changelog-release.json" \
+            --repo "${{ github.repository }}" \
+            --channel "${{ inputs.channel }}" \
+            --release-tag "${{ needs.prepare_release.outputs.release_tag }}"
 
       - name: Load changelog into step output
         id: generate_changelog
         shell: bash
-        env:
-          LEGACY_CHANGELOG: ${{ steps.legacy_changelog.outputs.changelog }}
         run: |
-          # Bridge step: picks whichever generator ran for this channel and
-          # re-emits the changelog as outputs.changelog so downstream Slack/GCS
-          # steps work unchanged.
-          if [[ "${{ inputs.channel }}" == "stable" ]]; then
-            CHANGELOG_FILE="${{ runner.temp }}/changelog-draft/changelog-release.json"
-            if [ ! -f "$CHANGELOG_FILE" ]; then
-              echo "::error::changelog-release.json not found at $CHANGELOG_FILE"
-              exit 1
-            fi
-            jq empty "$CHANGELOG_FILE"
-            {
-              echo "changelog<<CHANGELOG_EOF"
-              cat "$CHANGELOG_FILE"
-              echo "CHANGELOG_EOF"
-            } >> $GITHUB_OUTPUT
-          else
-            echo "$LEGACY_CHANGELOG" | jq empty
-            {
-              echo "changelog<<CHANGELOG_EOF"
-              printf '%s\n' "$LEGACY_CHANGELOG"
-              echo "CHANGELOG_EOF"
-            } >> $GITHUB_OUTPUT
+          # Both generators now write the same release-format file.
+          CHANGELOG_FILE="${{ runner.temp }}/changelog-draft/changelog-release.json"
+          if [ ! -f "$CHANGELOG_FILE" ]; then
+            echo "::error::changelog-release.json not found at $CHANGELOG_FILE"
+            exit 1
           fi
+          jq empty "$CHANGELOG_FILE"
+          {
+            echo "changelog<<CHANGELOG_EOF"
+            cat "$CHANGELOG_FILE"
+            echo "CHANGELOG_EOF"
+          } >> $GITHUB_OUTPUT
 
       - name: Build Slack changelog payload
         id: build_slack_payload
@@ -1841,6 +2133,7 @@ jobs:
           CHANGELOG_JSON: ${{ steps.generate_changelog.outputs.changelog }}
           RELEASE_TAG: ${{ needs.prepare_release.outputs.release_tag }}
           MARKDOWN_ARTIFACT_URL: ${{ steps.upload_changelog_draft_markdown.outputs.artifact-url }}
+          SLACK_CHANNEL: ${{ steps.get-config.outputs.changelog_slack_channel }}
         run: |
           CHANGELOG_INPUT="${{ runner.temp }}/slack-changelog-input.json"
           SLACK_PAYLOAD="${{ runner.temp }}/slack-changelog-payload.json"
@@ -1856,23 +2149,30 @@ jobs:
           fi
           echo "has_content=true" >> $GITHUB_OUTPUT
 
+          # chat.postMessage takes the destination channel as one of its
+          # arguments, so fold it into the payload the Slack step sends.
+          jq -c --arg channel "$SLACK_CHANNEL" '. + {channel: $channel}' "$SLACK_PAYLOAD" > "$SLACK_PAYLOAD.tmp"
+          mv "$SLACK_PAYLOAD.tmp" "$SLACK_PAYLOAD"
+
           echo "payload<<SLACK_PAYLOAD_EOF" >> $GITHUB_OUTPUT
           cat "$SLACK_PAYLOAD" >> $GITHUB_OUTPUT
           echo "SLACK_PAYLOAD_EOF" >> $GITHUB_OUTPUT
 
       - name: Post to a Slack channel
         id: slack
-        uses: slackapi/slack-github-action@410ae57cff5c6b682b106440be0e6c7eb8c98c9d # v1.16.0
+        uses: slackapi/slack-github-action@0d95c9a7becc1e6e297d76df9bc735c44f4cbcbc # v3.0.5
         if: ${{ steps.build_slack_payload.outputs.has_content == 'true' }}
         # Continue on with the rest of the workflow, even if we fail to send the
         # changelog info to Slack.  (We still want to stick the changelog JSON
         # in Cloud Storage.)
         continue-on-error: true
         with:
-          channel-id: ${{ steps.get-config.outputs.changelog_slack_channel }}
+          # Fail the step when Slack rejects the message; continue-on-error
+          # above still lets the rest of the job run.
+          errors: true
+          method: chat.postMessage
+          token: ${{ secrets.SLACK_CHANGELOG_BOT }}
           payload: ${{ steps.build_slack_payload.outputs.payload }}
-        env:
-          SLACK_BOT_TOKEN: ${{ secrets.SLACK_CHANGELOG_BOT }}
 
       - name: Generate changelog.json
         id: changelog_json
@@ -1891,8 +2191,10 @@ jobs:
           IMAGE=$(echo $CHANGELOG | jq -r '.images | if length > 0 then .[-1] else "" end')
           # Extract Oz updates as a JSON array
           OZ_UPDATES=$(echo $CHANGELOG | jq -c '.oz_updates // []')
+          # Extract TUI updates as a JSON array
+          TUI_UPDATES=$(echo $CHANGELOG | jq -c '.tui_updates // []')
           # Tweak the structure of the JSON, add in a top-level date field, and add in the markdown_sections field
-          CHANGELOG=$(echo $CHANGELOG_SECTIONS | jq --arg date "$DATE" --arg new_features "$NEW_FEATURES" --arg improvements "$IMPROVEMENTS" --arg image "$IMAGE" --argjson oz_updates "$OZ_UPDATES" '{"date": $date, "sections": to_entries | map({"title": .key, "items": .value}), "markdown_sections": [{"title": "New features", "markdown": $new_features}, {"title": "Improvements", "markdown": $improvements}, {"title": "Coming soon", "markdown": ""}]} + (if $image != "" then {"image_url": $image} else {} end) + (if ($oz_updates | length) > 0 then {"oz_updates": $oz_updates} else {} end)')
+          CHANGELOG=$(echo $CHANGELOG_SECTIONS | jq --arg date "$DATE" --arg new_features "$NEW_FEATURES" --arg improvements "$IMPROVEMENTS" --arg image "$IMAGE" --argjson oz_updates "$OZ_UPDATES" --argjson tui_updates "$TUI_UPDATES" '{"date": $date, "sections": to_entries | map({"title": .key, "items": .value}), "markdown_sections": [{"title": "New features", "markdown": $new_features}, {"title": "Improvements", "markdown": $improvements}, {"title": "Coming soon", "markdown": ""}]} + (if $image != "" then {"image_url": $image} else {} end) + (if ($oz_updates | length) > 0 then {"oz_updates": $oz_updates} else {} end) + (if ($tui_updates | length) > 0 then {"tui_updates": $tui_updates} else {} end)')
 
           echo $CHANGELOG > changelog.json
           cat changelog.json

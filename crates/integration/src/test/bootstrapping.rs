@@ -9,12 +9,13 @@ use warp::integration_testing::input::{
 use warp::integration_testing::step::new_step_with_default_assertions;
 use warp::integration_testing::tab::tab_title_step;
 use warp::integration_testing::terminal::util::{
-    current_shell_starter_and_version, ExpectedExitStatus,
+    ExpectedExitStatus, current_shell_starter_and_version,
 };
 use warp::integration_testing::terminal::{
     assert_active_block_command_for_single_terminal_in_tab,
     assert_long_running_block_executing_for_single_terminal_in_tab,
-    execute_command_for_single_terminal_in_tab, wait_until_bootstrapped_single_pane_for_tab,
+    clear_blocklist_to_remove_bootstrapped_blocks, execute_command_for_single_terminal_in_tab,
+    wait_until_bootstrapped_single_pane_for_tab,
 };
 use warp::integration_testing::view_getters::{
     single_input_view_for_tab, single_terminal_view_for_tab,
@@ -24,10 +25,10 @@ use warp::terminal::shell::{self, ShellType};
 use warp::workspace::Workspace;
 use warpui_core::clipboard::ClipboardContent;
 use warpui_core::integration::TestStep;
-use warpui_core::{async_assert, async_assert_eq, ViewHandle};
+use warpui_core::{ViewHandle, async_assert, async_assert_eq};
 
-use super::{new_builder, Builder};
-use crate::util::{write_all_rc_files_for_test, write_rc_files_for_test, ShellRcType};
+use super::{Builder, new_builder};
+use crate::util::{ShellRcType, write_all_rc_files_for_test, write_rc_files_for_test};
 
 /// Ensures that config files are only sourced once when bootstrapping a new session.
 pub fn test_rc_files_only_sourced_once_during_bootstrapping() -> Builder {
@@ -312,6 +313,54 @@ pub fn test_zsh_bootstraps_with_nounset_option() -> Builder {
             "echo 'nounset test passed'".to_string(),
             ExpectedExitStatus::Success,
             "nounset test passed",
+        ))
+}
+
+/// Regression test for https://github.com/warpdotdev/warp/issues/7099: a `.zshrc` that enables
+/// vi-mode key bindings via `autoload -Uz cursor_mode; cursor_mode` (mirroring the reporter's
+/// exact repro; prezto's `init.zsh` does the same thing) must not leak leftover buffer content,
+/// nor corrupt the command text, into the next command -- even when the line editor is in vi
+/// command (normal) mode, as it transiently can be after a stray byte from the bootstrap paste.
+pub fn test_zsh_cursor_mode_vi_bindings_do_not_corrupt_commands() -> Builder {
+    new_builder()
+        .set_should_run_test(|| {
+            // cursor_mode/prezto are zsh-specific.
+            let (starter, _) = current_shell_starter_and_version();
+            matches!(starter.shell_type(), shell::ShellType::Zsh)
+        })
+        .with_setup(|utils| {
+            let dir = utils.test_dir();
+            write_rc_files_for_test(
+                dir,
+                r#"
+mkdir -p "$HOME/.zfunctions"
+cat > "$HOME/.zfunctions/cursor_mode" << 'CURSOR_MODE_EOF'
+bindkey -v
+CURSOR_MODE_EOF
+fpath=("$HOME/.zfunctions" $fpath)
+autoload -Uz cursor_mode
+cursor_mode
+function zle-line-init() { zle -K vicmd }
+zle -N zle-line-init
+"#,
+                [ShellRcType::Zsh],
+            );
+        })
+        .with_step(wait_until_bootstrapped_single_pane_for_tab(0))
+        .with_step(clear_blocklist_to_remove_bootstrapped_blocks())
+        // Leaves "LEFTOVER_RESIDUE" pending in the line editor's buffer for the *next* prompt,
+        // simulating genuine leftover bootstrap-paste bytes Warp has no visibility into.
+        .with_step(execute_command_for_single_terminal_in_tab(
+            0,
+            "print -z LEFTOVER_RESIDUE".to_string(),
+            ExpectedExitStatus::Success,
+            (),
+        ))
+        .with_step(execute_command_for_single_terminal_in_tab(
+            0,
+            "echo cursor_mode_vi_ok".to_string(),
+            ExpectedExitStatus::Success,
+            "cursor_mode_vi_ok",
         ))
 }
 

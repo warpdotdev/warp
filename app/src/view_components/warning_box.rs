@@ -1,6 +1,7 @@
 //! A reusable warning callout component with optional action button.
 use markdown_parser::{FormattedText, FormattedTextInline, FormattedTextLine};
 use warp_core::ui::color::blend::Blend;
+use warpui::EventContext;
 use warpui::color::ColorU;
 use warpui::elements::{
     Border, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Element, Expanded, Flex,
@@ -8,7 +9,6 @@ use warpui::elements::{
     Radius, Text,
 };
 use warpui::platform::Cursor;
-use warpui::EventContext;
 
 use crate::appearance::Appearance;
 use crate::themes::theme::Fill as ThemeFill;

@@ -9,13 +9,14 @@ use warp_core::user_preferences::GetUserPreferences as _;
 use warpui::{AppContext, Entity, ModelContext, SingletonEntity};
 
 use super::execution_context::WarpAiExecutionContext;
-use super::utils::{markdown_segments_from_text, FormattedTranscriptMessage, TranscriptPart};
+use super::utils::{FormattedTranscriptMessage, TranscriptPart, markdown_segments_from_text};
 use crate::ai::{RequestLimitInfo, RequestUsageInfo};
 use crate::ai_assistant::utils::{AssistantTranscriptPart, TranscriptPartSubType};
 use crate::auth::AuthStateProvider;
 use crate::send_telemetry_from_ctx;
-use crate::server::server_api::ai::AIClient;
+use crate::server::ids::ServerId;
 use crate::server::server_api::ServerApi;
+use crate::server::server_api::ai::AIClient;
 use crate::server::telemetry::{TelemetryEvent, WarpAIRequestResult};
 use crate::workspaces::user_workspaces::UserWorkspaces;
 
@@ -166,7 +167,12 @@ impl Requests {
     }
 
     /// Starts a Warp AI request against the server with the given request prompt.
-    pub fn issue_request(&mut self, request: String, ctx: &mut ModelContext<Self>) {
+    pub fn issue_request(
+        &mut self,
+        request: String,
+        team_uid: Option<ServerId>,
+        ctx: &mut ModelContext<Self>,
+    ) {
         let server_api = self.server_api.clone();
         let raw_request = request.trim();
         let request_for_api = raw_request.to_string();
@@ -246,7 +252,10 @@ impl Requests {
                             };
 
                             let auth_state = AuthStateProvider::as_ref(ctx).get();
-                            let response = if let Some(team) = UserWorkspaces::as_ref(ctx).current_team() {
+                            let response = if let Some(team) = team_uid.and_then(|team_uid| {
+                                UserWorkspaces::as_ref(ctx)
+                                    .team_from_uid_across_all_workspaces(team_uid)
+                            }) {
                                 let current_user_email = auth_state.user_email().unwrap_or_default();
                                 let has_admin_permissions = team.has_admin_permissions(&current_user_email);
                                 if team.billing_metadata.can_upgrade_to_higher_tier_plan() {

@@ -4,11 +4,11 @@ use std::env::var_os;
 use anyhow::Context;
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
-use vec1::{vec1, Vec1};
+use vec1::{Vec1, vec1};
+use warpui::AppContext;
 use warpui::keymap::Keystroke;
 #[cfg(not(test))]
 use warpui::keymap::Trigger;
-use warpui::AppContext;
 
 /// Environment variable to disable saving keybindings to file (used in integration tests)
 pub const DISABLE_SAVE_ENV_VAR: &str = "WARP_TEST_DISABLE_KEYBINDING_SAVE";

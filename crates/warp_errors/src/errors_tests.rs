@@ -2,7 +2,7 @@ use std::sync::{Mutex, OnceLock};
 
 use log::{Level, Log, Metadata, Record};
 
-use crate::{ReportErrorLogMode, LOG_TARGET};
+use crate::{LOG_TARGET, ReportErrorLogMode};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct LogEntry {

@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use crate::{JsonModel, JsonSerializer};
 
 /// Source-control provider hosting an environment's repositories.
-#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub enum CodeForge {
     #[default]
     #[serde(rename = "GITHUB")]
@@ -212,6 +212,9 @@ pub struct AmbientAgentEnvironment {
     ///   - `Some([...])`: these specific secrets are the default
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub secrets: Option<Vec<EnvironmentSecretRef>>,
+    /// Runner supplying compute for runs that do not name one themselves.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_runner_uid: Option<String>,
 }
 
 impl AmbientAgentEnvironment {
@@ -232,6 +235,7 @@ impl AmbientAgentEnvironment {
             setup_commands,
             providers: ProvidersConfig::default(),
             secrets: None,
+            default_runner_uid: None,
         }
     }
 

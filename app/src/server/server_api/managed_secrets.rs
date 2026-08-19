@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use async_trait::async_trait;
 use cynic::{MutationBuilder, QueryBuilder};
 use warp_graphql::managed_secrets::{ManagedSecret, ManagedSecretType};

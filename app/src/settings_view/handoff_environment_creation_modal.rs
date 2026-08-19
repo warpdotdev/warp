@@ -20,7 +20,7 @@ use crate::settings_view::update_environment_form::{
     EnvironmentFormInitArgs, UpdateEnvironmentForm, UpdateEnvironmentFormEvent,
 };
 use crate::ui_components::buttons::icon_button;
-use crate::ui_components::dialog::{dialog_styles, Dialog};
+use crate::ui_components::dialog::{Dialog, dialog_styles};
 use crate::ui_components::icons::Icon;
 
 const DIALOG_WIDTH: f32 = 600.;

@@ -13,13 +13,13 @@
 use std::time::Duration;
 
 use super::{
-    Color, Modifier, TuiBuffer, TuiConstraint, TuiElement, TuiLayoutContext, TuiPaintContext,
-    TuiRect, TuiSize, TuiStyle,
+    Color, Modifier, TuiConstraint, TuiElement, TuiLayoutContext, TuiPaintContext, TuiPaintSurface,
+    TuiScreenPoint, TuiScreenPosition, TuiSize, TuiStyle,
 };
+use crate::AppContext;
 use crate::color::ColorU;
 use crate::elements::animation::AnimationClock;
 use crate::elements::shimmer_math::{self, ShimmerConfig};
-use crate::AppContext;
 
 /// How often the shimmer repaints. The band moves about one cell per ~140ms
 /// with the default config on short strings, so 100ms keeps it smooth without
@@ -34,6 +34,9 @@ pub struct TuiShimmeringText {
     /// The clock the band's phase is derived from.
     clock: AnimationClock,
     modifier: Modifier,
+    grouped_suffix_glyph_count: usize,
+    size: Option<TuiSize>,
+    origin: Option<TuiScreenPoint>,
 }
 
 impl TuiShimmeringText {
@@ -54,12 +57,24 @@ impl TuiShimmeringText {
             config,
             clock,
             modifier: Modifier::empty(),
+            grouped_suffix_glyph_count: 0,
+            size: None,
+            origin: None,
         }
     }
 
     /// Adds `modifier` (e.g. [`Modifier::BOLD`]) to every painted cell.
     pub fn with_modifier(mut self, modifier: Modifier) -> Self {
         self.modifier = self.modifier.union(modifier);
+        self
+    }
+
+    /// Appends `suffix` and makes all of its glyphs sample one shared shimmer
+    /// intensity.
+    pub fn with_grouped_suffix(mut self, suffix: impl AsRef<str>) -> Self {
+        let suffix = suffix.as_ref();
+        self.grouped_suffix_glyph_count = suffix.chars().count();
+        self.text.push_str(suffix);
         self
     }
 }
@@ -71,43 +86,71 @@ impl TuiElement for TuiShimmeringText {
         _ctx: &mut TuiLayoutContext,
         _app: &AppContext,
     ) -> TuiSize {
-        if self.text.is_empty() {
-            return constraint.clamp(TuiSize::ZERO);
-        }
-        let width = u16::try_from(self.text.chars().count()).unwrap_or(u16::MAX);
-        TuiSize::new(
-            constraint.constrain_width(width),
-            constraint.constrain_height(1),
-        )
+        let size = if self.text.is_empty() {
+            constraint.clamp(TuiSize::ZERO)
+        } else {
+            let width = u16::try_from(self.text.chars().count()).unwrap_or(u16::MAX);
+            TuiSize::new(
+                constraint.constrain_width(width),
+                constraint.constrain_height(1),
+            )
+        };
+        self.size = Some(size);
+        size
     }
 
-    fn render(&self, area: TuiRect, buffer: &mut TuiBuffer, ctx: &mut TuiPaintContext) {
-        if area.is_empty() {
+    fn render(
+        &mut self,
+        origin: TuiScreenPosition,
+        surface: &mut TuiPaintSurface<'_>,
+        ctx: &mut TuiPaintContext,
+    ) {
+        self.origin = Some(ctx.scene_point(origin));
+        let Some(size) = self.size else {
+            return;
+        };
+        if size.width == 0 || size.height == 0 {
             return;
         }
 
         let glyph_count = self.text.chars().count();
         let center = shimmer_math::shimmer_center(glyph_count, self.clock.elapsed(), &self.config);
+        let grouped_suffix = (self.grouped_suffix_glyph_count > 0).then(|| {
+            let start = glyph_count - self.grouped_suffix_glyph_count;
+            (
+                start,
+                start + (self.grouped_suffix_glyph_count.saturating_sub(1) / 2),
+            )
+        });
 
         for (index, char) in self.text.chars().enumerate() {
-            let x = area
-                .x
-                .saturating_add(index.min(usize::from(u16::MAX)) as u16);
-            if x >= area.right() {
+            let x = index.min(usize::from(u16::MAX)) as u16;
+            if x >= size.width {
                 break;
             }
-            let intensity = shimmer_math::intensity_at(index, center, &self.config);
+            let shimmer_index = grouped_suffix
+                .filter(|(start, _)| index >= *start)
+                .map_or(index, |(_, center)| center);
+            let intensity = shimmer_math::intensity_at(shimmer_index, center, &self.config);
             let color =
                 shimmer_math::shimmer_color_at(self.base_color, self.shimmer_color, intensity);
             let style = TuiStyle::default()
                 .fg(Color::Rgb(color.r, color.g, color.b))
                 .add_modifier(self.modifier);
-            if let Some(cell) = buffer.cell_mut((x, area.y)) {
+            if let Some(cell) = surface.cell_mut(origin.offset(i32::from(x), 0)) {
                 cell.set_symbol(char.to_string().as_str()).set_style(style);
             }
         }
 
         ctx.repaint_after(REPAINT_INTERVAL);
+    }
+
+    fn size(&self) -> Option<TuiSize> {
+        self.size
+    }
+
+    fn origin(&self) -> Option<TuiScreenPoint> {
+        self.origin
     }
 }
 

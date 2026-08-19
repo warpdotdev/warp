@@ -24,7 +24,7 @@ use crate::server::sync_queue::SyncQueue;
 use crate::settings::PrivacySettings;
 use crate::settings_view::keybindings::KeybindingChangedNotifier;
 use crate::test_util::settings::initialize_settings_for_tests;
-use crate::workspaces::team::Team;
+use crate::workspaces::team::{Team, TeamVisibility};
 use crate::workspaces::team_tester::TeamTesterStatus;
 use crate::workspaces::user_workspaces::UserWorkspaces;
 use crate::workspaces::workspace::Workspace;
@@ -87,9 +87,11 @@ fn test_build_auth_url_with_next_overrides_existing() {
         next_values.pop(),
         Some("warpdev://settings/environments".to_string())
     );
-    assert!(parsed
-        .query_pairs()
-        .any(|(key, value)| key == "foo" && value == "bar"));
+    assert!(
+        parsed
+            .query_pairs()
+            .any(|(key, value)| key == "foo" && value == "bar")
+    );
 }
 
 #[test]
@@ -246,15 +248,17 @@ fn team_for_test() -> Team {
     Team {
         uid: 123.into(),
         name: "test".to_string(),
-        invite_code: None,
+        color: None,
+        invite_link: None,
         members: vec![],
         pending_email_invites: vec![],
         invite_link_domain_restrictions: vec![],
         billing_metadata: Default::default(),
         stripe_customer_id: None,
-        organization_settings: Default::default(),
+        settings: Default::default(),
         is_eligible_for_discovery: false,
         has_billing_history: false,
+        visibility: TeamVisibility::Open,
     }
 }
 
@@ -269,7 +273,6 @@ fn workspace_for_test(team: &Team) -> Workspace {
         billing_cycle_usage: None,
         has_billing_history: false,
         settings: Default::default(),
-        invite_code: None,
         invite_link_domain_restrictions: vec![],
         pending_email_invites: vec![],
         is_eligible_for_discovery: false,
@@ -1000,8 +1003,8 @@ fn test_render_docker_image_field_shows_github_auth_required_message() {
 }
 
 #[test]
-fn test_create_environment_form_with_team_can_toggle_share_with_team_and_renders_warning_when_disabled(
-) {
+fn test_create_environment_form_with_team_can_toggle_share_with_team_and_renders_warning_when_disabled()
+ {
     App::test((), |mut app| async move {
         init_update_environment_form_test_models(&mut app);
         let window_id = create_test_window(&mut app);
@@ -1014,6 +1017,8 @@ fn test_create_environment_form_with_team_can_toggle_share_with_team_and_renders
             UserWorkspaces::handle(ctx).update(ctx, |user_workspaces, ctx| {
                 user_workspaces.update_workspaces(vec![workspace], ctx);
                 user_workspaces.set_current_workspace_uid(workspace_uid, ctx);
+                let team_uid = user_workspaces.inherited_or_default_team_uid(None);
+                user_workspaces.register_window(window_id, team_uid, ctx);
             });
 
             let view_handle = ctx.add_typed_action_view(window_id, |ctx| {

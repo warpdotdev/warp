@@ -3,6 +3,7 @@ pub mod auth;
 pub mod block;
 #[cfg(not(target_family = "wasm"))]
 pub(crate) mod download;
+pub mod factory;
 pub mod harness_support;
 pub mod integrations;
 pub mod managed_mcp;
@@ -11,6 +12,8 @@ pub mod object;
 pub(crate) mod presigned_upload;
 pub mod referral;
 pub mod team;
+#[cfg(feature = "tui")]
+pub mod tui_onboarding;
 pub mod workspace;
 
 use std::ops::Deref;
@@ -20,11 +23,12 @@ use std::time::Duration;
 
 use ::http::header::CONTENT_LENGTH;
 use ai::AIClient;
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use auth::AuthClient;
 use block::BlockClient;
 use channel_versions::ChannelVersions;
 use chrono::{DateTime, FixedOffset};
+use factory::FactoryClient;
 use instant::Instant;
 use managed_mcp::ManagedMcpClient;
 use object::ObjectClient;
@@ -33,11 +37,14 @@ use referral::ReferralsClient;
 use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
 use team::TeamClient;
+#[cfg(feature = "tui")]
+use tui_onboarding::TuiOnboardingClient;
 use url::Url;
 use warp_core::context_flag::ContextFlag;
 use warp_core::telemetry::TelemetryEvent;
-use warp_errors::{register_error, report_error, AnyhowErrorExt, ErrorExt};
+use warp_errors::{AnyhowErrorExt, ErrorExt, register_error, report_error};
 use warp_managed_secrets::client::ManagedSecretsClient;
+use warp_server_client::HttpStatusError;
 use warp_server_client::auth::{AuthClientImpl, AuthEvent, EXPERIMENT_ID_HEADER};
 use warp_server_client::base_client::{
     AmbientHeaderPolicy, AuthenticatedGraphqlConfig, BaseClient, GraphqlRoutingConfig,
@@ -60,9 +67,13 @@ use crate::auth::auth_manager::AuthManager;
 use crate::auth::auth_state::AuthState;
 use crate::server::telemetry::TelemetryApi;
 use crate::settings::PrivacySettingsSnapshot;
-use crate::{settings_view, ChannelState};
+use crate::{ChannelState, settings_view};
 
 pub const FETCH_CHANNEL_VERSIONS_TIMEOUT: std::time::Duration = Duration::from_secs(60);
+#[derive(Serialize)]
+struct AgentTipShownAnalyticsRequest {
+    tip: String,
+}
 
 /// We use a special error code header `X-Warp-Error-Code` to allow the server to send
 /// more specific error code information, so that the client can discern between different
@@ -341,7 +352,10 @@ impl AIApiError {
 impl ErrorExt for AIApiError {
     fn is_actionable(&self) -> bool {
         match self {
-            AIApiError::Deserialization(_) => true,
+            AIApiError::Deserialization(error) => match error {
+                DeserializationError::Json(_) => true,
+                DeserializationError::Transport(error) => error.is_actionable(),
+            },
             AIApiError::Transport(error) => error.is_actionable(),
             AIApiError::Other(error) => error.is_actionable(),
             AIApiError::Stream { source, .. } => source.is_actionable(),
@@ -365,14 +379,55 @@ pub enum TranscribeError {
     ServerOverloaded,
 
     #[error("Internal error occurred at transport layer.")]
-    Transport,
+    Transport(#[source] reqwest::Error),
+
+    #[error("Failed with status code {0}")]
+    ErrorStatus(http::StatusCode),
 
     #[error("Failed to deserialize JSON.")]
-    Deserialization,
+    Deserialization(#[source] DeserializationError),
 
     #[error(transparent)]
     Other(#[from] anyhow::Error),
 }
+
+impl TranscribeError {
+    fn from_json_error(err: reqwest::Error) -> Self {
+        if err.is_decode() {
+            #[cfg(not(target_family = "wasm"))]
+            {
+                use std::error::Error as _;
+                let mut source = err.source();
+                while let Some(underlying) = source {
+                    if underlying.is::<hyper::Error>() {
+                        return TranscribeError::Transport(err);
+                    }
+                    source = underlying.source();
+                }
+            }
+            return TranscribeError::Deserialization(DeserializationError::Transport(err));
+        }
+        TranscribeError::Transport(err)
+    }
+}
+
+impl ErrorExt for TranscribeError {
+    fn is_actionable(&self) -> bool {
+        match self {
+            TranscribeError::Transport(error) => error.is_actionable(),
+            TranscribeError::ErrorStatus(status) => {
+                !status.is_server_error() && *status != http::StatusCode::TOO_MANY_REQUESTS
+            }
+            TranscribeError::Other(error) => error.is_actionable(),
+            TranscribeError::Deserialization(error) => match error {
+                DeserializationError::Json(_) => true,
+                DeserializationError::Transport(error) => error.is_actionable(),
+            },
+            TranscribeError::QuotaLimit | TranscribeError::ServerOverloaded => false,
+        }
+    }
+}
+register_error!(TranscribeError);
 
 /// An API wrapper struct with methods to requests to warp-server.
 ///
@@ -447,7 +502,7 @@ impl ServerApi {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, all(feature = "tui", feature = "test-util")))]
     fn new_for_test() -> Self {
         let (tx, _) = async_channel::unbounded();
         let auth_state = Arc::new(AuthState::new_for_test());
@@ -663,7 +718,11 @@ impl ServerApi {
         }
     }
 
-    /// Converts a non-success public API response into the most specific client error available.
+    /// Converts a non-success public API response into the most specific client error
+    /// available. The returned error always carries an [`HttpStatusError`] in its chain
+    /// (via [`anyhow::Error::context`]) so callers retrying through
+    /// [`is_transient_http_error`](super::retry_strategies::is_transient_http_error) fail
+    /// fast on a deterministic 4xx instead of defaulting to a transient retry.
     async fn error_from_response(response: http_client::Response) -> anyhow::Error {
         let status = response.status();
         let is_at_capacity = response
@@ -679,29 +738,32 @@ impl ServerApi {
 
         // Get the response text first since we may need to try multiple deserializations.
         let response_text = response.text().await.unwrap_or_default();
+        let status_error = HttpStatusError {
+            status: status.as_u16(),
+            body: response_text.clone(),
+        };
 
         // Check for AT_CAPACITY error code header.
-        if is_at_capacity {
-            if let Ok(capacity_error) =
+        if is_at_capacity
+            && let Ok(capacity_error) =
                 serde_json::from_str::<CloudAgentCapacityError>(&response_text)
-            {
-                return capacity_error.into();
-            }
+        {
+            return anyhow::Error::new(status_error).context(capacity_error);
         }
         if status == StatusCode::TOO_MANY_REQUESTS && is_out_of_credits {
             let user_display_message = serde_json::from_str::<OutOfCreditsResponse>(&response_text)
                 .ok()
                 .and_then(|r| r.user_display_message);
-            return AIApiError::QuotaLimit {
+            return anyhow::Error::new(status_error).context(AIApiError::QuotaLimit {
                 user_display_message,
-            }
-            .into();
+            });
         }
 
         // Try to deserialize error response as { "error": "message" }
         match serde_json::from_str::<ClientError>(&response_text) {
-            Ok(error_response) => error_response.into(),
-            Err(_) => anyhow!("API request failed with status {status}"),
+            Ok(error_response) => anyhow::Error::new(status_error).context(error_response),
+            Err(_) => anyhow::Error::new(status_error)
+                .context(format!("API request failed with status {status}")),
         }
     }
 
@@ -866,8 +928,10 @@ impl ServerApi {
 
                 let response = request.send().await;
                 if let Err(err) = response {
-                    report_error!(anyhow::Error::new(err)
-                        .context("Failed to send POST request to /client/login"));
+                    report_error!(
+                        anyhow::Error::new(err)
+                            .context("Failed to send POST request to /client/login")
+                    );
                 }
             }
             Err(err) => {
@@ -891,6 +955,41 @@ impl ServerApi {
         self.telemetry_api
             .send_telemetry_event(user_id, anonymous_id, event, settings_snapshot)
             .await
+    }
+
+    pub async fn send_agent_tip_shown_analytics_event(&self, tip: String) -> Result<()> {
+        let auth_token = self
+            .get_or_refresh_access_token()
+            .await
+            .context("Failed to get access token for API request")?;
+        let url = format!(
+            "{}/analytics/agent-tip-shown",
+            ChannelState::server_root_url()
+        );
+        let mut request = self
+            .base_client
+            .http_client()
+            .post(&url)
+            .json(&AgentTipShownAnalyticsRequest { tip });
+        if let Some(token) = auth_token.as_bearer_token() {
+            request = request.bearer_auth(token);
+        }
+
+        for (name, value) in self.ambient_agent_headers().await? {
+            request = request.header(name, value);
+        }
+
+        let response = request
+            .send()
+            .await
+            .with_context(|| format!("Failed to send API request to {url}"))?;
+
+        if response.status().is_success() {
+            Ok(())
+        } else {
+            self.observe_iap_challenge(&response);
+            Err(Self::error_from_response(response).await)
+        }
     }
 
     /// Drains all queued [`TelemetryEvent`]s into Rudderstack requests containing the corresponding
@@ -1072,7 +1171,7 @@ impl ServerApi {
                         Ok(output_response) => Ok(output_response),
                         Err(e) => {
                             log::warn!("Failed to deserialize response: {e:?}");
-                            Err(TranscribeError::Deserialization)
+                            Err(TranscribeError::from_json_error(e))
                         }
                     }
                 } else if res.status() == http::StatusCode::TOO_MANY_REQUESTS {
@@ -1087,13 +1186,14 @@ impl ServerApi {
                         Err(TranscribeError::ServerOverloaded)
                     }
                 } else {
-                    log::warn!("Non-success status code received: {}", res.status());
-                    Err(TranscribeError::Transport)
+                    let status = res.status();
+                    log::warn!("Non-success status code received: {status}");
+                    Err(TranscribeError::ErrorStatus(status))
                 }
             }
             Err(e) => {
                 log::warn!("Error while sending request: {e:?}");
-                Err(TranscribeError::Transport)
+                Err(TranscribeError::Transport(e))
             }
         }
     }
@@ -1285,7 +1385,7 @@ impl ServerApiProvider {
     }
 
     /// Constructs a new SeverApiProvider for tests.
-    #[cfg(test)]
+    #[cfg(any(test, all(feature = "tui", feature = "test-util")))]
     pub fn new_for_test() -> Self {
         let server_api = Arc::new(ServerApi::new_for_test());
         let auth_client = Arc::new(AuthClientImpl::new(server_api.base_client.clone()));
@@ -1320,6 +1420,10 @@ impl ServerApiProvider {
     pub fn get_team_client(&self) -> Arc<dyn TeamClient> {
         self.server_api.clone()
     }
+    #[cfg(feature = "tui")]
+    pub fn get_tui_onboarding_client(&self) -> Arc<dyn TuiOnboardingClient> {
+        self.server_api.clone()
+    }
 
     pub fn get_ai_client(&self) -> Arc<dyn AIClient> {
         self.server_api.clone()
@@ -1342,6 +1446,10 @@ impl ServerApiProvider {
         self.server_api.clone()
     }
 
+    pub fn get_factory_client(&self) -> Arc<dyn FactoryClient> {
+        self.server_api.clone()
+    }
+
     /// Returns the shared HTTP client. This client is wired into network logging
     /// and includes standard Warp request headers.
     pub fn get_http_client(&self) -> Arc<http_client::Client> {
@@ -1359,3 +1467,7 @@ impl Entity for ServerApiProvider {
 }
 
 impl SingletonEntity for ServerApiProvider {}
+
+#[cfg(test)]
+#[path = "server_api_tests.rs"]
+mod tests;

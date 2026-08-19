@@ -5,9 +5,9 @@ use parking_lot::Mutex;
 use warp_core::channel::ChannelState;
 use warp_errors::report_error;
 use warpui::{Entity, ModelContext, SingletonEntity};
-use windows::core::Error;
-use windows::Win32::Foundation::{CloseHandle, GetLastError, ERROR_ALREADY_EXISTS, HANDLE};
+use windows::Win32::Foundation::{CloseHandle, ERROR_ALREADY_EXISTS, GetLastError, HANDLE};
 use windows::Win32::System::Threading::CreateMutexW;
+use windows::core::Error;
 
 use super::service_impl::UriServiceImpl;
 
@@ -68,7 +68,7 @@ fn try_create_mutex() -> Result<Option<MutexHandle>, Error> {
     handle
         .inspect_err(|err| {
             report_error!(
-                anyhow::anyhow!("{err:#}").context("Failed to create single-instance mutex")
+                anyhow::Error::new(err.clone()).context("Failed to create single-instance mutex")
             );
         })
         .map(|handle| {
@@ -120,7 +120,7 @@ impl SingleInstanceManager {
             }
             Err(err) => {
                 report_error!(
-                    anyhow::anyhow!("{err:#}").context("Failed to initialize UriService Server")
+                    anyhow::Error::new(err).context("Failed to initialize UriService Server")
                 );
                 // If we failed to create a server, we can't receive URI requests so we drop the
                 // lock.

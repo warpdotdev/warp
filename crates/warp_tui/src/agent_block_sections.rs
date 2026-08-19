@@ -8,36 +8,36 @@
 use std::time::Duration;
 
 use warp::tui_export::{
-    format_elapsed_seconds, AIActionStatus, AIAgentAction, AIAgentTodo, AIAgentTodoList, MessageId,
-    TodoStatus,
+    AIActionStatus, AIAgentAction, AIAgentTodo, AIAgentTodoList, MessageId, TodoStatus,
+    format_elapsed_seconds,
 };
+use warpui_core::AppContext;
+use warpui_core::elements::CrossAxisAlignment;
 use warpui_core::elements::tui::{
     Modifier, TuiContainer, TuiElement, TuiFlex, TuiParentElement, TuiStyle, TuiText,
 };
-use warpui_core::elements::CrossAxisAlignment;
-use warpui_core::AppContext;
 
 use crate::agent_block::{CollapsibleSectionStates, TuiAIBlockAction};
 use crate::tool_call_labels::{
-    tool_call_display_state, tool_call_glyph, tool_call_label, ResolvedCommandBlock,
-    ToolCallDisplayState,
+    ResolvedCommandBlock, mcp_server_name_for_action, styled_tool_call_label_spans,
+    tool_call_display_state, tool_call_label_with_server,
 };
 use crate::tui_builder::TuiUiBuilder;
 
-const INPUT_PREFIX: &str = "≫ ";
+const INPUT_PREFIX: &str = "> ";
 
 /// Task-list header glyph. Visually interchangeable with the design's `☰`,
 /// whose inconsistent cell width across terminals leaves ghost cells behind.
 const TASK_LIST_HEADER_GLYPH: &str = "≡";
 
 /// Renders the input section: the user's submitted query on a highlighted
-/// background with a `≫` prompt marker.
+/// background with a `>` prompt marker.
 pub(crate) fn render_input_section(text: &str, app: &AppContext) -> Box<dyn TuiElement> {
     let builder = TuiUiBuilder::from_app(app);
     let text_style = builder.input_text_style();
     let prefix_style = builder.input_prefix_style();
 
-    // Only the first line carries the `≫` prompt marker; continuation
+    // Only the first line carries the `>` prompt marker; continuation
     // lines are indented to the marker's width so they align beneath it.
     // The column stretches to the full offered width so the highlighted
     // background spans the whole row, not just the text.
@@ -73,48 +73,6 @@ pub(crate) fn render_input_section(text: &str, app: &AppContext) -> Box<dyn TuiE
         .finish()
 }
 
-/// Shared leading-glyph style for all rich and fallback TUI tool-call rows.
-pub(crate) fn tool_call_glyph_style(
-    state: ToolCallDisplayState,
-    builder: &TuiUiBuilder,
-) -> TuiStyle {
-    match state {
-        ToolCallDisplayState::Constructing | ToolCallDisplayState::Pending => {
-            builder.dim_text_style()
-        }
-        ToolCallDisplayState::AwaitingApproval | ToolCallDisplayState::Running => {
-            builder.attention_glyph_style()
-        }
-        ToolCallDisplayState::Succeeded => builder.success_glyph_style(),
-        ToolCallDisplayState::Failed => builder.error_text_style(),
-        ToolCallDisplayState::Cancelled => builder.muted_text_style(),
-    }
-}
-
-/// Shared label style for all rich and fallback TUI tool-call rows.
-pub(crate) fn tool_call_label_style(
-    state: ToolCallDisplayState,
-    builder: &TuiUiBuilder,
-) -> TuiStyle {
-    match state {
-        ToolCallDisplayState::Constructing | ToolCallDisplayState::Pending => {
-            builder.dim_text_style()
-        }
-        ToolCallDisplayState::AwaitingApproval
-        | ToolCallDisplayState::Running
-        | ToolCallDisplayState::Succeeded
-        | ToolCallDisplayState::Failed
-        | ToolCallDisplayState::Cancelled => builder.primary_text_style(),
-    }
-}
-
-/// Renders a plain-text response section.
-pub(crate) fn render_plain_text_section(text: &str, app: &AppContext) -> Box<dyn TuiElement> {
-    TuiText::new(text.to_owned())
-        .with_style(TuiUiBuilder::from_app(app).primary_text_style())
-        .finish()
-}
-
 /// Renders the fallback plain-text status row for an agent tool call, used
 /// for every tool call without a richer registered child view (the GUI's
 /// view-based action rendering has no TUI equivalent for these yet): a
@@ -123,9 +81,10 @@ pub(crate) fn render_plain_text_section(text: &str, app: &AppContext) -> Box<dyn
 /// hanging indent under itself. State lives in the glyph, so labels keep the
 /// normal foreground except in-flight rows, which stay dim until execution
 /// starts. `output_streaming` marks tool calls whose arguments are still
-/// streaming in (see `ToolCallDisplayState::Constructing`); `block` carries
-/// the terminal block's ground truth for shell-command tool calls (see
-/// `ResolvedCommandBlock`).
+/// streaming in (see
+/// [`crate::tool_call_labels::ToolCallDisplayState::Constructing`]); `block`
+/// carries the terminal block's ground truth for shell-command tool calls
+/// (see `ResolvedCommandBlock`).
 pub(crate) fn render_fallback_tool_call_section(
     action: &AIAgentAction,
     status: Option<&AIActionStatus>,
@@ -135,16 +94,22 @@ pub(crate) fn render_fallback_tool_call_section(
 ) -> Box<dyn TuiElement> {
     let builder = TuiUiBuilder::from_app(app);
     let state = tool_call_display_state(status, output_streaming, block.map(|block| block.state));
-    let glyph_style = tool_call_glyph_style(state, &builder);
-    let label_style = tool_call_label_style(state, &builder);
-    let label = tool_call_label(action, status, output_streaming, block);
+    let glyph_style = state.glyph_style(&builder);
+    let server_name = mcp_server_name_for_action(&action.action, app);
+    let label = tool_call_label_with_server(
+        action,
+        status,
+        output_streaming,
+        block,
+        server_name.as_deref(),
+    );
     TuiFlex::row()
         .child(
-            TuiText::new(format!("{} ", tool_call_glyph(state)))
+            TuiText::new(format!("{} ", state.glyph()))
                 .with_style(glyph_style)
                 .finish(),
         )
-        .child(TuiText::new(label).with_style(label_style).finish())
+        .child(TuiText::from_spans(styled_tool_call_label_spans(&label, &builder)).finish())
         .finish()
 }
 
@@ -153,10 +118,9 @@ pub(crate) fn render_thinking_section(
     states: &CollapsibleSectionStates,
     message_id: &MessageId,
     finished_duration: Option<Duration>,
-    body: &str,
+    body: Box<dyn TuiElement>,
     app: &AppContext,
 ) -> Box<dyn TuiElement> {
-    let builder = TuiUiBuilder::from_app(app);
     let header = match finished_duration {
         Some(duration) => format!("Thought for {}", format_elapsed_seconds(duration)),
         None => "Thinking...".to_owned(),
@@ -167,27 +131,31 @@ pub(crate) fn render_thinking_section(
         header,
         finished_duration.is_some(),
         body,
-        builder.muted_text_style(),
         app,
     )
 }
 
 /// Renders a streamed conversation summary with the same persistent
 /// collapse/hover behavior as a reasoning section.
+///
+/// Defaults to **collapsed** whether or not streaming has finished, so an
+/// in-progress summary does not auto-expand — the prior expand-while-streaming
+/// then collapse-on-finish flip jittered the transcript. Manual expand still
+/// works via `CollapsibleSectionStates`.
 pub(crate) fn render_summarization_section(
     states: &CollapsibleSectionStates,
     message_id: &MessageId,
-    finished: bool,
-    body: &str,
+    body: Box<dyn TuiElement>,
     app: &AppContext,
 ) -> Box<dyn TuiElement> {
     render_collapsible_message_section(
         states,
         message_id,
-        "Conversation summarized".to_owned(),
-        finished,
+        "Conversation summary".to_owned(),
+        // Always collapsed by default; a manual override in
+        // `CollapsibleSectionStates` still wins so users can expand it.
+        true,
         body,
-        TuiUiBuilder::from_app(app).primary_text_style(),
         app,
     )
 }
@@ -197,18 +165,12 @@ fn render_collapsible_message_section(
     message_id: &MessageId,
     header: String,
     finished: bool,
-    body: &str,
-    body_style: TuiStyle,
+    body: Box<dyn TuiElement>,
     app: &AppContext,
 ) -> Box<dyn TuiElement> {
     let builder = TuiUiBuilder::from_app(app);
-    // Indent the body so every wrapped line aligns beneath the header.
-    let body_element = TuiContainer::new(
-        TuiText::new(body.to_owned())
-            .with_style(body_style)
-            .finish(),
-    )
-    .with_padding_left(4);
+    // Left-align the body with the header and separate the two with a blank row.
+    let body_element = TuiContainer::new(body).with_padding_top(1).finish();
 
     let collapsed = states.is_collapsed(message_id, finished);
     let toggle_message_id = message_id.clone();
@@ -216,7 +178,7 @@ fn render_collapsible_message_section(
         collapsed,
         header,
         states.hover_state(message_id),
-        body_element.finish(),
+        body_element,
         move |event_ctx, _app| {
             event_ctx.dispatch_typed_action(TuiAIBlockAction::SetSectionCollapsed {
                 message_id: toggle_message_id.clone(),
@@ -246,7 +208,7 @@ pub(crate) fn render_todo_list_section(
 
     let mut rows = TuiFlex::column();
     for (title, status) in todos {
-        let (glyph, glyph_style) = todo_glyph(status, &builder);
+        let (glyph, glyph_style) = todo_status_glyph(status, &builder);
         let title_style = match status {
             TodoStatus::Pending | TodoStatus::InProgress | TodoStatus::Completed => {
                 builder.primary_text_style()
@@ -292,10 +254,13 @@ pub(crate) fn render_todo_list_section(
 /// The status glyph and its style for one task row. Pending and in-progress
 /// glyphs follow the TUI Figma design; terminal states reuse the tool-call
 /// glyph vocabulary (see `tool_call_glyph`).
-fn todo_glyph(status: &TodoStatus, builder: &TuiUiBuilder) -> (&'static str, TuiStyle) {
+pub(crate) fn todo_status_glyph(
+    status: &TodoStatus,
+    builder: &TuiUiBuilder,
+) -> (&'static str, TuiStyle) {
     match status {
         TodoStatus::Pending => ("◌", builder.primary_text_style()),
-        TodoStatus::InProgress => ("•", builder.attention_glyph_style()),
+        TodoStatus::InProgress => ("●", builder.attention_glyph_style()),
         TodoStatus::Completed => ("✓", builder.success_glyph_style()),
         TodoStatus::Cancelled | TodoStatus::Stopped => ("■", builder.muted_text_style()),
     }

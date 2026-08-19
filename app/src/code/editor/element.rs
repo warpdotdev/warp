@@ -1,22 +1,22 @@
 mod gutter_button;
 use std::ops::Range;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 pub use gutter_button::{AddAsContextButton, CommentButton, RevertHunkButton};
 use parking_lot::Mutex;
 use pathfinder_color::ColorU;
 use pathfinder_geometry::rect::RectF;
-use pathfinder_geometry::vector::{vec2f, Vector2F};
+use pathfinder_geometry::vector::{Vector2F, vec2f};
 use warp_core::features::FeatureFlag;
 use warp_core::ui::appearance::Appearance;
-use warp_core::ui::theme::color::internal_colors;
 use warp_core::ui::theme::Fill;
+use warp_core::ui::theme::color::internal_colors;
 use warp_editor::editor::EditorView;
 use warp_editor::render::element::lens_element::RichTextElementLens;
 use warp_editor::render::element::{RenderableBlock, RichTextElement, VerticalExpansionBehavior};
 use warp_editor::render::model::{
-    gutter_expansion_button_types, BlockLocation, ExpansionType, LineCount, RenderState,
+    BlockLocation, ExpansionType, LineCount, RenderState, gutter_expansion_button_types,
 };
 use warpui::elements::new_scrollable::{NewScrollableElement, ScrollableAxis};
 use warpui::elements::{
@@ -359,14 +359,13 @@ impl LineNumberConfig {
     }
 
     pub fn display_line_number(&self, line_count: LineCount) -> usize {
-        if self.mode == CodeEditorLineNumberMode::Relative {
-            if let Some(active_line_number) = self.active_line_number {
-                if active_line_number != line_count {
-                    return active_line_number
-                        .as_usize()
-                        .abs_diff(line_count.as_usize());
-                }
-            }
+        if self.mode == CodeEditorLineNumberMode::Relative
+            && let Some(active_line_number) = self.active_line_number
+            && active_line_number != line_count
+        {
+            return active_line_number
+                .as_usize()
+                .abs_diff(line_count.as_usize());
         }
 
         self.absolute_line_number(line_count)
@@ -1013,23 +1012,23 @@ impl<V: EditorView> EditorWrapper<V> {
             };
 
             let mut stack = Stack::new().with_child(container.finish());
-            if state.is_hovered() {
-                if let Some(text) = gutter_button.tooltip_text() {
-                    let tooltip = appearance
-                        .ui_builder()
-                        .tool_tip(text.into())
-                        .build()
-                        .finish();
-                    stack.add_positioned_overlay_child(
-                        tooltip,
-                        OffsetPositioning::offset_from_parent(
-                            vec2f(0., 8.),
-                            ParentOffsetBounds::Unbounded,
-                            ParentAnchor::BottomLeft,
-                            ChildAnchor::TopLeft,
-                        ),
-                    );
-                }
+            if state.is_hovered()
+                && let Some(text) = gutter_button.tooltip_text()
+            {
+                let tooltip = appearance
+                    .ui_builder()
+                    .tool_tip(text.into())
+                    .build()
+                    .finish();
+                stack.add_positioned_overlay_child(
+                    tooltip,
+                    OffsetPositioning::offset_from_parent(
+                        vec2f(0., 8.),
+                        ParentOffsetBounds::Unbounded,
+                        ParentAnchor::BottomLeft,
+                        ChildAnchor::TopLeft,
+                    ),
+                );
             }
 
             stack.finish()
@@ -1332,21 +1331,21 @@ impl<V: EditorView> Element for EditorWrapper<V> {
             for gutter_element in gutter_elements {
                 let gutter_element_size = gutter_element.element.layout(constraint, ctx, app);
 
-                if FeatureFlag::InlineCodeReview.is_enabled() {
-                    if let Some(comment_box) = &mut self.comment_box {
-                        let highlight_line = &comment_box.line;
-                        if gutter_element.line == *highlight_line {
-                            let highlight_width = size.x();
-                            let highlight_height = gutter_element_size.y();
-                            comment_box.line_highlight_element.layout(
-                                SizeConstraint {
-                                    min: vec2f(0.0, 0.0),
-                                    max: vec2f(highlight_width, highlight_height),
-                                },
-                                ctx,
-                                app,
-                            );
-                        }
+                if FeatureFlag::InlineCodeReview.is_enabled()
+                    && let Some(comment_box) = &mut self.comment_box
+                {
+                    let highlight_line = &comment_box.line;
+                    if gutter_element.line == *highlight_line {
+                        let highlight_width = size.x();
+                        let highlight_height = gutter_element_size.y();
+                        comment_box.line_highlight_element.layout(
+                            SizeConstraint {
+                                min: vec2f(0.0, 0.0),
+                                max: vec2f(highlight_width, highlight_height),
+                            },
+                            ctx,
+                            app,
+                        );
                     }
                 }
             }
@@ -1449,36 +1448,36 @@ impl<V: EditorView> Element for EditorWrapper<V> {
                             .as_ref()
                             .is_some_and(|r| r == element.line.line_range()));
 
-                if let Some(size) = element.diff_hunk_size(is_hovered) {
-                    if let Some(color) = element.diff_indicator_color(diff_hunks_are_expanded) {
-                        let current_range = element.line.line_range();
-                        let same_group = group.as_ref().is_some_and(|g| {
-                            g.range == current_range
-                                && g.color == color
-                                && (g.width - size.x()).abs() < f32::EPSILON
-                        });
-                        if same_group {
-                            group.as_mut().unwrap().end_y = gutter_y + element.height;
-                        } else {
-                            // Flush previous group.
-                            if let Some(g) = group.take() {
-                                sliver_rects.push((
-                                    RectF::new(
-                                        origin + vec2f(0., g.start_y),
-                                        vec2f(g.width, g.end_y - g.start_y),
-                                    ),
-                                    g.color,
-                                ));
-                            }
-                            // Start new group.
-                            group = Some(SliverGroup {
-                                start_y: gutter_y,
-                                end_y: gutter_y + element.height,
-                                range: current_range,
-                                color,
-                                width: size.x(),
-                            });
+                if let Some(size) = element.diff_hunk_size(is_hovered)
+                    && let Some(color) = element.diff_indicator_color(diff_hunks_are_expanded)
+                {
+                    let current_range = element.line.line_range();
+                    let same_group = group.as_ref().is_some_and(|g| {
+                        g.range == current_range
+                            && g.color == color
+                            && (g.width - size.x()).abs() < f32::EPSILON
+                    });
+                    if same_group {
+                        group.as_mut().unwrap().end_y = gutter_y + element.height;
+                    } else {
+                        // Flush previous group.
+                        if let Some(g) = group.take() {
+                            sliver_rects.push((
+                                RectF::new(
+                                    origin + vec2f(0., g.start_y),
+                                    vec2f(g.width, g.end_y - g.start_y),
+                                ),
+                                g.color,
+                            ));
                         }
+                        // Start new group.
+                        group = Some(SliverGroup {
+                            start_y: gutter_y,
+                            end_y: gutter_y + element.height,
+                            range: current_range,
+                            color,
+                            width: size.x(),
+                        });
                     }
                 }
 
@@ -1534,41 +1533,36 @@ impl<V: EditorView> Element for EditorWrapper<V> {
 
             ctx.scene.stop_layer();
 
-            if FeatureFlag::InlineCodeReview.is_enabled() {
-                if let Some(comment_box) = &mut self.comment_box {
-                    if let Some((offset, height)) = inline_comment_gutter_element {
-                        let gutter_origin = origin + vec2f(0., offset);
+            if FeatureFlag::InlineCodeReview.is_enabled()
+                && let Some(comment_box) = &mut self.comment_box
+                && let Some((offset, height)) = inline_comment_gutter_element
+            {
+                let gutter_origin = origin + vec2f(0., offset);
 
-                        // Highlight the selected line.
-                        comment_box
-                            .line_highlight_element
-                            .paint(gutter_origin, ctx, app);
+                // Highlight the selected line.
+                comment_box
+                    .line_highlight_element
+                    .paint(gutter_origin, ctx, app);
 
-                        // Cache a single pixel where the comment editor would be located
-                        // if were to render it within this element.
-                        let rect = RectF::new(gutter_origin, vec2f(1., height));
-                        ctx.position_cache.cache_position_for_one_frame(
-                            self.comment_save_position_id.clone(),
-                            rect,
-                        );
-                    }
-                }
+                // Cache a single pixel where the comment editor would be located
+                // if were to render it within this element.
+                let rect = RectF::new(gutter_origin, vec2f(1., height));
+                ctx.position_cache
+                    .cache_position_for_one_frame(self.comment_save_position_id.clone(), rect);
             }
         }
 
         // Cache find references anchor position if we have one.
-        if self.find_references_anchor.is_some() {
-            if let Some((offset, height)) = find_references_gutter_element {
-                let gutter_origin = origin + vec2f(0., offset);
+        if self.find_references_anchor.is_some()
+            && let Some((offset, height)) = find_references_gutter_element
+        {
+            let gutter_origin = origin + vec2f(0., offset);
 
-                // Cache the gutter position for the find references anchor.
-                // This will be used to determine if the card should be shown.
-                let rect = RectF::new(gutter_origin, vec2f(1., height));
-                ctx.position_cache.cache_position_for_one_frame(
-                    self.find_references_save_position_id.clone(),
-                    rect,
-                );
-            }
+            // Cache the gutter position for the find references anchor.
+            // This will be used to determine if the card should be shown.
+            let rect = RectF::new(gutter_origin, vec2f(1., height));
+            ctx.position_cache
+                .cache_position_for_one_frame(self.find_references_save_position_id.clone(), rect);
         }
 
         self.child_max_z_index = Some(ctx.scene.max_active_z_index());
@@ -1653,12 +1647,11 @@ impl<V: EditorView> Element for EditorWrapper<V> {
                 if !gutter_handled {
                     let was_clicking = self.state_handle.in_click.swap(false, Ordering::Relaxed);
 
-                    if was_clicking {
-                        if let Some(gutter_range) =
+                    if was_clicking
+                        && let Some(gutter_range) =
                             self.gutter_element_range_containing_position(*position, false)
-                        {
-                            (self.click_handler)(gutter_range, ctx);
-                        }
+                    {
+                        (self.click_handler)(gutter_range, ctx);
                     }
                 }
             }

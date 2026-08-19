@@ -33,25 +33,25 @@ pub use global_actions::{
     ForkAIConversationParams, ForkFromExchange, ForkedConversationDestination,
 };
 use serde::{Deserialize, Serialize};
-pub use util::{active_terminal_in_window, PaneViewLocator, TabMovement};
+pub use util::{PaneViewLocator, TabMovement, active_terminal_in_window};
 pub use view::{
-    Workspace, NEW_SESSION_MENU_BUTTON_POSITION_ID, NEW_TAB_BUTTON_POSITION_ID,
-    PANEL_HEADER_HEIGHT, TAB_BAR_HEIGHT, TOTAL_TAB_BAR_HEIGHT, WORKSPACE_PADDING,
+    NEW_SESSION_MENU_BUTTON_POSITION_ID, NEW_TAB_BUTTON_POSITION_ID, PANEL_HEADER_HEIGHT,
+    TAB_BAR_HEIGHT, TOTAL_TAB_BAR_HEIGHT, WORKSPACE_PADDING, Workspace,
 };
 use warp_core::context_flag::ContextFlag;
+use warpui::AppContext;
 use warpui::accessibility::AccessibilityVerbosity;
 use warpui::elements::DropTargetData;
 use warpui::keymap::{BindingDescription, EditableBinding, FixedBinding};
-use warpui::AppContext;
 
 use crate::ai::blocklist::NEW_AGENT_PANE_LABEL;
 use crate::channel::{Channel, ChannelState};
 use crate::features::FeatureFlag;
 use crate::palette::PaletteMode;
 use crate::server::telemetry::{AgentModeEntrypoint, PaletteSource};
-use crate::settings_view::{self, flags, SettingsSection};
-use crate::tab::{uses_vertical_tabs, NewSessionMenuItem};
-use crate::util::bindings::{self, cmd_or_ctrl_shift, is_binding_pty_compliant, CustomAction};
+use crate::settings_view::{self, SettingsSection, flags};
+use crate::tab::{NewSessionMenuItem, uses_vertical_tabs};
+use crate::util::bindings::{self, CustomAction, cmd_or_ctrl_shift, is_binding_pty_compliant};
 use crate::{code, modal, notebooks, tab_configs};
 
 // Helper function to access panel header corner radius from other modules
@@ -61,7 +61,7 @@ pub fn panel_header_corner_radius() -> warpui::elements::CornerRadius {
 
 pub use one_time_modal_model::OneTimeModalModel;
 pub use registry::WorkspaceRegistry;
-pub use toast_stack::ToastStack;
+pub use toast_stack::{ToastStack, ToastStackEvent};
 
 use crate::workspace::view::{
     LEFT_PANEL_AGENT_CONVERSATIONS_BINDING_NAME, LEFT_PANEL_GLOBAL_SEARCH_BINDING_NAME,
@@ -91,6 +91,7 @@ pub fn init(app: &mut AppContext) {
     view::launch_modal::oz_launch::init(app);
     view::openwarp_launch_modal::init(app);
     view::orchestration_launch_modal::init(app);
+    view::agent_cli_launch_modal::init(app);
     view::feature_intro_modal::init(app);
     view::auto_handoff_sleep_modal::init(app);
     view::cloud_agent_capacity_modal::init(app);
@@ -224,6 +225,18 @@ pub fn init(app: &mut AppContext) {
                     "workspace:reset_orchestration_launch_modal_state",
                     "[Debug] Reset Orchestration Launch Modal State",
                     WorkspaceAction::ResetOrchestrationLaunchModalState,
+                )
+                .with_context_predicate(id!("Workspace")),
+                EditableBinding::new(
+                    "workspace:open_agent_cli_launch_modal",
+                    "[Debug] Open Warp Agent CLI Launch Modal",
+                    WorkspaceAction::OpenAgentCliLaunchModal,
+                )
+                .with_context_predicate(id!("Workspace")),
+                EditableBinding::new(
+                    "workspace:reset_agent_cli_launch_modal_state",
+                    "[Debug] Reset Warp Agent CLI Launch Modal State",
+                    WorkspaceAction::ResetAgentCliLaunchModalState,
                 )
                 .with_context_predicate(id!("Workspace")),
                 EditableBinding::new(
@@ -970,6 +983,14 @@ pub fn init(app: &mut AppContext) {
     .with_group(bindings::BindingGroup::Settings.as_str())
     .with_context_predicate(id!("Workspace"))]);
 
+    app.register_editable_bindings([EditableBinding::new(
+        "workspace:cycle_active_tab_color",
+        "Cycle current tab color",
+        WorkspaceAction::CycleActiveTabColor,
+    )
+    .with_group(bindings::BindingGroup::Settings.as_str())
+    .with_context_predicate(id!("Workspace"))]);
+
     // Tab grouping bindings (keyless by default; gated on `GroupedTabs`).
     app.register_editable_bindings([
         EditableBinding::new(
@@ -1641,7 +1662,7 @@ fn add_open_setting_pages_as_editable_binding(app: &mut AppContext) {
         EditableBinding::new(
             "workspace:show_mcp_servers_settings_page",
             BindingDescription::new("Open Settings: MCP Servers"),
-            WorkspaceAction::ShowSettingsPage(SettingsSection::MCPServers),
+            WorkspaceAction::ShowSettingsPage(SettingsSection::AgentMCPServers),
         )
         .with_group(bindings::BindingGroup::Settings.as_str())
         .with_context_predicate(id!("Workspace")),

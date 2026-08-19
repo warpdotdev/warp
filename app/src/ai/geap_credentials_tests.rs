@@ -8,16 +8,15 @@ use warpui::{AddSingletonModel, App};
 use warpui_extras::user_preferences;
 
 use super::*;
+use crate::server::server_api::ServerApiProvider;
 use crate::server::server_api::team::MockTeamClient;
 use crate::server::server_api::workspace::MockWorkspaceClient;
-use crate::server::server_api::ServerApiProvider;
-use crate::workspaces::team::Team;
+use crate::workspaces::team::{Team, TeamVisibility};
 use crate::workspaces::workspace::{HostEnablementSetting, LlmHostSettings, Workspace};
 
 // ── pure helpers ────────────────────────────────────────────────
 
-const TEST_AUDIENCE: &str =
-    "//iam.googleapis.com/projects/123456/locations/global/workloadIdentityPools/warp-pool/providers/warp-provider";
+const TEST_AUDIENCE: &str = "//iam.googleapis.com/projects/123456/locations/global/workloadIdentityPools/warp-pool/providers/warp-provider";
 const TEST_SA_EMAIL: &str = "warp-geap@test-project.iam.gserviceaccount.com";
 
 #[test]
@@ -146,15 +145,17 @@ fn team_for_test() -> Team {
     Team {
         uid: 123.into(),
         name: "test".to_string(),
-        invite_code: None,
+        color: None,
+        invite_link: None,
         members: vec![],
         pending_email_invites: vec![],
         invite_link_domain_restrictions: vec![],
         billing_metadata: Default::default(),
         stripe_customer_id: None,
-        organization_settings: Default::default(),
+        settings: Default::default(),
         is_eligible_for_discovery: false,
         has_billing_history: false,
+        visibility: TeamVisibility::Open,
     }
 }
 
@@ -170,7 +171,6 @@ fn workspace_with_geap_host(enabled: bool) -> Workspace {
         billing_cycle_usage: None,
         has_billing_history: false,
         settings: Default::default(),
-        invite_code: None,
         invite_link_domain_restrictions: vec![],
         pending_email_invites: vec![],
         is_eligible_for_discovery: false,
@@ -295,7 +295,7 @@ fn refresh_disables_and_drops_tokens_when_gate_is_off() {
 }
 
 #[test]
-fn refresh_rests_at_missing_when_enabled_but_unconfigured() {
+fn refresh_rests_at_unconfigured_when_enabled_but_unconfigured() {
     let mut workspace = workspace_with_geap_host(true);
     // Enabled, but the admin has not configured an audience yet.
     workspace
@@ -312,7 +312,7 @@ fn refresh_rests_at_missing_when_enabled_but_unconfigured() {
             refresh_geap_credentials(manager, ctx);
             assert_eq!(
                 *manager.geap_credentials_state(),
-                GeapCredentialsState::Missing
+                GeapCredentialsState::Unconfigured
             );
         });
     })
@@ -481,6 +481,44 @@ fn mint_completion_failure_restores_servable_previous() {
                 } if *credentials == carried && *minted_for == current => {}
                 other => panic!("expected the previous token restored, got {other:?}"),
             }
+        });
+    })
+}
+
+#[test]
+fn mint_failure_starts_the_cooldown_that_suppresses_the_blocking_wait() {
+    let workspace = workspace_with_geap_host(true);
+    App::test((), |mut app| async move {
+        let _geap_flag = FeatureFlag::GeminiEnterprise.override_enabled(true);
+        initialize_app(&mut app, vec![workspace]);
+        ApiKeyManager::handle(&app).update(&mut app, |manager, ctx| {
+            let current = current_binding(ctx);
+            manager.set_geap_credentials_state(
+                GeapCredentialsState::Refreshing {
+                    previous: Some((expired_credentials(), current.clone())),
+                },
+                ctx,
+            );
+            apply_geap_mint_result(
+                manager,
+                Err(LoadGeapCredentialsError::ExchangeToken {
+                    status: None,
+                    detail: "boom".into(),
+                }),
+                current.clone(),
+                false,
+                ctx,
+            );
+            // Restoring the previous token leaves an expired credential in
+            // `Loaded`, which on its own reads as eligible for another
+            // blocking mint on the very next request. The cooldown recorded by
+            // the failure is the only thing preventing every following prompt
+            // from paying the full request-time wait.
+            assert!(matches!(
+                manager.geap_credentials_state(),
+                GeapCredentialsState::Loaded { .. }
+            ));
+            assert!(!manager.geap_expired_refresh_eligibility(&current));
         });
     })
 }

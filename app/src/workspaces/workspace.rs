@@ -48,7 +48,6 @@ pub struct Workspace {
     pub billing_cycle_usage: Option<BillingCycleUsageData>,
     pub has_billing_history: bool,
     pub settings: WorkspaceSettings,
-    pub invite_code: Option<WorkspaceInviteCode>,
     pub invite_link_domain_restrictions: Vec<InviteLinkDomainRestriction>,
     pub pending_email_invites: Vec<EmailInvite>,
     // If the team is eligible for discovery, then show toggle for setting discoverability to the team's admin
@@ -77,7 +76,6 @@ impl Workspace {
             billing_cycle_usage: None,
             has_billing_history: false,
             settings: Default::default(), // TODO: persistence wrapper instead of default
-            invite_code: Default::default(),
             invite_link_domain_restrictions: Default::default(),
             pending_email_invites: Default::default(),
             is_eligible_for_discovery: false,
@@ -93,6 +91,17 @@ impl Workspace {
     pub fn is_workspace_admin(&self, user_email: &str) -> bool {
         self.get_member_by_email(user_email)
             .is_some_and(|member| member.role.is_admin_or_owner())
+    }
+
+    pub fn is_native_workspaces_enabled(&self) -> bool {
+        self.billing_metadata
+            .tier
+            .native_workspaces_policy
+            .is_some_and(|policy| policy.enabled)
+    }
+
+    pub fn is_native_workspaces_admin(&self, user_email: &str) -> bool {
+        self.is_workspace_admin(user_email) && self.is_native_workspaces_enabled()
     }
 
     pub fn resolve_usage_visibility(&self, is_admin: bool) -> UsageVisibility {
@@ -135,19 +144,18 @@ impl Workspace {
     }
 
     pub fn are_overages_remaining(&self) -> bool {
-        if self.settings.usage_based_pricing_settings.enabled {
-            if let Some(max_spend_cents) = self
+        if self.settings.usage_based_pricing_settings.enabled
+            && let Some(max_spend_cents) = self
                 .settings
                 .usage_based_pricing_settings
                 .max_monthly_spend_cents
-            {
-                if let Some(ai_overages) = &self.billing_metadata.ai_overages {
-                    return ai_overages.current_monthly_request_cost_cents < max_spend_cents as i32;
-                } else {
-                    // If they have the setting enabled but no overages usage so far,
-                    // that means they have no database entry, so they have overages remaining.
-                    return true;
-                }
+        {
+            if let Some(ai_overages) = &self.billing_metadata.ai_overages {
+                return ai_overages.current_monthly_request_cost_cents < max_spend_cents as i32;
+            } else {
+                // If they have the setting enabled but no overages usage so far,
+                // that means they have no database entry, so they have overages remaining.
+                return true;
             }
         }
 
@@ -176,7 +184,8 @@ impl Workspace {
         }
     }
 
-    /// Returns the price in cents for the selected auto-reload credit denomination.
+    /// Returns the price in cents for the selected auto-reload credit denomination,
+    /// including any plan surcharge (premium plans reload at the premium price).
     /// Returns None if auto-reload is not configured or if the denomination can't be found in pricing options.
     pub fn get_auto_reload_price_cents(
         &self,
@@ -190,13 +199,12 @@ impl Workspace {
         addon_credits_options
             .iter()
             .find(|option| option.credits == selected_credits)
-            .map(|option| option.price_usd_cents)
+            .map(|option| {
+                option.price_usd_cents_with_premium(
+                    self.billing_metadata.addon_credits_price_premium_bps(),
+                )
+            })
     }
-}
-
-#[derive(Clone, Debug)]
-pub struct WorkspaceInviteCode {
-    pub code: String,
 }
 
 #[derive(Clone, Eq, PartialEq, Debug)]
@@ -231,6 +239,7 @@ impl Ord for WorkspaceMember {
 pub struct EmailInvite {
     pub invitee_email: String,
     pub expired: bool,
+    pub team_uid: Option<ServerId>,
 }
 
 impl PartialOrd for EmailInvite {
@@ -386,9 +395,36 @@ pub struct ManagedByokByoePolicy {
     pub enabled: bool,
 }
 
-#[derive(Clone, Debug, Copy, Serialize, Deserialize)]
+#[derive(Clone, Debug, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PurchaseAddOnCreditsPolicy {
     pub enabled: bool,
+    /// When `enabled` is false, allows purchasing add-on credit packs at a
+    /// `price_premium_bps` surcharge over list price (e.g. on the Free plan).
+    #[serde(default)]
+    pub premium_enabled: bool,
+    /// Surcharge in basis points applied to list prices when purchasing via
+    /// the premium path (1000 bps = +10%). 0 for standard purchasing plans.
+    #[serde(default)]
+    pub price_premium_bps: i32,
+}
+
+impl PurchaseAddOnCreditsPolicy {
+    /// Whether this plan may purchase add-on credit packs at all, either at
+    /// list price (`enabled`) or at a premium surcharge (`premium_enabled`).
+    pub fn allows_purchases(&self) -> bool {
+        self.enabled || self.premium_enabled
+    }
+
+    /// The surcharge in basis points applied to pack list prices. 0 whenever
+    /// standard (list price) purchasing is enabled — standard purchasing
+    /// wins if the server ever sends both flags.
+    pub fn effective_premium_bps(&self) -> i32 {
+        if !self.enabled && self.premium_enabled {
+            self.price_premium_bps
+        } else {
+            0
+        }
+    }
 }
 
 #[derive(Clone, Debug, Copy, Serialize, Deserialize)]
@@ -403,6 +439,11 @@ pub struct EnterpriseCreditsAutoReloadPolicy {
 
 #[derive(Clone, Debug, Copy, Serialize, Deserialize)]
 pub struct MultiAdminPolicy {
+    pub enabled: bool,
+}
+
+#[derive(Clone, Debug, Copy, Serialize, Deserialize)]
+pub struct NativeWorkspacesPolicy {
     pub enabled: bool,
 }
 
@@ -490,6 +531,7 @@ pub struct Tier {
     pub enterprise_pay_as_you_go_policy: Option<EnterprisePayAsYouGoPolicy>,
     pub enterprise_credits_auto_reload_policy: Option<EnterpriseCreditsAutoReloadPolicy>,
     pub multi_admin_policy: Option<MultiAdminPolicy>,
+    pub native_workspaces_policy: Option<NativeWorkspacesPolicy>,
     pub ambient_agents_policy: Option<AmbientAgentsPolicy>,
     pub usage_visibility_policy: Option<UsageVisibilityPolicy>,
 }
@@ -507,6 +549,26 @@ pub struct BillingMetadata {
     pub ai_overages: Option<AiOverages>,
 }
 
+/// The effective account outcome used to route users after account-first signup.
+///
+/// Paid status and free AI availability are resolved from fresh server-authored
+/// data during post-auth onboarding.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FtueAccountClass {
+    Paid,
+    FreeIcp,
+    FreeStandard,
+}
+
+impl FtueAccountClass {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            FtueAccountClass::Paid => "paid",
+            FtueAccountClass::FreeIcp => "free_icp",
+            FtueAccountClass::FreeStandard => "free_standard",
+        }
+    }
+}
 #[derive(Clone, Debug, Default)]
 pub struct BonusGrantsPurchased {
     pub total_credits_purchased: i32,
@@ -543,6 +605,12 @@ pub struct BillingCycleUsageEntry {
     pub usage_source: AiCreditsUsageSource,
     pub credits_used: i32,
     pub cost_cents: i32,
+    /// Uid of the team this usage is attributed to. `billingCycleUsageHistory`
+    /// is workspace-wide, so this is what scopes an entry to a single team.
+    /// `None` for rows written before usage attribution shipped and for the
+    /// synthetic aggregate rows the server emits below `FullBreakdown`
+    /// visibility.
+    pub attributed_team_uid: Option<String>,
 }
 
 /// Per-cycle bucket of redacted usage entries with explicit period bounds.
@@ -756,10 +824,28 @@ impl BillingMetadata {
                 .is_some_and(|policy| policy.enabled)
     }
 
+    /// Whether this plan may purchase add-on credit packs at all, either at
+    /// list price (`enabled`) or at a premium surcharge (`premium_enabled`).
     pub fn is_purchase_add_on_credits_policy_enabled(&self) -> bool {
         self.tier
             .purchase_add_on_credits_policy
-            .is_some_and(|policy| policy.enabled)
+            .is_some_and(|policy| policy.allows_purchases())
+    }
+
+    /// Whether add-on credit purchases on this plan go through the premium
+    /// (surcharged) path rather than standard list-price purchasing.
+    pub fn is_premium_addon_credits_purchase(&self) -> bool {
+        self.tier
+            .purchase_add_on_credits_policy
+            .is_some_and(|policy| !policy.enabled && policy.premium_enabled)
+    }
+
+    /// The surcharge in basis points applied to add-on credit pack list
+    /// prices for this plan. 0 whenever standard purchasing is enabled.
+    pub fn addon_credits_price_premium_bps(&self) -> i32 {
+        self.tier
+            .purchase_add_on_credits_policy
+            .map_or(0, |policy| policy.effective_premium_bps())
     }
 }
 
@@ -891,7 +977,7 @@ pub struct LinkSharingSettings {
     pub direct_link_sharing_enabled: bool,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct EnterpriseSecretRegex {
     pub pattern: String,
     #[serde(default)]
@@ -950,6 +1036,100 @@ pub struct WorkspaceSettings {
     pub enable_warp_attribution: AdminEnablementSetting,
     #[serde(default)]
     pub default_host_slug: Option<String>,
+}
+
+/// A workspace-governable setting carried on [`TeamSettings`]: the effective
+/// `value` plus whether the workspace layer enforces it (mirrors the server's
+/// `*SettingInfo` wrappers). The enforcement bit is preserved so future admin UI
+/// can distinguish workspace-enforced values from team-owned ones.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct EnforceableSetting<T> {
+    pub value: T,
+    #[serde(default)]
+    pub is_enforced_by_workspace: bool,
+}
+
+/// A list setting split by the layer that contributed each entry (mirrors the
+/// server's `StringListSettingInfo` / `SecretRedactionRegexListInfo`). `values`
+/// is the authoritative merged result; `workspace_entries` / `team_entries` are
+/// preserved so future admin UI can present the layers separately.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct SplitListSetting<T> {
+    pub values: Vec<T>,
+    #[serde(default)]
+    pub workspace_entries: Vec<T>,
+    #[serde(default)]
+    pub team_entries: Vec<T>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct TeamAiPermissionsSettings {
+    pub allow_ai_in_remote_sessions: EnforceableSetting<bool>,
+    pub remote_session_regex_list: SplitListSetting<String>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct TeamSecretRedactionSettings {
+    pub enabled: EnforceableSetting<bool>,
+    pub regexes: SplitListSetting<EnterpriseSecretRegex>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct TeamAiAutonomySettings {
+    pub apply_code_diffs: EnforceableSetting<Option<ActionPermission>>,
+    pub read_files: EnforceableSetting<Option<ActionPermission>>,
+    pub create_plans: EnforceableSetting<Option<ActionPermission>>,
+    pub execute_commands: EnforceableSetting<Option<ActionPermission>>,
+    pub write_to_pty: EnforceableSetting<Option<WriteToPtyPermission>>,
+    pub computer_use: EnforceableSetting<Option<ComputerUsePermission>>,
+    pub read_files_allowlist: SplitListSetting<String>,
+    pub execute_commands_allowlist: SplitListSetting<String>,
+    pub execute_commands_denylist: SplitListSetting<String>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct TeamLinkSharingSettings {
+    pub anyone_with_link_sharing_enabled: EnforceableSetting<bool>,
+    pub direct_link_sharing_enabled: EnforceableSetting<bool>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct TeamSandboxedAgentSettings {
+    pub execute_commands_denylist: SplitListSetting<String>,
+}
+
+/// The effective settings that apply to a team, combining the workspace layer
+/// with the team's own configuration.
+///
+/// This is intentionally a distinct type from [`WorkspaceSettings`] rather than
+/// an alias: it is sourced from the server's effective `Team.settings`. Each
+/// workspace-governable group keeps both its effective value **and** the
+/// `is_enforced_by_workspace` / workspace-vs-team split metadata (via
+/// [`EnforceableSetting`] / [`SplitListSetting`]) so future admin UI can recover
+/// those details. Unlike `WorkspaceSettings`, it does not carry the
+/// workspace-scoped `is_invite_link_enabled` / `is_discoverable` flags (those
+/// remain on [`WorkspaceSettings`] and are read from the current workspace).
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct TeamSettings {
+    pub ugc_collection: EnforceableSetting<UgcCollectionEnablementSetting>,
+    pub cloud_conversation_storage: EnforceableSetting<AdminEnablementSetting>,
+    pub codebase_context: EnforceableSetting<AdminEnablementSetting>,
+    pub ai_permissions: TeamAiPermissionsSettings,
+    pub secret_redaction: TeamSecretRedactionSettings,
+    pub ai_autonomy: TeamAiAutonomySettings,
+    pub link_sharing: TeamLinkSharingSettings,
+    pub sandboxed_agent: TeamSandboxedAgentSettings,
+    pub llm_settings: LlmSettings,
+    pub telemetry_settings: TelemetrySettings,
+    pub usage_based_pricing_settings: UsageBasedPricingSettings,
+    pub addon_credits_settings: AddonCreditsSettings,
+    /// The team-level agent attribution setting. When `Enable` or `Disable`, the
+    /// user toggle is locked. When `RespectUserSetting` (or absent), the user can choose.
+    #[serde(default)]
+    pub enable_warp_attribution: AdminEnablementSetting,
+    #[serde(default)]
+    pub default_host_slug: Option<String>,
+    pub team_byo: Option<TeamByoSettings>,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]

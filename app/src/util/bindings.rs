@@ -3,7 +3,7 @@ use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use enum_iterator::{all, Sequence};
+use enum_iterator::{Sequence, all};
 use fuzzy_match::match_indices_case_insensitive;
 use itertools::Itertools;
 use lazy_static::lazy_static;
@@ -16,7 +16,7 @@ use warpui::keymap::{
 use warpui::platform::OperatingSystem;
 use warpui::{Action, AppContext, SingletonEntity};
 
-use crate::keyboard::{remove_custom_keybinding, write_custom_keybinding, UserDefinedKeybinding};
+use crate::keyboard::{UserDefinedKeybinding, remove_custom_keybinding, write_custom_keybinding};
 use crate::settings_view::keybindings::{KeybindingChangedEvent, KeybindingChangedNotifier};
 
 pub const MAC_MENUS_CONTEXT: DescriptionContext = DescriptionContext::Custom("mac_menus");
@@ -188,11 +188,15 @@ lazy_static! {
     /// * `^_`: Unit Separator
     /// * `^?`: Delete
     ///
+    /// `ctrl-/` is reserved alongside these. It isn't caret notation for a distinct character, but
+    /// terminals have encoded it as the Unit Separator since xterm and editors bind against it.
+    /// See GH#4620.
+    ///
     /// ## Note
     /// Though caret notation uses uppercase letters (`^C` instead of `^c`), we validate using
     /// _lowercase_ characters because it is impossible to create a [`Keystroke`] of the form
     /// `ctrl-[A-Z]`. See [`Keystroke::parse`].
-    pub static ref CONTROL_CHARACTER_KEY_REGEX: Regex = Regex::new(r"^ctrl-[a-z@\[\\\]^_?]$").expect("should be able to construct regex");
+    pub static ref CONTROL_CHARACTER_KEY_REGEX: Regex = Regex::new(r"^ctrl-[a-z@\[\\\]^_?/]$").expect("should be able to construct regex");
 
     /// Set of actions on Mac that should be considered valid bindings even though they aren't PTY
     /// compliant. We weren't always diligent about avoiding bindings that could conflict with
@@ -363,7 +367,10 @@ pub fn custom_tag_to_keystroke(custom: CustomTag) -> Option<Keystroke> {
         // differently compared to the app which saves the resulting character used with shift
         // TODO: resolve these keybinding differences
         CustomAction::ToggleResourceCenter => Keystroke::parse("ctrl-shift-/").ok(),
-        CustomAction::ToggleKeybindingsPage => Keystroke::parse("cmdorctrl-/").ok(),
+        // Set this to mac-only. On Linux/Windows `cmdorctrl-/` resolves to `ctrl-/`, which is
+        // reserved for the PTY: keybindings are dispatched before terminal input, so this
+        // swallowed the keystroke before the terminal ever saw it.
+        CustomAction::ToggleKeybindingsPage => mac_only_keystroke("cmd-/"),
         CustomAction::ScrollToTopOfSelectedBlocks => Keystroke::parse("cmdorctrl-shift-up").ok(),
         CustomAction::ScrollToBottomOfSelectedBlocks => {
             Keystroke::parse("cmdorctrl-shift-down").ok()
@@ -637,11 +644,7 @@ pub fn filter_bindings_including_keystroke<'a>(
                 let keystroke_search_score = if let Some(search_keystroke) = &search_keystroke {
                     binding.trigger.as_ref().and_then(|candidate_keystroke| {
                         let score = keystroke_includes(search_keystroke, candidate_keystroke);
-                        if score > 0 {
-                            Some(score)
-                        } else {
-                            None
-                        }
+                        if score > 0 { Some(score) } else { None }
                     })
                 } else {
                     None

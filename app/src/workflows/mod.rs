@@ -29,9 +29,9 @@ use crate::cloud_object::{
     CloudModelType, CloudObjectEventEntrypoint, CloudObjectUpsertParams, CreateCloudObjectResult,
     CreateObjectRequest, GenericServerObject, ObjectType, Revision, UpdateCloudObjectResult,
 };
-use crate::drive::items::workflow::WarpDriveWorkflow;
-use crate::drive::items::WarpDriveItem;
 use crate::drive::CloudObjectTypeAndId;
+use crate::drive::items::WarpDriveItem;
+use crate::drive::items::workflow::WarpDriveWorkflow;
 use crate::notebooks::{NotebookId, NotebookLocation};
 use crate::persistence::ModelEvent;
 use crate::server::cloud_objects::update_manager::InitiatedBy;
@@ -280,7 +280,7 @@ impl CloudModelType for CloudWorkflowModel {
             // a snapshot to update at a moment in time.
             model: workflow.model().clone().into(),
             id: workflow.id,
-            revision: revision_ts.or_else(|| workflow.metadata.revision.clone()),
+            revision: revision_ts.or(workflow.metadata.revision),
         }
     }
 

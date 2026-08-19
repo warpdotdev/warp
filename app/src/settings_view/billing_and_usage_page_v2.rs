@@ -24,7 +24,7 @@ use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
 use warpui::ui_components::switch::SwitchStateHandle;
 use warpui::{
     AppContext, Element, Entity, ModelHandle, SingletonEntity, TypedActionView, UpdateView, View,
-    ViewContext, ViewHandle,
+    ViewContext, ViewHandle, WeakViewHandle,
 };
 
 use super::billing_and_usage::billing_cycle_usage_section::BillingCycleUsageSectionView;
@@ -32,13 +32,16 @@ use super::billing_and_usage::overage_limit_modal::{SpendingLimitModal, Spending
 use super::billing_and_usage::usage_history_entry::UsageHistoryEntry;
 use super::billing_and_usage::usage_history_model::UsageHistoryModel;
 pub use super::billing_and_usage_page::BillingAndUsagePageEvent;
-use super::billing_and_usage_page::{BillingAndUsagePageAction, BillingUsageTab};
-use super::settings_page::{render_customer_type_badge, render_info_icon, AdditionalInfo};
-use super::SettingsSection;
-use crate::ai::request_usage_model::{
-    BonusGrant, BonusGrantScope, BonusGrantType, AMBIENT_AGENT_TRIAL_CREDIT_THRESHOLD,
+use super::billing_and_usage_page::{
+    BillingAndUsagePageAction, BillingUsageTab, CHECKOUT_PENDING_MESSAGE,
+    render_premium_upgrade_savings_note,
 };
+use super::settings_page::{AdditionalInfo, render_customer_type_badge, render_info_icon};
+use super::{SettingsSection, plan_header_presentation};
 use crate::ai::AIRequestUsageModel;
+use crate::ai::request_usage_model::{
+    AMBIENT_AGENT_TRIAL_CREDIT_THRESHOLD, BonusGrant, BonusGrantScope, BonusGrantType,
+};
 use crate::auth::auth_state::AuthState;
 use crate::auth::auth_view_modal::AuthViewVariant;
 use crate::auth::{AuthManager, AuthStateProvider};
@@ -51,16 +54,16 @@ use crate::ui_components::blended_colors;
 use crate::ui_components::buttons::icon_button;
 use crate::ui_components::icons::Icon;
 use crate::ui_components::tab_selector::{self, SettingsTab};
-use crate::view_components::action_button::{ActionButton, PrimaryTheme, SecondaryTheme};
 use crate::view_components::ToastFlavor;
+use crate::view_components::action_button::{ActionButton, PrimaryTheme, SecondaryTheme};
 use crate::workspaces::update_manager::TeamUpdateManager;
 use crate::workspaces::user_workspaces::{UserWorkspaces, UserWorkspacesEvent};
 use crate::workspaces::workspace::{CustomerType, Workspace, WorkspaceUid};
-use crate::{send_telemetry_from_ctx, WorkspaceAction};
+use crate::{WorkspaceAction, send_telemetry_from_ctx};
 
 const ADDON_CREDITS_DESCRIPTION: &str = "Add-on credits are purchased in prepaid packages that roll over each billing cycle and expire after one year. The more you purchase, the better the per-credit rate. Once your base plan credits are used, add-on credits will be consumed.";
 const ADDITIONAL_ADDON_CREDITS_DESCRIPTION_FOR_TEAM: &str =
-    "Purchased add-on credits are added to your personal balance.";
+    "Purchased add-on credits are added to your team's shared credit pool.";
 const MANAGED_AUTO_RELOAD_HEADER: &str = "Auto-reload is enabled";
 
 const ADDON_CREDITS_DELINQUENT_WARNING_STRING: &str =
@@ -162,11 +165,18 @@ struct AddonCreditsPurchaseState {
     description_text: String,
     auto_reload_enabled: bool,
     has_admin_permissions: bool,
+    /// Whether team-level purchase settings (spend limit, auto-reload) can be
+    /// edited: requires admin permission AND an existing team. Teamless users
+    /// can purchase, but have no team settings until their first purchase
+    /// creates a team server-side.
+    can_edit_team_settings: bool,
     purchase_disabled: bool,
     auto_reload_switch_disabled: bool,
     price_label: String,
     auto_reload_tooltip_text: String,
     warning_text: Option<&'static str>,
+    /// Surcharge in basis points applied to displayed prices (0 = none).
+    premium_bps: i32,
 }
 
 struct UsageHistoryState {
@@ -214,6 +224,7 @@ impl GrantBucket {
 struct ClassifiedGrants {
     personal: GrantBucket,
     team: GrantBucket,
+    workspace: GrantBucket,
 }
 
 impl ClassifiedGrants {
@@ -221,6 +232,7 @@ impl ClassifiedGrants {
         let now = chrono::Utc::now();
         let mut personal = Vec::new();
         let mut team = Vec::new();
+        let mut workspace = Vec::new();
 
         for grant in grants {
             if grant.expiration.is_some_and(|exp| now >= exp) {
@@ -229,30 +241,35 @@ impl ClassifiedGrants {
             if grant.request_credits_remaining <= 0 {
                 continue;
             }
-            let in_user_scope = grant.scope == BonusGrantScope::User;
-            let in_workspace_scope =
-                workspace_uid.is_some_and(|uid| grant.scope == BonusGrantScope::Workspace(uid));
             if grant.grant_type == BonusGrantType::AmbientOnly {
                 continue;
-            } else if in_user_scope {
-                personal.push(grant.clone());
-            } else if in_workspace_scope {
-                team.push(grant.clone());
+            }
+            match grant.scope {
+                BonusGrantScope::User => personal.push(grant.clone()),
+                BonusGrantScope::Team(uid) if workspace_uid == Some(uid) => {
+                    team.push(grant.clone())
+                }
+                BonusGrantScope::Workspace(uid) if workspace_uid == Some(uid) => {
+                    workspace.push(grant.clone())
+                }
+                BonusGrantScope::Team(_) | BonusGrantScope::Workspace(_) => {}
             }
         }
 
         Self {
             personal: GrantBucket { grants: personal },
             team: GrantBucket { grants: team },
+            workspace: GrantBucket { grants: workspace },
         }
     }
 
     fn has_any(&self) -> bool {
-        !self.personal.is_empty() || !self.team.is_empty()
+        !self.personal.is_empty() || !self.team.is_empty() || !self.workspace.is_empty()
     }
 }
 
 pub struct BillingAndUsagePageV2View {
+    self_handle: WeakViewHandle<Self>,
     auth_state: Arc<AuthState>,
     addon_credit_modal_state: ModalViewState<Modal<SpendingLimitModal>>,
     selected_tab: BillingUsageTab,
@@ -338,6 +355,7 @@ impl BillingAndUsagePageV2View {
             ctx.add_typed_action_view(BillingCycleUsageSectionView::new);
 
         let mut me = Self {
+            self_handle: ctx.handle(),
             auth_state,
             addon_credit_modal_state: ModalViewState::new(addon_credit_modal_view),
             selected_tab: BillingUsageTab::Overview,
@@ -435,6 +453,16 @@ impl BillingAndUsagePageV2View {
                 AIRequestUsageModel::handle(ctx)
                     .update(ctx, |m, ctx| m.refresh_request_usage_async(ctx));
             }
+            UserWorkspacesEvent::PurchaseAddonCreditsCheckoutRequired { checkout_url } => {
+                if self.addon_credits.purchase_loading {
+                    self.addon_credits.purchase_loading = false;
+                    ctx.open_url(checkout_url);
+                    self.show_toast(CHECKOUT_PENDING_MESSAGE, ToastFlavor::Default, ctx);
+                    // Credits are granted via webhook once checkout completes;
+                    // `on_page_selected` refreshes billing data when the user
+                    // returns (e.g. via the confirmation page's Open Warp link).
+                }
+            }
             UserWorkspacesEvent::PurchaseAddonCreditsRejected(err) => {
                 self.addon_credits.purchase_loading = false;
                 self.show_toast(&err.to_string(), ToastFlavor::Error, ctx);
@@ -482,7 +510,7 @@ impl BillingAndUsagePageV2View {
             }
             SpendingLimitModalEvent::Update { amount_cents } => {
                 let workspaces = UserWorkspaces::as_ref(ctx);
-                let team_uid = workspaces.current_team_uid();
+                let team_uid = workspaces.team_uid_for_window(ctx.window_id());
 
                 if let Some(team_uid) = team_uid {
                     UserWorkspaces::handle(ctx).update(ctx, |user_workspaces, ctx| {
@@ -578,115 +606,125 @@ impl BillingAndUsagePageV2View {
             .with_main_axis_alignment(MainAxisAlignment::End);
 
         let workspaces = UserWorkspaces::as_ref(app);
-
-        if let Some(team) = workspaces.current_team() {
-            if team.billing_metadata.customer_type != CustomerType::Unknown {
-                right_side.add_child(
-                    Container::new(render_customer_type_badge(
-                        appearance,
-                        team.billing_metadata.customer_type.to_display_string(),
-                    ))
+        let workspace = workspaces.current_workspace();
+        let billing_metadata = workspace.map(|workspace| &workspace.billing_metadata);
+        let team = workspaces.team_for_view_handle(&self.self_handle, app);
+        let presentation = plan_header_presentation(billing_metadata, team.is_some(), false);
+        if let Some(badge_label) = presentation.badge_label {
+            right_side.add_child(
+                Container::new(render_customer_type_badge(appearance, badge_label))
                     .with_margin_right(8.)
                     .finish(),
-                );
-            }
-
+            );
+        }
+        if let Some(team) = team {
             let current_user_email = AuthStateProvider::as_ref(app)
                 .get()
                 .user_email()
                 .unwrap_or_default();
-            let has_admin_permissions = team.has_admin_permissions(&current_user_email);
+            let is_team_admin = team.has_admin_permissions(&current_user_email);
+            let is_workspace_admin = workspace
+                .is_some_and(|workspace| workspace.is_workspace_admin(&current_user_email));
 
-            if has_admin_permissions {
-                if team.billing_metadata.customer_type != CustomerType::Enterprise
-                    && team.has_billing_history
-                {
-                    let team_uid = team.uid;
-                    let fg_color = appearance.theme().active_ui_text_color();
-                    right_side.add_child(
-                        Container::new(
-                            appearance
-                                .ui_builder()
-                                .button(
-                                    ButtonVariant::Link,
-                                    self.plan_mouse_states.manage_billing_link.clone(),
+            if is_team_admin
+                && billing_metadata.is_some_and(|billing_metadata| {
+                    billing_metadata.customer_type != CustomerType::Enterprise
+                })
+                && workspace.is_some_and(|workspace| workspace.has_billing_history)
+            {
+                let team_uid = team.uid;
+                let fg_color = appearance.theme().active_ui_text_color();
+                right_side.add_child(
+                    Container::new(
+                        appearance
+                            .ui_builder()
+                            .button(
+                                ButtonVariant::Link,
+                                self.plan_mouse_states.manage_billing_link.clone(),
+                            )
+                            .with_text_and_icon_label(
+                                TextAndIcon::new(
+                                    TextAndIconAlignment::IconFirst,
+                                    "Manage billing",
+                                    Icon::CoinsStacked.to_warpui_icon(fg_color),
+                                    MainAxisSize::Min,
+                                    MainAxisAlignment::Center,
+                                    vec2f(14., 14.),
                                 )
-                                .with_text_and_icon_label(
-                                    TextAndIcon::new(
-                                        TextAndIconAlignment::IconFirst,
-                                        "Manage billing",
-                                        Icon::CoinsStacked.to_warpui_icon(fg_color),
-                                        MainAxisSize::Min,
-                                        MainAxisAlignment::Center,
-                                        vec2f(14., 14.),
-                                    )
-                                    .with_inner_padding(4.),
-                                )
-                                .with_style(UiComponentStyles {
-                                    font_color: Some(fg_color.into()),
-                                    ..Default::default()
-                                })
-                                .build()
-                                .on_click(move |ctx, _, _| {
-                                    ctx.dispatch_typed_action(
-                                        BillingAndUsagePageAction::GenerateStripeBillingPortalLink {
-                                            team_uid,
-                                        },
-                                    );
-                                })
-                                .finish(),
-                        )
-                        .with_margin_left(8.)
-                        .finish(),
-                    );
-                }
-
-                if team.billing_metadata.is_enterprise_plan() {
-                    let team_uid = team.uid;
-                    let fg_color = appearance.theme().active_ui_text_color();
-                    right_side.add_child(
-                        Container::new(
-                            appearance
-                                .ui_builder()
-                                .button(
-                                    ButtonVariant::Link,
-                                    self.plan_mouse_states.open_admin_panel_link.clone(),
-                                )
-                                .with_text_and_icon_label(
-                                    TextAndIcon::new(
-                                        TextAndIconAlignment::IconFirst,
-                                        "Open admin panel",
-                                        Icon::Users.to_warpui_icon(fg_color),
-                                        MainAxisSize::Min,
-                                        MainAxisAlignment::Center,
-                                        vec2f(14., 14.),
-                                    )
-                                    .with_inner_padding(4.),
-                                )
-                                .with_style(UiComponentStyles {
-                                    font_color: Some(fg_color.into()),
-                                    ..Default::default()
-                                })
-                                .build()
-                                .on_click(move |ctx, _, _| {
-                                    ctx.dispatch_typed_action(
-                                        BillingAndUsagePageAction::OpenAdminPanel { team_uid },
-                                    );
-                                })
-                                .finish(),
-                        )
-                        .with_margin_left(8.)
-                        .finish(),
-                    );
-                }
-            }
-        } else {
-            let current_user_id = self.auth_state.user_id().unwrap_or_default();
-            right_side.add_child(
-                Container::new(render_customer_type_badge(appearance, "Free".into()))
-                    .with_margin_right(8.)
+                                .with_inner_padding(4.),
+                            )
+                            .with_style(UiComponentStyles {
+                                font_color: Some(fg_color.into()),
+                                ..Default::default()
+                            })
+                            .build()
+                            .on_click(move |ctx, _, _| {
+                                ctx.dispatch_typed_action(
+                                    BillingAndUsagePageAction::GenerateStripeBillingPortalLink {
+                                        team_uid,
+                                    },
+                                );
+                            })
+                            .finish(),
+                    )
+                    .with_margin_left(8.)
                     .finish(),
-            );
+                );
+            }
+
+            if should_show_open_admin_panel_link(
+                is_team_admin,
+                is_workspace_admin,
+                billing_metadata.is_some_and(|metadata| metadata.is_enterprise_plan()),
+            ) {
+                let team_uid = team.uid;
+                let use_workspace_admin_panel = workspace.is_some_and(|workspace| {
+                    workspace.is_native_workspaces_admin(&current_user_email)
+                });
+                let fg_color = appearance.theme().active_ui_text_color();
+                right_side.add_child(
+                    Container::new(
+                        appearance
+                            .ui_builder()
+                            .button(
+                                ButtonVariant::Link,
+                                self.plan_mouse_states.open_admin_panel_link.clone(),
+                            )
+                            .with_text_and_icon_label(
+                                TextAndIcon::new(
+                                    TextAndIconAlignment::IconFirst,
+                                    "Open admin panel",
+                                    Icon::Users.to_warpui_icon(fg_color),
+                                    MainAxisSize::Min,
+                                    MainAxisAlignment::Center,
+                                    vec2f(14., 14.),
+                                )
+                                .with_inner_padding(4.),
+                            )
+                            .with_style(UiComponentStyles {
+                                font_color: Some(fg_color.into()),
+                                ..Default::default()
+                            })
+                            .build()
+                            .on_click(move |ctx, _, _| {
+                                if use_workspace_admin_panel {
+                                    ctx.dispatch_typed_action(
+                                        BillingAndUsagePageAction::OpenWorkspaceAdminPanel,
+                                    );
+                                } else {
+                                    ctx.dispatch_typed_action(
+                                        BillingAndUsagePageAction::OpenTeamAdminPanel { team_uid },
+                                    );
+                                }
+                            })
+                            .finish(),
+                    )
+                    .with_margin_left(8.)
+                    .finish(),
+                );
+            }
+        } else if presentation.show_personal_upgrade {
+            let current_user_id = self.auth_state.user_id().unwrap_or_default();
             right_side.add_child(
                 Container::new(
                     appearance
@@ -847,6 +885,24 @@ impl BillingAndUsagePageV2View {
             );
         }
 
+        if !classified.workspace.is_empty() {
+            cards_row.add_child(
+                Expanded::new(
+                    1.,
+                    render_balance_card(
+                        appearance,
+                        BONUS_CREDITS_DOT_COLOR,
+                        "Workspace credits",
+                        &classified.workspace.expiry_label(),
+                        classified.workspace.total_balance(),
+                        None,
+                        outline_color,
+                    ),
+                )
+                .finish(),
+            );
+        }
+
         Some(
             Flex::column()
                 .with_child(
@@ -947,8 +1003,8 @@ impl BillingAndUsagePageV2View {
         }
 
         let is_on_paid_plan = UserWorkspaces::as_ref(app)
-            .current_team()
-            .is_some_and(|team| team.billing_metadata.is_user_on_paid_plan());
+            .current_workspace()
+            .is_some_and(|workspace| workspace.billing_metadata.is_user_on_paid_plan());
         if !is_on_paid_plan {
             let user_id = AuthStateProvider::as_ref(app).get().user_id();
             let buy_more_button = ui_builder
@@ -1030,8 +1086,8 @@ impl BillingAndUsagePageV2View {
 
     fn render_addon_credits_panel(
         &self,
-        workspace: &Workspace,
-        team_uid: ServerId,
+        workspace: Option<&Workspace>,
+        team_uid: Option<ServerId>,
         has_admin_permissions: bool,
         delinquent: bool,
         app: &AppContext,
@@ -1063,17 +1119,24 @@ impl BillingAndUsagePageV2View {
 
     fn addon_credits_panel_state(
         &self,
-        workspace: &Workspace,
-        team_uid: ServerId,
+        workspace: Option<&Workspace>,
+        team_uid: Option<ServerId>,
         has_admin_permissions: bool,
         delinquent: bool,
         app: &AppContext,
     ) -> AddonCreditsPanelState {
-        let team_can_purchase = UserWorkspaces::as_ref(app)
-            .current_team()
-            .and_then(|t| t.billing_metadata.tier.purchase_add_on_credits_policy)
-            .is_some_and(|p| p.enabled);
-        let can_upgrade = workspace.billing_metadata.can_upgrade_to_build_plan();
+        let workspaces = UserWorkspaces::as_ref(app);
+        let purchase_policy = workspaces.purchase_policy_for_team(
+            team_uid.and_then(|team_uid| workspaces.team_from_uid(team_uid)),
+        );
+        let team_can_purchase = purchase_policy.is_some_and(|policy| policy.allows_purchases());
+        let premium_bps = purchase_policy.map_or(0, |policy| policy.effective_premium_bps());
+        let can_upgrade = workspace
+            .is_none_or(|workspace| workspace.billing_metadata.can_upgrade_to_build_plan());
+        let upgrade_url = match team_uid {
+            Some(team_uid) => UserWorkspaces::upgrade_link_for_team(team_uid),
+            None => UserWorkspaces::upgrade_link(self.auth_state.user_id().unwrap_or_default()),
+        };
 
         if !team_can_purchase {
             if !has_admin_permissions {
@@ -1084,7 +1147,7 @@ impl BillingAndUsagePageV2View {
                 return AddonCreditsPanelState::IneligiblePlan(
                     AddonCreditsRestriction::UpgradeToBuild {
                         link_text: "Upgrade to Build",
-                        url: UserWorkspaces::upgrade_link_for_team(team_uid),
+                        url: upgrade_url,
                     },
                 );
             }
@@ -1097,14 +1160,16 @@ impl BillingAndUsagePageV2View {
             .addon_credits
             .options
             .get(self.addon_credits.selected_denomination);
-        let auto_reload_enabled = workspace
-            .settings
-            .addon_credits_settings
-            .auto_reload_enabled;
+        let auto_reload_enabled = workspace.is_some_and(|workspace| {
+            workspace
+                .settings
+                .addon_credits_settings
+                .auto_reload_enabled
+        });
 
-        let team_count = UserWorkspaces::as_ref(app)
-            .current_team()
-            .map(|t| t.members.len())
+        let team_count = workspaces
+            .team_for_view_handle(&self.self_handle, app)
+            .map(|team| team.members.len())
             .unwrap_or(1);
         let description_text = if team_count > 1 {
             format!("{ADDON_CREDITS_DESCRIPTION} {ADDITIONAL_ADDON_CREDITS_DESCRIPTION_FOR_TEAM}")
@@ -1112,14 +1177,18 @@ impl BillingAndUsagePageV2View {
             ADDON_CREDITS_DESCRIPTION.to_string()
         };
 
-        let would_exceed = selected_credit_option.is_some_and(|opt| {
-            let limit = workspace
-                .settings
-                .addon_credits_settings
-                .max_monthly_spend_cents
-                .unwrap_or(DEFAULT_MAX_MONTHLY_SPEND_CENTS);
-            (workspace.bonus_grants_purchased_this_month.cents_spent + opt.price_usd_cents) > limit
-        });
+        let would_exceed = workspace
+            .zip(selected_credit_option)
+            .is_some_and(|(workspace, opt)| {
+                let limit = workspace
+                    .settings
+                    .addon_credits_settings
+                    .max_monthly_spend_cents
+                    .unwrap_or(DEFAULT_MAX_MONTHLY_SPEND_CENTS);
+                (workspace.bonus_grants_purchased_this_month.cents_spent
+                    + opt.price_usd_cents_with_premium(premium_bps))
+                    > limit
+            });
         let purchase_disabled = self.addon_credits.purchase_loading
             || would_exceed
             || delinquent
@@ -1130,7 +1199,10 @@ impl BillingAndUsagePageV2View {
         let price_label = selected_credit_option
             .map(|opt| {
                 let credits = opt.credits.separate_with_commas();
-                let dollars = format!("${:.2}", opt.price_usd_cents as f64 / 100.0);
+                let dollars = format!(
+                    "${:.2}",
+                    opt.price_usd_cents_with_premium(premium_bps) as f64 / 100.0
+                );
                 format!("{credits} credits / {dollars}")
             })
             .unwrap_or_default();
@@ -1145,10 +1217,11 @@ impl BillingAndUsagePageV2View {
             Some(ADDON_CREDITS_DELINQUENT_WARNING_STRING)
         } else if delinquent {
             Some(ADDON_CREDITS_NON_ADMIN_DELINQUENT_WARNING_STRING)
-        } else if workspace
-            .billing_metadata
-            .has_failed_addon_credit_auto_reload_status()
-        {
+        } else if workspace.is_some_and(|workspace| {
+            workspace
+                .billing_metadata
+                .has_failed_addon_credit_auto_reload_status()
+        }) {
             Some(if has_admin_permissions {
                 RESTRICTED_BILLING_USAGE_WARNING_STRING
             } else {
@@ -1175,9 +1248,12 @@ impl BillingAndUsagePageV2View {
 
         if !has_admin_permissions && auto_reload_enabled {
             let configured_auto_reload_option = workspace
-                .settings
-                .addon_credits_settings
-                .selected_auto_reload_credit_denomination
+                .and_then(|workspace| {
+                    workspace
+                        .settings
+                        .addon_credits_settings
+                        .selected_auto_reload_credit_denomination
+                })
                 .and_then(|credits| {
                     self.addon_credits
                         .options
@@ -1188,13 +1264,16 @@ impl BillingAndUsagePageV2View {
             let description_text = match configured_auto_reload_option {
                 Some(option) => {
                     let credits = option.credits.separate_with_commas();
-                    let price = format!("${:.2}", option.price_usd_cents as f64 / 100.0);
+                    let price = format!(
+                        "${:.2}",
+                        option.price_usd_cents_with_premium(premium_bps) as f64 / 100.0
+                    );
                     format!(
-                        "Your admin has enabled auto-reload for add-on credits. When your personal add-on credit balance runs low, Warp will automatically purchase {credits} credits for {price} and add them to your balance."
+                        "Your admin has enabled auto-reload for add-on credits. When your team's add-on credit balance runs low, Warp will automatically purchase {credits} credits for {price} and add them to your team's shared pool."
                     )
                 }
                 None => {
-                    "Your admin has enabled auto-reload for add-on credits. When your personal add-on credit balance runs low, Warp will automatically purchase add-on credits and add them to your balance.".to_string()
+                    "Your admin has enabled auto-reload for add-on credits. When your team's add-on credit balance runs low, Warp will automatically purchase add-on credits and add them to your team's shared pool.".to_string()
                 }
             };
             return AddonCreditsPanelState::AutoreloadNonAdmin {
@@ -1207,11 +1286,13 @@ impl BillingAndUsagePageV2View {
             description_text,
             auto_reload_enabled,
             has_admin_permissions,
+            can_edit_team_settings: has_admin_permissions && team_uid.is_some(),
             purchase_disabled,
             auto_reload_switch_disabled,
             price_label,
             auto_reload_tooltip_text,
             warning_text,
+            premium_bps,
         })
     }
 
@@ -1333,8 +1414,8 @@ impl BillingAndUsagePageV2View {
 
     fn render_addon_credits_purchase_card(
         &self,
-        workspace: &Workspace,
-        team_uid: ServerId,
+        workspace: Option<&Workspace>,
+        team_uid: Option<ServerId>,
         state: AddonCreditsPurchaseState,
         appearance: &Appearance,
     ) -> Box<dyn Element> {
@@ -1355,7 +1436,7 @@ impl BillingAndUsagePageV2View {
 
     fn render_addon_credits_upper_section(
         &self,
-        workspace: &Workspace,
+        workspace: Option<&Workspace>,
         state: &AddonCreditsPurchaseState,
         appearance: &Appearance,
     ) -> Box<dyn Element> {
@@ -1378,7 +1459,7 @@ impl BillingAndUsagePageV2View {
             .with_children([header, paragraph])
             .with_spacing(8.);
 
-        if state.has_admin_permissions {
+        if state.can_edit_team_settings {
             let info_icon = render_info_icon(
                 appearance,
                 AdditionalInfo::<BillingAndUsagePageAction> {
@@ -1391,9 +1472,12 @@ impl BillingAndUsagePageV2View {
                 },
             );
             let spend_limit = workspace
-                .settings
-                .addon_credits_settings
-                .max_monthly_spend_cents
+                .and_then(|workspace| {
+                    workspace
+                        .settings
+                        .addon_credits_settings
+                        .max_monthly_spend_cents
+                })
                 .map(|c| format!("${:.2}", c as f64 / 100.0))
                 .unwrap_or_else(|| "$200.00".to_string());
             let spend_row = Flex::row()
@@ -1417,8 +1501,8 @@ impl BillingAndUsagePageV2View {
                 .finish();
             upper_section.add_child(spend_row);
 
-            if let Some(purchased_row) =
-                Self::render_purchased_this_month_row(workspace, appearance)
+            if let Some(purchased_row) = workspace
+                .and_then(|workspace| Self::render_purchased_this_month_row(workspace, appearance))
             {
                 upper_section.add_child(purchased_row);
             }
@@ -1511,7 +1595,7 @@ impl BillingAndUsagePageV2View {
 
     fn render_addon_credits_lower_section(
         &self,
-        team_uid: ServerId,
+        team_uid: Option<ServerId>,
         state: &AddonCreditsPurchaseState,
         appearance: &Appearance,
     ) -> Box<dyn Element> {
@@ -1566,7 +1650,7 @@ impl BillingAndUsagePageV2View {
             );
 
         let mut right_group = Flex::row().with_cross_axis_alignment(CrossAxisAlignment::Center);
-        if state.has_admin_permissions {
+        if state.can_edit_team_settings {
             let auto_reload_switch_element = {
                 let switch_builder = appearance
                     .ui_builder()
@@ -1578,12 +1662,14 @@ impl BillingAndUsagePageV2View {
                     switch_builder
                         .build()
                         .on_click(move |ctx, _, _| {
-                            ctx.dispatch_typed_action(
-                                BillingAndUsagePageAction::UpdateAutoReloadEnabled {
-                                    team_uid,
-                                    enabled: !auto_reload_enabled,
-                                },
-                            );
+                            if let Some(team_uid) = team_uid {
+                                ctx.dispatch_typed_action(
+                                    BillingAndUsagePageAction::UpdateAutoReloadEnabled {
+                                        team_uid,
+                                        enabled: !auto_reload_enabled,
+                                    },
+                                );
+                            }
                         })
                         .finish()
                 }
@@ -1613,7 +1699,11 @@ impl BillingAndUsagePageV2View {
         }
         right_group.add_child(
             Container::new(purchase_button)
-                .with_margin_left(if state.has_admin_permissions { 16. } else { 0. })
+                .with_margin_left(if state.can_edit_team_settings {
+                    16.
+                } else {
+                    0.
+                })
                 .finish(),
         );
         let lower_row = Flex::row()
@@ -1623,6 +1713,18 @@ impl BillingAndUsagePageV2View {
             .with_child(price_row.finish())
             .with_child(right_group.finish());
         let mut lower_children: Vec<Box<dyn Element>> = vec![lower_row.finish()];
+
+        if state.premium_bps > 0 {
+            let upgrade_url = match team_uid {
+                Some(team_uid) => UserWorkspaces::upgrade_link_for_team(team_uid),
+                None => UserWorkspaces::upgrade_link(self.auth_state.user_id().unwrap_or_default()),
+            };
+            lower_children.push(render_premium_upgrade_savings_note(
+                upgrade_url,
+                state.premium_bps,
+                appearance,
+            ));
+        }
 
         if let Some(warning_text) = state.warning_text {
             lower_children.push(self.render_warning_row(appearance, warning_text.to_string()));
@@ -1675,30 +1777,36 @@ impl BillingAndUsagePageV2View {
             content.add_child(balance);
         }
 
-        let delinquent = UserWorkspaces::as_ref(app)
-            .current_team()
-            .map(|t| t.billing_metadata.is_delinquent_due_to_payment_issue())
-            .unwrap_or_default();
+        let workspaces = UserWorkspaces::as_ref(app);
+        let delinquent = workspaces.current_workspace().is_some_and(|workspace| {
+            workspace
+                .billing_metadata
+                .is_delinquent_due_to_payment_issue()
+        });
 
-        if let (Some(ws), Some(team)) = (
-            UserWorkspaces::as_ref(app).current_workspace(),
-            UserWorkspaces::as_ref(app).current_team(),
-        ) {
-            let workspace_bonus_credits = ai_model.total_workspace_bonus_credits_remaining(ws.uid);
-            let is_payg_zero = ws.billing_metadata.is_enterprise_pay_as_you_go_enabled()
-                && workspace_bonus_credits == 0;
+        let ws = workspaces.current_workspace();
+        let team = workspaces.team_for_view_handle(&self.self_handle, app);
+        let show_addon_credits_panel = ws.is_some()
+            || workspaces
+                .purchase_policy_for_team(team)
+                .is_some_and(|policy| policy.allows_purchases());
+        if show_addon_credits_panel {
+            let is_payg_zero = ws.is_some_and(|ws| {
+                ws.billing_metadata.is_enterprise_pay_as_you_go_enabled()
+                    && ai_model.total_workspace_and_team_bonus_credits_remaining(ws.uid) == 0
+            });
 
             if !is_payg_zero {
-                let current_user_is_admin = {
+                let current_user_is_admin = team.is_none_or(|team| {
                     let email = AuthStateProvider::as_ref(app)
                         .get()
                         .user_email()
                         .unwrap_or_default();
                     team.has_admin_permissions(&email)
-                };
+                });
                 content.add_child(self.render_addon_credits_panel(
                     ws,
-                    team.uid,
+                    team.map(|team| team.uid),
                     current_user_is_admin,
                     delinquent,
                     app,
@@ -1977,8 +2085,11 @@ impl TypedActionView for BillingAndUsagePageV2View {
                     ws.generate_stripe_billing_portal_link(*team_uid, ctx);
                 });
             }
-            BillingAndUsagePageAction::OpenAdminPanel { team_uid } => {
+            BillingAndUsagePageAction::OpenTeamAdminPanel { team_uid } => {
                 super::admin_actions::AdminActions::open_admin_panel(*team_uid, ctx);
+            }
+            BillingAndUsagePageAction::OpenWorkspaceAdminPanel => {
+                super::admin_actions::AdminActions::open_workspace_admin_panel(ctx);
             }
             BillingAndUsagePageAction::ContactSupport => {
                 super::admin_actions::AdminActions::contact_support(ctx);
@@ -2036,35 +2147,34 @@ impl TypedActionView for BillingAndUsagePageV2View {
             BillingAndUsagePageAction::SelectTopupDenomination(i) => {
                 self.addon_credits.selected_denomination = *i;
                 self.update_denomination_buttons_focus(ctx);
+                let workspaces = UserWorkspaces::as_ref(ctx);
+                let team = workspaces.team_for_view(ctx);
+                let has_admin_permissions = team.is_some_and(|team| {
+                    AuthStateProvider::as_ref(ctx)
+                        .get()
+                        .user_email()
+                        .is_some_and(|email| team.has_admin_permissions(&email))
+                });
+                let team_uid = team.map(|team| team.uid);
                 UserWorkspaces::handle(ctx).update(ctx, |ws, ctx| {
-                    let has_admin_permissions = ws.current_team().is_some_and(|team| {
-                        AuthStateProvider::as_ref(ctx)
-                            .get()
-                            .user_email()
-                            .is_some_and(|email| team.has_admin_permissions(&email))
-                    });
-                    let team_uid = ws.current_team_uid();
-                    if let Some((workspace, team_uid)) = ws.current_workspace().zip(team_uid) {
-                        if has_admin_permissions
-                            && workspace
-                                .settings
-                                .addon_credits_settings
-                                .auto_reload_enabled
-                        {
-                            if let Some(opt) = self
-                                .addon_credits
-                                .options
-                                .get(self.addon_credits.selected_denomination)
-                            {
-                                ws.update_addon_credits_settings(
-                                    team_uid,
-                                    None,
-                                    None,
-                                    Some(opt.credits),
-                                    ctx,
-                                );
-                            }
-                        }
+                    if let Some((workspace, team_uid)) = ws.current_workspace().zip(team_uid)
+                        && has_admin_permissions
+                        && workspace
+                            .settings
+                            .addon_credits_settings
+                            .auto_reload_enabled
+                        && let Some(opt) = self
+                            .addon_credits
+                            .options
+                            .get(self.addon_credits.selected_denomination)
+                    {
+                        ws.update_addon_credits_settings(
+                            team_uid,
+                            None,
+                            None,
+                            Some(opt.credits),
+                            ctx,
+                        );
                     }
                 });
                 ctx.notify();
@@ -2151,6 +2261,14 @@ impl TypedActionView for BillingAndUsagePageV2View {
             }
         }
     }
+}
+
+fn should_show_open_admin_panel_link(
+    is_team_admin: bool,
+    is_workspace_admin: bool,
+    is_enterprise_plan: bool,
+) -> bool {
+    (is_team_admin || is_workspace_admin) && is_enterprise_plan
 }
 
 fn render_balance_card(
@@ -2241,3 +2359,7 @@ fn render_balance_card(
     .with_vertical_padding(12.)
     .finish()
 }
+
+#[cfg(test)]
+#[path = "billing_and_usage_page_v2_tests.rs"]
+mod tests;

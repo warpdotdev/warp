@@ -15,8 +15,9 @@ use warp::tui_export::{
 use warpui::platform::WindowStyle;
 use warpui::{AddWindowOptions, EntityId, EntityIdMap, ViewHandle};
 use warpui_core::elements::tui::{
-    TuiBufferExt, TuiConstraint, TuiLayoutContext, TuiRect, TuiSize, TuiViewportContent,
-    TuiViewportWindow, TuiViewportedElement,
+    TuiBufferExt, TuiConstraint, TuiElement, TuiGridPoint, TuiLayoutContext, TuiRect, TuiRowResize,
+    TuiSelectionSpan, TuiSize, TuiText, TuiViewportContent, TuiViewportWindow,
+    TuiViewportedElement,
 };
 use warpui_core::presenter::tui::TuiPresenter;
 use warpui_core::{App, AppContext, TuiView, TypedActionView, ViewContext};
@@ -24,7 +25,7 @@ use warpui_core::{App, AppContext, TuiView, TypedActionView, ViewContext};
 use super::{AgentBlockRegistry, TuiBlockListViewportItemId, TuiBlockListViewportSource};
 use crate::agent_block::{TuiAIBlock, TuiAIBlockAction, TuiAIBlockEvent};
 use crate::terminal_block::should_render_terminal_block;
-use crate::test_fixtures::{add_test_action_model_and_events, TestHostView};
+use crate::test_fixtures::{TestHostView, add_test_action_model_and_events};
 
 #[test]
 fn tui_block_list_viewport_source_uses_canonical_block_list_order() {
@@ -36,7 +37,7 @@ fn tui_block_list_viewport_source_uses_canonical_block_list_order() {
         .blocks()
         .iter()
         .filter(|block| should_render_terminal_block(block, model.block_list()))
-        .map(|block| TuiBlockListViewportItemId::TerminalBlock(block.id().clone()))
+        .map(|block| TuiBlockListViewportItemId::Terminal(block.id().clone()))
         .collect::<Vec<_>>();
     let source = TuiBlockListViewportSource::new(
         Arc::new(FairMutex::new(model)),
@@ -51,6 +52,7 @@ fn tui_block_list_viewport_source_uses_canonical_block_list_order() {
 #[test]
 fn tui_block_list_viewport_source_slices_terminal_blocks_to_visible_rows() {
     App::test((), |app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
         app.read(|app| {
             let mut model = TerminalModel::mock(None, None);
             model.simulate_block("printf", "one\r\ntwo\r\nthree\r\n");
@@ -145,6 +147,122 @@ fn viewport_layout_reports_original_agent_block_resize() {
         assert_eq!(changes.len(), 1);
         assert_eq!(changes[0].old_rows, 0..99);
         assert_eq!(changes[0].new_height, expected);
+    });
+}
+
+#[test]
+fn viewport_layout_measures_retained_agent_element() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        let (source, model, agent_block) = seeded_agent_block_source(&mut app, 0, 99.0);
+
+        let content = app.read(|app| {
+            let mut rendered_views = EntityIdMap::default();
+            rendered_views.insert(
+                agent_block.id(),
+                TuiText::new("one\ntwo\nthree\nfour\nfive").finish(),
+            );
+            let mut ctx = TuiLayoutContext {
+                rendered_views: &mut rendered_views,
+            };
+            source.visible_items(
+                TuiViewportWindow {
+                    scroll_top: 0,
+                    viewport_height: 10,
+                },
+                80,
+                &mut ctx,
+                app,
+            )
+        });
+
+        assert_eq!(content.content_height, 5);
+        assert_eq!(rich_content_height(&model, agent_block.id()), Some(5.0));
+    });
+}
+
+#[test]
+fn zero_height_agent_block_contributes_no_rows_and_grows_with_content() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        let (source, model, agent_block, block_model) =
+            updating_agent_block_source(&mut app, AIBlockOutputStatus::Pending);
+
+        let empty_content = request_top_window(&app, &source, 10);
+        assert_eq!(empty_content.content_height, 0);
+        assert!(empty_content.items.is_empty());
+        assert_eq!(rich_content_height(&model, agent_block.id()), Some(0.0));
+        assert_eq!(
+            source.take_selection_row_resizes(),
+            vec![TuiRowResize {
+                old_rows: 0..1,
+                new_height: 0,
+            }]
+        );
+
+        block_model.update_status(
+            completed_markdown_status("Visible response"),
+            &agent_block,
+            &mut app,
+        );
+        let visible_content = request_top_window(&app, &source, 10);
+        assert!(visible_content.content_height > 0);
+        assert_eq!(visible_content.items.len(), 1);
+        assert_eq!(
+            rich_content_height(&model, agent_block.id()),
+            Some(visible_content.content_height as f64)
+        );
+        assert_eq!(
+            source.take_selection_row_resizes(),
+            vec![warpui_core::elements::tui::TuiRowResize {
+                old_rows: 0..0,
+                new_height: visible_content.content_height,
+            }]
+        );
+    });
+}
+
+#[test]
+fn read_only_content_omits_zero_height_rich_content_after_terminal_block() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        let mut terminal_model = TerminalModel::mock(None, None);
+        terminal_model.simulate_block("printf", "terminal row\r\n");
+        let terminal_model = Arc::new(FairMutex::new(terminal_model));
+        let agent_block = add_agent_block_with(
+            &mut app,
+            Vec::new(),
+            AIBlockOutputStatus::Pending,
+            terminal_model.clone(),
+        );
+        let view_id = agent_block.id();
+        {
+            let mut model = terminal_model.lock();
+            model.block_list_mut().append_rich_content(
+                RichContentItem::new(Some(RichContentType::AIBlock), view_id, None, false),
+                false,
+            );
+            model
+                .block_list_mut()
+                .update_rich_content_heights_in_lines(&HashMap::from([(
+                    view_id,
+                    BlockHeight::zero(),
+                )]));
+        }
+        let source = TuiBlockListViewportSource::new(
+            terminal_model,
+            AgentBlockRegistry::new(RefCell::new(HashMap::from([(view_id, agent_block)]))),
+        );
+
+        let content = source.read_only_content(
+            TuiViewportWindow {
+                scroll_top: 0,
+                viewport_height: 100,
+            },
+            80,
+        );
+
+        assert_eq!(content.items.len(), 1);
     });
 }
 
@@ -277,21 +395,72 @@ fn tui_transcript_scroll_reuses_cached_heights_at_stable_width() {
 }
 
 #[test]
-fn tui_agent_streaming_block_remeasured_at_stable_width() {
+fn tui_agent_streaming_block_reuses_height_until_output_changes() {
     App::test((), |mut app| async move {
         app.add_singleton_model(|_| Appearance::mock());
-        // A streaming block's height can grow without a per-update
-        // invalidation, so it must be re-measured at a stable width.
-        let (source, model, agent_block) = streaming_agent_block_source(&mut app);
+        let (source, model, agent_block, block_model) =
+            updating_agent_block_source(&mut app, streaming_markdown_status("Short response"));
 
         request_top_window(&app, &source, 10);
         source.take_selection_row_resizes();
-
-        // Seed a wrong height at the same width without dirtying; the streaming
-        // block is still re-measured, correcting it.
         seed_clean_height(&app, &model, &agent_block, 1234.0, 80);
         request_top_window(&app, &source, 10);
-        assert_ne!(rich_content_height(&model, agent_block.id()), Some(1234.0));
+        assert_eq!(rich_content_height(&model, agent_block.id()), Some(1234.0));
+        assert!(source.take_selection_row_resizes().is_empty());
+
+        block_model.update_status(
+            streaming_markdown_status(
+                "# Expanded response\n\n- first item\n- second item\n- third item\n\n\
+                 ## Details\n\nThis output update must refresh the cached streaming height.",
+            ),
+            &agent_block,
+            &mut app,
+        );
+        let updated = request_top_window(&app, &source, 10);
+
+        assert_ne!(updated.content_height, 1234);
+        assert_eq!(
+            rich_content_height(&model, agent_block.id()),
+            Some(updated.content_height as f64)
+        );
+        assert_eq!(source.take_selection_row_resizes().len(), 1);
+    });
+}
+
+#[test]
+fn completed_markdown_output_update_refreshes_cached_scroll_extent() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        let (source, model, agent_block, block_model) =
+            updating_agent_block_source(&mut app, completed_markdown_status("Short response"));
+        let width = 40;
+
+        let initial_height = request_top_window_at_width(&app, &source, 4, width).content_height;
+        source.take_selection_row_resizes();
+
+        block_model.update_status(
+            completed_markdown_status(
+                "# Expanded response\n\n- first item\n- second item\n- third item\n\n\
+                 ## Details\n\nThis paragraph adds enough semantic Markdown rows to grow the block.",
+            ),
+            &agent_block,
+            &mut app,
+        );
+        let updated_height = request_top_window_at_width(&app, &source, 4, width).content_height;
+        let resizes = source.take_selection_row_resizes();
+
+        assert!(
+            updated_height > initial_height,
+            "completed Markdown growth must increase the canonical scroll extent \
+             ({updated_height} vs {initial_height})"
+        );
+        assert_eq!(resizes.len(), 1);
+        assert_eq!(resizes[0].old_rows, 0..initial_height);
+        assert_eq!(resizes[0].new_height, updated_height);
+        assert_eq!(
+            rich_content_height(&model, agent_block.id()),
+            Some(updated_height as f64)
+        );
     });
 }
 
@@ -299,7 +468,7 @@ fn tui_agent_streaming_block_remeasured_at_stable_width() {
 fn tui_transcript_toggle_expands_and_remeasures_block_at_stable_width() {
     App::test((), |mut app| async move {
         app.add_singleton_model(|_| Appearance::mock());
-        let (source, _model, agent_block) = reasoning_agent_block_source(&mut app);
+        let (source, _model, agent_block) = streaming_reasoning_agent_block_source(&mut app);
 
         // A finished thinking section renders collapsed (header only).
         assert_eq!(
@@ -318,15 +487,21 @@ fn tui_transcript_toggle_expands_and_remeasures_block_at_stable_width() {
             collapsed
         );
 
-        // Expanding the thinking section must invalidate
-        // the cached height so the next frame re-measures even though the width
-        // is unchanged and the block is not streaming.
+        // Expanding the thinking section must invalidate the cached height so
+        // the next frame re-measures even though the width is unchanged.
         expand_thinking_section(&mut app, &agent_block);
         let expanded = request_top_window(&app, &source, 20).content_height;
         assert!(
             expanded > collapsed,
             "expanding the thinking section must grow the re-measured height ({expanded} vs {collapsed})"
         );
+        assert_eq!(source.take_selection_row_resizes().len(), 1);
+
+        assert_eq!(
+            request_top_window(&app, &source, 20).content_height,
+            expanded
+        );
+        assert!(source.take_selection_row_resizes().is_empty());
 
         // The expanded block renders the reasoning body beneath the header.
         let expanded_lines = render_block_lines(&app, &agent_block, 40);
@@ -337,6 +512,158 @@ fn tui_transcript_toggle_expands_and_remeasures_block_at_stable_width() {
                 .any(|line| line.contains("reasoning line two")),
             "{expanded_lines:?}"
         );
+    });
+}
+
+/// A selection covering the whole wrapped input section copies the original
+/// query verbatim (logical text), not the per-row grid scrape. Guards the TUI
+/// copy bug where a multi-row selection pasted with inserted newlines.
+#[test]
+fn selection_logical_text_returns_query_for_full_input_selection() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        // `seeded_agent_block_source` registers a block whose input query is
+        // "hello world from rust".
+        let query = "hello world from rust";
+        let (source, _model, agent_block) = seeded_agent_block_source(&mut app, 0, 99.0);
+        let width = 12u16;
+        let block_height = app.read(|app| {
+            let mut rendered_views = EntityIdMap::default();
+            let mut ctx = TuiLayoutContext {
+                rendered_views: &mut rendered_views,
+            };
+            agent_block.as_ref(app).desired_height(width, &mut ctx, app)
+        });
+        // The block is input-only, so its height is the top padding row plus the
+        // wrapped input; a wrapped input spans more than one row here.
+        assert!(
+            block_height > 2,
+            "input should wrap at width {width}: {block_height}"
+        );
+        let selection = TuiSelectionSpan {
+            start: TuiGridPoint { row: 1, col: 0 },
+            end: TuiGridPoint {
+                row: block_height - 1,
+                col: width,
+            },
+        };
+
+        let text = app.read(|app| source.selection_logical_text(selection, width, app));
+
+        assert_eq!(text.as_deref(), Some(query));
+    });
+}
+
+/// A selection that does not cover the whole input section (here starting
+/// mid-line) returns `None`, so copy falls back to the per-row grid path.
+#[test]
+fn selection_logical_text_falls_back_for_partial_input_selection() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        let (source, _model, _agent_block) = seeded_agent_block_source(&mut app, 0, 99.0);
+        let width = 12u16;
+        let selection = TuiSelectionSpan {
+            start: TuiGridPoint { row: 1, col: 1 },
+            end: TuiGridPoint { row: 2, col: width },
+        };
+
+        let text = app.read(|app| source.selection_logical_text(selection, width, app));
+
+        assert_eq!(text, None);
+    });
+}
+
+/// A selection that ends part-way through the section's final wrapped row (the
+/// end column stops short of the last glyph) falls back to per-row grid text,
+/// so the whole logical section is not returned and unselected trailing text is
+/// never copied.
+#[test]
+fn selection_logical_text_falls_back_for_partial_end_selection() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        let (source, _model, agent_block) = seeded_agent_block_source(&mut app, 0, 99.0);
+        let width = 12u16;
+        let block_height = app.read(|app| {
+            let mut rendered_views = EntityIdMap::default();
+            let mut ctx = TuiLayoutContext {
+                rendered_views: &mut rendered_views,
+            };
+            agent_block.as_ref(app).desired_height(width, &mut ctx, app)
+        });
+        assert!(
+            block_height > 2,
+            "input should wrap at width {width}: {block_height}"
+        );
+        // Start at the section's first column, but end at column 1 of the last
+        // rendered row — short of the last glyph.
+        let selection = TuiSelectionSpan {
+            start: TuiGridPoint { row: 1, col: 0 },
+            end: TuiGridPoint {
+                row: block_height - 1,
+                col: 1,
+            },
+        };
+
+        let text = app.read(|app| source.selection_logical_text(selection, width, app));
+
+        assert_eq!(text, None);
+    });
+}
+
+/// A selection over an agent block's input and plain-text response sections
+/// copies both as logical text joined by a newline — agent *output* text is
+/// covered too, not just user input.
+#[test]
+fn selection_logical_text_covers_agent_plain_text_output() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        let output = "the agent replied with a fairly long answer";
+        let terminal_model = Arc::new(FairMutex::new(TerminalModel::mock(None, None)));
+        let agent_block = add_agent_block_with(
+            &mut app,
+            vec![query_input("hi")],
+            plain_text_output_status(output),
+            terminal_model.clone(),
+        );
+        let view_id = agent_block.id();
+        {
+            let mut model = terminal_model.lock();
+            model.block_list_mut().append_rich_content(
+                RichContentItem::new(Some(RichContentType::AIBlock), view_id, None, false),
+                false,
+            );
+            model.block_list_mut().take_dirty_rich_content_items();
+            model
+                .block_list_mut()
+                .update_rich_content_heights(&HashMap::from([(view_id, 99.0)]));
+        }
+        let agent_blocks = AgentBlockRegistry::new(RefCell::new(HashMap::from([(
+            view_id,
+            agent_block.clone(),
+        )])));
+        let source = TuiBlockListViewportSource::new(terminal_model.clone(), agent_blocks);
+
+        let width = 16u16;
+        let block_height = app.read(|app| {
+            let mut rendered_views = EntityIdMap::default();
+            let mut ctx = TuiLayoutContext {
+                rendered_views: &mut rendered_views,
+            };
+            agent_block.as_ref(app).desired_height(width, &mut ctx, app)
+        });
+        // Select the whole block (both sections), from the blank top padding row
+        // through the last rendered row.
+        let selection = TuiSelectionSpan {
+            start: TuiGridPoint { row: 0, col: 0 },
+            end: TuiGridPoint {
+                row: block_height - 1,
+                col: width,
+            },
+        };
+
+        let text = app.read(|app| source.selection_logical_text(selection, width, app));
+
+        assert_eq!(text, Some(format!("hi\n{output}")));
     });
 }
 
@@ -352,37 +679,12 @@ fn seeded_agent_block_source(
     Arc<FairMutex<TerminalModel>>,
     ViewHandle<TuiAIBlock>,
 ) {
-    seeded_agent_block_source_impl(app, preceding_rows, stale_height, false)
-}
-
-/// Like [`seeded_agent_block_source`] but the registered agent block is still
-/// streaming, so its height can grow without a per-update invalidation.
-fn streaming_agent_block_source(
-    app: &mut App,
-) -> (
-    TuiBlockListViewportSource,
-    Arc<FairMutex<TerminalModel>>,
-    ViewHandle<TuiAIBlock>,
-) {
-    seeded_agent_block_source_impl(app, 0, 99.0, true)
-}
-
-fn seeded_agent_block_source_impl(
-    app: &mut App,
-    preceding_rows: usize,
-    stale_height: f64,
-    streaming: bool,
-) -> (
-    TuiBlockListViewportSource,
-    Arc<FairMutex<TerminalModel>>,
-    ViewHandle<TuiAIBlock>,
-) {
     let mut model = TerminalModel::mock(None, None);
     if preceding_rows > 0 {
         model.simulate_block("printf", &"x\r\n".repeat(preceding_rows));
     }
     let terminal_model = Arc::new(FairMutex::new(model));
-    let agent_block = add_agent_block(app, "hello world from rust", streaming);
+    let agent_block = add_agent_block(app, "hello world from rust");
     let view_id = agent_block.id();
     {
         let mut model = terminal_model.lock();
@@ -439,8 +741,8 @@ fn request_top_window_at_width(
 }
 
 /// Seeds a rich-content height at `width` without marking it dirty, so a later
-/// stable-width frame re-measures it only if the width-gating logic decides to
-/// (e.g. because the block is streaming).
+/// stable-width frame retains it unless another invalidation requires
+/// remeasurement.
 fn seed_clean_height(
     app: &App,
     model: &Arc<FairMutex<TerminalModel>>,
@@ -460,8 +762,8 @@ fn seed_clean_height(
     app.read(|app| agent_block.as_ref(app).record_height_measurement(width));
 }
 
-/// Builds a source over one finished agent block with a collapsible thought.
-fn reasoning_agent_block_source(
+/// Builds a source over one streaming agent block with a finished, collapsible thought.
+fn streaming_reasoning_agent_block_source(
     app: &mut App,
 ) -> (
     TuiBlockListViewportSource,
@@ -472,7 +774,9 @@ fn reasoning_agent_block_source(
     let agent_block = add_agent_block_with(
         app,
         Vec::new(),
-        finished_reasoning_status("reasoning line one\nreasoning line two\nreasoning line three"),
+        streaming_finished_reasoning_status(
+            "reasoning line one\nreasoning line two\nreasoning line three",
+        ),
         terminal_model.clone(),
     );
     let view_id = agent_block.id();
@@ -485,6 +789,8 @@ fn reasoning_agent_block_source(
                     .block_list_mut()
                     .mark_rich_content_dirty(view_id);
             }
+            TuiAIBlockEvent::BlockingStateChanged
+            | TuiAIBlockEvent::ReplacementGuidanceSubmitted { .. } => {}
         });
     });
     {
@@ -563,19 +869,12 @@ fn measured_height(app: &App, agent_block: &ViewHandle<TuiAIBlock>) -> f64 {
     })
 }
 
-/// Adds a `TuiAIBlock` backed by a single-query model in a fresh TUI
-/// window and returns its handle. `streaming` controls whether the block's
-/// model reports itself as still streaming.
-fn add_agent_block(app: &mut App, query: &str, streaming: bool) -> ViewHandle<TuiAIBlock> {
-    let status = if streaming {
-        AIBlockOutputStatus::Pending
-    } else {
-        non_streaming_status()
-    };
+/// Adds a finished `TuiAIBlock` backed by a single-query model in a fresh TUI window.
+fn add_agent_block(app: &mut App, query: &str) -> ViewHandle<TuiAIBlock> {
     add_agent_block_with(
         app,
         vec![query_input(query)],
-        status,
+        non_streaming_status(),
         Arc::new(FairMutex::new(TerminalModel::mock(None, None))),
     )
 }
@@ -601,18 +900,108 @@ fn add_agent_block_with(
         );
         ctx.add_typed_action_tui_view(window_id, move |ctx| {
             TuiAIBlock::new(
-                AIConversationId::new(),
-                AIAgentExchangeId::new(),
+                (AIConversationId::new(), AIAgentExchangeId::new()),
                 Rc::new(QueryAgentBlockModel { inputs, status }),
                 action_model,
                 &model_events,
                 terminal_model,
+                false,
                 ctx,
             )
         })
     })
 }
 
+fn updating_agent_block_source(
+    app: &mut App,
+    status: AIBlockOutputStatus,
+) -> (
+    TuiBlockListViewportSource,
+    Arc<FairMutex<TerminalModel>>,
+    ViewHandle<TuiAIBlock>,
+    Rc<UpdatingAgentBlockModel>,
+) {
+    let terminal_model = Arc::new(FairMutex::new(TerminalModel::mock(None, None)));
+    let block_model = Rc::new(UpdatingAgentBlockModel {
+        status: RefCell::new(status),
+        callback: RefCell::new(None),
+    });
+    let (action_model, model_events) = add_test_action_model_and_events(app);
+    let terminal_model_for_block = terminal_model.clone();
+    let block_model_for_block = block_model.clone();
+    let agent_block = app.update(|ctx| {
+        let (window_id, _) = ctx.add_tui_window(
+            AddWindowOptions {
+                window_style: WindowStyle::NotStealFocus,
+                ..Default::default()
+            },
+            |_| TestHostView,
+        );
+        ctx.add_typed_action_tui_view(window_id, move |ctx| {
+            TuiAIBlock::new(
+                (AIConversationId::new(), AIAgentExchangeId::new()),
+                block_model_for_block,
+                action_model,
+                &model_events,
+                terminal_model_for_block,
+                false,
+                ctx,
+            )
+        })
+    });
+    let view_id = agent_block.id();
+    let terminal_model_for_events = terminal_model.clone();
+    app.update(|ctx| {
+        ctx.subscribe_to_view(&agent_block, move |_, event, _| match event {
+            TuiAIBlockEvent::LayoutInvalidated => {
+                terminal_model_for_events
+                    .lock()
+                    .block_list_mut()
+                    .mark_rich_content_dirty(view_id);
+            }
+            TuiAIBlockEvent::BlockingStateChanged
+            | TuiAIBlockEvent::ReplacementGuidanceSubmitted { .. } => {}
+        });
+    });
+    terminal_model.lock().block_list_mut().append_rich_content(
+        RichContentItem::new(Some(RichContentType::AIBlock), view_id, None, false),
+        false,
+    );
+    let agent_blocks = AgentBlockRegistry::new(RefCell::new(HashMap::from([(
+        view_id,
+        agent_block.clone(),
+    )])));
+    (
+        TuiBlockListViewportSource::new(terminal_model.clone(), agent_blocks),
+        terminal_model,
+        agent_block,
+        block_model,
+    )
+}
+
+fn completed_markdown_status(markdown: &str) -> AIBlockOutputStatus {
+    AIBlockOutputStatus::Complete {
+        output: Shared::new(AIAgentOutput {
+            messages: vec![AIAgentOutputMessage {
+                id: MessageId::new("markdown-1".to_owned()),
+                message: AIAgentOutputMessageType::Text(AIAgentText {
+                    sections: vec![AIAgentTextSection::PlainText {
+                        text: markdown.to_owned().into(),
+                    }],
+                }),
+                citations: Vec::new(),
+            }],
+            ..Default::default()
+        }),
+    }
+}
+
+fn streaming_markdown_status(markdown: &str) -> AIBlockOutputStatus {
+    let AIBlockOutputStatus::Complete { output } = completed_markdown_status(markdown) else {
+        unreachable!()
+    };
+    AIBlockOutputStatus::PartiallyReceived { output }
+}
 /// A finished (cancelled) status: the block is not streaming, so the viewport's
 /// width-gating alone decides whether to re-measure it.
 fn non_streaming_status() -> AIBlockOutputStatus {
@@ -644,11 +1033,33 @@ fn finished_reasoning_status(body: &str) -> AIBlockOutputStatus {
     }
 }
 
+fn streaming_finished_reasoning_status(body: &str) -> AIBlockOutputStatus {
+    let AIBlockOutputStatus::Complete { output } = finished_reasoning_status(body) else {
+        unreachable!()
+    };
+    AIBlockOutputStatus::PartiallyReceived { output }
+}
+
+/// A completed output carrying a single plain-text response section.
+fn plain_text_output_status(text: &str) -> AIBlockOutputStatus {
+    AIBlockOutputStatus::Complete {
+        output: Shared::new(AIAgentOutput {
+            messages: vec![AIAgentOutputMessage {
+                id: MessageId::new("text-1".to_owned()),
+                message: AIAgentOutputMessageType::Text(AIAgentText {
+                    sections: vec![AIAgentTextSection::PlainText {
+                        text: text.to_owned().into(),
+                    }],
+                }),
+                citations: Vec::new(),
+            }],
+            ..Default::default()
+        }),
+    }
+}
+
 struct QueryAgentBlockModel {
     inputs: Vec<AIAgentInput>,
-    /// The output status this fake model reports: `Pending` models a streaming
-    /// block, `Cancelled` a finished (non-streaming) one, and `Complete`
-    /// carries rendered output such as a reasoning section.
     status: AIBlockOutputStatus,
 }
 
@@ -684,6 +1095,68 @@ impl AIBlockModel for QueryAgentBlockModel {
         _callback: OutputStatusUpdateCallback<Self::View>,
         _ctx: &mut ViewContext<Self::View>,
     ) {
+    }
+
+    fn request_type(&self, _app: &AppContext) -> AIRequestType {
+        AIRequestType::Active
+    }
+}
+
+struct UpdatingAgentBlockModel {
+    status: RefCell<AIBlockOutputStatus>,
+    callback: RefCell<Option<OutputStatusUpdateCallback<TuiAIBlock>>>,
+}
+
+impl UpdatingAgentBlockModel {
+    fn update_status(
+        &self,
+        status: AIBlockOutputStatus,
+        view: &ViewHandle<TuiAIBlock>,
+        app: &mut App,
+    ) {
+        *self.status.borrow_mut() = status;
+        view.update(app, |view, ctx| {
+            self.callback
+                .borrow_mut()
+                .as_mut()
+                .expect("agent block registered its output callback")(view, ctx);
+        });
+    }
+}
+
+impl AIBlockModel for UpdatingAgentBlockModel {
+    type View = TuiAIBlock;
+
+    fn status(&self, _app: &AppContext) -> AIBlockOutputStatus {
+        self.status.borrow().clone()
+    }
+
+    fn server_output_id(&self, _app: &AppContext) -> Option<ServerOutputId> {
+        None
+    }
+
+    fn model_id(&self, _app: &AppContext) -> Option<LLMId> {
+        None
+    }
+
+    fn base_model<'a>(&'a self, _app: &'a AppContext) -> Option<&'a LLMId> {
+        None
+    }
+
+    fn inputs_to_render<'a>(&'a self, _app: &'a AppContext) -> &'a [AIAgentInput] {
+        &[]
+    }
+
+    fn conversation_id(&self, _app: &AppContext) -> Option<AIConversationId> {
+        None
+    }
+
+    fn on_updated_output(
+        &self,
+        callback: OutputStatusUpdateCallback<Self::View>,
+        _ctx: &mut ViewContext<Self::View>,
+    ) {
+        *self.callback.borrow_mut() = Some(callback);
     }
 
     fn request_type(&self, _app: &AppContext) -> AIRequestType {

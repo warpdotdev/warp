@@ -133,12 +133,12 @@ impl StandingQueryResults {
         path: &Path,
         definitions: &StandingQueryDefinitions,
     ) {
-        if definitions.is_direct_project_skill_provider_child(path) {
-            if let Some(provider_root) = definitions.project_skill_provider_ancestor(path) {
-                self.project_skills.insert(StandingQueryContent::directory(
-                    StandardizedPath::from_local_absolute_unchecked(provider_root),
-                ));
-            }
+        if definitions.is_direct_project_skill_provider_child(path)
+            && let Some(provider_root) = definitions.project_skill_provider_ancestor(path)
+        {
+            self.project_skills.insert(StandingQueryContent::directory(
+                StandardizedPath::from_local_absolute_unchecked(provider_root),
+            ));
         }
     }
 

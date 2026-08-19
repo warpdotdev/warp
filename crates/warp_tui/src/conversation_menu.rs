@@ -7,18 +7,19 @@
 
 use warp::editor::{CodeEditorModel, CodeEditorModelEvent};
 use warp::tui_export::{
-    agent_conversations_cloud_metadata_load_failed, query_conversation_entries,
     AgentConversationEntryId, AgentConversationListEntryState, AgentConversationsModel,
     AgentConversationsModelEvent, AgentManagementFilters, ConversationSelectionHandle, Harness,
-    HarnessFilter,
+    HarnessFilter, agent_conversations_cloud_metadata_load_failed, query_conversation_entries,
 };
 use warp_editor::model::CoreEditorModel;
 use warpui_core::{AppContext, Entity, ModelContext, ModelHandle, SingletonEntity, WindowId};
 
 use crate::inline_menu::{
-    result_row_capacity, TuiInlineMenuHeader, TuiInlineMenuListState, TuiInlineMenuRow,
-    TuiInlineMenuRowStyle, TuiInlineMenuSnapshot, TuiInlineMenuStatus, MAX_INLINE_MENU_ROWS,
+    MAX_INLINE_MENU_ROWS, TuiInlineMenuHeader, TuiInlineMenuListState, TuiInlineMenuRow,
+    TuiInlineMenuRowStyle, TuiInlineMenuSnapshot, TuiInlineMenuStatus, result_row_capacity,
 };
+use crate::input_suggestions_mode::{TuiInputSuggestionsMode, TuiInputSuggestionsModeModel};
+use crate::telemetry::TuiConversationMenuTelemetryEvent;
 
 const MAX_VISIBLE_ROWS: usize = result_row_capacity(MAX_INLINE_MENU_ROWS, true, false);
 
@@ -47,6 +48,7 @@ pub(crate) enum TuiConversationMenuEvent {
 /// Query, selection, and model-subscription state for `/conversations`.
 pub(crate) struct TuiConversationMenuModel {
     input_editor: ModelHandle<CodeEditorModel>,
+    suggestions_mode: ModelHandle<TuiInputSuggestionsModeModel>,
     conversation_selection: ConversationSelectionHandle,
     window_id: WindowId,
     state: TuiConversationMenuState,
@@ -57,25 +59,27 @@ impl TuiConversationMenuModel {
     /// Creates a closed conversation menu and subscribes it to input/model changes.
     pub(crate) fn new(
         input_editor: ModelHandle<CodeEditorModel>,
+        suggestions_mode: ModelHandle<TuiInputSuggestionsModeModel>,
         conversation_selection: ConversationSelectionHandle,
         window_id: WindowId,
         ctx: &mut ModelContext<Self>,
     ) -> Self {
         ctx.subscribe_to_model(&input_editor, |model, _, event, ctx| {
-            if model.is_open() && matches!(event, CodeEditorModelEvent::ContentChanged { .. }) {
+            if model.is_open(ctx) && matches!(event, CodeEditorModelEvent::ContentChanged { .. }) {
                 model.refresh_rows(ctx);
             }
         });
         ctx.subscribe_to_model(
             &AgentConversationsModel::handle(ctx),
             |model, _, _: &AgentConversationsModelEvent, ctx| {
-                if model.is_open() {
+                if model.is_open(ctx) {
                     model.refresh_rows(ctx);
                 }
             },
         );
         Self {
             input_editor,
+            suggestions_mode,
             conversation_selection,
             window_id,
             state: TuiConversationMenuState::Closed,
@@ -84,18 +88,32 @@ impl TuiConversationMenuModel {
     }
 
     /// Returns whether the conversation menu is currently open.
-    pub(crate) fn is_open(&self) -> bool {
+    fn has_open_state(&self) -> bool {
         matches!(self.state, TuiConversationMenuState::Open { .. })
+    }
+
+    pub(crate) fn is_open(&self, ctx: &AppContext) -> bool {
+        self.has_open_state()
+            && self.suggestions_mode.as_ref(ctx).mode() == TuiInputSuggestionsMode::ConversationMenu
     }
 
     /// Opens the menu and registers it as an active conversation-list consumer.
     pub(crate) fn open(&mut self, ctx: &mut ModelContext<Self>) {
-        if self.is_open() {
+        if self.has_open_state() {
             return;
         }
+        let did_open = self.suggestions_mode.update(ctx, |mode, ctx| {
+            mode.try_open(TuiInputSuggestionsMode::ConversationMenu, ctx)
+        });
+        if !did_open {
+            return;
+        }
+        self.input_editor
+            .update(ctx, |editor, ctx| editor.clear_buffer(ctx));
         let mut list = TuiInlineMenuListState::default();
         list.set_loading(true);
         self.state = TuiConversationMenuState::Open { list };
+        warp::send_telemetry_from_ctx!(TuiConversationMenuTelemetryEvent::Opened, ctx);
         self.cloud_warning_shown = false;
         let window_id = self.window_id;
         let model_id = ctx.model_id();
@@ -107,7 +125,7 @@ impl TuiConversationMenuModel {
 
     /// Closes the menu and clears its query buffer.
     pub(crate) fn dismiss(&mut self, ctx: &mut ModelContext<Self>) {
-        if !self.is_open() {
+        if !self.is_open(ctx) {
             return;
         }
         self.close(ctx);
@@ -133,20 +151,51 @@ impl TuiConversationMenuModel {
         ctx.emit(TuiConversationMenuEvent::Updated);
     }
 
+    /// Selects the row at absolute snapshot index `index` (for mouse click).
+    /// Returns `true` when the row was actually selected, `false` when the
+    /// index is out of bounds or the menu is not open.
+    pub(crate) fn select_at_snapshot_index(
+        &mut self,
+        index: usize,
+        ctx: &mut ModelContext<Self>,
+    ) -> bool {
+        let TuiConversationMenuState::Open { list } = &mut self.state else {
+            return false;
+        };
+        let selected = list.select_absolute(index, MAX_VISIBLE_ROWS, |_| true);
+        ctx.emit(TuiConversationMenuEvent::Updated);
+        selected
+    }
+
+    /// Scrolls the viewport by `delta` rows without changing the selection.
+    pub(crate) fn scroll_by_delta(&mut self, delta: isize, ctx: &mut ModelContext<Self>) {
+        let TuiConversationMenuState::Open { list } = &mut self.state else {
+            return;
+        };
+        list.scroll_by(delta, MAX_VISIBLE_ROWS);
+        ctx.emit(TuiConversationMenuEvent::Updated);
+    }
+
     /// Returns the stable ID of the selected row without closing the menu.
     pub(crate) fn accept_selected(
         &mut self,
-        _ctx: &mut ModelContext<Self>,
+        ctx: &mut ModelContext<Self>,
     ) -> Option<AgentConversationEntryId> {
-        let selected_id = match &self.state {
+        if !self.is_open(ctx) {
+            return None;
+        }
+
+        match &self.state {
             TuiConversationMenuState::Open { list } => list.selected_row().map(|row| row.id),
             TuiConversationMenuState::Closed => None,
-        };
-        selected_id
+        }
     }
 
     /// Returns the render snapshot for the open menu.
-    pub(crate) fn snapshot(&self) -> Option<TuiInlineMenuSnapshot> {
+    pub(crate) fn snapshot(&self, ctx: &AppContext) -> Option<TuiInlineMenuSnapshot> {
+        if !self.is_open(ctx) {
+            return None;
+        }
         let TuiConversationMenuState::Open { list } = &self.state else {
             return None;
         };
@@ -169,13 +218,17 @@ impl TuiConversationMenuModel {
                 .iter()
                 .map(|row| TuiInlineMenuRow {
                     title: row.title.clone(),
+                    prefix: None,
                     description: None,
+                    state_suffix: None,
+                    promotional_suffix: None,
                     is_selectable: true,
                     style: TuiInlineMenuRowStyle::Default,
                 })
                 .collect(),
             selected_index: list.selected_index(),
             scroll_offset: list.scroll_offset(),
+            scroll_anchor: list.scroll_anchor(),
             max_visible_rows: MAX_VISIBLE_ROWS,
             status,
         })
@@ -183,13 +236,18 @@ impl TuiConversationMenuModel {
 
     /// Closes the menu and unregisters its conversation-list consumer.
     fn close(&mut self, ctx: &mut ModelContext<Self>) {
-        self.state = TuiConversationMenuState::Closed;
-        let window_id = self.window_id;
-        let model_id = ctx.model_id();
-        AgentConversationsModel::handle(ctx).update(ctx, |model, ctx| {
-            model.register_view_closed(window_id, model_id, ctx);
+        if self.has_open_state() {
+            self.state = TuiConversationMenuState::Closed;
+            let window_id = self.window_id;
+            let model_id = ctx.model_id();
+            AgentConversationsModel::handle(ctx).update(ctx, |model, ctx| {
+                model.register_view_closed(window_id, model_id, ctx);
+            });
+            ctx.emit(TuiConversationMenuEvent::Updated);
+        }
+        self.suggestions_mode.update(ctx, |mode, ctx| {
+            mode.close_if_active(TuiInputSuggestionsMode::ConversationMenu, ctx);
         });
-        ctx.emit(TuiConversationMenuEvent::Updated);
     }
 
     /// Rebuilds rows from the current query while preserving stable selection.

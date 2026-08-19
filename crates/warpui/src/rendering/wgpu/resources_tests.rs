@@ -15,7 +15,8 @@ fn test_is_unsupported_llvmpipe_adapter() {
         device_pci_bus_id: "01:00.0".to_owned(),
         subgroup_min_size: wgpu::MINIMUM_SUBGROUP_MIN_SIZE,
         subgroup_max_size: wgpu::MAXIMUM_SUBGROUP_MAX_SIZE,
-        transient_saves_memory: false,
+        transient_saves_memory: Some(false),
+        limit_bucket: None,
     };
     assert!(!is_older_lavapipe_adapter(&supported_adapter_info));
 
@@ -32,7 +33,8 @@ fn test_is_unsupported_llvmpipe_adapter() {
         device_pci_bus_id: "01:00.0".to_owned(),
         subgroup_min_size: wgpu::MINIMUM_SUBGROUP_MIN_SIZE,
         subgroup_max_size: wgpu::MAXIMUM_SUBGROUP_MAX_SIZE,
-        transient_saves_memory: false,
+        transient_saves_memory: Some(false),
+        limit_bucket: None,
     };
 
     assert!(is_older_lavapipe_adapter(&unsupported_adapter_info));
@@ -51,7 +53,8 @@ fn test_is_unsupported_intel_uhd_adapter() {
         device_pci_bus_id: "01:00.0".to_owned(),
         subgroup_min_size: wgpu::MINIMUM_SUBGROUP_MIN_SIZE,
         subgroup_max_size: wgpu::MAXIMUM_SUBGROUP_MAX_SIZE,
-        transient_saves_memory: false,
+        transient_saves_memory: Some(false),
+        limit_bucket: None,
     }));
     assert!(!is_older_vulkan_intel_uhd_adapter(&wgpu::AdapterInfo {
         name: String::from("Intel(R) HD Graphics 620 (KBL GT2)"),
@@ -65,7 +68,8 @@ fn test_is_unsupported_intel_uhd_adapter() {
         device_pci_bus_id: "01:00.0".to_owned(),
         subgroup_min_size: wgpu::MINIMUM_SUBGROUP_MIN_SIZE,
         subgroup_max_size: wgpu::MAXIMUM_SUBGROUP_MAX_SIZE,
-        transient_saves_memory: false,
+        transient_saves_memory: Some(false),
+        limit_bucket: None,
     }));
     assert!(!is_older_vulkan_intel_uhd_adapter(&wgpu::AdapterInfo {
         name: String::from("Intel(R) HD Graphics 620 (KBL GT2)"),
@@ -79,7 +83,8 @@ fn test_is_unsupported_intel_uhd_adapter() {
         device_pci_bus_id: "01:00.0".to_owned(),
         subgroup_min_size: wgpu::MINIMUM_SUBGROUP_MIN_SIZE,
         subgroup_max_size: wgpu::MAXIMUM_SUBGROUP_MAX_SIZE,
-        transient_saves_memory: false,
+        transient_saves_memory: Some(false),
+        limit_bucket: None,
     }));
     assert!(is_older_vulkan_intel_uhd_adapter(&wgpu::AdapterInfo {
         name: String::from("Intel(R) HD Graphics 620 (KBL GT2)"),
@@ -93,7 +98,8 @@ fn test_is_unsupported_intel_uhd_adapter() {
         device_pci_bus_id: "01:00.0".to_owned(),
         subgroup_min_size: wgpu::MINIMUM_SUBGROUP_MIN_SIZE,
         subgroup_max_size: wgpu::MAXIMUM_SUBGROUP_MAX_SIZE,
-        transient_saves_memory: false,
+        transient_saves_memory: Some(false),
+        limit_bucket: None,
     }));
     assert!(!is_older_vulkan_intel_uhd_adapter(&wgpu::AdapterInfo {
         name: String::from("Intel(R) HD Graphics 620 (KBL GT2)"),
@@ -107,7 +113,8 @@ fn test_is_unsupported_intel_uhd_adapter() {
         device_pci_bus_id: "01:00.0".to_owned(),
         subgroup_min_size: wgpu::MINIMUM_SUBGROUP_MIN_SIZE,
         subgroup_max_size: wgpu::MAXIMUM_SUBGROUP_MAX_SIZE,
-        transient_saves_memory: false,
+        transient_saves_memory: Some(false),
+        limit_bucket: None,
     }));
     assert!(is_older_vulkan_intel_uhd_adapter(&wgpu::AdapterInfo {
         name: String::from("Intel(R) HD Graphics 620 (KBL GT2)"),
@@ -121,6 +128,37 @@ fn test_is_unsupported_intel_uhd_adapter() {
         device_pci_bus_id: "01:00.0".to_owned(),
         subgroup_min_size: wgpu::MINIMUM_SUBGROUP_MIN_SIZE,
         subgroup_max_size: wgpu::MAXIMUM_SUBGROUP_MAX_SIZE,
-        transient_saves_memory: false,
+        transient_saves_memory: Some(false),
+        limit_bucket: None,
+    }));
+    // See https://github.com/warpdotdev/warp/issues/14577.
+    assert!(is_older_vulkan_intel_uhd_adapter(&wgpu::AdapterInfo {
+        name: String::from("Intel(R) Xe Graphics (TGL GT2)"),
+        vendor: 0,
+        device: 0,
+        device_type: wgpu::DeviceType::IntegratedGpu,
+        driver: String::from("Intel open-source Mesa driver"),
+        driver_info: String::from("Mesa 21.2.6"),
+        backend: wgpu::Backend::Vulkan,
+        device_pci_bus_id: "01:00.0".to_owned(),
+        subgroup_min_size: wgpu::MINIMUM_SUBGROUP_MIN_SIZE,
+        subgroup_max_size: wgpu::MAXIMUM_SUBGROUP_MAX_SIZE,
+        transient_saves_memory: Some(false),
+        limit_bucket: None,
+    }));
+    assert!(!is_older_vulkan_intel_uhd_adapter(&wgpu::AdapterInfo {
+        name: String::from("Intel(R) Xe Graphics (TGL GT2)"),
+        vendor: 0,
+        device: 0,
+        device_type: wgpu::DeviceType::IntegratedGpu,
+        driver: String::from("Intel open-source Mesa driver"),
+        // Version is recent enough
+        driver_info: String::from("Mesa 24.0.2"),
+        backend: wgpu::Backend::Vulkan,
+        device_pci_bus_id: "01:00.0".to_owned(),
+        subgroup_min_size: wgpu::MINIMUM_SUBGROUP_MIN_SIZE,
+        subgroup_max_size: wgpu::MAXIMUM_SUBGROUP_MAX_SIZE,
+        transient_saves_memory: Some(false),
+        limit_bucket: None,
     }));
 }
