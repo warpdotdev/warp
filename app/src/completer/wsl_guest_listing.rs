@@ -9,20 +9,8 @@ use warpui::r#async::FutureExt as AsyncFutureExt;
 use crate::completer::SessionContext;
 use crate::terminal::model::session::ExecuteCommandOptions;
 
-/// Budget for a full guest-driven directory listing. The host cannot resolve an
-/// `IO_REPARSE_TAG_LX_SYMLINK` over `\\wsl$` (APP-3993), so a WSL directory listing goes through
-/// the guest unconditionally rather than as a rare patch to a host listing. That makes this call
-/// part of the primary listing path for every fresh WSL directory view, so it gets its own
-/// budget instead of reusing one sized for a narrower, less frequent call.
-const GUEST_LISTING_TIMEOUT: Duration = Duration::from_secs(5);
+const GUEST_LISTING_TIMEOUT: Duration = Duration::from_millis(300);
 
-/// Lists `directory`'s entries by asking the WSL guest directly, following symlinks (`-L`) so a
-/// symlink-to-directory completes as a directory and a directory reached only by traversing a
-/// symlink can be listed at all -- both cases the host cannot handle over `\\wsl$`.
-///
-/// Returns `None` on any failure (timeout, non-zero exit, or output the parser can't use) so the
-/// caller can fall back to the host listing. A slow or failing guest must never leave the user
-/// with fewer completions than the host-only listing already provides.
 #[cfg_attr(not(windows), allow(dead_code))]
 pub(super) async fn list_entries(
     session_context: &SessionContext,
@@ -32,10 +20,6 @@ pub(super) async fn list_entries(
     run_guest_listing(session_context, &script, GUEST_LISTING_TIMEOUT).await
 }
 
-/// Runs `script` against the guest and parses its output, subject to `timeout`. Split out from
-/// [`list_entries`] purely so tests can exercise the timeout branch deterministically -- a short
-/// `timeout` against a script guaranteed to outlast it -- rather than waiting out the real,
-/// multi-second production budget against a real WSL host this environment doesn't have.
 async fn run_guest_listing(
     session_context: &SessionContext,
     script: &str,

@@ -516,8 +516,6 @@ pub fn test_parse_ls_script_output_splits_dirs_and_files() {
     );
 }
 
-/// A single entry with a non-UTF-8 name must not discard the rest of the listing: Linux
-/// filenames may contain arbitrary byte sequences, so the parser drops just that entry.
 #[test]
 pub fn test_parse_ls_script_output_drops_only_the_non_utf8_entry() {
     let mut output = b"./good_dir\0.\0\0./good_file.txt\0./bad_".to_vec();
@@ -536,9 +534,6 @@ pub fn test_parse_ls_script_output_drops_only_the_non_utf8_entry() {
     );
 }
 
-/// A directory with zero files still produces a well-formed, complete wire format (the dirs
-/// list, the separator, and the files list's own -- here absent -- terminator), which must
-/// parse as a real, empty-of-files listing rather than as truncated.
 #[test]
 pub fn test_parse_ls_script_output_zero_files_is_a_real_listing() {
     let output = b"./only-dir\0\0";
@@ -550,9 +545,6 @@ pub fn test_parse_ls_script_output_zero_files_is_a_real_listing() {
     );
 }
 
-/// A completely empty directory (no dirs, no files) still produces the separator alone, which
-/// must parse as a real empty listing rather than as truncated -- distinct from genuinely empty
-/// command output below, which has no separator at all.
 #[test]
 pub fn test_parse_ls_script_output_empty_directory_is_a_real_listing() {
     let output = b"\0";
@@ -564,10 +556,6 @@ pub fn test_parse_ls_script_output_empty_directory_is_a_real_listing() {
     );
 }
 
-/// Regression test for the review finding on this PR: output truncated right after the dirs
-/// list -- missing the separator and the entire files pass -- must not be mistaken for a
-/// complete "one directory, no files" listing. Byte-for-byte, this differs from the real one-
-/// dir/zero-file case above only in that the separator's `\0` never arrived.
 #[test]
 pub fn test_parse_ls_script_output_truncated_before_separator_fails() {
     let output = b"./only-dir\0";
@@ -575,16 +563,11 @@ pub fn test_parse_ls_script_output_truncated_before_separator_fails() {
     assert_eq!(super::parse_ls_script_output(output), None);
 }
 
-/// Regression test for the review finding on this PR: entirely empty command output (the
-/// command reported success but captured zero bytes) must not be mistaken for a real empty
-/// directory listing.
 #[test]
 pub fn test_parse_ls_script_output_empty_output_fails() {
     assert_eq!(super::parse_ls_script_output(b""), None);
 }
 
-/// Output truncated mid-entry in the files list (no trailing `\0` at all) must also fail rather
-/// than silently dropping the partial entry and reporting the files seen so far as complete.
 #[test]
 pub fn test_parse_ls_script_output_truncated_mid_file_entry_fails() {
     let output = b"./dir\0\0./whole_file.txt\0./partial_fil";

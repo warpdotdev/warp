@@ -1,34 +1,26 @@
+#[cfg(unix)]
 use std::collections::HashSet;
+#[cfg(unix)]
 use std::iter::FromIterator;
 use std::sync::Arc;
-use std::time::Duration;
 
 use typed_path::{TypedPath, TypedPathBuf};
+#[cfg(unix)]
 use warp_completer::completer::EngineDirEntry;
+use warp_completer::signatures::CommandRegistry;
 use warpui::App;
 
 use crate::completer::SessionContext;
 use crate::terminal::model::session::command_executor::testing::TestCommandExecutor;
 use crate::terminal::model::session::{Session, SessionInfo};
 use crate::terminal::shell::ShellType;
+#[cfg(unix)]
 use crate::test_util::{Stub, VirtualFS};
 
 fn test_session_context(session: Session, cwd: TypedPathBuf, app: &App) -> SessionContext {
-    app.read(|ctx| {
-        SessionContext::new(
-            session,
-            warp_completer::signatures::CommandRegistry::default().into(),
-            cwd,
-            ctx,
-        )
-    })
+    app.read(|ctx| SessionContext::new(session, CommandRegistry::default().into(), cwd, ctx))
 }
 
-/// A `Session` whose guest command runs through a real local shell rather than `wsl.exe`, so the
-/// exact `find -L`-based script this module builds can be exercised end to end without a real
-/// WSL host. Forces Bash regardless of the host platform's default test shell (mirroring
-/// `Session::test_remote()`), since the script is POSIX-shaped -- this is what the WSL guest
-/// itself would run.
 fn test_wsl_like_session() -> Session {
     Session::new(
         SessionInfo::new_for_test().with_shell_type(ShellType::Bash),
@@ -36,16 +28,6 @@ fn test_wsl_like_session() -> Session {
     )
 }
 
-/// Regression test for APP-3993: asking the WSL guest for a listing directly, rather than
-/// patching a host listing, both classifies a symlink-to-directory correctly and lists a
-/// directory reached only by traversing a symlink -- the "completing inside a symlinked
-/// directory" case the host cannot handle at all over `\wsl$`.
-///
-/// This module isn't `#[cfg(windows)]` (only the call site in `mod.rs` is, since `is_wsl()` is
-/// only ever true on a Windows session), so this runs on real Unix CI, unlike a module-wide
-/// gate that would only ever exercise this test via manual local un-gating. Still Unix-only,
-/// matching `test_session_context_follows_symlinked_directories_remotely` in `test.rs`, since
-/// `sandbox.ln`'s Windows symlink behavior isn't relied on there either.
 #[cfg(unix)]
 #[test]
 fn test_list_entries_follows_symlinks_and_succeeds() {
@@ -84,9 +66,6 @@ fn test_list_entries_follows_symlinks_and_succeeds() {
     });
 }
 
-/// A guest command that can't even run (here, a `cd` into a directory that doesn't exist) must
-/// signal the caller to fall back to the host listing rather than silently returning an empty
-/// one.
 #[test]
 fn test_list_entries_returns_none_on_guest_failure() {
     App::test((), |app| async move {
@@ -98,12 +77,6 @@ fn test_list_entries_returns_none_on_guest_failure() {
     });
 }
 
-/// A guest command that runs past its budget must signal the fallback too, the same as a hard
-/// failure. Goes through `run_guest_listing` directly with a short timeout against a script
-/// guaranteed to outlast it, rather than waiting out the real multi-second production budget
-/// (`GUEST_LISTING_TIMEOUT`) against a real WSL host this environment doesn't have -- that's the
-/// entire reason `run_guest_listing` takes `timeout` as a parameter instead of always using the
-/// production constant.
 #[test]
 fn test_run_guest_listing_returns_none_on_timeout() {
     App::test((), |app| async move {
@@ -115,8 +88,8 @@ fn test_run_guest_listing_returns_none_on_timeout() {
 
         let result = warpui::r#async::block_on(super::run_guest_listing(
             &ctx,
-            "sleep 1",
-            Duration::from_millis(20),
+            "sleep 5",
+            super::GUEST_LISTING_TIMEOUT,
         ));
         assert_eq!(result, None);
     });

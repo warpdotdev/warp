@@ -1,9 +1,5 @@
 #[cfg(feature = "completions_v2")]
 mod js;
-// Not `#[cfg(windows)]`: the module has no Windows-only code, and gating it out entirely would
-// mean its tests -- including the guest-listing happy path and the fallback signal -- never run
-// on any real CI target, only via manual local un-gating. Only the call site below, where
-// `is_wsl()` is only ever true on a Windows session, is gated.
 mod wsl_guest_listing;
 
 use std::collections::{HashMap, HashSet};
