@@ -611,6 +611,7 @@ impl ApiKeyManager {
                             |m| api::request::settings::custom_model_providers::CustomModel {
                                 slug: m.name.clone(),
                                 config_key: m.config_key.clone(),
+                                reasoning_effort: String::new(),
                             },
                         )
                         .collect(),

@@ -28,11 +28,11 @@ use warp::tui_export::{
     BlocklistAIHistoryEvent, BlocklistAIHistoryModel, BlocklistAIInputModel,
     BlocklistOrchestrationTelemetryEvent, CLISubagentController, CLISubagentEvent,
     CLISubagentTarget, COMMAND_REGISTRY, CancellationReason, ChangelogModel, ChangelogRequestType,
-    CloudConversationData, CommandExecutionSource, ConversationFileExport, ConversationSelection,
-    ConversationSelectionHandle, ExecuteCommandEvent, FORK_PREFIX, ForkConversationError,
-    GetRelevantFilesController, GitHubRepoModel, GitRepoStatusModel, LLMId, LLMPreferences,
-    LLMPreferencesEvent, LOCAL_SKILLS_REMOTE_EXECUTION_ERROR_MESSAGE, LinkedWorkflowData,
-    ModelEvent, ParsedSlashCommandInput, PersistenceWriter, PillBarActionKind,
+    ChargedUsageTotals, CloudConversationData, CommandExecutionSource, ConversationFileExport,
+    ConversationSelection, ConversationSelectionHandle, ExecuteCommandEvent, FORK_PREFIX,
+    ForkConversationError, GetRelevantFilesController, GitHubRepoModel, GitRepoStatusModel, LLMId,
+    LLMPreferences, LLMPreferencesEvent, LOCAL_SKILLS_REMOTE_EXECUTION_ERROR_MESSAGE,
+    LinkedWorkflowData, ModelEvent, ParsedSlashCommandInput, PersistenceWriter, PillBarActionKind,
     PillBarInteractionEvent, PillBarPillKind, PillSwitchOutcome, PtyIntent, PtyIntentEvent,
     QueuedQueryEvent, QueuedQueryModel, RepoDetectionSessionType, RepoDetectionSource,
     ServerConversationToken, SessionSettings, Sessions, SessionsEvent, ShellCommandExecutorEvent,
@@ -3813,12 +3813,13 @@ impl TuiTerminalSessionView {
         exchange_id: AIAgentExchangeId,
         duration: Duration,
         block_credits: Option<f32>,
+        block_charged_usage: Option<ChargedUsageTotals>,
         ctx: &AppContext,
     ) -> Option<Box<dyn TuiElement>> {
         (!self
             .hidden_response_summary_exchange_ids
             .contains(&exchange_id))
-        .then(|| render_response_summary(duration, block_credits, ctx))
+        .then(|| render_response_summary(duration, block_credits, block_charged_usage, ctx))
     }
 
     /// Toggles the inline model picker from the footer's active-model label —
@@ -5447,6 +5448,7 @@ impl TuiTerminalSessionView {
                     exchange_id,
                     duration,
                     conversation.credits_spent_for_last_block(),
+                    conversation.charged_usage_for_last_block(),
                     ctx,
                 ) {
                     content =

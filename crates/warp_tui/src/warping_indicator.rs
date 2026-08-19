@@ -15,7 +15,8 @@
 use std::sync::LazyLock;
 use std::time::Duration;
 
-use warp::tui_export::format_credits;
+use warp::tui_export::{ChargedUsageTotals, format_credits};
+use warp_core::features::FeatureFlag;
 use warpui_core::AppContext;
 use warpui_core::elements::animation::{AnimationClock, Keyframe, KeyframeTimeline};
 use warpui_core::elements::shimmer_math::ShimmerConfig;
@@ -134,22 +135,46 @@ pub(crate) fn render_warping_indicator_row(
 
 /// Renders the completed-response summary row shown in the indicator's slot
 /// once the response finishes: the resting glyph, the response's wall-to-wall
-/// duration, and the credits it spent (omitted until any are reported). The
+/// duration, and the credits it spent (omitted until any are reported),
+/// followed by its dollar cost when pricing transparency is enabled. The
 /// row is static — no animation, no repaint scheduling.
 pub(crate) fn render_response_summary(
     duration: Duration,
     block_credits: Option<f32>,
+    block_charged_usage: Option<ChargedUsageTotals>,
     app: &AppContext,
 ) -> Box<dyn TuiElement> {
     let builder = TuiUiBuilder::from_app(app);
     let mut text = format!("{RESTING_SPINNER} {}s", duration.as_secs());
     if let Some(credits) = block_credits.filter(|credits| *credits > 0.0) {
-        text.push_str(&format!(" • {}", format_credits(credits)));
+        text.push_str(&format!(
+            " \u{2022} {}",
+            format_credits_with_cost(credits, block_charged_usage)
+        ));
     }
     TuiText::new(text)
         .with_style(builder.muted_text_style())
         .truncate()
         .finish()
+}
+
+/// Formats a credits figure with its dollar cost delta appended in parens
+/// (`"0.5 credits ($0.03)"`), gated by `FeatureFlag::PricingTransparency` --
+/// pre-saga behavior (credits only) when the flag is off, matching the
+/// existing Credits/Cost/Detail footer toggle's gate. `charged_usage` is
+/// this response's cost delta, not the conversation cumulative.
+fn format_credits_with_cost(credits: f32, charged_usage: Option<ChargedUsageTotals>) -> String {
+    let credits_text = format_credits(credits);
+    if !FeatureFlag::PricingTransparency.is_enabled() {
+        return credits_text;
+    }
+    let Some(charged_usage) = charged_usage else {
+        return credits_text;
+    };
+    format!(
+        "{credits_text} ({})",
+        crate::usage::format_cost(charged_usage.total_cost_in_cents())
+    )
 }
 
 #[cfg(test)]

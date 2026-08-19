@@ -3285,6 +3285,7 @@ impl BlocklistAIController {
                     // Total credits charged for this request = inference (`exact`) + platform.
                     RequestCost::new(f64::from(cost.exact) + f64::from(cost.platform_credits))
                 }),
+                finished_event.request_charges.take(),
                 finished_event.token_usage,
                 finished_event.conversation_usage_metadata.take(),
                 did_request_contain_user_query,

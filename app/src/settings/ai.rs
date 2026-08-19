@@ -654,6 +654,10 @@ pub enum TuiUsageDisplayMode {
     Credits,
     /// Provider dollar cost.
     Cost,
+    /// Full pricing-transparency breakdown: dollar cost, token count, and
+    /// the per-category (input/cache-read/cache-write/output) inference
+    /// cost breakdown, condensed onto the single footer line.
+    Detail,
 }
 
 settings::macros::implement_setting_for_enum!(
@@ -807,11 +811,13 @@ impl TuiStatuslineConfig {
 }
 
 impl TuiUsageDisplayMode {
-    /// The other unit — clicking the usage entry flips to this.
+    /// The next unit in the click-to-cycle sequence: credits → cost → full
+    /// breakdown detail → back to credits.
     pub fn toggled(self) -> Self {
         match self {
             TuiUsageDisplayMode::Credits => TuiUsageDisplayMode::Cost,
-            TuiUsageDisplayMode::Cost => TuiUsageDisplayMode::Credits,
+            TuiUsageDisplayMode::Cost => TuiUsageDisplayMode::Detail,
+            TuiUsageDisplayMode::Detail => TuiUsageDisplayMode::Credits,
         }
     }
 }

@@ -1,13 +1,22 @@
 use std::time::Duration;
 
 use warp::appearance::Appearance;
+use warp::tui_export::ChargedUsageTotals;
+use warp_core::features::FeatureFlag;
 use warpui_core::App;
 use warpui_core::elements::shimmer_math::ShimmerConfig;
 use warpui_core::elements::tui::{Color, TuiBufferExt, TuiElement, TuiRect, TuiText};
 use warpui_core::presenter::tui::TuiPresenter;
 
-use super::{SPINNER_TIMELINE, render_warping_indicator_row};
+use super::{SPINNER_TIMELINE, render_response_summary, render_warping_indicator_row};
 use crate::tui_builder::TuiUiBuilder;
+
+fn charged_usage(total_cost_in_cents: f32) -> ChargedUsageTotals {
+    ChargedUsageTotals {
+        input_cost_in_cents: total_cost_in_cents,
+        ..Default::default()
+    }
+}
 
 #[test]
 fn spinner_follows_the_prototype_choreography() {
@@ -144,6 +153,99 @@ fn renders_a_custom_progress_label() {
                     .expect("success status should have a foreground")
             );
             assert!(frame.repaint_at.is_some());
+        });
+    });
+}
+
+/// Surface #15: the per-response inline summary row shows a per-response
+/// dollar delta (not the conversation cumulative) alongside credits, gated
+/// by `FeatureFlag::PricingTransparency`. With the flag off, the row is
+/// byte-identical to pre-saga output (credits only, no dollar figure).
+#[test]
+fn response_summary_shows_per_response_dollar_delta_when_flag_is_on() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            ctx.add_singleton_model(|_| Appearance::mock());
+        });
+        app.read(|app_ctx| {
+            let _guard = FeatureFlag::PricingTransparency.override_enabled(true);
+            let element = render_response_summary(
+                Duration::from_secs(5),
+                Some(0.5),
+                Some(charged_usage(3.0)),
+                app_ctx,
+            );
+            let mut presenter = TuiPresenter::new();
+            let frame = presenter.present_element(element, TuiRect::new(0, 0, 40, 1), app_ctx);
+            let line = frame.buffer.to_lines()[0].clone();
+            assert_eq!(line.trim_end(), "∷ 5s • 0.5 credits ($0.03)");
+        });
+    });
+}
+
+#[test]
+fn response_summary_omits_dollar_delta_when_flag_is_off() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            ctx.add_singleton_model(|_| Appearance::mock());
+        });
+        app.read(|app_ctx| {
+            let _guard = FeatureFlag::PricingTransparency.override_enabled(false);
+            let element = render_response_summary(
+                Duration::from_secs(5),
+                Some(0.5),
+                Some(charged_usage(3.0)),
+                app_ctx,
+            );
+            let mut presenter = TuiPresenter::new();
+            let frame = presenter.present_element(element, TuiRect::new(0, 0, 40, 1), app_ctx);
+            let line = frame.buffer.to_lines()[0].clone();
+            assert_eq!(line.trim_end(), "∷ 5s • 0.5 credits");
+        });
+    });
+}
+
+/// The delta changes from response to response within the same conversation
+/// -- it is per-response, not the conversation cumulative.
+#[test]
+fn response_summary_dollar_delta_changes_between_responses() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            ctx.add_singleton_model(|_| Appearance::mock());
+        });
+        app.read(|app_ctx| {
+            let _guard = FeatureFlag::PricingTransparency.override_enabled(true);
+            let mut presenter = TuiPresenter::new();
+
+            let first = render_response_summary(
+                Duration::from_secs(2),
+                Some(0.2),
+                Some(charged_usage(3.0)),
+                app_ctx,
+            );
+            let first_line = presenter
+                .present_element(first, TuiRect::new(0, 0, 40, 1), app_ctx)
+                .buffer
+                .to_lines()[0]
+                .trim_end()
+                .to_owned();
+
+            let second = render_response_summary(
+                Duration::from_secs(4),
+                Some(0.8),
+                Some(charged_usage(12.0)),
+                app_ctx,
+            );
+            let second_line = presenter
+                .present_element(second, TuiRect::new(0, 0, 40, 1), app_ctx)
+                .buffer
+                .to_lines()[0]
+                .trim_end()
+                .to_owned();
+
+            assert_eq!(first_line, "∷ 2s • 0.2 credits ($0.03)");
+            assert_eq!(second_line, "∷ 4s • 0.8 credits ($0.12)");
+            assert_ne!(first_line, second_line);
         });
     });
 }

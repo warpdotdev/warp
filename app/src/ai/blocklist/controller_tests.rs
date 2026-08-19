@@ -305,6 +305,7 @@ fn mock_response_stream_updates_history_through_controller() {
                             token_usage: vec![],
                             should_refresh_model_config: false,
                             request_cost: None,
+                            request_charges: None,
                         },
                     )),
                 },

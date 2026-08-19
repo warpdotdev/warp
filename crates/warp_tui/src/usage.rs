@@ -77,7 +77,8 @@ impl UsageToggle {
 }
 
 /// The entry's text for `mode`: the GUI-consistent credits total (formatted
-/// with the GUI's own `format_credits`) or the provider dollar cost.
+/// with the GUI's own `format_credits`), the provider dollar cost, or the
+/// full pricing-transparency detail breakdown.
 fn entry_text(mode: TuiUsageDisplayMode, totals: ConversationUsageTotals) -> String {
     match mode {
         TuiUsageDisplayMode::Credits => format_credits(totals.credits_spent),
@@ -85,7 +86,35 @@ fn entry_text(mode: TuiUsageDisplayMode, totals: ConversationUsageTotals) -> Str
             .cost_in_cents
             .map(format_cost)
             .unwrap_or_else(|| "Cost unavailable".to_owned()),
+        TuiUsageDisplayMode::Detail => format_detail(totals),
     }
+}
+
+/// Condenses the full pricing-transparency breakdown onto a single status
+/// line: total dollar cost, token count, and the per-category inference
+/// cost breakdown (summed across every usage category/model via
+/// `ChargedUsageTotals`). Gracefully degrades (like `Cost` mode) when the
+/// underlying data isn't available -- e.g. a legacy conversation, or a
+/// server response predating the pricing-transparency breakdown fields.
+fn format_detail(totals: ConversationUsageTotals) -> String {
+    let Some(cost_in_cents) = totals.cost_in_cents else {
+        return "Cost unavailable".to_owned();
+    };
+    let mut text = format_cost(cost_in_cents);
+    if let Some(charged_usage) = totals.charged_usage {
+        let total_tokens = charged_usage.total_tokens();
+        if total_tokens > 0 {
+            text.push_str(&format!(" \u{b7} {total_tokens} tok"));
+        }
+        text.push_str(&format!(
+            " \u{b7} in {} \u{b7} cr {} \u{b7} cw {} \u{b7} out {}",
+            format_cost(charged_usage.input_cost_in_cents),
+            format_cost(charged_usage.input_cache_read_cost_in_cents),
+            format_cost(charged_usage.input_cache_write_cost_in_cents),
+            format_cost(charged_usage.output_cost_in_cents),
+        ));
+    }
+    text
 }
 
 /// Formats an accumulated cost in US cents as dollars (`3.2` cents → `$0.03`).

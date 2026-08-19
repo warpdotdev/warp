@@ -1,6 +1,6 @@
 use warp::appearance::Appearance;
 use warp::settings::TuiUsageDisplayMode;
-use warp::tui_export::ConversationUsageTotals;
+use warp::tui_export::{ChargedUsageTotals, ConversationUsageTotals};
 use warp_core::features::FeatureFlag;
 use warpui_core::App;
 use warpui_core::elements::tui::{TuiBufferExt, TuiRect};
@@ -13,6 +13,35 @@ fn totals(credits_spent: f32, cost_in_cents: f32) -> ConversationUsageTotals {
         credits_spent,
         cost_in_cents: Some(cost_in_cents),
         has_usage: true,
+        charged_usage: None,
+    }
+}
+
+/// A fixture breakdown shared with the GUI-side tests for the same sample
+/// conversation, so Detail mode's rendered text can be cross-checked against
+/// the GUI panels' numbers for identical input data (validation criterion 1).
+fn fixture_charged_usage() -> ChargedUsageTotals {
+    ChargedUsageTotals {
+        input_cost_in_cents: 1.0,
+        output_cost_in_cents: 2.0,
+        input_cache_read_cost_in_cents: 0.2,
+        input_cache_write_cost_in_cents: 0.1,
+        platform_cost_in_cents: 0.0,
+        input_tokens: 100,
+        output_tokens: 50,
+        input_cache_read_tokens: 20,
+        input_cache_write_tokens: 10,
+    }
+}
+
+fn totals_with_charged_usage(
+    credits_spent: f32,
+    cost_in_cents: f32,
+    charged_usage: ChargedUsageTotals,
+) -> ConversationUsageTotals {
+    ConversationUsageTotals {
+        charged_usage: Some(charged_usage),
+        ..totals(credits_spent, cost_in_cents)
     }
 }
 
@@ -38,12 +67,14 @@ fn entry_text_matches_the_gui_credits_formatting() {
 #[test]
 fn entry_text_follows_the_persisted_display_mode() {
     let usage = totals(2.5, 3.2);
-    // Credits is the default mode; a click toggles to cost and back.
+    // Credits is the default mode; a click cycles credits → cost → detail →
+    // back to credits.
     let credits = TuiUsageDisplayMode::default();
     assert_eq!(entry_text(credits, usage), "2.5 credits");
     assert_eq!(entry_text(credits.toggled(), usage), "$0.03");
+    assert_eq!(entry_text(credits.toggled().toggled(), usage), "$0.03");
     assert_eq!(
-        entry_text(credits.toggled().toggled(), usage),
+        entry_text(credits.toggled().toggled().toggled(), usage),
         "2.5 credits"
     );
 }
@@ -57,10 +88,49 @@ fn cost_mode_explicitly_marks_unknown_historical_cost() {
                 credits_spent: 0.0,
                 cost_in_cents: None,
                 has_usage: true,
+                charged_usage: None,
             },
         ),
         "Cost unavailable"
     );
+}
+
+#[test]
+fn detail_mode_explicitly_marks_unknown_historical_cost() {
+    assert_eq!(
+        entry_text(
+            TuiUsageDisplayMode::Detail,
+            ConversationUsageTotals {
+                credits_spent: 0.0,
+                cost_in_cents: None,
+                has_usage: true,
+                charged_usage: None,
+            },
+        ),
+        "Cost unavailable"
+    );
+}
+
+/// Detail mode renders the total cost, token count, and the per-category
+/// input/cache-read/cache-write/output breakdown, all summed from a
+/// `ChargedUsageTotals` fixture.
+#[test]
+fn detail_mode_renders_full_breakdown() {
+    let usage = totals_with_charged_usage(2.5, 3.3, fixture_charged_usage());
+    let text = entry_text(TuiUsageDisplayMode::Detail, usage);
+    assert_eq!(
+        text,
+        "$0.03 \u{b7} 180 tok \u{b7} in $0.01 \u{b7} cr $0.00 \u{b7} cw $0.00 \u{b7} out $0.02"
+    );
+}
+
+/// When the cost is known but no charged-usage breakdown was provided (e.g. a
+/// legacy conversation, or a request predating the breakdown fields), Detail
+/// mode degrades to just the total cost — no fabricated per-category split.
+#[test]
+fn detail_mode_without_charged_usage_shows_cost_only() {
+    let usage = totals(2.5, 3.2);
+    assert_eq!(entry_text(TuiUsageDisplayMode::Detail, usage), "$0.03");
 }
 
 /// The credits⇄dollars toggle is gated behind `PricingTransparency`: with the
@@ -111,6 +181,53 @@ fn footer_usage_entry_gates_the_cost_toggle_behind_the_feature_flag() {
             assert!(
                 line.contains("$0.03"),
                 "flag on must follow the persisted cost mode, got: {line:?}"
+            );
+        });
+    });
+}
+
+/// Same gate, but for the `Detail` mode specifically: with the flag off, a
+/// persisted `Detail` mode (e.g. left over from a session where the flag was
+/// on) must still render as plain static credits, not the breakdown -- byte
+/// identical to pre-saga (Credits/Cost-only) output.
+#[test]
+fn footer_usage_entry_gates_detail_mode_behind_the_feature_flag() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            ctx.add_singleton_model(|_| Appearance::mock());
+        });
+        let toggle = UsageToggle::default();
+        let usage = totals_with_charged_usage(2.5, 3.3, fixture_charged_usage());
+
+        app.read(|ctx| {
+            let _guard = FeatureFlag::PricingTransparency.override_enabled(false);
+            let entry = toggle.render_entry(TuiUsageDisplayMode::Detail, usage, ctx, |_, _| {});
+            let line = TuiPresenter::new()
+                .present_element(entry, TuiRect::new(0, 0, 40, 1), ctx)
+                .buffer
+                .to_lines()
+                .join("");
+            assert!(
+                line.contains("2.5 credits"),
+                "flag off must show static credits, got: {line:?}"
+            );
+            assert!(
+                !line.contains("tok") && !line.contains('$'),
+                "flag off must not expose the breakdown, got: {line:?}"
+            );
+        });
+
+        app.read(|ctx| {
+            let _guard = FeatureFlag::PricingTransparency.override_enabled(true);
+            let entry = toggle.render_entry(TuiUsageDisplayMode::Detail, usage, ctx, |_, _| {});
+            let line = TuiPresenter::new()
+                .present_element(entry, TuiRect::new(0, 0, 40, 1), ctx)
+                .buffer
+                .to_lines()
+                .join("");
+            assert!(
+                line.contains("180 tok"),
+                "flag on must follow the persisted detail mode, got: {line:?}"
             );
         });
     });

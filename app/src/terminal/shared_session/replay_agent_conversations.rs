@@ -170,6 +170,7 @@ fn create_finished_event_from_conversation(conversation: &AIConversation) -> Res
             credits_spent: conversation.inference_credits_spent(),
             platform_credits_spent: conversation.platform_credits_spent(),
             summarized: conversation.was_summarized(),
+            total_charges: None,
             #[allow(deprecated)]
             token_usage: conversation
                 .token_usage()
@@ -210,6 +211,7 @@ fn create_finished_event_from_conversation(conversation: &AIConversation) -> Res
                 token_usage: vec![],
                 should_refresh_model_config: false,
                 request_cost: None,
+                request_charges: None,
             },
         )),
     }
