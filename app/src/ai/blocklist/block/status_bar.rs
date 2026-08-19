@@ -826,7 +826,7 @@ impl BlocklistAIStatusBar {
             |message| message.text.clone(),
         );
         let secondary_element = match &model_warping_message {
-            Some(message) if message.is_fallback => {
+            Some(message) if message.show_fallback_explanation => {
                 Some(render_fallback_explanation(model.as_ref(), app))
             }
             _ => self.render_tip(app),
@@ -985,7 +985,7 @@ impl BlocklistAIStatusBar {
 
 /// The model an exchange's output is running on, as last reported by a `ModelUsed`
 /// message.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq)]
 struct ModelInUse {
     /// `None` when the server reported the model without a display name.
     display_name: Option<String>,
@@ -1120,12 +1120,12 @@ fn render_fallback_explanation<V: View>(
     .finish()
 }
 
-/// Warping text naming the model in use, plus whether that model is a fallback —
-/// which also earns the explanation line below the row.
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// Warping text naming the model in use, plus whether the row should carry the
+/// fallback explanation line beneath it.
+#[derive(Debug, PartialEq)]
 struct WarpingModelMessage {
     text: String,
-    is_fallback: bool,
+    show_fallback_explanation: bool,
 }
 
 /// What the warping row knows about the model when it renders.
@@ -1144,14 +1144,17 @@ const UNNAMED_FALLBACK_MODEL_WARPING_TEXT: &str = "Warping with another model.";
 /// Sonnet 4.5.". `None` keeps the row on its generic copy, which is what `auto`
 /// and custom routers get until routing picks a model and the server reports it.
 ///
-/// A fallback attempt is the same message plus two things, both of which stay
-/// behind `FallbackModelLoadOutputMessaging`: it may name the previous exchange's
-/// model, and it asks for the explanation line. That lookback avoids a flicker
-/// from "Warping..." on agent-initiated follow-ups, since a conversation that
-/// fell back once is likely to again, and is skipped after a new user query
-/// because the primary model may have recovered by then. Nothing else borrows
-/// another exchange's model: naming one the response may not be using is worse
-/// than naming none.
+/// Naming the model is `WarpingModelName`'s. `FallbackModelLoadOutputMessaging`
+/// owns the two things specific to a fallback attempt: the explanation line, and
+/// naming the previous exchange's model when this one has not reported yet. That
+/// lookback avoids a flicker from "Warping..." on agent-initiated follow-ups,
+/// since a conversation that fell back once is likely to again, and is skipped
+/// after a new user query because the primary model may have recovered by then.
+/// Nothing else borrows another exchange's model: naming one the response may not
+/// be using is worse than naming none.
+///
+/// The fallback message shipped before model naming did, so it still names its
+/// model on its own flag alone; every other naming needs `WarpingModelName`.
 fn warping_model_message(inputs: WarpingModelInputs) -> Option<WarpingModelMessage> {
     let fallback_messaging_enabled = FeatureFlag::FallbackModelLoadOutputMessaging.is_enabled();
     let model_in_use = match inputs.current {
@@ -1168,25 +1171,22 @@ fn warping_model_message(inputs: WarpingModelInputs) -> Option<WarpingModelMessa
         }
     };
 
-    if model_in_use.is_fallback {
-        if !fallback_messaging_enabled {
-            return None;
-        }
-        return Some(WarpingModelMessage {
-            text: model_in_use.display_name.map_or_else(
-                || UNNAMED_FALLBACK_MODEL_WARPING_TEXT.to_owned(),
-                warping_text_for_model,
-            ),
-            is_fallback: true,
-        });
-    }
-
-    if !FeatureFlag::WarpingModelName.is_enabled() {
+    let show_fallback_explanation = model_in_use.is_fallback && fallback_messaging_enabled;
+    if !FeatureFlag::WarpingModelName.is_enabled() && !show_fallback_explanation {
         return None;
     }
+
+    let text = match model_in_use.display_name {
+        Some(display_name) => warping_text_for_model(display_name),
+        // An unnamed fallback still has something to say; an unnamed ordinary
+        // model does not, so the row keeps its generic copy.
+        None if model_in_use.is_fallback => UNNAMED_FALLBACK_MODEL_WARPING_TEXT.to_owned(),
+        None => return None,
+    };
+
     Some(WarpingModelMessage {
-        text: warping_text_for_model(model_in_use.display_name?),
-        is_fallback: false,
+        text,
+        show_fallback_explanation,
     })
 }
 
