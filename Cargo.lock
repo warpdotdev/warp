@@ -15721,6 +15721,7 @@ dependencies = [
  "serde",
  "thiserror 2.0.17",
  "warp_core",
+ "warp_errors",
  "warp_graphql_schema",
  "websocket",
  "ws_stream_wasm",

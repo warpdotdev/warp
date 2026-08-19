@@ -1946,7 +1946,7 @@ impl AppContext {
         match self.contexts_from_responder_chain(window_id, &responder_chain) {
             Ok(ctxs) => ctxs,
             Err(error) => {
-                report_error!(error.context("Unable to fetch Key Bindings for View"));
+                log::error!("Unable to fetch Key Bindings for View: {error:#}");
                 Vec::new()
             }
         }
@@ -1993,7 +1993,7 @@ impl AppContext {
         let contexts = match self.contexts_from_responder_chain(window_id, &responder_chain) {
             Ok(ctxs) => ctxs,
             Err(error) => {
-                report_error!(error.context("Unable to fetch Key Bindings for View"));
+                log::error!("Unable to fetch Key Bindings for View: {error:#}");
                 return Vec::new();
             }
         };
