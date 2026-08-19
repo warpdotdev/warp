@@ -296,12 +296,15 @@ impl TerminalView {
                 let prepare_future = spawner
                     .spawn(|_, ctx| {
                         prepare_environment(
-                            source_repos,
-                            setup_commands,
                             DOCKER_SANDBOX_HOME_DIR.into(),
                             true, /* is_sandbox */
                             Harness::Oz,
-                            RepositoryPreparationOptions::default(),
+                            RepositoryPreparationOptions::new(
+                                source_repos,
+                                setup_commands,
+                                Vec::new(),
+                                false,
+                            ),
                             setup_events,
                             ctx,
                         )

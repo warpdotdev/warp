@@ -63,13 +63,22 @@ pub enum PrepareEnvironmentError {
 /// Server-owned repository settings for environment preparation.
 #[derive(Default)]
 pub(crate) struct RepositoryPreparationOptions {
+    source_repos: Vec<SourceRepo>,
+    setup_commands: Vec<String>,
     head_overrides: Vec<RepositoryHeadOverride>,
     remove_origins: bool,
 }
 
 impl RepositoryPreparationOptions {
-    pub fn new(head_overrides: Vec<RepositoryHeadOverride>, remove_origins: bool) -> Self {
+    pub fn new(
+        source_repos: Vec<SourceRepo>,
+        setup_commands: Vec<String>,
+        head_overrides: Vec<RepositoryHeadOverride>,
+        remove_origins: bool,
+    ) -> Self {
         Self {
+            source_repos,
+            setup_commands,
             head_overrides,
             remove_origins,
         }
@@ -126,8 +135,6 @@ pub(crate) fn validate_repository_head_overrides(
 /// happen to pass a path like `/home/agent/...` don't silently flip into
 /// sandbox-only mode.
 pub(crate) fn prepare_environment(
-    source_repos: Vec<SourceRepo>,
-    setup_commands: Vec<String>,
     working_dir: PathBuf,
     is_sandbox: bool,
     harness: Harness,
@@ -138,6 +145,8 @@ pub(crate) fn prepare_environment(
     let spawner = ctx.spawner();
     async move {
         let RepositoryPreparationOptions {
+            source_repos,
+            setup_commands,
             head_overrides: repository_head_overrides,
             remove_origins: remove_repository_origins,
         } = repository_options;

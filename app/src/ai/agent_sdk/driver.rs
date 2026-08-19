@@ -2767,12 +2767,12 @@ impl AgentDriver {
                     let working_dir = me.working_dir.clone();
                     me.terminal_driver.update(ctx, |_, ctx| {
                         environment::prepare_environment(
-                            source_repos_for_prepare,
-                            setup_commands,
                             working_dir,
                             false, /* is_sandbox */
                             harness,
                             environment::RepositoryPreparationOptions::new(
+                                source_repos_for_prepare,
+                                setup_commands,
                                 repository_head_overrides,
                                 remove_repository_origins,
                             ),
