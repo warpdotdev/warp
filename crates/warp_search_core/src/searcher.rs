@@ -1192,20 +1192,13 @@ struct SequencedEvent {
     event: SearcherEvent,
 }
 
-/// An item sent over `AsyncSearcher`'s events channel: either a regular operation, or a coalesced
-/// marker that tells the background writer to re-check `pending_rebuild`.
-///
-/// The marker carries no payload -- the rebuild itself lives in `SearcherProducerState`, not in
-/// the channel -- so it is only ever used to wake the writer. `rebuild_index_async` enqueues one
-/// only on the transition from no rebuild pending to one being pending (checking
-/// `pending_rebuild.is_some()` before overwriting it), so at most one `RebuildMarker` is ever in
-/// flight regardless of how many times a rebuild is requested before the writer wakes up. This
-/// is what keeps the notification mechanism itself bounded, matching the bound already placed on
-/// `pending_rebuild`: without it, a burst of rebuild requests would enqueue a marker per
-/// request, growing the channel without limit even though each marker is tiny -- the same
-/// failure class this ticket exists to eliminate.
+/// An item sent over `AsyncSearcher`'s events channel.
 enum QueuedItem {
+    /// A regular insert/delete/clear operation.
     Event(SequencedEvent),
+    /// Wakes the background writer to re-check `pending_rebuild`, which holds the actual
+    /// rebuild data -- this carries none. See [`AsyncSearcher::rebuild_index_async`] for how at
+    /// most one stays outstanding.
     RebuildMarker,
 }
 
@@ -1216,18 +1209,16 @@ struct PendingRebuild {
     documents: Vec<FullTextSearchDocumentEntry>,
 }
 
-/// Producer-side state shared between `AsyncSearcher` and its background writer task.
-///
-/// At most one rebuild is ever retained: a new rebuild request simply replaces whatever was in
-/// `pending_rebuild`, regardless of how many were requested in between. `next_sequence` and
-/// `pending_rebuild` are guarded by the *same* lock so that allocating a sequence number and
-/// publishing the corresponding operation -- sending it on the events channel, or storing it in
-/// `pending_rebuild` -- happen atomically from the point of view of any other producer or the
-/// background writer. Without that, the writer could observe a rebuild as "later" than an event
-/// that had already been assigned an earlier sequence number but not yet reached the channel,
-/// letting a stale event apply after a newer rebuild (or a newer event apply before one).
+/// Producer-side state shared between `AsyncSearcher` and its background writer task, guarded by
+/// a single lock so that allocating a sequence number and publishing the corresponding
+/// operation happen atomically with respect to any other producer or the background writer.
+/// Without that atomicity, the writer could observe a rebuild as "later" than an event that had
+/// already been assigned an earlier sequence number but not yet reached the channel, letting a
+/// stale event apply after a newer rebuild (or a newer event apply before one).
 struct SearcherProducerState {
+    /// The next [`Sequence`] to assign.
     next_sequence: Sequence,
+    /// The currently pending rebuild, if any. See [`AsyncSearcher::rebuild_index_async`].
     pending_rebuild: Option<PendingRebuild>,
 }
 
@@ -1237,40 +1228,22 @@ const SEARCH_ASYNC_MAX_BATCH_SIZE: usize = 100;
 /// index writer (waiting for any remaining operations to complete).
 const SEARCH_IDLE_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// Splits a drained batch of events around the currently pending rebuild (if any), merging them
-/// in true request order into one or more chunks of [`SearcherEvent`]s, each of which should be
-/// applied (and committed) as its own unit.
-///
-/// Events are partitioned by comparing their sequence number against the rebuild's: those
-/// requested first go in their own chunk, the rebuild itself is expanded into a clear followed by
-/// an insert of every document in its (most recently requested) document set, and anything
-/// requested after the rebuild batches together in a final chunk. With no pending rebuild, the
-/// whole batch is just one chunk, in order.
+/// Splits a drained batch of events around the currently pending rebuild (if any) into one or
+/// more chunks, each to be committed as its own unit, in true request order.
 ///
 /// A rebuild is always isolated into its own commit, never sharing one with an event requested
 /// before it. This is required because Tantivy's `delete_all_documents` only removes
 /// already-*committed* segments -- it does not affect documents added earlier in the same
 /// uncommitted writer transaction. If an earlier event's commit were merged with the rebuild's,
 /// that event would survive the "clear" and could incorrectly win over the rebuild's value for
-/// the same document. Isolating the rebuild's commit guarantees any earlier event is durably
-/// committed (and so actually gets cleared) before the rebuild's clear runs.
+/// the same document.
 ///
-/// A rebuild's own inserts are deliberately *not* further split into bounded sub-commits, even
-/// though that means one rebuild can commit an arbitrarily large document set in a single writer
-/// transaction. Splitting it would not reduce peak memory at the layer that actually retains it:
-/// Tantivy's own add-document pipeline (`crossbeam_channel::bounded`, sized to
-/// `PIPELINE_MAX_SIZE_IN_DOCS` = 10,000 *documents*, not bytes -- see
-/// `tantivy::indexer::index_writer`) is drained continuously by background indexing threads,
-/// independent of when/whether we call `commit()`; `add_document` already blocks once that
-/// pipeline is full, so a single rebuild's transient footprint there is capped at ~10,000
-/// documents' worth of content regardless of how many `execute_operations` calls we split it
-/// across. `memory_budget` (see [`DEFAULT_MEMORY_BUDGET`]) similarly does not bound this: it caps
-/// each indexing thread's in-memory segment arena, a downstream and separate pool from the raw
-/// document pipeline. Splitting commits would only trade this (already-bounded) cost for a new
-/// one: concurrent searches observing a partially-rebuilt index between sub-commits. What the
-/// coalescing in [`AsyncSearcher::rebuild_index_async`] actually bounds -- and what the pipeline
-/// has no protection against on its own -- is *how many rebuilds' worth* of documents can be in
-/// flight at once; that is the fix for unbounded growth here, not commit granularity.
+/// A rebuild's own inserts are not further split into bounded sub-commits. Tantivy's
+/// add-document pipeline (`crossbeam_channel::bounded`, sized to `PIPELINE_MAX_SIZE_IN_DOCS` =
+/// 10,000 documents, not bytes -- see `tantivy::indexer::index_writer`) already bounds a single
+/// rebuild's transient footprint there, independent of `commit()` -- unlike `memory_budget`,
+/// which bounds a separate, downstream pool. Splitting commits would not lower that footprint,
+/// only add a new cost: concurrent searches observing a partially-rebuilt index in between.
 fn merge_with_rebuild(
     batch: Vec<SequencedEvent>,
     rebuild: Option<PendingRebuild>,
@@ -1319,16 +1292,14 @@ async fn process_searcher_events(
 ) {
     let mut running = true;
     while running {
-        let mut batch: Vec<SequencedEvent> = vec![];
+        let mut batch = vec![];
         let mut batch_started = false;
         let mut hit_idle_timeout = false;
 
-        // If a rebuild is already pending as this cycle begins, there is nothing to wait for:
-        // process it immediately rather than entering the wait loop below. Without this, a
-        // rebuild's wake-up marker could be drained (and so discarded, since the marker carries
-        // no data) by an *earlier* cycle's post-take drain before this cycle got a chance to see
-        // the rebuild it was announcing, which would otherwise delay -- not lose -- that rebuild
-        // until the next real event or the idle timeout.
+        // If a rebuild is already pending as this cycle begins, skip waiting and process it
+        // immediately. Otherwise its wake-up marker could be drained by an *earlier* cycle's
+        // post-take drain before this cycle exists to notice it, delaying -- not losing -- the
+        // rebuild until the next real event or the idle timeout.
         if producer_state.lock().pending_rebuild.is_none() {
             let mut timer = Timer::never().fuse();
             let mut idle_timer = Timer::at(Instant::now() + SEARCH_IDLE_TIMEOUT).fuse();
@@ -1353,10 +1324,8 @@ async fn process_searcher_events(
                                             break;
                                         }
                                     }
-                                    // Nothing to push: `pending_rebuild` is always re-checked below
-                                    // regardless of what woke us, so the marker itself carries no
-                                    // data. It rides the same batching timer as regular events
-                                    // rather than forcing immediate processing.
+                                    // Nothing to push: `pending_rebuild` is re-checked below
+                                    // regardless of what woke us.
                                     QueuedItem::RebuildMarker => {}
                                 }
                             }
@@ -1377,16 +1346,13 @@ async fn process_searcher_events(
             }
         }
 
-        // Take the pending rebuild (if any) *before* draining any further events, not after.
-        // Allocating a sequence number and publishing (to the events channel, or to
-        // `pending_rebuild`) happen atomically under the producer lock (`SearcherProducerState`),
-        // so the moment we take the rebuild here, every event with a lower sequence number has
-        // already been published to the channel. Draining afterwards can therefore only pick up
-        // events sequenced after the rebuild, which `merge_with_rebuild` correctly places after
-        // it. This ordering is load-bearing: reversing it would reopen the gap the producer lock
-        // exists to close, since an event that had already been allocated a lower sequence
-        // number but not yet published could then land in this batch and be misapplied after a
-        // rebuild it actually preceded.
+        // Take the pending rebuild *before* draining further events, not after -- this order is
+        // load-bearing. Sequence allocation and publishing happen atomically under the producer
+        // lock, so by the time we take the rebuild here, every event with a lower sequence
+        // number has already reached the channel; draining afterwards can only pick up events
+        // sequenced after it, which `merge_with_rebuild` places correctly. Reversing the order
+        // would reopen that gap: an event already allocated a lower sequence number, but not yet
+        // published, could land in this batch and be misapplied after a rebuild it preceded.
         let rebuild = producer_state.lock().pending_rebuild.take();
         while let Ok(item) = rx.try_recv() {
             if let QueuedItem::Event(event) = item {
@@ -1458,7 +1424,7 @@ impl<C: SearchSchemaConfig> AsyncSearcher<C> {
             self.tx
                 .send(QueuedItem::Event(SequencedEvent { sequence, event })),
         )
-        .map_err(|e| anyhow::anyhow!("Failed to send search index event: {}", e))
+        .map_err(|e| anyhow::anyhow!("Failed to send search index event: {e}"))
     }
 
     pub fn search_id(
@@ -1501,20 +1467,12 @@ impl<C: SearchSchemaConfig> AsyncSearcher<C> {
     }
 
     /// Clears the index and inserts `documents`, coalescing a burst of rebuild requests into at
-    /// most one pending rebuild, **without** reordering it against any interleaved
-    /// [`Self::insert_document_async`] / [`Self::delete_document_async`] calls.
-    ///
-    /// Unlike calling [`Self::clear_search_index_async`] followed by
-    /// [`Self::build_index_async`], if this is called again before the background writer has
-    /// processed a previous rebuild, the earlier request is replaced rather than retained
-    /// alongside it: only the most recently requested document set is ever applied. The
-    /// replacement is tagged with a fresh sequence number, so it is logically positioned after
-    /// any insert/delete calls made since the earlier, now-superseded request -- see
-    /// [`SearcherProducerState`] and [`merge_with_rebuild`]. This keeps at most one rebuild ever
-    /// pending regardless of how many times this is called, while guaranteeing every operation is
-    /// still applied in the order it was requested: an insert/delete requested before a rebuild is
-    /// never clobbered by that rebuild's (older) snapshot, and one requested after a rebuild is
-    /// never overwritten by it either.
+    /// most one pending rebuild rather than one per call: if called again before the background
+    /// writer has processed a previous rebuild, the earlier request is replaced, not retained
+    /// alongside it. This never reorders against interleaved [`Self::insert_document_async`] /
+    /// [`Self::delete_document_async`] calls: an insert/delete requested before a rebuild is
+    /// never clobbered by that (now-superseded) rebuild's snapshot, and one requested after a
+    /// rebuild is never overwritten by it.
     pub fn rebuild_index_async(
         &self,
         documents: impl IntoIterator<Item = C::SearchDocEntry>,
@@ -1527,12 +1485,10 @@ impl<C: SearchSchemaConfig> AsyncSearcher<C> {
             let mut state = self.producer_state.lock();
             let sequence = state.next_sequence;
             state.next_sequence += 1;
-            // Whether a marker is already outstanding is inferred from `pending_rebuild` itself
-            // -- checked here, before it gets overwritten below -- rather than tracked in a
-            // separate flag: only the transition from no rebuild pending to one being pending
-            // needs to enqueue a marker (see `QueuedItem::RebuildMarker`). If one is already
-            // pending, the background writer will pick up the document set we just stored when
-            // it wakes for that marker, so sending a second one would be redundant.
+            // A marker is needed only on the transition from no rebuild pending to one being
+            // pending, checked here before `pending_rebuild` is overwritten below: if one is
+            // already pending, the writer will pick up this document set when it wakes for the
+            // marker already sent.
             let needs_marker = state.pending_rebuild.is_none();
             state.pending_rebuild = Some(PendingRebuild {
                 sequence,
@@ -1542,7 +1498,7 @@ impl<C: SearchSchemaConfig> AsyncSearcher<C> {
         };
         if needs_marker {
             block_on(self.tx.send(QueuedItem::RebuildMarker))
-                .map_err(|e| anyhow::anyhow!("Failed to send rebuild marker: {}", e))?;
+                .map_err(|e| anyhow::anyhow!("Failed to send rebuild marker: {e}"))?;
         }
         Ok(())
     }
