@@ -2151,6 +2151,12 @@ fn render_tab_group_internal(
                 .then(|| pane_group.custom_title(app))
                 .flatten()
         };
+    // A grouped member skips the per-tab outer container (the tab group's
+    // container replaces it), and that container is what normally carries the
+    // tab's own title row — so the member renders its header inline instead.
+    let renders_member_header = in_tab_group
+        && matches!(display_granularity, VerticalTabsDisplayGranularity::Panes)
+        && should_show_tab_group_member_header(has_custom_title, visible_pane_ids.len());
     let is_menu_open_for_tab = workspace
         .show_tab_right_click_menu
         .is_some_and(|(idx, _)| idx == tab_index);
@@ -2388,7 +2394,30 @@ fn render_tab_group_internal(
             } else {
                 GROUP_BODY_BOTTOM_PADDING
             };
-            let mut container = Container::new(build_rows()).with_background(background);
+            // The tab-rename editor stays on the pane row for grouped members
+            // (`renamable_tab_index` is set there), so this header is always
+            // static text — passing the editor here too would render two
+            // editors for the same rename.
+            let body = if renders_member_header {
+                Flex::column()
+                    .with_main_axis_size(MainAxisSize::Min)
+                    .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
+                    .with_child(render_group_header(
+                        GroupHeaderProps {
+                            tab_index,
+                            pane_group,
+                            is_being_renamed: false,
+                            rename_editor: rename_editor.clone(),
+                            header_mouse_state: group_header_mouse_state.clone(),
+                        },
+                        app,
+                    ))
+                    .with_child(build_rows())
+                    .finish()
+            } else {
+                build_rows()
+            };
+            let mut container = Container::new(body).with_background(background);
             if FeatureFlag::GroupedTabs.is_enabled() && stack_panes_flush {
                 container = container
                     .with_corner_radius(CornerRadius::with_all(Radius::Pixels(ROW_CORNER_RADIUS)));
@@ -4007,6 +4036,21 @@ fn should_show_tab_group_header(
     visible_pane_count: usize,
 ) -> bool {
     has_custom_title || is_being_renamed || visible_pane_count > 1
+}
+
+/// Decides whether a tab that sits *inside* a tab group renders its own title
+/// header above its pane rows in `Panes` granularity.
+///
+/// A grouped member is rendered without the per-tab outer container, which is
+/// what carries the tab title for an ungrouped tab. Issue #14784: without a
+/// replacement, moving a tab into a group silently drops its title and every
+/// member row falls back to its pane's generated title (`New session` for a
+/// fresh terminal), making the members indistinguishable. Grouping should only
+/// change where a tab sits, so the same triggers as
+/// [`should_show_tab_group_header`] apply — minus the rename case, because for
+/// grouped members the inline tab-rename editor lives on the pane row.
+fn should_show_tab_group_member_header(has_custom_title: bool, visible_pane_count: usize) -> bool {
+    has_custom_title || visible_pane_count > 1
 }
 
 fn search_fragments_contain_query(fragments: &[String], query_lower: &str) -> bool {
