@@ -133,7 +133,7 @@ fn timer_delay_clamps_to_floor_when_near_or_past_expiry() {
     );
 }
 
-// ── refresh guard / safety net (app harness) ───────────────────────
+// ── refresh guard / safety net (app harness) ───────────────────
 
 fn team_for_test() -> Team {
     Team {
