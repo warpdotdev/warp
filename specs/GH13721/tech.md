@@ -58,7 +58,7 @@ BufferBlockItem::Image { alt_text, source, title: _ } => {
 `width: Pixels`, `height: Pixels`, `spacing: BlockSpacing`. The drawn element
 `RenderableImage` (`crates/editor/src/render/element/image.rs`) uses the
 `warpui_core::elements::Image` primitive with `.contain()`
-(`crates/warpui_core/src/elements/gui/image.rs:120-121`, `388-394`), which already
+(`crates/warpui_core/src/elements/gui/image.rs:120-123`, `388-405`), which already
 supports SVG via `usvg`/`resvg`
 (`crates/warpui_core/src/image_cache.rs:274-283, 463, 472-476`). **This `.contain()`
 call is not, by itself, an aspect-ratio mechanism for this feature**: it only fit-scales
@@ -116,7 +116,20 @@ Relevant code:
   model's GPU single-texture edge limit that grounds `MAX_EXPLICIT_IMAGE_DIMENSION_PX`.
 - `crates/editor/src/content/mermaid_diagram.rs:54-107` — `mermaid_diagram_config` /
   `mermaid_diagram_size`: the existing precedent for layout-time intrinsic-ratio sizing
-  from `AssetCache`, which §4 below reuses verbatim for `<img>` sizing.
+  from `AssetCache`, which §4 below reuses for `<img>` sizing.
+- `crates/editor/src/render/model/mod.rs:3044-3067, 3102-3107` —
+  `try_layout_pending_edits` (the gate that makes content layout a no-op on an empty
+  queue) and `add_pending_edit` (how §4's relayout is queued).
+- `crates/editor/src/content/buffer.rs:2611-2615` — `invalidate_layout_for_range`, the
+  block-scoped no-op `EditDelta` builder §4's relayout uses.
+- `crates/editor/src/content/hidden_lines_model.rs:175-178` — the existing
+  `invalidate_layout_for_range` + `add_pending_edit` call shape to mirror.
+- `crates/warpui_core/src/assets/asset_cache.rs:177-179` — `AssetHandle::when_loaded`,
+  the completion future §4's relayout awaits.
+- `crates/editor/src/search.rs:330-345` — the `ctx.spawn` precedent for async results
+  updating editor state.
+- `crates/warpui_core/src/elements/gui/image.rs:357-372` — `image_rect`, which centers
+  the decoded image inside its box; the source of today's centered default (§4).
 - `crates/editor/src/render/model/mod.rs:1470-1475` — `ImageBlockConfig`.
 - `crates/editor/src/render/model/positioned.rs:62-64, 202-204` — `Positioned::image()`
   and the generic `content_origin()` that `align` must override (§4).
@@ -145,7 +158,7 @@ pub struct FormattedImage {
     /// `None` for Markdown `![alt](src)` images, which have no sizing syntax.
     pub width: Option<ImageDimension>,
     pub height: Option<ImageDimension>,
-    pub align: ImageAlign,   // defaults to Left
+    pub align: ImageAlign,   // defaults to Center, matching today's rendering
 }
 ```
 
@@ -154,28 +167,39 @@ Add two small public types in the same module:
 ```rust
 pub enum ImageDimension {
     /// Absolute pixels, e.g. `width="640"` or `width="640px"`.
-    Pixels(f32),
-    /// Percentage of the available content dimension, e.g. `width="90%"`.
-    Percent(f32),
+    Pixels(OrderedFloat<f32>),
+    /// Percentage of the available content width, e.g. `width="90%"`.
+    /// Only valid for `width`; a percentage `height` is rejected at parse time.
+    Percent(OrderedFloat<f32>),
 }
 
 #[derive(Default)]
-pub enum ImageAlign { #[default] Left, Center, Right }
+pub enum ImageAlign { Left, #[default] Center, Right }
 ```
 
+`Center` is the default because Markdown images render centered today — see §4's
+"Today's default is centered" for the mechanism and the behavior-preservation argument.
+
 `FormattedImage` stays `Clone + Debug + PartialEq + Eq`-compatible with the rest of the
-enum. Because `f32` is not `Eq`, either store the parsed dimension as an integer
-(pixels as `u32`, percent as `u16`) or newtype it so the `Eq`/`Hash` derive on the
-surrounding types continues to hold. **Recommended:** store integers
-(`Pixels(u32)` / `Percent(u16)`) — HTML width/height attributes are integers, so this
-loses no precision and keeps `Eq`.
+enum. Bare `f32` is not `Eq`, so the dimension payloads use `ordered_float::OrderedFloat<f32>`,
+matching how the rest of the codebase carries `Eq`/`Hash`-able floats — `warpui_core`'s
+`Lines(OrderedFloat<f64>)` (`crates/warpui_core/src/units.rs:30`),
+`Scene`'s `font_size: OrderedFloat<f32>` (`crates/warpui_core/src/scene.rs:74`), and the
+text-layout cache keys (`crates/warpui_core/src/text_layout.rs:319-326`). This keeps the
+`Eq`/`Hash` derives on the surrounding types while leaving the parsed values in the same
+float domain as the `Pixels` they resolve into, so no integer round-trip is needed.
+
+`markdown_parser` does not currently depend on `ordered-float`
+(`crates/markdown_parser/Cargo.toml`), so this change adds `ordered-float.workspace = true`
+to that crate. The workspace already pins the crate for `warpui_core`
+(`crates/warpui_core/Cargo.toml:60`) and `editor` (`crates/editor/Cargo.toml:31`).
 
 `FormattedTextLine::Image` behavior is unchanged: `raw_text` stays `alt_text\n`,
 `num_lines` stays `1`, and `compute_formatted_text_delta` needs no change (still a
 derived structural compare).
 
 Markdown `![alt](src)` images continue to construct `FormattedImage` with
-`width: None, height: None, align: Left`, so their behavior is byte-for-byte unchanged.
+`width: None, height: None, align: Center`, so their behavior is byte-for-byte unchanged.
 
 ### 2. Parser: recognize a block-level `<img>` tag
 
@@ -210,10 +234,19 @@ Then it constructs a `FormattedImage`:
   (https://html.spec.whatwg.org/multipage/rendering.html#rules-for-parsing-dimension-values),
   the legacy algorithm browsers use for `<img>` `width`/`height` presentational
   attributes — percentages are part of that same algorithm (our percent support
-  mirrors it), and a leading `-` is a parse error in both its absolute and percent
-  forms, so no browser clamps a negative value; it's dropped, falling back to
+  mirrors it for `width`), and a leading `-` is a parse error in both its absolute and
+  percent forms, so no browser clamps a negative value; it's dropped, falling back to
   intrinsic/default sizing exactly as this spec does.
-- `align` parses case-insensitively to `Left`/`Center`/`Right`, defaulting to `Left`
+- **A percentage `height` is rejected**: `height` runs the shared parse and then discards
+  an `ImageDimension::Percent` result, yielding `None` — the attribute is ignored exactly
+  like `height="abc"` (invariant 5). Percentage *widths* are unaffected. This is a
+  deliberate narrowing of the WHATWG algorithm, not an oversight: a percentage needs a
+  reference dimension, and neither candidate reference is acceptable — the image block's
+  default height is an internal implementation detail authors cannot reason about, and
+  the viewport height would make document layout depend on window size at render time.
+  Rejecting at parse means no percent-height value ever reaches layout, so §4 has no
+  percent-height resolution rule to state.
+- `align` parses case-insensitively to `Left`/`Center`/`Right`, defaulting to `Center`
   for absent/unrecognized values (invariant 8, 9).
 
 To keep the grammar small and avoid re-implementing a full HTML tokenizer, the
@@ -248,7 +281,7 @@ plus current grep):
 - `crates/editor/src/content/text.rs:496-500`, `markdown.rs:~1129` — serialization
   (see §5).
 - `crates/ipynb_parser/src/lib.rs:217` — notebook image construction; add the
-  `None/None/Left` defaults (notebook images have no HTML sizing).
+  `None/None/Center` defaults (notebook images have no HTML sizing).
 - Any remaining destructure sites in `edit.rs`, `render/model/mod.rs`,
   `render/model/location.rs`, `selection.rs` — extend patterns with the new fields (or
   `..`). The style guide prefers exhaustive matches over `_` wildcards, so add explicit
@@ -258,7 +291,7 @@ plus current grep):
 
 **The existing mechanism this reuses.** Plain Markdown images do not have a
 precedent for intrinsic-ratio sizing today — `BufferBlockItem::Image`'s layout
-(`edit.rs:726-751`) never queries the asset at all, it just always fills
+(`edit.rs:721-746`) never queries the asset at all, it just always fills
 `available_width` at a hardcoded height. But **Mermaid diagrams already solve exactly
 this problem**, one block type over: `mermaid_diagram_size`
 (`crates/editor/src/content/mermaid_diagram.rs:85-107`) queries
@@ -271,13 +304,89 @@ which also handles `StaticBitmap`/`AnimatedBitmap`) and computes
 When the asset is not yet `Loaded` (`Loading`/`FailedToLoad`/`Evicted`), it falls back
 to a height-multiplier default (`mermaid_diagram_config`, `:54-71`) — the same shape of
 fallback `BufferBlockItem::Image` already uses today, just parameterized instead of
-hardcoded. This is a real, shipped, layout-time re-derivation, not a speculative
-"generous cap": every time editor content layout re-runs (the same re-run that lets a
-`Loading` Mermaid diagram flip to a rendered `MermaidDiagram` block once its asset
-resolves — driven by the normal buffer/viewport invalidation path, not by the paint
-layer's `repaint_after_load`), the image block re-queries `AssetCache` and gets a
-better answer once decoded data exists. `<img>` sizing adopts this identical pattern
-rather than inventing a new one.
+hardcoded. `<img>` sizing adopts this query-at-layout-time pattern rather than inventing
+a new one.
+
+**Asset load does not, on its own, re-run content layout — this spec must add that
+trigger.** Reusing Mermaid's *sizing* query is not enough, because the query only
+produces a better answer when the content layout actually re-runs, and nothing in the
+asset-load path makes it re-run. The measured pipeline:
+
+- Content layout — the phase that runs `LayoutTask::from_styled_block` and builds
+  `ImageBlockConfig` — executes only when a `PendingLayout` is queued.
+  `RichTextElement::layout` (`crates/editor/src/render/element/mod.rs:1005-1011`) calls
+  `RenderState::try_layout_pending_edits`, which early-outs when `pending_edits` is empty
+  (`crates/editor/src/render/model/mod.rs:3044-3067`); only a non-empty queue reaches
+  `layout_edit_delta` → `EditDelta::layout_delta` (`crates/editor/src/content/edit.rs:508-531`),
+  the sole production caller of `from_styled_block`.
+- The production producers of a `PendingLayout` are buffer edits
+  (`EditorModel::update_content`, `crates/editor/src/model.rs:94-99`), the full-buffer
+  `EditorModel::rebuild_layout` (`model.rs:103-113`, documented for font-size-class
+  changes), hidden-line expand/collapse
+  (`crates/editor/src/content/hidden_lines_model.rs:177, 192, 204` via
+  `Buffer::invalidate_layout_for_range`, `crates/editor/src/content/buffer.rs:2611-2615`),
+  and diff-view temporary blocks (`render/model/mod.rs:2928-2931`).
+- The asset-load path reaches none of them. `Image::paint` calls
+  `ctx.repaint_after_load(handle)` (`crates/warpui_core/src/elements/gui/image.rs:486-491`),
+  which only inserts into `Presenter::pending_assets`
+  (`crates/warpui_core/src/presenter.rs:631-633`). `AppContext::manage_pending_assets`
+  (`crates/warpui_core/src/core/app.rs:3634-3684`) awaits `AssetHandle::when_loaded` and
+  then sets `redraw_requested = true` + `update_windows()`. That reaches
+  `Presenter::build_scene` (`presenter.rs:333-380`), which re-runs the **element tree's**
+  `Element::layout` + `after_layout` + `paint` — but never touches `pending_edits`, so
+  `ImageBlockConfig` is not rebuilt.
+
+`repaint_after_load` is therefore necessary but **not sufficient** for this feature: it
+correctly re-*paints* an already-sized box (which is why a Mermaid diagram the user
+explicitly toggled to Rendered swaps its placeholder for the diagram — that path emits a
+full `MermaidDiagram` with a real `ImageBlockConfig` up front, `edit.rs:796-810`, and
+`RenderableMermaidDiagram::layout` registers a `.before_load()` placeholder inside the
+same box, `crates/editor/src/render/element/mermaid.rs:88-115`). It cannot change the
+box's *size*, which is what intrinsic-ratio derivation needs.
+
+The `pending_mermaid_asset` field on `BlockItem::RunnableCodeBlock`
+(`render/model/mod.rs:1183-1190`) was intended as this hook — its doc comment says the
+view layer "can watch" it so "the layout will re-run" — but it has **no production
+reader**; grep finds only the definition, the construction sites in `edit.rs`, and test
+assertions. Auto-render Mermaid consequently self-corrects only when an unrelated edit
+happens to queue a relayout. This spec does not inherit that gap.
+
+**The mechanism this spec specifies.** When `LayoutTask::from_styled_block` sizes an
+image that needs intrinsic dimensions (exactly one of `width`/`height` specified) and
+finds the asset in `AssetState::Loading { handle }`, the editor spawns a task that awaits
+the load and then queues a scoped relayout of that block:
+
+1. Take the `AssetHandle` from the `Loading` state and build its completion future via
+   `AssetHandle::when_loaded(asset_cache)`
+   (`crates/warpui_core/src/assets/asset_cache.rs:177-179`) — the same future
+   `manage_pending_assets` awaits, so it is proven to fire on decode completion.
+2. Spawn it on the editor model's context with `ctx.spawn(future, |me, _, ctx| …)`, the
+   pattern already used for async buffer search results
+   (`crates/editor/src/search.rs:330-345`).
+3. In the completion callback, queue a relayout scoped to the image's block:
+   `Buffer::invalidate_layout_for_range(block_range)` (`buffer.rs:2611-2615`, which snaps
+   the range to block boundaries) to build the no-op `EditDelta`, then
+   `RenderState::add_pending_edit(delta, buffer_version)` (`render/model/mod.rs:3102-3107`)
+   — the same two-call shape `hidden_lines_model.rs:175-178` uses. The next frame's
+   `try_layout_pending_edits` then re-runs `from_styled_block` for that block, the
+   `AssetCache` query returns `Loaded`, and the ratio-derived dimension replaces the
+   fallback.
+
+Two obligations come with owning the task rather than borrowing the presenter's:
+
+- **Dedupe.** Spawning per layout pass would spawn a task per frame. The editor keeps a
+  set of in-flight `(block, AssetHandle)` pairs and skips spawning when one is already
+  pending, mirroring the `requested_repaint_after_load` guard on the `Image` primitive
+  (`elements/gui/image.rs:68, 488-490`) and the `(window, asset)` dedupe in
+  `manage_pending_assets` (`app.rs:3641-3644`).
+- **Cancellation.** The spawned handle is dropped when the block is edited away or its
+  asset source changes, so a stale completion cannot queue a relayout for a block that no
+  longer exists. Storing the handle alongside the dedupe entry gives both properties from
+  one structure.
+
+Images that do **not** need intrinsic dimensions — both axes specified, or neither —
+spawn nothing: their `ImageBlockConfig` is already final at first layout, and
+`repaint_after_load` alone correctly fills the settled box.
 
 **What a load *failure* looks like (`FailedToLoad` / `Evicted`), as opposed to
 sizing.** The paragraph above is about how these states affect *sizing* (they fall back
@@ -304,27 +413,25 @@ not — it only affects the paint element's own internal `size`, never wired int
 `ImageBlockConfig`, and `RenderableImage` in `crates/editor/src/render/element/image.rs`
 does not call it. Document-flow height, selection rects, and `align` offsets are all
 read from `ImageBlockConfig.width`/`.height` on the content-model `BlockItem::Image`
-(`render/model/mod.rs:4314,4375,4399`), so the fix must land in `edit.rs`'s layout
+(`render/model/mod.rs:4064, 4125, 4149, 4415, 4474`), so the fix must land in `edit.rs`'s layout
 task, exactly where Mermaid's does, not in the paint-layer element.)
 
 In `crates/editor/src/content/edit.rs:721-746`, replace the hardcoded size with a
 resolution against the new fields:
 
 - Compute `available_width = layout.max_width() - spacing.x_axis_offset()` (as today).
-- **One clamping rule, shared by both resolved-dimension paths:** define
-  `clamp_to_bound(px, bound) = px.clamp(1.0, bound.max(1.0))` — both an absolute pixel
-  value and a resolved percentage value pass through this same function before becoming
+- **One clamping rule, shared by every resolved-dimension path:** define
+  `clamp_to_bound(px, bound) = px.clamp(1.0, bound.max(1.0))` — an absolute pixel value
+  and a resolved percentage value both pass through this same function before becoming
   `ImageBlockConfig`'s field. `bound.max(1.0)` guards `f32::clamp`'s `min <= max`
-  precondition for the degenerate case where `available_width` or `default_height`
-  itself is sub-1px (a pathologically collapsed pane/container), so `clamp_to_bound`
-  never panics; the result is still floored at `1px` in that case, consistent with the
-  narrow-pane sibling case below. This unifies what were two separate, inconsistent
-  rules (an unclamped percent path alongside an already-clamped pixel path) into one.
+  precondition for the degenerate case where the bound itself is sub-1px (a
+  pathologically collapsed pane/container), so `clamp_to_bound` never panics; the result
+  is still floored at `1px` in that case, consistent with the narrow-pane case below.
 - Resolve `width`:
   - `Some(Pixels(px))` → `clamp_to_bound(px, available_width)` (invariant 4).
   - `Some(Percent(p))` → `clamp_to_bound(available_width * p / 100, available_width)`
-    (invariant 5), where `p` is already non-negative and at most `u16::MAX` by
-    construction — `parse_image_dimension` rejects a negative percent at parse time
+    (invariant 5), where `p` is already non-negative by construction —
+    `parse_image_dimension` rejects a negative percent at parse time
     (invariant 12; a negative percent never reaches this resolution step at all, it is
     `None` here exactly like an unparseable string). `width="200%"` still clamps to
     `available_width` (full width, same result as `width="100%"`), since
@@ -345,11 +452,10 @@ resolution against the new fields:
   - **Height** is *not* analogously bounded by `default_height`. `default_height`
     (`base_line_height * DEFAULT_IMAGE_HEIGHT_LINE_MULTIPLIER`) is the *fallback
     default size for an unspecified height* — it is **not** a maximum. Vertical space
-    is free (the document scrolls), so an explicit, reasonable pixel height must be
-    **honored verbatim**: `<img height="480">` renders at 480px, not shrunk to
-    ~200px. (An earlier draft clamped pixel height to `default_height` by mechanically
-    mirroring the width rule; that conflated "the default when unspecified" with "the
-    maximum when specified" and is corrected here.)
+    is free (the document scrolls), so an explicit, reasonable pixel height is
+    **honored verbatim**: `<img height="480">` renders at 480px, not shrunk to ~200px.
+    "The default when unspecified" and "the maximum when specified" are distinct roles,
+    and `default_height` fills only the first.
   - `Some(Pixels(px))` → `clamp_to_bound(px, MAX_EXPLICIT_IMAGE_DIMENSION_PX)`. The
     only ceiling on an explicit pixel height is a **sanity cap for hostile/nonsense
     values** (e.g. `height="99999999"`), not a layout-driven maximum.
@@ -361,20 +467,16 @@ resolution against the new fields:
     `8192.0` (the guaranteed floor, conservative across GPUs). Every reasonable markdown
     image — even a tall infographic — sits well under this cap; only pathological input
     reaches it. The `1px` floor from `clamp_to_bound` still applies.
-  - `Some(Percent(p))` → `clamp_to_bound(default_height * p / 100, default_height)`.
-    A **percentage** is intrinsically relative to a reference, and for height that
-    reference is `default_height` (the height budget) — so `default_height` legitimately
-    *is* both the reference and the cap here: `height="200%"` means "twice the default
-    height" and clamps to the full `default_height` bound exactly as `width="200%"`
-    clamps to `available_width` (invariant 5). Percent height is bounded by design;
-    only absolute pixel height escapes to the sanity cap. `p` is non-negative by
-    construction (parse-time rejection of negatives, invariant 12).
+  - `Some(Percent(_))` is **unreachable for height** — a percentage height is rejected in
+    the parser (§2), so `height` is only ever `None` or `Some(Pixels(_))` by the time
+    layout resolves it. There is no percent-height reference bound, and `default_height`
+    is never used as a cap for any specified height.
   - `None` with `width` also `None` → `default_height` itself (the unspecified-height
     default; invariant 7).
 
   So `clamp_to_bound` is still the single shared clamp function; what differs per axis
-  is only the *bound argument* — `available_width` for width, `MAX_EXPLICIT_IMAGE_DIMENSION_PX`
-  for an absolute pixel height, and `default_height` for a percent height (its reference).
+  is only the *bound argument* — `available_width` for width (pixel or percent), and
+  `MAX_EXPLICIT_IMAGE_DIMENSION_PX` for an absolute pixel height.
 - **Aspect ratio when exactly one dimension is set (invariant 6):** resolve the
   specified axis per the rules above (already clamped), then derive the other axis
   from the intrinsic ratio using the Mermaid mechanism verbatim. The invariant that
@@ -447,18 +549,17 @@ resolution against the new fields:
   - **Pre-decode — `AssetState::Loading | FailedToLoad(_) | Evicted`, or `Loaded` with
     a zero/unreadable intrinsic size:** this is the state that needs its own explicit
     contract, because a naive "derived axis gets a plain default box" description
-    (what earlier drafts of this spec said) leaves a gap — see "Why the pre-decode
-    fallback needs `stretch()`, not `contain()`" below. The specified axis keeps its
-    resolved value unchanged (per the invariant above); the derived axis uses today's
-    plain default for that axis (`available_width` for a derived width,
-    `default_height` for a derived height) as before. What changes is *how the element
-    renders that box*: for this one transient layout, `RenderableImage::layout()`
-    (§4 "Where the offset is applied" sibling section, `render/element/image.rs:39-51`)
-    must use `Image::new(...).stretch()` instead of `.contain()` for this block. A
-    later layout pass (triggered the same way a `Loading` Mermaid diagram's is)
-    re-resolves once the asset decodes, switching back to `.contain()` for the
-    post-decode, aspect-ratio-correct box (which by construction has zero slack for
-    `contain()` vs. `stretch()` to differ on — see below).
+    leaves a gap — see "Why the pre-decode fallback needs `stretch()`, not `contain()`"
+    below. The specified axis keeps its resolved value unchanged (per the invariant
+    above); the derived axis uses today's plain default for that axis
+    (`available_width` for a derived width, `default_height` for a derived height). What
+    changes is *how the element renders that box*: for this one transient layout,
+    `RenderableImage::layout()` (`render/element/image.rs:39-51`) uses
+    `Image::new(...).stretch()` instead of `.contain()` for this block. The relayout
+    queued by the asset-load mechanism above re-resolves the box once the asset decodes,
+    switching back to `.contain()` for the post-decode, aspect-ratio-correct box (which
+    by construction has zero slack for `contain()` vs. `stretch()` to differ on — see
+    below).
 - **Why the pre-decode fallback needs `stretch()`, not `contain()`.** `Image::contain()`
   (`warpui_core/src/elements/gui/image.rs:120-123`) fit-scales the decoded image by the
   *smaller* of the box's width/height ratios — it shrinks-to-fit, it does not stretch
@@ -489,16 +590,12 @@ resolution against the new fields:
   first (per invariant 5), then the derived `height` uses that resolved pixel width in
   the ratio formula above — percent sizing and aspect-ratio derivation compose rather
   than being mutually exclusive.
-- **Percentage height with intrinsic ratio (sibling case):** symmetric — if `height` is
-  `Percent` and `width` is unspecified, the percent resolves (and clamps) against
-  `default_height` first, then the derived `width` uses that resolved pixel height in
-  the ratio formula, subject to the **same overflow precedence as the pixel height-only
-  case above**: if the derived width exceeds `available_width`, the box scales down
-  uniformly (`width = available_width`, `effective_height = available_width *
-  intrinsic_h / intrinsic_w`) rather than clamping only the width. The resolved-percent
-  height is the "specified height" that yields to the pane bound in that case.
-- **Zero/near-zero `available_width` (sibling case — narrow pane or deeply nested
-  constrained container):** `clamp_to_bound`'s `1.0` floor means a percent or pixel
+- **Percentage height has no intrinsic-ratio case**, because it never reaches layout:
+  `height="50%"` is rejected in the parser (§2) and arrives here as `None`. Such an image
+  is therefore either width-only (if a width was given, taking the width-with-derived-height
+  path above) or fully unspecified (taking the default-sizing path, invariant 7).
+- **Zero/near-zero `available_width` (narrow pane or deeply nested constrained
+  container):** `clamp_to_bound`'s `1.0` floor means a percent or pixel
   width never resolves to `0` or negative regardless of how small `available_width` is;
   a pathologically narrow pane renders a 1px-wide image rather than panicking on a
   degenerate `SizeConstraint` or dividing by zero in the ratio formula (the ratio
@@ -521,29 +618,39 @@ point in layout — nothing new needs to be threaded in to know them:
   dimension once the asset is `Loaded`, or today's plain default (rendered via
   `.stretch()`, not `.contain()`, per the pre-decode sub-case above) while it isn't.
 
-**Why `Image::contain()`'s internal centering is not a conflict.**
-`RenderableImage::layout()` (`crates/editor/src/render/element/image.rs:39-51`)
-constructs the primitive as `Image::new(asset_source, CacheOption::BySize).contain()`
-(or `.stretch()`, per the pre-decode sub-case above — the fit-mode selection is a
-one-line branch on `AssetState`, not a structural change to `layout()`) and lays it out
-with `SizeConstraint::new(vec2f(0., 0.), size)` where
-`size = vec2f(config.width.as_f32(), config.height.as_f32())` — i.e. the primitive's
-box *is* `ImageBlockConfig.width × .height`, not some larger constraint. Once §4's
-sizing makes those two values the aspect-ratio-correct pair (the common case once the
-asset is `Loaded`, and by construction whenever both dimensions are author-specified),
-`contain()` has zero slack to center within: the decoded image already fills the box
-exactly, so the primitive's internal centering/`top_aligned`/`right_aligned` logic in
-`crates/warpui_core/src/elements/gui/image.rs` never has room to run. The only case
-where the primitive's box and the decoded image's aspect ratio could disagree is the
-transient "asset not yet `Loaded`" fallback with exactly one dimension specified — and
-that is precisely the case switched to `.stretch()` above, so it does not letterbox or
-shrink the specified axis; it self-corrects to the ratio-correct `.contain()` box on
-the next layout pass exactly like Mermaid's transient case does. (An author who
-specifies *both* `width` and `height` with a mismatched aspect ratio, per the
-"both dimensions given" case above, keeps `.contain()` and can see legitimate
-letterboxing — that is direct author intent, not a fallback artifact, and is
-unaffected by this fix.) Alignment therefore happens **one level up from the
-primitive**, at the block's paint origin, not by fighting `contain()`'s behavior.
+**Today's default is centered, and `Center` must stay the default.** This is a
+behavior-preservation constraint, not a free design choice. `RenderableImage::layout()`
+(`crates/editor/src/render/element/image.rs:39-51`) constructs the primitive as
+`Image::new(asset_source, CacheOption::BySize).contain()` and lays it out with
+`SizeConstraint::new(vec2f(0., 0.), size)` where
+`size = vec2f(config.width.as_f32(), config.height.as_f32())`. Today `config.width` is
+always the full `available_width` (`edit.rs:721-746`), and `RenderableImage` sets neither
+`top_aligned` nor `right_aligned`, so the primitive's `image_rect()`
+(`crates/warpui_core/src/elements/gui/image.rs:357-372`) takes its final branch and
+offsets the decoded image by `(size - logical_image_size) / 2.0` — **centered on both
+axes** inside the full-width box. A Markdown `![alt](src)` image narrower than the pane
+therefore renders horizontally centered today.
+
+`ImageAlign::default()` is accordingly **`Center`**, not `Left`: an `<img>` with no
+`align` attribute, and every existing Markdown image, must keep rendering centered.
+
+This interacts with §4's sizing change in a way the implementation must handle
+explicitly. Once sizing makes `config.width` the *author-specified* width rather than the
+full `available_width`, the primitive's box shrinks to the image, `contain()` has no slack
+left inside it, and the primitive's own centering stops producing any offset. The
+centering that `contain()` provides today must therefore be **re-established one level
+up**, at the block's paint origin, using the same offset arithmetic as `Center` below. Concretely: the block box is positioned within `available_width` by the
+align offset, and the image fills the block box. For an image whose resolved width is the
+full `available_width` (the no-attribute default, invariant 7) the `Center` offset is `0`
+and the result is pixel-identical to today either way.
+
+The one case where the primitive's box and the decoded image's aspect ratio still
+disagree is the transient "asset not yet `Loaded`" fallback with exactly one dimension
+specified — that case is switched to `.stretch()` above, so it does not letterbox or
+shrink the specified axis. (An author who specifies *both* `width` and `height` with a
+mismatched aspect ratio, per the "both dimensions given" case above, keeps `.contain()`
+and can see legitimate letterboxing within the block box — that is direct author intent.
+The block box itself is still placed by the `align` offset.)
 
 **Where the offset is applied.** Add `align: ImageAlign` to `ImageBlockConfig`
 (`render/model/mod.rs:1470-1475`). **Also store the available content width on the
@@ -569,9 +676,10 @@ constructor (paralleling `image()`) that adds an alignment offset on top of
 arithmetic as the align-blocks spec (GH13735; per-line/block offset applied at paint,
 not at the primitive level — the same altitude this fix operates at):
 
-- `Left` → offset `0` (today's behavior, pixel-identical — untagged/`align="left"`
-  images do not shift).
-- `Center` → offset `(available_width - config.width) / 2`.
+- `Left` → offset `0`.
+- `Center` (**the default**) → offset `(available_width - config.width) / 2`. For an
+  image at the full `available_width` this is `0`, so untagged full-width images are
+  pixel-identical to today.
 - `Right` → offset `available_width - config.width`.
 
 (invariant 8). This offset shifts only the block's own paint origin — selection rects
@@ -585,11 +693,14 @@ position with no separate change needed.
 (`crates/editor/src/content/markdown.rs`) must preserve enough to reproduce the image
 (invariant 14). Recommended canonical form:
 
-- If `width`/`height`/`align` are all default (a Markdown image), serialize as today:
+- If `width` and `height` are both `None` and `align` is the default (`Center`) — the
+  shape every Markdown `![alt](src)` image has — serialize as today:
   `![alt](src "title")`.
-- If any sizing attribute is present (an HTML image), serialize as a canonical
-  `<img>` tag: `<img src="…" alt="…" title="…" width="…" height="…" align="…">`,
-  emitting only the attributes that are set. Values go through the existing HTML
+- If any sizing attribute is present, or `align` is `Left`/`Right`, serialize as a
+  canonical `<img>` tag: `<img src="…" alt="…" title="…" width="…" height="…" align="…">`,
+  emitting only the attributes that are set. Because `Center` is the default, an explicit
+  `align="center"` round-trips to the Markdown form when no dimension is set; the
+  rendering is identical, so no author intent is lost. Values go through the existing HTML
   attribute-escaping path so `"`, `<`, `>` are escaped, not interpolated raw
   (invariant 13). This mirrors how §6 of `specs/GH849/` handled title-aware
   serialization.
@@ -628,18 +739,22 @@ construction.
 
 ### Unit tests — parser (`crates/markdown_parser/src/markdown_parser_tests.rs`)
 
-Covers invariants 1–3, 8–13:
+Covers invariants 1–3, 5, 8–13:
 
 - `<img src="a.svg">` on its own line → `FormattedTextLine::Image` with that source,
-  empty alt, `width/height = None`, `align = Left`.
+  empty alt, `width/height = None`, `align = Center` (the default).
 - `<img src="a.svg" alt="Chart" title="T" width="90%">` → percent width, alt, title.
 - `<img src="a.png" width="640" height="480">` → pixel width/height.
 - `<img src="a.png" width="640px">` → `px` suffix parsed as pixels.
 - `WIDTH`/`Width`/`ALIGN="Center"` → case-insensitive names and `align` value.
-- `align="left|center|right"` → each alignment; unknown value → `Left`.
+- `align="left|center|right"` → each alignment; unknown value → `Center` (the default).
 - `width="abc"`, `width=""`, `width="-40"`, `width="-10%"` → dimension ignored
   (`None`), image still parses (invariant 12; negative is rejected uniformly for both
   the pixel and percent forms — there is no negative-percent special case).
+- `height="50%"`, `height="150%"` → `height` is `None` (percent heights rejected,
+  invariant 5), while `<img src="a.png" width="90%" height="50%">` still yields
+  `width = Some(Percent(90))` — the rejection is height-only and does not poison the
+  width on the same tag.
 - `<img alt="x">` (no `src`) and `<img>` → parser fails, line renders as text
   (assert it becomes `FormattedTextLine::Line`, invariant 10).
 - `text <img src="a.png"> more text` → renders as text, not image (invariant 11).
@@ -680,14 +795,16 @@ Covers invariants 4–8:
   to `width="abc"`, and the image falls back to default sizing for that axis
   (invariant 7). See the parser test coverage above; this file does not re-clamp a
   negative percent to `1px`.
-- **`height="150%"`** → clamps to `default_height` (sibling of the width-percent clamp,
-  applied against the height reference bound instead of `available_width`). Percent
-  height is bounded by its reference by design.
+- **`height="150%"`, `height="50%"`** — parser-level cases, not layout-level ones: a
+  percentage height is rejected at parse (§2, invariant 5), so `height` arrives at layout
+  as `None` and the image falls back to default height sizing (invariant 7) or to the
+  aspect-derived height when a width is given. A percentage *width* on the same tag is
+  unaffected. See the parser test coverage above.
 - **Explicit pixel height is honored, NOT clamped to `default_height`** — the
   reasonable-markdown boundary cases, each of which gets an explicit unit test with a
   justification comment stating why the boundary sits where it does:
   - `height="480"` with `default_height` ≈ 200px → resolves to **480** (honored
-    verbatim; the old `default_height` clamp is gone). Justification: 480px is a
+    verbatim, not clamped down to `default_height`). Justification: 480px is a
     reasonable image height and vertical space is free (the doc scrolls), so there is
     no reason to shrink it.
   - `height="8192"` (== `MAX_EXPLICIT_IMAGE_DIMENSION_PX`) → resolves to **8192**
@@ -699,13 +816,23 @@ Covers invariants 4–8:
     not a layout-driven maximum.
   - `height="1"` → resolves to **1** (the `clamp_to_bound` `1px` floor; a 1px image is
     degenerate-but-valid, never a zero box).
-- **Percent width and percent height both given, both `>100%`** → each axis clamps
-  independently against its own bound (`available_width` / `default_height`); no ratio
+- **`width="200%"` with `height="600"`** → the width clamps to `available_width` and the
+  pixel height is honored at 600; each axis resolves against its own rule and no ratio
   math applies (both dimensions given).
-- `align = Left` → `Positioned<ImageBlockConfig>`'s x-origin is pixel-identical to the
-  no-`align`-field baseline (regression guard against shifting untagged images).
+- **No `align` attribute, image narrower than the pane** → renders **centered**, matching
+  the pre-change rendering. This is the load-bearing regression guard for the alignment
+  default: assert the drawn image's x-origin equals
+  `(available_width - config.width) / 2`, and compare it against a baseline capture of
+  today's `contain()`-centered output for the same image and pane width. A test asserting
+  a left-flush origin here would be asserting a behavior regression.
+- **No `align` attribute, image at full `available_width`** →
+  `Positioned<ImageBlockConfig>`'s x-origin is pixel-identical to the
+  no-`align`-field baseline (the `Center` offset is `0` at full width).
 - `align = Center` → x-origin offset equals `(available_width - config.width) / 2`.
 - `align = Right` → x-origin offset equals `available_width - config.width`.
+- `align = Left` → x-origin offset equals `0` (flush to `bounds::content_origin`); assert
+  this differs from the default for a narrower-than-pane image, so `align="left"` is
+  proven to be a real opt-out from the centered default rather than a no-op.
 - `align = Center/Right` with a narrower-than-pane pixel width → offset uses the
   resolved (post-clamp) `config.width`, not the raw requested width.
 - **Width-only + `AssetState::Loaded` intrinsic size** → `height` equals
@@ -715,16 +842,14 @@ Covers invariants 4–8:
 - **Height-only + `AssetState::Loaded`, derived width fits the pane** → height honored
   exactly; `width` equals `height * intrinsic_w / intrinsic_h` (≤ `available_width`).
   A justification-commented boundary test asserts the specified height is unchanged.
-- **Height-only + `AssetState::Loaded`, derived width would overflow (the Oz round-3
-  precedence corner case)** → the box scales down uniformly: `width == available_width`
+- **Height-only + `AssetState::Loaded`, derived width would overflow** → the box scales
+  down uniformly: `width == available_width`
   and `effective_height == available_width * intrinsic_h / intrinsic_w` (below the
   specified height). A boundary test (justification-commented, on the 3:1 wide shape)
   asserts: `width == available_width`, aspect ratio preserved (`width / height ==
   intrinsic_w / intrinsic_h`), and the effective height is strictly less than the
   specified height. A second test at the exact boundary (`derived_width ==
   available_width`) asserts the height is honored (the `<=` branch, not scale-down).
-- **Percent height-only + derived width would overflow** → same uniform scale-down
-  applies to the resolved-percent height (neighbor test).
 - **Width-only + `AssetState::Loading`** (asset not yet decoded) → `height` falls back
   to the plain default (`default_height`), not a placeholder cap; re-running layout
   after the asset transitions to `Loaded` produces the ratio-derived height (regression
@@ -737,9 +862,9 @@ Covers invariants 4–8:
   uses `.contain()`, not `.stretch()`, for this case (no fallback frame to reason about).
 - **`width="90%"` + intrinsic ratio** → `height` is derived from the *resolved pixel*
   width (`available_width * 90 / 100`), not from the unresolved percentage.
-- **`height="90%"` + intrinsic ratio (sibling of the above)** → `width` is derived from
-  the *resolved pixel* height (`default_height * 90 / 100`), clamped to
-  `available_width`.
+- **`width="90%" height="50%"`** → the percent width resolves normally; the percent
+  height is `None` from the parser, so the image takes the width-only path and derives
+  its height from the intrinsic ratio (invariant 5 + 6 composed).
 - **Width-only + `AssetState::Loading` → element fit mode** → assert
   `RenderableImage::layout()` constructs the primitive with `.stretch()`, not
   `.contain()`, while the derived height is still the plain `default_height` fallback;
@@ -754,6 +879,29 @@ Covers invariants 4–8:
 - **Zero/near-zero `available_width`** (e.g. a deeply nested constrained container) →
   a percent or pixel width still resolves to at least `1px`, no panic, no
   `NaN`/divide-by-zero in the ratio-derivation formula.
+
+### Unit tests — asset-load relayout trigger (`crates/editor/src/content/edit_tests.rs`)
+
+Covers the §4 relayout mechanism. `edit_tests.rs:301, 531, 592` already drive
+`AssetState::Loading { handle } => handle.when_loaded(asset_cache)` to completion inside a
+test, so this pattern has working precedent to build on.
+
+- **Width-only image, asset `Loading` → completes** → a pending edit is queued for that
+  block after the `when_loaded` future resolves, and the subsequent layout produces the
+  ratio-derived height. This is the core test: without the trigger the block would keep
+  its `default_height` fallback forever, so an assertion on the *queue* (not just on a
+  manually re-run layout) is what proves the mechanism.
+- **Both dimensions specified, asset `Loading`** → **no** task is spawned and **no**
+  pending edit is queued; the box is already final. Guards against relayout churn for
+  images that do not need intrinsic size.
+- **No dimensions specified, asset `Loading`** → likewise no spawn, no pending edit
+  (today's behavior, unchanged).
+- **Repeated layout passes while the same asset is still `Loading`** → exactly one task is
+  in flight; the second and third passes do not spawn duplicates (the dedupe guard).
+- **Block edited away before the asset resolves** → the completion does not queue a
+  pending edit for the removed block, and does not panic (the cancellation guard).
+- **Asset `FailedToLoad`** → no task spawned (there is nothing to wait for) and the block
+  keeps its fallback box, per the load-failure visual described in §4.
 
 ### Integration / manual
 
@@ -779,13 +927,19 @@ exercisable there.
   intrinsic size from `AssetCache` at layout time, exactly like `mermaid_diagram_size`
   (`mermaid_diagram.rs:85-107`). If the asset hasn't finished loading yet, the missing
   (derived) axis uses the plain default for one layout pass, rendered via `.stretch()`
-  rather than `.contain()` so the *specified* axis is never shrunk by fit-scaling
-  during that transient frame, and self-corrects to the intrinsic-ratio-derived value
-  (and back to `.contain()`) once the asset resolves and layout re-runs (the same
-  self-correction Mermaid relies on today) — this is not a new invalidation mechanism,
-  just a second consumer of an existing one, plus a one-line fit-mode branch that
-  Mermaid's own diagram block does not need (Mermaid has no author-specified dimension
-  to protect pre-decode; `<img>` does).
+  rather than `.contain()` so the *specified* axis is never shrunk by fit-scaling during
+  that transient frame, then resolves to the intrinsic-ratio-derived value (and back to
+  `.contain()`) on the relayout the asset-load mechanism in §4 queues.
+- **This PR adds the editor's first asset-load-driven relayout trigger**, and that is the
+  riskiest part of the change. `repaint_after_load` re-paints but does not rebuild
+  `ImageBlockConfig`, and the `pending_mermaid_asset` field that was meant to fill this
+  role has no production reader, so there is no existing hook to borrow — §4 specifies
+  spawning a `when_loaded` task that queues a block-scoped `add_pending_edit`. The
+  failure modes to watch in review are a spawn-per-frame loop (guarded by the in-flight
+  dedupe set) and a stale completion queuing a relayout for a block that has since been
+  edited away (guarded by dropping the task handle). A follow-up could generalize this
+  into the shared hook `pending_mermaid_asset` anticipated, which would let auto-render
+  Mermaid stop depending on an incidental relayout — out of scope here.
 - **Honoring intrinsic SVG size with no attributes** (the other half of the issue's
   repro) is intentionally deferred: it changes default behavior for existing documents
   and deserves its own spec/PR.

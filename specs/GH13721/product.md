@@ -102,12 +102,20 @@ Out of scope (not changed by this spec):
    or overflowing.)
 
 5. When the tag specifies `width` as a percentage (`width="90%"`), the image is laid
-   out at that percentage of the pane's available content width. A percentage `height`
-   is relative to the image block's **default height** (the fallback size an image with
-   no specified height would render at — `base_line_height × DEFAULT_IMAGE_HEIGHT_LINE_MULTIPLIER`
-   in the tech spec), **not** the pane's visible viewport height. A percentage over
-   100% clamps to that reference (`height="200%"` renders at the full default-height
-   bound), mirroring how `width="200%"` clamps to the pane width.
+   out at that percentage of the pane's available content width. A percentage over 100%
+   clamps to the pane width (`width="200%"` renders the same as `width="100%"`).
+
+   **Percentage heights are not supported.** A `height` expressed as a percentage
+   (`height="50%"`) is ignored — the image is laid out as if no height were specified,
+   falling back to the default sizing for that dimension (invariant 7) or to the
+   aspect-derived height when a width is given (invariant 6). Percentages need a
+   reference dimension to resolve against, and no candidate reference is both stable and
+   meaningful to an author: the image block's default height is an internal
+   implementation detail an author has no way to reason about, and the pane's visible
+   viewport height makes a document's layout depend on the window size at render time.
+   Pixel heights are honored (invariant 4); percentage *widths* remain supported because
+   the pane's available content width is a reference the author can reason about
+   directly.
 
 6. When only one of `width` / `height` is specified, the other dimension is derived
    from the image's intrinsic aspect ratio once it has decoded, so the specified
@@ -136,8 +144,10 @@ Out of scope (not changed by this spec):
    (unspecified) axis falls back to a default and the frame is drawn stretched to fill
    that box. This means the derived axis — never the author-specified one — may be
    briefly distorted for that one pre-decode frame; it self-corrects to the
-   aspect-ratio-correct size on the very next layout pass once the asset decodes (the
-   same self-correction Mermaid diagrams rely on today). The trade-off is deliberate:
+   aspect-ratio-correct size on the next layout pass once the asset decodes. That
+   correction is not automatic — the viewer explicitly requests a re-layout of the image's
+   block when the asset finishes loading; see the tech spec's asset-load relayout
+   mechanism. The trade-off is deliberate:
    stretching the *derived* axis for one frame is preferable to letting contain-fit
    shrink the *specified* axis below its requested value. See the tech spec's
    "Why the pre-decode fallback needs `stretch()`" section and its layout-math tests
@@ -148,8 +158,10 @@ Out of scope (not changed by this spec):
    HTML tag alone does not change default sizing.
 
 8. The `align` attribute positions the image horizontally within the pane:
-   `align="left"` (default) left-aligns, `align="center"` centers, `align="right"`
-   right-aligns. An absent or unrecognized `align` value left-aligns.
+   `align="left"` left-aligns, `align="center"` centers, `align="right"` right-aligns.
+   An absent or unrecognized `align` value **centers**, which is how the Markdown viewer
+   already draws images that are narrower than the pane; a document that adds no `align`
+   attribute renders exactly as it does today.
 
 9. Attribute parsing is case-insensitive for attribute names and for the `align`
    keyword values, matching HTML semantics (`WIDTH`, `Width`, `width` are equivalent;
