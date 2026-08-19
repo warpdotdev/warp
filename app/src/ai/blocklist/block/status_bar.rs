@@ -11,7 +11,6 @@ use warp_core::features::FeatureFlag;
 use warp_core::ui::Icon as CoreIcon;
 use warp_core::ui::appearance::Appearance;
 use warp_core::ui::theme::Fill;
-use warp_multi_agent_api as api;
 use warpui::r#async::{SpawnedFutureHandle, Timer};
 use warpui::elements::shimmering_text::ShimmeringTextStateHandle;
 use warpui::elements::{Border, Container, Empty, Flex, MouseStateHandle, ParentElement, Text};
@@ -33,7 +32,7 @@ use crate::ai::AgentTip;
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent::{
     AIAgentExchangeId, AIAgentOutput, AIAgentOutputMessageType, CancellationReason,
-    SummarizationType, icons,
+    OutputModelInfo, SummarizationType, icons,
 };
 use crate::ai::agent_tips::AITipModel;
 use crate::ai::blocklist::agent_view::shortcuts::AgentShortcutViewModel;
@@ -815,29 +814,22 @@ impl BlocklistAIStatusBar {
 
         let output_status = model.status(app);
         let output_to_render = output_status.output_to_render();
-        let (current_is_fallback, current_display_name) = output_to_render
-            .as_ref()
-            .and_then(|o| {
-                let o = o.get();
-                let m = o.model_info.as_ref()?;
-                Some((Some(m.is_fallback), Some(m.display_name.clone())))
-            })
-            .unwrap_or((None, None));
+        let current_model_in_use = output_to_render.as_ref().and_then(|output| {
+            let output = output.get();
+            output.model_info.as_ref().map(ModelInUse::from)
+        });
 
-        let fallback_warping_text = resolve_fallback_warping_message(
-            current_is_fallback,
-            current_display_name,
-            model.as_ref(),
-            app,
+        let model_warping_message =
+            resolve_warping_model_message(current_model_in_use, model.as_ref(), app);
+        let default_warping_text = model_warping_message.as_ref().map_or_else(
+            || LOAD_OUTPUT_MESSAGE.to_owned(),
+            |message| message.text.clone(),
         );
-        let default_warping_text = fallback_warping_text
-            .as_deref()
-            .unwrap_or(LOAD_OUTPUT_MESSAGE)
-            .to_owned();
-        let secondary_element = if fallback_warping_text.is_some() {
-            Some(render_fallback_explanation(model.as_ref(), app))
-        } else {
-            self.render_tip(app)
+        let secondary_element = match &model_warping_message {
+            Some(message) if message.is_fallback => {
+                Some(render_fallback_explanation(model.as_ref(), app))
+            }
+            _ => self.render_tip(app),
         };
 
         Some(render_warping_indicator(
@@ -991,13 +983,32 @@ impl BlocklistAIStatusBar {
     }
 }
 
+/// The model an exchange's output is running on, as last reported by a `ModelUsed`
+/// message.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ModelInUse {
+    /// `None` when the server reported the model without a display name.
+    display_name: Option<String>,
+    is_fallback: bool,
+}
+
+impl From<&OutputModelInfo> for ModelInUse {
+    fn from(model_info: &OutputModelInfo) -> Self {
+        Self {
+            display_name: Some(model_info.display_name.clone())
+                .filter(|display_name| !display_name.is_empty()),
+            is_fallback: model_info.is_fallback,
+        }
+    }
+}
+
 /// Checks only the immediately previous exchange for model info (from ModelUsed messages
 /// during streaming). We intentionally limit this to a single exchange to avoid reaching
 /// back to stale fallback data from much earlier in the conversation.
 fn latest_model_used_before_exchange<V: View>(
     model: &dyn AIBlockModel<View = V>,
     app: &AppContext,
-) -> Option<api::message::ModelUsed> {
+) -> Option<ModelInUse> {
     let conversation = model.conversation(app)?;
     conversation
         .exchanges_reversed()
@@ -1005,13 +1016,7 @@ fn latest_model_used_before_exchange<V: View>(
         .and_then(|exchange| {
             let output = exchange.output_status.output()?;
             let output = output.get();
-            let model_info = output.model_info.as_ref()?;
-            Some(api::message::ModelUsed {
-                model_id: model_info.model_id.to_string(),
-                model_display_name: model_info.display_name.clone(),
-                is_fallback: model_info.is_fallback,
-                prompt_cache_expires_at: None,
-            })
+            output.model_info.as_ref().map(ModelInUse::from)
         })
 }
 
@@ -1115,48 +1120,107 @@ fn render_fallback_explanation<V: View>(
     .finish()
 }
 
-/// If the current exchange is using a fallback model, returns the warping message to display
-/// (e.g. "Warping with Claude 3.5 Haiku."). When the current exchange's output doesn't have
-/// model info yet (the ModelUsed message hasn't arrived), we check the most recent previous
-/// exchange as a best guess — if the conversation already fell back, the next exchange likely
-/// will too. This avoids a flicker from "Warping..." to "Warping with {name}." on follow-ups.
+/// Warping text naming the model in use, plus whether that model is a fallback —
+/// which also earns the explanation line below the row.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct WarpingModelMessage {
+    text: String,
+    is_fallback: bool,
+}
+
+/// What the warping row knows about the model when it renders.
+struct WarpingModelInputs {
+    /// The model reported for the exchange being rendered.
+    current: Option<ModelInUse>,
+    /// The model reported for the exchange before it.
+    previous: Option<ModelInUse>,
+    /// Whether the exchange being rendered begins with a user query.
+    is_new_user_query: bool,
+}
+
+const UNNAMED_FALLBACK_MODEL_WARPING_TEXT: &str = "Warping with another model.";
+
+/// Warping text for the model a response is running on, e.g. "Warping with Claude
+/// Sonnet 4.5.". `None` keeps the row on its generic copy, which is what `auto`
+/// and custom routers get until routing picks a model and the server reports it.
 ///
-/// We skip the lookback for new user queries because the underlying model may have recovered
-/// since the previous exchange. For agent-initiated follow-up exchanges (action results, etc.)
-/// the lookback is still applied.
-fn resolve_fallback_warping_message<V: View>(
-    current_is_fallback: Option<bool>,
-    current_display_name: Option<String>,
+/// A fallback attempt is the same message plus two things, both of which stay
+/// behind `FallbackModelLoadOutputMessaging`: it may name the previous exchange's
+/// model, and it asks for the explanation line. That lookback avoids a flicker
+/// from "Warping..." on agent-initiated follow-ups, since a conversation that
+/// fell back once is likely to again, and is skipped after a new user query
+/// because the primary model may have recovered by then. Nothing else borrows
+/// another exchange's model: naming one the response may not be using is worse
+/// than naming none.
+fn warping_model_message(inputs: WarpingModelInputs) -> Option<WarpingModelMessage> {
+    let fallback_messaging_enabled = FeatureFlag::FallbackModelLoadOutputMessaging.is_enabled();
+    let model_in_use = match inputs.current {
+        Some(current) => current,
+        None => {
+            if !fallback_messaging_enabled || inputs.is_new_user_query {
+                return None;
+            }
+            let previous = inputs.previous?;
+            if !previous.is_fallback {
+                return None;
+            }
+            previous
+        }
+    };
+
+    if model_in_use.is_fallback {
+        if !fallback_messaging_enabled {
+            return None;
+        }
+        return Some(WarpingModelMessage {
+            text: model_in_use.display_name.map_or_else(
+                || UNNAMED_FALLBACK_MODEL_WARPING_TEXT.to_owned(),
+                warping_text_for_model,
+            ),
+            is_fallback: true,
+        });
+    }
+
+    if !FeatureFlag::WarpingModelName.is_enabled() {
+        return None;
+    }
+    Some(WarpingModelMessage {
+        text: warping_text_for_model(model_in_use.display_name?),
+        is_fallback: false,
+    })
+}
+
+fn warping_text_for_model(display_name: String) -> String {
+    format!("Warping with {display_name}.")
+}
+
+/// Collects the exchange state [`warping_model_message`] decides on.
+fn resolve_warping_model_message<V: View>(
+    current: Option<ModelInUse>,
     model: &dyn AIBlockModel<View = V>,
     app: &AppContext,
-) -> Option<String> {
-    if !FeatureFlag::FallbackModelLoadOutputMessaging.is_enabled() {
-        return None;
-    }
-    let mut is_fallback = current_is_fallback;
-    let mut display_name = current_display_name;
-    let is_new_user_query = model
-        .conversation(app)
-        .and_then(|conv| {
-            let exchange_id = model.exchange_id(app)?;
-            conv.exchange_with_id(exchange_id)
-        })
-        .is_some_and(|exchange| exchange.has_user_query());
-    if is_fallback.is_none()
-        && !is_new_user_query
-        && let Some(prev) = latest_model_used_before_exchange(model, app)
-    {
-        is_fallback = Some(prev.is_fallback);
-        if !prev.model_display_name.is_empty() {
-            display_name = Some(prev.model_display_name);
-        }
-    }
-    if !is_fallback.unwrap_or(false) {
-        return None;
-    }
-    Some(match display_name.as_deref() {
-        Some(name) => format!("Warping with {name}."),
-        None => "Warping with another model.".to_owned(),
+) -> Option<WarpingModelMessage> {
+    // Both only feed the fallback lookback, which cannot apply once the exchange
+    // being rendered has reported a model of its own.
+    let (previous, is_new_user_query) = if current.is_none() {
+        (
+            latest_model_used_before_exchange(model, app),
+            model
+                .conversation(app)
+                .and_then(|conversation| {
+                    let exchange_id = model.exchange_id(app)?;
+                    conversation.exchange_with_id(exchange_id)
+                })
+                .is_some_and(|exchange| exchange.has_user_query()),
+        )
+    } else {
+        (None, false)
+    };
+
+    warping_model_message(WarpingModelInputs {
+        current,
+        previous,
+        is_new_user_query,
     })
 }
 
@@ -1419,3 +1483,7 @@ impl TypedActionView for BlocklistAIStatusBar {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "status_bar_tests.rs"]
+mod tests;
