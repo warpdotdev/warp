@@ -23,7 +23,7 @@ use super::TerminalView;
 #[cfg(not(target_family = "wasm"))]
 use crate::ai::agent_sdk::driver::{
     WARP_DRIVE_SYNC_TIMEOUT,
-    environment::{prepare_environment, RepositoryPreparationOptions},
+    environment::{RepositoryPreparationOptions, prepare_environment},
     terminal::TerminalDriver,
 };
 #[cfg(not(target_family = "wasm"))]

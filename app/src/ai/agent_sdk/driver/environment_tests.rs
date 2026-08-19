@@ -303,12 +303,14 @@ fn checkout_command_absent_when_no_ref() {
         "warpdotdev".to_string(),
         "warp".to_string(),
     );
-    assert!(checkout_command_for(
-        &clone_request(repo, None),
-        Path::new("/workspace"),
-        ShellType::Bash
-    )
-    .is_none());
+    assert!(
+        checkout_command_for(
+            &clone_request(repo, None),
+            Path::new("/workspace"),
+            ShellType::Bash
+        )
+        .is_none()
+    );
 }
 
 #[test]
@@ -365,9 +367,11 @@ fn repository_head_override_validation_rejects_duplicates_and_mismatches() {
         "0123456789abcdef0123456789abcdef01234567",
     );
 
-    let duplicate_error =
-        validate_repository_head_overrides(&environment.effective_repos(), &[github.clone(), github.clone()])
-            .expect_err("duplicate repository identity must fail");
+    let duplicate_error = validate_repository_head_overrides(
+        &environment.effective_repos(),
+        &[github.clone(), github.clone()],
+    )
+    .expect_err("duplicate repository identity must fail");
     assert!(duplicate_error.to_string().contains("duplicate"));
 
     let forge_mismatch = commit_head_override(
@@ -376,8 +380,9 @@ fn repository_head_override_validation_rejects_duplicates_and_mismatches() {
         "warp",
         "0123456789abcdef0123456789abcdef01234567",
     );
-    let mismatch_error = validate_repository_head_overrides(&environment.effective_repos(), &[forge_mismatch])
-        .expect_err("forge mismatch must fail");
+    let mismatch_error =
+        validate_repository_head_overrides(&environment.effective_repos(), &[forge_mismatch])
+            .expect_err("forge mismatch must fail");
     assert!(mismatch_error.to_string().contains("not declared"));
 }
 
@@ -852,12 +857,14 @@ fn single_repo_checkout_pins_existing_dir_when_checkout_ref_set() {
         "warpdotdev".to_string(),
         fixture.repo_name.clone(),
     );
-    assert!(checkout_command_for(
-        &clone_request(unpinned, None),
-        &fixture.working_dir,
-        ShellType::Bash
-    )
-    .is_none());
+    assert!(
+        checkout_command_for(
+            &clone_request(unpinned, None),
+            &fixture.working_dir,
+            ShellType::Bash
+        )
+        .is_none()
+    );
 }
 
 #[test]
@@ -911,12 +918,14 @@ fn no_checkout_ref_leaves_clone_on_default_branch() {
         fixture.repo_name.clone(),
     );
     // No ref means no checkout command is produced ...
-    assert!(checkout_command_for(
-        &clone_request(repo, None),
-        &fixture.working_dir,
-        ShellType::Bash
-    )
-    .is_none());
+    assert!(
+        checkout_command_for(
+            &clone_request(repo, None),
+            &fixture.working_dir,
+            ShellType::Bash
+        )
+        .is_none()
+    );
     // ... and the clone stays exactly where a plain clone leaves it.
     assert_eq!(
         git_stdout(&["rev-parse", "HEAD"], &repo_dir),
