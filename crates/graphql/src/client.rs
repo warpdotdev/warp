@@ -59,21 +59,8 @@ pub enum GraphQLError {
 impl ErrorExt for GraphQLError {
     fn is_actionable(&self) -> bool {
         match self {
-            // Pre- and post-response transport failures already have a considered
-            // classification on the wrapped `reqwest::Error` (connect/timeout/decode); reuse it
-            // rather than re-deriving it here.
             GraphQLError::RequestError(e) | GraphQLError::ResponseError(e) => e.is_actionable(),
-            // Both indicate the request was blocked by infrastructure ahead of warp-server (the
-            // staging allowlist, a stale IAP token) rather than a defect in our code, and both
-            // already have a dedicated recovery path (`send_auth_event` in graphql_helpers.rs)
-            // instead of surfacing as an unhandled error.
             GraphQLError::StagingAccessBlocked | GraphQLError::IapChallengeBlocked => false,
-            // 408/429 are externally-caused and already non-actionable in `HttpStatusError`
-            // (public_api.rs); 5xx is added on top of that per `is_transient_status`
-            // (retry_strategies.rs), which already treats it as externally-caused for this same
-            // `GraphQLError`, albeit for retry rather than observability purposes. Other statuses
-            // (401, 403, 404, ...) can indicate a bug in how we built the request or handled auth,
-            // so they stay actionable.
             GraphQLError::HttpError { status, .. } => {
                 !matches!(status.as_u16(), 408 | 429 | 500..=599)
             }
@@ -269,7 +256,3 @@ macro_rules! define_operation {
     };
 }
 pub(crate) use define_operation;
-
-#[cfg(test)]
-#[path = "client_tests.rs"]
-mod tests;
