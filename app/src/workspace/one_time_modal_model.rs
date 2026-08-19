@@ -832,7 +832,7 @@ impl OneTimeModalModel {
         else {
             return false;
         };
-        let Some(current_team) = user_workspaces.team_for_window(target_window_id) else {
+        let Some(current_team) = user_workspaces.team_for_window(target_window_id, ctx) else {
             return false;
         };
 

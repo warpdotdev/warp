@@ -232,14 +232,14 @@ impl TypedActionView for BillingCycleUsageSectionView {
             }
             BillingCycleUsageAction::OpenUpgrade => {
                 if let Some(team_uid) =
-                    UserWorkspaces::as_ref(ctx).team_uid_for_window(ctx.window_id())
+                    UserWorkspaces::as_ref(ctx).team_uid_for_window(ctx.window_id(), ctx)
                 {
                     ctx.open_url(&UserWorkspaces::upgrade_link_for_team(team_uid));
                 }
             }
             BillingCycleUsageAction::OpenTeamAdminPanel => {
                 if let Some(team_uid) =
-                    UserWorkspaces::as_ref(ctx).team_uid_for_window(ctx.window_id())
+                    UserWorkspaces::as_ref(ctx).team_uid_for_window(ctx.window_id(), ctx)
                 {
                     AdminActions::open_admin_panel(team_uid, ctx);
                 }

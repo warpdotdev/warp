@@ -26,6 +26,7 @@ use crate::server::server_api::ServerApiProvider;
 use crate::settings_view::keybindings::KeybindingChangedNotifier;
 use crate::test_util::settings::initialize_settings_for_tests;
 use crate::themes::onboarding_theme_picker_themes;
+use crate::workspace::WindowTeam;
 use crate::workspaces::user_workspaces::UserWorkspaces;
 use crate::workspaces::workspace::FtueAccountClass;
 
@@ -380,6 +381,7 @@ fn test_show_needs_sso_link_view_blocks_pre_terminal_onboarding_states() {
                     previous_active_window: None,
                     shell: None,
                 },
+                window_team: WindowTeam::pending(),
             }));
             (target, marker)
         }

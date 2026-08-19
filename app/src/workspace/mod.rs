@@ -23,6 +23,7 @@ pub mod tab_settings;
 mod toast_stack;
 pub mod util;
 pub mod view;
+mod window_team;
 
 pub use action::{
     AutoCloudHandoffTrigger, CommandSearchOptions, InitContent, RestoreConversationLayout,
@@ -62,6 +63,7 @@ pub fn panel_header_corner_radius() -> warpui::elements::CornerRadius {
 pub use one_time_modal_model::OneTimeModalModel;
 pub use registry::WorkspaceRegistry;
 pub use toast_stack::{ToastStack, ToastStackEvent};
+pub use window_team::WindowTeam;
 
 use crate::workspace::view::{
     LEFT_PANEL_AGENT_CONVERSATIONS_BINDING_NAME, LEFT_PANEL_GLOBAL_SEARCH_BINDING_NAME,

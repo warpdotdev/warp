@@ -788,7 +788,7 @@ impl TypedActionView for BuildPlanMigrationModal {
             BuildPlanMigrationModalViewAction::GetStartedClicked => {
                 // Get current team UID and workspace data
                 let workspaces = UserWorkspaces::as_ref(ctx);
-                let Some(team_uid) = workspaces.team_uid_for_window(ctx.window_id()) else {
+                let Some(team_uid) = workspaces.team_uid_for_window(ctx.window_id(), ctx) else {
                     ctx.emit(BuildPlanMigrationModalEvent::ShowToast {
                         message: "Oops, something went wrong; your team data could not be found."
                             .to_string(),

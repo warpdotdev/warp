@@ -135,9 +135,6 @@ impl DataSource {
         ctx: &mut ModelContext<Self>,
     ) {
         let may_affect_scope = match event {
-            UserWorkspacesEvent::WindowTeamChanged { window_id } => {
-                *window_id == self.scope.window_id
-            }
             // Team membership decides whether an object's owner resolves to a team space or to
             // the shared space, so it can change what this window sees without reassigning it.
             UserWorkspacesEvent::TeamsChanged => true,

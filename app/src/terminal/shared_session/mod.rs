@@ -288,7 +288,7 @@ pub fn max_session_size(window_id: WindowId, app: &AppContext) -> Byte {
 
     use crate::workspaces::user_workspaces::UserWorkspaces;
     UserWorkspaces::as_ref(app)
-        .team_for_window(window_id)
+        .team_for_window(window_id, app)
         .and_then(|team| team.billing_metadata.tier.session_sharing_policy)
         .map(|policy| Byte::from_u64(policy.max_session_size))
         .unwrap_or(Byte::from_u64_with_unit(100, byte_unit::Unit::MB).unwrap())

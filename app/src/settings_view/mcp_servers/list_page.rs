@@ -504,7 +504,7 @@ impl MCPServersListPageView {
         ctx: &mut ViewContext<Self>,
     ) {
         let Some(team_uid) = UserWorkspaces::as_ref(ctx)
-            .team_for_window(ctx.window_id())
+            .team_for_window(ctx.window_id(), ctx)
             .map(|team| team.uid)
         else {
             return;

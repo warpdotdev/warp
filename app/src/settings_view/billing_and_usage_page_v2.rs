@@ -510,7 +510,7 @@ impl BillingAndUsagePageV2View {
             }
             SpendingLimitModalEvent::Update { amount_cents } => {
                 let workspaces = UserWorkspaces::as_ref(ctx);
-                let team_uid = workspaces.team_uid_for_window(ctx.window_id());
+                let team_uid = workspaces.team_uid_for_window(ctx.window_id(), ctx);
 
                 if let Some(team_uid) = team_uid {
                     UserWorkspaces::handle(ctx).update(ctx, |user_workspaces, ctx| {

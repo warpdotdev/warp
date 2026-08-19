@@ -1,4 +1,6 @@
-use std::collections::{HashMap, HashSet};
+#[cfg(test)]
+use std::collections::HashMap;
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use anyhow::Result;
@@ -92,11 +94,6 @@ pub enum UserWorkspacesEvent {
     TeamsChanged,
     /// Fired when the selected workspace actually changes to a different one.
     CurrentWorkspaceChanged,
-    /// Fired when a single window's team assignment changes. Windows are independent, so
-    /// subscribers that hold per-window state must only react to their own window.
-    WindowTeamChanged {
-        window_id: WindowId,
-    },
     CodebaseContextEnablementChanged,
     /// Fired when a service agreement's sunsetted_to_build_ts field is updated.
     SunsettedToBuildDataUpdated,
@@ -109,7 +106,6 @@ pub enum UserWorkspacesEvent {
 pub struct UserWorkspaces {
     current_workspace_uid: Tracked<Option<WorkspaceUid>>,
     workspaces: Tracked<Vec<Workspace>>,
-    window_team_uids: HashMap<WindowId, Option<ServerId>>,
     joinable_teams: Vec<DiscoverableTeam>,
     /// The user-level add-on credits purchase policy from the latest
     /// workspaces-metadata response. Teamless (fresh free) users have no
@@ -117,6 +113,8 @@ pub struct UserWorkspaces {
     /// filtered out of `workspaces` — this is the only place their purchase
     /// policy survives.
     user_purchase_policy: Option<PurchaseAddOnCreditsPolicy>,
+    #[cfg(test)]
+    window_team_overrides: HashMap<WindowId, Option<ServerId>>,
     team_client: Arc<dyn TeamClient>,
     workspace_client: Arc<dyn WorkspaceClient>,
 }
@@ -170,9 +168,10 @@ impl UserWorkspaces {
         Self {
             current_workspace_uid: cached_workspaces.first().map(|w| w.uid).into(),
             workspaces: cached_workspaces.into(),
-            window_team_uids: Default::default(),
             joinable_teams: Default::default(),
             user_purchase_policy: None,
+            #[cfg(test)]
+            window_team_overrides: Default::default(),
             team_client,
             workspace_client,
         }
@@ -220,9 +219,10 @@ impl UserWorkspaces {
         Self {
             current_workspace_uid: current_workspace_uid.into(),
             workspaces: cached_workspaces.into(),
-            window_team_uids: Default::default(),
             joinable_teams: Default::default(),
             user_purchase_policy: None,
+            #[cfg(test)]
+            window_team_overrides: Default::default(),
             team_client,
             workspace_client,
         }
@@ -268,7 +268,7 @@ impl UserWorkspaces {
     }
 
     pub fn admin_billing_link_for_default_team(&self, user_email: &str) -> Option<String> {
-        let team_uid = self.inherited_or_default_team_uid(None)?;
+        let team_uid = self.default_team_uid()?;
         self.team_from_uid(team_uid)
             .filter(|team| team.has_admin_permissions(user_email))
             .map(|_| Self::admin_billing_link_for_team(team_uid))
@@ -279,48 +279,64 @@ impl UserWorkspaces {
             .and_then(|w| w.teams.iter().find(|t| t.uid == team_uid))
     }
 
-    pub fn register_window(
-        &mut self,
-        window_id: WindowId,
-        team_uid: Option<ServerId>,
-        ctx: &mut ModelContext<Self>,
-    ) {
-        let previous_team_uid = self.team_uid_for_window(window_id);
-        self.window_team_uids.entry(window_id).or_insert(team_uid);
-        if self.team_uid_for_window(window_id) != previous_team_uid {
-            ctx.emit(UserWorkspacesEvent::WindowTeamChanged { window_id });
-        }
-        ctx.notify();
-    }
-    pub fn inherited_or_default_team_uid(
-        &self,
-        source_window_id: Option<WindowId>,
-    ) -> Option<ServerId> {
-        source_window_id
-            .and_then(|source_window_id| self.team_uid_for_window(source_window_id))
-            .or_else(|| {
-                self.current_workspace()
-                    .and_then(|workspace| workspace.teams.first())
-                    .map(|team| team.uid)
-            })
+    pub fn default_team_uid(&self) -> Option<ServerId> {
+        self.current_workspace()
+            .and_then(|workspace| workspace.teams.first())
+            .map(|team| team.uid)
     }
 
+    pub fn team_uid_for_window(&self, window_id: WindowId, ctx: &AppContext) -> Option<ServerId> {
+        let team_uid = crate::workspace::WorkspaceRegistry::as_ref(ctx)
+            .get(window_id, ctx)
+            .and_then(|workspace| workspace.as_ref(ctx).team_uid());
+        #[cfg(test)]
+        {
+            team_uid.or_else(|| {
+                self.window_team_overrides
+                    .get(&window_id)
+                    .copied()
+                    .flatten()
+            })
+        }
+        #[cfg(not(test))]
+        {
+            team_uid
+        }
+    }
+
+    #[cfg(test)]
     pub fn set_team_for_window(
         &mut self,
         window_id: WindowId,
         team_uid: ServerId,
-        ctx: &mut ModelContext<Self>,
+        _ctx: &mut ModelContext<Self>,
     ) {
-        let window_team_uid = self.window_team_uids.entry(window_id).or_default();
-        if window_team_uid.is_none() {
-            *window_team_uid = Some(team_uid);
-            ctx.emit(UserWorkspacesEvent::WindowTeamChanged { window_id });
-            ctx.notify();
-        }
+        self.window_team_overrides.insert(window_id, Some(team_uid));
     }
 
-    pub fn team_uid_for_window(&self, window_id: WindowId) -> Option<ServerId> {
-        self.window_team_uids.get(&window_id).copied().flatten()
+    #[cfg(test)]
+    pub fn register_window(
+        &mut self,
+        window_id: WindowId,
+        team_uid: Option<ServerId>,
+        _ctx: &mut ModelContext<Self>,
+    ) {
+        self.window_team_overrides.insert(window_id, team_uid);
+    }
+
+    #[cfg(test)]
+    pub fn inherited_or_default_team_uid(
+        &self,
+        previous_active_window: Option<WindowId>,
+    ) -> Option<ServerId> {
+        previous_active_window
+            .and_then(|window_id| {
+                self.window_team_overrides
+                    .get(&window_id)
+                    .copied()
+                    .flatten()
+            })
+            .or_else(|| self.default_team_uid())
     }
 
     /// Returns `true` when the user belongs to more than one team in the current
@@ -331,12 +347,12 @@ impl UserWorkspaces {
             .map(|ws| ws.teams.len() > 1)
             .unwrap_or(false)
     }
-    pub fn team_for_window(&self, window_id: WindowId) -> Option<&Team> {
-        self.team_uid_for_window(window_id)
+    pub fn team_for_window(&self, window_id: WindowId, ctx: &AppContext) -> Option<&Team> {
+        self.team_uid_for_window(window_id, ctx)
             .and_then(|team_uid| self.team_from_uid(team_uid))
     }
     pub fn team_for_view<T: Entity>(&self, ctx: &ViewContext<T>) -> Option<&Team> {
-        self.team_for_window(ctx.window_id())
+        self.team_for_window(ctx.window_id(), ctx)
     }
 
     pub fn team_for_view_handle<T: Entity>(
@@ -346,40 +362,7 @@ impl UserWorkspaces {
     ) -> Option<&Team> {
         view_handle
             .window_id(ctx)
-            .and_then(|window_id| self.team_for_window(window_id))
-    }
-
-    /// Returns the windows whose team assignment changed.
-    #[must_use]
-    fn reconcile_window_team_assignments(&mut self) -> Vec<WindowId> {
-        let team_uids = self
-            .current_workspace()
-            .map(|workspace| {
-                workspace
-                    .teams
-                    .iter()
-                    .map(|team| team.uid)
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default();
-        let fallback_team_uid = team_uids.first().copied();
-
-        let mut reassigned_windows = Vec::new();
-        for (window_id, window_team_uid) in self.window_team_uids.iter_mut() {
-            if window_team_uid.is_none_or(|team_uid| !team_uids.contains(&team_uid))
-                && *window_team_uid != fallback_team_uid
-            {
-                *window_team_uid = fallback_team_uid;
-                reassigned_windows.push(*window_id);
-            }
-        }
-        reassigned_windows
-    }
-
-    fn emit_window_team_changed(windows: Vec<WindowId>, ctx: &mut ModelContext<Self>) {
-        for window_id in windows {
-            ctx.emit(UserWorkspacesEvent::WindowTeamChanged { window_id });
-        }
+            .and_then(|window_id| self.team_for_window(window_id, ctx))
     }
 
     pub fn team_from_uid_across_all_workspaces(&self, team_uid: ServerId) -> Option<&Team> {
@@ -603,9 +586,7 @@ impl UserWorkspaces {
     ) {
         let changed = *self.current_workspace_uid != Some(workspace_uid);
         *self.current_workspace_uid = Some(workspace_uid);
-        let reassigned_windows = self.reconcile_window_team_assignments();
         self.notify_and_emit_teams_changed(ctx);
-        Self::emit_window_team_changed(reassigned_windows, ctx);
         if changed {
             ctx.emit(UserWorkspacesEvent::CurrentWorkspaceChanged);
         }
@@ -958,7 +939,7 @@ impl UserWorkspaces {
             return vec![Space::Shared];
         }
         let mut spaces = vec![];
-        if let Some(team) = self.team_for_window(window_id) {
+        if let Some(team) = self.team_for_window(window_id, ctx) {
             spaces.push(Space::Team { team_uid: team.uid });
         }
 
@@ -1036,9 +1017,7 @@ impl UserWorkspaces {
         let sunsetted_to_build_changed = self.has_sunsetted_to_build_data_changed(&workspaces);
 
         *self.workspaces = workspaces;
-        let reassigned_windows = self.reconcile_window_team_assignments();
         self.notify_and_emit_teams_changed(ctx);
-        Self::emit_window_team_changed(reassigned_windows, ctx);
 
         if sunsetted_to_build_changed {
             ctx.emit(UserWorkspacesEvent::SunsettedToBuildDataUpdated);

@@ -253,18 +253,23 @@ pub(crate) fn initialize_app(app: &mut App) {
 }
 
 pub(crate) fn mock_workspace(app: &mut App) -> ViewHandle<Workspace> {
-    let global_resource_handles = GlobalResourceHandles::mock(app);
     let active_window_id = app.read(|ctx| ctx.windows().active_window());
+    mock_workspace_with_source(
+        app,
+        NewWorkspaceSource::Empty {
+            previous_active_window: active_window_id,
+            shell: None,
+        },
+    )
+}
+
+fn mock_workspace_with_source(
+    app: &mut App,
+    workspace_source: NewWorkspaceSource,
+) -> ViewHandle<Workspace> {
+    let global_resource_handles = GlobalResourceHandles::mock(app);
     let (_, workspace) = app.add_window(WindowStyle::NotStealFocus, |ctx| {
-        Workspace::new(
-            global_resource_handles,
-            None,
-            NewWorkspaceSource::Empty {
-                previous_active_window: active_window_id,
-                shell: None,
-            },
-            ctx,
-        )
+        Workspace::new(global_resource_handles, None, workspace_source, ctx)
     });
     workspace
 }
@@ -274,16 +279,10 @@ fn test_open_new_window_for_team_reuses_existing_team_window() {
     App::test((), |mut app| async move {
         initialize_app(&mut app);
 
-        let source_workspace = mock_workspace(&mut app);
-        let existing_team_workspace = mock_workspace(&mut app);
-        let existing_team_window_id =
-            existing_team_workspace.update(&mut app, |_, ctx| ctx.window_id());
         let team_uid: ServerId = 123.into();
-        app.update(|ctx| {
-            UserWorkspaces::handle(ctx).update(ctx, |user_workspaces, ctx| {
-                user_workspaces.register_window(existing_team_window_id, Some(team_uid), ctx);
-            });
-        });
+        let source_workspace = mock_workspace(&mut app);
+        let _existing_team_workspace =
+            mock_workspace_with_source(&mut app, NewWorkspaceSource::TeamSwitched { team_uid });
         let initial_window_count = app.window_ids().len();
 
         source_workspace.update(&mut app, |workspace, ctx| {
@@ -312,12 +311,35 @@ fn test_open_new_window_for_team_creates_window_when_team_has_none() {
             assert_eq!(
                 ctx.window_ids()
                     .filter(|window_id| {
-                        UserWorkspaces::as_ref(ctx).team_uid_for_window(*window_id)
+                        UserWorkspaces::as_ref(ctx).team_uid_for_window(*window_id, ctx)
                             == Some(team_uid)
                     })
                     .count(),
                 1
             );
+        });
+    });
+}
+
+#[test]
+fn test_new_window_inherits_source_window_team() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let team_uid = 123.into();
+        let source_workspace =
+            mock_workspace_with_source(&mut app, NewWorkspaceSource::TeamSwitched { team_uid });
+        let source_window_id = source_workspace.update(&mut app, |_, ctx| ctx.window_id());
+        let inherited_workspace = mock_workspace_with_source(
+            &mut app,
+            NewWorkspaceSource::Empty {
+                previous_active_window: Some(source_window_id),
+                shell: None,
+            },
+        );
+
+        inherited_workspace.read(&app, |workspace, _| {
+            assert_eq!(workspace.team_uid(), Some(team_uid));
         });
     });
 }

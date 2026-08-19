@@ -156,7 +156,9 @@ use super::util::{
     PaneViewLocator, TabMovement, TerminalSessionFallbackBehavior, WelcomeTipsViewState,
     WorkspaceMouseStates, WorkspaceState,
 };
-use super::{ActiveSession, TabBarDropTargetData, TabBarLocation, WorkspaceRegistry, util};
+use super::{
+    ActiveSession, TabBarDropTargetData, TabBarLocation, WindowTeam, WorkspaceRegistry, util,
+};
 use crate::ai::active_agent_views_model::ActiveAgentViewsModel;
 #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
 use crate::ai::agent::CancellationReason;
@@ -1015,6 +1017,7 @@ enum TabBarSlot {
 
 pub struct Workspace {
     window_id: WindowId,
+    window_team: WindowTeam,
     pub(crate) tabs: Vec<TabData>,
     active_tab_index: usize,
     /// Tracks tab activation order (most-recently-used first).
@@ -2844,6 +2847,22 @@ impl Workspace {
         workspace_setting: NewWorkspaceSource,
         ctx: &mut ViewContext<Self>,
     ) -> Self {
+        Self::new_with_window_team(
+            workspace_setting.window_team(ctx),
+            global_resource_handles,
+            server_time,
+            workspace_setting,
+            ctx,
+        )
+    }
+
+    pub(crate) fn new_with_window_team(
+        window_team: WindowTeam,
+        global_resource_handles: GlobalResourceHandles,
+        server_time: Option<Arc<ServerTime>>,
+        workspace_setting: NewWorkspaceSource,
+        ctx: &mut ViewContext<Self>,
+    ) -> Self {
         let GlobalResourceHandles {
             model_event_sender,
             tips_completed,
@@ -3460,6 +3479,7 @@ impl Workspace {
             theme_deletion_modal,
             import_modal,
             window_id: ctx.window_id(),
+            window_team,
             toast_stack,
             agent_toast_stack,
             update_toast_stack,
@@ -3557,6 +3577,13 @@ impl Workspace {
         ws
     }
 
+    pub fn window_team(&self) -> WindowTeam {
+        self.window_team.clone()
+    }
+
+    pub fn team_uid(&self) -> Option<ServerId> {
+        self.window_team.uid()
+    }
     #[cfg(any(test, feature = "integration_tests"))]
     pub fn command_palette_view(&self) -> ViewHandle<crate::search::command_palette::View> {
         self.palette.clone()
@@ -6137,7 +6164,6 @@ impl Workspace {
     }
 
     fn show_team_switcher_dropdown(&mut self, ctx: &mut ViewContext<Self>) {
-        let window_id = self.window_id;
         let user_workspaces = UserWorkspaces::as_ref(ctx);
         // Only meaningful when the user can switch teams.
         if !user_workspaces.can_switch_teams() {
@@ -6146,7 +6172,7 @@ impl Workspace {
         let Some(workspace) = user_workspaces.current_workspace() else {
             return;
         };
-        let current_team_uid = user_workspaces.team_uid_for_window(window_id);
+        let current_team_uid = self.team_uid();
         let mut items: Vec<MenuItem<WorkspaceAction>> = vec![
             MenuItemFields::new("Switch team")
                 .with_disabled(true)
@@ -6182,7 +6208,9 @@ impl Workspace {
         if !user_workspaces.can_switch_teams() {
             return None;
         }
-        let current_team = user_workspaces.team_for_window(self.window_id)?;
+        let current_team = self
+            .team_uid()
+            .and_then(|team_uid| user_workspaces.team_from_uid(team_uid))?;
         let team_name = current_team.name.clone();
         let team_color_hex = current_team.color.clone();
         let theme = appearance.theme();
@@ -11812,7 +11840,7 @@ impl Workspace {
         WindowSnapshot {
             tabs,
             active_tab_index,
-            team_uid: UserWorkspaces::as_ref(app).team_uid_for_window(window_id),
+            team_uid: self.team_uid(),
             bounds: window_bounds,
             fullscreen_state: window_fullscreen_state,
             quake_mode,
@@ -23592,12 +23620,6 @@ impl Workspace {
         self.tab_views().map(|tab| tab.id())
     }
 
-    fn team_uid(&self, app: &AppContext) -> Option<ServerId> {
-        UserWorkspaces::as_ref(app)
-            .team_for_window(self.window_id)
-            .map(|team| team.uid)
-    }
-
     fn initiate_user_signup(
         &mut self,
         entrypoint: AnonymousUserSignupEntrypoint,
@@ -24393,7 +24415,7 @@ impl TypedActionView for Workspace {
                 send_telemetry_from_ctx!(TelemetryEvent::UserMenuUpgradeClicked, ctx);
 
                 let auth_state = AuthStateProvider::as_ref(ctx).get();
-                let upgrade_url = if let Some(team_uid) = self.team_uid(ctx) {
+                let upgrade_url = if let Some(team_uid) = self.team_uid() {
                     UserWorkspaces::upgrade_link_for_team(team_uid)
                 } else {
                     let user_id = auth_state.user_id().unwrap_or_default();
@@ -24463,7 +24485,7 @@ impl TypedActionView for Workspace {
                 }
             }
             ImportToTeamDrive => {
-                let team_uid = self.team_uid(ctx);
+                let team_uid = self.team_uid();
                 if let Some(team_uid) = team_uid {
                     self.open_import_modal(Owner::Team { team_uid }, &None, ctx);
                 }
@@ -24483,7 +24505,7 @@ impl TypedActionView for Workspace {
                 }
             }
             CreateTeamNotebook => {
-                let team_uid = self.team_uid(ctx);
+                let team_uid = self.team_uid();
                 if let Some(team_uid) = team_uid {
                     self.update_warp_drive_view(ctx, |drive_panel, ctx| {
                         drive_panel.open_cloud_object_dialog(
@@ -24513,7 +24535,7 @@ impl TypedActionView for Workspace {
                 }
             }
             CreateTeamEnvVarCollection => {
-                let team_uid = self.team_uid(ctx);
+                let team_uid = self.team_uid();
                 if let Some(team_uid) = team_uid {
                     self.update_warp_drive_view(ctx, |drive_panel, ctx| {
                         drive_panel.open_cloud_object_dialog(
@@ -24545,7 +24567,7 @@ impl TypedActionView for Workspace {
                 }
             }
             CreateTeamWorkflow => {
-                let team_uid = self.team_uid(ctx);
+                let team_uid = self.team_uid();
                 if let Some(team_uid) = team_uid {
                     let source = WorkflowOpenSource::New {
                         title: None,
@@ -24575,7 +24597,7 @@ impl TypedActionView for Workspace {
                 ctx.notify();
             }
             CreateTeamFolder => {
-                let team_uid = self.team_uid(ctx);
+                let team_uid = self.team_uid();
                 if let Some(team_uid) = team_uid {
                     self.update_warp_drive_view(ctx, |drive_panel, ctx| {
                         drive_panel.open_cloud_object_dialog(
@@ -25700,7 +25722,7 @@ impl TypedActionView for Workspace {
                 }
             }
             CreateTeamAIPrompt => {
-                let team_uid = self.team_uid(ctx);
+                let team_uid = self.team_uid();
                 if let Some(team_uid) = team_uid {
                     let source = WorkflowOpenSource::New {
                         title: None,
@@ -26321,7 +26343,7 @@ impl TypedActionView for Workspace {
                     .into_iter()
                     .chain(ctx.window_ids())
                     .find(|window_id| {
-                        UserWorkspaces::as_ref(ctx).team_uid_for_window(*window_id)
+                        UserWorkspaces::as_ref(ctx).team_uid_for_window(*window_id, ctx)
                             == Some(team_uid)
                     });
                 if let Some(window_id) = existing_window_id {
@@ -26481,7 +26503,7 @@ impl View for Workspace {
             context.set.insert(flags::SHOW_HIDDEN_FILES);
         }
 
-        if self.team_uid(app).is_some() {
+        if self.team_uid().is_some() {
             context.set.insert("WarpDrive_BelongsToTeam");
         }
 

@@ -684,16 +684,17 @@ impl SearchItem for ModelSearchItem {
             .with_child(scores);
 
         if self.disable_reason.as_ref() == Some(&DisableReason::RequiresUpgrade) {
-            let upgrade_url =
-                if let Some(team) = UserWorkspaces::as_ref(app).team_for_window(self.window_id) {
-                    UserWorkspaces::upgrade_link_for_team(team.uid)
-                } else {
-                    let user_id = AuthStateProvider::as_ref(app)
-                        .get()
-                        .user_id()
-                        .unwrap_or_default();
-                    UserWorkspaces::upgrade_link(user_id)
-                };
+            let upgrade_url = if let Some(team) =
+                UserWorkspaces::as_ref(app).team_for_window(self.window_id, app)
+            {
+                UserWorkspaces::upgrade_link_for_team(team.uid)
+            } else {
+                let user_id = AuthStateProvider::as_ref(app)
+                    .get()
+                    .user_id()
+                    .unwrap_or_default();
+                UserWorkspaces::upgrade_link(user_id)
+            };
 
             let mut display_name = self.display_text.clone();
             if let Some(first) = display_name.get_mut(..1) {

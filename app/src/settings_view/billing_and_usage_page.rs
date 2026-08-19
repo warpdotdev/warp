@@ -580,7 +580,7 @@ impl BillingAndUsagePageView {
             }
             SpendingLimitModalEvent::Update { amount_cents } => {
                 let workspaces = UserWorkspaces::as_ref(ctx);
-                let team_uid = workspaces.team_uid_for_window(ctx.window_id());
+                let team_uid = workspaces.team_uid_for_window(ctx.window_id(), ctx);
                 let usage_settings = workspaces.usage_based_pricing_settings();
 
                 if let Some(team_uid) = team_uid {
@@ -608,7 +608,7 @@ impl BillingAndUsagePageView {
             }
             SpendingLimitModalEvent::Update { amount_cents } => {
                 let workspaces = UserWorkspaces::as_ref(ctx);
-                let team_uid = workspaces.team_uid_for_window(ctx.window_id());
+                let team_uid = workspaces.team_uid_for_window(ctx.window_id(), ctx);
 
                 if let Some(team_uid) = team_uid {
                     UserWorkspaces::handle(ctx).update(ctx, |user_workspaces, ctx| {
@@ -977,7 +977,8 @@ impl TypedActionView for BillingAndUsagePageView {
             BillingAndUsagePageAction::SelectTopupDenomination(i) => {
                 self.selected_addon_denomination = *i;
                 self.update_denomination_buttons_focus(ctx);
-                let team_uid = UserWorkspaces::as_ref(ctx).team_uid_for_window(ctx.window_id());
+                let team_uid =
+                    UserWorkspaces::as_ref(ctx).team_uid_for_window(ctx.window_id(), ctx);
                 UserWorkspaces::handle(ctx).update(ctx, |user_workspaces, ctx| {
                     if let Some((workspace, team_uid)) =
                         user_workspaces.current_workspace().zip(team_uid)

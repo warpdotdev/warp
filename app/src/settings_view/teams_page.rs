@@ -971,8 +971,7 @@ impl TeamsPageView {
 
                 ctx.emit(TeamsPageViewEvent::TeamsChanged);
             }
-            UserWorkspacesEvent::CurrentWorkspaceChanged
-            | UserWorkspacesEvent::WindowTeamChanged { .. } => {
+            UserWorkspacesEvent::CurrentWorkspaceChanged => {
                 // A workspace selection change always emits `TeamsChanged` too,
                 // which already refreshes this page.
             }

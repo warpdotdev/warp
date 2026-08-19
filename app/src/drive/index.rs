@@ -5247,7 +5247,7 @@ impl View for DriveIndex {
             }
         };
 
-        if let Some(team) = workspaces.team_for_window(self.window_id) {
+        if let Some(team) = workspaces.team_for_window(self.window_id, app) {
             if team.billing_metadata.is_delinquent_due_to_payment_issue() {
                 let current_user_email = self.auth_state.user_email().unwrap_or_default();
                 let has_admin_permissions = team.has_admin_permissions(&current_user_email);
