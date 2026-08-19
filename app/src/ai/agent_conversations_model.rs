@@ -39,6 +39,7 @@ use crate::ai::ambient_agents::{
     AmbientAgentTaskState,
 };
 use crate::ai::artifacts::Artifact;
+use crate::ai::blocklist::orchestration_topology::orchestration_aware_conversation_status;
 use crate::ai::blocklist::{
     BlocklistAIHistoryEvent, BlocklistAIHistoryModel, ConversationStatusUpdate,
 };
@@ -125,12 +126,46 @@ enum TaskFetchState {
     TransientlyFailed { at: Instant, error: TaskFetchError },
 }
 
-/// Availability state for cloud conversation metadata.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-enum CloudConversationMetadataLoadState {
-    #[default]
-    Available,
-    Failed,
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum InitialConversationLoadState {
+    LoadingLocal,
+    WaitingForCloud,
+    LoadingCloud,
+    Loaded,
+    CloudFailed,
+}
+
+impl InitialConversationLoadState {
+    fn is_loading_local(self) -> bool {
+        match self {
+            InitialConversationLoadState::LoadingLocal => true,
+            InitialConversationLoadState::WaitingForCloud
+            | InitialConversationLoadState::LoadingCloud
+            | InitialConversationLoadState::Loaded
+            | InitialConversationLoadState::CloudFailed => false,
+        }
+    }
+
+    fn can_start_cloud_load(self) -> bool {
+        match self {
+            InitialConversationLoadState::WaitingForCloud => true,
+            InitialConversationLoadState::LoadingLocal
+            | InitialConversationLoadState::LoadingCloud
+            | InitialConversationLoadState::Loaded
+            | InitialConversationLoadState::CloudFailed => false,
+        }
+    }
+
+    fn can_poll(self) -> bool {
+        match self {
+            InitialConversationLoadState::Loaded | InitialConversationLoadState::CloudFailed => {
+                true
+            }
+            InitialConversationLoadState::LoadingLocal
+            | InitialConversationLoadState::WaitingForCloud
+            | InitialConversationLoadState::LoadingCloud => false,
+        }
+    }
 }
 
 /// Tracks the cooldown window for RTC-triggered task-list refreshes. Pending events keep
@@ -382,7 +417,14 @@ impl AgentRunDisplayStatus {
                 let history_model = BlocklistAIHistoryModel::as_ref(app);
                 entry::conversation_id_shadowed_by_task(task, history_model)
                     .and_then(|conversation_id| history_model.conversation(&conversation_id))
-                    .map(|conversation| Self::from_conversation_status(conversation.status()))
+                    .map(|conversation| {
+                        // Roll the whole orchestration subtree (children,
+                        // grandchildren, …) into the root card's status.
+                        Self::from_conversation_status(&orchestration_aware_conversation_status(
+                            history_model,
+                            conversation,
+                        ))
+                    })
                     .unwrap_or_else(|| Self::from_task_state(task))
             }
             AmbientAgentTaskState::Succeeded
@@ -593,10 +635,7 @@ pub struct AgentConversationsModel {
     /// Set of view IDs actively consuming this model's data per window.
     /// When a window has at least one consumer, we poll for new tasks while that window is active.
     active_data_consumers_per_window: HashMap<WindowId, HashSet<EntityId>>,
-    /// Whether we have finished the initial task load
-    has_finished_initial_load: bool,
-    /// Availability state for cloud conversation metadata.
-    cloud_conversation_metadata_load_state: CloudConversationMetadataLoadState,
+    initial_load_state: InitialConversationLoadState,
     /// Per-task fetch state for `get_or_async_fetch_task_data`. See [`TaskFetchState`] for
     /// the meaning of each variant. Tasks that have been successfully fetched live in `tasks`
     /// and are absent from this map.
@@ -608,7 +647,7 @@ pub struct AgentConversationsModel {
 }
 
 pub enum AgentConversationsModelEvent {
-    /// Initial load of tasks completed.
+    /// Conversation data was loaded or refreshed.
     ConversationsLoaded,
     /// New tasks were received during polling (view should diff against its local state).
     NewTasksReceived,
@@ -651,9 +690,7 @@ impl AgentConversationsModel {
                 in_flight_poll_abort_handle: None,
                 next_poll_abort_handle: None,
                 active_data_consumers_per_window: HashMap::new(),
-                has_finished_initial_load: true,
-                cloud_conversation_metadata_load_state:
-                    CloudConversationMetadataLoadState::Available,
+                initial_load_state: InitialConversationLoadState::Loaded,
                 task_fetch_state: HashMap::new(),
                 rtc_task_refresh_throttle_state: RtcTaskRefreshThrottleState::default(),
                 dirty_since: None,
@@ -692,8 +729,7 @@ impl AgentConversationsModel {
             in_flight_poll_abort_handle: None,
             next_poll_abort_handle: None,
             active_data_consumers_per_window: HashMap::new(),
-            has_finished_initial_load: false,
-            cloud_conversation_metadata_load_state: CloudConversationMetadataLoadState::Available,
+            initial_load_state: InitialConversationLoadState::LoadingLocal,
             task_fetch_state: HashMap::new(),
             rtc_task_refresh_throttle_state: RtcTaskRefreshThrottleState::default(),
             dirty_since: None,
@@ -705,19 +741,19 @@ impl AgentConversationsModel {
         if AppExecutionMode::as_ref(ctx).can_fetch_agent_runs_for_management() {
             model.sync_conversations(ctx);
         } else {
-            model.has_finished_initial_load = true;
+            model.initial_load_state = InitialConversationLoadState::Loaded;
         }
         model
     }
 
     pub fn is_loading(&self) -> bool {
-        !self.has_finished_initial_load
+        self.initial_load_state.is_loading_local()
     }
 
     /// Returns whether cloud conversation metadata failed to load.
     #[cfg_attr(not(feature = "tui"), allow(dead_code))]
     pub(crate) fn cloud_conversation_metadata_load_failed(&self) -> bool {
-        self.cloud_conversation_metadata_load_state == CloudConversationMetadataLoadState::Failed
+        self.initial_load_state == InitialConversationLoadState::CloudFailed
     }
 
     fn handle_network_status_changed(
@@ -760,10 +796,10 @@ impl AgentConversationsModel {
         event: &AuthManagerEvent,
         ctx: &mut ModelContext<Self>,
     ) {
-        // When auth completes, retry the initial task sync if we haven't loaded tasks yet
+        // When auth completes, start the initial cloud sync if it has not started yet.
         // Only sync if we're not in CLI mode
         if matches!(event, AuthManagerEvent::AuthComplete)
-            && !self.has_finished_initial_load
+            && self.initial_load_state.can_start_cloud_load()
             && AppExecutionMode::as_ref(ctx).can_fetch_agent_runs_for_management()
         {
             self.fetch_ambient_agent_tasks_and_cloud_convo_metadata(ctx);
@@ -916,6 +952,9 @@ impl AgentConversationsModel {
             let metadata = ConversationMetadata { nav_data };
             self.conversations.insert(conversation_id, metadata);
         }
+        if self.initial_load_state == InitialConversationLoadState::LoadingLocal {
+            self.initial_load_state = InitialConversationLoadState::WaitingForCloud;
+        }
 
         ctx.emit(AgentConversationsModelEvent::ConversationsLoaded);
     }
@@ -937,6 +976,7 @@ impl AgentConversationsModel {
             // If we don't have AI enabled, don't pull tasks
             return;
         }
+        self.initial_load_state = InitialConversationLoadState::LoadingCloud;
 
         let ai_client = ServerApiProvider::as_ref(ctx).get_ai_client();
 
@@ -1031,11 +1071,10 @@ impl AgentConversationsModel {
                     cloud_metadata_loaded,
                 )) = result
                 {
-                    model.has_finished_initial_load = true;
-                    model.cloud_conversation_metadata_load_state = if cloud_metadata_loaded {
-                        CloudConversationMetadataLoadState::Available
+                    model.initial_load_state = if cloud_metadata_loaded {
+                        InitialConversationLoadState::Loaded
                     } else {
-                        CloudConversationMetadataLoadState::Failed
+                        InitialConversationLoadState::CloudFailed
                     };
 
                     // Update tasks if we got any
@@ -1063,9 +1102,7 @@ impl AgentConversationsModel {
                     model.update_polling_state(ctx);
                     ctx.emit(AgentConversationsModelEvent::ConversationsLoaded);
                 } else if let RequestState::RequestFailed(e) = result {
-                    model.has_finished_initial_load = true;
-                    model.cloud_conversation_metadata_load_state =
-                        CloudConversationMetadataLoadState::Failed;
+                    model.initial_load_state = InitialConversationLoadState::CloudFailed;
                     model.update_polling_state(ctx);
                     report_error!(e);
                 }
@@ -1123,7 +1160,7 @@ impl AgentConversationsModel {
 
     /// Returns true if we should be polling: online, not loading, and active window has the view open.
     fn should_be_polling(&self, ctx: &ModelContext<Self>) -> bool {
-        if !self.has_finished_initial_load {
+        if !self.initial_load_state.can_poll() {
             return false;
         }
 
@@ -1244,6 +1281,8 @@ impl AgentConversationsModel {
         self.tasks.values()
     }
 
+    /// Seeds the task cache so tests can exercise cache-hit paths without a
+    /// server round trip.
     #[cfg(test)]
     pub(crate) fn insert_task_for_test(&mut self, task: AmbientAgentTask) {
         self.tasks.insert(task.task_id, task);
@@ -1690,6 +1729,59 @@ impl AgentConversationsModel {
         }
     }
 
+    /// Updates a cached task to reflect that execution has started and its
+    /// session is now known (from a `run_session_linked` wire event). If the
+    /// task is not yet cached, starts a fetch to retrieve it.
+    ///
+    /// Mutating the cache entry directly avoids a full round-trip while still
+    /// giving `decide_child_pane_materialization` the `InProgress` +
+    /// `is_sandbox_running=true` + `session_id` it needs to return `AttachLive`
+    /// on the next pill click. `TasksUpdated` is emitted so any pending
+    /// re-drives fire immediately.
+    pub fn update_task_as_running_with_session(
+        &mut self,
+        task_id: &AmbientAgentTaskId,
+        session_id_str: String,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        use crate::ai::ambient_agents::AmbientAgentTaskState;
+        if let Some(task) = self.tasks.get_mut(task_id) {
+            task.session_id = Some(session_id_str);
+            task.is_sandbox_running = true;
+            // Only promote to InProgress if still in a queued/pending state;
+            // never downgrade a terminal state that may have arrived concurrently.
+            match task.state {
+                AmbientAgentTaskState::Queued
+                | AmbientAgentTaskState::Pending
+                | AmbientAgentTaskState::Claimed => {
+                    task.state = AmbientAgentTaskState::InProgress;
+                }
+                _ => {}
+            }
+            ctx.emit(AgentConversationsModelEvent::TasksUpdated);
+        } else {
+            // Task not cached yet; start a fetch.
+            self.async_fetch_task(task_id, ctx);
+        }
+    }
+
+    /// Evicts a task from the cache and immediately starts a fresh
+    /// `GET /agent/runs/{id}` fetch. Used by the family drain when a terminal
+    /// lifecycle event arrives for a child whose cached state is stale (e.g.
+    /// still shows `Queued` from the initial discovery fetch). The refreshed
+    /// data — including the server conversation token and terminal state —
+    /// enables `decide_child_pane_materialization` to return `LoadTranscript`
+    /// so subsequent pill clicks load the cloud transcript.
+    pub fn evict_and_refetch_task(
+        &mut self,
+        task_id: &AmbientAgentTaskId,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        self.tasks.remove(task_id);
+        self.task_fetch_state.remove(task_id);
+        self.async_fetch_task(task_id, ctx);
+    }
+
     /// Get raw task data by task ID, fetching from server if not in memory.
     /// If the task is already in memory, returns it immediately.
     /// If not, spawns an async task to fetch it from the server, stores it in memory,
@@ -2018,8 +2110,7 @@ impl AgentConversationsModel {
         self.active_data_consumers_per_window.clear();
         self.task_fetch_state.clear();
         self.dirty_since = None;
-        // Reset the initial load flag so that we can retry the initial sync with the new logged in user
-        self.has_finished_initial_load = false;
+        self.initial_load_state = InitialConversationLoadState::WaitingForCloud;
     }
 }
 

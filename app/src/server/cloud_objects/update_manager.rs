@@ -406,8 +406,8 @@ impl UpdateManager {
                                     }
                                 });
                         } else if cloud_model.get_ai_execution_profile(&server_id).is_some() {
-                            AIExecutionProfilesModel::handle(ctx).update(ctx, |model, _| {
-                                model.replace_client_id_with_server_id(server_id, client_id);
+                            AIExecutionProfilesModel::handle(ctx).update(ctx, |model, ctx| {
+                                model.replace_client_id_with_server_id(server_id, client_id, ctx);
                             });
                         }
                     }
@@ -1233,6 +1233,11 @@ impl UpdateManager {
         self.has_initial_load.wait()
     }
 
+    /// Returns whether the current account's initial cloud-object load has completed.
+    pub(crate) fn has_completed_initial_load(&self) -> bool {
+        self.has_initial_load.is_set()
+    }
+
     /// Reset the initial-load condition so that subsequent callers of
     /// [`initial_load_complete`](Self::initial_load_complete) will block until
     /// the next load finishes. Call this when the user identity changes (e.g.
@@ -1306,7 +1311,7 @@ impl UpdateManager {
             if let Some(current_object) = cloud_model.get_by_uid(&uid) {
 
                 // The revision and metadata_ts determine which parts of this update to accept
-                let current_object_revision = current_object.metadata().revision.clone();
+                let current_object_revision = current_object.metadata().revision;
 
                 // First, check if the incoming revision is greater than the in-memory revision.
                 if let Some(in_memory_revision) = current_object_revision {

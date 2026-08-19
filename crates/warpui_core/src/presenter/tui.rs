@@ -45,7 +45,9 @@ use crate::elements::tui::{
     TuiBuffer, TuiConstraint, TuiElement, TuiLayoutContext, TuiPaintContext, TuiPaintSurface,
     TuiPresentationContext, TuiRect, TuiScene, TuiScreenPosition, TuiSize,
 };
-use crate::{AppContext, EntityIdMap, TuiView, ViewHandle, WindowId, WindowInvalidation};
+use crate::{
+    AppContext, EntityIdMap, EntityIdSet, TuiView, ViewHandle, WindowId, WindowInvalidation,
+};
 
 /// A painted frame: the composited cell [`TuiBuffer`] plus the absolute cursor
 /// position (in buffer cell coordinates), if a focused element owns the cursor.
@@ -96,6 +98,8 @@ pub struct TuiPresenter {
     pub(crate) last_element: Option<Box<dyn TuiElement>>,
     /// The retained scene painted from `last_element`.
     pub(crate) last_scene: Option<Rc<TuiScene>>,
+    /// View IDs embedded in the most recently presented frame, including the root.
+    pub(crate) presented_views: EntityIdSet,
     /// Whether [`invalidate`](Self::invalidate) ran since the last
     /// [`present`](Self::present). When it did, every changed view was
     /// re-rendered into `rendered_views`, so `last_element` is current and a
@@ -181,6 +185,7 @@ impl TuiPresenter {
         else {
             self.last_element = None;
             self.last_scene = None;
+            self.presented_views.clear();
             return TuiFrame::blank(area);
         };
 
@@ -199,6 +204,8 @@ impl TuiPresenter {
             );
             element.present(&mut present_ctx);
         }
+        self.presented_views = embeddings.keys().copied().collect();
+        self.presented_views.insert(root_view_id);
         ctx.report_view_embeddings(window_id, embeddings);
 
         let (frame, scene) = paint(element.as_mut(), arranged, area, &mut self.rendered_views);
@@ -218,6 +225,7 @@ impl TuiPresenter {
         area: TuiRect,
         app: &AppContext,
     ) -> TuiFrame {
+        self.presented_views.clear();
         let mut layout_ctx = TuiLayoutContext {
             rendered_views: &mut self.rendered_views,
         };

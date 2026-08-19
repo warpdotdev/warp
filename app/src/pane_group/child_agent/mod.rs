@@ -1,5 +1,6 @@
 pub(in crate::pane_group) mod hydration;
-mod restoration;
+pub(crate) mod materialization;
+pub(in crate::pane_group) mod restoration;
 
 use std::collections::HashMap;
 use std::ffi::OsString;
@@ -88,6 +89,7 @@ fn start_new_child_conversation(
             name,
             parent_conversation_id,
             orchestration_harness,
+            false,
             ctx,
         )
     })

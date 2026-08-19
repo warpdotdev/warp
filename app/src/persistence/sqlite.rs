@@ -2,7 +2,6 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::convert::TryInto;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
-use std::str::FromStr;
 use std::sync::mpsc::SyncSender;
 use std::sync::{Arc, Once};
 use std::{fs, thread};
@@ -284,25 +283,39 @@ unsafe fn init_logging() {
 
                 #[cfg(feature = "crash_reporting")]
                 if level == log::Level::Error {
-                    sentry::with_scope(
-                        |scope| {
-                            let mut context = std::collections::BTreeMap::new();
-                            context.insert("message".to_string(), err_message.into());
-                            context.insert("code".to_string(), err_code.into());
-                            context.insert(
-                                "code_description".to_string(),
-                                sqlite3::code_to_str(err_code).into(),
-                            );
-                            scope.set_context("sqlite", sentry::protocol::Context::Other(context));
-                        },
-                        || {
-                            sentry::capture_message(
-                                "Sqlite Error",
-                                sentry_log::convert_log_level(level),
-                            )
-                        },
-                    );
-                    return;
+                    use std::sync::atomic::{AtomicU64, Ordering};
+
+                    // Each bit represents a primary SQLite error code (0-63). Primary codes are
+                    // the least-significant byte of the extended code; real error codes are ≤ 28.
+                    static REPORTED_PRIMARY_CODES: AtomicU64 = AtomicU64::new(0);
+                    let primary_code = (primary_error_code as u64).min(63);
+                    let bit = 1u64 << primary_code;
+                    if REPORTED_PRIMARY_CODES.fetch_or(bit, Ordering::Relaxed) & bit == 0 {
+                        // First occurrence of this primary error code — report to Sentry.
+                        sentry::with_scope(
+                            |scope| {
+                                let mut context = std::collections::BTreeMap::new();
+                                context.insert("message".to_string(), err_message.into());
+                                context.insert("code".to_string(), err_code.into());
+                                context.insert(
+                                    "code_description".to_string(),
+                                    sqlite3::code_to_str(err_code).into(),
+                                );
+                                scope.set_context(
+                                    "sqlite",
+                                    sentry::protocol::Context::Other(context),
+                                );
+                            },
+                            || {
+                                sentry::capture_message(
+                                    "Sqlite Error",
+                                    sentry_log::convert_log_level(level),
+                                )
+                            },
+                        );
+                        // The structured Sentry event is the record; skip the redundant log line.
+                        return;
+                    }
                 }
 
                 log::log!(
@@ -971,6 +984,7 @@ fn save_app_state(conn: &mut SqliteConnection, app_state: &AppState) -> Result<(
                     .agent_management_filters
                     .as_ref()
                     .and_then(|f| serde_json::to_string(f).ok()),
+                team_uid: window.team_uid.map(Into::into),
             };
             diesel::insert_into(schema::windows::dsl::windows)
                 .values(new_window)
@@ -1358,7 +1372,7 @@ fn save_pane_state(
 
             let settings_pane = model::NewSettingsPane {
                 id,
-                current_page: current_page.to_string(),
+                current_page: current_page.slug().to_owned(),
             };
 
             diesel::insert_into(schema::settings_panes::dsl::settings_panes)
@@ -2065,8 +2079,7 @@ fn save_workspaces(
         .into_iter()
         .flat_map(|workspace| {
             workspace.teams.into_iter().filter_map(|team| {
-                let serialized_settings_json =
-                    serde_json::to_string(&team.organization_settings).ok()?;
+                let serialized_settings_json = serde_json::to_string(&team.settings).ok()?;
                 let team_id_match = teams_by_server_uid.get(&team.uid.uid())?;
                 Some(NewTeamSettings {
                     team_id: *team_id_match,
@@ -2338,9 +2351,8 @@ fn read_node(conn: &mut SqliteConnection, node: model::PaneNode) -> Result<PaneN
                         .select(model::SettingsPane::as_select())
                         .first(conn)?;
 
-                    let current_page = SettingsSection::from_str(&settings_pane.current_page)
-                        .ok()
-                        .unwrap_or_default();
+                    let current_page =
+                        SettingsSection::from_slug(&settings_pane.current_page).unwrap_or_default();
                     LeafContents::Settings(SettingsPaneSnapshot::Local {
                         current_page,
                         search_query: None,
@@ -2668,6 +2680,9 @@ fn read_sqlite_data(
                     WindowSnapshot {
                         tabs: saved_tabs,
                         active_tab_index: tab_index,
+                        team_uid: window.team_uid.and_then(|persisted_team_uid| {
+                            ServerId::try_from(persisted_team_uid).ok()
+                        }),
                         quake_mode: window.quake_mode,
                         bounds,
                         universal_search_width: window.universal_search_width,
@@ -2814,11 +2829,11 @@ fn read_sqlite_data(
         .optional()?
         .map(|uid| uid.into());
 
-    // Command history, user profiles, and pending object actions are only
-    // consumed by the GUI; headless launch modes skip loading them.
-    let commands = if data_scope.gui_history() {
+    // The GUI and TUI both consume command history. Other headless launch
+    // modes skip it.
+    let commands = if data_scope.command_history() {
         schema::commands::dsl::commands
-            // Ensure the commands come into memory sorted chronologically.
+            // The newest row for a duplicate command supplies its summary metadata.
             .order(schema::commands::columns::id.desc())
             .load_iter::<model::Command, DefaultLoadingMode>(conn)?
             .filter_map(|command| command.ok())
@@ -2828,7 +2843,7 @@ fn read_sqlite_data(
         Vec::new()
     };
 
-    let user_profiles = if data_scope.gui_history() {
+    let user_profiles = if data_scope.user_profiles() {
         schema::user_profiles::dsl::user_profiles
             .load_iter::<model::UserProfile, DefaultLoadingMode>(conn)?
             .filter_map(|user_profile| user_profile.ok())
@@ -2838,7 +2853,7 @@ fn read_sqlite_data(
         Vec::new()
     };
 
-    let object_actions: Vec<ObjectAction> = if data_scope.gui_history() {
+    let object_actions: Vec<ObjectAction> = if data_scope.gui_only_data() {
         schema::object_actions::dsl::object_actions
             .load_iter::<model::PersistedObjectAction, DefaultLoadingMode>(conn)?
             .filter_map(|object_action| object_action.ok()) // parse into PersistedObjectAction

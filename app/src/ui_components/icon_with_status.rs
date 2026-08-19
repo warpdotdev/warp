@@ -2,7 +2,7 @@ use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::vec2f;
 use warp_core::ui::icons::Icon as WarpIcon;
 use warp_core::ui::theme::color::internal_colors;
-use warp_core::ui::theme::{Fill as WarpThemeFill, WarpTheme};
+use warp_core::ui::theme::{ColorScheme, Fill as WarpThemeFill, WarpTheme};
 use warpui::elements::{
     ChildAnchor, ConstrainedBox, Container, CornerRadius, Element, OffsetPositioning, ParentAnchor,
     ParentElement, ParentOffsetBounds, Radius, Stack,
@@ -75,6 +75,8 @@ fn circle_padding(total: f32) -> f32 {
     (circle_size(total) - icon_size(total)) / 2.
 }
 
+/// Returns the diameter of the status badge's cutout ring, i.e. the badge's
+/// full painted footprint.
 fn badge_size(total: f32, style: StatusBadgeStyle) -> f32 {
     total * style.ring_ratio
 }
@@ -128,7 +130,9 @@ pub(crate) enum IconWithStatusVariant {
     },
     /// A pre-built icon element on an overlay background.
     NeutralElement { icon_element: Box<dyn Element> },
-    /// An Oz agent icon on the theme background.
+    /// A Warp agent conversation: monochrome Warp glyph and circle. Local conversations
+    /// use a foreground/background pair that flips for light and dark themes; ambient
+    /// (cloud) conversations retain the purple brand background and cloud status badge.
     OzAgent {
         status: Option<ConversationStatus>,
         is_ambient: bool,
@@ -140,8 +144,11 @@ pub(crate) enum IconWithStatusVariant {
         is_ambient: bool,
     },
     /// A pre-rendered avatar with an optional status overlay (cloud lobe when
-    /// ambient). Caller must size `avatar` to `circle_size(total_size)` so the
-    /// overlay's overhang matches the other variants.
+    /// ambient). The overlay is anchored to the `total_size` box's bottom-right
+    /// corner however big `avatar` is, so pass either an avatar sized to
+    /// `circle_size(total_size)` (to match the overhang of the other variants)
+    /// or an element that already fills the `total_size` box and places its own
+    /// artwork inside it.
     CustomAvatar {
         avatar: Box<dyn Element>,
         status: Option<ConversationStatus>,
@@ -201,28 +208,9 @@ pub(crate) fn render_icon_with_status_with_badge_style(
             total_size,
         ),
         IconWithStatusVariant::OzAgent { status, is_ambient } => {
-            let circle_background = if is_ambient {
-                ThemeFill::Solid(OZ_AMBIENT_BACKGROUND_COLOR)
-            } else {
-                theme.background()
-            };
-            // In ambient/cloud mode use the combined `OzCloud` silhouette (Oz + cloud),
-            // matching the treatment used in the agent view header. Non-ambient runs
-            // continue to use the plain `Oz` glyph.
-            let oz_glyph = if is_ambient {
-                WarpIcon::OzCloud
-            } else {
-                WarpIcon::Oz
-            };
-            // Cloud (ambient) runs use a black glyph on the light-purple background
-            // for consistency with the web app; local runs keep the theme text color.
-            let glyph_color = if is_ambient {
-                WarpThemeFill::Solid(ColorU::black())
-            } else {
-                theme.main_text_color(theme.background())
-            };
+            let (circle_background, glyph_color) = warp_agent_circle_colors(theme, is_ambient);
             let circle = render_circle(
-                oz_glyph.to_warpui_icon(glyph_color).finish(),
+                WarpIcon::Agent.to_warpui_icon(glyph_color).finish(),
                 circle_background,
                 total_size,
             );
@@ -279,6 +267,19 @@ pub(crate) fn render_icon_with_status_with_badge_style(
             theme,
             status_container_background,
         ),
+    }
+}
+
+fn warp_agent_circle_colors(theme: &WarpTheme, is_ambient: bool) -> (WarpThemeFill, WarpThemeFill) {
+    if is_ambient {
+        return (
+            ThemeFill::Solid(OZ_AMBIENT_BACKGROUND_COLOR),
+            WarpThemeFill::Solid(ColorU::black()),
+        );
+    }
+    match theme.inferred_color_scheme() {
+        ColorScheme::LightOnDark => (WarpThemeFill::black(), WarpThemeFill::white()),
+        ColorScheme::DarkOnLight => (WarpThemeFill::white(), WarpThemeFill::black()),
     }
 }
 
@@ -443,9 +444,11 @@ fn render_with_optional_status_badge(
     status_container_background: WarpThemeFill,
 ) -> Box<dyn Element> {
     let Some(status) = status else {
-        // No status badge: still occupy the full `total_size` footprint so the agent
-        // circle (which is only `circle_size(total)` wide) sits centered in the box
-        // the caller reserved.
+        // No status badge: still reserve the full `total_size` footprint the caller
+        // asked for, so badged and un-badged variants occupy identical space.
+        // `ConstrainedBox` only tightens constraints — it does not center — so the
+        // circle (which is only `circle_size(total)` wide) is painted at the box's
+        // top-left. Callers that need it centered must wrap it in `Align`.
         return ConstrainedBox::new(circle)
             .with_width(total_size)
             .with_height(total_size)
@@ -494,3 +497,7 @@ fn render_with_optional_status_badge(
         .with_height(total_size)
         .finish()
 }
+
+#[cfg(test)]
+#[path = "icon_with_status_tests.rs"]
+mod tests;

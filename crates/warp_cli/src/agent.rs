@@ -1,5 +1,6 @@
 use std::fmt;
 use std::path::PathBuf;
+use std::str::FromStr;
 
 use clap::builder::PossibleValue;
 use clap::{Args, Subcommand, ValueEnum};
@@ -37,6 +38,92 @@ impl fmt::Display for OutputFormat {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let value = self.to_possible_value().expect("no values are skipped");
         f.write_str(value.get_name())
+    }
+}
+
+/// Source-control provider for a repository checkout.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum RepositoryForge {
+    #[serde(rename = "GITHUB")]
+    GitHub,
+    #[serde(rename = "GITLAB")]
+    GitLab,
+}
+/// Server-supplied repository HEAD used to prepare an agent run.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", content = "value", rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum RepositoryHeadRef {
+    CommitSha(String),
+    Branch(String),
+}
+
+impl RepositoryHeadRef {
+    pub fn value(&self) -> &str {
+        match self {
+            Self::CommitSha(value) | Self::Branch(value) => value,
+        }
+    }
+}
+
+/// Server-supplied override for an environment repository's initial HEAD.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RepositoryHeadOverride {
+    pub code_forge: RepositoryForge,
+    pub repo_owner: String,
+    pub repo_name: String,
+    pub head: RepositoryHeadRef,
+}
+
+impl RepositoryHeadOverride {
+    pub fn identity(&self) -> (RepositoryForge, &str, &str) {
+        (
+            self.code_forge,
+            self.repo_owner.as_str(),
+            self.repo_name.as_str(),
+        )
+    }
+
+    fn validate(&self) -> Result<(), String> {
+        if self.repo_owner.is_empty() {
+            return Err("repo_owner must not be empty".to_string());
+        }
+        if self.repo_name.is_empty() {
+            return Err("repo_name must not be empty".to_string());
+        }
+        match &self.head {
+            RepositoryHeadRef::CommitSha(commit_sha) => {
+                if commit_sha.len() != 40
+                    || !commit_sha
+                        .bytes()
+                        .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+                {
+                    return Err(
+                        "commit SHA must be an exact 40-character lowercase hexadecimal SHA"
+                            .to_string(),
+                    );
+                }
+            }
+            RepositoryHeadRef::Branch(branch) => {
+                if branch.is_empty() || branch.trim() != branch {
+                    return Err(
+                        "branch must not be empty or contain surrounding whitespace".to_string()
+                    );
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+impl FromStr for RepositoryHeadOverride {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        let head_override = serde_json::from_str::<Self>(value)
+            .map_err(|error| format!("invalid repository head override JSON: {error}"))?;
+        head_override.validate()?;
+        Ok(head_override)
     }
 }
 
@@ -216,7 +303,7 @@ impl Harness {
 
     pub fn display_name(self) -> &'static str {
         match self {
-            Self::Oz => "Oz",
+            Self::Oz => "Warp Agent",
             Self::Claude => "Claude Code",
             Self::OpenCode => "OpenCode",
             Self::Gemini => "Gemini CLI",
@@ -281,9 +368,9 @@ pub enum AgentProfileCommand {
 /// Agent-related subcommands.
 #[derive(Debug, Clone, Subcommand)]
 pub enum AgentCommand {
-    /// Run a new Oz agent.
+    /// Run a new Warp Agent.
     Run(RunAgentArgs),
-    /// Dispatch an Oz agent that runs remotely.
+    /// Dispatch a cloud agent.
     RunCloud(RunCloudArgs),
     /// Manage agent profiles.
     #[command(subcommand)]
@@ -402,6 +489,29 @@ pub struct RunAgentArgs {
     )]
     pub idle_on_complete: Option<humantime::Duration>,
 
+    /// Keep the agent's session open after the conversation ends in a terminal error, so a human
+    /// can attach to the failed run and debug in it. The agent process is the shared-session
+    /// sharer, so without this the session dies with the process.
+    ///
+    /// An idle window, not a fixed one: a follow-up cancels the pending exit.
+    ///
+    /// Deliberately separate from `--idle-on-complete`, which covers the success/blocked/cancelled
+    /// lifecycle. Neither flag is a fallback for the other.
+    ///
+    /// Cloud workers set this through `OZ_IDLE_ON_FAIL` rather than the flag, so that a pinned
+    /// CLI predating this option ignores it instead of rejecting an unknown argument.
+    ///
+    /// You can optionally provide a duration (e.g. `--idle-on-fail 10m`).
+    #[arg(
+        long = "idle-on-fail",
+        value_name = "DURATION",
+        env = "OZ_IDLE_ON_FAIL",
+        num_args = 0..=1,
+        default_missing_value = "15m",
+        hide = true
+    )]
+    pub idle_on_fail: Option<humantime::Duration>,
+
     #[command(flatten)]
     pub snapshot: SnapshotArgs,
     /// Identifier for the task that spawned this agent, used to report progress.
@@ -448,7 +558,7 @@ pub struct RunAgentArgs {
 
     /// Execution harness for the agent run.
     ///
-    /// "oz" (default) uses Warp's built-in agent infrastructure.
+    /// "oz" (default) uses Warp Agent.
     /// "claude" delegates to the `claude` CLI.
     #[arg(long = "harness", value_name = "HARNESS", default_value_t = Harness::Oz, hide = true)]
     pub harness: Harness,
@@ -470,6 +580,20 @@ pub struct RunAgentArgs {
 
     #[arg(long = "configure-git-credentials-with-github", hide = true, requires_all = ["task_id"])]
     pub configure_git_credentials_with_github: bool,
+
+    /// Repository HEAD override supplied by the server for this task.
+    #[arg(
+        long = "repository-head-override-json",
+        value_name = "JSON",
+        action = clap::ArgAction::Append,
+        requires = "task_id",
+        hide = true
+    )]
+    pub repository_head_overrides: Vec<RepositoryHeadOverride>,
+
+    /// Remove the origin remote from environment repositories after setup.
+    #[arg(long = "remove-repository-origins", requires = "task_id", hide = true)]
+    pub remove_repository_origins: bool,
 }
 
 impl RunAgentArgs {
@@ -535,6 +659,23 @@ pub struct RunCloudArgs {
     /// Name for this agent task.
     #[arg(long = "name", short = 'n')]
     pub name: Option<String>,
+
+    /// Title for this agent task and its conversation.
+    ///
+    /// Unlike `--name`, which sets the agent configuration name, `--title`
+    /// controls the task and conversation title shown for the run. When
+    /// spawning a factory sibling, pass the child task title here.
+    #[arg(long = "title", value_name = "TITLE")]
+    pub title: Option<String>,
+
+    /// Run ID of the parent run that is spawning this run.
+    ///
+    /// Setting this makes the new run an orchestration child of the given
+    /// parent: it inherits the parent's lineage (depth, root run) and scope,
+    /// is attributed to the ORCHESTRATION source, and is tracked on the parent
+    /// run. Pass the current run ID when a factory foreman spawns a sibling.
+    #[arg(long = "parent-run-id", value_name = "RUN_ID")]
+    pub parent_run_id: Option<String>,
 
     /// MCP servers to start before executing the agent.
     ///
@@ -693,6 +834,10 @@ pub struct AgentCreateArgs {
     #[arg(long = "description")]
     pub description: Option<String>,
 
+    /// Base prompt for runs of this agent.
+    #[arg(long = "prompt", value_name = "TEXT")]
+    pub prompt: Option<String>,
+
     /// Attach a secret to the agent. Repeat the flag for multiple secrets.
     #[arg(long = "secret", value_name = "NAME")]
     pub secrets: Vec<String>,
@@ -802,6 +947,14 @@ pub struct AgentUpdateArgs {
     /// Remove the agent default environment.
     #[arg(long = "remove-environment", conflicts_with = "environment")]
     pub remove_environment: bool,
+
+    /// Replacement base prompt for runs executed by this agent.
+    #[arg(long = "prompt", value_name = "TEXT", conflicts_with = "remove_prompt")]
+    pub prompt: Option<String>,
+
+    /// Remove the agent base prompt.
+    #[arg(long = "remove-prompt", conflicts_with = "prompt")]
+    pub remove_prompt: bool,
 
     /// JSON formatting configuration.
     #[command(flatten)]

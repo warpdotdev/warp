@@ -3,15 +3,13 @@
 use std::collections::HashMap;
 use std::sync::mpsc::SyncSender;
 
-use base64::Engine as _;
-use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 #[cfg(not(target_family = "wasm"))]
 use session_sharing_protocol::sharer::SessionSourceType;
 use url::Url;
+#[cfg(not(target_family = "wasm"))]
 use warp_cli::agent::Harness;
 use warp_core::execution_mode::AppExecutionMode;
 use warp_errors::report_error;
-use warp_multi_agent_api as multi_agent_api;
 use warpui::{
     AppContext, EntityId, ModelHandle, SingletonEntity, ViewContext, ViewHandle, WindowId,
 };
@@ -28,8 +26,8 @@ use crate::AIExecutionProfilesModel;
 use crate::ai::active_agent_views_model::ActiveAgentViewsModel;
 use crate::ai::agent::conversation::{AIConversationId, ConversationStatus};
 use crate::ai::agent::{RenderableAIError, StartAgentExecutionMode};
-use crate::ai::ambient_agents::task::{HarnessConfig, normalize_orchestrator_agent_name};
-use crate::ai::ambient_agents::{AgentConfigSnapshot, AmbientAgentTaskId};
+use crate::ai::ambient_agents::AmbientAgentTaskId;
+use crate::ai::ambient_agents::task::normalize_orchestrator_agent_name;
 #[cfg(feature = "local_fs")]
 use crate::ai::blocklist::BlocklistAIHistoryEvent;
 use crate::ai::blocklist::agent_view::{AgentViewControllerEvent, AgentViewEntryOrigin};
@@ -39,9 +37,10 @@ use crate::ai::blocklist::{BlocklistAIHistoryModel, StartAgentRequest};
 use crate::ai::blocklist::{apply_child_agent_model_override, prepare_local_oz_child_launch};
 use crate::ai::conversation_utils;
 use crate::ai::llms::LLMPreferences;
-use crate::ai::skills::SkillManager;
+use crate::ai::orchestration::{RemoteChildLaunchConfig, prepare_remote_child_launch};
 use crate::app_state::{AmbientAgentPaneSnapshot, LeafContents, TerminalPaneSnapshot};
 use crate::code::buffer_location::LocalOrRemotePath;
+use crate::features::FeatureFlag;
 #[cfg(feature = "local_fs")]
 use crate::pane_group::CodeSource;
 use crate::pane_group::Event::OpenConversationHistory;
@@ -52,7 +51,6 @@ use crate::pane_group::{self, Direction, PaneGroup};
 use crate::persistence::{BlockCompleted, ModelEvent};
 #[cfg(not(target_family = "wasm"))]
 use crate::server::server_api::ServerApiProvider;
-use crate::server::server_api::ai::{SpawnAgentRequest, UserQueryMode};
 use crate::session_management::SessionNavigationData;
 use crate::terminal::cli_agent_sessions::CLIAgentSessionsModel;
 use crate::terminal::general_settings::GeneralSettings;
@@ -62,7 +60,6 @@ use crate::terminal::shared_session::manager::{Manager, ManagerEvent};
 use crate::terminal::shared_session::role_change_modal::RoleChangeOpenSource;
 use crate::terminal::shared_session::{SharedSessionStatus, join_link};
 use crate::terminal::view::Event;
-use crate::terminal::view::ambient_agent::should_disable_snapshot;
 use crate::terminal::{TerminalManager, TerminalView};
 use crate::view_components::ToastFlavor;
 use crate::workspace::sync_inputs::SyncedInputState;
@@ -93,35 +90,6 @@ pub struct TerminalPane {
     /// by the `PaneStack`, since the terminal manager is the associated data for
     /// the backing pane view.
     view: ViewHandle<TerminalPaneView>,
-}
-
-fn resolve_runtime_skills(
-    skill_references: &[ai::skills::SkillReference],
-    ctx: &AppContext,
-) -> Result<Vec<String>, Vec<String>> {
-    let skill_manager = SkillManager::as_ref(ctx);
-    let mut runtime_skills = Vec::with_capacity(skill_references.len());
-    let mut unresolved_references = Vec::new();
-
-    for reference in skill_references {
-        let Some(skill) = skill_manager.active_skill_by_reference(reference, ctx) else {
-            unresolved_references.push(reference.to_string());
-            continue;
-        };
-        runtime_skills.push(serialize_proto_to_base64(&multi_agent_api::Skill::from(
-            skill.clone(),
-        )));
-    }
-
-    if unresolved_references.is_empty() {
-        Ok(runtime_skills)
-    } else {
-        Err(unresolved_references)
-    }
-}
-
-fn serialize_proto_to_base64<M: prost::Message>(message: &M) -> String {
-    BASE64_STANDARD.encode(message.encode_to_vec())
 }
 
 /// Returns the host terminal's `SharedSessionSource`, or `None` if it is
@@ -373,6 +341,7 @@ impl PaneContent for TerminalPane {
                 group.restore_missing_child_agent_panes_for_parent(
                     *conversation_id,
                     terminal_pane_id.into(),
+                    true,
                     ctx,
                 );
             }
@@ -1369,6 +1338,31 @@ fn handle_terminal_view_event(
                     );
                 }
             }
+            Event::EnsureUnifiedViewerChildPane {
+                conversation_id,
+                task,
+            } => {
+                if FeatureFlag::OrchestrationUnifiedStack.is_enabled() {
+                    group.materialize_viewer_child_pane_from_task(
+                        *conversation_id,
+                        task.as_ref().clone(),
+                        ctx,
+                    );
+                }
+            }
+            Event::OrchestrationChildSharedSessionJoinFailed {
+                conversation_id,
+                session_id,
+            } => {
+                if FeatureFlag::OrchestrationUnifiedStack.is_enabled() {
+                    group.recover_viewer_child_join_failure(
+                        pane_id,
+                        *conversation_id,
+                        *session_id,
+                        ctx,
+                    );
+                }
+            }
             Event::HideAIDocumentPanes => {
                 group.close_all_ai_document_panes(ctx);
             }
@@ -1408,7 +1402,7 @@ fn handle_terminal_view_event(
             }
             Event::OpenAgentProfileEditor { profile_id } => {
                 ctx.emit(pane_group::Event::OpenAgentProfileEditor {
-                    profile_id: *profile_id,
+                    profile_id: profile_id.clone(),
                 });
             }
             Event::InsertCodeReviewComments {
@@ -1457,7 +1451,9 @@ fn handle_terminal_view_event(
                 // joinable `session_id`. Materializes a dedicated hidden
                 // shared-session viewer pane for the child so subsequent pill
                 // clicks land on a populated agent view rather than an empty
-                // cloud-mode shell.
+                // cloud-mode shell. Only reached while
+                // `OrchestrationUnifiedStack` is disabled; the unified stack
+                // emits `EnsureUnifiedViewerChildPane` instead.
                 group.ensure_shared_session_viewer_child_pane(*conversation_id, *session_id, ctx);
             }
             Event::OpenChildAgentInNewTab { conversation_id } => {
@@ -1577,13 +1573,19 @@ fn dispatch_start_agent_conversation(
             runner_id,
             agent_identity_uid,
         } => {
+            let working_dir = group
+                .terminal_view_from_pane_id(parent_pane_id, ctx)
+                .and_then(|view| view.as_ref(ctx).pwd_if_local(ctx))
+                .map(std::path::PathBuf::from)
+                .unwrap_or_default();
             launch_remote_child(
                 group,
                 parent_pane_id,
                 request,
-                RemoteLaunchFields {
+                RemoteChildLaunchConfig {
                     environment_id,
                     skill_references,
+                    working_dir,
                     model_id,
                     computer_use_enabled,
                     worker_host,
@@ -1672,8 +1674,8 @@ fn launch_local_no_harness_child(
                     // so the share-reporter in
                     // `local_tty/terminal_manager.rs` can resolve it from
                     // the selected conversation when the share handshake
-                    // succeeds. Mirrors the pattern used by
-                    // `OrchestrationViewerModel::apply_children_fetch`.
+                    // succeeds. Mirrors how `OrchestrationViewerModel`
+                    // stamps run/task ids onto viewer child placeholders.
                     BlocklistAIHistoryModel::handle(ctx).update(ctx, |model, ctx| {
                         if let Some(conversation) = model.conversation_mut(&conversation_id) {
                             conversation.set_task_id(child_task_id);
@@ -1887,28 +1889,6 @@ fn launch_local_harness_child(
     );
 }
 
-/// Fields destructured from `StartAgentExecutionMode::Remote` so they can be
-/// passed through to [`launch_remote_child`] as a single argument cluster.
-struct RemoteLaunchFields {
-    environment_id: String,
-    skill_references: Vec<ai::skills::SkillReference>,
-    model_id: String,
-    computer_use_enabled: bool,
-    worker_host: String,
-    harness_type: String,
-    title: String,
-    /// Managed-secret name forwarded from the orchestration UI for non-Oz
-    /// harness credentials. Resolved to `AgentConfigSnapshot.harness_auth_secrets`
-    /// when applicable.
-    auth_secret_name: Option<String>,
-    /// Runner UID selecting the child's compute config. Empty means "no
-    /// override" — resolved at dispatch via the environment's default runner.
-    runner_id: String,
-    /// UID of the named agent (service account) the remote child should
-    /// execute as; forwarded to `SpawnAgentRequest.agent_identity_uid`.
-    agent_identity_uid: Option<String>,
-}
-
 /// Sets up a hidden ambient-agent pane for a Remote child agent: creates the
 /// child conversation, marks it as remote, resolves runtime skills (silently
 /// bailing with a status update on resolution failure), constructs the
@@ -1926,38 +1906,21 @@ fn launch_remote_child(
     group: &mut PaneGroup,
     parent_pane_id: PaneId,
     request: StartAgentRequest,
-    fields: RemoteLaunchFields,
+    config: RemoteChildLaunchConfig,
     ctx: &mut ViewContext<PaneGroup>,
 ) -> Option<AIConversationId> {
-    let RemoteLaunchFields {
-        environment_id,
-        skill_references,
-        model_id,
-        computer_use_enabled,
-        worker_host,
-        harness_type,
-        title,
-        auth_secret_name,
-        runner_id,
-        agent_identity_uid,
-    } = fields;
-
     let request_id = request.id;
-    let orchestration_harness = if harness_type.trim().is_empty() {
-        Harness::Oz
-    } else {
-        Harness::parse_orchestration_harness(&harness_type).unwrap_or(Harness::Unknown)
-    };
-    let Some(parent_run_id) = request.parent_run_id.clone() else {
+    if request.parent_run_id.is_none() {
         report_error!(
             "Remote StartAgent request missing parent_run_id",
             extra: { "parent_conversation_id" => ?request.parent_conversation_id }
         );
         return None;
-    };
+    }
 
     let agent_name = normalize_orchestrator_agent_name(&request.name);
     let request_name = agent_name.clone().unwrap_or_default();
+    let orchestration_harness = config.orchestration_harness();
 
     let new_pane_id = group.insert_ambient_agent_pane_hidden_for_child_agent(parent_pane_id, ctx);
 
@@ -1968,16 +1931,23 @@ fn launch_remote_child(
     };
 
     let terminal_view_id = new_terminal_view.id();
+    // Under the unified stack, remote children are not persisted to the local DB
+    // (they are re-seeded from the server on restore). Under the flag-off path,
+    // children must be persisted so they survive restarts.
+    let is_remote = crate::features::FeatureFlag::OrchestrationUnifiedStack.is_enabled();
     let conversation_id = BlocklistAIHistoryModel::handle(ctx).update(ctx, |history_model, ctx| {
         let id = history_model.start_new_child_conversation(
             terminal_view_id,
             request_name.clone(),
             request.parent_conversation_id,
             Some(orchestration_harness),
+            is_remote,
             ctx,
         );
-        // Mark as remote so the parent's LocalAgentTaskSyncModel skips status
-        // reporting — the remote worker handles it.
+        // `start_new_child_conversation` already marked this remote above
+        // (before its first persist); this call is now a no-op, kept so the
+        // parent's LocalAgentTaskSyncModel skipping status reporting for
+        // remote children stays obviously correct at a glance.
         history_model.mark_conversation_as_remote_child(id, ctx);
         id
     });
@@ -1986,19 +1956,13 @@ fn launch_remote_child(
         model.record_new_conversation_request_complete(request_id, conversation_id, ctx);
     });
 
-    let runtime_skills = match resolve_runtime_skills(&skill_references, ctx) {
-        Ok(runtime_skills) => runtime_skills,
-        Err(unresolved_references) => {
-            let error_message = format!(
-                "Failed to resolve child agent skills: {}",
-                unresolved_references.join(", ")
-            );
+    let prepared = match prepare_remote_child_launch(&request, config, ctx) {
+        Ok(prepared) => prepared,
+        Err(error) => {
+            let error_message = error.user_message();
             report_error!(
-                "Failed to resolve StartAgentV2 skill references for remote child",
-                extra: {
-                    "conversation_id" => ?conversation_id,
-                    "unresolved_references" => %unresolved_references.join(", ")
-                }
+                anyhow::Error::new(error).context("Failed to prepare remote child launch"),
+                extra: { "conversation_id" => ?conversation_id }
             );
             BlocklistAIHistoryModel::handle(ctx).update(ctx, |history_model, ctx| {
                 history_model.update_conversation_status_with_error(
@@ -2013,80 +1977,6 @@ fn launch_remote_child(
         }
     };
 
-    // Treat an empty environment_id as "no environment specified" so the
-    // spawn request leaves the config.environment_id field unset. The
-    // server's StartAgent producer defaults to the parent's environment
-    // when available, so an empty value here means the caller explicitly
-    // opted into running with an empty environment.
-    let environment_id = Some(environment_id).filter(|s| !s.trim().is_empty());
-    // Unrecognized harness types collapse to None so the server picks
-    // its default, matching the behavior of an empty `harness_type`.
-    // We deliberately do NOT round-trip `Harness::Unknown` to the server;
-    // that variant is for representing server-originated unknowns to the
-    // user, not for writes.
-    let harness_override = if harness_type.is_empty() {
-        None
-    } else {
-        match <Harness as clap::ValueEnum>::from_str(&harness_type, true) {
-            Ok(harness) => Some(HarnessConfig::from_harness_type(harness)),
-            Err(_) => {
-                log::warn!(
-                    "Unknown harness type from StartAgentV2 proto: {harness_type:?}; omitting harness override so the server picks its default"
-                );
-                None
-            }
-        }
-    };
-    let computer_use_enabled =
-        (orchestration_harness == Harness::Oz).then_some(computer_use_enabled);
-    // Map the run-wide auth secret name into the harness-specific
-    // config variant. For unsupported harnesses (Oz, OpenCode, Gemini,
-    // Unknown), the secret is silently ignored — those harnesses either
-    // use Warp's built-in auth (Oz) or don't currently support managed
-    // secrets via this flow.
-    let harness_auth_secrets = auth_secret_name
-        .as_ref()
-        .filter(|name| !name.trim().is_empty())
-        .and_then(|name| match orchestration_harness {
-            Harness::Claude => Some(crate::ai::ambient_agents::task::HarnessAuthSecretsConfig {
-                claude_auth_secret_name: Some(name.clone()),
-                codex_auth_secret_name: None,
-            }),
-            Harness::Codex => Some(crate::ai::ambient_agents::task::HarnessAuthSecretsConfig {
-                claude_auth_secret_name: None,
-                codex_auth_secret_name: Some(name.clone()),
-            }),
-            Harness::Oz | Harness::OpenCode | Harness::Gemini | Harness::Unknown => None,
-        });
-    let spawn_request = SpawnAgentRequest {
-        prompt: Some(request.prompt),
-        mode: UserQueryMode::Normal,
-        config: Some(AgentConfigSnapshot {
-            name: agent_name,
-            environment_id,
-            runner_id: (!runner_id.is_empty()).then_some(runner_id),
-            model_id: (!model_id.is_empty()).then_some(model_id),
-            worker_host: (!worker_host.is_empty()).then_some(worker_host),
-            computer_use_enabled,
-            harness: harness_override,
-            harness_auth_secrets,
-            ..Default::default()
-        }),
-        title: (!title.is_empty()).then_some(title),
-        team: None,
-        skill: None,
-        attachments: vec![],
-        interactive: Some(true),
-        parent_run_id: Some(parent_run_id),
-        runtime_skills,
-        referenced_attachments: vec![],
-        conversation_id: None,
-        initial_snapshot_token: None,
-        agent_identity_uid: agent_identity_uid.filter(|uid| !uid.trim().is_empty()),
-        snapshot_disabled: should_disable_snapshot(ctx).then_some(true),
-        orchestration_handoff: None,
-    };
-
     new_terminal_view.update(ctx, |terminal_view, ctx| {
         terminal_view.enter_agent_view(
             None,
@@ -2097,7 +1987,7 @@ fn launch_remote_child(
         if let Some(ambient_agent_view_model) = terminal_view.ambient_agent_view_model() {
             ambient_agent_view_model.update(ctx, |model, ctx| {
                 model.set_conversation_id(Some(conversation_id));
-                model.spawn_agent_with_request(spawn_request, ctx);
+                model.spawn_agent_with_request(prepared.spawn_request, ctx);
             });
         } else {
             report_error!("Remote StartAgent child pane missing ambient agent view model");
@@ -2120,11 +2010,7 @@ fn handle_ai_history_event(
     is_shared_ambient_agent_session: bool,
     ctx: &mut ViewContext<PaneGroup>,
 ) {
-    use std::sync::Arc;
-
-    use crate::ai::blocklist::{
-        AIQueryHistoryOutputStatus, PersistedAIInput, PersistedAIInputType,
-    };
+    use crate::ai::blocklist::maybe_build_ai_query_upsert_event;
 
     if event
         .terminal_surface_id()
@@ -2134,74 +2020,21 @@ fn handle_ai_history_event(
     }
 
     match event {
-        BlocklistAIHistoryEvent::AppendedExchange {
-            exchange_id,
-            conversation_id,
-            is_hidden,
-            ..
-        }
-        | BlocklistAIHistoryEvent::UpdatedStreamingExchange {
-            exchange_id,
-            conversation_id,
-            is_hidden,
-            ..
-        } => {
+        BlocklistAIHistoryEvent::AppendedExchange { .. }
+        | BlocklistAIHistoryEvent::UpdatedStreamingExchange { .. } => {
             // Check if session restoration is enabled.
             if !*GeneralSettings::as_ref(ctx).restore_session
                 || !AppExecutionMode::as_ref(ctx).can_save_session()
             {
                 return;
             }
-
-            let Some(conversation) =
-                BlocklistAIHistoryModel::as_ref(ctx).conversation(conversation_id)
-            else {
-                log::warn!("Received event with invalid conversation ID: {conversation_id:?}");
+            let Some(upsert_ai_query_event) = maybe_build_ai_query_upsert_event(
+                event,
+                terminal_view_id,
+                is_shared_ambient_agent_session,
+                ctx,
+            ) else {
                 return;
-            };
-
-            let Some(exchange) = conversation.exchange_with_id(*exchange_id) else {
-                log::warn!("Received event with invalid exchange ID: {exchange_id:?}");
-                return;
-            };
-
-            // Hidden blocks and passive-only conversations should not be restored, so we skip
-            // them.
-            if *is_hidden || conversation.is_entirely_passive() {
-                return;
-            }
-
-            // Do not persist AI queries from shared ambient agent sessions that we've viewed,
-            // as these were sent as part of an ambient agent run and shouldn't polute the up arrow history.
-            if is_shared_ambient_agent_session {
-                return;
-            }
-
-            // Only query-bearing inputs (e.g. user queries) are persisted for
-            // up-arrow history. Early return and skip writing for exchanges that
-            // carry empty input.
-            let inputs: Vec<_> = exchange
-                .input
-                .iter()
-                .filter_map(|input| PersistedAIInputType::try_from(input).ok())
-                .collect();
-            if inputs.is_empty() {
-                return;
-            }
-
-            let persisted_query = PersistedAIInput {
-                start_ts: exchange.start_time,
-                inputs,
-                exchange_id: exchange.id,
-                conversation_id: *conversation_id,
-                output_status: AIQueryHistoryOutputStatus::from(&exchange.output_status),
-                working_directory: exchange.working_directory.clone(),
-                // TODO(CORE-3546): shell: exchange.shell.clone(),
-                model_id: exchange.model_id.clone(),
-                coding_model_id: exchange.coding_model_id.clone(),
-            };
-            let upsert_ai_query_event = ModelEvent::UpsertAIQuery {
-                query: Arc::new(persisted_query),
             };
             let _ = ctx.spawn(
                 // Sending over a sync sender can block the current thread, so we

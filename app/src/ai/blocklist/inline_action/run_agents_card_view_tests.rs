@@ -32,6 +32,7 @@ fn make_request_with_skills(
             prompt: "do work".to_string(),
             title: "Child agent".to_string(),
             agent_identity_uid: String::new(),
+            model_id: String::new(),
         }],
         plan_id: String::new(),
         harness_auth_secret_name: None,
@@ -330,6 +331,7 @@ mod format_terminal_state_tests {
     fn launched(name: &str, agent_id: &str) -> RunAgentsAgentOutcome {
         RunAgentsAgentOutcome {
             name: name.to_string(),
+            resolved_model_id: String::new(),
             kind: RunAgentsAgentOutcomeKind::Launched {
                 agent_id: agent_id.to_string(),
             },
@@ -339,6 +341,7 @@ mod format_terminal_state_tests {
     fn failed(name: &str, error: &str) -> RunAgentsAgentOutcome {
         RunAgentsAgentOutcome {
             name: name.to_string(),
+            resolved_model_id: String::new(),
             kind: RunAgentsAgentOutcomeKind::Failed {
                 error: error.to_string(),
             },
@@ -641,4 +644,71 @@ fn local_to_cloud_idempotent_when_already_remote() {
         computer_use_enabled,
         "toggle to Remote when already Remote should not clobber computer_use"
     );
+}
+
+mod is_orphaned_by_finished_output_tests {
+    use super::super::is_orphaned_by_finished_output;
+    use crate::ai::agent::{AIAgentOutput, CancellationReason, RenderableAIError, Shared};
+    use crate::ai::blocklist::action_model::AIActionStatus;
+    use crate::ai::blocklist::block::model::AIBlockOutputStatus;
+
+    fn partial_output() -> Shared<AIAgentOutput> {
+        Shared::new(AIAgentOutput::default())
+    }
+
+    fn cancelled_block() -> AIBlockOutputStatus {
+        AIBlockOutputStatus::Cancelled {
+            partial_output: Some(partial_output()),
+            reason: CancellationReason::ManuallyCancelled,
+        }
+    }
+
+    #[test]
+    fn statusless_action_on_cancelled_block_is_orphaned() {
+        assert!(is_orphaned_by_finished_output(None, &cancelled_block()));
+    }
+
+    #[test]
+    fn statusless_action_on_failed_block_is_orphaned() {
+        let failed = AIBlockOutputStatus::Failed {
+            partial_output: Some(partial_output()),
+            error: RenderableAIError::other("boom", false),
+        };
+        assert!(is_orphaned_by_finished_output(None, &failed));
+    }
+
+    #[test]
+    fn statusless_action_on_unfinished_or_successful_block_is_not_orphaned() {
+        for block_status in [
+            AIBlockOutputStatus::Pending,
+            AIBlockOutputStatus::PartiallyReceived {
+                output: partial_output(),
+            },
+            AIBlockOutputStatus::Complete {
+                output: partial_output(),
+            },
+        ] {
+            assert!(
+                !is_orphaned_by_finished_output(None, &block_status),
+                "{block_status:?} should not orphan the card"
+            );
+        }
+    }
+
+    /// An action that reached the queue gets a real result when the
+    /// conversation is cancelled, so its own status must keep driving the card.
+    #[test]
+    fn action_with_status_on_cancelled_block_is_not_orphaned() {
+        for action_status in [
+            AIActionStatus::Preprocessing,
+            AIActionStatus::Queued,
+            AIActionStatus::Blocked,
+            AIActionStatus::RunningAsync,
+        ] {
+            assert!(
+                !is_orphaned_by_finished_output(Some(&action_status), &cancelled_block()),
+                "{action_status:?} should not orphan the card"
+            );
+        }
+    }
 }

@@ -11,8 +11,8 @@ use warp_core::user_preferences::GetUserPreferences;
 use warp_errors::report_error;
 use warpui::r#async::{SpawnedFutureHandle, Timer};
 use warpui::{
-    AppContext, Entity, ModelAsRef, ModelContext, ModelHandle, SingletonEntity, ViewHandle,
-    WeakModelHandle,
+    AppContext, Entity, EntityId, ModelAsRef, ModelContext, ModelHandle, SingletonEntity,
+    ViewHandle, WeakModelHandle,
 };
 
 use super::context_chip::{
@@ -23,13 +23,15 @@ use super::context_chip::{
 use super::logging::{ChipCommandLogEntry, PromptChipExecutionPhase, PromptChipLogger};
 use super::prompt::Prompt;
 use super::{ChipResult, ChipValue, ContextChipKind, chips_to_string};
+use crate::CLIAgentSessionsModel;
+use crate::ai::blocklist::agent_view::AgentViewController;
 use crate::code_review::git_repo_model::{GitRepoStatusEvent, GitRepoStatusModel};
 use crate::code_review::github_repo_model::{GitHubRepoEvent, GitHubRepoModel};
 use crate::context_chips::display_chip::GitLineChanges;
 use crate::editor::EditorView;
 use crate::features::FeatureFlag;
 use crate::menu::{MenuItem, MenuItemFields};
-use crate::settings::{InputSettings, WarpPromptSeparator};
+use crate::settings::{AISettings, AISettingsChangedEvent, InputSettings, WarpPromptSeparator};
 use crate::terminal::event::{BlockType, UserBlockCompleted};
 use crate::terminal::model::block::{Block, BlockMetadata};
 use crate::terminal::model::session::{ExecuteCommandOptions, Session, Sessions, SessionsEvent};
@@ -156,6 +158,8 @@ pub struct CurrentPrompt {
     sessions: ModelHandle<Sessions>,
     prompt_chip_logger: PromptChipLogger,
     update_tx: async_channel::Sender<()>,
+    agent_view_controller: Option<WeakModelHandle<AgentViewController>>,
+    terminal_view_id: Option<EntityId>,
 
     /// When set, branch, branch status, and diff stats are populated from
     /// `GitRepoStatusModel` filesystem events.
@@ -171,6 +175,18 @@ pub struct CurrentPrompt {
 struct PromptContext {
     active_block_metadata: BlockMetadata,
     environment: Environment,
+}
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct ActiveChipSurfaces {
+    prompt: bool,
+    agent_footer: bool,
+    cli_agent_footer: bool,
+}
+
+impl ActiveChipSurfaces {
+    fn any(self) -> bool {
+        self.prompt || self.agent_footer || self.cli_agent_footer
+    }
 }
 
 #[derive(Clone)]
@@ -231,6 +247,8 @@ impl CurrentPrompt {
             latest_context: None,
             prompt_chip_logger: PromptChipLogger::default(),
             update_tx,
+            agent_view_controller: None,
+            terminal_view_id: None,
             same_line_prompt_enabled: prompt.as_ref(ctx).same_line_prompt_enabled(),
             separator: prompt.as_ref(ctx).separator(),
             git_repo_status: None,
@@ -241,20 +259,39 @@ impl CurrentPrompt {
     /// This is used to subscribe to an editor view (i.e. in the input) whose buffer
     /// we'd like to use to update chip state.
     pub fn subscribe_to_input_editor(
-        &self,
+        &mut self,
         editor: ViewHandle<EditorView>,
+        agent_view_controller: ModelHandle<AgentViewController>,
+        terminal_view_id: EntityId,
         ctx: &mut ModelContext<Self>,
     ) {
+        self.agent_view_controller = Some(agent_view_controller.downgrade());
+        self.terminal_view_id = Some(terminal_view_id);
+
+        ctx.subscribe_to_model(&agent_view_controller, |me, _, _, ctx| {
+            me.update_states_with_new_context(ctx);
+        });
+
+        ctx.subscribe_to_model(
+            &CLIAgentSessionsModel::handle(ctx),
+            move |me, _, event, ctx| {
+                if event.terminal_view_id() == terminal_view_id {
+                    me.update_states_with_new_context(ctx);
+                }
+            },
+        );
+        ctx.subscribe_to_model(&AISettings::handle(ctx), |me, _, event, ctx| {
+            if matches!(
+                event,
+                AISettingsChangedEvent::ShouldRenderCLIAgentToolbar { .. }
+            ) {
+                me.update_states_with_new_context(ctx);
+            }
+        });
         // A WeakViewHandle is used here to avoid leaking the terminal model
         let weak_editor_handle = editor.downgrade();
         ctx.subscribe_to_view(&editor, move |me, _, _, ctx| {
-            // CurrentPrompt exists and this fn is called even if we're not using warp prompt.
-            // We don't need to do anything if we're honoring PS1 unless universal developer input
-            // or AgentView is enabled (agent view needs chips regardless of PS1 setting).
-            if *SessionSettings::as_ref(ctx).honor_ps1
-                && !InputSettings::as_ref(ctx).is_universal_developer_input_enabled(ctx)
-                && !FeatureFlag::AgentView.is_enabled()
-            {
+            if !me.active(ctx) {
                 return;
             }
             let Some(editor) = weak_editor_handle.upgrade(ctx) else {
@@ -278,6 +315,8 @@ impl CurrentPrompt {
                 }
             }
         });
+
+        self.update_states_with_new_context(ctx);
     }
 
     pub fn snapshot(&self) -> HashMap<ContextChipKind, Option<ChipValue>> {
@@ -332,7 +371,9 @@ impl CurrentPrompt {
     fn update_on_click_value(&mut self, chip_kind: &ContextChipKind, value: Option<Vec<String>>) {
         log::debug!("Updating prompt on_click value of {chip_kind:?} to {value:?}");
         let filter_values = match chip_kind {
-            ContextChipKind::ShellGitBranch => self.filter_git_branch_on_click_values(value),
+            ContextChipKind::ShellGitBranch | ContextChipKind::GitBranchStatus => {
+                self.filter_git_branch_on_click_values(value)
+            }
             _ => value,
         };
         if let Some(state) = self.states.get_mut(chip_kind) {
@@ -805,6 +846,20 @@ impl CurrentPrompt {
         }
     }
 
+    /// Re-run the branch-list (on-click) generator for a git branch chip so
+    /// its branch-switcher dropdown stays in sync with the repository.
+    fn refresh_git_branch_dropdown(
+        &mut self,
+        chip_kind: ContextChipKind,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        if let Some(chip) = chip_kind.to_chip()
+            && let Some(on_click_gen) = chip.on_click_generator().cloned()
+        {
+            self.refresh_on_click_values(&chip_kind, on_click_gen, ctx);
+        }
+    }
+
     /// Run only the on-click generator for the given chip, updating the
     /// `last_on_click_values` in state when the command completes.
     fn refresh_on_click_values(
@@ -1031,8 +1086,8 @@ impl CurrentPrompt {
         });
     }
 
-    /// Reads the currently-configured chips from the [`Prompt`] model and filters out any that
-    /// are missing their definition.
+    /// Reads the currently-configured chips from the [`Prompt`] model and filters out any that are
+    /// missing their definition.
     fn configured_chips(&self, ctx: &AppContext) -> Vec<ContextChipKind> {
         let prompt = Prompt::as_ref(ctx);
         prompt
@@ -1042,36 +1097,69 @@ impl CurrentPrompt {
             .collect()
     }
 
-    /// Chips whose values we should actively maintain in state.
-    ///
-    /// When Agent View is enabled, the footer chips should not depend on prompt chip
-    /// customization/ordering/visibility, so we keep their backing values up to date even if they
-    /// are not present in the prompt configuration.
-    fn chips_to_run(&self, ctx: &AppContext) -> Vec<ContextChipKind> {
-        let mut chips = self.configured_chips(ctx);
+    fn active_surfaces(&self, ctx: &AppContext) -> ActiveChipSurfaces {
+        let prompt = !*SessionSettings::as_ref(ctx).honor_ps1
+            || InputSettings::as_ref(ctx).is_universal_developer_input_enabled(ctx);
+        let agent_footer = FeatureFlag::AgentView.is_enabled()
+            && self
+                .agent_view_controller
+                .as_ref()
+                .and_then(|controller| controller.upgrade(ctx))
+                .is_some_and(|controller| controller.as_ref(ctx).is_active());
+        let cli_agent_footer = self.terminal_view_id.is_some_and(|terminal_view_id| {
+            *AISettings::as_ref(ctx).should_render_cli_agent_footer
+                && CLIAgentSessionsModel::as_ref(ctx)
+                    .session(terminal_view_id)
+                    .is_some_and(|session| session.agent.supports_cli_agent_footer())
+        });
 
-        if FeatureFlag::AgentView.is_enabled() {
-            let footer_chips = SessionSettings::as_ref(ctx)
-                .agent_footer_chip_selection
-                .all_chips();
-            for chip_kind in footer_chips {
+        ActiveChipSurfaces {
+            prompt,
+            agent_footer,
+            cli_agent_footer,
+        }
+    }
+
+    fn chips_to_run_for_surfaces(
+        &self,
+        surfaces: ActiveChipSurfaces,
+        ctx: &AppContext,
+    ) -> Vec<ContextChipKind> {
+        let mut chips = if surfaces.prompt {
+            self.configured_chips(ctx)
+        } else {
+            Vec::new()
+        };
+
+        let mut extend_unique = |new_chips: Vec<ContextChipKind>| {
+            for chip_kind in new_chips {
                 if !chips.contains(&chip_kind) {
                     chips.push(chip_kind);
                 }
             }
+        };
 
-            // Also include chips configured for the CLI agent footer.
-            let cli_footer_chips = SessionSettings::as_ref(ctx)
-                .cli_agent_footer_chip_selection
-                .all_chips();
-            for chip_kind in cli_footer_chips {
-                if !chips.contains(&chip_kind) {
-                    chips.push(chip_kind);
-                }
-            }
+        if surfaces.agent_footer {
+            extend_unique(
+                SessionSettings::as_ref(ctx)
+                    .agent_footer_chip_selection
+                    .all_chips(),
+            );
+        }
+
+        if surfaces.cli_agent_footer {
+            extend_unique(
+                SessionSettings::as_ref(ctx)
+                    .cli_agent_footer_chip_selection
+                    .all_chips(),
+            );
         }
 
         chips
+    }
+    /// Chips whose values we should actively maintain in state.
+    fn chips_to_run(&self, ctx: &AppContext) -> Vec<ContextChipKind> {
+        self.chips_to_run_for_surfaces(self.active_surfaces(ctx), ctx)
     }
 
     /// Resets states (including terminating any in progress spawned operations), and updates the
@@ -1485,12 +1573,7 @@ impl CurrentPrompt {
         if current_branch.as_ref() != Some(&new_branch) {
             self.update_chip_value(&ContextChipKind::ShellGitBranch, Some(new_branch));
             // Refresh the branch dropdown so it stays in sync.
-            let chip_kind = ContextChipKind::ShellGitBranch;
-            if let Some(chip) = chip_kind.to_chip()
-                && let Some(on_click_gen) = chip.on_click_generator().cloned()
-            {
-                self.refresh_on_click_values(&chip_kind, on_click_gen, ctx);
-            }
+            self.refresh_git_branch_dropdown(ContextChipKind::ShellGitBranch, ctx);
         }
 
         let new_branch_status = ChipValue::GitBranchStatus(metadata.branch_tracking_status.clone());
@@ -1498,7 +1581,17 @@ impl CurrentPrompt {
             .latest_chip_value(&ContextChipKind::GitBranchStatus)
             .cloned();
         if current_branch_status.as_ref() != Some(&new_branch_status) {
+            // Only a branch change affects the dropdown's branch list;
+            // ahead/behind count updates don't warrant re-running it.
+            let branch_changed = !matches!(
+                current_branch_status.as_ref(),
+                Some(ChipValue::GitBranchStatus(current))
+                    if current.branch == metadata.branch_tracking_status.branch
+            );
             self.update_chip_value(&ContextChipKind::GitBranchStatus, Some(new_branch_status));
+            if branch_changed {
+                self.refresh_git_branch_dropdown(ContextChipKind::GitBranchStatus, ctx);
+            }
         }
 
         // Update GitDiffStats with structured data directly.
@@ -1547,13 +1640,7 @@ impl CurrentPrompt {
 
     /// Whether or not context chips are active. If this is false, we can skip running them.
     fn active(&self, ctx: &AppContext) -> bool {
-        // Context chips are active when:
-        // 1. PS1 is not honored (normal case), OR
-        // 2. Universal developer input is enabled (overrides PS1 behavior), OR
-        // 3. AgentView feature is enabled (agent view needs chips regardless of PS1)
-        !*SessionSettings::as_ref(ctx).honor_ps1
-            || InputSettings::as_ref(ctx).is_universal_developer_input_enabled(ctx)
-            || FeatureFlag::AgentView.is_enabled()
+        self.active_surfaces(ctx).any()
     }
 }
 

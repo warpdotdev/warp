@@ -3090,6 +3090,18 @@ fn test_br_inside_bold_keeps_bold_across_break() {
 }
 
 #[test]
+fn test_parse_html_comment_multi_line_block_is_stripped() {
+    let source = "Intro\n<!--\nnotes for maintainers\nspanning lines\n-->\nOutro\n";
+    assert_eq!(
+        test_parse_markdown(source),
+        vec![
+            FormattedTextLine::Line(vec![FormattedTextFragment::plain_text("Intro")]),
+            FormattedTextLine::Line(vec![FormattedTextFragment::plain_text("Outro")]),
+        ]
+    );
+}
+
+#[test]
 fn test_br_inside_underline_keeps_underline_across_break() {
     let fragments = parse_single_line_fragments("<u>a<br>b</u>");
     let joined: String = fragments.iter().map(|f| f.text.as_str()).collect();
@@ -3111,5 +3123,71 @@ fn test_br_inside_link_keeps_hyperlink_across_break() {
             Some(Hyperlink::Url(url)) if url == "https://x.com"
         )),
         "both sides of the break should keep the hyperlink, got {fragments:?}"
+    );
+}
+
+#[test]
+fn test_parse_html_comment_single_line_block_is_stripped() {
+    let source = "# Heading\n<!-- section: quick-start -->\nBody text\n";
+    assert_eq!(
+        test_parse_markdown(source),
+        vec![
+            FormattedTextLine::Heading(FormattedTextHeader {
+                heading_size: 1,
+                text: vec![FormattedTextFragment::plain_text("Heading")]
+            }),
+            FormattedTextLine::Line(vec![FormattedTextFragment::plain_text("Body text")]),
+        ]
+    );
+}
+
+#[test]
+fn test_parse_html_comment_inline_is_stripped() {
+    let source = "Before <!-- TODO --> after\n";
+    assert_eq!(
+        test_parse_markdown(source),
+        vec![FormattedTextLine::Line(vec![
+            FormattedTextFragment::plain_text("Before  after")
+        ])]
+    );
+}
+
+#[test]
+fn test_parse_html_comment_inside_code_block_is_preserved() {
+    let source = "```html\n<!-- keep me -->\n```";
+    assert_eq!(
+        test_parse_markdown(source),
+        vec![FormattedTextLine::CodeBlock(CodeBlockText {
+            lang: "html".to_string(),
+            code: "<!-- keep me -->\n".to_string()
+        })]
+    );
+}
+
+#[test]
+fn test_parse_html_comment_inside_code_span_is_preserved() {
+    let source = "Use `<!-- x -->` here\n";
+    assert_eq!(
+        test_parse_markdown(source),
+        vec![FormattedTextLine::Line(vec![
+            FormattedTextFragment::plain_text("Use "),
+            FormattedTextFragment::inline_code("<!-- x -->"),
+            FormattedTextFragment::plain_text(" here"),
+        ])]
+    );
+}
+
+#[test]
+fn test_parse_html_comment_with_trailing_same_line_content_is_not_block() {
+    // A comment is only a whole-line block comment when nothing but whitespace follows it on the
+    // same line. When content follows the closing `-->`, the line falls through to inline parsing:
+    // the comment is stripped inline and the trailing `# Heading` stays literal text rather than
+    // being reparsed as a fresh heading block.
+    let source = "<!-- hidden --> # Heading\n";
+    assert_eq!(
+        test_parse_markdown(source),
+        vec![FormattedTextLine::Line(vec![
+            FormattedTextFragment::plain_text(" # Heading")
+        ])]
     );
 }

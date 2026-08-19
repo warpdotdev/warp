@@ -1946,7 +1946,7 @@ impl AppContext {
         match self.contexts_from_responder_chain(window_id, &responder_chain) {
             Ok(ctxs) => ctxs,
             Err(error) => {
-                report_error!(error.context("Unable to fetch Key Bindings for View"));
+                log::error!("Unable to fetch Key Bindings for View: {error:#}");
                 Vec::new()
             }
         }
@@ -1993,7 +1993,7 @@ impl AppContext {
         let contexts = match self.contexts_from_responder_chain(window_id, &responder_chain) {
             Ok(ctxs) => ctxs,
             Err(error) => {
-                report_error!(error.context("Unable to fetch Key Bindings for View"));
+                log::error!("Unable to fetch Key Bindings for View: {error:#}");
                 return Vec::new();
             }
         };
@@ -2661,7 +2661,7 @@ impl AppContext {
 
         match window_result {
             Err(err) => {
-                report_error!("error opening window", extra: { "error" => %err });
+                report_error!(err.context("error opening window"));
             }
             Ok(_) => {
                 self.on_window_invalidated(window_id, move |window_id, ctx| {
@@ -4407,25 +4407,32 @@ impl AppContext {
                 self.task_done(task_id);
             }
             TaskCallback::ViewFromStream {
-                window_id,
                 view_id,
                 mut on_item,
                 on_done,
             } => {
-                if let Some(mut view) = self
-                    .windows
-                    .get_mut(&window_id)
-                    .and_then(|w| w.views.remove(&view_id))
-                {
-                    on_item(view.as_any_mut(), output, self, window_id, view_id);
-                    self.windows
-                        .get_mut(&window_id)
-                        .ok_or_else(|| anyhow!("Unable to retrieve window for view"))?
-                        .views
-                        .insert(view_id, view);
+                // A stream can outlive a cross-window view transfer, so resolve the view's current
+                // window when each item arrives.
+                if let Some(current_window_id) = self.view_to_window.get(&view_id).copied() {
+                    if let Some(mut view) = self
+                        .windows
+                        .get_mut(&current_window_id)
+                        .and_then(|w| w.views.remove(&view_id))
+                    {
+                        on_item(view.as_any_mut(), output, self, current_window_id, view_id);
+                        self.windows
+                            .get_mut(&current_window_id)
+                            .ok_or_else(|| anyhow!("Unable to retrieve window for view"))?
+                            .views
+                            .insert(view_id, view);
+                    } else {
+                        result = Err(anyhow!(
+                            "Unable to retrieve view when relaying task output from stream"
+                        ));
+                    }
                 } else {
                     result = Err(anyhow!(
-                        "Unable to retrieve view when relaying task output from stream"
+                        "Unable to retrieve window when relaying task output from stream"
                     ));
                 }
                 // Streams go through different code paths compared to Futures.
@@ -4434,7 +4441,6 @@ impl AppContext {
                 self.task_callbacks.insert(
                     task_id,
                     TaskCallback::ViewFromStream {
-                        window_id,
                         view_id,
                         on_item,
                         on_done,
@@ -4461,19 +4467,20 @@ impl AppContext {
                 }
             }
             TaskCallback::ViewFromStream {
-                window_id,
                 view_id,
                 on_done: callback,
                 ..
             } => {
-                if let Some(mut view) = self
-                    .windows
-                    .get_mut(&window_id)
-                    .and_then(|w| w.views.remove(&view_id))
+                // Completion must use the same current window as item delivery.
+                if let Some(current_window_id) = self.view_to_window.get(&view_id).copied()
+                    && let Some(mut view) = self
+                        .windows
+                        .get_mut(&current_window_id)
+                        .and_then(|w| w.views.remove(&view_id))
                 {
-                    callback(view.as_any_mut(), self, window_id, view_id);
+                    callback(view.as_any_mut(), self, current_window_id, view_id);
                     self.windows
-                        .get_mut(&window_id)
+                        .get_mut(&current_window_id)
                         .expect("Window should exist.")
                         .views
                         .insert(view_id, view);
@@ -4725,8 +4732,13 @@ impl AppContext {
 
     /// Opens the given URL in the default application configured to handle the URL.
     pub fn open_url(&self, url: &str) {
+        self.try_open_url(url);
+    }
+
+    /// Opens the given URL and returns whether the platform accepted the launch request.
+    pub fn try_open_url(&self, url: &str) -> bool {
         let effective_url = (self.before_open_url_callback)(url, self);
-        self.platform_delegate.open_url(&effective_url);
+        self.platform_delegate.open_url(&effective_url)
     }
 
     pub fn system_theme(&self) -> SystemTheme {

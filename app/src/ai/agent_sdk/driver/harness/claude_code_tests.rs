@@ -761,6 +761,7 @@ fn prepare_claude_environment_config_with_config_dir_uses_dir_global_config() {
         None => unsafe { std::env::remove_var("CLAUDE_CONFIG_DIR") },
     }
 }
+
 #[test]
 #[serial_test::serial]
 fn resolve_suffix_from_resolved_env_vars() {

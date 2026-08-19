@@ -70,7 +70,7 @@ fn initialize_upload_artifact_test(
 
     profiles.update(app, |profiles, ctx| {
         if let Some(profile_id) = profiles.create_profile(ctx) {
-            profiles.set_read_files(profile_id, &ActionPermission::AlwaysAsk, ctx);
+            profiles.set_read_files(&profile_id, &ActionPermission::AlwaysAsk, ctx);
             profiles.set_active_profile(terminal_view_id, profile_id, ctx);
         }
     });

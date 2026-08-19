@@ -31,7 +31,7 @@ use crate::view_components::action_button::{ActionButton, SecondaryTheme};
 use crate::workflows::WorkflowType;
 use crate::workflows::workflow::{Argument, ArgumentType, Workflow};
 
-const DOCS_URL: &str = "https://docs.warp.dev/agent-platform/cloud-agents/overview";
+const DOCS_URL: &str = "https://docs.warp.dev/platform/";
 const ENV_DOCS_URL: &str =
     "https://docs.warp.dev/reference/cli/integration-setup#creating-an-environment";
 const OZ_URL: &str = "https://oz.warp.dev";

@@ -52,16 +52,15 @@ impl HttpServer {
             let listener = match tokio::net::TcpListener::bind(addr).await {
                 Ok(listener) => listener,
                 Err(err) => {
-                    report_error!(
-                        "Failed to bind local HTTP server",
-                        extra: { "addr" => %addr, "error" => %err }
-                    );
+                    log::error!("Failed to bind local HTTP server on {addr}: {err:#}");
                     return;
                 }
             };
 
             if let Err(err) = axum::serve(listener, root.layer(TraceLayer::new_for_http())).await {
-                report_error!("Local HTTP server exited with error", extra: { "error" => %err });
+                report_error!(
+                    anyhow::Error::new(err).context("Local HTTP server exited with error")
+                );
             }
         });
 

@@ -2204,9 +2204,45 @@ impl VimHandler for EditorView {
         });
     }
 
-    fn replace_char(&mut self, c: char, char_count: u32, ctx: &mut ViewContext<Self>) {
-        if char_count <= self.distance_to_line_end(ctx) {
+    fn replace_char(
+        &mut self,
+        c: char,
+        char_count: u32,
+        advance: bool,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if advance {
+            if self.distance_to_line_end(ctx) > 0 {
+                self.replace_characters(c, 1, ctx);
+                self.move_right(true, ctx);
+            } else {
+                self.user_insert(&c.to_string(), ctx);
+            }
+        } else if char_count <= self.distance_to_line_end(ctx) {
             self.replace_characters(c, char_count, ctx);
+        }
+    }
+
+    fn replace_text(
+        &mut self,
+        text: &str,
+        count: u32,
+        already_applied: bool,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let repeat_count = count.saturating_sub(u32::from(already_applied));
+        for _ in 0..repeat_count {
+            for c in text.chars() {
+                if self.distance_to_line_end(ctx) > 0 {
+                    self.replace_characters(c, 1, ctx);
+                    self.move_right(true, ctx);
+                } else {
+                    self.user_insert(&c.to_string(), ctx);
+                }
+            }
+        }
+        if !text.is_empty() {
+            self.move_left(true, ctx);
         }
     }
 
@@ -2277,7 +2313,7 @@ impl VimHandler for EditorView {
                                 );
 
                                 if *motion_type == MotionType::Linewise {
-                                    let include_newline = *operator != VimOperator::Change;
+                                    let include_newline = operator.includes_trailing_newline();
                                     editor_model.extend_selection_linewise(include_newline, ctx);
                                 }
                             }
@@ -2285,7 +2321,7 @@ impl VimHandler for EditorView {
                                 editor_model
                                     .move_to_buffer_end(/* keep_selection */ true, ctx);
                                 if *motion_type == MotionType::Linewise {
-                                    let include_newline = *operator != VimOperator::Change;
+                                    let include_newline = operator.includes_trailing_newline();
                                     editor_model.extend_selection_linewise(include_newline, ctx);
                                 }
                             }
@@ -2297,7 +2333,7 @@ impl VimHandler for EditorView {
                                 editor_model.change_selections(new_selections, ctx);
 
                                 if *motion_type == MotionType::Linewise {
-                                    let include_newline = *operator != VimOperator::Change;
+                                    let include_newline = operator.includes_trailing_newline();
                                     editor_model.extend_selection_linewise(include_newline, ctx);
                                 }
                             }
@@ -2310,14 +2346,14 @@ impl VimHandler for EditorView {
                                     ctx,
                                 );
                                 if *motion_type == MotionType::Linewise {
-                                    let include_newline = *operator != VimOperator::Change;
+                                    let include_newline = operator.includes_trailing_newline();
                                     editor_model.extend_selection_linewise(include_newline, ctx);
                                 }
                             }
                         }
                     }
                     VimOperand::Line => {
-                        let include_newline = *operator != VimOperator::Change;
+                        let include_newline = operator.includes_trailing_newline();
                         editor_model.extend_selection_below(operand_count.saturating_sub(1), ctx);
                         editor_model.extend_selection_linewise(include_newline, ctx);
                     }
@@ -2408,6 +2444,7 @@ impl VimHandler for EditorView {
             VimOperator::ToggleComment => {
                 // Commenting is not enabled for the EditorView.
             }
+            VimOperator::Indent | VimOperator::Dedent => {}
         }
     }
 
@@ -2689,7 +2726,7 @@ impl VimHandler for EditorView {
     ) {
         let selection_change =
             |editor_model: &mut EditorModel, ctx: &mut ModelContext<EditorModel>| {
-                let include_newline = *operator != VimOperator::Change;
+                let include_newline = operator.includes_trailing_newline();
                 editor_model.vim_visual_selection_range(motion_type, include_newline, ctx);
             };
         match operator {
@@ -2749,6 +2786,7 @@ impl VimHandler for EditorView {
             VimOperator::ToggleComment => {
                 // Commenting is not enabled for the EditorView.
             }
+            VimOperator::Indent | VimOperator::Dedent => {}
         }
     }
 
@@ -4401,14 +4439,13 @@ impl EditorView {
                 .is_some_and(|ai_block| {
                     let block = ai_block.as_ref(ctx);
                     // Ctrl+c should dismiss the passive ai block only if the keybindings for the block are not hidden.
-                    let is_pending_code_diff = block.find_undismissed_code_diff(ctx).is_some();
-                    let is_pending_suggested_prompt = block
-                        .pending_unit_test_suggestion(ctx)
-                        .is_some_and(|suggested_prompt| {
-                            !suggested_prompt.as_ref(ctx).is_keybindings_hidden()
-                        });
-                    block.is_passive_conversation(ctx)
-                        && (is_pending_code_diff || is_pending_suggested_prompt)
+                    block.is_passive_conversation()
+                        && (block.find_undismissed_code_diff(ctx).is_some()
+                            || block.pending_unit_test_suggestion(ctx).is_some_and(
+                                |suggested_prompt| {
+                                    !suggested_prompt.as_ref(ctx).is_keybindings_hidden()
+                                },
+                            ))
                 })
         });
 

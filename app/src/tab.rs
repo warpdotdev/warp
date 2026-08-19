@@ -36,6 +36,8 @@ use crate::launch_configs::launch_config::LaunchConfig;
 use crate::menu::{MenuAction, MenuItem, MenuItemFields};
 use crate::pane_group::{PaneGroup, PaneId};
 use crate::shell_indicator::ShellIndicatorType;
+use crate::terminal::shared_session::SharedSessionStatus;
+use crate::terminal::shared_session::manager::Manager;
 use crate::terminal::shared_session::render_util::shared_session_indicator_color;
 use crate::terminal::view::TerminalViewState;
 use crate::themes::theme::{AnsiColorIdentifier, Fill as ThemeFill, VerticalGradient};
@@ -96,7 +98,9 @@ const TAB_CLOSE_BUTTON_WIDTH: f32 = 20.0;
 const MAX_TOOLTIP_LENGTH: usize = 80;
 pub(crate) const TAB_PIN_INDICATOR_ICON_SIZE: f32 = 16.0;
 
-const TAB_INDICATOR_SYNCED_COLOR: u32 = 0x4A93FFFF;
+/// Color of the synchronized-inputs indicator, shared by the horizontal tab bar
+/// and the vertical tabs panel so both surfaces read identically.
+pub(crate) const TAB_INDICATOR_SYNCED_COLOR: u32 = 0x4A93FFFF;
 
 // Width threshold (in px) below which we render an icon-only tab
 pub(crate) const COMPACT_TAB_WIDTH_THRESHOLD: f32 = 42.0;
@@ -132,6 +136,20 @@ impl SelectedTabColor {
             SelectedTabColor::Cleared => None,
             SelectedTabColor::Unset => default,
         }
+    }
+}
+
+pub(crate) fn next_tab_color(current: Option<AnsiColorIdentifier>) -> SelectedTabColor {
+    match current.and_then(|color| {
+        TAB_COLOR_OPTIONS
+            .iter()
+            .position(|candidate| *candidate == color)
+    }) {
+        Some(index) if index + 1 < TAB_COLOR_OPTIONS.len() => {
+            SelectedTabColor::Color(TAB_COLOR_OPTIONS[index + 1])
+        }
+        Some(_) => SelectedTabColor::Cleared,
+        None => SelectedTabColor::Color(TAB_COLOR_OPTIONS[0]),
     }
 }
 
@@ -347,26 +365,34 @@ impl TabData {
             }
         }
 
-        // Add "Copy link" option if the focused session in this tab is being shared or viewed
-        let is_shared_or_viewed = self
-            .pane_group
-            .as_ref(ctx)
-            .focused_session_view(ctx)
-            .map(|view| {
-                view.as_ref(ctx)
-                    .model
-                    .lock()
-                    .shared_session_status()
-                    .is_sharer_or_viewer()
-            })
-            .unwrap_or(false);
+        // Add "Copy link" option if the focused session in this tab is being shared or viewed.
+        // Disable the item (rather than silently no-op) when the Manager does not yet have a
+        // session id (e.g. during ViewPending / SharePending while the session is still setting up).
+        let focused_session_view = self.pane_group.as_ref(ctx).focused_session_view(ctx);
+        let focused_session_status = focused_session_view.as_ref().map(|view| {
+            view.as_ref(ctx)
+                .model
+                .lock()
+                .shared_session_status()
+                .clone()
+        });
 
-        if is_shared_or_viewed {
+        if focused_session_status
+            .as_ref()
+            .is_some_and(SharedSessionStatus::is_sharer_or_viewer)
+        {
+            let has_session_link = focused_session_view
+                .as_ref()
+                .zip(focused_session_status.as_ref())
+                .is_some_and(|(view, status)| {
+                    Manager::as_ref(ctx).has_session_link(&view.id(), status)
+                });
             menu_items.push(
                 MenuItemFields::new("Copy link")
                     .with_on_select_action(WorkspaceAction::CopySharedSessionLinkFromTab {
                         tab_index: index,
                     })
+                    .with_disabled(!has_session_link)
                     .into_item(),
             );
         }
@@ -1501,7 +1527,7 @@ impl<'a> TabComponent<'a> {
                     }
                 } else {
                     let icon_color = self.appearance.theme().nonactive_ui_text_color();
-                    Some(Icon::Oz.to_warpui_icon(icon_color).finish())
+                    Some(Icon::Agent.to_warpui_icon(icon_color).finish())
                 }
             }
             Indicator::AmbientAgent => {
@@ -1515,8 +1541,9 @@ impl<'a> TabComponent<'a> {
                 let mouse_state = self.tab.indicator_hover_state.clone();
                 Some(
                     Hoverable::new(mouse_state, move |state| {
-                        let mut stack = Stack::new()
-                            .with_child(Icon::OzCloud.to_warpui_icon(icon_color.into()).finish());
+                        let mut stack = Stack::new().with_child(
+                            Icon::CloudFilled.to_warpui_icon(icon_color.into()).finish(),
+                        );
 
                         if state.is_hovered() {
                             let tooltip = ui_builder

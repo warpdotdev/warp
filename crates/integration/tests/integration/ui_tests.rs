@@ -219,6 +219,7 @@ integration_tests! {
     test_osc8_file_scheme_opens_url,
     test_osc8_no_regression_on_url_autodetect,
 
+    test_cycle_active_tab_color_with_keybinding,
     test_active_session_follows_focus,
     test_tab_context_menu_copies_metadata,
     test_vertical_tab_context_menu_copies_metadata,
@@ -266,6 +267,8 @@ integration_tests! {
     test_latest_buffer_operations,
 
     test_pass_control_sequences_to_long_running_block,
+    test_execution_profiles_load_from_settings_file,
+    test_execution_profile_model_persists_and_hot_reloads_settings_file,
     test_settings_file_migration_from_native_store,
     test_settings_file_hot_reload_applies_new_values,
 
@@ -273,6 +276,18 @@ integration_tests! {
     test_settings_error_banner_on_startup_with_invalid_value,
     test_settings_error_banner_on_reload_with_invalid_toml,
     test_settings_error_banner_on_reload_with_invalid_value,
+
+    // Settings sidebar navigation and search.
+    test_settings_mouse_navigation_through_umbrella,
+    test_settings_keyboard_navigation_down_into_collapsed_umbrella,
+    test_settings_keyboard_navigation_up_into_collapsed_umbrella,
+    test_settings_keyboard_navigation_after_manual_collapse,
+    test_settings_search_filters_top_level_pages,
+    test_settings_search_filters_subpages,
+    test_settings_search_subpage_still_renders_content,
+    test_settings_search_clear_restores_umbrella_state,
+    test_settings_search_preserved_on_sidebar_click,
+    test_settings_agent_mcp_servers_renders_standalone_page,
 
     test_copy_selection_within_ai_block,
     #[ignore = "Affected by agent_view feature flag UI changes"]
@@ -314,6 +329,7 @@ integration_tests! {
     #[ignore = "Affected by agent_view feature flag UI changes"]
     test_selection_last_to_ai_lines,
     test_restored_ai_block_renders_mermaid_and_local_images,
+    test_cancelled_run_agents_card_renders_cancelled_state,
 
     // Middle-click-paste is only implemented for Linux right now.
     #[cfg(any(target_os = "linux", target_os = "freebsd"))]
@@ -334,6 +350,7 @@ integration_tests! {
 
     // Copy current path command-palette action
     test_copy_current_path_copies_terminal_pwd,
+    test_copy_current_path_copies_code_editor_file_path,
 
     // Go to Line tests
     test_goto_line_dialog_open_close,

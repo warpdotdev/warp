@@ -71,8 +71,11 @@ impl std::fmt::Display for SessionDefault {
 }
 
 pub use agent_onboarding_view::{AgentOnboardingAction, AgentOnboardingEvent, AgentOnboardingView};
-pub use model::{OnboardingAuthState, SelectedSettings, UICustomizationSettings};
-pub use slides::ProjectOnboardingSettings;
+pub use model::{
+    ChooseHowToStartExperimentArm, CreditPackOption, CreditPurchaseState, OnboardingAuthState,
+    SelectedSettings, UICustomizationSettings,
+};
+pub use slides::{OfferVariant, ProjectOnboardingSettings};
 pub use telemetry::OnboardingEvent;
 
 pub fn init(app: &mut warpui_core::AppContext) {

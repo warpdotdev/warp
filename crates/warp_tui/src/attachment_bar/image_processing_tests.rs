@@ -5,7 +5,10 @@ use base64::engine::general_purpose;
 use futures_lite::future::block_on;
 use warpui_core::clipboard::{ClipboardContent, ImageData};
 
-use super::{MAX_IMAGE_SIZE_BYTES, parse_image_paths, process_clipboard_content, process_paths};
+use super::{
+    ClipboardPasteContent, MAX_IMAGE_SIZE_BYTES, classify_clipboard_content, parse_image_paths,
+    process_clipboard_content, process_paths,
+};
 
 const ONE_PIXEL_PNG: &str =
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
@@ -37,6 +40,56 @@ fn rejects_mixed_or_non_image_pastes() {
     let cwd = Path::new("/workspace");
     assert!(parse_image_paths("one.png notes.txt", cwd).is_none());
     assert!(parse_image_paths("ordinary prompt text", cwd).is_none());
+}
+
+#[test]
+fn classifies_plain_clipboard_text_as_text() {
+    let content = ClipboardContent::plain_text("ordinary prompt text".to_owned());
+
+    let ClipboardPasteContent::Text(text) =
+        classify_clipboard_content(content, Path::new("/workspace"))
+    else {
+        panic!("plain clipboard text should remain text");
+    };
+
+    assert_eq!(text, "ordinary prompt text");
+}
+
+#[test]
+fn classifies_clipboard_image_paths_without_reparsing_spaces() {
+    let content = ClipboardContent {
+        paths: Some(vec!["/workspace/image one.png".to_owned()]),
+        ..Default::default()
+    };
+
+    let ClipboardPasteContent::ImagePaths {
+        paths,
+        original_text,
+    } = classify_clipboard_content(content, Path::new("/other"))
+    else {
+        panic!("an image file path should be classified as an attachment");
+    };
+
+    assert_eq!(paths, [Path::new("/workspace/image one.png")]);
+    assert_eq!(original_text, "/workspace/image one.png");
+}
+
+#[test]
+fn classifies_clipboard_image_data_before_text() {
+    let content = ClipboardContent {
+        plain_text: "image fallback".to_owned(),
+        images: Some(vec![ImageData {
+            data: vec![1, 2, 3],
+            mime_type: "image/png".to_owned(),
+            filename: None,
+        }]),
+        ..Default::default()
+    };
+
+    assert!(matches!(
+        classify_clipboard_content(content, Path::new("/workspace")),
+        ClipboardPasteContent::Image(_)
+    ));
 }
 
 #[test]
@@ -106,9 +159,9 @@ fn processes_clipboard_image_content() {
 }
 
 #[test]
-fn rejects_clipboard_content_without_an_image() {
+fn reports_unavailable_clipboard_image_data() {
     assert_eq!(
         process_clipboard_content(ClipboardContent::plain_text("text".to_owned())).unwrap_err(),
-        "The clipboard does not contain an image."
+        "Clipboard image data is unavailable."
     );
 }

@@ -32,7 +32,7 @@ use crate::palette::PaletteMode;
 use crate::pane_group::PaneGroup;
 use crate::prompt::editor_modal::OpenSource as PromptEditorOpenSource;
 use crate::search;
-use crate::server::ids::SyncId;
+use crate::server::ids::{ServerId, SyncId};
 use crate::server::telemetry::{
     AddTabWithShellSource, AgentModeEntrypoint, PaletteSource, SharingDialogSource,
 };
@@ -146,6 +146,7 @@ pub enum WorkspaceAction {
     /// (see #9351). The context-menu path keeps using `RenamePane(locator)`.
     RenameActivePane,
     SetActiveTabName(String),
+    CycleActiveTabColor,
     /// Sets the manual color override for the active tab.
     ///
     /// - `Color(_)` — apply that color.
@@ -744,6 +745,12 @@ pub enum WorkspaceAction {
     /// Reset the orchestration launch modal dismissed state (for debugging)
     #[cfg(debug_assertions)]
     ResetOrchestrationLaunchModalState,
+    /// Open the Warp Agent CLI Launch Modal (for debugging)
+    #[cfg(debug_assertions)]
+    OpenAgentCliLaunchModal,
+    /// Reset the Warp Agent CLI launch modal dismissed state (for debugging)
+    #[cfg(debug_assertions)]
+    ResetAgentCliLaunchModalState,
     /// Open the Feature Intro Modal (for debugging)
     #[cfg(debug_assertions)]
     OpenFeatureIntroModal,
@@ -875,6 +882,12 @@ pub enum WorkspaceAction {
     /// Opens (or focuses) the in-app network log pane as a right-split of the
     /// active pane group. Gated on `ContextFlag::NetworkLogConsole`.
     OpenNetworkLogPane,
+    /// Opens or focuses a window scoped to the specified team.
+    OpenNewWindowForTeam {
+        team_uid: ServerId,
+    },
+    /// Shows (toggles) the team-switcher dropdown menu in the title bar.
+    ShowTeamSwitcherMenu,
 }
 
 impl From<&WorkspaceAction> for LoginGatedFeature {
@@ -938,6 +951,7 @@ impl WorkspaceAction {
             | RenameActiveTab
             | RenameActivePane
             | SetActiveTabName(_)
+            | CycleActiveTabColor
             | SetActiveTabColor(_)
             | CloseTab(_)
             | CloseActiveTab
@@ -1196,7 +1210,9 @@ impl WorkspaceAction {
             | ShowHandoffEnvironmentCreationModal
             | ShowCloudModeV2EnvironmentCreationModal
             | OpenCreateAuthSecretModal { .. }
-            | OpenNetworkLogPane => false,
+            | OpenNetworkLogPane
+            | OpenNewWindowForTeam { .. }
+            | ShowTeamSwitcherMenu => false,
             #[cfg(debug_assertions)]
             ShowHoaOnboardingFlow => false,
             #[cfg(target_family = "wasm")]
@@ -1211,6 +1227,8 @@ impl WorkspaceAction {
             | ResetOpenWarpLaunchModalState
             | OpenOrchestrationLaunchModal
             | ResetOrchestrationLaunchModalState
+            | OpenAgentCliLaunchModal
+            | ResetAgentCliLaunchModalState
             | OpenFeatureIntroModal
             | ResetFeatureIntroModalState
             | OpenAutoHandoffSleepModal

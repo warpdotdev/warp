@@ -6,6 +6,7 @@ use uuid::Uuid;
 use warp_multi_agent_api::response_event;
 use warpui::{App, SingletonEntity};
 
+use super::response_stream::{PendingResume, RecoveryBudget};
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent::task::TaskId;
 use crate::ai::agent::{
@@ -193,7 +194,11 @@ fn cancelling_conversation_aborts_pending_auto_resume() {
 
         terminal.update(&mut app, |terminal, ctx| {
             terminal.ai_controller().update(ctx, |controller, ctx| {
-                controller.schedule_auto_resume_after_error(conversation_id, ctx);
+                let resume = PendingResume::new_for_test(
+                    RecoveryBudget::fresh().next_attempt(),
+                    std::time::Duration::from_millis(1),
+                );
+                controller.schedule_auto_resume_after_error(conversation_id, resume, ctx);
                 assert!(
                     controller
                         .pending_auto_resume_handles
@@ -299,7 +304,9 @@ fn mock_response_stream_updates_history_through_controller() {
                             conversation_usage_metadata: None,
                             token_usage: vec![],
                             should_refresh_model_config: false,
+                            #[allow(deprecated)]
                             request_cost: None,
+                            request_charges: None,
                         },
                     )),
                 },
@@ -381,7 +388,11 @@ fn fail_conversation_due_to_shell_exit_reports_error_and_survives_manual_cancel(
             let stream = ctx.add_model(|_| ResponseStream::new_for_test(stream_id.clone()));
             view.ai_controller().update(ctx, |controller, ctx| {
                 controller.register_mock_stream_for_test(stream_id, conversation_id, stream, ctx);
-                controller.fail_conversation_due_to_shell_exit(conversation_id, ctx);
+                controller.fail_conversation_due_to_shell_exit(
+                    conversation_id,
+                    "exit 1".to_string(),
+                    ctx,
+                );
             });
             conversation_id
         });

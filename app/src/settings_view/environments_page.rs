@@ -20,7 +20,7 @@ use warpui::windowing::state::ApplicationStage;
 use warpui::windowing::{self, WindowManager};
 use warpui::{
     AppContext, Entity, FocusContext, ModelHandle, SingletonEntity, TypedActionView, View,
-    ViewContext, ViewHandle,
+    ViewContext, ViewHandle, WeakViewHandle,
 };
 
 use super::agent_assisted_environment_modal::{
@@ -136,7 +136,6 @@ impl EnvironmentDisplayData {
         let last_edited_ts = env
             .metadata
             .revision
-            .clone()
             .map(ServerTimestamp::from)
             .or(env.metadata.metadata_last_updated_ts);
 
@@ -207,6 +206,7 @@ impl EnvironmentDisplayData {
 }
 
 pub struct EnvironmentsPageView {
+    self_handle: WeakViewHandle<Self>,
     page: PageType<Self>,
     current_page: EnvironmentsPage,
     copy_button_mouse_states: HashMap<SyncId, MouseStateHandle>,
@@ -355,7 +355,8 @@ impl EnvironmentsPageView {
                 CloudModelEvent::ObjectUpdated { .. }
                 | CloudModelEvent::ObjectMoved { .. }
                 | CloudModelEvent::ObjectPermissionsUpdated { .. }
-                | CloudModelEvent::ObjectSynced { .. } => {}
+                | CloudModelEvent::ObjectSynced { .. }
+                | CloudModelEvent::EnvironmentLastTaskRunTimestampsUpdated => {}
                 // Events that never affect environments — skip entirely.
                 CloudModelEvent::NotebookEditorChangedFromServer { .. }
                 | CloudModelEvent::ObjectForceExpanded { .. } => return,
@@ -509,6 +510,7 @@ impl EnvironmentsPageView {
             ctx.add_model(|_| crate::pane_group::pane::PaneConfiguration::new("Environments"));
 
         let mut view = Self {
+            self_handle: ctx.handle(),
             page: PageType::new_monolith(
                 EnvironmentsPageWidget,
                 None, // Title rendered conditionally in widget
@@ -788,7 +790,7 @@ impl EnvironmentsPageView {
                 };
 
                 // Get the revision from the existing environment
-                let revision = existing_env.metadata.revision.clone();
+                let revision = existing_env.metadata.revision;
 
                 // Track the pending save to show success toast when complete
                 self.pending_save_env_id = Some(*env_id);
@@ -948,7 +950,10 @@ impl TypedActionView for EnvironmentsPageView {
                 self.open_environment_setup_mode_selector(ctx);
             }
             EnvironmentsPageAction::ShareToTeam(env_id) => {
-                let Some(team_uid) = UserWorkspaces::as_ref(ctx).current_team_uid() else {
+                let Some(team_uid) = UserWorkspaces::as_ref(ctx)
+                    .team_for_view(ctx)
+                    .map(|team| team.uid)
+                else {
                     self.show_error_toast(
                         "Unable to share environment: you are not currently on a team.".to_string(),
                         ctx,
@@ -1142,7 +1147,10 @@ impl EnvironmentsPageWidget {
                 sort_by_last_edited_desc(&mut personal_environments);
                 sort_by_last_edited_desc(&mut team_environments);
 
-                let is_user_on_team = UserWorkspaces::as_ref(app).current_team_uid().is_some();
+                let window_team =
+                    UserWorkspaces::as_ref(app).team_for_view_handle(&view.self_handle, app);
+                let is_user_on_team = window_team.is_some();
+                let team_name = window_team.map(|team| team.name.as_str());
 
                 let card_render_state = EnvironmentCardRenderState {
                     copy_button_mouse_states: &view.copy_button_mouse_states,
@@ -1164,6 +1172,7 @@ impl EnvironmentsPageWidget {
                             app,
                             EnvironmentListScope::Personal,
                             is_user_on_team,
+                            team_name,
                         ))
                         .with_child(Self::render_section_divider(appearance))
                         .with_child(Self::render_scoped_section(
@@ -1173,6 +1182,7 @@ impl EnvironmentsPageWidget {
                             app,
                             EnvironmentListScope::Team,
                             is_user_on_team,
+                            team_name,
                         ))
                         .finish();
                     page.add_child(sections);
@@ -1184,6 +1194,7 @@ impl EnvironmentsPageWidget {
                         app,
                         EnvironmentListScope::Personal,
                         is_user_on_team,
+                        team_name,
                     ));
                 } else {
                     page.add_child(Self::render_scoped_section(
@@ -1193,6 +1204,7 @@ impl EnvironmentsPageWidget {
                         app,
                         EnvironmentListScope::Team,
                         is_user_on_team,
+                        team_name,
                     ));
                 }
             }
@@ -1296,6 +1308,7 @@ impl EnvironmentsPageWidget {
         app: &AppContext,
         list_scope: EnvironmentListScope,
         is_user_on_team: bool,
+        team_name: Option<&str>,
     ) -> Box<dyn Element> {
         // Keep header-to-card spacing smaller than the overall page/section spacing.
         const HEADER_TO_LIST_SPACING: f32 = 8.;
@@ -1303,9 +1316,8 @@ impl EnvironmentsPageWidget {
         let header = match list_scope {
             EnvironmentListScope::Personal => Self::render_overline_header("Personal", appearance),
             EnvironmentListScope::Team => {
-                let shared_by_text = UserWorkspaces::as_ref(app)
-                    .current_team()
-                    .map(|team| format!("Shared by Warp and {}", team.name))
+                let shared_by_text = team_name
+                    .map(|team_name| format!("Shared by Warp and {team_name}"))
                     .unwrap_or_else(|| "Shared by Warp and your team".to_string());
                 Self::render_overline_header(&shared_by_text, appearance)
             }

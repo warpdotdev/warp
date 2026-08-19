@@ -732,12 +732,7 @@ impl WorkflowModal {
         match (self.workflow_id, self.owner) {
             (Some(workflow_id), None) => {
                 UpdateManager::handle(ctx).update(ctx, |update_manager, ctx| {
-                    update_manager.update_workflow(
-                        workflow,
-                        workflow_id,
-                        self.revision_ts.clone(),
-                        ctx,
-                    );
+                    update_manager.update_workflow(workflow, workflow_id, self.revision_ts, ctx);
                 });
                 ctx.emit(WorkflowModalEvent::UpdatedWorkflow(workflow_id));
             }
@@ -925,7 +920,8 @@ impl WorkflowModal {
             | CloudModelEvent::ObjectDeleted { .. }
             | CloudModelEvent::ObjectForceExpanded { .. }
             | CloudModelEvent::ObjectSynced { .. }
-            | CloudModelEvent::InitialLoadCompleted => {}
+            | CloudModelEvent::InitialLoadCompleted
+            | CloudModelEvent::EnvironmentLastTaskRunTimestampsUpdated => {}
         }
     }
 
