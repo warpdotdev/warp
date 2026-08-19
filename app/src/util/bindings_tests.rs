@@ -3,7 +3,9 @@ use warpui::keymap::{EditableBinding, Keystroke, Trigger};
 use warpui::platform::OperatingSystem;
 
 use crate::terminal;
-use crate::util::bindings::{keybinding_name_to_display_string, trigger_to_keystroke};
+use crate::util::bindings::{
+    CustomAction, keybinding_name_to_display_string, trigger_to_keystroke,
+};
 use crate::workspace::WorkspaceAction;
 
 #[test]
@@ -135,6 +137,68 @@ fn test_toggle_maximize_pane_binding_is_editable() {
                 Some(displayed_keybinding),
                 keybinding_name_to_display_string(TOGGLE_MAXIMIZE_PANE_BINDING_NAME, ctx)
                     .as_deref()
+            );
+        });
+    });
+}
+
+#[test]
+fn test_clearing_custom_action_binding_leaves_no_keystroke_behind() {
+    // Regression test for GH#15309: `workspace::mod::init` used to also register a
+    // non-editable `FixedBinding` for `CustomAction::ToggleProjectExplorer` (for the macOS
+    // menu). Because bindings with a `Trigger::Custom` are matched by tag rather than by name,
+    // that hidden binding kept resolving a keystroke (alt-1 on non-mac platforms) even after
+    // the user cleared the editable `workspace:left_panel_project_explorer` binding in
+    // Settings > Keyboard shortcuts, making the shortcut impossible to actually remove.
+    //
+    // This test exercises the general mechanism: any action exposed via `with_custom_action`
+    // must not also be registered as a separate `FixedBinding` sharing the same `CustomAction`,
+    // or clearing the editable binding will not actually free up the keystroke.
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            const BINDING_NAME: &str = "test:toggle_project_explorer";
+            let tag = CustomAction::ToggleProjectExplorer as isize;
+
+            ctx.register_editable_bindings([EditableBinding::new(
+                BINDING_NAME,
+                "Left Panel: Project explorer",
+                WorkspaceAction::ToggleProjectExplorer,
+            )
+            .with_custom_action(CustomAction::ToggleProjectExplorer)]);
+
+            let expected_default = if OperatingSystem::get().is_mac() {
+                "⌃1"
+            } else {
+                "Alt 1"
+            };
+            assert_eq!(
+                Some(expected_default),
+                keybinding_name_to_display_string(BINDING_NAME, ctx).as_deref()
+            );
+
+            // Simulate the user clicking "Clear" in Settings > Keyboard shortcuts (see
+            // `KeybindingsView::remove_keystroke`).
+            ctx.set_custom_trigger(BINDING_NAME.to_owned(), Trigger::Empty);
+            assert_eq!(
+                None,
+                keybinding_name_to_display_string(BINDING_NAME, ctx),
+                "clearing the editable binding should leave no default keystroke behind"
+            );
+
+            // No binding -- editable or fixed -- should still resolve a keystroke for this
+            // custom action once the editable binding has been cleared.
+            let leftover_keystrokes: Vec<_> = ctx
+                .custom_action_bindings()
+                .filter(|binding| {
+                    matches!(binding.trigger, Trigger::Custom(t) if *t == tag)
+                        || matches!(binding.original_trigger, Some(Trigger::Custom(t)) if *t == tag)
+                })
+                .filter_map(|binding| trigger_to_keystroke(binding.trigger))
+                .collect();
+            assert!(
+                leftover_keystrokes.is_empty(),
+                "expected no binding to still resolve a keystroke for ToggleProjectExplorer \
+                 after clearing the editable binding, found: {leftover_keystrokes:?}"
             );
         });
     });

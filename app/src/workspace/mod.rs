@@ -514,16 +514,15 @@ pub fn init(app: &mut AppContext) {
         ]);
     }
 
-    app.register_fixed_bindings([
-        // Menu dispatch for the "Open File Picker" custom action.
-        FixedBinding::custom(
-            CustomAction::ToggleProjectExplorer,
-            WorkspaceAction::ToggleProjectExplorer,
-            BindingDescription::new("Toggle project explorer")
-                .with_custom_description(bindings::MAC_MENUS_CONTEXT, "Project Explorer"),
-            id!("Workspace") & id!(flags::SHOW_PROJECT_EXPLORER),
-        ),
-    ]);
+    // Note: there is intentionally no `FixedBinding` registered for
+    // `CustomAction::ToggleProjectExplorer`. The macOS "View" menu (see `app_menus.rs`) and
+    // Settings > Keyboard shortcuts both source this custom action from the editable
+    // `workspace:left_panel_project_explorer` binding below (via `with_custom_action`), the same
+    // pattern used for e.g. `CustomAction::ToggleMaximizePane`. Registering an additional
+    // `FixedBinding` here would silently convert its `Trigger::Custom` into a hardcoded,
+    // non-editable `alt-1` keystroke trigger on non-mac platforms (see
+    // `convert_custom_triggers_to_keystroke_triggers`) that can never be remapped or removed via
+    // Settings, even after the editable binding is reassigned or cleared. See GH#15309.
 
     app.register_editable_bindings([
         EditableBinding::new(
