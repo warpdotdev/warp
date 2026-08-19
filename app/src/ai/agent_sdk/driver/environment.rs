@@ -11,7 +11,7 @@ use cloud_object_models::CodeForge;
 use futures::channel::oneshot;
 use futures::future::join_all;
 use repo_metadata::repositories::{DetectedRepositories, RepoDetectionSource};
-use warp_cli::agent::{Harness, RepositoryForge, RepositoryHeadOverride};
+use warp_cli::agent::{Harness, RepositoryForge, RepositoryHeadOverride, RepositoryHeadRef};
 use warp_completer::completer::{CommandExitStatus, CommandOutput};
 use warp_core::command::ExitCode;
 use warp_core::{safe_info, safe_warn};
@@ -200,8 +200,8 @@ async fn prepare_environment_impl(
     if !source_repos.is_empty() {
         setup_events
             .record_result(SetupStep::EnvironmentRepoClone, async {
-                clone_repos(
-                    &apply_repository_head_overrides(source_repos, repository_head_overrides),
+                clone_checkout_requests(
+                    &repository_clone_requests(source_repos, repository_head_overrides),
                     working_dir,
                     spawner,
                 )
@@ -369,18 +369,25 @@ fn head_override_for_repo<'a>(
         .find(|head_override| head_override_matches_repo(head_override, repo))
 }
 
-fn apply_repository_head_overrides(
+#[derive(Debug, Clone)]
+struct RepositoryCloneRequest {
+    repo: SourceRepo,
+    checkout: Option<RepositoryHeadRef>,
+}
+
+fn repository_clone_requests(
     repos: &[SourceRepo],
     overrides: &[RepositoryHeadOverride],
-) -> Vec<SourceRepo> {
+) -> Vec<RepositoryCloneRequest> {
     repos
         .iter()
         .cloned()
-        .map(|repo| match head_override_for_repo(overrides, &repo) {
-            Some(head_override) => {
-                repo.with_checkout_ref(Some(head_override.head.value().to_string()))
-            }
-            None => repo,
+        .map(|repo| {
+            let checkout = match head_override_for_repo(overrides, &repo) {
+                Some(head_override) => Some(head_override.head.clone()),
+                None => repo.checkout_ref.clone().map(RepositoryHeadRef::Branch),
+            };
+            RepositoryCloneRequest { repo, checkout }
         })
         .collect()
 }
@@ -434,7 +441,7 @@ async fn remove_repository_origins_from_repos(
     }
 }
 
-fn build_parallel_clone_command(repos: &[SourceRepo], shell_type: ShellType) -> String {
+fn build_parallel_clone_command(repos: &[RepositoryCloneRequest], shell_type: ShellType) -> String {
     let mut script = String::from(
         r#"set +e
 failed=0
@@ -449,6 +456,18 @@ clone_repo() {
   repo_url="$2"
   target="$3"
   checkout_ref="$4"
+  is_commit_sha="$5"
+  if [ "$is_commit_sha" = "1" ]; then
+    if [ -e "$target" ]; then
+      printf '%s\n' "Checking out $checkout_ref in existing repository $repo_name..."
+    else
+      printf '%s\n' "Initializing repository $repo_name at $checkout_ref..."
+      git init --quiet "$target" || return 1
+      git -C "$target" remote add origin "$repo_url" || return 1
+    fi
+    git -C "$target" fetch --filter=tree:0 origin "$checkout_ref" && git -C "$target" checkout --detach FETCH_HEAD
+    return
+  fi
   if [ -d "$target" ]; then
     printf '%s\n' "Repository directory $target already exists, skipping clone..."
   else
@@ -464,20 +483,26 @@ clone_repo() {
     );
 
     let mut log_outputs = String::new();
-    for (index, repo) in repos.iter().enumerate() {
-        let repo_name = format!("{}/{}", repo.owner, repo.repo);
-        let repo_url = repo.https_clone_url();
+    for (index, request) in repos.iter().enumerate() {
+        let repo_name = format!("{}/{}", request.repo.owner, request.repo.repo);
+        let repo_url = request.repo.https_clone_url();
         let escaped_repo_name = shell_escape_single_quotes(&repo_name, ShellType::Bash);
         let escaped_repo_url = shell_escape_single_quotes(&repo_url, ShellType::Bash);
-        let escaped_target = shell_escape_single_quotes(&repo.repo, ShellType::Bash);
-        let escaped_checkout_ref = shell_escape_single_quotes(
-            repo.checkout_ref.as_deref().unwrap_or_default(),
-            ShellType::Bash,
-        );
+        let escaped_target = shell_escape_single_quotes(&request.repo.repo, ShellType::Bash);
+        let checkout_ref = request
+            .checkout
+            .as_ref()
+            .map(RepositoryHeadRef::value)
+            .unwrap_or_default();
+        let escaped_checkout_ref = shell_escape_single_quotes(checkout_ref, ShellType::Bash);
+        let is_commit_sha = match request.checkout {
+            Some(RepositoryHeadRef::CommitSha(_)) => "1",
+            Some(RepositoryHeadRef::Branch(_)) | None => "0",
+        };
         let log_var = format!("log_file_{index}");
         script.push_str(&format!(
             "{log_var}=\"$tmp_dir/repo-{index}.log\"\n\
-             clone_repo '{escaped_repo_name}' '{escaped_repo_url}' '{escaped_target}' '{escaped_checkout_ref}' >\"${log_var}\" 2>&1 &\n"
+             clone_repo '{escaped_repo_name}' '{escaped_repo_url}' '{escaped_target}' '{escaped_checkout_ref}' '{is_commit_sha}' >\"${log_var}\" 2>&1 &\n"
         ));
         script.push_str("pids=\"$pids $!\"\n");
         log_outputs.push_str(&format!(
@@ -516,9 +541,17 @@ pub(super) async fn clone_repos(
     working_dir: &Path,
     spawner: &ModelSpawner<TerminalDriver>,
 ) -> Result<(), PrepareEnvironmentError> {
+    clone_checkout_requests(&repository_clone_requests(repos, &[]), working_dir, spawner).await
+}
+
+async fn clone_checkout_requests(
+    repos: &[RepositoryCloneRequest],
+    working_dir: &Path,
+    spawner: &ModelSpawner<TerminalDriver>,
+) -> Result<(), PrepareEnvironmentError> {
     match repos {
         [] => Ok(()),
-        [repo] => clone_repo(repo, working_dir, spawner).await,
+        [request] => clone_repo(request, working_dir, spawner).await,
         repos => {
             let shell_type = spawner
                 .spawn(|driver, ctx| {
@@ -531,7 +564,7 @@ pub(super) async fn clone_repos(
 
             let repo_names = repos
                 .iter()
-                .map(|repo| format!("{}/{}", repo.owner, repo.repo))
+                .map(|request| format!("{}/{}", request.repo.owner, request.repo.repo))
                 .collect::<Vec<_>>();
             safe_info!(
                 safe: ("Cloning repositories via terminal"),
@@ -557,12 +590,13 @@ pub(super) async fn clone_repos(
 
 /// Clone a source repository to `{working_dir}/{repo.repo}` if it does not already exist.
 /// This only performs the clone -- it does NOT register the repo with `DetectedRepositories`.
-#[tracing::instrument(skip_all, err, fields(tags.cloud_agent = true, repo = %repo))]
-pub(super) async fn clone_repo(
-    repo: &SourceRepo,
+#[tracing::instrument(skip_all, err, fields(tags.cloud_agent = true, repo = %request.repo))]
+async fn clone_repo(
+    request: &RepositoryCloneRequest,
     working_dir: &Path,
     spawner: &ModelSpawner<TerminalDriver>,
 ) -> Result<(), PrepareEnvironmentError> {
+    let repo = &request.repo;
     let repo_name = format!("{}/{}", repo.owner, repo.repo);
     let repo_url = repo.https_clone_url();
     // Get the session's shell type for proper escaping, falling back to Bash
@@ -576,10 +610,11 @@ pub(super) async fn clone_repo(
         .await
         .unwrap_or(ShellType::Bash);
     let escaped_url = shell_escape_single_quotes(&repo_url, shell_type);
-    // We do a partial clone here to speed up environment setup time.
-    let command = format!("git clone --filter=tree:0 '{escaped_url}'");
-
     let repo_dir = working_dir.join(&repo.repo);
+    let commit_sha = match &request.checkout {
+        Some(RepositoryHeadRef::CommitSha(commit_sha)) => Some(commit_sha.as_str()),
+        Some(RepositoryHeadRef::Branch(_)) | None => None,
+    };
     // Always ask the session whether the repo dir already exists, rather
     // than stat'ing from the host. The session knows about sandbox-only
     // paths, and this goes through the silent executor so `test -d` is
@@ -587,7 +622,24 @@ pub(super) async fn clone_repo(
     // explicitly so the probe doesn't rely on the session's CWD.
     let dir_exists = terminal_directory_exists(&repo_dir.to_string_lossy(), spawner).await?;
 
-    if dir_exists {
+    if let Some(commit_sha) = commit_sha {
+        if !dir_exists {
+            safe_info!(
+                safe: ("Initializing repository at commit via terminal"),
+                full: ("Initializing repository via terminal: {repo_name} at {commit_sha}")
+            );
+            let escaped_dir = shell_escape_single_quotes(&repo_dir.to_string_lossy(), shell_type);
+            let init_command = format!(
+                "git init --quiet '{escaped_dir}' && git -C '{escaped_dir}' remote add origin '{escaped_url}'"
+            );
+            let exit_code = execute_command(init_command, spawner).await?;
+            if exit_code != 0.into() {
+                return Err(PrepareEnvironmentError::CloneRepo {
+                    repo_name: repo_name.clone(),
+                });
+            }
+        }
+    } else if dir_exists {
         safe_warn!(
             safe: ("We already have a directory with the same repository name in the terminal working directory, skipping clone..."),
             full: (
@@ -600,6 +652,8 @@ pub(super) async fn clone_repo(
             full: ("Cloning repository via terminal: {repo_name}")
         );
 
+        // We do a partial clone here to speed up environment setup time.
+        let command = format!("git clone --filter=tree:0 '{escaped_url}'");
         let exit_code = execute_command(command, spawner).await?;
         if exit_code != 0.into() {
             return Err(PrepareEnvironmentError::CloneRepo {
@@ -613,8 +667,12 @@ pub(super) async fn clone_repo(
         );
     }
 
-    if let Some(command) = checkout_command_for(repo, working_dir, shell_type) {
-        let checkout_ref = repo.checkout_ref.as_deref().unwrap_or_default();
+    if let Some(command) = checkout_command_for(request, working_dir, shell_type) {
+        let checkout_ref = request
+            .checkout
+            .as_ref()
+            .map(RepositoryHeadRef::value)
+            .unwrap_or_default();
         safe_info!(
             safe: ("Checking out pinned ref for repository"),
             full: ("Checking out {checkout_ref} for {repo_name}")
@@ -632,12 +690,12 @@ pub(super) async fn clone_repo(
 }
 
 fn checkout_command_for(
-    repo: &SourceRepo,
+    request: &RepositoryCloneRequest,
     working_dir: &Path,
     shell_type: ShellType,
 ) -> Option<String> {
-    let checkout_ref = repo.checkout_ref.as_deref()?;
-    let repo_dir = working_dir.join(&repo.repo);
+    let checkout_ref = request.checkout.as_ref()?.value();
+    let repo_dir = working_dir.join(&request.repo.repo);
     let escaped_dir = shell_escape_single_quotes(&repo_dir.to_string_lossy(), shell_type);
     let escaped_ref = shell_escape_single_quotes(checkout_ref, shell_type);
     Some(format!(
