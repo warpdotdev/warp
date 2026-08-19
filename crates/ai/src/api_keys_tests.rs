@@ -216,6 +216,7 @@ fn endpoint_with_keys(
             .map(|(n, a, cfg)| CustomEndpointModel {
                 name: (*n).into(),
                 alias: a.map(|s| s.into()),
+                reasoning_effort: None,
                 config_key: (*cfg).into(),
             })
             .collect(),
@@ -282,6 +283,35 @@ fn serde_legacy_endpoint_defaults_to_chat_completions() {
     )
     .unwrap();
     assert_eq!(endpoint.schema, CustomEndpointSchema::OpenaiChatCompletions);
+}
+
+#[test]
+fn serde_legacy_custom_model_defaults_reasoning_effort_to_none() {
+    let model: CustomEndpointModel =
+        serde_json::from_str(r#"{"name":"legacy","alias":null,"config_key":"legacy-key"}"#)
+            .unwrap();
+    assert_eq!(model.reasoning_effort, None);
+}
+
+#[test]
+fn custom_endpoint_reasoning_efforts_match_openai_responses_values() {
+    assert_eq!(
+        OPENAI_RESPONSES_REASONING_EFFORTS,
+        &["none", "minimal", "low", "medium", "high", "xhigh", "max"]
+    );
+}
+
+#[test]
+fn serde_round_trips_unknown_reasoning_effort() {
+    let model = CustomEndpointModel {
+        name: "future-model".into(),
+        alias: None,
+        reasoning_effort: Some("ultra".into()),
+        config_key: "future-key".into(),
+    };
+    let json = serde_json::to_string(&model).unwrap();
+    let deserialized: CustomEndpointModel = serde_json::from_str(&json).unwrap();
+    assert_eq!(deserialized.reasoning_effort.as_deref(), Some("ultra"));
 }
 
 // ── has_any_key ─────────────────────────────────────────────────
@@ -370,13 +400,15 @@ fn custom_model_providers_none_when_byo_disabled() {
 
 #[test]
 fn custom_model_providers_populates_single_endpoint() {
+    let mut endpoint = endpoint_with_keys(
+        "My EP",
+        "https://custom.io/v1",
+        "ep-key",
+        &[("big-model", Some("alias"), "uuid-1")],
+    );
+    endpoint.models[0].reasoning_effort = Some("high".into());
     let mgr = make_manager(ApiKeys {
-        custom_endpoints: vec![endpoint_with_keys(
-            "My EP",
-            "https://custom.io/v1",
-            "ep-key",
-            &[("big-model", Some("alias"), "uuid-1")],
-        )],
+        custom_endpoints: vec![endpoint],
         ..Default::default()
     });
     let result = mgr.custom_model_providers_for_request(true).unwrap();
@@ -387,7 +419,30 @@ fn custom_model_providers_populates_single_endpoint() {
     assert_eq!(p.models.len(), 1);
     assert_eq!(p.models[0].slug, "big-model");
     assert_eq!(p.models[0].config_key, "uuid-1");
+    assert_eq!(p.models[0].reasoning_effort, "high");
     assert_eq!(p.schema, CustomEndpointSchema::OpenaiChatCompletions as i32);
+}
+
+#[test]
+fn custom_model_providers_preserves_unknown_reasoning_effort() {
+    let mut endpoint = endpoint_with_keys(
+        "My EP",
+        "https://custom.io/v1",
+        "ep-key",
+        &[("future-model", None, "uuid-future")],
+    );
+    endpoint.models[0].reasoning_effort = Some("ultra".into());
+    let mgr = make_manager(ApiKeys {
+        custom_endpoints: vec![endpoint],
+        ..Default::default()
+    });
+
+    let model = &mgr
+        .custom_model_providers_for_request(true)
+        .unwrap()
+        .providers[0]
+        .models[0];
+    assert_eq!(model.reasoning_effort, "ultra");
 }
 
 #[test]
@@ -467,6 +522,7 @@ fn display_label_uses_alias_when_present() {
     let m = CustomEndpointModel {
         name: "raw-name".into(),
         alias: Some("My Alias".into()),
+        reasoning_effort: None,
         config_key: "k".into(),
     };
     assert_eq!(m.display_label(), "My Alias");
@@ -477,6 +533,7 @@ fn display_label_falls_back_to_name_when_alias_missing() {
     let m = CustomEndpointModel {
         name: "raw-name".into(),
         alias: None,
+        reasoning_effort: None,
         config_key: "k".into(),
     };
     assert_eq!(m.display_label(), "raw-name");
@@ -487,6 +544,7 @@ fn display_label_falls_back_to_name_when_alias_is_whitespace() {
     let m = CustomEndpointModel {
         name: "raw-name".into(),
         alias: Some("   ".into()),
+        reasoning_effort: None,
         config_key: "k".into(),
     };
     assert_eq!(m.display_label(), "raw-name");

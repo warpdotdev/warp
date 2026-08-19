@@ -314,6 +314,7 @@ fn model(name: &str, alias: Option<&str>, config_key: &str) -> CustomEndpointMod
     CustomEndpointModel {
         name: name.into(),
         alias: alias.map(|s| s.into()),
+        reasoning_effort: None,
         config_key: config_key.into(),
     }
 }
@@ -639,11 +640,12 @@ fn active_models_fall_back_to_usable_choice_or_custom_endpoint_when_default_disa
                     name: "local".to_string(),
                     url: "https://example.com/v1".to_string(),
                     api_key: "test-key".to_string(),
-                    models: vec![(
-                        "custom-model".to_string(),
-                        None,
-                        Some(custom_model_id.to_string()),
-                    )],
+                    models: vec![ai::api_keys::CustomEndpointModelParams {
+                        name: "custom-model".to_string(),
+                        alias: None,
+                        reasoning_effort: None,
+                        config_key: Some(custom_model_id.to_string()),
+                    }],
                     schema: ai::api_keys::CustomEndpointSchema::default(),
                 },
                 ctx,
@@ -811,11 +813,12 @@ fn reconcile_preserves_custom_models_saved_on_execution_profile() {
                     name: "local".to_string(),
                     url: "https://example.com/v1".to_string(),
                     api_key: "test-key".to_string(),
-                    models: vec![(
-                        "custom-model".to_string(),
-                        Some("Custom Model".to_string()),
-                        Some(custom_model_id.to_string()),
-                    )],
+                    models: vec![ai::api_keys::CustomEndpointModelParams {
+                        name: "custom-model".to_string(),
+                        alias: Some("Custom Model".to_string()),
+                        reasoning_effort: None,
+                        config_key: Some(custom_model_id.to_string()),
+                    }],
                     schema: ai::api_keys::CustomEndpointSchema::default(),
                 },
                 ctx,

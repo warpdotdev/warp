@@ -1,6 +1,9 @@
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
-use ::ai::api_keys::{CustomEndpoint, CustomEndpointSchema};
+use ::ai::api_keys::{
+    CustomEndpoint, CustomEndpointModelParams, CustomEndpointSchema,
+    OPENAI_RESPONSES_REASONING_EFFORTS,
+};
 use url::Url;
 use warp_editor::editor::NavigationKey;
 use warpui::elements::{
@@ -45,6 +48,9 @@ const MODAL_SCROLLBAR_WIDTH: f32 = 4.;
 // which have no scrollbar.
 const SCROLL_CONTENT_RIGHT_MARGIN: f32 = 24. + MODAL_SCROLLBAR_WIDTH;
 const MODEL_INPUT_WIDTH: f32 = (INPUT_WIDTH - MODEL_ROW_SPACING) / 2.;
+const MODEL_INPUT_WIDTH_WITH_REASONING: f32 = (INPUT_WIDTH - MODEL_ROW_SPACING * 2.) / 3.;
+const MODEL_INPUT_HEIGHT: f32 = 36.;
+const REASONING_EFFORT_DEFAULT_LABEL: &str = "Provider default";
 fn model_row_scroll_position_id(index: usize) -> String {
     format!("custom_endpoint_model_row_{index}")
 }
@@ -57,7 +63,7 @@ pub enum CustomEndpointModalEvent {
         url: String,
         api_key: String,
         schema: CustomEndpointSchema,
-        models: Vec<(String, Option<String>, Option<String>)>,
+        models: Vec<CustomEndpointModelParams>,
     },
     SaveEndpoint {
         index: usize,
@@ -65,7 +71,7 @@ pub enum CustomEndpointModalEvent {
         url: String,
         api_key: String,
         schema: CustomEndpointSchema,
-        models: Vec<(String, Option<String>, Option<String>)>,
+        models: Vec<CustomEndpointModelParams>,
     },
     RemoveEndpoint {
         index: usize,
@@ -80,11 +86,13 @@ pub enum CustomEndpointModalAction {
     RemoveModel(usize),
     RemoveEndpoint,
     SetSchema(CustomEndpointSchema),
+    SetReasoningEffort(Option<&'static str>),
 }
 
 struct ModelRow {
     name_editor: ViewHandle<EditorView>,
     alias_editor: ViewHandle<EditorView>,
+    reasoning_effort_dropdown: ViewHandle<Dropdown<CustomEndpointModalAction>>,
     remove_mouse_state: MouseStateHandle,
     config_key: Option<String>,
 }
@@ -221,6 +229,7 @@ impl CustomEndpointModal {
                 model_rows.push(Self::create_model_row(
                     Some(&model.name),
                     model.alias.as_deref(),
+                    model.reasoning_effort.as_deref(),
                     Some(model.config_key.clone()),
                     font_family,
                     &text_colors,
@@ -230,6 +239,7 @@ impl CustomEndpointModal {
         }
         if model_rows.is_empty() {
             model_rows.push(Self::create_model_row(
+                None,
                 None,
                 None,
                 None,
@@ -252,14 +262,7 @@ impl CustomEndpointModal {
             me.handle_api_key_event(event, ctx);
         });
         for row in &model_rows {
-            let name_editor = row.name_editor.clone();
-            ctx.subscribe_to_view(&name_editor, |me, editor, event, ctx| {
-                me.handle_model_editor_event(&editor, event, ctx);
-            });
-            let alias_editor = row.alias_editor.clone();
-            ctx.subscribe_to_view(&alias_editor, |me, editor, event, ctx| {
-                me.handle_model_editor_event(&editor, event, ctx);
-            });
+            Self::subscribe_to_model_row(row, ctx);
         }
         let remove_endpoint_button = ctx.add_typed_action_view(|_| {
             ActionButton::new("Remove", DangerSecondaryTheme)
@@ -289,6 +292,7 @@ impl CustomEndpointModal {
     fn create_model_row(
         name: Option<&str>,
         alias: Option<&str>,
+        reasoning_effort: Option<&str>,
         config_key: Option<String>,
         font_family: FamilyId,
         text_colors: &crate::editor::TextColors,
@@ -333,13 +337,54 @@ impl CustomEndpointModal {
             }
             editor
         });
+        let selected_reasoning_effort = reasoning_effort
+            .filter(|effort| OPENAI_RESPONSES_REASONING_EFFORTS.contains(effort))
+            .unwrap_or(REASONING_EFFORT_DEFAULT_LABEL)
+            .to_string();
+        let reasoning_effort_dropdown = ctx.add_typed_action_view(move |ctx| {
+            let mut dropdown = Dropdown::new(ctx);
+            dropdown.set_render_popup_externally(true, ctx);
+            let mut items = vec![DropdownItem::new(
+                REASONING_EFFORT_DEFAULT_LABEL,
+                CustomEndpointModalAction::SetReasoningEffort(None),
+            )];
+            items.extend(OPENAI_RESPONSES_REASONING_EFFORTS.iter().map(|effort| {
+                DropdownItem::new(
+                    *effort,
+                    CustomEndpointModalAction::SetReasoningEffort(Some(*effort)),
+                )
+            }));
+            dropdown.set_items(items, ctx);
+            dropdown.set_selected_by_name(selected_reasoning_effort, ctx);
+            dropdown.set_top_bar_max_width(MODEL_INPUT_WIDTH_WITH_REASONING);
+            dropdown.set_menu_width(MODEL_INPUT_WIDTH_WITH_REASONING, ctx);
+            dropdown.set_vertical_margin(0., ctx);
+            dropdown.set_top_bar_height(MODEL_INPUT_HEIGHT, ctx);
+            dropdown
+        });
 
         ModelRow {
             name_editor,
             alias_editor,
+            reasoning_effort_dropdown,
             remove_mouse_state: Default::default(),
             config_key,
         }
+    }
+
+    fn subscribe_to_model_row(row: &ModelRow, ctx: &mut ViewContext<Self>) {
+        let name_editor = row.name_editor.clone();
+        ctx.subscribe_to_view(&name_editor, |me, editor, event, ctx| {
+            me.handle_model_editor_event(&editor, event, ctx);
+        });
+        let alias_editor = row.alias_editor.clone();
+        ctx.subscribe_to_view(&alias_editor, |me, editor, event, ctx| {
+            me.handle_model_editor_event(&editor, event, ctx);
+        });
+        let reasoning_effort_dropdown = row.reasoning_effort_dropdown.clone();
+        ctx.subscribe_to_view(&reasoning_effort_dropdown, |_, _, event, ctx| match event {
+            DropdownEvent::ToggleExpanded | DropdownEvent::Close => ctx.notify(),
+        });
     }
 
     pub fn prefill(
@@ -381,6 +426,7 @@ impl CustomEndpointModal {
                 self.model_rows.push(Self::create_model_row(
                     Some(&model.name),
                     model.alias.as_deref(),
+                    model.reasoning_effort.as_deref(),
                     Some(model.config_key.clone()),
                     font_family,
                     &text_colors,
@@ -393,20 +439,14 @@ impl CustomEndpointModal {
                 None,
                 None,
                 None,
+                None,
                 font_family,
                 &text_colors,
                 ctx,
             ));
         }
         for row in &self.model_rows {
-            let name_editor = row.name_editor.clone();
-            ctx.subscribe_to_view(&name_editor, |me, editor, event, ctx| {
-                me.handle_model_editor_event(&editor, event, ctx);
-            });
-            let alias_editor = row.alias_editor.clone();
-            ctx.subscribe_to_view(&alias_editor, |me, editor, event, ctx| {
-                me.handle_model_editor_event(&editor, event, ctx);
-            });
+            Self::subscribe_to_model_row(row, ctx);
         }
     }
 
@@ -466,20 +506,30 @@ impl CustomEndpointModal {
         let url = self.endpoint_url_editor.as_ref(ctx).buffer_text(ctx);
         let api_key = self.api_key_editor.as_ref(ctx).buffer_text(ctx);
         let schema = self.selected_schema(ctx);
-        let models: Vec<(String, Option<String>, Option<String>)> = self
+        let models: Vec<CustomEndpointModelParams> = self
             .model_rows
             .iter()
             .map(|row| {
                 let name = row.name_editor.as_ref(ctx).buffer_text(ctx);
                 let alias = row.alias_editor.as_ref(ctx).buffer_text(ctx);
-                let alias_opt = if alias.trim().is_empty() {
+                let alias = if alias.trim().is_empty() {
                     None
                 } else {
                     Some(alias)
                 };
-                (name, alias_opt, row.config_key.clone())
+                let reasoning_effort = if schema == CustomEndpointSchema::OpenaiResponses {
+                    Self::selected_reasoning_effort(row, ctx).map(str::to_string)
+                } else {
+                    None
+                };
+                CustomEndpointModelParams {
+                    name,
+                    alias,
+                    reasoning_effort,
+                    config_key: row.config_key.clone(),
+                }
             })
-            .filter(|(name, _, _)| !name.trim().is_empty())
+            .filter(|model| !model.name.trim().is_empty())
             .collect();
         if let Some(index) = self.editing_index {
             ctx.emit(CustomEndpointModalEvent::SaveEndpoint {
@@ -515,6 +565,21 @@ impl CustomEndpointModal {
         }
     }
 
+    fn selected_reasoning_effort(row: &ModelRow, ctx: &AppContext) -> Option<&'static str> {
+        match row.reasoning_effort_dropdown.as_ref(ctx).selected_action() {
+            Some(CustomEndpointModalAction::SetReasoningEffort(effort)) => effort,
+            Some(
+                CustomEndpointModalAction::Cancel
+                | CustomEndpointModalAction::Save
+                | CustomEndpointModalAction::AddModel
+                | CustomEndpointModalAction::RemoveModel(_)
+                | CustomEndpointModalAction::RemoveEndpoint
+                | CustomEndpointModalAction::SetSchema(_),
+            )
+            | None => None,
+        }
+    }
+
     fn cancel(&mut self, ctx: &mut ViewContext<Self>) {
         ctx.emit(CustomEndpointModalEvent::Close);
     }
@@ -522,16 +587,8 @@ impl CustomEndpointModal {
     fn add_model(&mut self, ctx: &mut ViewContext<Self>) {
         let font_family = Appearance::as_ref(ctx).ui_font_family();
         let text_colors = crate::settings_view::editor_text_colors(Appearance::as_ref(ctx));
-        let row = Self::create_model_row(None, None, None, font_family, &text_colors, ctx);
-        // Subscribe to the new editors
-        let name_editor = row.name_editor.clone();
-        ctx.subscribe_to_view(&name_editor, |me, editor, event, ctx| {
-            me.handle_model_editor_event(&editor, event, ctx);
-        });
-        let alias_editor = row.alias_editor.clone();
-        ctx.subscribe_to_view(&alias_editor, |me, editor, event, ctx| {
-            me.handle_model_editor_event(&editor, event, ctx);
-        });
+        let row = Self::create_model_row(None, None, None, None, font_family, &text_colors, ctx);
+        Self::subscribe_to_model_row(&row, ctx);
         self.model_rows.push(row);
         // ClippedScrollable clamps this to its true maximum after laying out the new row.
         // Until the form overflows, that maximum remains zero and the modal grows naturally.
@@ -737,6 +794,8 @@ impl View for CustomEndpointModal {
 
         let is_valid = self.is_valid(app);
         let is_editing = self.editing_index.is_some();
+        let show_reasoning_effort =
+            self.selected_schema(app) == CustomEndpointSchema::OpenaiResponses;
 
         let label_font_family = appearance.ui_font_family();
         let label_text_color = theme.active_ui_text_color().into();
@@ -762,7 +821,11 @@ impl View for CustomEndpointModal {
         column.add_child(
             Container::new(
                 Text::new(
-                    "Provide your endpoint details below. You can add as many models from the endpoint as you'd like and can also provide aliases for the model picker in your input.",
+                    if show_reasoning_effort {
+                        "Provide your endpoint details below. You can add as many models from the endpoint as you'd like and can also provide aliases for the model picker in your input. If providing a reasoning level, be sure to check that your model supports that reasoning level."
+                    } else {
+                        "Provide your endpoint details below. You can add as many models from the endpoint as you'd like and can also provide aliases for the model picker in your input."
+                    },
                     appearance.ui_font_family(),
                     LABEL_FONT_SIZE,
                 )
@@ -862,26 +925,36 @@ impl View for CustomEndpointModal {
         );
 
         // Model rows
+        let model_input_width = if show_reasoning_effort {
+            MODEL_INPUT_WIDTH_WITH_REASONING
+        } else {
+            MODEL_INPUT_WIDTH
+        };
         let has_remove_model_button = self.model_rows.len() > 1;
+        let mut model_label_inputs = Flex::row()
+            .with_spacing(MODEL_ROW_SPACING)
+            .with_child(
+                ConstrainedBox::new(label("Model name"))
+                    .with_width(model_input_width)
+                    .finish(),
+            )
+            .with_child(
+                ConstrainedBox::new(label("Model alias (optional)"))
+                    .with_width(model_input_width)
+                    .finish(),
+            );
+        if show_reasoning_effort {
+            model_label_inputs.add_child(
+                ConstrainedBox::new(label("Reasoning effort (optional)"))
+                    .with_width(model_input_width)
+                    .finish(),
+            );
+        }
         let mut model_labels = Flex::row()
             .with_main_axis_size(MainAxisSize::Max)
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_spacing(REMOVE_MODEL_BUTTON_SPACING)
-            .with_child(
-                Flex::row()
-                    .with_spacing(MODEL_ROW_SPACING)
-                    .with_child(
-                        ConstrainedBox::new(label("Model name"))
-                            .with_width(MODEL_INPUT_WIDTH)
-                            .finish(),
-                    )
-                    .with_child(
-                        ConstrainedBox::new(label("Model alias (optional)"))
-                            .with_width(MODEL_INPUT_WIDTH)
-                            .finish(),
-                    )
-                    .finish(),
-            );
+            .with_child(model_label_inputs.finish());
         if has_remove_model_button {
             model_labels.add_child(
                 ConstrainedBox::new(Empty::new().finish())
@@ -902,7 +975,7 @@ impl View for CustomEndpointModal {
                 .ui_builder()
                 .text_input(row.name_editor.clone())
                 .with_style(UiComponentStyles {
-                    width: Some(MODEL_INPUT_WIDTH),
+                    width: Some(model_input_width),
                     ..Default::default()
                 })
                 .build()
@@ -912,7 +985,7 @@ impl View for CustomEndpointModal {
                 .ui_builder()
                 .text_input(row.alias_editor.clone())
                 .with_style(UiComponentStyles {
-                    width: Some(MODEL_INPUT_WIDTH),
+                    width: Some(model_input_width),
                     ..Default::default()
                 })
                 .build()
@@ -930,17 +1003,23 @@ impl View for CustomEndpointModal {
             } else {
                 Empty::new().finish()
             };
-            let model_inputs = Flex::row()
+            let mut model_inputs = Flex::row()
                 .with_spacing(MODEL_ROW_SPACING)
                 .with_child(name_input)
-                .with_child(alias_input)
-                .finish();
+                .with_child(alias_input);
+            if show_reasoning_effort {
+                model_inputs.add_child(
+                    ConstrainedBox::new(ChildView::new(&row.reasoning_effort_dropdown).finish())
+                        .with_width(model_input_width)
+                        .finish(),
+                );
+            }
 
             let mut row = Flex::row()
                 .with_main_axis_size(MainAxisSize::Max)
                 .with_cross_axis_alignment(CrossAxisAlignment::Center)
                 .with_spacing(REMOVE_MODEL_BUTTON_SPACING)
-                .with_child(model_inputs);
+                .with_child(model_inputs.finish());
             if has_remove_model_button {
                 row.add_child(
                     ConstrainedBox::new(remove_button)
@@ -1060,9 +1139,18 @@ impl View for CustomEndpointModal {
         .for_single_frame()
         .finish();
 
-        // Render the schema dropdown popup at the outermost Stack level so it
-        // paints after all form content and appears on top of sibling fields.
+        // Attach menus after the fixed action row so an overlapping option owns
+        // the click instead of also activating the button underneath it.
         let schema_popup = self.schema_dropdown.as_ref(app).render_menu_as_overlay();
+        let reasoning_effort_popups = self
+            .model_rows
+            .iter()
+            .filter_map(|row| {
+                row.reasoning_effort_dropdown
+                    .as_ref(app)
+                    .render_menu_as_overlay()
+            })
+            .collect::<Vec<_>>();
         let mut outer_stack = Stack::new();
         outer_stack.add_child(
             Flex::column()
@@ -1072,6 +1160,9 @@ impl View for CustomEndpointModal {
                 .finish(),
         );
         if let Some((popup, positioning)) = schema_popup {
+            outer_stack.add_positioned_overlay_child(popup, positioning);
+        }
+        for (popup, positioning) in reasoning_effort_popups {
             outer_stack.add_positioned_overlay_child(popup, positioning);
         }
         outer_stack.finish()
@@ -1161,6 +1252,7 @@ impl TypedActionView for CustomEndpointModal {
                 self.schema = *schema;
                 ctx.notify();
             }
+            CustomEndpointModalAction::SetReasoningEffort(_) => ctx.notify(),
         }
     }
 }

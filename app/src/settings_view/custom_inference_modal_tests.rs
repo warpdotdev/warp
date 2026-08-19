@@ -18,6 +18,7 @@ fn endpoint_with_models(model_count: usize) -> CustomEndpoint {
             .map(|index| CustomEndpointModel {
                 name: format!("model-{index}"),
                 alias: None,
+                reasoning_effort: None,
                 config_key: format!("config-{index}"),
             })
             .collect(),
@@ -131,6 +132,10 @@ fn modal_with_many_models_lays_out() {
 #[test]
 fn model_row_inputs_align_and_controls_fit_gutter() {
     assert_eq!(MODEL_INPUT_WIDTH * 2. + MODEL_ROW_SPACING, INPUT_WIDTH);
+    assert_eq!(
+        MODEL_INPUT_WIDTH_WITH_REASONING * 3. + MODEL_ROW_SPACING * 2.,
+        INPUT_WIDTH
+    );
     // SCROLL_CONTENT_RIGHT_MARGIN already includes MODAL_SCROLLBAR_WIDTH, so the
     // right gutter (button spacing + remove-button column + content right margin)
     // is 56 without adding the scrollbar width again.
@@ -334,6 +339,58 @@ fn selecting_schema_is_reflected_in_saved_schema() {
                 modal.selected_schema(ctx),
                 CustomEndpointSchema::AnthropicMessages,
                 "schema chosen in the dropdown should be what save() persists"
+            );
+        });
+    })
+}
+
+#[test]
+fn reasoning_effort_dropdown_uses_closed_options_and_external_overlay() {
+    App::test((), |mut app| async move {
+        init_modal_test_models(&mut app);
+        let mut endpoint = endpoint_with_models(1);
+        endpoint.schema = CustomEndpointSchema::OpenaiResponses;
+        endpoint.models[0].reasoning_effort = Some("high".to_string());
+        let (_window_id, modal) = app.add_window(WindowStyle::NotStealFocus, move |ctx| {
+            CustomEndpointModal::new(Some(&endpoint), Some(0), ctx)
+        });
+
+        modal.update(&mut app, |modal, ctx| {
+            let dropdown = modal.model_rows[0].reasoning_effort_dropdown.clone();
+            assert_eq!(
+                CustomEndpointModal::selected_reasoning_effort(&modal.model_rows[0], ctx),
+                Some("high")
+            );
+            dropdown.update(ctx, |dropdown, ctx| dropdown.toggle_expanded(ctx));
+            assert!(
+                dropdown.as_ref(ctx).render_menu_as_overlay().is_some(),
+                "open reasoning menu should be rendered by the modal's outer stack"
+            );
+            dropdown.update(ctx, |dropdown, ctx| dropdown.toggle_expanded(ctx));
+
+            dropdown.update(ctx, |dropdown, ctx| {
+                dropdown.set_selected_by_index(6, ctx);
+            });
+            assert_eq!(
+                CustomEndpointModal::selected_reasoning_effort(&modal.model_rows[0], ctx),
+                Some("xhigh")
+            );
+
+            dropdown.update(ctx, |dropdown, ctx| {
+                dropdown.set_selected_by_index(0, ctx);
+            });
+            assert_eq!(
+                CustomEndpointModal::selected_reasoning_effort(&modal.model_rows[0], ctx),
+                None
+            );
+
+            let mut endpoint = endpoint_with_models(1);
+            endpoint.schema = CustomEndpointSchema::OpenaiResponses;
+            endpoint.models[0].reasoning_effort = Some("ultra".to_string());
+            modal.prefill(Some(&endpoint), Some(0), ctx);
+            assert_eq!(
+                CustomEndpointModal::selected_reasoning_effort(&modal.model_rows[0], ctx),
+                None
             );
         });
     })
