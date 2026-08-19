@@ -5,6 +5,7 @@
 mod agent_mode;
 mod ai_assistant;
 mod ai_document;
+mod background_block_cursor;
 mod block_filtering;
 mod bootstrapping;
 mod code_review;
@@ -51,6 +52,7 @@ pub use agent_mode::*;
 pub use ai_assistant::*;
 pub use ai_document::*;
 use anyhow::{Result, anyhow};
+pub use background_block_cursor::*;
 pub use block_filtering::*;
 pub use bootstrapping::*;
 pub use code_review::*;

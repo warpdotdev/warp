@@ -43,6 +43,7 @@ use super::find::{BlockFindRenderData, TerminalFindModel};
 use super::grid_renderer::CellGlyphCache;
 use super::meta_shortcuts::handle_keystroke_despite_composing;
 use super::model::SecretHandle;
+use super::model::ansi::CursorShape;
 use super::model::block::BlockId;
 use super::model::blocks::{RichContentItem, SelectionRange};
 use super::model::grid::grid_handler::Link;
@@ -2581,9 +2582,7 @@ impl BlockListElement {
                 command_focused_range.as_ref(),
                 command_grid_properties,
                 block_grid_params,
-                block
-                    .is_command_cursor_visible()
-                    .then(|| block.prompt_and_command_grid().cursor_style().shape),
+                command_grid_visible_cursor_shape(block),
                 image_metadata,
                 ctx,
                 app,
@@ -2682,9 +2681,7 @@ impl BlockListElement {
                 output_focused_range.as_ref(),
                 output_grid_properties,
                 block_grid_params,
-                block
-                    .is_output_cursor_visible()
-                    .then(|| block.output_grid().cursor_style().shape),
+                output_grid_visible_cursor_shape(block),
                 image_metadata,
                 ctx,
                 app,
@@ -3072,6 +3069,27 @@ impl BlockListElement {
     ) -> bool {
         false
     }
+}
+
+/// The cursor shape to paint as in-grid block-cursor contrast styling for the command grid
+/// (i.e. the `visible_cursor_shape` argument to `BlockGrid::draw`), or `None` if the block
+/// should not show a cursor there. Mirrors the condition used for the overlay cursor so a
+/// block that should no longer render a cursor (e.g. once finished) does not leave a
+/// residual cursor-cell highlight behind, even though `TermMode::SHOW_CURSOR` remains set on
+/// the grid (see CORE-3798).
+fn command_grid_visible_cursor_shape(block: &Block) -> Option<CursorShape> {
+    block
+        .is_command_cursor_visible()
+        .then(|| block.prompt_and_command_grid().cursor_style().shape)
+}
+
+/// The cursor shape to paint as in-grid block-cursor contrast styling for the output grid.
+/// See `command_grid_visible_cursor_shape` for why this is gated the same way as the
+/// overlay cursor.
+fn output_grid_visible_cursor_shape(block: &Block) -> Option<CursorShape> {
+    block
+        .is_output_cursor_visible()
+        .then(|| block.output_grid().cursor_style().shape)
 }
 
 /// With a `WithinBlock<IndexPoint>`, the point will count rows with 0 starting with the beginning
