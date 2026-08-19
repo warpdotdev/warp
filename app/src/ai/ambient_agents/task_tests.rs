@@ -1,9 +1,12 @@
+use std::sync::atomic::{AtomicU64, Ordering};
+
 use chrono::{Duration, Utc};
 use serde_json::{Value, json};
 
 use super::{
     AgentConfigSnapshot, AgentSource, AmbientAgentLiveSessionState, AmbientAgentTask,
     AmbientAgentTaskState, ExecutionLocation, TaskStatusErrorCode, TaskStatusMessage,
+    is_first_occurrence_of_unknown_source,
 };
 
 fn make_task(snapshot_name: Option<&str>, title: &str) -> AmbientAgentTask {
@@ -235,6 +238,23 @@ fn ambient_agent_task_falls_back_to_none_for_unrecognized_source() {
     let task: AmbientAgentTask = serde_json::from_value(task).unwrap();
 
     assert_eq!(task.source, None);
+}
+
+#[test]
+fn is_first_occurrence_of_unknown_source_dedupes_per_distinct_value() {
+    // Unique per test run so this doesn't collide with other tests, or with
+    // itself if the suite ever reruns within the same process.
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let unique = COUNTER.fetch_add(1, Ordering::Relaxed);
+    let value = format!("TEST_ONLY_UNKNOWN_SOURCE_{unique}");
+    let other_value = format!("TEST_ONLY_UNKNOWN_SOURCE_{unique}_OTHER");
+
+    assert!(is_first_occurrence_of_unknown_source(&value));
+    assert!(!is_first_occurrence_of_unknown_source(&value));
+    assert!(!is_first_occurrence_of_unknown_source(&value));
+
+    // A second, distinct unknown value is still tracked (and logged) on its own.
+    assert!(is_first_occurrence_of_unknown_source(&other_value));
 }
 
 #[test]
