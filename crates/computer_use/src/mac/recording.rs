@@ -223,9 +223,16 @@ fn new_ffmpeg_capture_command(config: &RecordingConfig, width: u32, height: u32)
         .args(["-pix_fmt", "yuv420p"]);
     // Apply playback speed: rescale presentation timestamps so the video
     // plays faster than real time. A multiplier of 4 makes a 4-minute
-    // recording play in 1 minute. Values <= 1 are skipped (real-time).
-    if config.playback_speed_multiplier > 1.0 {
-        let setpts = format!("{:.6}*PTS", 1.0 / config.playback_speed_multiplier);
+    // recording play in 1 minute. Sanitize defensively here (the actual
+    // command-building site) even though callers are expected to have
+    // already resolved a valid value: this is what prevents a non-finite or
+    // absurdly large `playback_speed_multiplier` from producing a corrupt or
+    // zero-duration `setpts` filter. Values <= 1 (after sanitizing) are
+    // skipped (real-time).
+    let playback_speed_multiplier =
+        crate::sanitize_playback_speed_multiplier(config.playback_speed_multiplier);
+    if playback_speed_multiplier > 1.0 {
+        let setpts = format!("{:.6}*PTS", 1.0 / playback_speed_multiplier);
         command.args(["-vf", &format!("setpts={setpts}")]);
     }
     // Max file size is an output limit; stays as an output option.

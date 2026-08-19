@@ -130,6 +130,7 @@ async fn finalize_recording(
         handle,
         actions,
         frame_rate,
+        playback_speed_multiplier,
         ..
     } = recording;
     let recorder = computer_use::create_recorder();
@@ -153,6 +154,7 @@ async fn finalize_recording(
         (output.width, output.height),
         output.duration,
         frame_rate,
+        playback_speed_multiplier,
     )
     .await
     {

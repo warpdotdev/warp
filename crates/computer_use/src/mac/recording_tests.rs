@@ -44,6 +44,60 @@ fn applies_setpts_filter_when_playback_speed_exceeds_one() {
 }
 
 #[test]
+fn applies_setpts_filter_for_the_default_1_5x_speed() {
+    // The universal default is 1.5x, sent by the server on every
+    // StartRecording call and mirrored by the client-side fallback default.
+    let config = RecordingConfig::default();
+    assert_eq!(config.playback_speed_multiplier, 1.5);
+    let args = argv(&config);
+
+    // 1.0 / 1.5 = 0.666667, formatted to six decimals.
+    let setpts = args
+        .iter()
+        .find(|arg| arg.starts_with("setpts="))
+        .expect("argv should contain a setpts filter at the default 1.5x speed");
+    assert_eq!(setpts, "setpts=0.666667*PTS");
+}
+
+#[test]
+fn omits_setpts_filter_for_non_finite_playback_speed() {
+    // NaN or +Infinity must never reach the ffmpeg argv as a corrupt or
+    // zero-duration `setpts` filter; the command builder sanitizes them to
+    // real-time instead.
+    for multiplier in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+        let config = RecordingConfig {
+            playback_speed_multiplier: multiplier,
+            ..RecordingConfig::default()
+        };
+        let args = argv(&config);
+
+        assert!(
+            !args.iter().any(|arg| arg.starts_with("setpts=")),
+            "argv should omit setpts for non-finite multiplier {multiplier}, got {args:?}"
+        );
+    }
+}
+
+#[test]
+fn clamps_absurdly_large_playback_speed_to_the_maximum() {
+    let config = RecordingConfig {
+        playback_speed_multiplier: f32::MAX,
+        ..RecordingConfig::default()
+    };
+    let args = argv(&config);
+
+    let setpts = args
+        .iter()
+        .find(|arg| arg.starts_with("setpts="))
+        .expect("argv should still contain a setpts filter, clamped to the maximum");
+    let expected = format!(
+        "setpts={:.6}*PTS",
+        1.0 / crate::MAX_PLAYBACK_SPEED_MULTIPLIER
+    );
+    assert_eq!(setpts, &expected);
+}
+
+#[test]
 fn omits_setpts_filter_when_playback_speed_is_real_time() {
     for multiplier in [0.0_f32, 1.0] {
         let config = RecordingConfig {

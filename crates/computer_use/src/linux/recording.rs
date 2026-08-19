@@ -178,9 +178,11 @@ fn new_ffmpeg_capture_command(
         .args(["-pix_fmt", "yuv420p"]);
     // The Linux master is captured at 1x so the post-stop smart cut can keep
     // real action windows at full speed and remove only blocked/thinking gaps.
-    // The server/default `playback_speed_multiplier` is intentionally not
-    // applied here; it remains accepted for wire compatibility and is still
-    // used by the macOS avfoundation fallback.
+    // `config.playback_speed_multiplier` is intentionally not applied here; it
+    // is instead applied as a final ffmpeg pass in `apply_playback_speed`,
+    // after the cut and overlay burn-in (see `post_process_recording`). macOS
+    // applies the same multiplier live during capture instead (see
+    // `mac::recording`), since it has no post-stop cut to desync.
     // Max file size is an output limit; stays as an output option.
     command
         .args(["-movflags", "+faststart"])
@@ -428,6 +430,83 @@ async fn cut_to_segments(
     }
 }
 
+/// Builds the ffmpeg command for the final playback-speed pass (see
+/// [`apply_playback_speed`]). Split out so the argv can be inspected in tests
+/// without spawning ffmpeg, mirroring [`new_ffmpeg_capture_command`].
+fn new_playback_speed_command(
+    input: &Path,
+    output: &Path,
+    frame_rate: u32,
+    playback_speed_multiplier: f32,
+) -> Command {
+    let mut command = Command::new("ffmpeg");
+    // Sanitize defensively here (the actual command-building site) even
+    // though callers are expected to have already resolved a valid value:
+    // this is what prevents a non-finite or absurdly large
+    // `playback_speed_multiplier` from producing a corrupt or zero-duration
+    // `setpts` filter. Mirrors macOS's live setpts filter (see
+    // `mac::recording`), applied here as a final pass instead of during
+    // capture.
+    let playback_speed_multiplier =
+        crate::sanitize_playback_speed_multiplier(playback_speed_multiplier);
+    let setpts = format!("{:.6}*PTS", 1.0 / playback_speed_multiplier);
+    command
+        .arg("-y")
+        .arg("-i")
+        .arg(input)
+        .args(["-vf", &format!("setpts={setpts}")])
+        .args(["-r", &frame_rate.to_string()])
+        .args(["-c:v", "libx264"])
+        .args(["-preset", "ultrafast"])
+        .args(["-pix_fmt", "yuv420p"])
+        .args(["-movflags", "+faststart"])
+        .arg(output);
+    command
+}
+
+/// Applies `playback_speed_multiplier` as a final ffmpeg pass over an already
+/// cut-and-annotated `input` video, returning the path to the sped-up file (a
+/// sibling with extension `speed.mp4`). The input is left untouched; the
+/// caller owns cleanup of both.
+///
+/// This runs strictly after [`cut_to_segments`] and [`burn_overlays_into_cut`]
+/// so the ASS overlays, which are authored/remapped in the cut's own 1x
+/// timeline, are burned in before their presentation timestamps are rescaled.
+/// Applying `setpts` any earlier (e.g. on the raw x11grab capture) would
+/// desync the overlays from the actions they annotate and re-break the 1x
+/// master invariant the smart cut depends on (see QUALITY-1112). Callers must
+/// only invoke this when `playback_speed_multiplier > 1.0`; the real-time (≤
+/// 1.0) case is handled by the caller returning the input unchanged.
+async fn apply_playback_speed(
+    input: &Path,
+    frame_rate: u32,
+    playback_speed_multiplier: f32,
+) -> Result<PathBuf, RecordingError> {
+    let output_path = input.with_extension("speed.mp4");
+    let status =
+        new_playback_speed_command(input, &output_path, frame_rate, playback_speed_multiplier)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .await;
+    match status {
+        Ok(status) if status.success() => Ok(output_path),
+        Ok(status) => {
+            let _ = std::fs::remove_file(&output_path);
+            Err(RecordingError::Finalize {
+                reason: format!("ffmpeg playback speed pass exited with status {status}"),
+            })
+        }
+        Err(e) => {
+            let _ = std::fs::remove_file(&output_path);
+            Err(RecordingError::Finalize {
+                reason: format!("failed to run ffmpeg for playback speed pass: {e}"),
+            })
+        }
+    }
+}
+
 /// Burns the remapped ASS overlay pills into an already-cut `input` video,
 /// returning the path to the annotated file (a sibling with extension
 /// `overlay.mp4`). The cut input is left untouched; the caller owns cleanup of
@@ -480,18 +559,20 @@ async fn burn_overlays_into_cut(
 /// produced paths. ffmpeg demuxes each mp4 from disk frame-by-frame, so the
 /// whole recording is never buffered in memory.
 ///
-/// The two steps are independent: `cut_to_segments` knows nothing about
-/// overlays, and `burn_overlays_into_cut` knows nothing about segment
-/// boundaries. A recording whose committed actions yield no qualifying segment
-/// returns an error rather than producing a video; the caller falls back to
-/// uploading the untouched source for an unexpected processing failure after at
-/// least one committed action.
+/// The three steps are independent: `cut_to_segments` knows nothing about
+/// overlays or speed, `burn_overlays_into_cut` knows nothing about segment
+/// boundaries or speed, and `apply_playback_speed` knows nothing about
+/// segments or overlays. A recording whose committed actions yield no
+/// qualifying segment returns an error rather than producing a video; the
+/// caller falls back to uploading the untouched source for an unexpected
+/// processing failure after at least one committed action.
 pub async fn post_process_recording(
     input: &Path,
     entries: &[crate::ActionLogEntry],
     dimensions: (u32, u32),
     source_duration: Duration,
     frame_rate: u32,
+    playback_speed_multiplier: f32,
 ) -> Result<PathBuf, RecordingError> {
     let segments = crate::overlay::build_keep_segments(entries, source_duration, frame_rate);
     if segments.is_empty() {
@@ -522,7 +603,39 @@ pub async fn post_process_recording(
     // original source on any error.
     let _ = std::fs::remove_file(&cut_path);
 
-    overlay_result
+    let overlay_path = overlay_result?;
+
+    // Step 3: apply the universal playback speed as a final pass, strictly
+    // after the cut and overlay burn-in.
+    finalize_playback_speed(overlay_path, frame_rate, playback_speed_multiplier).await
+}
+
+/// Applies [`apply_playback_speed`] to `overlay_path` (the cut- and
+/// overlay-burned output of the prior two steps) and removes it once the
+/// pass is attempted, on both success and failure -- so a failed pass never
+/// strands the (potentially large) burned-overlay MP4 in the OS temp
+/// directory. On success the caller uploads the returned sped-up file; on
+/// failure it falls back to uploading the original 1x source, so
+/// `overlay_path` is unusable either way once this returns.
+///
+/// `sanitize_playback_speed_multiplier` treats non-finite/<= 1.0 values as
+/// real-time and clamps absurdly large ones. When the sanitized value is
+/// real-time, `overlay_path` is returned unchanged and is NOT removed, since
+/// it is then the caller's final output.
+async fn finalize_playback_speed(
+    overlay_path: PathBuf,
+    frame_rate: u32,
+    playback_speed_multiplier: f32,
+) -> Result<PathBuf, RecordingError> {
+    let playback_speed_multiplier =
+        crate::sanitize_playback_speed_multiplier(playback_speed_multiplier);
+    if playback_speed_multiplier <= 1.0 {
+        return Ok(overlay_path);
+    }
+    let speed_result =
+        apply_playback_speed(&overlay_path, frame_rate, playback_speed_multiplier).await;
+    let _ = std::fs::remove_file(&overlay_path);
+    speed_result
 }
 
 /// Builds the ffmpeg `filter_complex` for the segment-cut step only (no

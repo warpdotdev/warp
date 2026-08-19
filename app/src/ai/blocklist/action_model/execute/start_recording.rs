@@ -81,12 +81,10 @@ impl StartRecordingExecutor {
                 // frame rate 0 means unspecified, and absent limits would otherwise
                 // leave the capture unbounded.
                 let defaults = computer_use::RecordingConfig::default();
-                // Use server-provided integer speed multiplier (> 1 means faster
-                // playback); fall back to the client default (4x) when absent.
-                let playback_speed_multiplier = playback_speed_multiplier
-                    .filter(|&s| s > 1)
-                    .map(|s| s as f32)
-                    .unwrap_or(defaults.playback_speed_multiplier);
+                let playback_speed_multiplier = resolve_playback_speed_multiplier(
+                    playback_speed_multiplier,
+                    defaults.playback_speed_multiplier,
+                );
                 let resolved_frame_rate = if frame_rate > 0 {
                     frame_rate
                 } else {
@@ -99,12 +97,19 @@ impl StartRecordingExecutor {
                     playback_speed_multiplier,
                     target,
                 };
-                // Carry the resolved frame rate to the completion callback so the
-                // controller can store it for the post-stop smart cut's one-frame
-                // minimum, even though it is not echoed back to the server.
-                (recorder.start(config).await, resolved_frame_rate)
+                // Carry the resolved frame rate and speed multiplier to the
+                // completion callback: the controller stores the frame rate for
+                // the post-stop smart cut's one-frame minimum, and the speed
+                // multiplier for the post-stop speed pass (Linux) / as a record
+                // of what was already applied live during capture (macOS).
+                // Neither is echoed back to the server.
+                (
+                    recorder.start(config).await,
+                    resolved_frame_rate,
+                    playback_speed_multiplier,
+                )
             },
-            move |(result, frame_rate), ctx| match result {
+            move |(result, frame_rate, playback_speed_multiplier), ctx| match result {
                 Ok(handle) => {
                     let recording_id = Uuid::new_v4().to_string();
                     let started_at = SystemTime::now();
@@ -128,6 +133,7 @@ impl StartRecordingExecutor {
                             conversation_id,
                             handle,
                             frame_rate,
+                            playback_speed_multiplier,
                             summary,
                             description,
                             target,
@@ -170,3 +176,26 @@ impl StartRecordingExecutor {
 impl Entity for StartRecordingExecutor {
     type Event = ();
 }
+
+/// Resolves the playback speed multiplier to actually pass to the recorder
+/// from the wire-presence-preserving value carried on the action.
+///
+/// `None` means the server never specified a value at all (e.g. an old
+/// server build), so the client's own `default` applies. `Some(raw)` is an
+/// explicit server request -- including a value <= 1.0, which explicitly
+/// asks for real-time -- and is validated through
+/// `computer_use::sanitize_playback_speed_multiplier` rather than being
+/// coerced back to `default`. Collapsing an explicit real-time request to
+/// `default` was a real regression: a server configured for real-time
+/// (`playback_speed_multiplier <= 1.0` in warp-server) would otherwise still
+/// produce a sped-up recording.
+fn resolve_playback_speed_multiplier(playback_speed_multiplier: Option<f32>, default: f32) -> f32 {
+    match playback_speed_multiplier {
+        None => default,
+        Some(raw) => computer_use::sanitize_playback_speed_multiplier(raw),
+    }
+}
+
+#[cfg(all(test, not(target_family = "wasm")))]
+#[path = "start_recording_tests.rs"]
+mod tests;

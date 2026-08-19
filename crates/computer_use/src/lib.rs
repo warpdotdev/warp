@@ -287,22 +287,39 @@ pub fn create_recorder() -> Box<dyn Recorder> {
 }
 
 /// Applies platform-specific post-processing and returns the path to upload.
-/// Linux trims inactive gaps and burns action overlays; other platforms return
-/// `input` unchanged.
+/// Linux trims inactive gaps, burns action overlays, then applies
+/// `playback_speed_multiplier` as a final pass; other platforms return `input`
+/// unchanged (macOS applies the multiplier live during capture instead; see
+/// `mac::recording`).
 pub async fn post_process_recording(
     input: &Path,
     entries: &[ActionLogEntry],
     dimensions: (u32, u32),
     source_duration: Duration,
     frame_rate: u32,
+    playback_speed_multiplier: f32,
 ) -> Result<PathBuf, RecordingError> {
     #[cfg(all(linux, not(noop)))]
     {
-        imp::post_process_recording(input, entries, dimensions, source_duration, frame_rate).await
+        imp::post_process_recording(
+            input,
+            entries,
+            dimensions,
+            source_duration,
+            frame_rate,
+            playback_speed_multiplier,
+        )
+        .await
     }
     #[cfg(not(all(linux, not(noop))))]
     {
-        let _ = (entries, dimensions, source_duration, frame_rate);
+        let _ = (
+            entries,
+            dimensions,
+            source_duration,
+            frame_rate,
+            playback_speed_multiplier,
+        );
         Ok(input.to_path_buf())
     }
 }
@@ -373,6 +390,29 @@ pub trait Recorder: Send + Sync + 'static {
     async fn stop(&self, handle: RecordingHandle) -> Result<RecordingOutput, RecordingError>;
 }
 
+/// Upper bound for [`RecordingConfig::playback_speed_multiplier`]. Values
+/// above this collapse ffmpeg's `setpts` scale factor to (or unacceptably
+/// close to) zero at the six-decimal precision both platforms' capture
+/// commands format with, producing a zero-duration or corrupt recording --
+/// and non-finite inputs (`NaN`, `+-Infinity`) collapse it outright. Chosen
+/// well above any plausible product value (the default is 1.5x).
+pub const MAX_PLAYBACK_SPEED_MULTIPLIER: f32 = 100.0;
+
+/// Sanitizes a raw, potentially server-provided playback speed multiplier
+/// immediately before it is used to build either platform's ffmpeg command.
+/// Non-finite (`NaN`/`+-Infinity`) and non-positive values are treated as
+/// real-time (returns `1.0`, matching the `<= 1.0` real-time convention both
+/// platforms already use) rather than producing a corrupt or zero-duration
+/// recording; otherwise the value is clamped to
+/// [`MAX_PLAYBACK_SPEED_MULTIPLIER`].
+pub fn sanitize_playback_speed_multiplier(multiplier: f32) -> f32 {
+    if !multiplier.is_finite() || multiplier <= 1.0 {
+        1.0
+    } else {
+        multiplier.min(MAX_PLAYBACK_SPEED_MULTIPLIER)
+    }
+}
+
 /// Runtime-owned capture configuration for a recording.
 #[derive(Debug, Clone)]
 pub struct RecordingConfig {
@@ -384,8 +424,10 @@ pub struct RecordingConfig {
     pub max_size_bytes: u64,
     /// How many times faster the output video should play back relative to real
     /// time. For example, 4.0 makes a 4-minute recording play in 1 minute. A
-    /// value of 0.0 or 1.0 means real-time (no speedup). Applied via an ffmpeg
-    /// presentation-timestamp rescale filter on the output video.
+    /// value of 0.0 or 1.0 means real-time (no speedup). Not assumed to
+    /// already be sanitized: both platforms' command builders apply
+    /// [`sanitize_playback_speed_multiplier`] before formatting it into an
+    /// ffmpeg presentation-timestamp rescale filter.
     pub playback_speed_multiplier: f32,
     /// The surface to capture. `Screen` records the whole X display (legacy behavior);
     /// `Window` records the targeted window after making it foreground-visible when supported.
@@ -400,10 +442,12 @@ impl Default for RecordingConfig {
             // NOTE: Bounds every capture so an unattended recording can't grow without bound (~10 min / 1 GiB).
             max_duration: Duration::from_secs(10 * 60),
             max_size_bytes: 1024 * 1024 * 1024,
-            // NOTE: 4x playback speed keeps demo videos short and watchable. A 4-minute
-            // recording plays in 1 minute. The server can override via the StartRecording
-            // tool call's playback_speed_multiplier field.
-            playback_speed_multiplier: 4.0,
+            // NOTE: 1.5x playback speed is the universal default applied on every
+            // substrate. The server sends this on every StartRecording tool call
+            // (see `computer_use_recording.playback_speed_multiplier` in
+            // warp-server); this constant is only the fallback used when the
+            // server omits a value.
+            playback_speed_multiplier: 1.5,
             target: Target::Screen,
         }
     }

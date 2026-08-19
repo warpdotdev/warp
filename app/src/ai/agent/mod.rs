@@ -1074,7 +1074,9 @@ impl From<AIAgentActionId> for crate::persistence::model::AIAgentActionId {
 }
 
 /// An "action" included in an AI output.
-#[derive(Debug, Clone, Eq, PartialEq)]
+// Not `Eq`: wraps `AIAgentActionType`, which is not `Eq` because
+// `StartRecording::playback_speed_multiplier` is an `Option<f32>`.
+#[derive(Debug, Clone, PartialEq)]
 pub struct AIAgentAction {
     /// Unique ID for the action.
     pub id: AIAgentActionId,
@@ -1814,7 +1816,9 @@ impl Display for InvokedSkill {
 }
 
 #[allow(clippy::large_enum_variant)]
-#[derive(Debug, Clone, Eq, PartialEq)]
+// Not `Eq`: `Action(AIAgentAction)` wraps `AIAgentActionType`, which is not
+// `Eq` because of `StartRecording::playback_speed_multiplier: Option<f32>`.
+#[derive(Debug, Clone, PartialEq)]
 pub enum AIAgentOutputMessageType {
     Text(AIAgentText),
     Reasoning {
@@ -1935,7 +1939,8 @@ impl Deref for MessageId {
 }
 
 /// A single output message received in an AI's response to some [`AIAgentInput`].
-#[derive(Debug, Clone, Eq, PartialEq)]
+// Not `Eq`: `message` is an `AIAgentOutputMessageType`, which is not `Eq`.
+#[derive(Debug, Clone, PartialEq)]
 pub struct AIAgentOutputMessage {
     pub id: MessageId,
     pub message: AIAgentOutputMessageType,

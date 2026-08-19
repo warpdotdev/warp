@@ -117,6 +117,10 @@ pub(crate) struct ActiveRecording {
     /// The capture frame rate, used by the post-stop smart cut to enforce the
     /// one-source-frame minimum for instantaneous action groups.
     pub(crate) frame_rate: u32,
+    /// How many times faster the finalized video should play back relative to
+    /// real time, applied by the post-stop pipeline (Linux) or already baked
+    /// in live during capture (macOS). A value <= 1.0 means real-time.
+    pub(crate) playback_speed_multiplier: f32,
     /// The surface being recorded, used to resolve pointer-event coordinates
     /// into capture space for the post-stop burn-in.
     pub(crate) target: computer_use::Target,
@@ -245,6 +249,7 @@ impl RecordingController {
         conversation_id: AIConversationId,
         handle: computer_use::RecordingHandle,
         frame_rate: u32,
+        playback_speed_multiplier: f32,
         summary: Option<String>,
         description: Option<String>,
         target: computer_use::Target,
@@ -261,6 +266,7 @@ impl RecordingController {
                 handle,
                 started_at: Instant::now(),
                 frame_rate,
+                playback_speed_multiplier,
                 target,
                 pointer_session: computer_use::PointerSession::new(),
                 actions: Vec::new(),

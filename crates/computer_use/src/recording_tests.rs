@@ -1,6 +1,54 @@
 use super::*;
 
 #[test]
+fn sanitize_playback_speed_multiplier_treats_real_time_values_as_1x() {
+    for value in [f32::NEG_INFINITY, -1.0, 0.0, 0.5, 1.0] {
+        assert_eq!(
+            sanitize_playback_speed_multiplier(value),
+            1.0,
+            "value {value} should sanitize to real-time (1.0)"
+        );
+    }
+}
+
+#[test]
+fn sanitize_playback_speed_multiplier_treats_non_finite_values_as_real_time() {
+    // NaN and +Infinity must never reach an ffmpeg command: NaN would format
+    // as a garbage `setpts=NaN*PTS` filter, and +Infinity's reciprocal
+    // collapses to `setpts=0.000000*PTS` (a zero-duration/corrupt output).
+    for value in [f32::NAN, f32::INFINITY] {
+        assert_eq!(
+            sanitize_playback_speed_multiplier(value),
+            1.0,
+            "non-finite value {value} should sanitize to real-time (1.0)"
+        );
+    }
+}
+
+#[test]
+fn sanitize_playback_speed_multiplier_passes_through_reasonable_values() {
+    assert_eq!(sanitize_playback_speed_multiplier(1.5), 1.5);
+    assert_eq!(sanitize_playback_speed_multiplier(4.0), 4.0);
+    assert_eq!(
+        sanitize_playback_speed_multiplier(MAX_PLAYBACK_SPEED_MULTIPLIER),
+        MAX_PLAYBACK_SPEED_MULTIPLIER
+    );
+}
+
+#[test]
+fn sanitize_playback_speed_multiplier_clamps_absurd_finite_values() {
+    // f32::MAX's reciprocal underflows to 0.0 well before six-decimal
+    // formatting, which would otherwise produce `setpts=0.000000*PTS`.
+    for value in [MAX_PLAYBACK_SPEED_MULTIPLIER + 1.0, 1_000_000.0, f32::MAX] {
+        assert_eq!(
+            sanitize_playback_speed_multiplier(value),
+            MAX_PLAYBACK_SPEED_MULTIPLIER,
+            "value {value} should clamp to MAX_PLAYBACK_SPEED_MULTIPLIER"
+        );
+    }
+}
+
+#[test]
 fn observes_synthetic_recording_exit() {
     let (mut handle, exit_state) = RecordingHandle::new_test(1, 1);
     assert_eq!(handle.poll_exit(), None);

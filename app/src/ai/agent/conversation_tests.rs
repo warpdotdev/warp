@@ -141,6 +141,9 @@ fn tool_call_result_message(
     }
 }
 
+// The deprecated legacy field must still be set to construct this struct
+// literal (it is a plain, non-optional proto3 field).
+#[allow(deprecated)]
 fn start_recording_tool_call() -> api::message::tool_call::Tool {
     api::message::tool_call::Tool::StartRecording(api::message::tool_call::StartRecording {
         description: String::new(),
@@ -149,6 +152,7 @@ fn start_recording_tool_call() -> api::message::tool_call::Tool {
         summary: String::new(),
         playback_speed_multiplier: 0,
         target: None,
+        playback_speed_kind: None,
     })
 }
 

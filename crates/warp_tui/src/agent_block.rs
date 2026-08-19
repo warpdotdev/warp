@@ -145,7 +145,9 @@ enum TuiRichTextSection {
 }
 
 /// Renderable pieces of an agent block; this will grow as we render richer sections.
-#[derive(Clone, Debug, Eq, PartialEq)]
+// Not `Eq`: `ToolCall` wraps `AIAgentAction`, which is not `Eq` because of
+// `StartRecording::playback_speed_multiplier: Option<f32>`.
+#[derive(Clone, Debug, PartialEq)]
 enum TuiAIBlockSection {
     Input(String),
     RichText(TuiRichTextSection),

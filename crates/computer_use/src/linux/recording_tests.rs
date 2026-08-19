@@ -416,6 +416,280 @@ fn capture_command_disables_cursor_compositing_for_screen_and_window() {
     }
 }
 
+/// The final speed-pass command applies `setpts` scaled by the inverse of the
+/// multiplier, forces the constant output frame rate, and writes to the given
+/// output path — mirroring macOS's live setpts filter format exactly, so the
+/// two platforms converge on the same final video timing.
+#[test]
+fn playback_speed_command_applies_setpts_filter() {
+    let input = Path::new("/tmp/input.mp4");
+    let output = Path::new("/tmp/input.speed.mp4");
+    let command = super::new_playback_speed_command(input, output, 15, 1.5);
+    let args: Vec<String> = command
+        .as_std()
+        .get_args()
+        .map(|arg| arg.to_string_lossy().into_owned())
+        .collect();
+
+    // 1.0 / 1.5 = 0.666667, formatted to six decimals — matches macOS's format.
+    let setpts = args
+        .iter()
+        .find(|arg| arg.starts_with("setpts="))
+        .expect("argv should contain a setpts filter");
+    assert_eq!(setpts, "setpts=0.666667*PTS");
+    assert!(
+        args.iter().any(|arg| arg == "-vf"),
+        "argv should pass setpts via -vf, got {args:?}"
+    );
+
+    let r_index = args
+        .iter()
+        .position(|arg| arg == "-r")
+        .expect("argv should contain -r");
+    assert_eq!(args.get(r_index + 1), Some(&"15".to_string()));
+}
+
+/// Non-finite and absurdly large multipliers must never reach the ffmpeg
+/// argv as a corrupt or zero-duration `setpts` filter; the command builder
+/// sanitizes them defensively (mirrors the macOS argv tests).
+#[test]
+fn playback_speed_command_sanitizes_non_finite_and_extreme_values() {
+    let input = Path::new("/tmp/input.mp4");
+    let output = Path::new("/tmp/input.speed.mp4");
+
+    for multiplier in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+        let command = super::new_playback_speed_command(input, output, 15, multiplier);
+        let args: Vec<String> = command
+            .as_std()
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect();
+        let setpts = args
+            .iter()
+            .find(|arg| arg.starts_with("setpts="))
+            .expect("argv should still contain a setpts filter");
+        assert_eq!(
+            setpts, "setpts=1.000000*PTS",
+            "non-finite multiplier {multiplier} should sanitize to real-time (identity setpts)"
+        );
+    }
+
+    let command = super::new_playback_speed_command(input, output, 15, f32::MAX);
+    let args: Vec<String> = command
+        .as_std()
+        .get_args()
+        .map(|arg| arg.to_string_lossy().into_owned())
+        .collect();
+    let setpts = args
+        .iter()
+        .find(|arg| arg.starts_with("setpts="))
+        .expect("argv should still contain a setpts filter");
+    let expected = format!(
+        "setpts={:.6}*PTS",
+        1.0 / crate::MAX_PLAYBACK_SPEED_MULTIPLIER
+    );
+    assert_eq!(setpts, &expected, "f32::MAX should clamp to the maximum");
+}
+
+/// A longer, uniform-color fixture (unlike [`write_fixture_source`], which is
+/// deliberately short and frame-identifiable for the smart-cut test). The
+/// final speed pass forces a constant output frame rate (`-r`), which
+/// resamples the rescaled presentation timestamps onto a fixed frame grid;
+/// on a very short clip that resampling's up-to-one-frame-period rounding is
+/// a large fraction of the total duration and makes a tight tolerance flaky.
+/// A longer clip keeps that same rounding error a small, stable fraction of
+/// the expected duration.
+async fn write_duration_fixture(path: &Path, frames: usize, frame_rate: u32) {
+    write_solid_fixture(path, frames, frame_rate, FIXTURE_W, FIXTURE_H).await
+}
+
+/// Writes a solid mid-gray fixture of `frames` frames at `width`x`height`,
+/// used both for pure duration checks ([`write_duration_fixture`]) and as a
+/// plain background a burned-in overlay can be visually detected against
+/// ([`post_process_recording_runs_the_full_cut_overlay_speed_pipeline`]).
+async fn write_solid_fixture(path: &Path, frames: usize, frame_rate: u32, width: u32, height: u32) {
+    let frame_len = (width as usize) * (height as usize) * 3;
+    let raw = vec![128u8; frames * frame_len];
+    let raw_path = path.with_extension("raw");
+    std::fs::write(&raw_path, &raw).expect("write raw source");
+    let output = Command::new("ffmpeg")
+        .args(["-y", "-hide_banner", "-f", "rawvideo", "-pix_fmt", "rgb24"])
+        .args(["-video_size", &format!("{width}x{height}")])
+        .args(["-framerate", &frame_rate.to_string()])
+        .arg("-i")
+        .arg(&raw_path)
+        .args([
+            "-c:v",
+            "libx264",
+            "-preset",
+            "ultrafast",
+            "-pix_fmt",
+            "yuv420p",
+        ])
+        .arg(path)
+        .output()
+        .await
+        .expect("run ffmpeg source encode");
+    let _ = std::fs::remove_file(&raw_path);
+    assert!(
+        output.status.success(),
+        "ffmpeg source encode failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+/// Extracts a single decoded frame at `at_secs` into raw interleaved RGB24.
+async fn decode_frame_at(path: &Path, width: u32, height: u32, at_secs: f64) -> Vec<u8> {
+    let raw_path = path.with_extension(format!("frame-{:.3}.raw", at_secs.max(0.0)));
+    let output = Command::new("ffmpeg")
+        .args(["-y", "-hide_banner"])
+        .args(["-ss", &format!("{:.3}", at_secs.max(0.0))])
+        .arg("-i")
+        .arg(path)
+        .args(["-frames:v", "1", "-f", "rawvideo", "-pix_fmt", "rgb24"])
+        .arg(&raw_path)
+        .output()
+        .await
+        .expect("run ffmpeg frame extract");
+    assert!(
+        output.status.success(),
+        "ffmpeg frame extract at {at_secs}s failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let data = std::fs::read(&raw_path).expect("read extracted frame");
+    let _ = std::fs::remove_file(&raw_path);
+    let frame_len = (width as usize) * (height as usize) * 3;
+    assert!(
+        data.len() >= frame_len,
+        "extracted frame ({} bytes) smaller than one {width}x{height} frame ({frame_len} bytes)",
+        data.len()
+    );
+    data[..frame_len].to_vec()
+}
+
+/// Fraction of pixels in `frame` that differ meaningfully from a solid
+/// `background` color -- used to detect whether a burned-in overlay pill is
+/// visible in a decoded frame without needing to know its exact pixel
+/// position.
+fn fraction_non_background(frame: &[u8], background: [u8; 3]) -> f64 {
+    let pixels = frame.chunks_exact(3);
+    let total = pixels.len().max(1);
+    let differing = pixels
+        .filter(|px| {
+            let diff = (i32::from(px[0]) - i32::from(background[0])).abs()
+                + (i32::from(px[1]) - i32::from(background[1])).abs()
+                + (i32::from(px[2]) - i32::from(background[2])).abs();
+            diff > 30
+        })
+        .count();
+    differing as f64 / total as f64
+}
+
+/// End-to-end: applying a 1.5x speed pass to a fixture video shrinks its
+/// duration by the expected ratio, and the output is independently probed as
+/// playable (a non-zero, decodable duration) -- not just "ffmpeg exited 0".
+#[tokio::test]
+async fn apply_playback_speed_rescales_duration() {
+    if !ffmpeg_available().await {
+        eprintln!("skipping apply_playback_speed_rescales_duration: no ffmpeg");
+        return;
+    }
+
+    const FRAMES: usize = 60;
+    let dir = std::env::temp_dir().join(format!("warp-speed-test-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&dir).expect("create temp dir");
+    let source = dir.join("source.mp4");
+    write_duration_fixture(&source, FRAMES, FIXTURE_FRAME_RATE).await;
+    let source_duration = probe_duration(&source).await;
+    assert!(
+        (source_duration - 6.0).abs() < 0.05,
+        "fixture source should be ~6.0s (60 frames at 10fps), got {source_duration}s"
+    );
+
+    let sped_path = super::apply_playback_speed(&source, FIXTURE_FRAME_RATE, 1.5)
+        .await
+        .expect("apply playback speed");
+    let sped_duration = probe_duration(&sped_path).await;
+
+    let expected = source_duration / 1.5;
+    assert!(
+        (sped_duration - expected).abs() < 0.3,
+        "expected ~{expected}s after a 1.5x speedup of a {source_duration}s source, got \
+         {sped_duration}s"
+    );
+    assert!(
+        sped_duration > 0.0,
+        "sped-up output should have a non-zero, playable duration"
+    );
+
+    let _ = std::fs::remove_file(&sped_path);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// On a successful speed pass, `finalize_playback_speed` removes the input
+/// (burned-overlay) file, since its content now lives in the returned
+/// sped-up file.
+#[tokio::test]
+async fn finalize_playback_speed_removes_input_on_success() {
+    if !ffmpeg_available().await {
+        eprintln!("skipping finalize_playback_speed_removes_input_on_success: no ffmpeg");
+        return;
+    }
+
+    let dir =
+        std::env::temp_dir().join(format!("warp-speed-success-test-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&dir).expect("create temp dir");
+    let overlay_path = dir.join("overlay.mp4");
+    write_fixture_source(&overlay_path).await;
+
+    let result = super::finalize_playback_speed(overlay_path.clone(), FIXTURE_FRAME_RATE, 1.5)
+        .await
+        .expect("speed pass should succeed on a valid fixture video");
+
+    assert!(
+        !overlay_path.exists(),
+        "the burned-overlay input should be removed once superseded by the sped-up output"
+    );
+    assert!(result.exists(), "the sped-up output should exist");
+
+    let _ = std::fs::remove_file(&result);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Regression test for a defect where a failed speed pass left the
+/// burned-overlay MP4 (`overlay_path`) stranded in the OS temp directory: the
+/// error from `apply_playback_speed` propagated before cleanup ran.
+/// `finalize_playback_speed` must remove `overlay_path` on failure too.
+#[tokio::test]
+async fn finalize_playback_speed_removes_input_on_failure() {
+    if !ffmpeg_available().await {
+        eprintln!("skipping finalize_playback_speed_removes_input_on_failure: no ffmpeg");
+        return;
+    }
+
+    let dir =
+        std::env::temp_dir().join(format!("warp-speed-failure-test-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&dir).expect("create temp dir");
+    // Not a valid video: ffmpeg will fail to decode it, forcing
+    // `apply_playback_speed` to return an error.
+    let overlay_path = dir.join("overlay.mp4");
+    std::fs::write(&overlay_path, b"not a real video").expect("write invalid fixture");
+
+    let result =
+        super::finalize_playback_speed(overlay_path.clone(), FIXTURE_FRAME_RATE, 1.5).await;
+
+    assert!(
+        result.is_err(),
+        "speed pass over an invalid input should fail"
+    );
+    assert!(
+        !overlay_path.exists(),
+        "a failed speed pass must not strand the burned-overlay input file"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// The cut-only filtergraph emits one `trim`+`setpts=PTS-STARTPTS` branch per
 /// retained segment, concatenates them video-only, and maps the result to
 /// `[vout]`. It contains no overlay/subtitles logic, which is handled in a
@@ -634,5 +908,103 @@ async fn smart_cut_retains_only_selected_frames_in_order() {
         "output duration should be ~0.6s (6 frames at 10fps), got {duration}"
     );
 
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// End-to-end: the real production pipeline (`post_process_recording`) --
+/// smart cut, then overlay burn-in, then the final 1.5x speed pass -- run
+/// against a real ffmpeg-encoded fixture, verifying the output is playable,
+/// its duration reflects both the cut and the speedup, and the burned-in
+/// overlay pill is visible during the action's display window and absent
+/// beforehand (i.e. the overlay survived the cut/speed remap rather than
+/// drifting or disappearing).
+#[tokio::test]
+async fn post_process_recording_runs_the_full_cut_overlay_speed_pipeline() {
+    if !ffmpeg_available().await {
+        eprintln!(
+            "skipping post_process_recording_runs_the_full_cut_overlay_speed_pipeline: no ffmpeg"
+        );
+        return;
+    }
+
+    // Large enough that the overlay pill (fixed pixel margins/font size) is
+    // fully on-screen, unlike the tiny 64x64 fixture used elsewhere.
+    const WIDTH: u32 = 320;
+    const HEIGHT: u32 = 240;
+    const FRAMES: usize = 60; // 6.0s at 10fps.
+    let source_duration = Duration::from_secs(6);
+
+    let dir = std::env::temp_dir().join(format!("warp-pipeline-test-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&dir).expect("create temp dir");
+    let source = dir.join("source.mp4");
+    write_solid_fixture(&source, FRAMES, FIXTURE_FRAME_RATE, WIDTH, HEIGHT).await;
+
+    // One action group from 1.0s-1.5s. The cut retains [0.75s, 2.5s] (250ms
+    // pre / 1000ms post margins), a 1.75s segment; at 1.5x that becomes
+    // ~1.1667s. The overlay's remapped display window covers nearly the
+    // whole result (see the source-to-output math in the module doc above).
+    let entries = vec![crate::ActionLogEntry {
+        offset: Duration::from_millis(1000),
+        finish_offset: Duration::from_millis(1500),
+        labels: vec!["typing\u{2026}".to_string()],
+        pointer_events: Vec::new(),
+    }];
+
+    let output = super::post_process_recording(
+        &source,
+        &entries,
+        (WIDTH, HEIGHT),
+        source_duration,
+        FIXTURE_FRAME_RATE,
+        1.5,
+    )
+    .await
+    .expect("full cut/overlay/speed pipeline should succeed");
+
+    assert!(output.exists(), "pipeline output should exist");
+    assert_ne!(
+        output, source,
+        "pipeline should produce a new file, not return the untouched source"
+    );
+
+    let duration = probe_duration(&output).await;
+    let expected = 1.75 / 1.5;
+    assert!(
+        (duration - expected).abs() < 0.4,
+        "expected ~{expected:.3}s (1.75s cut at 1.5x), got {duration}s -- three independent \
+         constant-frame-rate re-encodes (cut, overlay burn-in, speed pass) each add their own \
+         frame-grid rounding"
+    );
+    assert!(
+        duration > 0.0 && duration < source_duration.as_secs_f64(),
+        "output should be a playable clip shorter than the untouched 6s source, got {duration}s"
+    );
+
+    // The overlay pill should be visible partway through the clip (during the
+    // action's lingering display window) and absent right at the start
+    // (before the pill's remapped onset, ~0.1667s in).
+    let background = [128u8, 128, 128];
+    let early_frame = decode_frame_at(&output, WIDTH, HEIGHT, 0.05).await;
+    let overlay_frame = decode_frame_at(&output, WIDTH, HEIGHT, duration * 0.6).await;
+    let early_fraction = fraction_non_background(&early_frame, background);
+    let overlay_fraction = fraction_non_background(&overlay_frame, background);
+    assert!(
+        early_fraction < 0.02,
+        "frame before the pill's onset should be plain background, got {early_fraction:.4} \
+         non-background"
+    );
+    assert!(
+        overlay_fraction > 0.02,
+        "frame during the action's display window should show the burned-in overlay pill, got \
+         only {overlay_fraction:.4} non-background"
+    );
+
+    // Preserve the recording as a visual-evidence artifact when requested.
+    if let Ok(evidence_dir) = std::env::var("WARP_RECORDING_TEST_OUTPUT_DIR") {
+        let dest = Path::new(&evidence_dir).join("full_pipeline_recording.mp4");
+        let _ = std::fs::copy(&output, &dest);
+    }
+
+    let _ = std::fs::remove_file(&output);
     let _ = std::fs::remove_dir_all(&dir);
 }
