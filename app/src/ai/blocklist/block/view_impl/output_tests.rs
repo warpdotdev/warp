@@ -13,13 +13,13 @@ use warpui::App;
 use watcher::HomeDirectoryWatcher;
 
 use super::{
-    RecordingCardText, format_upload_artifact_text, parsed_skill_for_common_locations,
-    read_skill_display_text, should_decorate_recorded_use_computer, start_recording_card_text,
-    stop_recording_card_text,
+    RecordingCardText, computer_use_subtask_text_markdown, format_upload_artifact_text,
+    parsed_skill_for_common_locations, read_skill_display_text,
+    should_decorate_recorded_use_computer, start_recording_card_text, stop_recording_card_text,
 };
 use crate::ai::agent::{
-    RecordingStarted, RecordingStopped, StartRecordingResult, StopRecordingResult,
-    UploadArtifactResult,
+    AIAgentTextSection, RecordingStarted, RecordingStopped, StartRecordingResult,
+    StopRecordingResult, UploadArtifactResult,
 };
 use crate::ai::skills::SkillManager;
 use crate::settings::AISettings;
@@ -164,6 +164,38 @@ fn stop_recording_card_text_includes_partial_duration_without_raw_reason() {
             subtext: Some("Partial recording • 0:12".to_string()),
         }
     );
+}
+
+#[test]
+fn computer_use_subtask_text_markdown_joins_plain_text_sections() {
+    let sections = vec![
+        AIAgentTextSection::PlainText {
+            text: "Checking the renamed labels".to_string().into(),
+        },
+        AIAgentTextSection::PlainText {
+            text: "They look correct.".to_string().into(),
+        },
+    ];
+
+    let markdown = computer_use_subtask_text_markdown(&sections);
+
+    assert_eq!(
+        markdown,
+        "Checking the renamed labels\n\nThey look correct."
+    );
+}
+
+#[test]
+fn computer_use_subtask_text_markdown_preserves_code_fences() {
+    let sections = vec![AIAgentTextSection::Code {
+        code: "echo hi".to_string(),
+        language: None,
+        source: None,
+    }];
+
+    let markdown = computer_use_subtask_text_markdown(&sections);
+
+    assert_eq!(markdown, "```\necho hi\n```");
 }
 
 #[test]

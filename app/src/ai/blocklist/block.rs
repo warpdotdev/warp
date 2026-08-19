@@ -89,16 +89,17 @@ use super::{
 };
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent::redaction::redact_secrets;
+use crate::ai::agent::task::TaskId;
 use crate::ai::agent::telemetry::ForTelemetry as _;
 use crate::ai::agent::{
     AIAgentAction, AIAgentActionId, AIAgentActionResultType, AIAgentActionType, AIAgentAttachment,
-    AIAgentCitation, AIAgentContext, AIAgentInput, AIAgentOutput, AIAgentOutputMessage,
-    AIAgentOutputMessageType, AIAgentTextSection, AIIdentifiers, CancellationReason,
-    CreateDocumentsRequest, CreateDocumentsResult, DocumentToCreate, EditDocumentsResult,
-    MessageId, PassiveSuggestionTrigger, ProgrammingLanguage, RenderableAIError,
-    RequestCommandOutputResult, RequestFileEditsResult, SearchCodebaseResult, ServerOutputId,
-    SubagentCall, SubagentType, SuggestPromptRequest, SuggestPromptResult, SuggestedLoggingId,
-    SummarizationType, TodoOperation,
+    AIAgentCitation, AIAgentContext, AIAgentExchangeId, AIAgentInput, AIAgentOutput,
+    AIAgentOutputMessage, AIAgentOutputMessageType, AIAgentTextSection, AIIdentifiers,
+    CancellationReason, CreateDocumentsRequest, CreateDocumentsResult, DocumentToCreate,
+    EditDocumentsResult, MessageId, PassiveSuggestionTrigger, ProgrammingLanguage,
+    RenderableAIError, RequestCommandOutputResult, RequestFileEditsResult, SearchCodebaseResult,
+    ServerOutputId, SubagentCall, SubagentType, SuggestPromptRequest, SuggestPromptResult,
+    SuggestedLoggingId, SummarizationType, TodoOperation,
 };
 use crate::ai::agent_conversations_model::{AgentConversationsModel, AgentConversationsModelEvent};
 use crate::ai::ambient_agents::AmbientAgentTaskId;
@@ -1317,8 +1318,10 @@ impl AIBlock {
             }
         });
 
-        // Note: UpdatedStreamingExchange is handled by the dedicated on_updated_output()
-        // callback in model_impl.rs, so we don't need to respond to it here.
+        // `UpdatedStreamingExchange` for this block's own exchange is handled by the dedicated
+        // on_updated_output() callback in model_impl.rs. A computer-use subtask embedded on this
+        // exchange (see APP-5371) has its own, distinct exchange ID, so its streaming updates
+        // land here instead; see the `UpdatedStreamingExchange` arm below.
         ctx.subscribe_to_model(
             &BlocklistAIHistoryModel::handle(ctx),
             |me, _, event, ctx| {
@@ -1333,6 +1336,24 @@ impl AIBlock {
                         | BlocklistAIHistoryEvent::StartedNewConversation { .. }
                         | BlocklistAIHistoryEvent::SetActiveConversation { .. } => {
                             ctx.notify();
+                        }
+                        // Refresh this block's embedded computer-use action state (buttons,
+                        // recording eligibility, etc.) whenever a computer-use subtask exchange
+                        // it currently embeds streams new content, so newly streamed tool calls
+                        // render with correct per-action UI state instead of stale/missing state
+                        // (APP-5371).
+                        BlocklistAIHistoryEvent::UpdatedStreamingExchange {
+                            exchange_id: updated_exchange_id,
+                            conversation_id: updated_conversation_id,
+                            ..
+                        } if *updated_conversation_id == me.client_ids.conversation_id
+                            && *updated_exchange_id != me.client_ids.client_exchange_id
+                            && me.references_computer_use_subtask_exchange(
+                                *updated_exchange_id,
+                                ctx,
+                            ) =>
+                        {
+                            me.refresh_embedded_computer_use_state(ctx);
                         }
                         _ => {}
                     }
@@ -1991,6 +2012,79 @@ impl AIBlock {
         ctx.notify();
     }
 
+    /// Returns the actions belonging to any computer-use subagent tasks referenced by this
+    /// exchange's output (via a `Subagent(SubagentCall { subagent_type: ComputerUse, .. })`
+    /// message). Computer-use subagent tasks are intentionally excluded from the blocklist (see
+    /// `should_show_task_in_blocklist`) so their tool calls render inline as part of this
+    /// exchange's output instead of in a separate trailing AI block (APP-5371); this lets the
+    /// same per-action UI state (buttons, etc.) get registered for those embedded actions too.
+    fn embedded_computer_use_subtask_actions(
+        &self,
+        output: &AIAgentOutput,
+        app: &AppContext,
+    ) -> Vec<AIAgentAction> {
+        let Some(conversation) = self.model.conversation(app) else {
+            return Vec::new();
+        };
+        output
+            .messages
+            .iter()
+            .filter_map(|message| match &message.message {
+                AIAgentOutputMessageType::Subagent(SubagentCall {
+                    subagent_type: SubagentType::ComputerUse,
+                    task_id,
+                }) => conversation.get_task(&TaskId::new(task_id.clone())),
+                _ => None,
+            })
+            .flat_map(|task| task.exchanges())
+            .filter_map(|exchange| exchange.output_status.output())
+            .flat_map(|shared_output| shared_output.get().actions().cloned().collect::<Vec<_>>())
+            .collect()
+    }
+
+    /// Returns whether the referenced exchange belongs to a computer-use subtask that this
+    /// exchange's current output embeds (see `embedded_computer_use_subtask_actions`). Used to
+    /// decide whether an `UpdatedStreamingExchange` event for a different exchange should refresh
+    /// this block's embedded action state (APP-5371).
+    fn references_computer_use_subtask_exchange(
+        &self,
+        exchange_id: AIAgentExchangeId,
+        app: &AppContext,
+    ) -> bool {
+        let Some(output) = self.model.status(app).output_to_render() else {
+            return false;
+        };
+        let output = output.get();
+        let Some(conversation) = self.model.conversation(app) else {
+            return false;
+        };
+        output.messages.iter().any(|message| {
+            let AIAgentOutputMessageType::Subagent(SubagentCall {
+                subagent_type: SubagentType::ComputerUse,
+                task_id,
+            }) = &message.message
+            else {
+                return false;
+            };
+            conversation
+                .get_task(&TaskId::new(task_id.clone()))
+                .is_some_and(|task| task.exchanges().any(|exchange| exchange.id == exchange_id))
+        })
+    }
+
+    /// Re-runs action/button-state registration for this exchange's output (including any
+    /// embedded computer-use subtask actions) and re-renders. Called when a referenced
+    /// computer-use subtask exchange streams new content, since that arrives as an
+    /// `UpdatedStreamingExchange` for a *different* exchange than this block's own (APP-5371).
+    fn refresh_embedded_computer_use_state(&mut self, ctx: &mut ViewContext<Self>) {
+        let Some(output) = self.model.status(ctx).output_to_render() else {
+            return;
+        };
+        let output = output.get();
+        self.handle_updated_output(&output, ctx);
+        ctx.notify();
+    }
+
     fn handle_updated_output(&mut self, output: &AIAgentOutput, ctx: &mut ViewContext<Self>) {
         // Ensure ui state handles are initialized for todo operation output messages.
         for message in &output.messages {
@@ -2001,7 +2095,14 @@ impl AIBlock {
             }
         }
 
-        self.has_recording_related_actions = output.actions().any(|action| {
+        // Computer-use subagent tasks don't get their own AI block (see
+        // `should_show_task_in_blocklist`); their tool calls render inline on this exchange
+        // instead (APP-5371). Treat their actions the same as this exchange's own for the
+        // purposes of button/state registration below, so those inline rows work correctly.
+        let embedded_cu_actions = self.embedded_computer_use_subtask_actions(output, ctx);
+        let all_actions = || output.actions().chain(embedded_cu_actions.iter());
+
+        self.has_recording_related_actions = all_actions().any(|action| {
             matches!(
                 &action.action,
                 AIAgentActionType::StartRecording { .. }
@@ -2022,9 +2123,9 @@ impl AIBlock {
 
         self.fetch_conversation_search_agent_run_titles(output, ctx);
 
-        for action in output.actions() {
+        for action in all_actions() {
             let new_action_ids: HashSet<AIAgentActionId> =
-                output.actions().map(|action| action.id.clone()).collect();
+                all_actions().map(|action| action.id.clone()).collect();
 
             #[cfg(feature = "integration_tests")]
             {

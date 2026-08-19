@@ -62,6 +62,22 @@ fn test_should_show_task_in_blocklist_hides_conversation_search_subagent_task() 
 }
 
 #[test]
+fn test_should_show_task_in_blocklist_hides_computer_use_subagent_task() {
+    // Regression test for APP-5371: computer-use subagent tasks must not get their own
+    // blocklist AI block, otherwise their tool calls render in a separate trailing block
+    // that can end up below the parent exchange's response footer/toolbelt.
+    let conversation =
+        create_restored_conversation(api::message::tool_call::subagent::Metadata::ComputerUse(()));
+
+    let subtask = conversation
+        .all_tasks()
+        .find(|task| task.is_computer_use_subagent())
+        .expect("computer-use subagent task should exist");
+
+    assert!(!should_show_task_in_blocklist(subtask));
+}
+
+#[test]
 fn test_exchanges_for_blocklist_excludes_warp_docs_subagent_exchanges() {
     let conversation = create_restored_conversation(
         api::message::tool_call::subagent::Metadata::WarpDocumentationSearch(()),

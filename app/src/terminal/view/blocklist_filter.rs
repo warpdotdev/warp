@@ -7,10 +7,15 @@ use crate::ai::agent::task::Task;
 /// Returns whether a task's exchanges should be shown in the blocklist.
 pub fn should_show_task_in_blocklist(task: &Task) -> bool {
     // All tasks are visible in the blocklist aside from CLI (long-running command),
-    // Warp documentation search, and conversation search subtasks.
+    // Warp documentation search, conversation search, and computer-use subtasks.
+    //
+    // Computer-use subtasks are excluded so their tool calls render inline as part of the
+    // exchange that spawned them (see the `SubagentType::ComputerUse` handling in
+    // `view_impl/output.rs`), directly above that exchange's response footer/toolbelt.
     !task.is_cli_subagent()
         && !task.is_warp_documentation_search_subagent()
         && !task.is_conversation_search_subagent()
+        && !task.is_computer_use_subagent()
 }
 
 /// Returns true if the conversation contains at least one exchange that would be shown in the
