@@ -171,14 +171,16 @@ fn parallel_clone_command_threads_checkout_ref_and_pins_after_clone() {
     // The shell function fetches then checks out FETCH_HEAD only when a ref is set.
     assert!(command.contains("checkout_ref=\"$4\""));
     assert!(command.contains("if [ -n \"$checkout_ref\" ]; then"));
-    assert!(command.contains("git -C \"$target\" fetch --filter=tree:0 origin \"$checkout_ref\""));
+    assert!(
+        command.contains("git -C \"$target\" fetch --filter=blob:none origin \"$checkout_ref\"")
+    );
     assert!(command.contains("git -C \"$target\" checkout --detach FETCH_HEAD"));
     // Pinning must not be nested under the "directory missing" branch — reused
     // target directories still need fetch/checkout when a ref is set.
     assert!(command.contains("already exists, skipping clone..."));
     assert!(!command.contains("already exists, skipping clone...\n    return 0"));
     // A clone failure must short-circuit before any checkout attempt.
-    assert!(command.contains("git clone --filter=tree:0 \"$repo_url\" \"$target\" || return 1"));
+    assert!(command.contains("git clone --filter=blob:none \"$repo_url\" \"$target\" || return 1"));
     // The pinned repo's ref is threaded into the command (as the 4th positional
     // arg to clone_repo). The whole script is single-quote-escaped for `sh -c`,
     // so assert on the ref content rather than the surrounding quoting.
@@ -197,7 +199,7 @@ fn checkout_command_checks_out_fetch_head_not_ref_name() {
     let command =
         checkout_command_for(&repo, Path::new("/tmp/work"), ShellType::Bash).expect("ref set");
 
-    assert!(command.contains("fetch --filter=tree:0 origin 'abc123'"));
+    assert!(command.contains("fetch --filter=blob:none origin 'abc123'"));
     assert!(command.contains("checkout --detach FETCH_HEAD"));
     // Must not check out the original ref name after fetch (stale local branch
     // risk / FETCH_HEAD-only objects).
@@ -336,7 +338,7 @@ fn partial_clone(fixture: &Fixture) -> PathBuf {
     git(
         &[
             "clone",
-            "--filter=tree:0",
+            "--filter=blob:none",
             &fixture.origin_url,
             repo_dir.to_str().unwrap(),
         ],
@@ -416,9 +418,9 @@ fn checkout_command_pins_head_to_commit_absent_from_default_branch() {
     let fixture = build_fixture();
     let repo_dir = partial_clone(&fixture);
 
-    // The partial clone (`--filter=tree:0`) only fetched `main`, so the pinned
-    // commit — which lives off the default branch — requires the fetch step
-    // baked into the command before it can be checked out.
+    // The partial clone (`--filter=blob:none`) only fetched `main`, so the
+    // pinned commit — which lives off the default branch — requires the fetch
+    // step baked into the command before it can be checked out.
     let repo = SourceRepo::new(
         CodeForge::GitHub,
         "warpdotdev".to_string(),
@@ -613,6 +615,72 @@ fn no_checkout_ref_leaves_clone_on_default_branch() {
         git_stdout(&["rev-parse", "HEAD"], &repo_dir),
         fixture.base_sha
     );
+}
+
+/// Regression test for APP-5509: a `--filter=blob:none` clone must carry
+/// enough tree data that a path-limited `git log` never reaches the network.
+/// A regression to `--filter=tree:0` would instead try to lazily fetch a
+/// tree per commit walked, so repointing `origin` at an unreachable URL
+/// after the clone turns that regression into a fast failure here instead of
+/// the hang seen in production.
+#[test]
+fn blobless_clone_walks_path_limited_history_without_network() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+
+    let origin = root.join("origin.git");
+    fs::create_dir_all(&origin).unwrap();
+    git(&["init", "-b", "main", "--bare", "."], &origin);
+    git(&["config", "uploadpack.allowFilter", "true"], &origin);
+    let origin_url = format!("file://{}", origin.display());
+
+    let seed = root.join("seed");
+    fs::create_dir_all(&seed).unwrap();
+    git(&["init", "-b", "main", "."], &seed);
+    git(&["remote", "add", "origin", &origin_url], &seed);
+    for (contents, message) in [("one\n", "first"), ("one\ntwo\n", "second")] {
+        fs::write(seed.join("notes.md"), contents).unwrap();
+        git(&["add", "."], &seed);
+        git(&["commit", "-m", message], &seed);
+    }
+    git(&["push", "origin", "main"], &seed);
+
+    let repo_dir = root.join("clone");
+    git(
+        &[
+            "clone",
+            "--filter=blob:none",
+            &origin_url,
+            repo_dir.to_str().unwrap(),
+        ],
+        root,
+    );
+
+    // Simulate the origin becoming unreachable after the clone (e.g. the
+    // sandbox network being torn down), so a lazy tree fetch fails fast
+    // instead of hanging.
+    git(
+        &[
+            "remote",
+            "set-url",
+            "origin",
+            "https://127.0.0.1:1/unreachable.git",
+        ],
+        &repo_dir,
+    );
+
+    let output = Command::new("git")
+        .args(["--no-pager", "log", "--oneline", "--", "notes.md"])
+        .current_dir(&repo_dir)
+        .output()
+        .expect("git should be runnable");
+    assert!(
+        output.status.success(),
+        "path-limited git log must stay local on a blobless clone: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let commit_count = String::from_utf8(output.stdout).unwrap().lines().count();
+    assert_eq!(commit_count, 2, "expected both commits touching notes.md");
 }
 
 #[test]
