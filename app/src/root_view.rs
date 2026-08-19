@@ -1631,8 +1631,7 @@ pub enum NewWorkspaceSource {
     NotebookFromFilePath {
         file_path: Option<PathBuf>,
     },
-    /// Opens a new window whose first tab is the given Tab Config. Used when a
-    /// `tab_config` deeplink cold-starts Warp (no existing window to open into).
+    /// Opens a new window whose first tab is the given Tab Config.
     TabConfig {
         tab_config: crate::tab_configs::TabConfig,
         previous_active_window: Option<WindowId>,
