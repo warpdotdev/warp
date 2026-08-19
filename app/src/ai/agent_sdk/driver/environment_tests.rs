@@ -284,14 +284,19 @@ fn checkout_command_checks_out_fetch_head_not_ref_name() {
     )
     .with_checkout_ref(Some("feature".to_string()));
 
+    let workspace = Path::new("/workspace");
     let command = checkout_command_for(
         &clone_request(repo, Some(RepositoryHeadRef::Branch("feature".to_string()))),
-        Path::new("/workspace"),
+        workspace,
         ShellType::Bash,
     )
     .unwrap();
 
-    assert!(command.contains("git -C '/workspace/warp' fetch --filter=tree:0 origin 'feature'"));
+    let warp_dir = workspace.join("warp");
+    assert!(command.contains(&format!(
+        "git -C '{}' fetch --filter=tree:0 origin 'feature'",
+        warp_dir.to_string_lossy()
+    )));
     assert!(command.contains("checkout --detach FETCH_HEAD"));
     assert!(!command.contains("checkout --detach 'feature'"));
 }
@@ -488,11 +493,13 @@ fn repository_origin_removal_targets_all_environment_repositories() {
         ),
     ];
 
-    let command =
-        build_remove_repository_origins_command(&repos, Path::new("/workspace"), ShellType::Bash);
+    let workspace = Path::new("/workspace");
+    let command = build_remove_repository_origins_command(&repos, workspace, ShellType::Bash);
 
-    assert!(command.contains("/workspace/warp"));
-    assert!(command.contains("/workspace/warp-server"));
+    let warp_dir = workspace.join("warp").to_string_lossy().into_owned();
+    let warp_server_dir = workspace.join("warp-server").to_string_lossy().into_owned();
+    assert!(command.contains(&warp_dir));
+    assert!(command.contains(&warp_server_dir));
     assert!(command.contains("remote get-url origin"));
     assert!(command.contains("remote remove origin"));
 }
