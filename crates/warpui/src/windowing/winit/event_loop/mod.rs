@@ -1937,8 +1937,12 @@ impl EventLoop {
         let on_input = Box::new(move |input: SoftKeyboardInput| {
             log::debug!("Soft keyboard callback received input: {:?}", input);
             if let Err(e) = proxy.send_event(CustomEvent::SoftKeyboardInput(input)) {
+                // `e` wraps the undelivered `CustomEvent`, which can be a
+                // `SoftKeyboardInput::TextInserted(String)` carrying the user's
+                // typed text; report it typed (context's Display is static) rather
+                // than interpolating its Debug into the message.
                 report_error!(
-                    anyhow::anyhow!("{e:?}").context("Failed to send SoftKeyboardInput event")
+                    anyhow::Error::new(e).context("Failed to send SoftKeyboardInput event")
                 );
             }
         });

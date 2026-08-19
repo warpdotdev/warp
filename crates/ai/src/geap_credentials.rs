@@ -106,13 +106,18 @@ pub struct GeapMintBinding {
     pub federation: GeapFederation,
 }
 
+// `detail` carries the raw provider response body (Google STS/IAM), which can
+// include user- or workspace-identifying content, so it must never appear in
+// `Display`/`Debug`-derived reporting text — only `user_facing()` decides what
+// reaches the UI, and it never echoes `detail` either. Keep the messages below
+// static so `report_error!` can report this type directly without leaking it.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum LoadGeapCredentialsError {
-    #[error("failed to mint a Warp identity token: {detail}")]
+    #[error("failed to mint a Warp identity token")]
     MintIdentityToken { detail: String },
-    #[error("STS token exchange failed (status={status:?}): {detail}")]
+    #[error("STS token exchange failed")]
     ExchangeToken { status: Option<u16>, detail: String },
-    #[error("service account impersonation failed (status={status:?}): {detail}")]
+    #[error("service account impersonation failed")]
     ImpersonateServiceAccount { status: Option<u16>, detail: String },
 }
 

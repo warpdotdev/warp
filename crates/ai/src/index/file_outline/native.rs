@@ -82,11 +82,15 @@ pub async fn build_outline(
                 .collect::<HashMap<_, _>>()
         });
 
-        if let Err(e) = sender.send(result) {
+        if sender.send(result).is_err() {
+            // `send`'s `Err` hands back the undelivered outline map itself, whose
+            // `Debug` includes source symbol names and comments from the user's
+            // codebase, so it must never be interpolated into a report. This can
+            // recur once per outline build, so throttle it.
             report_error!(
-                anyhow::anyhow!("{e:?}")
-                    .context("Could not send result of outline generation to background thread")
-            )
+                anyhow!("Could not send result of outline generation to background thread"),
+                warp_errors::ReportErrorLogMode::OncePerRun
+            );
         }
     });
 

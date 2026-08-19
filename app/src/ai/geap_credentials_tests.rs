@@ -133,11 +133,13 @@ fn timer_delay_clamps_to_floor_when_near_or_past_expiry() {
     );
 }
 
-// The structured `LoadGeapCredentialsError` is intentionally not user-facing
-// (no `Display` prose, no truncation) — the UI layer owns turning a leg + HTTP
-// `status` + raw `detail` into actionable copy. Coverage that the structured
-// error round-trips into `Failed { error }` lives in the mint-completion tests
-// below.
+// `LoadGeapCredentialsError` derives a `Display` so `report_error!` can report
+// it typed, but that `Display` is intentionally static (no leg-specific prose,
+// no HTTP `status`, no raw `detail`) since `detail` carries the raw Google
+// STS/IAM response body. The UI layer owns turning a leg + `status` + `detail`
+// into actionable copy via `user_facing()`, which also never echoes `detail`.
+// Coverage that the structured error round-trips into `Failed { error }` lives
+// in the mint-completion tests below.
 
 // ── refresh guard / safety net (app harness) ───────────────────
 

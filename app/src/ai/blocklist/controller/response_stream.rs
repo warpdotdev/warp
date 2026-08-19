@@ -456,12 +456,6 @@ impl ResponseStream {
                 );
             }
             Err(e) => {
-                // Own the converted error so it can be reported fully typed (preserving
-                // is_actionable() classification) and still moved into `AIApiError::Other`
-                // below; borrowing it for the report drops the static context message,
-                // so Sentry groups by the conversion error's own message instead.
-                let converted_error = anyhow::Error::new(e);
-                report_error!(&converted_error);
                 if self.current_request_id.is_none_or(|id| id != request_id) {
                     return;
                 }
@@ -471,7 +465,12 @@ impl ResponseStream {
                 // a transient network failure. Surface the original error and finish
                 // terminally. (HTTP send failures don't take this path — they arrive as
                 // in-stream error events.)
-                let error = Arc::new(AIApiError::Other(converted_error));
+                //
+                // `report_request_failure` below is the single sink for this error;
+                // don't also report it here, or it double-reports the same failure.
+                let error = Arc::new(AIApiError::Other(
+                    anyhow::Error::new(e).context("Failed to send request to multi-agent API"),
+                ));
                 self.error_event_emitted = true;
                 self.report_request_failure(&error, NetworkStatus::as_ref(ctx).is_online());
                 ctx.emit(ResponseStreamEvent::ReceivedEvent(Consumable::new(Err(
