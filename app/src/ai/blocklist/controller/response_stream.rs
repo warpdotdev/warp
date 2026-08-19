@@ -456,10 +456,6 @@ impl ResponseStream {
                 );
             }
             Err(e) => {
-                // Own the converted error so it can be reported fully typed (preserving
-                // is_actionable() classification) and still moved into `AIApiError::Other`
-                // below; borrowing it for the report drops the static context message,
-                // so Sentry groups by the conversion error's own message instead.
                 let converted_error = anyhow::Error::new(e);
                 report_error!(&converted_error);
                 if self.current_request_id.is_none_or(|id| id != request_id) {
