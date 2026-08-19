@@ -169,6 +169,7 @@ fn label_changes_across_action_lifecycle() {
             grid_contents: String::new(),
             cursor: String::new(),
             is_alt_screen_active: false,
+            activity: None,
         },
     ));
     assert_eq!(
