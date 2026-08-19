@@ -17,7 +17,7 @@ use crate::ai::blocklist::{
     BlocklistAIHistoryEvent, BlocklistAIHistoryModel, PendingAttachment, PendingFile, RequestInput,
     ResponseStream, ResponseStreamId,
 };
-use crate::ai::llms::LLMId;
+use crate::ai::llms::{LLMId, LLMPreferences};
 use crate::test_util::terminal::{add_window_with_terminal, initialize_app_for_terminal_view};
 
 fn new_ambient_agent_task_id() -> AmbientAgentTaskId {
@@ -87,6 +87,138 @@ fn passive_suggestions_request_params_omit_ambient_agent_task_id() {
             });
         });
     });
+}
+
+#[test]
+fn model_switch_dispatches_repeated_requests_after_stale_streams() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+        let sent_models = Arc::new(Mutex::new(Vec::new()));
+        let sent_models_for_subscription = Arc::clone(&sent_models);
+
+        let (controller, conversation_id, task_id, stale_stream_id, terminal_surface_id) = terminal
+            .update(&mut app, |view, ctx| {
+                let terminal_surface_id = view.id();
+                let stale_stream_id = ResponseStreamId::new_for_test();
+                let conversation_id =
+                    BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
+                        let conversation_id = history.start_new_conversation(
+                            terminal_surface_id,
+                            false,
+                            false,
+                            false,
+                            ctx,
+                        );
+                        let task_id = history
+                            .conversation(&conversation_id)
+                            .unwrap()
+                            .get_root_task_id()
+                            .clone();
+                        history
+                            .update_conversation_for_new_request_input(
+                                request_input(
+                                    conversation_id,
+                                    task_id,
+                                    LLMId::from("grok-4-5-medium"),
+                                ),
+                                stale_stream_id.clone(),
+                                terminal_surface_id,
+                                ctx,
+                            )
+                            .unwrap();
+                        conversation_id
+                    });
+                let task_id = BlocklistAIHistoryModel::as_ref(ctx)
+                    .conversation(&conversation_id)
+                    .unwrap()
+                    .get_root_task_id()
+                    .clone();
+                let stale_stream =
+                    ctx.add_model(|_| ResponseStream::new_for_test(stale_stream_id.clone()));
+                let controller = view.ai_controller().clone();
+                controller.update(ctx, |controller, ctx| {
+                    controller.register_mock_stream_for_test(
+                        stale_stream_id.clone(),
+                        conversation_id,
+                        stale_stream,
+                        ctx,
+                    );
+                    controller.mark_stream_inactive_for_test(&stale_stream_id, ctx);
+                });
+                ctx.subscribe_to_model(&controller, move |_, _, event, _| {
+                    if let super::BlocklistAIControllerEvent::SentRequest { model_id, .. } = event {
+                        sent_models_for_subscription
+                            .lock()
+                            .unwrap()
+                            .push(model_id.clone());
+                    }
+                });
+                (
+                    controller,
+                    conversation_id,
+                    task_id,
+                    stale_stream_id,
+                    terminal_surface_id,
+                )
+            });
+
+        let switched_model = LLMId::from("accounts/fireworks/models/kimi-k3");
+        LLMPreferences::handle(&app).update(&mut app, |preferences, ctx| {
+            preferences.update_preferred_agent_mode_llm(&switched_model, terminal_surface_id, ctx);
+        });
+
+        let first_stream_id = controller.update(&mut app, |controller, ctx| {
+            let (_, stream_id) = controller
+                .send_request_input(
+                    request_input(conversation_id, task_id.clone(), switched_model.clone()),
+                    None,
+                    true,
+                    false,
+                    ctx,
+                )
+                .expect("the first post-switch request should be dispatched");
+            stream_id
+        });
+
+        controller.update(&mut app, |controller, ctx| {
+            controller.mark_stream_inactive_for_test(&first_stream_id, ctx);
+            controller
+                .send_request_input(
+                    request_input(conversation_id, task_id, switched_model.clone()),
+                    None,
+                    true,
+                    false,
+                    ctx,
+                )
+                .expect("repeated post-switch requests should keep dispatching");
+        });
+
+        assert_eq!(
+            *sent_models.lock().unwrap(),
+            vec![switched_model.clone(), switched_model]
+        );
+        assert_ne!(first_stream_id, stale_stream_id);
+    });
+}
+
+fn request_input(
+    conversation_id: AIConversationId,
+    task_id: TaskId,
+    model_id: LLMId,
+) -> RequestInput {
+    RequestInput {
+        conversation_id,
+        input_messages: HashMap::from([(task_id, vec![])]),
+        working_directory: None,
+        model_id,
+        coding_model_id: LLMId::from("test-coding-model"),
+        cli_agent_model_id: LLMId::from("test-cli-agent-model"),
+        computer_use_model_id: LLMId::from("test-computer-use-model"),
+        shared_session_response_initiator: None,
+        request_start_ts: Local::now(),
+        supported_tools_override: None,
+    }
 }
 
 #[test]
