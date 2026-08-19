@@ -795,7 +795,6 @@ impl CodeView {
     }
 
     /// The current vertical scroll fraction of the active tab's editor, in `0..=1`.
-    #[cfg(feature = "local_fs")]
     fn scroll_fraction(&self, ctx: &AppContext) -> Option<f32> {
         let tab = self.tab_group.get(self.active_tab_index)?;
         Some(tab.editor_view.as_ref(ctx).scroll_fraction(ctx))

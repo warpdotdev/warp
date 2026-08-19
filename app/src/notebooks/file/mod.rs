@@ -313,12 +313,13 @@ impl FileNotebookView {
 
     /// Set the scroll fraction to restore once the file content is first loaded. Used to preserve
     /// scroll position when toggling markdown from raw to rendered.
-    pub fn set_pending_scroll_fraction(&mut self, scroll_fraction: Option<f32>) {
+    #[cfg_attr(not(feature = "local_fs"), expect(dead_code))]
+    pub(crate) fn set_pending_scroll_fraction(&mut self, scroll_fraction: Option<f32>) {
         self.pending_scroll_fraction = scroll_fraction;
     }
 
     /// The current vertical scroll fraction of the rendered editor, in `0..=1`.
-    #[cfg(feature = "local_fs")]
+    #[cfg_attr(not(feature = "local_fs"), expect(dead_code))]
     fn scroll_fraction(&self, ctx: &AppContext) -> Option<f32> {
         Some(
             self.editor
