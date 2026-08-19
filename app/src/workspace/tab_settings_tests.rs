@@ -87,6 +87,27 @@ fn hide_title_bar_search_bar_in_vertical_tabs_uses_vertical_tabs_path() {
 }
 
 #[test]
+fn show_tab_shortcuts_defaults_to_false() {
+    App::test((), |mut app| async move {
+        initialize_settings_for_tests(&mut app);
+
+        TabSettings::handle(&app).read(&app, |settings, _ctx| {
+            assert!(!*settings.show_tab_shortcuts);
+        });
+    });
+}
+
+#[test]
+fn show_tab_shortcuts_uses_appearance_tabs_path() {
+    assert_eq!(
+        ShowTabShortcuts::toml_path(),
+        Some("appearance.tabs.show_tab_shortcuts")
+    );
+    assert_eq!(ShowTabShortcuts::hierarchy(), Some("appearance.tabs"));
+    assert_eq!(ShowTabShortcuts::toml_key(), "show_tab_shortcuts");
+}
+
+#[test]
 fn header_toolbar_chip_selection_default_contains_code_review() {
     let config = HeaderToolbarChipSelection::Default;
     assert!(config.contains_item(&HeaderToolbarItemKind::CodeReview));

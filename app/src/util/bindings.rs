@@ -485,6 +485,37 @@ pub fn keybinding_name_to_display_string(binding_name: &str, ctx: &AppContext) -
     keybinding_name_to_keystroke(binding_name, ctx).map(|keystroke| keystroke.displayed())
 }
 
+/// Editable-binding names for switching to a tab by its 1-based position
+/// (`workspace:activate_first_tab` .. `workspace:activate_eighth_tab`), indexed by
+/// zero-based tab position (position `0` is the first tab). Registered in
+/// `workspace::init`; there is no fixed shortcut for tab positions past the 8th
+/// (`cmdorctrl-9` activates the *last* tab instead).
+pub const TAB_SWITCH_SHORTCUT_BINDING_NAMES: [&str; 8] = [
+    "workspace:activate_first_tab",
+    "workspace:activate_second_tab",
+    "workspace:activate_third_tab",
+    "workspace:activate_fourth_tab",
+    "workspace:activate_fifth_tab",
+    "workspace:activate_sixth_tab",
+    "workspace:activate_seventh_tab",
+    "workspace:activate_eighth_tab",
+];
+
+/// Returns the display string for the switch-to-tab shortcut bound to `tab_position`
+/// (zero-based tab index), reflecting the user's actual current binding, including
+/// any override. Returns `None` when:
+/// - `tab_position` is 8 or greater (no fixed shortcut past the 8th tab), or
+/// - the binding is unassigned, or
+/// - the binding is not a single keystroke (e.g. the user reassigned it to a
+///   multi-key chord), since that can't be rendered as a single shortcut hint.
+pub fn tab_switch_shortcut_hint(tab_position: usize, ctx: &AppContext) -> Option<String> {
+    let binding_name = TAB_SWITCH_SHORTCUT_BINDING_NAMES.get(tab_position)?;
+    match ctx.get_binding_by_name(binding_name)?.trigger {
+        Trigger::Keystrokes(keys) if keys.len() == 1 => Some(keys[0].displayed()),
+        _ => None,
+    }
+}
+
 /// Get normalized keybinding string from binding name. Unset keybindings will return None.
 pub fn keybinding_name_to_normalized_string(
     binding_name: &str,

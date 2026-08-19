@@ -467,6 +467,16 @@ define_settings_group!(TabSettings, settings: [
         toml_path: "appearance.tabs.show_indicators_button",
         description: "Whether to show activity indicators on tabs.",
     },
+    show_tab_shortcuts: ShowTabShortcuts {
+        type: bool,
+        default: false,
+        supported_platforms: SupportedPlatforms::ALL,
+        sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        surface: settings::SettingSurfaces::GUI,
+        private: false,
+        toml_path: "appearance.tabs.show_tab_shortcuts",
+        description: "Whether to show the switch-to-tab keyboard shortcut hint on each of the first 8 tabs.",
+    },
     show_code_review_button: ShowCodeReviewButton {
         type: bool,
         default: true,

@@ -12,13 +12,13 @@ use super::{
     VerticalTabsSummaryPrimaryLabel, branch_label_display, coalesce_summary_branch_entries,
     code_detail_kind_label, compact_branch_subtitle_display, detail_sidecar_width_and_bounds,
     detail_target_for_hovered_row, non_terminal_search_text_fragments,
-    pane_ids_for_display_granularity, pane_search_text_fragments, preferred_agent_tab_titles,
-    push_normalized_unique_summary_label, search_fragments_contain_query,
-    select_summary_pane_kind_icons, should_keep_detail_sidecar_visible_for_mouse_position,
-    should_show_tab_group_header, shows_synced_inputs_indicator,
-    sort_summary_primary_labels_status_first, summary_overflow_count,
-    summary_search_text_fragments, terminal_kind_badge_label, terminal_primary_line_data,
-    terminal_pull_request_badge_label, terminal_search_text_fragments,
+    pane_ids_for_display_granularity, pane_row_carries_tab_shortcut_hint,
+    pane_search_text_fragments, preferred_agent_tab_titles, push_normalized_unique_summary_label,
+    search_fragments_contain_query, select_summary_pane_kind_icons,
+    should_keep_detail_sidecar_visible_for_mouse_position, should_show_tab_group_header,
+    shows_synced_inputs_indicator, sort_summary_primary_labels_status_first,
+    summary_overflow_count, summary_search_text_fragments, terminal_kind_badge_label,
+    terminal_primary_line_data, terminal_pull_request_badge_label, terminal_search_text_fragments,
     terminal_title_fallback_font, uses_outer_group_container, visible_pane_ids_for_detail_target,
     vtab_diff_stats_text,
 };
@@ -676,6 +676,24 @@ fn tab_group_header_hidden_for_single_pane_without_custom_title() {
     // an empty group (this shape shouldn't reach the renderer in practice,
     // but the helper is total and stays closed).
     assert!(!should_show_tab_group_header(false, false, 0));
+}
+
+#[test]
+fn pane_row_carries_hint_always_in_tabs_summary_granularity() {
+    // Each row already represents the whole tab in this granularity, regardless
+    // of whether a header would otherwise show (it never does here).
+    assert!(pane_row_carries_tab_shortcut_hint(false, false));
+    assert!(pane_row_carries_tab_shortcut_hint(false, true));
+}
+
+#[test]
+fn pane_row_carries_hint_in_panes_granularity_only_when_no_header_shows() {
+    // A lone pane with no custom title and not being renamed: no header, so
+    // the row itself carries the hint.
+    assert!(pane_row_carries_tab_shortcut_hint(true, false));
+    // A header is showing (multi-pane, custom title, or renaming): it carries
+    // the hint instead, so the row must not duplicate it.
+    assert!(!pane_row_carries_tab_shortcut_hint(true, true));
 }
 
 #[test]

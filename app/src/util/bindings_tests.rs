@@ -3,7 +3,10 @@ use warpui::keymap::{EditableBinding, Keystroke, Trigger};
 use warpui::platform::OperatingSystem;
 
 use crate::terminal;
-use crate::util::bindings::{keybinding_name_to_display_string, trigger_to_keystroke};
+use crate::util::bindings::{
+    TAB_SWITCH_SHORTCUT_BINDING_NAMES, keybinding_name_to_display_string, tab_switch_shortcut_hint,
+    trigger_to_keystroke,
+};
 use crate::workspace::WorkspaceAction;
 
 #[test]
@@ -157,6 +160,146 @@ fn test_terminal_page_scroll_bindings_are_editable() {
 
             assert_eq!(page_up, Keystroke::parse("pageup").ok());
             assert_eq!(page_down, Keystroke::parse("pagedown").ok());
+        });
+    });
+}
+
+/// Registers the eight `TAB_SWITCH_SHORTCUT_BINDING_NAMES` as editable bindings
+/// bound to `cmdorctrl-1` .. `cmdorctrl-8`, mirroring their real registration in
+/// `workspace::init` without pulling in that function's other side effects.
+fn register_tab_switch_shortcut_bindings(ctx: &mut warpui::AppContext) {
+    ctx.register_editable_bindings(TAB_SWITCH_SHORTCUT_BINDING_NAMES.iter().enumerate().map(
+        |(position, name)| {
+            EditableBinding::new(
+                name,
+                format!("Switch to tab {}", position + 1),
+                WorkspaceAction::ActivateTabByNumber(position + 1),
+            )
+            .with_key_binding(format!("cmdorctrl-{}", position + 1))
+        },
+    ));
+}
+
+#[test]
+fn test_tab_switch_shortcut_hint_resolves_each_of_the_first_eight_positions() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            register_tab_switch_shortcut_bindings(ctx);
+
+            for position in 0..8 {
+                let expected = if OperatingSystem::get().is_mac() {
+                    format!("⌘{}", position + 1)
+                } else {
+                    format!("Ctrl {}", position + 1)
+                };
+                assert_eq!(
+                    Some(expected),
+                    tab_switch_shortcut_hint(position, ctx),
+                    "position {position}"
+                );
+            }
+        });
+    });
+}
+
+#[test]
+fn test_tab_switch_shortcut_hint_is_none_past_the_eighth_position() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            register_tab_switch_shortcut_bindings(ctx);
+
+            assert_eq!(None, tab_switch_shortcut_hint(8, ctx));
+            assert_eq!(None, tab_switch_shortcut_hint(100, ctx));
+        });
+    });
+}
+
+#[test]
+fn test_tab_switch_shortcut_hint_is_none_when_unbound() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            register_tab_switch_shortcut_bindings(ctx);
+
+            // The user removed the binding for the third tab entirely.
+            ctx.set_custom_trigger(
+                TAB_SWITCH_SHORTCUT_BINDING_NAMES[2].to_owned(),
+                Trigger::Empty,
+            );
+
+            assert_eq!(None, tab_switch_shortcut_hint(2, ctx));
+            // Other positions are unaffected.
+            let expected = if OperatingSystem::get().is_mac() {
+                "⌘4"
+            } else {
+                "Ctrl 4"
+            };
+            assert_eq!(Some(expected.to_owned()), tab_switch_shortcut_hint(3, ctx));
+        });
+    });
+}
+
+#[test]
+fn test_tab_switch_shortcut_hint_is_none_for_a_multi_keystroke_chord() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            register_tab_switch_shortcut_bindings(ctx);
+
+            // The user reassigned the fifth tab's shortcut to a two-key chord, which
+            // can't be rendered as a single keystroke hint.
+            ctx.set_custom_trigger(
+                TAB_SWITCH_SHORTCUT_BINDING_NAMES[4].to_owned(),
+                Trigger::Keystrokes(vec![
+                    Keystroke::parse("ctrl-k").unwrap(),
+                    Keystroke::parse("b").unwrap(),
+                ]),
+            );
+
+            assert_eq!(None, tab_switch_shortcut_hint(4, ctx));
+        });
+    });
+}
+
+#[test]
+fn test_tab_switch_shortcut_hint_reflects_a_remap_to_a_different_single_keystroke() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            register_tab_switch_shortcut_bindings(ctx);
+
+            let default_expected = if OperatingSystem::get().is_mac() {
+                "⌘3".to_owned()
+            } else {
+                "Ctrl 3".to_owned()
+            };
+            assert_eq!(Some(default_expected), tab_switch_shortcut_hint(2, ctx));
+
+            // The user remaps the third tab's shortcut away from `cmdorctrl-3` to a
+            // different single keystroke: the displayed hint must follow the remap
+            // immediately (the same lookup is redone on every render), and other
+            // positions must stay on their own bindings.
+            ctx.set_custom_trigger(
+                TAB_SWITCH_SHORTCUT_BINDING_NAMES[2].to_owned(),
+                Trigger::Keystrokes(vec![Keystroke::parse("cmd-shift-9").unwrap()]),
+            );
+
+            let remapped_expected = if OperatingSystem::get().is_mac() {
+                "⇧⌘9"
+            } else {
+                "Shift Logo 9"
+            };
+            assert_eq!(
+                Some(remapped_expected.to_owned()),
+                tab_switch_shortcut_hint(2, ctx)
+            );
+
+            let position_four_expected = if OperatingSystem::get().is_mac() {
+                "⌘4"
+            } else {
+                "Ctrl 4"
+            };
+            assert_eq!(
+                Some(position_four_expected.to_owned()),
+                tab_switch_shortcut_hint(3, ctx)
+            );
         });
     });
 }
