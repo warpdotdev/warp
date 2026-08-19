@@ -134,15 +134,15 @@ fn names_a_fallback_model_without_the_explanation_line() {
     );
 }
 
+/// Goes through the conversion rather than hand-building the input, so this also
+/// covers what an empty display name renders as: "Warping with ." before the
+/// normalization, this afterwards.
 #[test]
 fn describes_an_unnamed_fallback_model_generically() {
     let _fallback_messaging = FeatureFlag::FallbackModelLoadOutputMessaging.override_enabled(true);
 
     assert_eq!(
-        warping_model_message(for_current(Some(ModelInUse {
-            display_name: None,
-            is_fallback: true,
-        }))),
+        warping_model_message(for_current(Some(ModelInUse::from(&model_info("", true))))),
         Some(WarpingModelMessage {
             text: UNNAMED_FALLBACK_MODEL_WARPING_TEXT.to_owned(),
             show_fallback_explanation: true,
