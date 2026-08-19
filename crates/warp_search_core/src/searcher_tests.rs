@@ -1,4 +1,3 @@
-use std::collections::VecDeque;
 use std::sync::Arc;
 
 use itertools::Itertools;
@@ -9,35 +8,55 @@ use warpui_core::r#async::executor::Background;
 use crate::define_search_schema;
 use crate::searcher::{
     AsyncSearcher, CustomTokenizer, FullTextSearchDocumentEntry, FullTextSearchFieldValue,
-    MIN_MEMORY_BUDGET, QueuedOp, SearchSchemaConfig, SearcherEvent, SearcherQueue,
-    SimpleFullTextSearcher, resolve_batch,
+    MIN_MEMORY_BUDGET, SearchSchemaConfig, SearcherEvent, SearcherProducerState, SequencedEvent,
+    SimpleFullTextSearcher, merge_with_rebuild,
 };
 
-/// Builds an [`AsyncSearcher`] whose queue has no background writer draining it, so a test can
+/// Builds an [`AsyncSearcher`] with no background writer draining its channel, so a test can
 /// drive the real async write API and then decide exactly when the queued work is applied, with
 /// [`drain_pending_chunks`] and [`apply_chunks`] standing in for the background writer.
 ///
-/// The returned receiver is the wake-up channel the background writer would own. Nothing reads
-/// from it; it is handed back so the test can keep it alive, since enqueuing fails once that
-/// channel is closed.
+/// The returned receivers are the channels the background writer would own. Nothing reads from
+/// them; they are handed back so the test can keep them alive, since publishing fails once they
+/// are closed. `events_rx` also lets [`drain_pending_chunks`] read back what was published.
 fn async_searcher_without_background_writer<C: SearchSchemaConfig>(
     searcher: SimpleFullTextSearcher<C>,
-) -> (AsyncSearcher<C>, async_channel::Receiver<()>) {
-    let (notify_tx, notify_rx) = async_channel::bounded(1);
-    let queue = Arc::new(SearcherQueue {
-        ops: Mutex::new(VecDeque::new()),
-        notify_tx,
-    });
-    (AsyncSearcher { searcher, queue }, notify_rx)
+) -> (
+    AsyncSearcher<C>,
+    async_channel::Receiver<SequencedEvent>,
+    async_channel::Receiver<()>,
+) {
+    let (tx, rx) = async_channel::unbounded();
+    let (rebuild_notify_tx, rebuild_notify_rx) = async_channel::bounded(1);
+    let producer_state = Arc::new(Mutex::new(SearcherProducerState {
+        next_sequence: 0,
+        pending_rebuild: None,
+    }));
+    (
+        AsyncSearcher {
+            searcher,
+            tx,
+            producer_state,
+            rebuild_notify_tx,
+        },
+        rx,
+        rebuild_notify_rx,
+    )
 }
 
-/// Drains everything queued so far and resolves it into per-commit chunks, exactly as the
-/// background writer does with a batch it has drained.
+/// Drains everything published so far -- both the events channel and the pending rebuild slot --
+/// and merges it into per-commit chunks, exactly as the background writer does with a batch it
+/// has drained.
 fn drain_pending_chunks<C: SearchSchemaConfig>(
     searcher: &AsyncSearcher<C>,
+    events_rx: &async_channel::Receiver<SequencedEvent>,
 ) -> Vec<Vec<SearcherEvent>> {
-    let batch = searcher.queue.ops.lock().drain(..).collect_vec();
-    resolve_batch(batch)
+    let mut batch = Vec::new();
+    while let Ok(event) = events_rx.try_recv() {
+        batch.push(event);
+    }
+    let rebuild = searcher.producer_state.lock().pending_rebuild.take();
+    merge_with_rebuild(batch, rebuild)
 }
 
 /// Applies `chunks` through the synchronous writer, committing each chunk on its own, exactly as
@@ -406,7 +425,7 @@ fn test_searcher_async_rebuild_coalesces_burst() {
     const BURST_SIZE: usize = 500;
     const DOCS_PER_REBUILD: u64 = 50;
 
-    let (searcher_async, _notify_rx) =
+    let (searcher_async, events_rx, _rebuild_notify_rx) =
         async_searcher_without_background_writer(TEST_SCHEMA.create_searcher(MIN_MEMORY_BUDGET));
 
     for burst in 0..BURST_SIZE {
@@ -417,22 +436,26 @@ fn test_searcher_async_rebuild_coalesces_burst() {
         searcher_async.rebuild_index_async(documents).unwrap();
     }
 
-    // However many rebuilds were requested, the queue must hold a single rebuild carrying a
-    // single document set: later requests replace the pending one instead of piling up behind it.
+    // However many rebuilds were requested, only the most recently requested document set should
+    // ever be retained, and a pure burst of rebuilds should never touch the events channel.
+    assert!(
+        events_rx.try_recv().is_err(),
+        "a burst of {BURST_SIZE} pure rebuild requests should never publish to the events channel"
+    );
     {
-        let ops = searcher_async.queue.ops.lock();
+        let state = searcher_async.producer_state.lock();
+        let rebuild = state
+            .pending_rebuild
+            .as_ref()
+            .expect("a rebuild should be pending");
         assert_eq!(
-            ops.len(),
-            1,
-            "a burst of {BURST_SIZE} rebuild requests should coalesce to one queued operation"
-        );
-        assert!(
-            matches!(ops.front(), Some(QueuedOp::Rebuild(documents)) if documents.len() == DOCS_PER_REBUILD as usize),
-            "the queued operation should be a rebuild holding exactly one snapshot of {DOCS_PER_REBUILD} documents"
+            rebuild.documents.len(),
+            DOCS_PER_REBUILD as usize,
+            "the pending rebuild should hold a single snapshot of {DOCS_PER_REBUILD} documents, not one accumulated from all {BURST_SIZE} requests"
         );
     }
 
-    let chunks = drain_pending_chunks(&searcher_async);
+    let chunks = drain_pending_chunks(&searcher_async, &events_rx);
     assert_eq!(
         chunks.len(),
         1,
@@ -496,7 +519,7 @@ fn test_searcher_async_rebuild_preserves_operation_order_with_interleaved_update
         id_fields: [id: u64]
     );
 
-    let (searcher_async, _notify_rx) =
+    let (searcher_async, events_rx, _rebuild_notify_rx) =
         async_searcher_without_background_writer(TEST_SCHEMA.create_searcher(MIN_MEMORY_BUDGET));
 
     let indexed_documents = || {
@@ -540,25 +563,19 @@ fn test_searcher_async_rebuild_preserves_operation_order_with_interleaved_update
         .unwrap();
 
     {
-        let ops = searcher_async.queue.ops.lock();
+        let state = searcher_async.producer_state.lock();
+        let rebuild = state
+            .pending_rebuild
+            .as_ref()
+            .expect("the newer rebuild (r2) should be pending, replacing r1");
         assert_eq!(
-            ops.len(),
-            3,
-            "the superseded rebuild should be replaced by the newer one, not queued alongside it"
-        );
-        assert!(
-            ops.iter()
-                .take(2)
-                .all(|op| matches!(op, QueuedOp::Event(SearcherEvent::DocumentInserted(_)))),
-            "the interleaved inserts should stay ahead of the newer rebuild, since they were requested first"
-        );
-        assert!(
-            matches!(ops.back(), Some(QueuedOp::Rebuild(_))),
-            "the replacement rebuild should be re-appended at the tail of the queue"
+            rebuild.documents.len(),
+            1,
+            "r2's snapshot should hold exactly the document it was requested with, not r1's"
         );
     }
 
-    let chunks = drain_pending_chunks(&searcher_async);
+    let chunks = drain_pending_chunks(&searcher_async, &events_rx);
     assert_eq!(
         chunks
             .iter()
@@ -571,7 +588,7 @@ fn test_searcher_async_rebuild_preserves_operation_order_with_interleaved_update
             ],
             vec!["clear".to_owned(), "insert r2 fresh".to_owned()],
         ],
-        "the interleaved inserts should be committed before, and separately from, the newer rebuild"
+        "the interleaved inserts (requested before r2) should be committed before, and separately from, the newer rebuild"
     );
 
     apply_chunks(&searcher_async, chunks);
@@ -597,7 +614,7 @@ fn test_searcher_async_rebuild_preserves_operation_order_with_interleaved_update
         })
         .unwrap();
 
-    let chunks = drain_pending_chunks(&searcher_async);
+    let chunks = drain_pending_chunks(&searcher_async, &events_rx);
     assert_eq!(
         chunks
             .iter()
