@@ -8,7 +8,7 @@ use warpui_core::r#async::executor::Background;
 use crate::define_search_schema;
 use crate::searcher::{
     AsyncSearcher, CustomTokenizer, FullTextSearchDocumentEntry, FullTextSearchFieldValue,
-    MIN_MEMORY_BUDGET, SearchSchemaConfig, SearcherEvent, SearcherProducerState, SequencedEvent,
+    MIN_MEMORY_BUDGET, QueuedItem, SearchSchemaConfig, SearcherEvent, SearcherProducerState,
     SimpleFullTextSearcher, merge_with_rebuild,
 };
 
@@ -16,46 +16,49 @@ use crate::searcher::{
 /// drive the real async write API and then decide exactly when the queued work is applied, with
 /// [`drain_pending_chunks`] and [`apply_chunks`] standing in for the background writer.
 ///
-/// The returned receivers are the channels the background writer would own. Nothing reads from
-/// them; they are handed back so the test can keep them alive, since publishing fails once they
-/// are closed. `events_rx` also lets [`drain_pending_chunks`] read back what was published.
+/// The returned receiver is the events channel the background writer would own. Nothing reads
+/// from it; it is handed back so the test can keep it alive, since publishing fails once it is
+/// closed, and so [`drain_pending_chunks`] (or the test itself) can read back what was published.
 fn async_searcher_without_background_writer<C: SearchSchemaConfig>(
     searcher: SimpleFullTextSearcher<C>,
-) -> (
-    AsyncSearcher<C>,
-    async_channel::Receiver<SequencedEvent>,
-    async_channel::Receiver<()>,
-) {
+) -> (AsyncSearcher<C>, async_channel::Receiver<QueuedItem>) {
     let (tx, rx) = async_channel::unbounded();
-    let (rebuild_notify_tx, rebuild_notify_rx) = async_channel::bounded(1);
     let producer_state = Arc::new(Mutex::new(SearcherProducerState {
         next_sequence: 0,
         pending_rebuild: None,
+        rebuild_marker_outstanding: false,
     }));
     (
         AsyncSearcher {
             searcher,
             tx,
             producer_state,
-            rebuild_notify_tx,
         },
         rx,
-        rebuild_notify_rx,
     )
 }
 
 /// Drains everything published so far -- both the events channel and the pending rebuild slot --
 /// and merges it into per-commit chunks, exactly as the background writer does with a batch it
-/// has drained.
+/// has drained. Mirrors the real writer's take-before-drain order (see `process_searcher_events`)
+/// and clears `rebuild_marker_outstanding` the same way, so a subsequent rebuild request in the
+/// same test enqueues its own fresh marker.
 fn drain_pending_chunks<C: SearchSchemaConfig>(
     searcher: &AsyncSearcher<C>,
-    events_rx: &async_channel::Receiver<SequencedEvent>,
+    events_rx: &async_channel::Receiver<QueuedItem>,
 ) -> Vec<Vec<SearcherEvent>> {
+    let rebuild = {
+        let mut state = searcher.producer_state.lock();
+        let rebuild = state.pending_rebuild.take();
+        state.rebuild_marker_outstanding = false;
+        rebuild
+    };
     let mut batch = Vec::new();
-    while let Ok(event) = events_rx.try_recv() {
-        batch.push(event);
+    while let Ok(item) = events_rx.try_recv() {
+        if let QueuedItem::Event(event) = item {
+            batch.push(event);
+        }
     }
-    let rebuild = searcher.producer_state.lock().pending_rebuild.take();
     merge_with_rebuild(batch, rebuild)
 }
 
@@ -425,7 +428,7 @@ fn test_searcher_async_rebuild_coalesces_burst() {
     const BURST_SIZE: usize = 500;
     const DOCS_PER_REBUILD: u64 = 50;
 
-    let (searcher_async, events_rx, _rebuild_notify_rx) =
+    let (searcher_async, events_rx) =
         async_searcher_without_background_writer(TEST_SCHEMA.create_searcher(MIN_MEMORY_BUDGET));
 
     for burst in 0..BURST_SIZE {
@@ -437,10 +440,22 @@ fn test_searcher_async_rebuild_coalesces_burst() {
     }
 
     // However many rebuilds were requested, only the most recently requested document set should
-    // ever be retained, and a pure burst of rebuilds should never touch the events channel.
+    // ever be retained, and the wake-up marker itself must stay coalesced to at most one queued
+    // item rather than one per request -- see `QueuedItem::RebuildMarker`.
+    let mut queued_items = Vec::new();
+    while let Ok(item) = events_rx.try_recv() {
+        queued_items.push(item);
+    }
     assert!(
-        events_rx.try_recv().is_err(),
-        "a burst of {BURST_SIZE} pure rebuild requests should never publish to the events channel"
+        queued_items
+            .iter()
+            .all(|item| matches!(item, QueuedItem::RebuildMarker)),
+        "a pure burst of rebuild requests should never publish a real event to the events channel"
+    );
+    assert!(
+        queued_items.len() <= 1,
+        "a burst of {BURST_SIZE} rebuild requests should coalesce their wake-up marker to at most one queued item, found {}",
+        queued_items.len()
     );
     {
         let state = searcher_async.producer_state.lock();
@@ -519,7 +534,7 @@ fn test_searcher_async_rebuild_preserves_operation_order_with_interleaved_update
         id_fields: [id: u64]
     );
 
-    let (searcher_async, events_rx, _rebuild_notify_rx) =
+    let (searcher_async, events_rx) =
         async_searcher_without_background_writer(TEST_SCHEMA.create_searcher(MIN_MEMORY_BUDGET));
 
     let indexed_documents = || {
@@ -632,5 +647,89 @@ fn test_searcher_async_rebuild_preserves_operation_order_with_interleaved_update
         indexed_documents(),
         vec![(1, "fresh update after rebuild".to_owned())],
         "an update requested after a rebuild must win over that rebuild"
+    );
+}
+
+/// Regression test for the wake-up marker introduced when the separate rebuild-notify channel
+/// was folded into the events channel: [`QueuedItem::RebuildMarker`] must itself stay coalesced
+/// to at most one outstanding item, even when a rebuild is requested, then superseded by
+/// another, while the first rebuild's marker is still sitting unconsumed on the channel.
+#[test]
+fn test_searcher_async_rebuild_marker_stays_coalesced_across_supersession() {
+    define_search_schema!(
+        schema_name: TEST_SCHEMA,
+        config_name: SchemaConfig,
+        search_doc: SearchDoc,
+        identifying_doc: IdentifyingDoc,
+        search_fields: [name: 1.0],
+        id_fields: [id: u64]
+    );
+
+    let (searcher_async, events_rx) =
+        async_searcher_without_background_writer(TEST_SCHEMA.create_searcher(MIN_MEMORY_BUDGET));
+
+    // The first rebuild transitions the marker from not-outstanding to outstanding, so it
+    // enqueues exactly one. The second, requested before that marker has been consumed,
+    // supersedes the pending document set but must not enqueue a second one.
+    searcher_async
+        .rebuild_index_async([SearchDoc {
+            name: "first".to_owned(),
+            id: 1,
+        }])
+        .unwrap();
+    searcher_async
+        .rebuild_index_async([SearchDoc {
+            name: "second".to_owned(),
+            id: 1,
+        }])
+        .unwrap();
+
+    let mut queued_items = Vec::new();
+    while let Ok(item) = events_rx.try_recv() {
+        queued_items.push(item);
+    }
+    assert_eq!(
+        queued_items.len(),
+        1,
+        "superseding a rebuild while its marker is still outstanding must not enqueue a second marker"
+    );
+    assert!(matches!(queued_items[0], QueuedItem::RebuildMarker));
+
+    // The pending rebuild itself must reflect the latest request, not the first.
+    {
+        let state = searcher_async.producer_state.lock();
+        let rebuild = state
+            .pending_rebuild
+            .as_ref()
+            .expect("a rebuild should be pending");
+        assert_eq!(rebuild.documents.len(), 1);
+    }
+
+    let chunks = drain_pending_chunks(&searcher_async, &events_rx);
+    apply_chunks(&searcher_async, chunks);
+    let documents = searcher_async.get_all_documents().unwrap();
+    assert_eq!(
+        documents.iter().map(|doc| &doc.name).collect_vec(),
+        vec!["second"],
+        "the superseding rebuild's document set must be the one that was applied"
+    );
+
+    // Once the marker has been consumed (by `drain_pending_chunks`, mirroring the background
+    // writer), a fresh rebuild request must enqueue its own marker again rather than assuming
+    // one is still outstanding.
+    searcher_async
+        .rebuild_index_async([SearchDoc {
+            name: "third".to_owned(),
+            id: 1,
+        }])
+        .unwrap();
+    let mut queued_items = Vec::new();
+    while let Ok(item) = events_rx.try_recv() {
+        queued_items.push(item);
+    }
+    assert_eq!(
+        queued_items.len(),
+        1,
+        "a rebuild requested after the marker was consumed must enqueue a fresh marker"
     );
 }
