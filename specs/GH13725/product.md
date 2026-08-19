@@ -50,7 +50,7 @@ Out of scope (explicit non-goals):
 
 3. The markdown-native equivalent `[Jump to Target Section](#target-section)` gets the **same** click behavior as invariant 2. It already parses as a link today; only resolution is new. This is the contrasting case the issue names explicitly as "resolves as a plain URL hyperlink" today.
 
-4. A heading `## Target Section` is addressable as `#target-section` with no authoring effort and no `<a id>` required. The slug is derived from the heading's rendered text by the algorithm the tech spec defines; that algorithm is Unicode-preserving, so `## Café Société` is addressable as `#café-société` and `## 日本語` as `#日本語`. Non-English headings are a supported case, not a degraded one.
+4. A heading `## Target Section` is addressable as `#target-section` with no authoring effort and no `<a id>` required. The slug is derived from the heading's rendered text by the algorithm the tech spec defines. That algorithm treats every script alike: letters are preserved, so `## Café Société` is addressable as `#café-société` and `## 日本語` as `#日本語`, while punctuation is removed whether it is ASCII or not, so `## 日本語です。` is addressable as `#日本語です` exactly as `## Target Section?` is addressable as `#target-section`. Non-English headings are a supported case, not a degraded one.
 
 5. `<a id="target-section"></a>` or `<a name="target-section"></a>`, placed anywhere in the document, registers `target-section` as a jump target.
 
