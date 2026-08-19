@@ -762,6 +762,35 @@ fn convert_context(context: &[AIAgentContext]) -> api::InputContext {
                     mime_type: image_context.mime_type,
                 });
             }
+            AIAgentContext::Video {
+                file_name: _,
+                frames,
+                native,
+                audio_transcript,
+            } => {
+                let api_frames: Vec<api::input_context::Image> = frames
+                    .into_iter()
+                    .map(|frame| api::input_context::Image {
+                        data: frame.data.into(),
+                        mime_type: frame.mime_type,
+                    })
+                    .collect();
+                // Also duplicate the frames into the legacy top-level `images` field so a server
+                // that predates `InputContext.videos` entirely (e.g. mid-rollout, or a rollback)
+                // still receives them instead of nothing -- a server that understands `videos`
+                // de-duplicates against this by matching bytes (see the server's
+                // ImagesFromUserQuery).
+                api_context.images.extend(api_frames.iter().cloned());
+                api_context.videos.push(api::input_context::Video {
+                    data: native
+                        .as_ref()
+                        .map(|n| n.data.clone().into())
+                        .unwrap_or_default(),
+                    mime_type: native.map(|n| n.mime_type).unwrap_or_default(),
+                    frames: api_frames,
+                    audio_transcript: audio_transcript.unwrap_or_default(),
+                });
+            }
             AIAgentContext::Codebase { path, name } => {
                 api_context
                     .codebases

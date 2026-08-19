@@ -102,6 +102,9 @@ impl SlashCommandRequest {
                 PendingAttachment::Image(image) => {
                     image_context.push(AIAgentContext::Image(image));
                 }
+                PendingAttachment::Video(video) => {
+                    image_context.extend(video.frames.into_iter().map(AIAgentContext::Image));
+                }
                 PendingAttachment::File(file) => prompt_files.push(file),
             }
         }

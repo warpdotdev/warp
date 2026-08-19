@@ -117,6 +117,17 @@ impl Input {
             );
         }
 
+        if FeatureFlag::VideoAsContext.is_enabled()
+            && matches!(ai_input_model.input_type(), InputType::AI)
+            && let Some(video_banner) = self.render_video_attach_banner(appearance)
+        {
+            column.add_child(
+                Container::new(video_banner)
+                    .with_margin_top(spacing::UDI_CHIP_MARGIN)
+                    .finish(),
+            );
+        }
+
         let show_harness_row = FeatureFlag::CloudMode.is_enabled()
             && HarnessAvailabilityModel::as_ref(app).should_show_harness_selector()
             && self

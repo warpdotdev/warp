@@ -210,6 +210,8 @@ fn create_finished_event_from_conversation(conversation: &AIConversation) -> Res
                 token_usage: vec![],
                 should_refresh_model_config: false,
                 request_cost: None,
+                // Synthetic event replaying persisted history; pruning is a real-request-only fact.
+                pruned_media: None,
             },
         )),
     }

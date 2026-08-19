@@ -26043,6 +26043,24 @@ impl TerminalView {
             return;
         }
 
+        // Route a supported video file (prototype: one at a time) through the same
+        // confirmation banner the attach-file picker uses, instead of falling through to
+        // shell-path insertion below. Gated the same way image auto-attach is: only when
+        // there's no active long-running command.
+        let mut remaining_paths: Vec<String> = paths.to_vec();
+        if !is_in_long_running_command
+            && FeatureFlag::VideoAsContext.is_enabled()
+            && let Some(index) = remaining_paths
+                .iter()
+                .position(|path| crate::util::video::is_supported_video_filepath(path))
+        {
+            let video_path = remaining_paths.remove(index);
+            self.input.update(ctx, |input, ctx| {
+                input.show_video_attach_banner_for_path(video_path, ctx);
+            });
+        }
+        let paths: &[String] = &remaining_paths;
+
         if !is_in_long_running_command {
             // Check for image file paths to be auto-attached
             let num_images = image_filepaths.len();
@@ -26057,6 +26075,9 @@ impl TerminalView {
                 if num_attached == paths.len() {
                     return; // Return early, don't insert file paths
                 }
+            } else if paths.is_empty() {
+                // Nothing left to insert as text after routing a lone video path to the banner.
+                return;
             }
         }
 
@@ -26768,6 +26789,7 @@ impl TypedActionView for TerminalView {
             | LoadAgentModeConversation
             | DeleteAttachment { .. }
             | OpenAttachmentLightbox { .. }
+            | VideoAttachBanner(_)
             | WriteCodebaseIndex
             | ToggleAutoexecuteMode
             | ToggleQueueNextPrompt
@@ -27425,16 +27447,31 @@ impl TypedActionView for TerminalView {
                     context_model.remove_pending_attachment(*index, ctx);
                 });
             }
+            VideoAttachBanner(action) => {
+                self.input.update(ctx, |input, ctx| {
+                    input.handle_video_attach_banner_action(action.clone(), ctx);
+                });
+            }
             OpenAttachmentLightbox { index } => {
+                // A video attachment's frames all share its attachment index, since the
+                // composer shows them as a single chip; opening the lightbox on that chip
+                // shows every one of its frames.
                 let pending_images = self
                     .ai_context_model
                     .as_ref(ctx)
                     .pending_attachments()
                     .iter()
                     .enumerate()
-                    .filter_map(|(attachment_index, attachment)| match attachment {
-                        PendingAttachment::Image(image) => Some((attachment_index, image.clone())),
-                        PendingAttachment::File(_) => None,
+                    .flat_map(|(attachment_index, attachment)| match attachment {
+                        PendingAttachment::Image(image) => {
+                            vec![(attachment_index, image.clone())]
+                        }
+                        PendingAttachment::Video(video) => video
+                            .frames
+                            .iter()
+                            .map(|frame| (attachment_index, frame.clone()))
+                            .collect(),
+                        PendingAttachment::File(_) => vec![],
                     })
                     .collect::<Vec<_>>();
                 let mut images = Vec::new();

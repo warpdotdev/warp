@@ -9561,6 +9561,7 @@ fn should_upload_cloud_followup_attachments_matches_cloud_mode_image_context_fla
         mime_type: "image/png".to_string(),
         file_name: "test.png".to_string(),
         is_figma: false,
+        source_video_file_name: None,
     });
 
     assert!(
@@ -9613,6 +9614,7 @@ fn upload_files_then_submit_cloud_followup_restores_input_on_upload_error() {
             mime_type: "image/png".to_string(),
             file_name: "test.png".to_string(),
             is_figma: false,
+            source_video_file_name: None,
         });
         let task_id: crate::ai::ambient_agents::AmbientAgentTaskId =
             "11111111-1111-1111-1111-111111111111".parse().unwrap();

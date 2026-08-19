@@ -80,7 +80,8 @@ use crate::terminal::model::session::SessionType;
 use crate::terminal::model::session::active_session::ActiveSession;
 use crate::terminal::model::terminal_model::TerminalModel;
 use crate::terminal::view::inline_banner::ZeroStatePromptSuggestionType;
-use crate::workspace::OneTimeModalModel;
+use crate::view_components::DismissibleToast;
+use crate::workspace::{OneTimeModalModel, ToastStack};
 use crate::workspaces::update_manager::TeamUpdateManager;
 use crate::workspaces::user_workspaces::UserWorkspaces;
 
@@ -3244,6 +3245,33 @@ impl BlocklistAIController {
         did_request_contain_user_query: bool,
         ctx: &mut ModelContext<Self>,
     ) {
+        // Per-request, non-persisted signal: the server pruned attachments from this turn's
+        // request to fit the resolved model's real limits. Not part of conversation usage
+        // metadata (which persists and accumulates) since the same history may not need pruning
+        // against a different model on a later turn — surface it once, quietly, and move on
+        // rather than writing anything into the conversation itself.
+        //
+        // Deliberately not described as "older" attachments: the server prunes oldest-history
+        // first, but a just-attached current-turn item that is individually too large for the
+        // model can also be pruned (see PruneMediaToFitModelLimits), so claiming a specific turn
+        // here would sometimes be wrong.
+        if let Some(pruned_media) = finished_event.pruned_media.take()
+            && pruned_media.pruned_count > 0
+            && let Some(window_id) = ctx.windows().active_window()
+        {
+            let message = if pruned_media.pruned_count == 1 {
+                "1 attachment from this conversation is no longer visible to the model to stay within its request limits.".to_string()
+            } else {
+                format!(
+                    "{} attachments from this conversation are no longer visible to the model to stay within its request limits.",
+                    pruned_media.pruned_count
+                )
+            };
+            ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
+                toast_stack.add_ephemeral_toast(DismissibleToast::default(message), window_id, ctx);
+            });
+        }
+
         let history_model = BlocklistAIHistoryModel::handle(ctx);
         history_model.update(ctx, |history_model, ctx| {
             // Update conversation cost and usage information before updating and
@@ -3459,6 +3487,14 @@ fn input_for_query(
     for attachment in prompt_attachments {
         match attachment {
             PendingAttachment::Image(image) => image_context.push(AIAgentContext::Image(image)),
+            PendingAttachment::Video(video) => {
+                image_context.push(AIAgentContext::Video {
+                    file_name: video.file_name,
+                    frames: video.frames,
+                    native: video.native_video,
+                    audio_transcript: video.audio_transcript,
+                });
+            }
             PendingAttachment::File(file) => file_attachments.push(file),
         }
     }

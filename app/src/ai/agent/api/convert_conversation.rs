@@ -251,6 +251,9 @@ pub(crate) fn convert_input_context(context: Option<&api::InputContext>) -> Arc<
                 mime_type,
                 file_name: "image".to_string(), // Default file name since proto doesn't have it
                 is_figma: false, // This field is only used for detecting Figma pngs in the input and is not meaningful for restored conversations.
+                // The server never carries this grouping metadata, so a restored conversation's
+                // frames render as individual image chips rather than a grouped video chip.
+                source_video_file_name: None,
             }));
         }
     }

@@ -35,6 +35,7 @@ use crate::terminal::block_list_element::{
     BlockHoverAction, BlockListMenuSource, BlockSelectAction, BlockTextSelectAction,
 };
 use crate::terminal::block_list_viewport::OverhangingBlock;
+use crate::terminal::input::video_attach_banner::VideoAttachBannerAction;
 use crate::terminal::model::SecretHandle;
 use crate::terminal::model::completions::ShellCompletion;
 use crate::terminal::model::index::Point;
@@ -351,6 +352,9 @@ pub enum TerminalAction {
     OpenAttachmentLightbox {
         index: usize,
     },
+    /// Actions dispatched from the video-attach confirmation banner (behind
+    /// `FeatureFlag::VideoAsContext`). See `crate::terminal::input::video_attach_banner`.
+    VideoAttachBanner(VideoAttachBannerAction),
     WriteCodebaseIndex,
     ToggleAutoexecuteMode,
     ToggleQueueNextPrompt,
@@ -681,6 +685,7 @@ impl fmt::Debug for TerminalAction {
             OpenAttachmentLightbox { index } => {
                 write!(f, "OpenAttachmentLightbox({index:?})")
             }
+            VideoAttachBanner(action) => write!(f, "VideoAttachBanner({action:?})"),
             WriteCodebaseIndex => write!(f, "PersistCodebaseIndex"),
             ToggleAutoexecuteMode => write!(f, "ToggleAutoexecuteMode"),
             ToggleQueueNextPrompt => write!(f, "ToggleQueueNextPrompt"),

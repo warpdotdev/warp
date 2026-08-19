@@ -12,13 +12,17 @@ use warpui::{App, SingletonEntity};
 #[cfg(feature = "local_fs")]
 use super::{AIBlockEvent, open_code_action_event};
 use super::{
-    CollapsibleElementState, CollapsibleExpansionState, UserAvatarInfo,
+    CollapsibleElementState, CollapsibleExpansionState, UserAvatarInfo, attachment_names,
     default_collapsible_state_for_orchestration_action,
     default_collapsible_state_for_orchestration_message, received_message_collapsible_id,
     recording_artifact_view_url, user_avatar_info_for_conversation_creator,
 };
-use crate::ai::agent::{AIAgentActionType, StartAgentExecutionMode};
+use crate::ai::agent::{
+    AIAgentActionType, AIAgentContext, AIAgentInput, ImageContext, StartAgentExecutionMode,
+    UserQueryMode,
+};
 use crate::ai::ambient_agents::AmbientAgentTaskId;
+use crate::ai::blocklist::AttachmentType;
 use crate::ai::blocklist::action_model::{
     compose_run_agents_child_prompt, run_agents_to_start_agent_mode,
 };
@@ -683,4 +687,98 @@ fn should_show_agent_mode_ask_user_question_speedbump_round_trips_to_false() {
             assert!(!*settings.should_show_agent_mode_ask_user_question_speedbump);
         });
     });
+}
+
+fn image_context(file_name: &str, source_video_file_name: Option<&str>) -> ImageContext {
+    ImageContext {
+        data: String::new(),
+        mime_type: "image/jpeg".to_owned(),
+        file_name: file_name.to_owned(),
+        is_figma: false,
+        source_video_file_name: source_video_file_name.map(str::to_owned),
+    }
+}
+
+fn user_query_input(images: Vec<ImageContext>) -> AIAgentInput {
+    AIAgentInput::UserQuery {
+        query: "query".to_owned(),
+        context: images.into_iter().map(AIAgentContext::Image).collect(),
+        static_query_type: None,
+        referenced_attachments: Default::default(),
+        user_query_mode: UserQueryMode::Normal,
+        running_command: None,
+        intended_agent: None,
+    }
+}
+
+#[test]
+fn attachment_names_groups_frames_from_the_same_video_into_one_chip() {
+    // Regression test: once a video's frames are sent, the transcript must keep showing one
+    // chip for the whole video (matching the single composer chip), not one chip per frame.
+    let input = user_query_input(vec![
+        image_context("clip.mp4-frame-01.jpg", Some("clip.mp4")),
+        image_context("clip.mp4-frame-02.jpg", Some("clip.mp4")),
+        image_context("clip.mp4-frame-03.jpg", Some("clip.mp4")),
+    ]);
+
+    let names = attachment_names(&[input]);
+
+    assert_eq!(
+        names,
+        vec![(AttachmentType::Video, "clip.mp4 \u{b7} 3 frames".to_owned())]
+    );
+}
+
+#[test]
+fn attachment_names_uses_singular_frame_wording_for_one_frame() {
+    let input = user_query_input(vec![image_context(
+        "clip.mp4-frame-01.jpg",
+        Some("clip.mp4"),
+    )]);
+
+    let names = attachment_names(&[input]);
+
+    assert_eq!(
+        names,
+        vec![(AttachmentType::Video, "clip.mp4 \u{b7} 1 frame".to_owned())]
+    );
+}
+
+#[test]
+fn attachment_names_keeps_directly_attached_images_as_individual_chips() {
+    // The plain image case (not extracted from a video) must not be affected: each directly
+    // attached image still renders as its own chip.
+    let input = user_query_input(vec![
+        image_context("a.png", None),
+        image_context("b.png", None),
+    ]);
+
+    let names = attachment_names(&[input]);
+
+    assert_eq!(
+        names,
+        vec![
+            (AttachmentType::Image, "a.png".to_owned()),
+            (AttachmentType::Image, "b.png".to_owned()),
+        ]
+    );
+}
+
+#[test]
+fn attachment_names_handles_a_mix_of_direct_images_and_video_frames() {
+    let input = user_query_input(vec![
+        image_context("a.png", None),
+        image_context("clip.mp4-frame-01.jpg", Some("clip.mp4")),
+        image_context("clip.mp4-frame-02.jpg", Some("clip.mp4")),
+    ]);
+
+    let names = attachment_names(&[input]);
+
+    assert_eq!(
+        names,
+        vec![
+            (AttachmentType::Image, "a.png".to_owned()),
+            (AttachmentType::Video, "clip.mp4 \u{b7} 2 frames".to_owned()),
+        ]
+    );
 }

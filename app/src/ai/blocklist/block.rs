@@ -6083,20 +6083,43 @@ fn has_attached_context_selected_text(inputs: &[AIAgentInput]) -> bool {
 }
 
 pub(super) fn attachment_names(inputs: &[AIAgentInput]) -> Vec<(AttachmentType, String)> {
-    let mut names: Vec<(AttachmentType, String)> = inputs
-        .iter()
-        .filter_map(|input| {
-            input.context().map(|contexts| {
-                contexts.iter().filter_map(|context| match context {
-                    AIAgentContext::Image(image) => {
-                        Some((AttachmentType::Image, image.file_name.clone()))
+    let mut names: Vec<(AttachmentType, String)> = Vec::new();
+
+    // Frames extracted from the same video (see `ImageContext::source_video_file_name`) collapse
+    // into a single chip labeled with the frame count (e.g. "clip.mp4 \u{b7} 5 frames"), mirroring
+    // the single chip the composer already shows for a video before it's sent — without this,
+    // sending the query would explode the video back into one chip per frame. Directly attached
+    // images (`source_video_file_name: None`) still render individually, one chip each.
+    let mut video_frame_counts: Vec<(String, usize)> = Vec::new();
+    for input in inputs {
+        let Some(contexts) = input.context() else {
+            continue;
+        };
+        for context in contexts {
+            let AIAgentContext::Image(image) = context else {
+                continue;
+            };
+            match &image.source_video_file_name {
+                Some(video_file_name) => {
+                    match video_frame_counts
+                        .iter_mut()
+                        .find(|(name, _)| name == video_file_name)
+                    {
+                        Some((_, count)) => *count += 1,
+                        None => video_frame_counts.push((video_file_name.clone(), 1)),
                     }
-                    _ => None,
-                })
-            })
-        })
-        .flatten()
-        .collect_vec();
+                }
+                None => names.push((AttachmentType::Image, image.file_name.clone())),
+            }
+        }
+    }
+    for (video_file_name, frame_count) in video_frame_counts {
+        let frame_word = if frame_count == 1 { "frame" } else { "frames" };
+        names.push((
+            AttachmentType::Video,
+            format!("{video_file_name} \u{b7} {frame_count} {frame_word}"),
+        ));
+    }
 
     // Also collect file names from FilePathReference attachments.
     // Use the map key (clean filename) rather than the file_name field

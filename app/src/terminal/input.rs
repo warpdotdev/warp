@@ -25,6 +25,7 @@ mod terminal;
 mod terminal_message_bar;
 mod universal;
 pub mod user_query;
+pub(crate) mod video_attach_banner;
 
 use std::any::Any;
 use std::borrow::Cow;
@@ -1646,6 +1647,10 @@ pub struct Input {
     deferred_remote_operations: DeferredRemoteOperations,
 
     prompt_suggestions_banner_state: Option<PromptSuggestionBannerState>,
+    /// State for the video-attach confirmation banner (behind `FeatureFlag::VideoAsContext`),
+    /// shown after a video file is picked and before it's converted into image-as-context
+    /// frames. See `video_attach_banner`.
+    video_attach_banner_state: Option<video_attach_banner::VideoAttachBannerState>,
     /// Shared flag checked by the editor's keymap context modifier to determine whether
     /// to suppress the editor's ctrl-enter newline insertion when a prompt suggestion
     /// banner is pending.
@@ -1864,6 +1869,14 @@ async fn upload_pending_attachments_to_task(
                 .decode(&image.data)
                 .map(|bytes| (image.file_name.clone(), image.mime_type.clone(), bytes))
                 .map_err(|e| (image.file_name, format!("Failed to decode attachment: {e}"))),
+            // Not reachable in practice: callers of this function build `pending_attachments`
+            // directly from flat `ImageContext`/`PendingFile` slices rather than from a live
+            // context model, so a grouped video attachment never reaches here. Fail closed with
+            // a clear message rather than silently dropping or mis-splitting the frames.
+            PendingAttachment::Video(video) => Err((
+                video.file_name,
+                "Video attachments aren't supported for cloud follow-up uploads".to_string(),
+            )),
         };
         match decoded {
             Ok((file_name, mime_type, bytes)) => {
@@ -3950,6 +3963,7 @@ impl Input {
             shared_session_input_state: None,
             shared_session_presence_manager: None,
             prompt_suggestions_banner_state: None,
+            video_attach_banner_state: None,
             has_prompt_suggestion_banner,
             was_intelligent_autosuggestion_accepted: false,
             last_intelligent_autosuggestion_result: None,
@@ -6131,9 +6145,13 @@ impl Input {
             let window_id = ctx.window_id();
 
             let message = if images_removed == 1 {
-                "1 image was removed - limit is 20 per conversation.".into()
+                format!(
+                    "1 image was removed - limit is {MAX_IMAGES_PER_CONVERSATION} per conversation."
+                )
             } else {
-                format!("{images_removed} images were removed - limit is 20 per conversation.")
+                format!(
+                    "{images_removed} images were removed - limit is {MAX_IMAGES_PER_CONVERSATION} per conversation."
+                )
             };
 
             ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
@@ -11441,13 +11459,31 @@ impl Input {
             // If we have image data, process the image data.
             self.handle_pasted_image_data(content.clone(), ctx) == 0
         } else if content.num_paths() > 0 {
+            let all_paths: Vec<String> = content.paths.clone().unwrap_or_default();
+
             // Else, we check the pasted file paths for any images.
-            let image_filepaths = warpui::clipboard_utils::get_image_filepaths_from_paths(
-                content.paths.as_deref().unwrap_or(&[]),
-            );
+            let image_filepaths =
+                warpui::clipboard_utils::get_image_filepaths_from_paths(&all_paths);
             let num_images_expected = image_filepaths.len();
-            self.handle_pasted_or_dragdropped_image_filepaths(image_filepaths, ctx)
-                < num_images_expected
+            let num_images_attached =
+                self.handle_pasted_or_dragdropped_image_filepaths(image_filepaths, ctx);
+
+            // If there were no images, check for a supported video path (prototype: one at a
+            // time) and route it through the same confirmation banner the file picker uses,
+            // instead of falling through to inserting the path as text.
+            let mut handled_video = false;
+            if num_images_expected == 0 && FeatureFlag::VideoAsContext.is_enabled() {
+                let video_path = all_paths
+                    .iter()
+                    .find(|path| crate::util::video::is_supported_video_filepath(path))
+                    .cloned();
+                if let Some(video_path) = video_path {
+                    self.show_video_attach_banner_for_path(video_path, ctx);
+                    handled_video = true;
+                }
+            }
+
+            !handled_video && num_images_attached < num_images_expected
         } else {
             true
         };
@@ -14076,6 +14112,7 @@ impl Input {
             {
                 match attachment {
                     PendingAttachment::Image(image) => images.push(image.clone()),
+                    PendingAttachment::Video(video) => images.extend(video.frames.iter().cloned()),
                     PendingAttachment::File(file) => files.push(file.clone()),
                 }
             }
@@ -15708,6 +15745,7 @@ impl Input {
         let icon = match chip.attachment_type {
             AttachmentType::Image => Icon::Image,
             AttachmentType::File => Icon::File,
+            AttachmentType::Video => Icon::Video,
         };
 
         let attachment_chip = Chip::new(
@@ -15737,7 +15775,10 @@ impl Input {
         .with_close_button(close_button)
         .build();
 
-        if matches!(chip.attachment_type, AttachmentType::Image) {
+        if matches!(
+            chip.attachment_type,
+            AttachmentType::Image | AttachmentType::Video
+        ) {
             let preview_chip_index = chip.index;
             EventHandler::new(attachment_chip.finish())
                 .on_left_mouse_down(move |ctx, _, _| {

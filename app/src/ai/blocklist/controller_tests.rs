@@ -30,6 +30,7 @@ fn image_attachment(file_name: &str) -> PendingAttachment {
         mime_type: "image/png".to_owned(),
         file_name: file_name.to_owned(),
         is_figma: false,
+        source_video_file_name: None,
     })
 }
 
@@ -300,6 +301,7 @@ fn mock_response_stream_updates_history_through_controller() {
                             token_usage: vec![],
                             should_refresh_model_config: false,
                             request_cost: None,
+                            pruned_media: None,
                         },
                     )),
                 },

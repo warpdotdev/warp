@@ -160,6 +160,11 @@ fn render_attachments(
         let icon = match attachment_type {
             AttachmentType::Image => Icon::Image,
             AttachmentType::File => Icon::File,
+            // A video's frames are unpacked into individual `AIAgentContext::Image` entries when
+            // sent, but `attachment_names` (see `block.rs`) regroups frames sharing the same
+            // source video back into a single `Video`-typed entry here, so the transcript shows
+            // one chip per video instead of exploding into one chip per frame.
+            AttachmentType::Video => Icon::Video,
         };
         let chip = Chip::new(
             file_name.clone(),

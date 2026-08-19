@@ -60,6 +60,7 @@ fn image_attachment(file_name: &str) -> PendingAttachment {
         mime_type: "image/png".to_owned(),
         file_name: file_name.to_owned(),
         is_figma: false,
+        source_video_file_name: None,
     })
 }
 

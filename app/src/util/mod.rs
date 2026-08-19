@@ -15,6 +15,8 @@ pub mod time_format;
 pub mod tooltips;
 pub(crate) mod traffic_lights;
 pub(crate) mod truncation;
+#[cfg(not(target_family = "wasm"))]
+pub mod video;
 pub mod vm_detection;
 #[cfg(windows)]
 pub mod windows;

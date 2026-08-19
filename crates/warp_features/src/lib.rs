@@ -272,6 +272,12 @@ pub enum FeatureFlag {
     /// Enables image as context for AM.
     ImageAsContext,
 
+    /// Enables video as context for AM: attached videos are converted into a small set of
+    /// still frames (plus an optional audio transcript) and sent through the image-as-context
+    /// path, since provider APIs we use don't accept native video attachments (Gemini native
+    /// video support is a documented follow-up, not covered by this flag).
+    VideoAsContext,
+
     /// UNIX shells running "natively" on Windows via MSYS2.
     MSYS2Shells,
 

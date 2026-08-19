@@ -562,6 +562,8 @@ impl BlocklistAIController {
                     token_usage: vec![],
                     should_refresh_model_config: false,
                     request_cost: None,
+                    // Synthetic event for a cancellation notice; pruning is a real-request-only fact.
+                    pruned_media: None,
                 },
             )),
         };

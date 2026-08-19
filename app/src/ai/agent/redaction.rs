@@ -349,6 +349,7 @@ fn redact_context(context: &mut [AIAgentContext]) {
             | AIAgentContext::ExecutionEnvironment(_)
             | AIAgentContext::CurrentTime { .. }
             | AIAgentContext::Image(_)
+            | AIAgentContext::Video { .. }
             | AIAgentContext::Codebase { .. }
             | AIAgentContext::ProjectRules { .. }
             | AIAgentContext::Git { .. }

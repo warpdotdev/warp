@@ -342,6 +342,7 @@ fn make_image_attachment(file_name: &str) -> PendingAttachment {
         mime_type: "image/png".to_owned(),
         file_name: file_name.to_owned(),
         is_figma: false,
+        source_video_file_name: None,
     })
 }
 
@@ -350,6 +351,24 @@ fn make_file_attachment(file_name: &str) -> PendingAttachment {
         file_name: file_name.to_owned(),
         file_path: file_name.into(),
         mime_type: "text/plain".to_owned(),
+    })
+}
+
+fn make_video_attachment(file_name: &str, frame_names: &[&str]) -> PendingAttachment {
+    PendingAttachment::Video(super::VideoContext {
+        file_name: file_name.to_owned(),
+        frames: frame_names
+            .iter()
+            .map(|frame_name| ImageContext {
+                data: String::new(),
+                mime_type: "image/jpeg".to_owned(),
+                file_name: (*frame_name).to_owned(),
+                is_figma: false,
+                source_video_file_name: Some(file_name.to_owned()),
+            })
+            .collect(),
+        native_video: None,
+        audio_transcript: None,
     })
 }
 
@@ -575,6 +594,219 @@ fn take_pending_attachments_drains_and_returns_all_staged() {
         assert_eq!(taken[1].file_name(), "notes.txt");
 
         // Draining clears the live staging so the input's attachment chips disappear.
+        model.read(&app, |m, _| assert!(m.pending_attachments().is_empty()));
+    });
+}
+
+#[test]
+fn append_pending_video_groups_frames_into_a_single_chip() {
+    // Attaching a video's extracted frames must produce exactly one `PendingAttachment` (one
+    // composer chip), while `pending_images()` still flattens down to every individual frame
+    // for capacity checks and query assembly.
+    App::test((), |mut app| async move {
+        let model = build_test_context_model(&mut app);
+
+        model.update(&mut app, |m, ctx| {
+            m.append_pending_video(
+                "clip.mp4".to_owned(),
+                vec![
+                    ImageContext {
+                        data: String::new(),
+                        mime_type: "image/jpeg".to_owned(),
+                        file_name: "clip.mp4-frame-01.jpg".to_owned(),
+                        is_figma: false,
+                        source_video_file_name: Some("clip.mp4".to_owned()),
+                    },
+                    ImageContext {
+                        data: String::new(),
+                        mime_type: "image/jpeg".to_owned(),
+                        file_name: "clip.mp4-frame-02.jpg".to_owned(),
+                        is_figma: false,
+                        source_video_file_name: Some("clip.mp4".to_owned()),
+                    },
+                ],
+                None,
+                ctx,
+            );
+        });
+
+        model.read(&app, |m, _| {
+            let attachments = m.pending_attachments();
+            assert_eq!(attachments.len(), 1);
+            assert_eq!(attachments[0].file_name(), "clip.mp4");
+            assert_eq!(
+                m.pending_images()
+                    .iter()
+                    .map(|img| img.file_name.as_str())
+                    .collect::<Vec<_>>(),
+                vec!["clip.mp4-frame-01.jpg", "clip.mp4-frame-02.jpg"]
+            );
+        });
+    });
+}
+
+#[test]
+fn append_pending_video_with_no_frames_is_a_no_op() {
+    App::test((), |mut app| async move {
+        let model = build_test_context_model(&mut app);
+
+        model.update(&mut app, |m, ctx| {
+            m.append_pending_video("clip.mp4".to_owned(), vec![], None, ctx);
+        });
+
+        model.read(&app, |m, _| assert!(m.pending_attachments().is_empty()));
+    });
+}
+
+#[test]
+fn set_pending_video_audio_transcript_updates_the_matching_video() {
+    App::test((), |mut app| async move {
+        let model = build_test_context_model(&mut app);
+
+        model.update(&mut app, |m, _| {
+            m.append_pending_attachments_for_test(vec![make_video_attachment(
+                "clip.mp4",
+                &["clip.mp4-frame-01.jpg"],
+            )]);
+        });
+
+        let updated = model.update(&mut app, |m, ctx| {
+            m.set_pending_video_audio_transcript("clip.mp4", "hello world".to_owned(), ctx)
+        });
+        assert!(updated);
+
+        model.read(&app, |m, _| {
+            let PendingAttachment::Video(video) = &m.pending_attachments()[0] else {
+                panic!("expected a video attachment");
+            };
+            assert_eq!(video.audio_transcript.as_deref(), Some("hello world"));
+        });
+    });
+}
+
+#[test]
+fn set_pending_video_audio_transcript_is_a_no_op_when_the_video_is_no_longer_pending() {
+    // Regression test for the send-before-transcript race, now expressed on structured context
+    // instead of the query buffer: once a video's chip is gone (sent or removed), a
+    // late-arriving transcript must not silently attach itself to an unrelated attachment.
+    App::test((), |mut app| async move {
+        let model = build_test_context_model(&mut app);
+
+        model.update(&mut app, |m, _| {
+            m.append_pending_attachments_for_test(vec![make_image_attachment("a.png")]);
+        });
+
+        let updated = model.update(&mut app, |m, ctx| {
+            m.set_pending_video_audio_transcript("clip.mp4", "hello world".to_owned(), ctx)
+        });
+        assert!(!updated);
+    });
+}
+
+#[test]
+fn removing_a_video_chip_removes_every_frame_it_stands_for() {
+    // Regression test: the composer's delete button on a video chip must not leave any of its
+    // frames orphaned in the pending set.
+    App::test((), |mut app| async move {
+        let model = build_test_context_model(&mut app);
+
+        model.update(&mut app, |m, _| {
+            m.append_pending_attachments_for_test(vec![
+                make_image_attachment("a.png"),
+                make_video_attachment(
+                    "clip.mp4",
+                    &["clip.mp4-frame-01.jpg", "clip.mp4-frame-02.jpg"],
+                ),
+            ]);
+        });
+        model.read(&app, |m, _| assert_eq!(m.pending_images().len(), 3));
+
+        // Delete the video chip (index 1 — one summary per `PendingAttachment` entry).
+        model.update(&mut app, |m, ctx| {
+            m.remove_pending_attachment(1, ctx);
+        });
+
+        model.read(&app, |m, _| {
+            assert_eq!(m.pending_attachments().len(), 1);
+            assert_eq!(
+                m.pending_images()
+                    .iter()
+                    .map(|img| img.file_name.as_str())
+                    .collect::<Vec<_>>(),
+                vec!["a.png"]
+            );
+        });
+    });
+}
+
+#[test]
+fn clear_pending_images_removes_video_attachments_too() {
+    App::test((), |mut app| async move {
+        let model = build_test_context_model(&mut app);
+
+        model.update(&mut app, |m, _| {
+            m.append_pending_attachments_for_test(vec![
+                make_video_attachment("clip.mp4", &["clip.mp4-frame-01.jpg"]),
+                make_file_attachment("notes.txt"),
+            ]);
+        });
+
+        model.update(&mut app, |m, ctx| {
+            m.clear_pending_images(ctx);
+        });
+
+        model.read(&app, |m, _| {
+            assert!(m.pending_images().is_empty());
+            assert_eq!(m.pending_attachments().len(), 1);
+            assert_eq!(m.pending_attachments()[0].file_name(), "notes.txt");
+        });
+    });
+}
+
+#[test]
+fn remove_last_pending_images_trims_video_frames_without_orphaning_the_chip() {
+    // Regression test: trimming toward the conversation limit must reduce a trailing video
+    // attachment's frame count rather than deleting whole attachments (which could remove more
+    // frames than requested) or leaving a zero-frame chip behind.
+    App::test((), |mut app| async move {
+        let model = build_test_context_model(&mut app);
+
+        model.update(&mut app, |m, _| {
+            m.append_pending_attachments_for_test(vec![
+                make_image_attachment("a.png"),
+                make_video_attachment(
+                    "clip.mp4",
+                    &[
+                        "clip.mp4-frame-01.jpg",
+                        "clip.mp4-frame-02.jpg",
+                        "clip.mp4-frame-03.jpg",
+                    ],
+                ),
+            ]);
+        });
+
+        // Remove 2 of the 4 total images: both should come off the tail of the video attachment,
+        // leaving it with 1 frame and still present as a single chip.
+        let removed = model.update(&mut app, |m, ctx| m.remove_last_pending_images(2, ctx));
+        assert_eq!(removed, 2);
+
+        model.read(&app, |m, _| {
+            let attachments = m.pending_attachments();
+            assert_eq!(attachments.len(), 2);
+            assert_eq!(attachments[1].file_name(), "clip.mp4");
+            assert_eq!(
+                m.pending_images()
+                    .iter()
+                    .map(|img| img.file_name.as_str())
+                    .collect::<Vec<_>>(),
+                vec!["a.png", "clip.mp4-frame-01.jpg"]
+            );
+        });
+
+        // Removing the remaining 2 images (1 video frame + the standalone image) should drop the
+        // now-empty video chip entirely rather than leaving an orphaned zero-frame attachment.
+        let removed = model.update(&mut app, |m, ctx| m.remove_last_pending_images(2, ctx));
+        assert_eq!(removed, 2);
         model.read(&app, |m, _| assert!(m.pending_attachments().is_empty()));
     });
 }
