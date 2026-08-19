@@ -1946,10 +1946,6 @@ impl AppContext {
         match self.contexts_from_responder_chain(window_id, &responder_chain) {
             Ok(ctxs) => ctxs,
             Err(error) => {
-                // The responder chain can legitimately contain a view that was already
-                // destroyed by the time we look up its context (a stale-chain race, not a
-                // bug we can fix here), so this stays a log breadcrumb rather than a
-                // Sentry report to avoid noise. See linear.app/warpdotdev/issue/APP-4467.
                 log::error!("Unable to fetch Key Bindings for View: {error:#}");
                 Vec::new()
             }
@@ -1997,9 +1993,6 @@ impl AppContext {
         let contexts = match self.contexts_from_responder_chain(window_id, &responder_chain) {
             Ok(ctxs) => ctxs,
             Err(error) => {
-                // Same stale-responder-chain race as `contexts_for_window_and_view` above:
-                // recoverable and not actionable here, so log rather than report.
-                // See linear.app/warpdotdev/issue/APP-4467.
                 log::error!("Unable to fetch Key Bindings for View: {error:#}");
                 return Vec::new();
             }
