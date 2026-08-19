@@ -2076,7 +2076,7 @@ impl AIClient for ServerApi {
         }
     }
 
-    #[tracing::instrument(skip_all, err, fields(
+    #[tracing::instrument(skip_all, err(Debug), fields(
         tags.cloud_agent = true,
         config.worker_host = tracing::field::Empty,
         config.harness = tracing::field::Empty
@@ -2133,7 +2133,7 @@ impl AIClient for ServerApi {
         }
     }
 
-    #[tracing::instrument(skip_all, err, fields(
+    #[tracing::instrument(skip_all, err(Debug), fields(
         tags.cloud_agent = true,
         ?task_state,
         ?session_id,
@@ -2245,7 +2245,7 @@ impl AIClient for ServerApi {
         Ok(response)
     }
 
-    #[tracing::instrument(skip_all, err, fields(tags.cloud_agent = true))]
+    #[tracing::instrument(skip_all, err(Debug), fields(tags.cloud_agent = true))]
     async fn get_ambient_agent_task(
         &self,
         task_id: &AmbientAgentTaskId,
@@ -2300,7 +2300,7 @@ impl AIClient for ServerApi {
         }
     }
 
-    #[tracing::instrument(skip_all, err, fields(tags.cloud_agent = true))]
+    #[tracing::instrument(skip_all, err(Debug), fields(tags.cloud_agent = true))]
     async fn get_ai_conversation(
         &self,
         server_conversation_token: ServerConversationToken,
@@ -2680,7 +2680,7 @@ impl AIClient for ServerApi {
         }
     }
 
-    #[tracing::instrument(skip_all, err, fields(tags.cloud_agent = true))]
+    #[tracing::instrument(skip_all, err(Debug), fields(tags.cloud_agent = true))]
     async fn get_task_attachments(
         &self,
         task_id: String,
@@ -2843,7 +2843,7 @@ impl AIClient for ServerApi {
         Ok(response)
     }
 
-    #[tracing::instrument(skip_all, err, fields(tags.cloud_agent = true))]
+    #[tracing::instrument(skip_all, err(Debug), fields(tags.cloud_agent = true))]
     async fn get_handoff_snapshot_attachments(
         &self,
         task_id: &AmbientAgentTaskId,
