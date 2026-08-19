@@ -68,10 +68,12 @@ impl ErrorExt for GraphQLError {
             // already have a dedicated recovery path (`send_auth_event` in graphql_helpers.rs)
             // instead of surfacing as an unhandled error.
             GraphQLError::StagingAccessBlocked | GraphQLError::IapChallengeBlocked => false,
-            // 408/429/5xx are the same externally-caused, non-actionable statuses already
-            // recognized by `HttpStatusError` (public_api.rs) and `is_transient_status`
-            // (retry_strategies.rs). Other statuses (401, 403, 404, ...) can indicate a bug in how
-            // we built the request or handled auth, so they stay actionable.
+            // 408/429 are externally-caused and already non-actionable in `HttpStatusError`
+            // (public_api.rs); 5xx is added on top of that per `is_transient_status`
+            // (retry_strategies.rs), which already treats it as externally-caused for this same
+            // `GraphQLError`, albeit for retry rather than observability purposes. Other statuses
+            // (401, 403, 404, ...) can indicate a bug in how we built the request or handled auth,
+            // so they stay actionable.
             GraphQLError::HttpError { status, .. } => {
                 !matches!(status.as_u16(), 408 | 429 | 500..=599)
             }
