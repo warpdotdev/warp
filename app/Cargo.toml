@@ -711,6 +711,8 @@ default = [
     "file_backed_execution_profiles",
     "well_known_mcp_ids",
     "factory_mcp",
+    "wait_for_events_parent_registration",
+    "orchestration_unified_stack",
 ]
 # Enable this feature to automatically perform heap profiling.  NOTE: This will
 # substantially slow down program execution.
@@ -1011,6 +1013,7 @@ skill_arguments = []
 active_conversation_requires_interaction = []
 incremental_auto_reload = []
 wait_for_events_parent_registration = []
+orchestration_unified_stack = []
 pending_user_query_indicator = []
 queue_slash_command = []
 queued_prompts_v2 = ["queue_slash_command"]
