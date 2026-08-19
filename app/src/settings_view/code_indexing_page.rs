@@ -334,9 +334,6 @@ impl CodeIndexingPageView {
                 manual_add_directory_button,
             },
         };
-        // The whole page is a single unfilterable widget, so it must be a
-        // monolith: otherwise every match renders as "(1)" regardless of how
-        // much of the page actually matched.
         PageType::new_monolith(widget, Some(PAGE_TITLE), true)
     }
 
