@@ -2030,10 +2030,10 @@ impl AIBlock {
 
         self.fetch_conversation_search_agent_run_titles(output, ctx);
 
+        let new_action_ids: FxHashSet<AIAgentActionId> =
+            output.actions().map(|action| action.id.clone()).collect();
         for action in output.actions() {
-            let new_action_ids: FxHashSet<AIAgentActionId> =
-                output.actions().map(|action| action.id.clone()).collect();
-
+            let new_action_ids = new_action_ids.clone();
             #[cfg(feature = "integration_tests")]
             {
                 // Log action IDs that were cached from a previous version of `output` that are not
