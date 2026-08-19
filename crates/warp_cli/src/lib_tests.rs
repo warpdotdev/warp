@@ -329,6 +329,51 @@ fn agent_run_parses_repeated_repository_head_override_json() {
 }
 
 #[test]
+fn agent_run_parses_remove_repository_origins_without_head_overrides() {
+    let args = Args::try_parse_from([
+        "warp",
+        "agent",
+        "run",
+        "--task-id",
+        "550e8400-e29b-41d4-a716-446655440000",
+        "--remove-repository-origins",
+    ])
+    .unwrap();
+
+    let Some(Command::CommandLine(boxed_cmd)) = args.command else {
+        panic!("Expected `warp agent run` command");
+    };
+    let CliCommand::Agent(AgentCommand::Run(run_args)) = boxed_cmd.as_ref() else {
+        panic!("Expected `warp agent run` command");
+    };
+
+    assert!(run_args.remove_repository_origins);
+}
+
+#[test]
+fn agent_run_preserves_repository_origins_by_default() {
+    let args = Args::try_parse_from([
+        "warp",
+        "agent",
+        "run",
+        "--task-id",
+        "550e8400-e29b-41d4-a716-446655440000",
+        "--repository-head-override-json",
+        r#"{"code_forge":"GITHUB","repo_owner":"warpdotdev","repo_name":"warp","head":{"type":"BRANCH","value":"main"}}"#,
+    ])
+    .unwrap();
+
+    let Some(Command::CommandLine(boxed_cmd)) = args.command else {
+        panic!("Expected `warp agent run` command");
+    };
+    let CliCommand::Agent(AgentCommand::Run(run_args)) = boxed_cmd.as_ref() else {
+        panic!("Expected `warp agent run` command");
+    };
+
+    assert!(!run_args.remove_repository_origins);
+}
+
+#[test]
 fn agent_run_rejects_invalid_exact_repository_sha() {
     for invalid_sha in [
         "0123456789abcdef0123456789abcdef0123456",

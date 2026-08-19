@@ -299,6 +299,8 @@ pub struct AgentDriverOptions {
     pub environment: Option<AmbientAgentEnvironment>,
     /// Overrides for repository HEADs in the agent's session.
     pub repository_head_overrides: Vec<RepositoryHeadOverride>,
+    /// Whether origin remotes should be removed from environment repositories.
+    pub remove_repository_origins: bool,
     /// Selected execution harness for this run.
     pub selected_harness: Harness,
     /// Model config for the selected harness. Only used for non-Oz harnesses.
@@ -367,6 +369,7 @@ pub struct AgentDriver {
     /// Resolved environment configuration.
     environment: Option<AmbientAgentEnvironment>,
     repository_head_overrides: Vec<RepositoryHeadOverride>,
+    remove_repository_origins: bool,
 
     // End-of-run snapshot upload controls.
     snapshot_disabled: bool,
@@ -639,6 +642,7 @@ impl AgentDriver {
             cloud_providers,
             environment,
             repository_head_overrides,
+            remove_repository_origins,
             selected_harness,
             third_party_harness_model_config,
             snapshot_disabled,
@@ -766,6 +770,7 @@ impl AgentDriver {
             cloud_providers,
             environment,
             repository_head_overrides,
+            remove_repository_origins,
             snapshot_disabled: snapshot_disabled_value,
             snapshot_upload_timeout: snapshot_upload_timeout
                 .unwrap_or(snapshot::DEFAULT_SNAPSHOT_UPLOAD_TIMEOUT),
@@ -811,6 +816,7 @@ impl AgentDriver {
             cloud_providers: Vec::new(),
             environment: None,
             repository_head_overrides: Vec::new(),
+            remove_repository_origins: false,
             snapshot_disabled: false,
             snapshot_upload_timeout: snapshot::DEFAULT_SNAPSHOT_UPLOAD_TIMEOUT,
             snapshot_script_timeout: snapshot::DEFAULT_DECLARATIONS_SCRIPT_TIMEOUT,
@@ -2162,8 +2168,14 @@ impl AgentDriver {
             .await?;
         let mut environment_skill_repos = Vec::new();
 
-        let (environment_opt, repository_head_overrides) = foreground
-            .spawn(|me, _| (me.environment.clone(), me.repository_head_overrides.clone()))
+        let (environment_opt, repository_head_overrides, remove_repository_origins) = foreground
+            .spawn(|me, _| {
+                (
+                    me.environment.clone(),
+                    me.repository_head_overrides.clone(),
+                    me.remove_repository_origins,
+                )
+            })
             .await?;
 
         if let Some(environment) = environment_opt {
@@ -2205,8 +2217,9 @@ impl AgentDriver {
                             working_dir,
                             false, /* is_sandbox */
                             harness,
-                            environment::RepositoryHeadOverrideContext::new(
+                            environment::RepositoryPreparationOptions::new(
                                 repository_head_overrides,
+                                remove_repository_origins,
                             ),
                             setup_events_for_environment,
                             ctx,

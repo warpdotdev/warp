@@ -37,8 +37,8 @@ pub enum PrepareEnvironmentError {
     InvalidRepositoryHeadOverrides { reason: String },
     #[error("Failed to prepare repositories: {repo_names}")]
     PrepareRepositories { repo_names: String },
-    #[error("Failed to remove remotes from overridden repositories")]
-    RemoveOverrideRemotes,
+    #[error("Failed to remove origins from environment repositories")]
+    RemoveRepositoryOrigins,
     #[error("Failed to run setup command: {command}")]
     SetupCommand { command: String },
     #[error("Failed to change directory into {repo_name}")]
@@ -47,15 +47,19 @@ pub enum PrepareEnvironmentError {
     TerminalDriver { source: AgentDriverError },
 }
 
-/// Server-owned repository HEAD override context for environment preparation.
+/// Server-owned repository settings for environment preparation.
 #[derive(Default)]
-pub(crate) struct RepositoryHeadOverrideContext {
-    overrides: Vec<RepositoryHeadOverride>,
+pub(crate) struct RepositoryPreparationOptions {
+    head_overrides: Vec<RepositoryHeadOverride>,
+    remove_origins: bool,
 }
 
-impl RepositoryHeadOverrideContext {
-    pub fn new(overrides: Vec<RepositoryHeadOverride>) -> Self {
-        Self { overrides }
+impl RepositoryPreparationOptions {
+    pub fn new(head_overrides: Vec<RepositoryHeadOverride>, remove_origins: bool) -> Self {
+        Self {
+            head_overrides,
+            remove_origins,
+        }
     }
 }
 
@@ -113,15 +117,16 @@ pub fn prepare_environment(
     working_dir: PathBuf,
     is_sandbox: bool,
     harness: Harness,
-    repository_head_override_context: RepositoryHeadOverrideContext,
+    repository_options: RepositoryPreparationOptions,
     setup_events: SetupClientEventReporter,
     ctx: &mut ModelContext<TerminalDriver>,
 ) -> impl Future<Output = Result<(), PrepareEnvironmentError>> {
     let spawner = ctx.spawner();
     async move {
-        let RepositoryHeadOverrideContext {
-            overrides: repository_head_overrides,
-        } = repository_head_override_context;
+        let RepositoryPreparationOptions {
+            head_overrides: repository_head_overrides,
+            remove_origins: remove_repository_origins,
+        } = repository_options;
         validate_repository_head_overrides(Some(&environment), &repository_head_overrides)?;
         let source_repos = environment.effective_repos();
         let setup_commands = environment.setup_commands;
@@ -142,6 +147,7 @@ pub fn prepare_environment(
             is_sandbox,
             &source_repos,
             &repository_head_overrides,
+            remove_repository_origins,
             setup_commands,
             should_index_codebase,
             Arc::clone(&repo_channels),
@@ -168,6 +174,7 @@ async fn prepare_environment_impl(
     is_sandbox: bool,
     source_repos: &[SourceRepo],
     repository_head_overrides: &[RepositoryHeadOverride],
+    remove_repository_origins: bool,
     setup_commands: Vec<String>,
     should_index_codebase: bool,
     repo_channels: Arc<Mutex<HashMap<PathBuf, oneshot::Sender<()>>>>,
@@ -277,10 +284,13 @@ async fn prepare_environment_impl(
         Ok(())
     };
 
-    let remove_remotes_result =
-        remove_override_remotes(repository_head_overrides, working_dir, spawner).await;
+    let remove_origins_result = if remove_repository_origins {
+        remove_repository_origins_from_repos(source_repos, working_dir, spawner).await
+    } else {
+        Ok(())
+    };
     setup_result?;
-    remove_remotes_result?;
+    remove_origins_result?;
 
     if should_index_codebase && source_repos.is_empty() {
         log::info!("No repositories to index for codebase context");
@@ -542,14 +552,14 @@ async fn prepare_repositories(
     }
     Ok(())
 }
-fn build_remove_override_remotes_command(
-    overrides: &[RepositoryHeadOverride],
+fn build_remove_repository_origins_command(
+    repos: &[SourceRepo],
     working_dir: &Path,
     shell_type: ShellType,
 ) -> String {
     let mut script = String::new();
-    for head_override in overrides {
-        let repo_path = working_dir.join(&head_override.repo_name);
+    for repo in repos {
+        let repo_path = working_dir.join(&repo.repo);
         let escaped_path =
             shell_escape_single_quotes(&repo_path.to_string_lossy(), ShellType::Bash);
         script.push_str(&format!(
@@ -562,21 +572,21 @@ fn build_remove_override_remotes_command(
     format!("sh -c '{escaped_script}'")
 }
 
-async fn remove_override_remotes(
-    overrides: &[RepositoryHeadOverride],
+async fn remove_repository_origins_from_repos(
+    repos: &[SourceRepo],
     working_dir: &Path,
     spawner: &ModelSpawner<TerminalDriver>,
 ) -> Result<(), PrepareEnvironmentError> {
-    if overrides.is_empty() {
+    if repos.is_empty() {
         return Ok(());
     }
     let shell_type = active_shell_type(spawner).await;
-    let command = build_remove_override_remotes_command(overrides, working_dir, shell_type);
+    let command = build_remove_repository_origins_command(repos, working_dir, shell_type);
     let output = execute_silent_command(command, spawner).await?;
     if output.success() {
         Ok(())
     } else {
-        Err(PrepareEnvironmentError::RemoveOverrideRemotes)
+        Err(PrepareEnvironmentError::RemoveRepositoryOrigins)
     }
 }
 

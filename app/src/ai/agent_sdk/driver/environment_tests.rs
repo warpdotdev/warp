@@ -8,7 +8,7 @@ use warp_cli::agent::{RepositoryForge, RepositoryHeadOverride, RepositoryHeadRef
 
 use super::{
     build_parallel_clone_command, build_parallel_prepare_command,
-    build_remove_override_remotes_command, single_repo_name, validate_repository_head_overrides,
+    build_remove_repository_origins_command, single_repo_name, validate_repository_head_overrides,
 };
 use crate::ai::cloud_environments::{AmbientAgentEnvironment, SourceRepo};
 use crate::terminal::shell::ShellType;
@@ -498,18 +498,25 @@ fn commit_override_rejects_shallow_repo_with_history_ref() {
 }
 
 #[test]
-fn override_remote_removal_targets_only_overridden_repositories() {
-    let checkouts = vec![commit_head_override(
-        RepositoryForge::GitHub,
-        "warpdotdev",
-        "warp",
-        "0123456789abcdef0123456789abcdef01234567",
-    )];
+fn repository_origin_removal_targets_all_environment_repositories() {
+    let repos = vec![
+        SourceRepo::new(
+            CodeForge::GitHub,
+            "warpdotdev".to_string(),
+            "warp".to_string(),
+        ),
+        SourceRepo::new(
+            CodeForge::GitHub,
+            "warpdotdev".to_string(),
+            "warp-server".to_string(),
+        ),
+    ];
 
     let command =
-        build_remove_override_remotes_command(&checkouts, Path::new("/workspace"), ShellType::Bash);
+        build_remove_repository_origins_command(&repos, Path::new("/workspace"), ShellType::Bash);
 
     assert!(command.contains("/workspace/warp"));
+    assert!(command.contains("/workspace/warp-server"));
     assert!(command.contains("remote get-url origin"));
     assert!(command.contains("remote remove origin"));
 }

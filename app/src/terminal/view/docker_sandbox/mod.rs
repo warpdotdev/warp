@@ -22,7 +22,7 @@ use warpui::{SingletonEntity, View, ViewHandle};
 use super::TerminalView;
 #[cfg(not(target_family = "wasm"))]
 use crate::ai::agent_sdk::driver::{
-    environment::{prepare_environment, RepositoryHeadOverrideContext},
+    environment::{prepare_environment, RepositoryPreparationOptions},
     terminal::TerminalDriver,
     WARP_DRIVE_SYNC_TIMEOUT,
 };
@@ -298,7 +298,7 @@ impl TerminalView {
                             DOCKER_SANDBOX_HOME_DIR.into(),
                             true, /* is_sandbox */
                             Harness::Oz,
-                            RepositoryHeadOverrideContext::default(),
+                            RepositoryPreparationOptions::default(),
                             setup_events,
                             ctx,
                         )

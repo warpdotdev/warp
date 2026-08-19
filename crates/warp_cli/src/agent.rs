@@ -559,6 +559,10 @@ pub struct RunAgentArgs {
         hide = true
     )]
     pub repository_head_overrides: Vec<RepositoryHeadOverride>,
+
+    /// Remove the origin remote from environment repositories after setup.
+    #[arg(long = "remove-repository-origins", requires = "task_id", hide = true)]
+    pub remove_repository_origins: bool,
 }
 
 impl RunAgentArgs {
