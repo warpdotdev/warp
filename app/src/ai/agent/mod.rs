@@ -2692,6 +2692,13 @@ pub struct PassiveCodeDiffEntry {
 pub enum PassiveSuggestionResultType {
     Prompt {
         prompt: String,
+        /// The server-minted, single-use prompt-suggestion offer id
+        /// from the chip, round-tripped verbatim. The server
+        /// substitutes its own stored prompt text on redeem, so this id -
+        /// not `prompt` - is what authorizes drawing on the lifetime
+        /// allowance. `None` when the chip carried no offer (old server, or
+        /// the client-synthesized "Execute this plan" suggestion).
+        suggestion_id: Option<String>,
     },
     CodeDiff {
         diffs: Vec<PassiveCodeDiffEntry>,
@@ -2955,7 +2962,7 @@ impl AIAgentInput {
                 ..
             } => Some(query.clone()),
             Self::PassiveSuggestionResult {
-                suggestion: PassiveSuggestionResultType::Prompt { prompt },
+                suggestion: PassiveSuggestionResultType::Prompt { prompt, .. },
                 ..
             } => Some(prompt.clone()),
             Self::AutoCodeDiffQuery { .. }

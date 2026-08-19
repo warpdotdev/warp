@@ -675,6 +675,8 @@ fn map_prompt_suggestions_response(
                 ),
                 static_prompt_suggestion_name: None,
                 should_start_new_conversation: true,
+                // Legacy REST generation path predates prompt-suggestion offers.
+                offer_id: None,
             })
         }
         Suggestion::Simple(simple_query) => AgentModePromptSuggestion::Success(PromptSuggestion {
@@ -684,6 +686,7 @@ fn map_prompt_suggestions_response(
             coding_query_context: None,
             static_prompt_suggestion_name: None,
             should_start_new_conversation: true,
+            offer_id: None,
         }),
         _ => AgentModePromptSuggestion::None,
     }

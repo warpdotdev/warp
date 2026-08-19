@@ -13,7 +13,7 @@ use warp_graphql::ai::{
 };
 use warp_graphql::mutations::generate_commands::{GenerateCommandsFailureType, GeneratedCommand};
 
-use crate::ai::{RequestLimitInfo, RequestLimitRefreshDuration};
+use crate::ai::{PromptSuggestionAllowance, RequestLimitInfo, RequestLimitRefreshDuration};
 use crate::server::telemetry::OpenedWarpAISource;
 use crate::terminal::model::terminal_model::BlockIndex;
 use crate::workflows::workflow::{Argument, Workflow};
@@ -172,6 +172,12 @@ impl From<RequestLimitInfoGraphql> for RequestLimitInfo {
             max_codebase_indices: value.max_codebase_indices as usize,
             max_files_per_repo: value.max_files_per_repo as usize,
             embedding_generation_batch_size: value.embedding_generation_batch_size as usize,
+            prompt_suggestion_allowance: value.prompt_suggestion_allowance.map(|allowance| {
+                PromptSuggestionAllowance {
+                    limit: allowance.limit as usize,
+                    used: allowance.used as usize,
+                }
+            }),
         }
     }
 }

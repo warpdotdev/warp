@@ -45,6 +45,12 @@ const INLINE_BANNER_BUTTON_PADDING: f32 = 8.;
 
 const DELINQUENT_DUE_TO_PAYMENT_ISSUE_TOOLTIP_MESSAGE: &str = "Restricted due to payment issue";
 const OUT_OF_REQUESTS_TOOLTIP_MESSAGE: &str = "Out of credits";
+/// Shown on hover/focus once the lifetime prompt-suggestion allowance
+/// is exhausted. Distinct from [`OUT_OF_REQUESTS_TOOLTIP_MESSAGE`]
+/// since it names the specific wallet that ran out and never opens the
+/// interactive Agent Mode unavailable modal.
+const PROMPT_SUGGESTION_ALLOWANCE_EXHAUSTED_TOOLTIP_MESSAGE: &str =
+    "Out of free prompt suggestion credits. Upgrade to keep using Agent Mode from a chip.";
 
 /// Types of zero-state prompt suggestions.
 #[derive(Debug, Copy, Clone, Serialize)]
@@ -133,6 +139,7 @@ fn render_button(
     prompt_alert_state: &PromptAlertState,
     should_shrink: bool,
     force_enabled: bool,
+    suggestion_allowance_exhausted: bool,
     appearance: &Appearance,
     app: &AppContext,
 ) -> Box<dyn Element> {
@@ -243,7 +250,11 @@ fn render_button(
 
         if is_button_disabled
             && mouse_state.is_hovered()
-            && let Some(tooltip_text) = get_tooltip_text_for_alert_state(prompt_alert_state)
+            && let Some(tooltip_text) = if suggestion_allowance_exhausted {
+                Some(PROMPT_SUGGESTION_ALLOWANCE_EXHAUSTED_TOOLTIP_MESSAGE.to_string())
+            } else {
+                get_tooltip_text_for_alert_state(prompt_alert_state)
+            }
         {
             let tooltip = appearance
                 .ui_builder()
@@ -317,6 +328,11 @@ fn get_tooltip_text_for_alert_state(alert_state: &PromptAlertState) -> Option<St
 /// Free-plan users who run out of Warp-provided AI credits should get a modal
 /// offering BYO/upgrade instead of a disabled button. Other disabled states
 /// (offline, payment issues, team overage gates) keep the disabled treatment.
+///
+/// A live lifetime prompt-suggestion allowance has its own
+/// click/hover treatment (see [`should_accept_via_suggestion_allowance`] and
+/// [`PROMPT_SUGGESTION_ALLOWANCE_EXHAUSTED_TOOLTIP_MESSAGE`]), so this modal
+/// is only relevant when the user's tier has no such wallet at all.
 fn should_open_unavailable_modal(state: &PromptAlertState, app: &AppContext) -> bool {
     FeatureFlag::OpenWarpNewSettingsModes.is_enabled()
         && matches!(state, PromptAlertState::RequestLimitReached)
@@ -326,6 +342,19 @@ fn should_open_unavailable_modal(state: &PromptAlertState, app: &AppContext) -> 
         // ICPs who still receive base credits on the Free plan keep the disabled
         // button; only offer the modal once the base allowance is gone.
         && AIRequestUsageModel::as_ref(app).request_limit() == 0
+        && AIRequestUsageModel::as_ref(app).suggestion_remaining().is_none()
+}
+
+/// Whether a click should accept the chip by drawing on the lifetime
+/// prompt-suggestion allowance instead of the interactive wallet. Only ever
+/// overrides the `RequestLimitReached` disabled state -- every other
+/// disabled state (offline, delinquent, anonymous hard gate, overage/spend
+/// policy) keeps its own disabled treatment and tooltip regardless of
+/// suggestion credits, per PRODUCT.md's "remaining > 0 and the other accept
+/// rules passing" gate.
+fn should_accept_via_suggestion_allowance(state: &PromptAlertState, app: &AppContext) -> bool {
+    matches!(state, PromptAlertState::RequestLimitReached)
+        && AIRequestUsageModel::as_ref(app).can_accept_prompt_suggestion()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -402,6 +431,14 @@ impl View for PromptSuggestionsView {
 
         let prompt_alert_state = self.prompt_alert.as_ref(app).state();
         let open_unavailable_modal = should_open_unavailable_modal(prompt_alert_state, app);
+        let can_accept_via_suggestion_allowance =
+            should_accept_via_suggestion_allowance(prompt_alert_state, app);
+        // Only relevant when the disablement reason is the shared
+        // "out of requests" state; other disabled states (offline, payment
+        // issues) keep their own, higher-priority tooltip.
+        let suggestion_allowance_exhausted =
+            matches!(prompt_alert_state, PromptAlertState::RequestLimitReached)
+                && AIRequestUsageModel::as_ref(app).suggestion_remaining() == Some(0);
 
         let Some(banner_state) = &self.banner_state else {
             return Empty::new().finish();
@@ -442,7 +479,8 @@ impl View for PromptSuggestionsView {
                     debug_request_token,
                     prompt_alert_state,
                     true, // should_shrink
-                    open_unavailable_modal,
+                    open_unavailable_modal || can_accept_via_suggestion_allowance,
+                    suggestion_allowance_exhausted,
                     appearance,
                     app,
                 ),
@@ -493,3 +531,7 @@ impl TypedActionView for PromptSuggestionsView {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "prompt_suggestions_tests.rs"]
+mod tests;

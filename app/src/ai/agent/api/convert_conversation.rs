@@ -2148,6 +2148,8 @@ fn convert_passive_suggestion_result_to_input(
         Some(api::passive_suggestion_result_type::Suggestion::Prompt(p)) => {
             PassiveSuggestionResultType::Prompt {
                 prompt: p.prompt.clone(),
+                suggestion_id: (!api_result.suggestion_id.is_empty())
+                    .then(|| api_result.suggestion_id.clone()),
             }
         }
         Some(api::passive_suggestion_result_type::Suggestion::CodeDiff(cd)) => {

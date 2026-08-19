@@ -34,6 +34,9 @@ pub fn static_suggested_query(command: &str) -> Option<PromptSuggestion> {
                 coding_query_context: None,
                 static_prompt_suggestion_name: Some(pattern.rule.name.to_string()),
                 should_start_new_conversation: false,
+                // Purely local pattern matching; never backed by a
+                // server-minted prompt-suggestion offer.
+                offer_id: None,
             });
         }
     }

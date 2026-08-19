@@ -1,11 +1,13 @@
+use std::sync::Arc;
+
 use chrono::{DateTime, Utc};
 use warp_core::command::ExitCode;
 use warp_multi_agent_api as api;
 
 use crate::ai::agent::task::TaskId;
 use crate::ai::agent::{
-    AIAgentActionResult, AIAgentActionResultType, AIAgentContext,
-    TransferShellCommandControlToUserResult,
+    AIAgentActionResult, AIAgentActionResultType, AIAgentContext, AIAgentInput,
+    PassiveSuggestionResultType, TransferShellCommandControlToUserResult,
 };
 use crate::terminal::model::block::BlockId;
 
@@ -154,6 +156,57 @@ fn transfer_control_snapshot_result_converts_to_tool_call_result_input() {
             }
         }
         other => panic!("Expected tool-call-result input, got {other:?}"),
+    }
+}
+
+#[test]
+fn passive_suggestion_result_prompt_carries_offer_id_onto_the_wire() {
+    let input = AIAgentInput::PassiveSuggestionResult {
+        trigger: None,
+        suggestion: PassiveSuggestionResultType::Prompt {
+            prompt: "do the thing".to_string(),
+            suggestion_id: Some("offer-123".to_string()),
+        },
+        context: Arc::new([]),
+    };
+
+    let converted = super::convert_input_to_user_input(input).expect("should convert");
+    match converted {
+        api::request::input::user_inputs::user_input::Input::PassiveSuggestionResult(input) => {
+            let result = input.result.expect("result should be set");
+            assert_eq!(result.suggestion_id, "offer-123");
+            match result.suggestion {
+                Some(api::passive_suggestion_result_type::Suggestion::Prompt(prompt)) => {
+                    assert_eq!(prompt.prompt, "do the thing");
+                }
+                other => panic!("Expected prompt suggestion, got {other:?}"),
+            }
+        }
+        other => panic!("Expected passive-suggestion-result input, got {other:?}"),
+    }
+}
+
+#[test]
+fn passive_suggestion_result_prompt_without_offer_id_sends_empty_suggestion_id() {
+    let input = AIAgentInput::PassiveSuggestionResult {
+        trigger: None,
+        suggestion: PassiveSuggestionResultType::Prompt {
+            prompt: "do the thing".to_string(),
+            suggestion_id: None,
+        },
+        context: Arc::new([]),
+    };
+
+    let converted = super::convert_input_to_user_input(input).expect("should convert");
+    match converted {
+        api::request::input::user_inputs::user_input::Input::PassiveSuggestionResult(input) => {
+            let result = input.result.expect("result should be set");
+            assert_eq!(
+                result.suggestion_id, "",
+                "a chip with no live offer must not invent an id"
+            );
+        }
+        other => panic!("Expected passive-suggestion-result input, got {other:?}"),
     }
 }
 

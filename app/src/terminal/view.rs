@@ -963,6 +963,8 @@ pub enum AgentModePromptSuggestion {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct PromptSuggestion {
+    /// Client-side telemetry identifier for this suggestion. Not the
+    /// server-minted prompt-suggestion offer id; see `offer_id`.
     pub id: String,
 
     /// The query that is displayed in the Prompt Suggestion chip to the user.
@@ -982,6 +984,13 @@ pub struct PromptSuggestion {
     // the existing one. Only applies when in agent view; in terminal view, prompt suggestions
     // always start a new conversation.
     pub should_start_new_conversation: bool,
+
+    /// The server-minted, single-use prompt-suggestion offer id
+    /// carried on the chip. Round-tripped verbatim to the accept request so
+    /// the server can substitute its own stored prompt text; the server
+    /// admits the lifetime allowance only when this authorizes the accept.
+    /// `None` for chips from a server that doesn't mint offers yet.
+    pub offer_id: Option<String>,
 }
 
 impl PromptSuggestion {
@@ -5439,6 +5448,9 @@ impl TerminalView {
                     coding_query_context: None,
                     static_prompt_suggestion_name: Some("EXECUTE_CREATED_PLAN".to_string()),
                     should_start_new_conversation: false,
+                    // Client-synthesized suggestion; never backed by a
+                    // server-minted prompt-suggestion offer.
+                    offer_id: None,
                 });
 
                 self.on_legacy_prompt_suggestion_generated(
@@ -10214,8 +10226,20 @@ impl TerminalView {
             }
         };
 
-        // Return early if we've run out of AI usage.
-        if !AIRequestUsageModel::as_ref(ctx).has_any_ai_remaining(ctx) {
+        // Return early if the user cannot accept this chip. When this tier
+        // has a lifetime prompt-suggestion allowance, that
+        // allowance is the sole gate -- accept must work while the
+        // interactive wallet (`has_any_ai_remaining`) is exhausted, and must
+        // stay blocked once the allowance itself is exhausted even if some
+        // interactive/BYO credit is separately available (the two wallets
+        // are kept separate; BYO must not silently continue this task). When
+        // this tier has no such wallet (e.g. paid), fall back to the
+        // interactive decision as before this feature.
+        let can_accept = match AIRequestUsageModel::as_ref(ctx).suggestion_remaining() {
+            Some(remaining) => remaining > 0,
+            None => AIRequestUsageModel::as_ref(ctx).has_any_ai_remaining(ctx),
+        };
+        if !can_accept {
             return false;
         }
 
@@ -10232,6 +10256,7 @@ impl TerminalView {
         let suggestion = &banner_state.prompt_suggestion;
         let prompt = suggestion.prompt.clone();
         let suggestion_id = suggestion.id.clone();
+        let offer_id = suggestion.offer_id.clone();
         let is_static_suggestion = suggestion.static_prompt_suggestion_name.is_some();
         let trigger = banner_state.trigger.clone();
         let should_start_new_conversation = suggestion.should_start_new_conversation;
@@ -10280,7 +10305,10 @@ impl TerminalView {
             self.ai_controller.update(ctx, |controller, ctx| {
                 controller.send_passive_suggestion_result(
                     Some(conversation_id),
-                    PassiveSuggestionResultType::Prompt { prompt },
+                    PassiveSuggestionResultType::Prompt {
+                        prompt,
+                        suggestion_id: offer_id,
+                    },
                     trigger,
                     ctx,
                 );
@@ -15397,6 +15425,7 @@ impl TerminalView {
                 trigger,
                 conversation_id,
                 server_request_token,
+                offer_id,
             } => {
                 self.on_maa_prompt_suggestion_generated(
                     prompt,
@@ -15405,6 +15434,7 @@ impl TerminalView {
                     trigger.clone(),
                     *conversation_id,
                     server_request_token.clone(),
+                    offer_id.clone(),
                     ctx,
                 );
             }
@@ -15442,6 +15472,7 @@ impl TerminalView {
         trigger: Option<PassiveSuggestionTrigger>,
         conversation_id: Option<AIConversationId>,
         server_request_token: Option<String>,
+        offer_id: Option<String>,
         ctx: &mut ViewContext<Self>,
     ) {
         if prompt.is_empty() {
@@ -15460,6 +15491,7 @@ impl TerminalView {
                 coding_query_context: None,
                 static_prompt_suggestion_name: None,
                 should_start_new_conversation: false,
+                offer_id,
             },
             accept_button_mouse_state: Default::default(),
             llm_warning_learn_more_hyperlink: Default::default(),

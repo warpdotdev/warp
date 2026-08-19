@@ -30,6 +30,7 @@ fn create_test_request_limit_info(
         max_codebase_indices: 0,
         max_files_per_repo: 5000,
         embedding_generation_batch_size: 100,
+        prompt_suggestion_allowance: None,
     }
 }
 

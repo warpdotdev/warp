@@ -168,6 +168,9 @@ fn create_finished_event_from_conversation(conversation: &AIConversation) -> Res
             context_window_usage: conversation.context_window_usage(),
             total_input_tokens: 0,
             credits_spent: conversation.inference_credits_spent(),
+            // Deprecated in favor of `total_charges`; migrating this
+            // consumer is tracked separately.
+            #[allow(deprecated)]
             platform_credits_spent: conversation.platform_credits_spent(),
             summarized: conversation.was_summarized(),
             #[allow(deprecated)]
@@ -197,6 +200,8 @@ fn create_finished_event_from_conversation(conversation: &AIConversation) -> Res
                 .iter()
                 .map(Into::into)
                 .collect(),
+            // Not tracked by the client-side conversation model.
+            total_charges: None,
         },
     );
 
@@ -209,7 +214,12 @@ fn create_finished_event_from_conversation(conversation: &AIConversation) -> Res
                 conversation_usage_metadata: usage_metadata,
                 token_usage: vec![],
                 should_refresh_model_config: false,
+                // Deprecated in favor of `request_charges`; migrating this
+                // consumer is tracked separately.
+                #[allow(deprecated)]
                 request_cost: None,
+                // Not tracked by the client-side conversation model.
+                request_charges: None,
             },
         )),
     }

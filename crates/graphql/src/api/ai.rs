@@ -46,6 +46,9 @@ pub struct AICreditAvailability {
 pub struct RequestLimitInfo {
     pub is_unlimited: bool,
     pub next_refresh_time: Time,
+    /// The user's lifetime prompt-suggestion credit allowance.
+    /// `None` when this tier has no such wallet (e.g. paid).
+    pub prompt_suggestion_allowance: Option<PromptSuggestionAllowance>,
     pub request_limit: i32,
     pub requests_used_since_last_refresh: i32,
     pub request_limit_refresh_duration: RequestLimitRefreshDuration,
@@ -56,6 +59,13 @@ pub struct RequestLimitInfo {
     pub max_codebase_indices: i32,
     pub max_files_per_repo: i32,
     pub embedding_generation_batch_size: i32,
+}
+
+/// The user's lifetime prompt-suggestion credit allowance.
+#[derive(cynic::QueryFragment, Clone, Copy, Debug)]
+pub struct PromptSuggestionAllowance {
+    pub limit: i32,
+    pub used: i32,
 }
 
 #[derive(cynic::Enum, Clone, Copy, Debug, PartialEq)]

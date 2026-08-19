@@ -8,7 +8,7 @@ use crate::ai::agent::api::convert_conversation::*;
 use crate::ai::agent::conversation::{
     AIAgentHarness, AIConversationId, ServerAIConversationMetadata,
 };
-use crate::ai::agent::{AIAgentInput, UserQueryMode};
+use crate::ai::agent::{AIAgentInput, PassiveSuggestionResultType, UserQueryMode};
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::cloud_object::{Revision, ServerMetadata, ServerPermissions};
 use crate::persistence::model::ConversationUsageMetadata;
@@ -2241,4 +2241,80 @@ fn test_handoff_rehydration_system_query_is_hidden() {
         !output.get().messages.is_empty(),
         "Agent output should still be rendered"
     );
+}
+
+/// The `suggestion_id` is the entire anti-fraud capability behind the
+/// lifetime prompt-suggestion allowance: it must survive a round trip
+/// through persisted history back into a restored `AIAgentInput`.
+#[test]
+fn passive_suggestion_result_prompt_restores_offer_id_from_history() {
+    let passive_result = api::message::PassiveSuggestionResult {
+        result: Some(api::PassiveSuggestionResultType {
+            trigger: Some(
+                api::passive_suggestion_result_type::Trigger::AgentResponseCompleted(
+                    api::passive_suggestion_result_type::AgentResponseCompleted {},
+                ),
+            ),
+            suggestion: Some(api::passive_suggestion_result_type::Suggestion::Prompt(
+                api::passive_suggestion_result_type::Prompt {
+                    prompt: "do the thing".to_string(),
+                },
+            )),
+            suggestion_id: "offer-123".to_string(),
+        }),
+        context: None,
+    };
+
+    let input = convert_passive_suggestion_result_to_input(&passive_result)
+        .expect("should convert to an input");
+
+    match input {
+        AIAgentInput::PassiveSuggestionResult { suggestion, .. } => match suggestion {
+            PassiveSuggestionResultType::Prompt {
+                prompt,
+                suggestion_id,
+            } => {
+                assert_eq!(prompt, "do the thing");
+                assert_eq!(suggestion_id, Some("offer-123".to_string()));
+            }
+            other => panic!("Expected prompt suggestion, got {other:?}"),
+        },
+        other => panic!("Expected PassiveSuggestionResult input, got {other:?}"),
+    }
+}
+
+/// A chip with no live offer (legacy/static chip, or an old server) must not
+/// invent an id: an empty wire `suggestion_id` restores to `None`, not
+/// `Some("")`.
+#[test]
+fn passive_suggestion_result_prompt_with_absent_offer_id_restores_to_none() {
+    let passive_result = api::message::PassiveSuggestionResult {
+        result: Some(api::PassiveSuggestionResultType {
+            trigger: Some(
+                api::passive_suggestion_result_type::Trigger::AgentResponseCompleted(
+                    api::passive_suggestion_result_type::AgentResponseCompleted {},
+                ),
+            ),
+            suggestion: Some(api::passive_suggestion_result_type::Suggestion::Prompt(
+                api::passive_suggestion_result_type::Prompt {
+                    prompt: "static suggestion".to_string(),
+                },
+            )),
+            suggestion_id: String::new(),
+        }),
+        context: None,
+    };
+
+    let input = convert_passive_suggestion_result_to_input(&passive_result)
+        .expect("should convert to an input");
+
+    match input {
+        AIAgentInput::PassiveSuggestionResult { suggestion, .. } => match suggestion {
+            PassiveSuggestionResultType::Prompt { suggestion_id, .. } => {
+                assert_eq!(suggestion_id, None);
+            }
+            other => panic!("Expected prompt suggestion, got {other:?}"),
+        },
+        other => panic!("Expected PassiveSuggestionResult input, got {other:?}"),
+    }
 }

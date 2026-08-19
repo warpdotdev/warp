@@ -299,7 +299,11 @@ fn mock_response_stream_updates_history_through_controller() {
                             conversation_usage_metadata: None,
                             token_usage: vec![],
                             should_refresh_model_config: false,
+                            // Deprecated in favor of `request_charges`; unrelated to
+                            // this test's assertions.
+                            #[allow(deprecated)]
                             request_cost: None,
+                            request_charges: None,
                         },
                     )),
                 },

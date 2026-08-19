@@ -40,6 +40,7 @@ use crate::ai::cloud_environments::{
     AmbientAgentEnvironment, CloudAmbientAgentEnvironment, CloudAmbientAgentEnvironmentModel,
 };
 use crate::ai::llms::LLMId;
+use crate::ai::{PromptSuggestionAllowance, RequestLimitInfo};
 use crate::auth::user::TEST_USER_UID;
 use crate::cloud_object::model::persistence::CloudModel;
 use crate::cloud_object::{CloudObjectMetadata, CloudObjectPermissions};
@@ -8400,6 +8401,7 @@ fn ctrl_c_does_not_accept_prompt_suggestion_banner() {
                     coding_query_context: None,
                     static_prompt_suggestion_name: None,
                     should_start_new_conversation: false,
+                    offer_id: None,
                 }),
                 block_id.clone(),
                 "ls".to_owned(),
@@ -8420,6 +8422,147 @@ fn ctrl_c_does_not_accept_prompt_suggestion_banner() {
                 view.inline_banners_state
                     .prompt_suggestions_banner
                     .is_some()
+            );
+        });
+    })
+}
+
+/// Sets the request usage model's interactive limit to 0 (no interactive AI
+/// remaining) and, when `Some`, a lifetime prompt-suggestion allowance
+/// with the given limit/used.
+fn set_request_usage_for_suggestion_allowance_test(
+    app: &mut App,
+    prompt_suggestion_allowance: Option<(usize, usize)>,
+) {
+    AIRequestUsageModel::handle(app).update(app, |model, ctx| {
+        model.update_request_limit_info(
+            RequestLimitInfo {
+                prompt_suggestion_allowance: prompt_suggestion_allowance
+                    .map(|(limit, used)| PromptSuggestionAllowance { limit, used }),
+                ..RequestLimitInfo::new_for_test(0, 0)
+            },
+            ctx,
+        );
+    });
+}
+
+/// `resolve_prompt_suggestion` must accept a chip on the lifetime
+/// prompt-suggestion allowance even while the interactive wallet
+/// (`has_any_ai_remaining`) is exhausted. This is the click gate described in
+/// PRODUCT.md "Exhaustion and UI state" #4.
+#[test]
+fn resolve_prompt_suggestion_accepts_via_suggestion_allowance_when_interactive_exhausted() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+
+        // No interactive credits, but 200 of a 300 lifetime suggestion
+        // allowance remain.
+        set_request_usage_for_suggestion_allowance_test(&mut app, Some((300, 100)));
+        assert!(
+            !app.read(|ctx| AIRequestUsageModel::as_ref(ctx).has_any_ai_remaining(ctx)),
+            "interactive wallet should be exhausted for this test"
+        );
+
+        terminal.update(&mut app, |view, ctx| {
+            view.on_maa_prompt_suggestion_generated(
+                "Do something",
+                &None,
+                0,
+                None,
+                None,
+                None,
+                Some("offer-1".to_owned()),
+                ctx,
+            );
+
+            let accepted = view.resolve_prompt_suggestion(
+                PromptSuggestionResolution::Accept {
+                    interaction_source: InteractionSource::Button,
+                },
+                ctx,
+            );
+            assert!(
+                accepted,
+                "a chip must be acceptable while remaining > 0 even with no interactive credits"
+            );
+        });
+    })
+}
+
+/// Regression guard: when this tier has no prompt-suggestion allowance at
+/// all (`None`, e.g. paid or an older server), `resolve_prompt_suggestion`
+/// must fall back to exactly its pre-feature behavior and stay gated on the
+/// interactive wallet.
+#[test]
+fn resolve_prompt_suggestion_falls_back_to_interactive_wallet_when_no_suggestion_allowance() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+
+        // No interactive credits and no suggestion wallet at all.
+        set_request_usage_for_suggestion_allowance_test(&mut app, None);
+
+        terminal.update(&mut app, |view, ctx| {
+            view.on_maa_prompt_suggestion_generated(
+                "Do something",
+                &None,
+                0,
+                None,
+                None,
+                None,
+                Some("offer-1".to_owned()),
+                ctx,
+            );
+
+            let accepted = view.resolve_prompt_suggestion(
+                PromptSuggestionResolution::Accept {
+                    interaction_source: InteractionSource::Button,
+                },
+                ctx,
+            );
+            assert!(
+                !accepted,
+                "with no suggestion wallet, accept must stay gated on interactive credits"
+            );
+        });
+    })
+}
+
+/// Chip visibility (the banner existing at all) must not depend on
+/// remaining suggestion credits -- a chip is still shown at remaining 0.
+#[test]
+fn prompt_suggestion_banner_remains_present_when_suggestion_allowance_exhausted() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+
+        // Allowance fully exhausted (remaining == 0).
+        set_request_usage_for_suggestion_allowance_test(&mut app, Some((300, 300)));
+        assert_eq!(
+            app.read(|ctx| AIRequestUsageModel::as_ref(ctx).suggestion_remaining()),
+            Some(0)
+        );
+
+        terminal.update(&mut app, |view, ctx| {
+            view.on_maa_prompt_suggestion_generated(
+                "Do something",
+                &None,
+                0,
+                None,
+                None,
+                None,
+                Some("offer-1".to_owned()),
+                ctx,
+            );
+        });
+
+        terminal.read(&app, |view, _ctx| {
+            assert!(
+                view.inline_banners_state
+                    .prompt_suggestions_banner
+                    .is_some(),
+                "the chip must remain visible even once the suggestion allowance is exhausted"
             );
         });
     })

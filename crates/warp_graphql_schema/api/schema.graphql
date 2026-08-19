@@ -2717,6 +2717,12 @@ enum PrincipalType {
   USER
 }
 
+"""The user's lifetime prompt-suggestion credit allowance."""
+type PromptSuggestionAllowance {
+  limit: Int!
+  used: Int!
+}
+
 input ProvideNegativeFeedbackResponseForAiConversationInput {
   conversationId: ID!
   requestIds: [ID!]!
@@ -2886,6 +2892,12 @@ type RequestLimitInfo {
   maxCodebaseIndices: Int!
   maxFilesPerRepo: Int!
   nextRefreshTime: Time!
+
+  """
+  The user's lifetime prompt-suggestion credit allowance. Null
+  when this tier has no such wallet (e.g. paid); remaining = limit - used.
+  """
+  promptSuggestionAllowance: PromptSuggestionAllowance
   requestLimit: Int!
   requestLimitPooling: PoolingType! @deprecated(reason: "Only user pooling is available")
   requestLimitRefreshDuration: RequestLimitRefreshDuration!

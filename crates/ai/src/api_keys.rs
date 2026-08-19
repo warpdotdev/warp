@@ -611,6 +611,9 @@ impl ApiKeyManager {
                             |m| api::request::settings::custom_model_providers::CustomModel {
                                 slug: m.name.clone(),
                                 config_key: m.config_key.clone(),
+                                // Not yet configurable per custom model on the
+                                // client; empty preserves the provider default.
+                                reasoning_effort: String::new(),
                             },
                         )
                         .collect(),

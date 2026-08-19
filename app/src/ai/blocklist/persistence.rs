@@ -75,7 +75,7 @@ impl TryFrom<&AIAgentInput> for PersistedAIInputType {
                 referenced_attachments: Default::default(),
             }),
             AIAgentInput::PassiveSuggestionResult {
-                suggestion: PassiveSuggestionResultType::Prompt { prompt },
+                suggestion: PassiveSuggestionResultType::Prompt { prompt, .. },
                 context,
                 ..
             } => Ok(Self::Query {

@@ -74,6 +74,25 @@ pub enum RequestLimitRefreshDuration {
     EveryTwoWeeks,
 }
 
+/// The user's lifetime prompt-suggestion credit allowance. This is
+/// a separate wallet from the interactive `RequestLimit`/bonus/PAYG/overage
+/// sources: it funds only accepting a prompt-suggestion chip (and the
+/// tool-call-only continuation of that accept), never typed Agent Mode.
+/// `None` means this tier has no such wallet (e.g. paid); chips behave as
+/// they did before this feature.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PromptSuggestionAllowance {
+    pub limit: usize,
+    pub used: usize,
+}
+
+impl PromptSuggestionAllowance {
+    /// Remaining lifetime prompt-suggestion credits.
+    pub fn remaining(&self) -> usize {
+        self.limit.saturating_sub(self.used)
+    }
+}
+
 /// The current rate limit info for the user.
 #[derive(Copy, Clone, Debug, Serialize, Deserialize)]
 pub struct RequestLimitInfo {
@@ -95,6 +114,10 @@ pub struct RequestLimitInfo {
     pub max_files_per_repo: usize,
     #[serde(default)]
     pub embedding_generation_batch_size: usize,
+    /// `None` when cached data predates this field or this tier has no
+    /// prompt-suggestion wallet.
+    #[serde(default)]
+    pub prompt_suggestion_allowance: Option<PromptSuggestionAllowance>,
 }
 
 fn default_voice_requests_limit() -> usize {
@@ -117,6 +140,7 @@ impl Default for RequestLimitInfo {
             max_codebase_indices: 3,
             max_files_per_repo: 5000,
             embedding_generation_batch_size: 100,
+            prompt_suggestion_allowance: None,
         }
     }
 }
@@ -160,6 +184,7 @@ impl RequestLimitInfo {
             max_codebase_indices: 40,
             max_files_per_repo: 10000,
             embedding_generation_batch_size: 100,
+            prompt_suggestion_allowance: None,
         }
     }
 }
@@ -503,6 +528,25 @@ impl AIRequestUsageModel {
             return Self::server_availability_permits_ai(availability, ctx);
         }
         self.has_any_ai_remaining_before_server_decision(ctx)
+    }
+
+    /// Remaining lifetime prompt-suggestion credits, or `None` if this tier
+    /// has no such wallet. This is a separate wallet from interactive AI
+    /// credits: it drives chip click/hover only, never
+    /// [`Self::has_any_ai_remaining`] or the composer's out-of-credits alert.
+    pub fn suggestion_remaining(&self) -> Option<usize> {
+        self.request_limit_info
+            .prompt_suggestion_allowance
+            .map(|allowance| allowance.remaining())
+    }
+
+    /// Whether the user can accept a prompt-suggestion chip right now, based
+    /// solely on the suggestion wallet. Intentionally independent of
+    /// [`Self::has_any_ai_remaining`], which continues to gate typed Agent
+    /// Mode input.
+    pub fn can_accept_prompt_suggestion(&self) -> bool {
+        self.suggestion_remaining()
+            .is_some_and(|remaining| remaining > 0)
     }
 
     /// Trusts `available`; only `OutOfCredits` may be refined by local BYO credentials.

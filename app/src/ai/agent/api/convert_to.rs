@@ -382,31 +382,40 @@ fn convert_input_to_user_input(
                 ),
                 _ => None,
             };
-            let api_suggestion = match suggestion {
-                PassiveSuggestionResultType::Prompt { prompt } => Some(
-                    api::passive_suggestion_result_type::Suggestion::Prompt(
+            let (api_suggestion, suggestion_id) = match suggestion {
+                PassiveSuggestionResultType::Prompt {
+                    prompt,
+                    suggestion_id,
+                } => (
+                    Some(api::passive_suggestion_result_type::Suggestion::Prompt(
                         api::passive_suggestion_result_type::Prompt { prompt },
-                    ),
+                    )),
+                    suggestion_id,
                 ),
                 PassiveSuggestionResultType::CodeDiff {
                     diffs,
                     summary,
                     accepted,
-                } => Some(
-                    api::passive_suggestion_result_type::Suggestion::CodeDiff(
-                        api::passive_suggestion_result_type::CodeDiff {
-                            diffs: diffs
-                                .into_iter()
-                                .map(|d| api::passive_suggestion_result_type::code_diff::Diff {
-                                    file_path: d.file_path,
-                                    search: d.search,
-                                    replace: d.replace,
-                                })
-                                .collect(),
-                            summary,
-                            accepted,
-                        },
+                } => (
+                    Some(
+                        api::passive_suggestion_result_type::Suggestion::CodeDiff(
+                            api::passive_suggestion_result_type::CodeDiff {
+                                diffs: diffs
+                                    .into_iter()
+                                    .map(|d| api::passive_suggestion_result_type::code_diff::Diff {
+                                        file_path: d.file_path,
+                                        search: d.search,
+                                        replace: d.replace,
+                                    })
+                                    .collect(),
+                                summary,
+                                accepted,
+                            },
+                        ),
                     ),
+                    // Code-diff accepts are not eligible for the
+                    // prompt-suggestion allowance; no offer id.
+                    None,
                 ),
             };
             Ok(
@@ -415,6 +424,7 @@ fn convert_input_to_user_input(
                         result: Some(api::PassiveSuggestionResultType {
                             trigger: api_trigger,
                             suggestion: api_suggestion,
+                            suggestion_id: suggestion_id.unwrap_or_default(),
                         }),
                     },
                 ),

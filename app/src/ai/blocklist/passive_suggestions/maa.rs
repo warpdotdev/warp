@@ -58,6 +58,10 @@ pub enum PassiveSuggestionsEvent {
         /// The server-assigned request token from the passive suggestion
         /// request. Used to join client-side telemetry with server-side logs.
         server_request_token: Option<String>,
+        /// The server-minted, single-use prompt-suggestion offer id
+        /// carried on `PromptChip.suggestion_id`. `None` for chips from a
+        /// server that doesn't mint offers yet.
+        offer_id: Option<String>,
     },
     NewCodeDiffSuggestion {
         diffs: Vec<FileDiff>,
@@ -231,6 +235,7 @@ impl PassiveSuggestionsModel {
                         prompt,
                         label,
                         is_trigger_irrelevant,
+                        offer_id,
                     } => {
                         if prompt.is_empty() {
                             return;
@@ -248,6 +253,7 @@ impl PassiveSuggestionsModel {
                             trigger,
                             conversation_id: continuable_conversation_id,
                             server_request_token,
+                            offer_id,
                         });
                     }
                     ExtractedSuggestion::CodeDiff { apply_file_diffs } => {
@@ -603,6 +609,10 @@ enum ExtractedSuggestion {
         prompt: String,
         label: Option<String>,
         is_trigger_irrelevant: bool,
+        /// The server-minted, single-use prompt-suggestion offer id
+        /// carried on `PromptChip.suggestion_id`. `None` when the
+        /// server didn't mint one (old server, or generation skipped it).
+        offer_id: Option<String>,
     },
     CodeDiff {
         apply_file_diffs: warp_multi_agent_api::message::tool_call::ApplyFileDiffs,
@@ -672,11 +682,17 @@ async fn extract_suggestion_from_stream(
                     } else {
                         Some(chip.label.clone())
                     };
+                    let offer_id = if chip.suggestion_id.is_empty() {
+                        None
+                    } else {
+                        Some(chip.suggestion_id.clone())
+                    };
                     return Some(StreamExtractionResult {
                         suggestion: ExtractedSuggestion::Prompt {
                             prompt: chip.prompt.clone(),
                             label,
                             is_trigger_irrelevant: suggest_prompt.is_trigger_irrelevant,
+                            offer_id,
                         },
                         server_request_token,
                     });

@@ -162,6 +162,7 @@ fn test_request_limit_info() {
                 max_codebase_indices: 3,
                 max_files_per_repo: 5000,
                 embedding_generation_batch_size: 100,
+                prompt_suggestion_allowance: None,
             };
             assert_eq!(200, request_usage_model.request_limit());
             assert_eq!(39, request_usage_model.requests_used());
@@ -188,6 +189,7 @@ fn test_request_limit_info_with_limit() {
                 max_codebase_indices: 3,
                 max_files_per_repo: 5000,
                 embedding_generation_batch_size: 100,
+                prompt_suggestion_allowance: None,
             };
             assert_eq!(999999999, request_usage_model.request_limit());
             assert_eq!(39, request_usage_model.requests_used());
@@ -214,6 +216,7 @@ fn test_request_limit_info_past_refresh_time() {
                 max_codebase_indices: 3,
                 max_files_per_repo: 5000,
                 embedding_generation_batch_size: 100,
+                prompt_suggestion_allowance: None,
             };
             assert_eq!(200, request_usage_model.request_limit());
             assert_eq!(0, request_usage_model.requests_used());
@@ -240,6 +243,7 @@ fn test_request_limit_info_is_unlimited_true() {
                 max_codebase_indices: 3,
                 max_files_per_repo: 5000,
                 embedding_generation_batch_size: 100,
+                prompt_suggestion_allowance: None,
             };
             assert_eq!(999999999, request_usage_model.request_limit());
             assert_eq!(39, request_usage_model.requests_used());
@@ -1561,6 +1565,47 @@ fn test_availability_refresh_skipped_when_logged_out() {
 
         request_usage_model.read(&app, |model, _| {
             assert_eq!(model.server_availability(), None);
+        });
+    });
+}
+
+#[test]
+fn test_suggestion_remaining_is_none_when_tier_has_no_allowance() {
+    App::test((), |mut app| async move {
+        let request_usage_model = add_request_usage_model(&mut app);
+
+        request_usage_model.update(&mut app, |model, _ctx| {
+            model.request_limit_info.prompt_suggestion_allowance = None;
+            assert_eq!(model.suggestion_remaining(), None);
+            assert!(!model.can_accept_prompt_suggestion());
+        });
+    });
+}
+
+#[test]
+fn test_suggestion_remaining_and_can_accept_reflect_the_lifetime_allowance() {
+    App::test((), |mut app| async move {
+        let request_usage_model = add_request_usage_model(&mut app);
+
+        request_usage_model.update(&mut app, |model, _ctx| {
+            model.request_limit_info.prompt_suggestion_allowance =
+                Some(PromptSuggestionAllowance {
+                    limit: 300,
+                    used: 100,
+                });
+            assert_eq!(model.suggestion_remaining(), Some(200));
+            assert!(model.can_accept_prompt_suggestion());
+
+            model.request_limit_info.prompt_suggestion_allowance =
+                Some(PromptSuggestionAllowance {
+                    limit: 300,
+                    used: 300,
+                });
+            assert_eq!(model.suggestion_remaining(), Some(0));
+            assert!(
+                !model.can_accept_prompt_suggestion(),
+                "an exhausted allowance must not permit accepting a chip"
+            );
         });
     });
 }

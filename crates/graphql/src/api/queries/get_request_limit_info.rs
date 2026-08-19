@@ -36,6 +36,10 @@ query GetRequestLimitInfo($requestContext: RequestContext!) {
           requestLimit
           nextRefreshTime
           requestLimitRefreshDuration
+          promptSuggestionAllowance {
+            limit
+            used
+          }
         }
         bonusGrants {
           createdAt

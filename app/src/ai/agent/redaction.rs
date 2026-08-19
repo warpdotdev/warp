@@ -295,7 +295,7 @@ pub(crate) fn redact_inputs(inputs: &mut [AIAgentInput]) {
             } => {
                 redact_context(Arc::make_mut(context));
                 match suggestion {
-                    PassiveSuggestionResultType::Prompt { prompt } => redact_secrets(prompt),
+                    PassiveSuggestionResultType::Prompt { prompt, .. } => redact_secrets(prompt),
                     PassiveSuggestionResultType::CodeDiff { diffs, .. } => {
                         for diff in diffs {
                             redact_secrets(&mut diff.file_path);
