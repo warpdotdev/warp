@@ -164,6 +164,57 @@ fn environment_setup_failed_is_failed() {
 }
 
 #[test]
+fn environment_setup_failed_still_recommends_checking_urls_and_setup_commands() {
+    // A setup-command failure genuinely warrants this guidance, unlike a
+    // clone failure (see below) -- keep it for the classes where it's
+    // actually right.
+    let (state, update) = classify_driver_error(&AgentDriverError::EnvironmentSetupFailed(
+        "Failed to run setup command: ./setup.sh".into(),
+    ));
+    assert_eq!(state, AgentTaskState::Failed);
+    assert_eq!(
+        update.error_code,
+        Some(PlatformErrorCode::EnvironmentSetupFailed)
+    );
+    assert!(
+        update
+            .message
+            .contains("Check your repository URLs and setup commands"),
+        "{}",
+        update.message
+    );
+}
+
+#[test]
+fn environment_clone_failed_names_repo_without_url_or_setup_command_guidance() {
+    // A clone/checkout failure only reaches this variant after retries were
+    // already exhausted, so it must not assert a URL or setup-command
+    // cause -- that diagnosis isn't supported by a single transient
+    // transport failure (e.g. a reset HTTP/2 stream).
+    let (state, update) = classify_driver_error(&AgentDriverError::EnvironmentCloneFailed(
+        "Failed to clone warpdotdev/warp-server".into(),
+    ));
+    assert_eq!(state, AgentTaskState::Failed);
+    assert_eq!(
+        update.error_code,
+        Some(PlatformErrorCode::EnvironmentSetupFailed)
+    );
+    assert!(
+        update.message.contains("warpdotdev/warp-server"),
+        "{}",
+        update.message
+    );
+    assert!(
+        !update
+            .message
+            .contains("Check your repository URLs and setup commands"),
+        "a clone failure must not assert a URL/setup-command cause after \
+         retries were already exhausted: {}",
+        update.message
+    );
+}
+
+#[test]
 fn setup_command_exited_shell_is_failed_with_env_setup_and_names_command() {
     let (state, update) = classify_driver_error(&AgentDriverError::SetupCommandExitedShell {
         command: "./setup.sh".into(),

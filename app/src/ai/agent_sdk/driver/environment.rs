@@ -14,7 +14,7 @@ use warp_cli::agent::Harness;
 use warp_completer::completer::CommandExitStatus;
 use warp_core::command::ExitCode;
 use warp_core::{safe_info, safe_warn};
-use warpui::r#async::FutureExt;
+use warpui::r#async::{FutureExt, Timer};
 use warpui::{ModelContext, ModelSpawner, SingletonEntity};
 
 use super::AgentDriverError;
@@ -23,10 +23,28 @@ use super::cache_setup;
 use super::terminal::TerminalDriver;
 use crate::ai::agent_sdk::setup_observability::{SetupClientEventReporter, SetupStep};
 use crate::ai::cloud_environments::{CodeForge, SourceRepo};
+use crate::terminal::model::BlockId;
 use crate::terminal::model::session::command_executor::shell_escape_single_quotes;
 use crate::terminal::shell::ShellType;
 
 const CODEBASE_INDEX_SYNC_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// Maximum number of attempts for a clone or pinned-ref fetch+checkout,
+/// including the first. Kept small so a genuinely bad URL or a missing
+/// permission still fails within a few seconds instead of retrying for
+/// minutes — this is why retries are unconditional rather than pattern-
+/// matching git's error output.
+const CLONE_MAX_ATTEMPTS: u32 = 3;
+/// Base backoff between retries; the actual sleep grows linearly with the
+/// attempt number (`attempt * base`) to spread out repeated transient
+/// failures (e.g. `RPC failed`, `HTTP/2 ... was not closed cleanly`)
+/// without adding much latency to the common, successful case.
+const CLONE_RETRY_BASE_DELAY: Duration = Duration::from_secs(2);
+/// Marker line the parallel clone script prints, in addition to its
+/// existing per-repo logs, listing exactly which repos failed so the
+/// reported error doesn't blame every repo in the batch for one repo's
+/// transport hiccup.
+const CLONE_FAILURE_MARKER: &str = "WARP_CLONE_FAILED:";
 
 #[derive(Debug, thiserror::Error)]
 pub enum PrepareEnvironmentError {
@@ -375,38 +393,73 @@ fn record_codebase_indexing(
 }
 
 fn build_parallel_clone_command(repos: &[SourceRepo], shell_type: ShellType) -> String {
-    let mut script = String::from(
+    let mut script = format!(
         r#"set +e
 failed=0
-pids=""
-tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/warp-clone-logs.XXXXXX")"
-cleanup_clone_logs() {
+failed_repos=""
+tmp_dir="$(mktemp -d "${{TMPDIR:-/tmp}}/warp-clone-logs.XXXXXX")"
+cleanup_clone_logs() {{
   rm -rf "$tmp_dir"
-}
+}}
 trap cleanup_clone_logs EXIT
-clone_repo() {
+CLONE_MAX_ATTEMPTS={max_attempts}
+CLONE_RETRY_BASE_DELAY_SECS={base_delay_secs}
+clone_repo() {{
   repo_name="$1"
   repo_url="$2"
   target="$3"
   checkout_ref="$4"
   if [ -d "$target" ]; then
     printf '%s\n' "Repository directory $target already exists, skipping clone..."
+  elif [ -e "$target" ] || [ -L "$target" ]; then
+    # Something other than a directory (a file, or a symlink -- dangling or
+    # not) is already at $target. Never clean this up: it isn't ours, and
+    # "clean up between retries" must only ever remove a partial clone that
+    # *we* created, never a pre-existing path the retry loop happens to fail
+    # against on its first attempt.
+    printf '%s\n' "$target already exists and is not a directory; refusing to clone $repo_name over it"
+    return 1
   else
     printf '%s\n' "Cloning repository $repo_name..."
-    git clone --filter=tree:0 "$repo_url" "$target" || return 1
+    attempt=1
+    while true; do
+      git clone --filter=tree:0 "$repo_url" "$target" && break
+      if [ "$attempt" -ge "$CLONE_MAX_ATTEMPTS" ]; then
+        return 1
+      fi
+      # Safe to remove unconditionally: the branch above already confirmed
+      # nothing existed at $target before this function's first attempt, so
+      # anything here now is debris from our own failed attempt.
+      rm -rf "$target"
+      printf '%s\n' "Clone of $repo_name failed (attempt $attempt/$CLONE_MAX_ATTEMPTS); retrying..."
+      sleep $((attempt * CLONE_RETRY_BASE_DELAY_SECS))
+      attempt=$((attempt + 1))
+    done
   fi
   # Pin after clone or reuse: a reused directory may still be on an old ref.
   if [ -n "$checkout_ref" ]; then
     printf '%s\n' "Checking out $checkout_ref in $repo_name..."
-    # Fetch leaves the object in FETCH_HEAD; check that out detached so we
-    # never prefer a stale local branch with the same name.
-    git -C "$target" fetch --filter=tree:0 origin "$checkout_ref" && git -C "$target" checkout --detach FETCH_HEAD
+    attempt=1
+    while true; do
+      # Fetch leaves the object in FETCH_HEAD; check that out detached so we
+      # never prefer a stale local branch with the same name.
+      git -C "$target" fetch --filter=tree:0 origin "$checkout_ref" && git -C "$target" checkout --detach FETCH_HEAD && break
+      if [ "$attempt" -ge "$CLONE_MAX_ATTEMPTS" ]; then
+        return 1
+      fi
+      printf '%s\n' "Checkout of $checkout_ref in $repo_name failed (attempt $attempt/$CLONE_MAX_ATTEMPTS); retrying..."
+      sleep $((attempt * CLONE_RETRY_BASE_DELAY_SECS))
+      attempt=$((attempt + 1))
+    done
   fi
-}
+}}
 "#,
+        max_attempts = CLONE_MAX_ATTEMPTS,
+        base_delay_secs = CLONE_RETRY_BASE_DELAY.as_secs(),
     );
 
     let mut log_outputs = String::new();
+    let mut wait_checks = String::new();
     for (index, repo) in repos.iter().enumerate() {
         let repo_name = format!("{}/{}", repo.owner, repo.repo);
         let repo_url = repo.https_clone_url();
@@ -418,11 +471,23 @@ clone_repo() {
             ShellType::Bash,
         );
         let log_var = format!("log_file_{index}");
+        let name_var = format!("repo_name_{index}");
+        let pid_var = format!("pid_{index}");
         script.push_str(&format!(
-            "{log_var}=\"$tmp_dir/repo-{index}.log\"\n\
-             clone_repo '{escaped_repo_name}' '{escaped_repo_url}' '{escaped_target}' '{escaped_checkout_ref}' >\"${log_var}\" 2>&1 &\n"
+            "{name_var}='{escaped_repo_name}'\n\
+             {log_var}=\"$tmp_dir/repo-{index}.log\"\n\
+             clone_repo \"${name_var}\" '{escaped_repo_url}' '{escaped_target}' '{escaped_checkout_ref}' >\"${log_var}\" 2>&1 &\n\
+             {pid_var}=$!\n"
         ));
-        script.push_str("pids=\"$pids $!\"\n");
+        // Generated per index (rather than a generic `for pid in $pids`) so
+        // each `wait` can be matched back to the repo it belongs to, letting
+        // the reported failure name only the repos that actually failed.
+        wait_checks.push_str(&format!(
+            "if ! wait \"${pid_var}\"; then\n\
+             \tfailed=1\n\
+             \tfailed_repos=\"$failed_repos ${name_var}\"\n\
+             fi\n"
+        ));
         log_outputs.push_str(&format!(
             "printf '%s\\n' '===== {escaped_repo_name} ====='\n\
              if [ -s \"${log_var}\" ]; then\n\
@@ -433,12 +498,11 @@ clone_repo() {
         ));
     }
 
+    script.push_str(&wait_checks);
     script.push_str(
-        r#"for pid in $pids; do
-  if ! wait "$pid"; then
-    failed=1
-  fi
-done
+        r#"if [ -n "$failed_repos" ]; then
+  printf '%s\n' "WARP_CLONE_FAILED:$failed_repos"
+fi
 "#,
     );
     script.push_str(&log_outputs);
@@ -450,6 +514,32 @@ exit "$failed"
 
     let escaped_script = shell_escape_single_quotes(&script, shell_type);
     format!("sh -c '{escaped_script}'")
+}
+
+/// Extract the repo names listed on a [`CLONE_FAILURE_MARKER`] line, if
+/// present, from the parallel clone script's captured output.
+fn parse_failed_repo_names(output: &str) -> Option<Vec<String>> {
+    let marker_line = output
+        .lines()
+        .rev()
+        .find(|line| line.starts_with(CLONE_FAILURE_MARKER))?;
+    let names: Vec<String> = marker_line[CLONE_FAILURE_MARKER.len()..]
+        .split_whitespace()
+        .map(str::to_owned)
+        .collect();
+    (!names.is_empty()).then_some(names)
+}
+
+/// Build the `CloneRepo` error for a failed parallel clone, naming only the
+/// repos the script actually reported as failed. Falls back to blaming the
+/// whole batch only when the marker line is missing or empty (e.g. the
+/// shell died before printing it), so the error never claims zero repos
+/// failed.
+fn clone_repo_error(repo_names: &[String], output: &str) -> PrepareEnvironmentError {
+    let failed = parse_failed_repo_names(output).unwrap_or_else(|| repo_names.to_vec());
+    PrepareEnvironmentError::CloneRepo {
+        repo_name: failed.join(", "),
+    }
 }
 
 /// Clone all source repositories to `{working_dir}/{repo.repo}` if they do not already exist.
@@ -482,11 +572,12 @@ pub(super) async fn clone_repos(
             );
 
             let command = build_parallel_clone_command(repos, shell_type);
-            let exit_code = execute_command(command, spawner).await?;
+            let (exit_code, block_id) = execute_command_with_block_id(command, spawner).await?;
             if exit_code != 0.into() {
-                return Err(PrepareEnvironmentError::CloneRepo {
-                    repo_name: repo_names.join(", "),
-                });
+                let output = fetch_block_output(&block_id, spawner)
+                    .await
+                    .unwrap_or_default();
+                return Err(clone_repo_error(&repo_names, &output));
             }
 
             safe_info!(
@@ -494,6 +585,35 @@ pub(super) async fn clone_repos(
                 full: ("Successfully cloned repositories: {}", repo_names.join(", "))
             );
             Ok(())
+        }
+    }
+}
+
+/// How the single-repo clone path should treat whatever (if anything) is
+/// already present at its clone target, based on probing the terminal
+/// session for it.
+#[derive(Debug, PartialEq, Eq)]
+enum CloneTargetState {
+    /// Nothing exists there yet: safe to clone into, and safe to remove
+    /// between retries if an attempt fails partway through, since anything
+    /// found there afterward must be debris from our own attempt.
+    Absent,
+    /// A directory already exists: reuse it and skip cloning entirely.
+    ExistingDirectory,
+    /// Something other than a directory already exists there (a regular
+    /// file, or a symlink, dangling or not): refuse to clone over it. This
+    /// must never be treated as a partial clone to clean up and retry into.
+    Blocked,
+}
+
+impl CloneTargetState {
+    fn classify(dir_exists: bool, path_exists: bool) -> Self {
+        if dir_exists {
+            CloneTargetState::ExistingDirectory
+        } else if path_exists {
+            CloneTargetState::Blocked
+        } else {
+            CloneTargetState::Absent
         }
     }
 }
@@ -528,32 +648,62 @@ pub(super) async fn clone_repo(
     // paths, and this goes through the silent executor so `test -d` is
     // not added to the user-visible blocklist. Pass the absolute path
     // explicitly so the probe doesn't rely on the session's CWD.
-    let dir_exists = terminal_directory_exists(&repo_dir.to_string_lossy(), spawner).await?;
-
-    if dir_exists {
-        safe_warn!(
-            safe: ("We already have a directory with the same repository name in the terminal working directory, skipping clone..."),
-            full: (
-            "We already have a directory with the name {} in the terminal working directory, skipping clone...",
-            repo.repo)
-        );
+    let repo_dir_str = repo_dir.to_string_lossy();
+    let dir_exists = terminal_directory_exists(&repo_dir_str, spawner).await?;
+    // Only probe for a non-directory path when there's no directory already,
+    // since that's the only case where the answer changes what we do.
+    let path_exists = if dir_exists {
+        false
     } else {
-        safe_info!(
-            safe: ("Cloning repository via terminal"),
-            full: ("Cloning repository via terminal: {repo_name}")
-        );
+        terminal_path_exists(&repo_dir_str, spawner).await?
+    };
 
-        let exit_code = execute_command(command, spawner).await?;
-        if exit_code != 0.into() {
+    match CloneTargetState::classify(dir_exists, path_exists) {
+        CloneTargetState::ExistingDirectory => {
+            safe_warn!(
+                safe: ("We already have a directory with the same repository name in the terminal working directory, skipping clone..."),
+                full: (
+                "We already have a directory with the name {} in the terminal working directory, skipping clone...",
+                repo.repo)
+            );
+        }
+        CloneTargetState::Blocked => {
+            // Something other than a directory (a file, or a symlink --
+            // dangling or not) already sits at the clone target. Refuse and
+            // bail rather than retrying: `execute_command_with_retry`'s
+            // cleanup must only ever remove a partial clone it created
+            // itself, never a pre-existing path the first attempt happens to
+            // fail against.
+            safe_warn!(
+                safe: ("Clone target already exists and is not a directory; refusing to clone over it"),
+                full: (
+                    "Clone target {} already exists and is not a directory; refusing to clone {repo_name} over it",
+                    repo_dir.display()
+                )
+            );
             return Err(PrepareEnvironmentError::CloneRepo {
                 repo_name: repo_name.clone(),
             });
         }
+        CloneTargetState::Absent => {
+            safe_info!(
+                safe: ("Cloning repository via terminal"),
+                full: ("Cloning repository via terminal: {repo_name}")
+            );
 
-        safe_info!(
-            safe: ("Successfully cloned repository"),
-            full: ("Successfully cloned: {repo_name}")
-        );
+            let exit_code =
+                execute_command_with_retry(command, Some((&repo_dir, shell_type)), spawner).await?;
+            if exit_code != 0.into() {
+                return Err(PrepareEnvironmentError::CloneRepo {
+                    repo_name: repo_name.clone(),
+                });
+            }
+
+            safe_info!(
+                safe: ("Successfully cloned repository"),
+                full: ("Successfully cloned: {repo_name}")
+            );
+        }
     }
 
     // Pin after clone or reuse when a ref was requested. A reused directory may
@@ -566,7 +716,7 @@ pub(super) async fn clone_repo(
             safe: ("Checking out pinned ref for repository"),
             full: ("Checking out {checkout_ref} for {repo_name}")
         );
-        let exit_code = execute_command(command, spawner).await?;
+        let exit_code = execute_command_with_retry(command, None, spawner).await?;
         checkout_result(&repo_name, checkout_ref, exit_code)?;
 
         safe_info!(
@@ -803,6 +953,102 @@ async fn execute_command(
         })
 }
 
+/// Like [`execute_command`], but also returns the command's block id so its
+/// output can be inspected afterward (e.g. to attribute a batch clone
+/// failure to the specific repos that failed).
+async fn execute_command_with_block_id(
+    command: String,
+    spawner: &ModelSpawner<TerminalDriver>,
+) -> Result<(ExitCode, BlockId), PrepareEnvironmentError> {
+    let command_handle = spawner
+        .spawn(move |terminal_driver, ctx| terminal_driver.execute_command(&command, ctx))
+        .await
+        .map_err(|_| PrepareEnvironmentError::InvalidRuntimeState)?
+        .map_err(|error| match error {
+            AgentDriverError::InvalidRuntimeState => PrepareEnvironmentError::InvalidRuntimeState,
+            source => PrepareEnvironmentError::TerminalDriver { source },
+        })?
+        .await
+        .map_err(|error| match error {
+            AgentDriverError::InvalidRuntimeState => PrepareEnvironmentError::InvalidRuntimeState,
+            source => PrepareEnvironmentError::TerminalDriver { source },
+        })?;
+    let block_id = command_handle.block_id().clone();
+    let exit_code = command_handle.await.map_err(|error| match error {
+        AgentDriverError::InvalidRuntimeState => PrepareEnvironmentError::InvalidRuntimeState,
+        source => PrepareEnvironmentError::TerminalDriver { source },
+    })?;
+    Ok((exit_code, block_id))
+}
+
+/// Fetch a command block's full visible plaintext output, if still available.
+async fn fetch_block_output(
+    block_id: &BlockId,
+    spawner: &ModelSpawner<TerminalDriver>,
+) -> Option<String> {
+    let block_id = block_id.clone();
+    spawner
+        .spawn(move |driver, ctx| driver.block_output_plaintext(&block_id, ctx))
+        .await
+        .ok()
+        .flatten()
+}
+
+/// Run `command` via the terminal session, retrying up to
+/// [`CLONE_MAX_ATTEMPTS`] times with linearly growing backoff when it exits
+/// non-zero. When `cleanup` is set, that directory is removed before each
+/// retry so a partially written clone doesn't block the next attempt.
+///
+/// Retries are unconditional rather than pattern-matching git's error
+/// output: a genuinely bad URL or a missing permission still fails within a
+/// few quick attempts, while a transient transport error (e.g. `RPC
+/// failed`, `HTTP/2 ... was not closed cleanly`) gets a chance to succeed on
+/// a later attempt.
+async fn execute_command_with_retry(
+    command: String,
+    cleanup: Option<(&Path, ShellType)>,
+    spawner: &ModelSpawner<TerminalDriver>,
+) -> Result<ExitCode, PrepareEnvironmentError> {
+    let mut exit_code = execute_command(command.clone(), spawner).await?;
+    for attempt in 1..CLONE_MAX_ATTEMPTS {
+        if exit_code == 0.into() {
+            break;
+        }
+        safe_warn!(
+            safe: ("Command failed; retrying"),
+            full: ("Command failed on attempt {attempt}/{CLONE_MAX_ATTEMPTS}, retrying: {command}")
+        );
+        if let Some((dir, shell_type)) = cleanup {
+            remove_directory(dir, shell_type, spawner).await?;
+        }
+        Timer::after(CLONE_RETRY_BASE_DELAY * attempt).await;
+        exit_code = execute_command(command.clone(), spawner).await?;
+    }
+    Ok(exit_code)
+}
+
+/// Remove `dir` via the terminal session's `rm -rf`, silently (no visible
+/// blocklist entry). Used to clear a partially written clone directory
+/// between retry attempts.
+async fn remove_directory(
+    dir: &Path,
+    shell_type: ShellType,
+    spawner: &ModelSpawner<TerminalDriver>,
+) -> Result<(), PrepareEnvironmentError> {
+    let escaped = shell_escape_single_quotes(&dir.to_string_lossy(), shell_type);
+    let command = format!("rm -rf '{escaped}'");
+    spawner
+        .spawn(move |driver, ctx| driver.execute_silent_command(command, ctx))
+        .await
+        .map_err(|_| PrepareEnvironmentError::InvalidRuntimeState)?
+        .await
+        .map(|_| ())
+        .map_err(|error| match error {
+            AgentDriverError::InvalidRuntimeState => PrepareEnvironmentError::InvalidRuntimeState,
+            source => PrepareEnvironmentError::TerminalDriver { source },
+        })
+}
+
 /// Change the current directory in the context of a terminal session (using `cd {dir}`).
 async fn cd_in_terminal(
     target: String,
@@ -894,6 +1140,40 @@ async fn terminal_directory_exists(
                 .unwrap_or(ShellType::Bash);
             let escaped = shell_escape_single_quotes(&path, shell_type);
             let command = format!("test -d '{escaped}'");
+            driver.execute_silent_command(command, ctx)
+        })
+        .await
+        .map_err(|_| PrepareEnvironmentError::InvalidRuntimeState)?
+        .await
+        .map_err(|error| match error {
+            AgentDriverError::InvalidRuntimeState => PrepareEnvironmentError::InvalidRuntimeState,
+            source => PrepareEnvironmentError::TerminalDriver { source },
+        })?;
+    Ok(output.status == CommandExitStatus::Success)
+}
+
+/// Returns whether anything at all exists at `path` from the perspective of
+/// the active terminal session -- a regular file, a directory, or a symlink,
+/// including a dangling one that [`terminal_directory_exists`]'s `-d` (and a
+/// plain `-e`, which follows symlinks) would both miss.
+///
+/// Used to distinguish "nothing here yet, safe to clone into and to clean up
+/// between retries" from "something we don't own is already here", so a
+/// clone retry's cleanup never deletes a pre-existing non-directory path.
+/// See the module-level `-d` / `-e` / `-L` combination in the generated
+/// parallel clone script for the same distinction made in shell.
+async fn terminal_path_exists(
+    path: &str,
+    spawner: &ModelSpawner<TerminalDriver>,
+) -> Result<bool, PrepareEnvironmentError> {
+    let path = path.to_owned();
+    let output = spawner
+        .spawn(move |driver, ctx| {
+            let shell_type = driver
+                .active_session_shell_type(ctx)
+                .unwrap_or(ShellType::Bash);
+            let escaped = shell_escape_single_quotes(&path, shell_type);
+            let command = format!("test -e '{escaped}' -o -L '{escaped}'");
             driver.execute_silent_command(command, ctx)
         })
         .await

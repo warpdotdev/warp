@@ -7,8 +7,9 @@ use tempfile::TempDir;
 use warp_core::command::ExitCode;
 
 use super::{
-    PrepareEnvironmentError, build_parallel_clone_command, checkout_command_for, checkout_result,
-    merge_repos_deduped, single_repo_name,
+    CloneTargetState, PrepareEnvironmentError, build_parallel_clone_command, checkout_command_for,
+    checkout_result, clone_repo_error, merge_repos_deduped, parse_failed_repo_names,
+    single_repo_name,
 };
 use crate::ai::cloud_environments::SourceRepo;
 use crate::terminal::shell::ShellType;
@@ -141,13 +142,188 @@ fn parallel_clone_command_runs_repos_in_background_and_waits() {
     assert!(command.contains("repo-1.log"));
     assert!(command.contains(">\"$log_file_0\" 2>&1 &"));
     assert!(command.contains(">\"$log_file_1\" 2>&1 &"));
-    assert!(command.contains("pids=\"$pids $!\""));
-    assert!(command.contains("wait \"$pid\""));
+    assert!(command.contains("pid_0=$!"));
+    assert!(command.contains("pid_1=$!"));
+    // Waits are generated per index (not a generic `for pid in $pids`) so a
+    // failure can be attributed back to the specific repo that failed.
+    assert!(command.contains("wait \"$pid_0\""));
+    assert!(command.contains("wait \"$pid_1\""));
     assert!(command.contains("===== warpdotdev/warp ====="));
     assert!(command.contains("cat \"$log_file_0\""));
     assert!(command.contains("===== platform/backend/api ====="));
     assert!(command.contains("cat \"$log_file_1\""));
     assert!(command.contains("exit \"$failed\""));
+}
+
+#[test]
+fn clone_target_state_classifies_directory_file_and_absent() {
+    assert_eq!(
+        CloneTargetState::classify(true, true),
+        CloneTargetState::ExistingDirectory
+    );
+    assert_eq!(
+        CloneTargetState::classify(true, false),
+        CloneTargetState::ExistingDirectory
+    );
+    assert_eq!(
+        CloneTargetState::classify(false, true),
+        CloneTargetState::Blocked
+    );
+    assert_eq!(
+        CloneTargetState::classify(false, false),
+        CloneTargetState::Absent
+    );
+}
+
+#[test]
+fn parallel_clone_command_retries_clone_and_checkout_with_backoff() {
+    let repos = vec![SourceRepo::new(
+        CodeForge::GitHub,
+        "warpdotdev".to_string(),
+        "warp".to_string(),
+    )];
+
+    let command = build_parallel_clone_command(&repos, ShellType::Bash);
+
+    // Both the clone and the pinned-ref fetch+checkout are retried, bounded
+    // by the same small attempt count, with a partial clone cleaned up
+    // before the next attempt.
+    assert!(command.contains("CLONE_MAX_ATTEMPTS=3"));
+    assert!(command.contains("CLONE_RETRY_BASE_DELAY_SECS=2"));
+    assert_eq!(
+        command
+            .matches("if [ \"$attempt\" -ge \"$CLONE_MAX_ATTEMPTS\" ]; then")
+            .count(),
+        2
+    );
+    assert_eq!(
+        command
+            .matches("sleep $((attempt * CLONE_RETRY_BASE_DELAY_SECS))")
+            .count(),
+        2
+    );
+    assert!(command.contains("git clone --filter=tree:0 \"$repo_url\" \"$target\" && break"));
+    assert!(command.contains("rm -rf \"$target\""));
+    assert!(command.contains(
+        "git -C \"$target\" fetch --filter=tree:0 origin \"$checkout_ref\" && git -C \"$target\" checkout --detach FETCH_HEAD && break"
+    ));
+}
+
+#[test]
+fn parallel_clone_command_refuses_non_directory_targets_without_cleanup() {
+    let repos = vec![SourceRepo::new(
+        CodeForge::GitHub,
+        "warpdotdev".to_string(),
+        "warp".to_string(),
+    )];
+
+    let command = build_parallel_clone_command(&repos, ShellType::Bash);
+
+    // A pre-existing non-directory target (a file, or a dangling symlink via
+    // `-L`) must be refused outright -- not cleaned up and retried like a
+    // partial clone.
+    assert!(command.contains("elif [ -e \"$target\" ] || [ -L \"$target\" ]; then"));
+    assert!(command.contains("refusing to clone $repo_name over it"));
+    // The refusal branch must return before ever reaching the `rm -rf`
+    // that's only safe once we know the retry loop's own attempt created it.
+    let refuse_pos = command
+        .find("refusing to clone $repo_name over it")
+        .unwrap();
+    let rm_pos = command.find("rm -rf \"$target\"").unwrap();
+    assert!(refuse_pos < rm_pos);
+}
+
+#[test]
+fn parallel_clone_command_reports_only_failed_repos_via_marker() {
+    let repos = vec![
+        SourceRepo::new(
+            CodeForge::GitHub,
+            "warpdotdev".to_string(),
+            "warp".to_string(),
+        ),
+        SourceRepo::new(
+            CodeForge::GitHub,
+            "warpdotdev".to_string(),
+            "warp-server".to_string(),
+        ),
+    ];
+
+    // Assert against the unwrapped inner script: the outer `sh -c '...'`
+    // escaping rewrites embedded single quotes, so raw single-quoted
+    // substrings only match before that escaping is applied.
+    let command = unwrap_sh_c_script(&build_parallel_clone_command(&repos, ShellType::Bash));
+
+    assert!(command.contains("failed_repos=\"\""));
+    assert!(command.contains("repo_name_0='warpdotdev/warp'"));
+    assert!(command.contains("repo_name_1='warpdotdev/warp-server'"));
+    assert!(command.contains("failed_repos=\"$failed_repos $repo_name_0\""));
+    assert!(command.contains("failed_repos=\"$failed_repos $repo_name_1\""));
+    assert!(command.contains("if [ -n \"$failed_repos\" ]; then"));
+    assert!(command.contains("printf '%s\\n' \"WARP_CLONE_FAILED:$failed_repos\""));
+}
+
+#[test]
+fn parse_failed_repo_names_extracts_marker_line() {
+    let output = "Cloning repository warpdotdev/warp...\n\
+                   WARP_CLONE_FAILED:warpdotdev/warp-server\n\
+                   ===== warpdotdev/warp =====\n";
+    assert_eq!(
+        parse_failed_repo_names(output),
+        Some(vec!["warpdotdev/warp-server".to_string()])
+    );
+}
+
+#[test]
+fn parse_failed_repo_names_extracts_multiple_repos() {
+    let output = "WARP_CLONE_FAILED:warpdotdev/warp warpdotdev/warp-server\n";
+    assert_eq!(
+        parse_failed_repo_names(output),
+        Some(vec![
+            "warpdotdev/warp".to_string(),
+            "warpdotdev/warp-server".to_string()
+        ])
+    );
+}
+
+#[test]
+fn parse_failed_repo_names_returns_none_without_marker_or_when_empty() {
+    assert_eq!(parse_failed_repo_names("no marker here\n"), None);
+    assert_eq!(parse_failed_repo_names("WARP_CLONE_FAILED:\n"), None);
+}
+
+#[test]
+fn clone_repo_error_names_only_failed_repos_from_marker() {
+    let repo_names = vec![
+        "warpdotdev/warp".to_string(),
+        "warpdotdev/warp-server".to_string(),
+    ];
+    let output = "===== warpdotdev/warp =====\nok\n\
+                   WARP_CLONE_FAILED:warpdotdev/warp-server\n";
+
+    let error = clone_repo_error(&repo_names, output);
+
+    assert!(matches!(
+        error,
+        PrepareEnvironmentError::CloneRepo { repo_name } if repo_name == "warpdotdev/warp-server"
+    ));
+}
+
+#[test]
+fn clone_repo_error_falls_back_to_full_batch_without_marker() {
+    // Defensive fallback for e.g. the shell dying before it could print the
+    // marker line: blame the whole batch rather than an empty repo name.
+    let repo_names = vec![
+        "warpdotdev/warp".to_string(),
+        "warpdotdev/warp-server".to_string(),
+    ];
+
+    let error = clone_repo_error(&repo_names, "no marker in this output\n");
+
+    assert!(matches!(
+        error,
+        PrepareEnvironmentError::CloneRepo { repo_name }
+            if repo_name == "warpdotdev/warp, warpdotdev/warp-server"
+    ));
 }
 
 #[test]
@@ -178,7 +354,7 @@ fn parallel_clone_command_threads_checkout_ref_and_pins_after_clone() {
     assert!(command.contains("already exists, skipping clone..."));
     assert!(!command.contains("already exists, skipping clone...\n    return 0"));
     // A clone failure must short-circuit before any checkout attempt.
-    assert!(command.contains("git clone --filter=tree:0 \"$repo_url\" \"$target\" || return 1"));
+    assert!(command.contains("git clone --filter=tree:0 \"$repo_url\" \"$target\" && break"));
     // The pinned repo's ref is threaded into the command (as the 4th positional
     // arg to clone_repo). The whole script is single-quote-escaped for `sh -c`,
     // so assert on the ref content rather than the surrounding quoting.
@@ -367,6 +543,24 @@ fn unwrap_sh_c_script(command: &str) -> String {
     inner.replace("'\"'\"'", "'")
 }
 
+/// Extract the `CLONE_MAX_ATTEMPTS`/`CLONE_RETRY_BASE_DELAY_SECS` assignments
+/// and the `clone_repo` function definition from a generated parallel clone
+/// script, dropping the background clones / waits / logs around them.
+/// Located by name so this doesn't accidentally grab `cleanup_clone_logs`
+/// instead, and includes the retry constants since `clone_repo`'s retry
+/// loops reference them.
+fn extract_clone_repo_helper(script: &str) -> &str {
+    let helper_start = script
+        .find("CLONE_MAX_ATTEMPTS=")
+        .expect("CLONE_MAX_ATTEMPTS assignment");
+    let helper_end = script[helper_start..]
+        .find("\n}")
+        .expect("clone_repo function terminator")
+        + helper_start
+        + 2;
+    &script[helper_start..helper_end]
+}
+
 /// Extract the `clone_repo` function body from the parallel clone script and
 /// invoke it once against a local fixture origin/target.
 fn run_parallel_clone_repo_helper(
@@ -389,18 +583,7 @@ fn run_parallel_clone_repo_helper(
         ),
     ];
     let script = unwrap_sh_c_script(&build_parallel_clone_command(&repos, ShellType::Bash));
-
-    // Keep only the clone_repo function definition; drop background clones /
-    // waits / logs. Locate by name so we don't grab cleanup_clone_logs instead.
-    let helper_start = script
-        .find("clone_repo() {")
-        .expect("clone_repo function definition");
-    let helper_end = script[helper_start..]
-        .find("\n}")
-        .expect("clone_repo function terminator")
-        + helper_start
-        + 2;
-    let helper = &script[helper_start..helper_end];
+    let helper = extract_clone_repo_helper(&script);
     let invoke = format!(
         "set -e\n{helper}\nclone_repo 'warpdotdev/{repo}' '{origin}' '{target}' '{checkout_ref}'\n",
         repo = fixture.repo_name,
@@ -509,6 +692,289 @@ fn parallel_clone_shell_leaves_existing_target_dir_when_no_checkout_ref() {
         git_stdout(&["rev-parse", "HEAD"], &repo_dir),
         fixture.base_sha,
         "no checkout_ref must leave an existing directory untouched"
+    );
+}
+
+/// Resolve the real `git` binary's absolute path, so a PATH-shadowing fake
+/// `git` (used to simulate a failing first attempt) can still delegate to it.
+fn real_git_path() -> String {
+    let output = Command::new("sh")
+        .arg("-c")
+        .arg("command -v git")
+        .output()
+        .expect("sh should be runnable");
+    assert!(output.status.success(), "git must be on PATH for tests");
+    String::from_utf8(output.stdout).unwrap().trim().to_string()
+}
+
+/// Install a fake `git` ahead of the real one on `PATH` that fails the first
+/// `clone` invocation (after leaving a partial target directory behind, like
+/// a real interrupted clone would) and delegates to the real `git` for every
+/// other invocation. Returns the directory to prepend to `PATH`.
+fn install_failing_once_git(bin_dir: &Path) {
+    fs::create_dir_all(bin_dir).unwrap();
+    let marker = bin_dir.join("clone-attempted");
+    let script = format!(
+        "#!/bin/sh\n\
+         if [ \"$1\" = clone ] && [ ! -f '{marker}' ]; then\n\
+         \ttouch '{marker}'\n\
+         \ttarget=\"$4\"\n\
+         \tmkdir -p \"$target\"\n\
+         \ttouch \"$target/partial-clone-debris\"\n\
+         \texit 1\n\
+         fi\n\
+         exec '{real_git}' \"$@\"\n",
+        marker = marker.display(),
+        real_git = real_git_path(),
+    );
+    let git_path = bin_dir.join("git");
+    fs::write(&git_path, script).unwrap();
+    let mut perms = fs::metadata(&git_path).unwrap().permissions();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        perms.set_mode(0o755);
+    }
+    fs::set_permissions(&git_path, perms).unwrap();
+}
+
+/// A `git clone` that fails on its first attempt (leaving a partial target
+/// directory behind, like a real interrupted clone does) must have that
+/// directory cleaned up and the clone retried, rather than failing outright.
+#[test]
+fn parallel_clone_shell_retries_and_cleans_up_after_a_failed_attempt() {
+    let fixture = build_fixture();
+    let bin_dir = fixture.working_dir.join("fake-bin");
+    install_failing_once_git(&bin_dir);
+    let repo_dir = fixture.working_dir.join(&fixture.repo_name);
+
+    let repos = vec![
+        SourceRepo::new(
+            CodeForge::GitHub,
+            "warpdotdev".to_string(),
+            fixture.repo_name.clone(),
+        ),
+        SourceRepo::new(
+            CodeForge::GitHub,
+            "warpdotdev".to_string(),
+            "other".to_string(),
+        ),
+    ];
+    let script = unwrap_sh_c_script(&build_parallel_clone_command(&repos, ShellType::Bash));
+    let helper = extract_clone_repo_helper(&script);
+    let invoke = format!(
+        "PATH='{bin_dir}':\"$PATH\"\n\
+         set -e\n\
+         {helper}\n\
+         clone_repo 'warpdotdev/{repo}' '{origin}' '{target}' ''\n",
+        bin_dir = bin_dir.display(),
+        repo = fixture.repo_name,
+        origin = fixture.origin_url,
+        target = repo_dir.display(),
+    );
+
+    let status = run_command(&invoke);
+
+    assert!(
+        status.success(),
+        "the second attempt (real git) must succeed after the first attempt's \
+         partial directory is cleaned up"
+    );
+    assert!(
+        !repo_dir.join("partial-clone-debris").exists(),
+        "the partial directory from the failed attempt must be removed before retrying"
+    );
+    assert_eq!(
+        git_stdout(&["rev-parse", "HEAD"], &repo_dir),
+        fixture.base_sha,
+        "the retried clone must produce a real checkout of the fixture repo"
+    );
+}
+
+#[test]
+fn parallel_clone_shell_refuses_to_clone_over_existing_file_target() {
+    let fixture = build_fixture();
+    let repo_dir = fixture.working_dir.join(&fixture.repo_name);
+    fs::write(&repo_dir, b"unrelated pre-existing file\n").unwrap();
+
+    let status = run_parallel_clone_repo_helper(&fixture, &repo_dir, None);
+
+    assert!(
+        !status.success(),
+        "must refuse to clone over an existing non-directory target"
+    );
+    assert!(
+        repo_dir.is_file(),
+        "the pre-existing file must not be deleted"
+    );
+    assert_eq!(
+        fs::read_to_string(&repo_dir).unwrap(),
+        "unrelated pre-existing file\n",
+        "file contents must be untouched"
+    );
+}
+
+#[test]
+#[cfg(unix)]
+fn parallel_clone_shell_refuses_to_clone_over_dangling_symlink_target() {
+    let fixture = build_fixture();
+    let repo_dir = fixture.working_dir.join(&fixture.repo_name);
+    std::os::unix::fs::symlink(
+        fixture.working_dir.join("nonexistent-symlink-target"),
+        &repo_dir,
+    )
+    .unwrap();
+
+    let status = run_parallel_clone_repo_helper(&fixture, &repo_dir, None);
+
+    assert!(
+        !status.success(),
+        "must refuse to clone over a dangling symlink target"
+    );
+    assert!(
+        fs::symlink_metadata(&repo_dir)
+            .expect("the symlink must still exist")
+            .file_type()
+            .is_symlink(),
+        "the pre-existing dangling symlink must not be deleted"
+    );
+}
+
+/// Install a fake `git` ahead of the real one on `PATH` that fails the first
+/// invocation whose argument list contains `failing_subcommand` (e.g.
+/// `"fetch"` or `"checkout"`) and delegates to the real `git` for every
+/// other invocation, including subsequent invocations of the same
+/// subcommand. Unlike [`install_failing_once_git`], this doesn't leave any
+/// debris behind: a failed `fetch`/`checkout` doesn't corrupt the working
+/// tree the way an interrupted `clone` can, so the retry loop for those
+/// steps has no cleanup to verify, only that the retry itself happens.
+fn install_failing_once_git_step(bin_dir: &Path, failing_subcommand: &str) {
+    fs::create_dir_all(bin_dir).unwrap();
+    let marker = bin_dir.join(format!("{failing_subcommand}-attempted"));
+    let script = format!(
+        "#!/bin/sh\n\
+         if [ ! -f '{marker}' ]; then\n\
+         \tfor arg in \"$@\"; do\n\
+         \t\tif [ \"$arg\" = '{failing_subcommand}' ]; then\n\
+         \t\t\ttouch '{marker}'\n\
+         \t\t\texit 1\n\
+         \t\tfi\n\
+         \tdone\n\
+         fi\n\
+         exec '{real_git}' \"$@\"\n",
+        marker = marker.display(),
+        failing_subcommand = failing_subcommand,
+        real_git = real_git_path(),
+    );
+    let git_path = bin_dir.join("git");
+    fs::write(&git_path, script).unwrap();
+    let mut perms = fs::metadata(&git_path).unwrap().permissions();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        perms.set_mode(0o755);
+    }
+    fs::set_permissions(&git_path, perms).unwrap();
+}
+
+/// A pinned-ref `fetch` that fails on its first attempt must be retried
+/// (rather than immediately surfacing `CheckoutFailed`) and still land on
+/// the pinned commit once a later attempt succeeds. This exercises the real
+/// `git -C ... fetch ... && git -C ... checkout ...` retry loop end to end,
+/// rather than only asserting it was generated as text.
+#[test]
+fn parallel_clone_shell_retries_fetch_before_pinning() {
+    let fixture = build_fixture();
+    let bin_dir = fixture.working_dir.join("fake-bin-fetch");
+    install_failing_once_git_step(&bin_dir, "fetch");
+    let repo_dir = fixture.working_dir.join(&fixture.repo_name);
+
+    let repos = vec![
+        SourceRepo::new(
+            CodeForge::GitHub,
+            "warpdotdev".to_string(),
+            fixture.repo_name.clone(),
+        )
+        .with_checkout_ref(Some(fixture.pinned_sha.clone())),
+        SourceRepo::new(
+            CodeForge::GitHub,
+            "warpdotdev".to_string(),
+            "other".to_string(),
+        ),
+    ];
+    let script = unwrap_sh_c_script(&build_parallel_clone_command(&repos, ShellType::Bash));
+    let helper = extract_clone_repo_helper(&script);
+    let invoke = format!(
+        "PATH='{bin_dir}':\"$PATH\"\n\
+         set -e\n\
+         {helper}\n\
+         clone_repo 'warpdotdev/{repo}' '{origin}' '{target}' '{checkout_ref}'\n",
+        bin_dir = bin_dir.display(),
+        repo = fixture.repo_name,
+        origin = fixture.origin_url,
+        target = repo_dir.display(),
+        checkout_ref = fixture.pinned_sha,
+    );
+
+    let status = run_command(&invoke);
+
+    assert!(
+        status.success(),
+        "the pin must succeed once the retried fetch goes through"
+    );
+    assert_eq!(
+        git_stdout(&["rev-parse", "HEAD"], &repo_dir),
+        fixture.pinned_sha,
+        "HEAD must land on the pinned commit despite the first fetch failing"
+    );
+}
+
+/// Same as [`parallel_clone_shell_retries_fetch_before_pinning`] but for a
+/// `checkout` that fails on its first attempt after a successful `fetch`.
+#[test]
+fn parallel_clone_shell_retries_checkout_before_pinning() {
+    let fixture = build_fixture();
+    let bin_dir = fixture.working_dir.join("fake-bin-checkout");
+    install_failing_once_git_step(&bin_dir, "checkout");
+    let repo_dir = fixture.working_dir.join(&fixture.repo_name);
+
+    let repos = vec![
+        SourceRepo::new(
+            CodeForge::GitHub,
+            "warpdotdev".to_string(),
+            fixture.repo_name.clone(),
+        )
+        .with_checkout_ref(Some(fixture.pinned_sha.clone())),
+        SourceRepo::new(
+            CodeForge::GitHub,
+            "warpdotdev".to_string(),
+            "other".to_string(),
+        ),
+    ];
+    let script = unwrap_sh_c_script(&build_parallel_clone_command(&repos, ShellType::Bash));
+    let helper = extract_clone_repo_helper(&script);
+    let invoke = format!(
+        "PATH='{bin_dir}':\"$PATH\"\n\
+         set -e\n\
+         {helper}\n\
+         clone_repo 'warpdotdev/{repo}' '{origin}' '{target}' '{checkout_ref}'\n",
+        bin_dir = bin_dir.display(),
+        repo = fixture.repo_name,
+        origin = fixture.origin_url,
+        target = repo_dir.display(),
+        checkout_ref = fixture.pinned_sha,
+    );
+
+    let status = run_command(&invoke);
+
+    assert!(
+        status.success(),
+        "the pin must succeed once the retried checkout goes through"
+    );
+    assert_eq!(
+        git_stdout(&["rev-parse", "HEAD"], &repo_dir),
+        fixture.pinned_sha,
+        "HEAD must land on the pinned commit despite the first checkout failing"
     );
 }
 

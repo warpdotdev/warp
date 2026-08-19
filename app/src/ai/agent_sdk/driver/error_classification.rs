@@ -173,6 +173,20 @@ pub fn classify_driver_error(error: &AgentDriverError) -> (AgentTaskState, TaskS
                 PlatformErrorCode::EnvironmentSetupFailed,
             ),
         ),
+        // A clone or pinned-ref checkout failed after retries were already
+        // exhausted. Report the failure plainly -- naming the repo the
+        // error carries -- without asserting a URL or setup-command cause:
+        // retries already cover the common transient-transport case (a
+        // reset stream, not a broken URL), so we don't know which of the
+        // remaining causes (bad URL, permissions, still-flaky network)
+        // applies, and guessing sends the reader to the wrong layer.
+        AgentDriverError::EnvironmentCloneFailed(msg) => (
+            AgentTaskState::Failed,
+            TaskStatusUpdate::with_error_code(
+                format!("Environment setup failed: {msg}."),
+                PlatformErrorCode::EnvironmentSetupFailed,
+            ),
+        ),
         // The shell died while an environment setup command was running
         // (e.g. the command ran `exit`). This is a user-side environment
         // configuration problem, so classify as FAILED.

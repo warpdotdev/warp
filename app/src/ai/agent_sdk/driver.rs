@@ -687,6 +687,16 @@ pub enum AgentDriverError {
     EnvironmentNotFound(String),
     #[error("Environment setup failed: {0}")]
     EnvironmentSetupFailed(String),
+    /// A repo clone or a pinned-ref checkout failed after the bounded retry
+    /// was exhausted. Kept distinct from `EnvironmentSetupFailed` because
+    /// that variant's classification appends "Check your repository URLs
+    /// and setup commands" -- a diagnosis we cannot support here. Retries
+    /// already cover the common transient-transport case (e.g. a reset
+    /// HTTP/2 stream), so a failure that reaches this variant could equally
+    /// be a bad URL, a permissions problem, or a still-flaky network; we
+    /// only know the clone/checkout failed, not why.
+    #[error("{0}")]
+    EnvironmentCloneFailed(String),
     #[error("Cloud provider setup failed")]
     CloudProviderSetupFailed(#[from] cloud_provider::CloudProviderSetupError),
     #[error("Could not resolve working directory {}", path.display())]
@@ -802,6 +812,10 @@ impl From<PrepareEnvironmentError> for AgentDriverError {
         match error {
             PrepareEnvironmentError::InvalidRuntimeState => AgentDriverError::InvalidRuntimeState,
             PrepareEnvironmentError::TerminalDriver { source } => source,
+            PrepareEnvironmentError::CloneRepo { .. }
+            | PrepareEnvironmentError::CheckoutFailed { .. } => {
+                AgentDriverError::EnvironmentCloneFailed(error.to_string())
+            }
             error => AgentDriverError::EnvironmentSetupFailed(error.to_string()),
         }
     }
@@ -1302,6 +1316,7 @@ impl AgentDriver {
                 if matches!(
                     err,
                     AgentDriverError::EnvironmentSetupFailed(_)
+                        | AgentDriverError::EnvironmentCloneFailed(_)
                         | AgentDriverError::SetupCommandExitedShell { .. }
                 ) {
                     let _ = foreground_for_error
