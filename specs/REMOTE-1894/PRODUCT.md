@@ -37,7 +37,7 @@ Non-goals:
 
 1. When the agent response stream fails mid-turn from a transient network/server failure (connection reset, TLS close_notify EOF, truncated response, 5xx, request timeout), the conversation automatically recovers and continues. A single such failure never produces a failed run.
 
-2. If the failure happens before the agent has streamed any actions for the turn, recovery is invisible: the request is re-sent and, if an attempt succeeds, the user sees a normal uninterrupted turn.
+2. If the failure happens before the agent has streamed any actions for the failing request, recovery is invisible: the request is re-sent and, if an attempt succeeds, the user sees a normal uninterrupted turn. This covers a failure at any point ahead of the first streamed action, including one that arrives before the response starts at all — an initial connection error or a 5xx before headers.
 
 3. If the failure happens after actions have streamed, the conversation resumes from the server's authoritative state. Work that already executed (commands, tool calls) is never re-executed by the recovery.
 
