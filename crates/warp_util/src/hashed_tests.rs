@@ -12,13 +12,26 @@ fn hash_matches_build_hasher() {
 }
 
 #[test]
-fn derefs_and_compares_as_the_key() {
-    let build_hasher = RandomState::new();
-    let hashed = Hashed::new("key".to_string(), &build_hasher);
-
+fn derefs_to_the_key() {
+    let hashed = Hashed::new("key".to_string(), &RandomState::new());
     assert_eq!(hashed.len(), 3);
+}
+
+#[test]
+fn compares_equal_to_the_key() {
+    let hashed = Hashed::new("key".to_string(), &RandomState::new());
     assert_eq!(hashed, "key".to_string());
+}
+
+#[test]
+fn key_returns_a_reference_to_the_key() {
+    let hashed = Hashed::new("key".to_string(), &RandomState::new());
     assert_eq!(hashed.key(), "key");
+}
+
+#[test]
+fn into_key_consumes_and_returns_the_key() {
+    let hashed = Hashed::new("key".to_string(), &RandomState::new());
     assert_eq!(hashed.into_key(), "key".to_string());
 }
 
