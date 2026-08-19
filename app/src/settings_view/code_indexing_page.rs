@@ -327,15 +327,17 @@ impl CodeIndexingPageView {
                     ctx.dispatch_typed_action(CodeIndexingPageAction::ManualAddDirectory);
                 })
         });
-        let widgets: Vec<Box<dyn SettingsWidget<View = Self>>> =
-            vec![Box::new(CodebaseIndexingCategorizedWidget {
-                inner: CodePageWidget {
-                    switch_state: Default::default(),
-                    auto_index_switch_state: Default::default(),
-                    manual_add_directory_button,
-                },
-            })];
-        PageType::new_uncategorized(widgets, Some(PAGE_TITLE))
+        let widget = CodeIndexingPageWidget {
+            inner: CodePageWidget {
+                switch_state: Default::default(),
+                auto_index_switch_state: Default::default(),
+                manual_add_directory_button,
+            },
+        };
+        // The whole page is a single unfilterable widget, so it must be a
+        // monolith: otherwise every match renders as "(1)" regardless of how
+        // much of the page actually matched.
+        PageType::new_monolith(widget, Some(PAGE_TITLE), true)
     }
 
     /// Resize `open_project_rules_mouse_states` to match the current workspace count.
@@ -2137,11 +2139,11 @@ impl CodePageWidget {
     }
 }
 
-struct CodebaseIndexingCategorizedWidget {
+struct CodeIndexingPageWidget {
     inner: CodePageWidget,
 }
 
-impl SettingsWidget for CodebaseIndexingCategorizedWidget {
+impl SettingsWidget for CodeIndexingPageWidget {
     type View = CodeIndexingPageView;
 
     fn search_terms(&self) -> &str {

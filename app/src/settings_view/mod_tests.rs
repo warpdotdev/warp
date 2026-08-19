@@ -895,3 +895,31 @@ fn empty_query_after_reapply_shows_all_widgets() {
         });
     });
 }
+
+// ── Monolith match counting (APP-5530) ───────────────────────────────────────
+// A monolith page is all-or-nothing: it must report a matching search as
+// Uncounted, never as a specific count. A page built with new_uncategorized /
+// new_categorized around a single widget reports Countable(1) instead, which
+// renders a misleading "(1)" in the sidebar for a page that isn't actually
+// broken down into separately-matchable pieces.
+
+#[test]
+fn monolith_match_yields_uncounted_not_countable_one() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            let mut page = PageType::new_monolith(
+                StubWidget {
+                    terms: "warp agent global ai toggle",
+                },
+                None,
+                false,
+            );
+
+            let md = page.update_filter("agent", ctx);
+            assert!(matches!(md, MatchData::Uncounted(true)));
+
+            let md = page.update_filter("file search", ctx);
+            assert!(matches!(md, MatchData::Uncounted(false)));
+        });
+    });
+}
