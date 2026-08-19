@@ -126,6 +126,13 @@ struct ScrollVelocity {
     last_update: Instant,
 }
 
+/// The number of consecutive failed frames after which we stop assuming a
+/// normally-transient render error (e.g. a surface `Validation` error) will
+/// resolve on its own, and rebuild the renderer instead. Without this, a GPU
+/// reset that leaves the surface permanently invalid freezes the window
+/// forever while the render loop retries the same failing call every frame.
+const MAX_CONSECUTIVE_RENDER_FAILURES: u32 = 10;
+
 /// The set of state we need to track per-window across frames.
 struct WindowState {
     /// The UI framework's identifier for the window in question (not to be
@@ -167,6 +174,11 @@ struct WindowState {
     /// UI element only requests the keyboard during LeftMouseDown.
     #[cfg(target_family = "wasm")]
     pending_soft_keyboard_request: bool,
+    /// The number of consecutive frames that have failed to render. Reset to
+    /// zero on a successful frame or when the renderer is recreated. Once this
+    /// reaches [`MAX_CONSECUTIVE_RENDER_FAILURES`], errors that are normally
+    /// skipped as transient escalate to a renderer rebuild.
+    consecutive_render_failures: u32,
 }
 
 impl WindowState {
@@ -186,6 +198,7 @@ impl WindowState {
             momentum_scroll_abort: None,
             #[cfg(target_family = "wasm")]
             pending_soft_keyboard_request: false,
+            consecutive_render_failures: 0,
         }
     }
 
@@ -965,6 +978,7 @@ impl EventLoop {
         window_id: winit::window::WindowId,
         window_target: &ActiveEventLoop,
     ) {
+        let winit_window_id = window_id;
         let Some(window_id) = self
             .state
             .windows
@@ -1019,24 +1033,51 @@ impl EventLoop {
         })();
 
         match render_result {
-            Ok(_) => self.callbacks.for_window(window).frame_drawn(),
+            Ok(_) => {
+                if let Some(state) = self.state.windows.get_mut(&winit_window_id) {
+                    state.consecutive_render_failures = 0;
+                }
+                self.callbacks.for_window(window).frame_drawn()
+            }
             Err(err) => {
                 log::warn!("Failed to render frame: {err:#}");
                 self.callbacks.for_window(window).frame_failed_to_draw();
 
-                match err {
+                let consecutive_render_failures = self
+                    .state
+                    .windows
+                    .get_mut(&winit_window_id)
+                    .map(|state| {
+                        state.consecutive_render_failures += 1;
+                        state.consecutive_render_failures
+                    })
+                    .unwrap_or(0);
+
+                let recreate_renderer = match err {
                     // If we failed to configure the surface, or...
                     renderer::Error::SurfaceConfigureError { .. }
                     // If the device was lost, or...
                     | renderer::Error::SurfaceError(renderer::GetSurfaceTextureError::Lost)
                     | renderer::Error::DeviceLost
                     // If we ran into any other wgpu error -
-                    | renderer::Error::Unknown(_)=> {
-                        log::warn!("Recreating the renderer in an attempt to recover...");
-                        window.drop_renderer(Box::new(window_target.owned_display_handle()));
-                        window.recreate_renderer(self.downrank_non_nvidia_vulkan_adapters);
+                    | renderer::Error::Unknown(_) => true,
+                    // Any other error (e.g. a surface `Validation` error) is
+                    // normally transient, and skipping the frame is enough.
+                    // But after a GPU reset, acquiring the surface texture can
+                    // keep failing with `Validation` indefinitely, leaving the
+                    // window permanently frozen. If the error hasn't resolved
+                    // itself after this many frames, it isn't transient -
+                    // escalate to a renderer rebuild.
+                    _ => consecutive_render_failures >= MAX_CONSECUTIVE_RENDER_FAILURES,
+                };
+
+                if recreate_renderer {
+                    log::warn!("Recreating the renderer in an attempt to recover...");
+                    if let Some(state) = self.state.windows.get_mut(&winit_window_id) {
+                        state.consecutive_render_failures = 0;
                     }
-                    _ => {}
+                    window.drop_renderer(Box::new(window_target.owned_display_handle()));
+                    window.recreate_renderer(self.downrank_non_nvidia_vulkan_adapters);
                 }
             }
         }
