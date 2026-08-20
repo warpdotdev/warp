@@ -99,8 +99,8 @@ the real parser. Add `--json` for machine-readable output and `--server-root
 <url>`, or `WARP_SERVER_ROOT` (or `WARP_SERVER_ROOT_URL`, the name an Oz
 sandbox exports), to point at a local, staging, or self-hosted server. No
 credential is required; `WARP_API_KEY` is forwarded when the environment
-already carries one, as an agent sandbox does, and a request it turns into a
-401 or 403 is retried once without it.
+already carries one, as an agent sandbox does, and dropped for a single retry
+if the server answers it with 401 or 403.
 
 The exit code distinguishes three outcomes, and so must you:
 

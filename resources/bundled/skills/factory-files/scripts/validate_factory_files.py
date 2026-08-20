@@ -271,13 +271,19 @@ def _request_json(url: str, token: Optional[str] = None, payload: Optional[Any] 
 
     A 401 or 403 drawn by a forwarded token is retried once without it: the
     endpoint needs no credential, so a stale or mismatched WARP_API_KEY must
-    not be able to block validation.
+    not be able to block validation. The drop is reported, because a key the
+    server rejects is worth knowing about even when validation then succeeds.
     """
     data = json.dumps(payload).encode("utf-8") if payload is not None else None
     try:
         body = _fetch(url, data, token)
     except urllib.error.HTTPError as error:
         if token and error.code in (401, 403):
+            print(
+                f"WARP_API_KEY was rejected with HTTP {error.code}; retrying without it, "
+                "since this endpoint needs no credential.",
+                file=sys.stderr,
+            )
             try:
                 body = _fetch(url, data, token=None)
             except urllib.error.HTTPError as retry_error:

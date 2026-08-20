@@ -128,6 +128,9 @@ def fake_server(
         thread.join(timeout=5)
 
 
+SERVER_ROOT_VARIABLES = ("WARP_SERVER_ROOT", "WARP_SERVER_ROOT_URL")
+
+
 def run_validator(
     root: Path,
     server_url: str | None = None,
@@ -135,10 +138,22 @@ def run_validator(
     extra: list[str] | None = None,
     extra_env: dict[str, str] | None = None,
 ):
+    """Run the validator against a server the caller named.
+
+    server_url is optional only so a check can name the server through the
+    environment instead. One of the two is required: with neither, the
+    validator would fall through to its production default and post a real
+    tree to app.warp.dev from a test run.
+    """
+    if server_url is None and not set(extra_env or {}) & set(SERVER_ROOT_VARIABLES):
+        raise RuntimeError(
+            "a check must name the fake server, via server_url or a server-root "
+            "variable in extra_env; otherwise the validator reaches production"
+        )
     environment = os.environ.copy()
     environment.pop("WARP_API_KEY", None)
-    environment.pop("WARP_SERVER_ROOT", None)
-    environment.pop("WARP_SERVER_ROOT_URL", None)
+    for variable in SERVER_ROOT_VARIABLES:
+        environment.pop(variable, None)
     if api_key:
         environment["WARP_API_KEY"] = api_key
     if extra_env:
@@ -355,7 +370,8 @@ def assert_401_is_retried_without_the_credential() -> None:
     """A stale or mismatched WARP_API_KEY must not be able to block validation.
 
     The endpoint needs no credential. When a forwarded key draws a 401 or 403,
-    the request is retried once, without it, before giving up.
+    the request is retried once, without it, before giving up. The drop is
+    reported, so a rejected key is still visible on a run that then passes.
     """
     with factory_tree() as root:
         with fake_server(CLEAN_RESPONSE, reject_authenticated_status=401) as server:
@@ -368,6 +384,10 @@ def assert_401_is_retried_without_the_credential() -> None:
                 )
             if server.authorization():
                 raise RuntimeError("the retry still carried an Authorization header")
+            if "WARP_API_KEY was rejected" not in result.stderr:
+                raise RuntimeError(f"the dropped credential was not reported: {result.stderr!r}")
+            if DISCLOSURE not in result.stdout:
+                raise RuntimeError("the note displaced the verdict the agent must repeat")
 
         with fake_server(CLEAN_RESPONSE, reject_authenticated_status=403) as server:
             result = run_validator(root, server.url, api_key="wk-1.stale")
@@ -432,7 +452,9 @@ def assert_server_root_falls_back_to_the_sandbox_url() -> None:
                 },
             )
         if result.returncode != EXIT_VALID:
-            raise RuntimeError("--server-root should take precedence over both environment variables")
+            raise RuntimeError(
+                "--server-root should take precedence over both environment variables"
+            )
 
 
 def assert_symlinked_resources_are_refused() -> None:
@@ -575,7 +597,10 @@ CHECKS = (
     ("an unreached verdict is never a pass", assert_unreached_verdicts_are_never_a_pass),
     ("credentials are optional but forwarded", assert_credentials_are_optional_but_forwarded),
     ("a 401/403 is retried without the credential", assert_401_is_retried_without_the_credential),
-    ("WARP_SERVER_ROOT_URL is a fallback server root", assert_server_root_falls_back_to_the_sandbox_url),
+    (
+        "WARP_SERVER_ROOT_URL is a fallback server root",
+        assert_server_root_falls_back_to_the_sandbox_url,
+    ),
     ("symlinked resources are refused", assert_symlinked_resources_are_refused),
     ("oversized trees are reported", assert_oversized_trees_are_reported),
     ("json output never implies a verdict", assert_json_output_never_implies_a_verdict),
