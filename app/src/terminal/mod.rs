@@ -130,9 +130,6 @@ pub fn init(app: &mut AppContext) {
     view::init(app);
 }
 
-/// Returns whether a right-click with the given `shift` modifier should paste from the
-/// clipboard, per the `right_click_behavior` setting. Shift always opens the context menu
-/// instead, regardless of the setting.
 pub fn should_right_click_paste(shift: bool, ctx: &AppContext) -> bool {
     !shift && SelectionSettings::as_ref(ctx).right_click_pastes()
 }

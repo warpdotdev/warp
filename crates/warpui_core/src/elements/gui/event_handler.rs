@@ -11,13 +11,10 @@ use crate::keymap::Keystroke;
 use crate::platform::keyboard::KeyCode;
 
 type Handler = Box<dyn FnMut(&mut EventContext, &AppContext, Vector2F) -> DispatchEventResult>;
-type RightMouseDownHandler = Box<
+type HandlerWithModifiers = Box<
     dyn FnMut(&mut EventContext, &AppContext, Vector2F, &ModifiersState) -> DispatchEventResult,
 >;
 type KeyHandler = Box<dyn FnMut(&mut EventContext, &AppContext, &Keystroke) -> DispatchEventResult>;
-type ScrollHandler = Box<
-    dyn FnMut(&mut EventContext, &AppContext, &Vector2F, &ModifiersState) -> DispatchEventResult,
->;
 type ModifierStateChangedHandler =
     Box<dyn FnMut(&mut EventContext, &AppContext, &KeyCode, &KeyState) -> DispatchEventResult>;
 
@@ -49,14 +46,14 @@ pub struct EventHandler {
     left_mouse_down: Option<RefCell<Handler>>,
     left_mouse_up: Option<RefCell<Handler>>,
     middle_mouse_down: Option<RefCell<Handler>>,
-    right_mouse_down: Option<RefCell<RightMouseDownHandler>>,
+    right_mouse_down: Option<RefCell<HandlerWithModifiers>>,
     forward_mouse_down: Option<RefCell<Handler>>,
     back_mouse_down: Option<RefCell<Handler>>,
     mouse_in: Option<RefCell<Handler>>,
     mouse_in_behavior: MouseInBehavior,
     mouse_out: Option<RefCell<Handler>>,
     mouse_dragged: Option<RefCell<Handler>>,
-    scroll_wheel: Option<RefCell<ScrollHandler>>,
+    scroll_wheel: Option<RefCell<HandlerWithModifiers>>,
     keydown: Option<RefCell<KeyHandler>>,
     modifier_state_changed: Option<RefCell<ModifierStateChangedHandler>>,
     origin: Option<Point>,
@@ -191,7 +188,7 @@ impl EventHandler {
     pub fn on_scroll_wheel<F>(mut self, callback: F) -> Self
     where
         F: 'static
-            + FnMut(&mut EventContext, &AppContext, &Vector2F, &ModifiersState) -> DispatchEventResult,
+            + FnMut(&mut EventContext, &AppContext, Vector2F, &ModifiersState) -> DispatchEventResult,
     {
         self.scroll_wheel = Some(RefCell::new(Box::new(callback)));
         self
@@ -367,7 +364,7 @@ impl Element for EventHandler {
                     && let Some(rect) = ctx.visible_rect(self.origin.unwrap(), self.size().unwrap())
                     && rect.contains_point(*position)
                 {
-                    return match callback.borrow_mut()(ctx, app, delta, modifiers) {
+                    return match callback.borrow_mut()(ctx, app, *delta, modifiers) {
                         DispatchEventResult::PropagateToParent => false,
                         DispatchEventResult::StopPropagation => true,
                     };

@@ -861,8 +861,6 @@ fn block_list_right_click_forwards_to_pty_when_long_running_block_owns_mouse() {
     })
 }
 
-/// Shift+right-clicking a block-list block must open the block's context menu even when
-/// `right_click_behavior` is `Paste`.
 #[test]
 fn block_list_shift_right_click_opens_context_menu_when_right_click_pastes() {
     App::test((), |mut app| async move {
@@ -963,8 +961,6 @@ fn block_list_shift_right_click_opens_context_menu_when_right_click_pastes() {
     })
 }
 
-/// Shift+right-clicking inside an active alt screen must open the alt-screen context menu even
-/// when `right_click_behavior` is `Paste`.
 #[test]
 fn alt_screen_shift_right_click_opens_context_menu_when_right_click_pastes() {
     App::test((), |mut app| async move {
@@ -1066,8 +1062,6 @@ fn alt_screen_shift_right_click_opens_context_menu_when_right_click_pastes() {
     })
 }
 
-/// Shift+right-clicking the input box itself must open the input's own context menu even when
-/// `right_click_behavior` is `Paste`.
 #[test]
 fn input_shift_right_click_opens_context_menu_when_right_click_pastes() {
     App::test((), |mut app| async move {
@@ -1153,6 +1147,128 @@ fn input_shift_right_click_opens_context_menu_when_right_click_pastes() {
             assert_eq!(
                 input.buffer_text(ctx),
                 input_text_before,
+                "Shift+right-click must never paste into the input box"
+            );
+        });
+    })
+}
+
+#[test]
+fn waterfall_background_right_click_honors_right_click_pastes_setting() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let (window_id, terminal) = add_window_with_id_and_terminal(&mut app, None);
+
+        terminal.update(&mut app, |_view, ctx| {
+            InputModeSettings::handle(ctx).update(ctx, |input_mode_settings, ctx| {
+                let _ = input_mode_settings
+                    .input_mode
+                    .set_value(InputMode::Waterfall, ctx);
+            });
+        });
+
+        SelectionSettings::handle(&app).update(&mut app, |settings, ctx| {
+            let _ = settings
+                .right_click_behavior
+                .set_value(RightClickBehavior::Paste, ctx);
+        });
+
+        app.update(|ctx| {
+            ctx.clipboard().write(ClipboardContent::plain_text(
+                "waterfall-paste-test".to_string(),
+            ));
+        });
+
+        let mut updated = EntityIdSet::default();
+        updated.insert(app.root_view_id(window_id).unwrap());
+        let invalidation = WindowInvalidation {
+            updated,
+            ..Default::default()
+        };
+        let presenter = Rc::new(RefCell::new(Presenter::new(window_id)));
+
+        let size_info = terminal.read(&app, |view, _ctx| *view.size_info);
+
+        macro_rules! rerender {
+            () => {
+                app.update(enclose!((presenter, invalidation) move |ctx| {
+                    presenter
+                        .borrow_mut()
+                        .invalidate(invalidation, ctx);
+                    presenter.borrow_mut().build_scene(
+                        vec2f(size_info.pane_width_px, size_info.pane_height_px),
+                        1.,
+                        None,
+                        ctx,
+                    );
+                }));
+            };
+        }
+
+        // With no blocks, both the block content height and the input's saved position height
+        // are zero, so any position within the pane satisfies "outside the block"; pick a point
+        // near the bottom of the pane, comfortably inside its bounds.
+        let position = vec2f(
+            2. * size_info.cell_width_px.as_f32(),
+            size_info.pane_height_px - 0.1,
+        );
+
+        let input = terminal.read(&app, |terminal, _ctx| terminal.input().clone());
+        assert!(!terminal.read(&app, |view, _ctx| view.is_context_menu_open()));
+
+        rerender!();
+        app.update(enclose!((presenter) move |ctx| {
+            ctx.simulate_window_event(
+                warpui::Event::RightMouseDown {
+                    position,
+                    cmd: false,
+                    shift: false,
+                    click_count: 1,
+                },
+                window_id,
+                presenter.clone(),
+            );
+        }));
+
+        assert!(
+            !terminal.read(&app, |view, _ctx| view.is_context_menu_open()),
+            "a bare right-click on the waterfall background must paste, not open the context menu"
+        );
+        input.read(&app, |input, ctx| {
+            assert_eq!(
+                input.buffer_text(ctx),
+                "waterfall-paste-test",
+                "a bare right-click on the waterfall background must paste the clipboard into the input"
+            );
+        });
+
+        // Reset the input, then confirm Shift still reveals the context menu instead.
+        input.update(&mut app, |input, ctx| {
+            input.replace_buffer_content("", ctx);
+        });
+
+        rerender!();
+        app.update(enclose!((presenter) move |ctx| {
+            ctx.simulate_window_event(
+                warpui::Event::RightMouseDown {
+                    position,
+                    cmd: false,
+                    shift: true,
+                    click_count: 1,
+                },
+                window_id,
+                presenter.clone(),
+            );
+        }));
+
+        assert!(
+            terminal.read(&app, |view, _ctx| view.is_context_menu_open()),
+            "Shift+right-click on the waterfall background must open the context menu, even when right-click-pastes is enabled"
+        );
+        input.read(&app, |input, ctx| {
+            assert_eq!(
+                input.buffer_text(ctx),
+                "",
                 "Shift+right-click must never paste into the input box"
             );
         });
