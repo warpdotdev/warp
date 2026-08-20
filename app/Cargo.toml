@@ -467,7 +467,7 @@ embed-resource = "3.0"
 
 # Note that we support channel-specific enables for these features
 [features]
-tui = ["warpui_core/tui"]
+tui = ["warp_terminal/tui", "warpui_core/tui"]
 ai_resume_button = []
 autoupdate = []
 figma_detection = []
@@ -504,6 +504,7 @@ crash_reporting = [
     "dep:crash-handler",
     "warp_logging/crash_reporting",
     "warp_errors/crash_reporting",
+    "warp_terminal/crash_reporting",
     "ai/crash_reporting",
 ]
 creating_shared_sessions = []
@@ -795,7 +796,7 @@ list_skills = []
 # This feature is enabled in build.rs when compiling for platforms which
 # support having a local tty/shell session.  It can be used to conditionally
 # include dependencies that should only exist in such environments.
-local_tty = []
+local_tty = ["warp_terminal/local_tty"]
 local_computer_use = []
 local_claude_codex_child_harnesses = []
 # This feature is enabled in build.rs when compiling for platforms which
@@ -808,6 +809,7 @@ local_fs = [
     "persistence/local_fs",
     "repo_metadata/local_fs",
     "warp_core/local_fs",
+    "warp_terminal/local_fs",
 ]
 log_expensive_frames_in_sentry = []
 jupyter_notebook_rendering = []
@@ -820,7 +822,7 @@ notebook_parameter = []
 oz_changelog_updates = []
 personal_cloud_objects = []
 # Remote-backed tty that connects to a PTY-like interface via a server.
-remote_tty = []
+remote_tty = ["warp_terminal/remote_tty"]
 # Fix for cursor reflow bug during window resize, from Alacritty resizing logic.
 resize_fix = []
 pluggable_notifications = []
@@ -867,6 +869,7 @@ test-util = [
     "warp_server_auth/test-util",
     "http_client/test-util",
     "warp_core/test-util",
+    "warp_terminal/test-util",
     "ai/test-util",
     "warp_server_client/test-util",
 ]
@@ -879,6 +882,7 @@ integration_tests = [
     "warpui/integration_tests",
     "warpui/test-util",
     "warp_core/integration_tests",
+    "warp_terminal/integration_tests",
     "warp_server_client/integration_tests",
 ]
 traces = []

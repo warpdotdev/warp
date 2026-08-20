@@ -86,6 +86,7 @@ use crate::terminal::{
     BlockPadding, ShellHost, ShellLaunchData, ShellLaunchState, SizeUpdate, SizeUpdateReason,
     color, ssh,
 };
+pub use warp_terminal::model::terminal_model::{ExitReason, RangeInModel};
 
 /// Max size of the window title stack.
 const TITLE_STACK_MAX_DEPTH: usize = 4096;
@@ -153,10 +154,6 @@ pub enum FindOption {
 pub enum WithinModel<T> {
     AltScreen(T),
     BlockList(WithinBlock<T>),
-}
-
-pub trait RangeInModel {
-    fn range(&self) -> RangeInclusive<Point>;
 }
 
 impl<T> WithinModel<T> {
@@ -1494,7 +1491,7 @@ impl TerminalModel {
         // Mark the active block as finished, as there is no way it could
         // possibly receive more output from the shell.
         self.block_list.active_block_mut().finish(0);
-        self.event_proxy.send_terminal_event(Event::Exit { reason });
+        self.event_proxy.send_app_event(Event::Exit { reason });
         self.commit_lifecycle_transition(&transition);
     }
 
@@ -1814,7 +1811,7 @@ impl TerminalModel {
         if let Some(record) = transition.recovery_record.clone() {
             log::debug!("Terminal lifecycle transition diagnostic: {record:?}");
             self.event_proxy
-                .send_terminal_event(Event::LifecycleRecovery(record));
+                .send_app_event(Event::LifecycleRecovery(record));
         }
         self.lifecycle_coordinator.commit(transition);
     }
@@ -2009,7 +2006,7 @@ impl TerminalModel {
             .clone()
             .spawned_with_shell_type(shell_type);
         self.event_proxy
-            .send_terminal_event(Event::ShellSpawned(shell_type));
+            .send_app_event(Event::ShellSpawned(shell_type));
         // Ensure the title is invalidated
         self.set_title(None);
     }
@@ -2153,7 +2150,7 @@ impl TerminalModel {
         self.alt_screen_active = true;
 
         self.event_proxy
-            .send_terminal_event(Event::TerminalModeSwapped(TerminalMode::AltScreen));
+            .send_app_event(Event::TerminalModeSwapped(TerminalMode::AltScreen));
     }
 
     /// Deactivate the alternate screen, switching back to the block list and
@@ -2177,7 +2174,7 @@ impl TerminalModel {
         }
 
         self.event_proxy
-            .send_terminal_event(Event::TerminalModeSwapped(TerminalMode::BlockList));
+            .send_app_event(Event::TerminalModeSwapped(TerminalMode::BlockList));
     }
 
     #[cfg(test)]
@@ -2266,7 +2263,7 @@ impl TerminalModel {
     fn send_title_event(&mut self, title: Option<String>) {
         let title = title.unwrap_or(self.shell_launch_state().display_name().into());
         let title_event = Event::Title(title);
-        self.event_proxy.send_terminal_event(title_event);
+        self.event_proxy.send_app_event(title_event);
     }
 
     pub fn set_custom_title(&mut self, custom_title: Option<String>) {
@@ -2321,7 +2318,7 @@ impl TerminalModel {
     }
 
     fn emit_handler_event(&mut self, event: HandlerEvent) {
-        self.event_proxy.send_handler_event(event);
+        self.event_proxy.send_app_event(Event::Handler(event));
     }
 
     /// Applies the normal command-completion pipeline and its once-per-command side effects.
@@ -2442,9 +2439,7 @@ impl TerminalModel {
         match ssh::util::check_ssh_login_state(&block_output) {
             SshLoginState::LastLogin | SshLoginState::PromptDetected => {
                 self.event_proxy
-                    .send_terminal_event(Event::DetectedEndOfSshLogin(
-                        SshLoginStatus::ReadyToWarpify,
-                    ));
+                    .send_app_event(Event::DetectedEndOfSshLogin(SshLoginStatus::ReadyToWarpify));
 
                 ssh_login_state.notification_state = SshLoginNotificationState::Completed;
             }
@@ -2453,7 +2448,7 @@ impl TerminalModel {
                 if is_initial_check {
                     if ssh_login_state.notification_state == SshLoginNotificationState::Monitoring {
                         self.event_proxy
-                            .send_terminal_event(Event::DetectedEndOfSshLogin(
+                            .send_app_event(Event::DetectedEndOfSshLogin(
                                 SshLoginStatus::RecheckBeforeWarpifying,
                             ));
 
@@ -2463,7 +2458,7 @@ impl TerminalModel {
                     }
                 } else {
                     self.event_proxy
-                        .send_terminal_event(Event::DetectedEndOfSshLogin(
+                        .send_app_event(Event::DetectedEndOfSshLogin(
                             SshLoginStatus::ReadyToWarpify,
                         ));
 
@@ -3072,7 +3067,7 @@ impl ansi::Handler for TerminalModel {
 
     fn pre_interactive_ssh_session(&mut self, _value: PreInteractiveSSHSessionValue) {
         self.event_proxy
-            .send_terminal_event(Event::PreInteractiveSSHSession);
+            .send_app_event(Event::PreInteractiveSSHSession);
     }
 
     fn ssh(&mut self, value: SSHValue) {
@@ -3097,8 +3092,7 @@ impl ansi::Handler for TerminalModel {
                 );
             }
             self.pending_ssh_wrapper_session = Some(value);
-            self.event_proxy
-                .send_terminal_event(Event::SSH(remote_shell));
+            self.event_proxy.send_app_event(Event::SSH(remote_shell));
         }
     }
 
@@ -3107,7 +3101,7 @@ impl ansi::Handler for TerminalModel {
             "Received ExitShell hook from shell for session_id: {:?}",
             data.session_id
         );
-        self.event_proxy.send_terminal_event(Event::ExitShell {
+        self.event_proxy.send_app_event(Event::ExitShell {
             session_id: data.session_id,
         });
     }
@@ -3180,7 +3174,7 @@ impl ansi::Handler for TerminalModel {
         match ShellType::from_name(data.shell.as_str()) {
             Some(shell_type) => {
                 self.event_proxy
-                    .send_terminal_event(Event::InitSubshell(InitSubshellEvent {
+                    .send_app_event(Event::InitSubshell(InitSubshellEvent {
                         shell_type,
                         uname: data.uname,
                     }))
@@ -3201,7 +3195,7 @@ impl ansi::Handler for TerminalModel {
             match shell_type {
                 Some(shell_type) => {
                     self.event_proxy
-                        .send_terminal_event(Event::SourcedRcFileInSubshell(
+                        .send_app_event(Event::SourcedRcFileInSubshell(
                             SourcedRcFileInSubshellEvent {
                                 shell_type,
                                 uname: data.uname,
@@ -3219,8 +3213,7 @@ impl ansi::Handler for TerminalModel {
     }
 
     fn finish_update(&mut self, data: FinishUpdateValue) {
-        self.event_proxy
-            .send_terminal_event(Event::FinishUpdate(data));
+        self.event_proxy.send_app_event(Event::FinishUpdate(data));
     }
 
     fn start_in_band_command_output(&mut self) {
@@ -3250,7 +3243,7 @@ impl ansi::Handler for TerminalModel {
                                     event.command_id
                                 );
                                 self.event_proxy
-                                    .send_terminal_event(Event::ExecutedInBandCommand(event));
+                                    .send_app_event(Event::ExecutedInBandCommand(event));
                             }
                             Err(e) => {
                                 log::warn!("Failed to parse generator output: {e:#}");
@@ -3332,7 +3325,7 @@ impl ansi::Handler for TerminalModel {
         ) {
             IsReceivingCompletionsOutput::Yes { pending } => {
                 self.event_proxy
-                    .send_terminal_event(Event::CompletionsFinished(pending.into()));
+                    .send_app_event(Event::CompletionsFinished(pending.into()));
             }
             IsReceivingCompletionsOutput::No => {
                 log::warn!("Tried to unexpectedly end completions output.")
@@ -3388,7 +3381,7 @@ impl ansi::Handler for TerminalModel {
 
     fn send_completions_prompt(&mut self) {
         self.event_proxy
-            .send_terminal_event(Event::SendCompletionsPrompt);
+            .send_app_event(Event::SendCompletionsPrompt);
     }
 
     fn start_iterm_image_receiving(&mut self, metadata: ITermImageMetadata) {
@@ -3653,7 +3646,7 @@ impl ansi::Handler for TerminalModel {
     fn pluggable_notification(&mut self, title: Option<String>, body: String) {
         if FeatureFlag::PluggableNotifications.is_enabled() {
             self.event_proxy
-                .send_terminal_event(Event::PluggableNotification { title, body });
+                .send_app_event(Event::PluggableNotification { title, body });
         }
     }
 
@@ -3731,20 +3724,6 @@ enum InBandCommandOutputDecodingError {
     },
     #[error("Failed to hex-decode the DCS payload: {0:?}")]
     HexDecodingFailure(FromHexError),
-}
-
-#[derive(Debug, Copy, Clone)]
-pub enum ExitReason {
-    /// The shell process exited naturally
-    ShellProcessExited,
-    /// PTY spawn failed
-    PtySpawnFailed,
-    /// PTY connection was lost/disconnected
-    PtyDisconnected,
-    /// Process was killed/terminated
-    ProcessKilled,
-    /// Shell could not be found/determined
-    ShellNotFound,
 }
 
 #[cfg(test)]

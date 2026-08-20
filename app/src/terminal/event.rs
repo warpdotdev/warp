@@ -149,6 +149,33 @@ pub enum Event {
     },
 }
 
+impl From<warp_terminal::event::Event> for Event {
+    fn from(event: warp_terminal::event::Event) -> Self {
+        match event {
+            warp_terminal::event::Event::MouseCursorDirty => Self::MouseCursorDirty,
+            warp_terminal::event::Event::ClipboardStore(clipboard, text) => {
+                Self::ClipboardStore(clipboard, text)
+            }
+            warp_terminal::event::Event::ClipboardLoad(clipboard, load) => {
+                Self::ClipboardLoad(clipboard, load)
+            }
+            warp_terminal::event::Event::CursorBlinkingChange(blinking) => {
+                Self::CursorBlinkingChange(blinking)
+            }
+            warp_terminal::event::Event::Bell => Self::Bell,
+            warp_terminal::event::Event::ImageReceived {
+                image_id,
+                image_data,
+                image_protocol,
+            } => Self::ImageReceived {
+                image_id,
+                image_data,
+                image_protocol,
+            },
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct InitSubshellEvent {
     pub shell_type: ShellType,
