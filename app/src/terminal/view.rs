@@ -16765,8 +16765,6 @@ impl TerminalView {
                     }
                 };
 
-                // "Paste" closes out this link menu's copy-related actions, same as
-                // the block right-click menu below.
                 if !items.is_empty() {
                     items.push(MenuItem::Separator);
                 }
