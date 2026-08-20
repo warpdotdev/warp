@@ -16683,7 +16683,7 @@ impl TerminalView {
                 Some(highlighted_link),
                 _,
             ) => {
-                match highlighted_link {
+                let mut items = match highlighted_link {
                     GridHighlightedLink::Url(url) => {
                         let url_content =
                             Some(model.link_at_range(url, RespectObfuscatedSecrets::Yes));
@@ -16763,7 +16763,16 @@ impl TerminalView {
                                 .into_item(),
                         ]
                     }
+                };
+
+                // "Paste" closes out this link menu's copy-related actions, same as
+                // the block right-click menu below.
+                if !items.is_empty() {
+                    items.push(MenuItem::Separator);
                 }
+                items.push(self.paste_menu_item(ctx));
+
+                items
             }
             (
                 BlockListMenuSource::RegularTextRightClick { .. }
