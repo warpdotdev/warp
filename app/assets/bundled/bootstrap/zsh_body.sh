@@ -1449,6 +1449,17 @@ esac
     # this is the point where we have all matches in $__hits and all
     # descriptions in $__dscr!
 
+    # $PREFIX is the part of the current word these matches replace -- everything before it
+    # ($IPREFIX, a literal quote in $QIPREFIX, other already-typed words) is left untouched.
+    # Since native completions only ever complete up to the cursor (see generator_command_for's
+    # doc comment), there's no $SUFFIX, so $PREFIX is always a trailing substring of the full
+    # line: its start is simply the line's length minus its own. This holds however $PREFIX got
+    # there -- a bare path segment, one following a literal `/` or `$`/`${` IPREFIX, one inside
+    # an open quote, or one with a literal (unexpanded) `~` or backslash-escape -- because
+    # $PREFIX always carries the exact characters typed for that segment, not an expanded or
+    # dequoted form (verified against each of these shapes empirically; see the PR description).
+    warp_mark_replacement_span_for_compadd_override $(( ${#_WARP_NATIVE_COMPLETIONS_LINE} - ${#PREFIX} )) ${#PREFIX}
+
     # display all matches
     local dsuf dscr
     for i in {1..$#__hits}; do
@@ -1474,6 +1485,17 @@ esac
     warp_mark_start_of_completions 'incrementally_typed'
   }
 
+  # Reports the range of the buffer (byte offsets into the line passed to
+  # warp_run_generator_command_foreground_completions) that the matches about to be emitted
+  # replace, so the client can use it instead of its own whitespace-derived guess -- see
+  # native_shell_completions.rs's PowerShell equivalent for why this matters: without it, a
+  # completion that only replaces part of the current word (anything after a literal `/`, a
+  # `$`/`${` sigil, or inside an open quote) gets filtered out entirely, because the shell's
+  # actual candidate doesn't start with the client's whitespace-derived guess at the typed token.
+  function warp_mark_replacement_span_for_compadd_override () {
+    printf '\e]9280;S;%s,%s\a' $1 $2
+  }
+
   # Marks the end of completions generation using a custom OSC.
   function warp_mark_end_of_completions () {
     printf '\e]9280;B\a'
@@ -1496,12 +1518,23 @@ esac
 
   # Avoid grouping. Under certain conditions, grouping can cause options to be printed
   # after the compostfunc hook is called.
-  zstyle ':completion:warp_complete_via_compadd_override:*' list-grouped false
-  zstyle ':completion:warp_complete_via_compadd_override:*' insert-tab false
-  zstyle ':completion:warp_complete_via_compadd_override:*' verbose yes
+  #
+  # These zstyle patterns must match on 'zle-line-init', not the widget name
+  # ('warp_complete_via_compadd_override_internal') the earlier version of this code used:
+  # since this completion is driven from inside the zle-line-init hook (see the comment above
+  # `_warp_native_completions_zle_line_init`), $curcontext's leading component is always
+  # literally "zle-line-init" (measured, e.g. "zle-line-init:complete:atuin:argument-1"),
+  # regardless of which command is being completed -- not the widget name. The mismatched
+  # pattern meant none of these styles were ever actually applied: verified this was silently
+  # suppressing every description for _describe-driven completions (e.g. `atuin `, `uvx --p`)
+  # that only show descriptions when the 'verbose' style is on for their real context; _arguments
+  # is unaffected only because it hits its own separate, unrelated code path for the same data.
+  zstyle ':completion:zle-line-init:*' list-grouped false
+  zstyle ':completion:zle-line-init:*' insert-tab false
+  zstyle ':completion:zle-line-init:*' verbose yes
   # Setting list-separator to an empty string avoids an extra `--` from being added
   # between the hit and the description.
-  zstyle ':completion:warp_complete_via_compadd_override:*' list-separator ''
+  zstyle ':completion:zle-line-init:*' list-separator ''
 
   # Native shell completions: foreground generator.
   #
