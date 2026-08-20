@@ -15,7 +15,7 @@ use warp_cli::mcp::MCPSpec;
 use warp_cli::skill::SkillSpec;
 use warp_cli::{
     OZ_CLI_ENV, OZ_HARNESS_ENV, OZ_PARENT_RUN_ID_ENV, OZ_RUN_ID_ENV, SERVER_ROOT_URL_OVERRIDE_ENV,
-    SESSION_SHARING_SERVER_URL_OVERRIDE_ENV, WS_SERVER_URL_OVERRIDE_ENV,
+    SESSION_SHARING_SERVER_URL_OVERRIDE_ENV, WS_SERVER_URL_OVERRIDE_ENV, warp_alias_env_var,
 };
 use warp_core::channel::ChannelState;
 use warp_core::features::FeatureFlag;
@@ -1101,6 +1101,34 @@ fn task_env_vars_propagate_message_listener_state_root_with_legacy_alias() {
         env_vars.get(&OsString::from(LEGACY_OZ_PARENT_STATE_ROOT_ENV)),
         Some(&OsString::from("/tmp/message-listener-root"))
     );
+}
+
+/// Every `OZ_` variable injected into a harness subprocess is also injected under its `WARP_`
+/// alias with the same value. Derived from the assembled map, so a future `OZ_` variable is
+/// covered without extending this test.
+#[test]
+fn task_env_vars_mirror_every_oz_var_to_a_warp_alias() {
+    let task_id: AmbientAgentTaskId = "550e8400-e29b-41d4-a716-446655440005".parse().unwrap();
+    let env_vars = task_env_vars(Some(&task_id), Some("parent-run-789"), Harness::Claude);
+
+    let expected_aliases: Vec<(OsString, OsString)> = env_vars
+        .iter()
+        .filter_map(|(name, value)| {
+            let alias = warp_alias_env_var(name.to_str()?)?;
+            Some((OsString::from(alias), value.clone()))
+        })
+        .collect();
+    assert!(
+        !expected_aliases.is_empty(),
+        "no OZ_ variables were injected, so the assertions below would prove nothing"
+    );
+    for (alias, value) in expected_aliases {
+        assert_eq!(
+            env_vars.get(&alias),
+            Some(&value),
+            "{alias:?} should mirror the OZ_ variable it aliases"
+        );
+    }
 }
 
 #[test]

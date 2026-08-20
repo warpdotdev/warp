@@ -180,6 +180,9 @@ pub(super) async fn run_declarations_script(
     command
         .current_dir(working_dir)
         .env(DECLARATIONS_PATH_ENV_VAR, &declarations_path);
+    if let Some(alias) = warp_cli::warp_alias_env_var(DECLARATIONS_PATH_ENV_VAR) {
+        command.env(alias, &declarations_path);
+    }
 
     let output = match command.output().with_timeout(script_timeout).await {
         Ok(Ok(output)) => output,

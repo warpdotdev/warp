@@ -23,6 +23,23 @@ fn identifies_worker_subcommands() {
     assert!(!is_worker_invocation("--prompt"));
 }
 
+#[test]
+fn warp_alias_env_var_swaps_the_oz_prefix() {
+    assert_eq!(
+        warp_alias_env_var(OZ_RUN_ID_ENV).as_deref(),
+        Some("WARP_RUN_ID")
+    );
+    assert_eq!(
+        warp_alias_env_var(OZ_PARENT_RUN_ID_ENV).as_deref(),
+        Some("WARP_PARENT_RUN_ID")
+    );
+    assert_eq!(warp_alias_env_var(OZ_CLI_ENV).as_deref(), Some("WARP_CLI"));
+    // Only the exact `OZ_` prefix aliases; an already-Warp-named or unrelated variable does not.
+    assert_eq!(warp_alias_env_var(SERVER_ROOT_URL_OVERRIDE_ENV), None);
+    assert_eq!(warp_alias_env_var("OZONE"), None);
+    assert_eq!(warp_alias_env_var("HOME"), None);
+}
+
 fn parse_run_cloud(args: &[&str]) -> crate::agent::RunCloudArgs {
     let full: Vec<&str> = std::iter::once("warp")
         .chain(args.iter().copied())

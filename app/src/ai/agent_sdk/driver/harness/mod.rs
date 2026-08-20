@@ -12,7 +12,7 @@ use tempfile::NamedTempFile;
 use warp_cli::agent::Harness;
 use warp_cli::{
     OZ_CLI_ENV, OZ_HARNESS_ENV, OZ_PARENT_RUN_ID_ENV, OZ_RUN_ID_ENV, SERVER_ROOT_URL_OVERRIDE_ENV,
-    SESSION_SHARING_SERVER_URL_OVERRIDE_ENV, WS_SERVER_URL_OVERRIDE_ENV,
+    SESSION_SHARING_SERVER_URL_OVERRIDE_ENV, WS_SERVER_URL_OVERRIDE_ENV, warp_alias_env_var,
 };
 use warp_core::channel::ChannelState;
 use warp_managed_secrets::ManagedSecretValue;
@@ -317,6 +317,21 @@ fn insert_task_env_var_aliases(
     }
 }
 
+/// Inserts the `WARP_`-prefixed alias of every `OZ_`-prefixed entry, carrying the same value.
+///
+/// Deriving the aliases from the assembled map rather than writing each pair out means an
+/// `OZ_` variable added to the injected set is aliased without a second edit.
+fn insert_warp_aliases(env_vars: &mut HashMap<OsString, OsString>) {
+    let aliases: Vec<(OsString, OsString)> = env_vars
+        .iter()
+        .filter_map(|(name, value)| {
+            let alias = warp_alias_env_var(name.to_str()?)?;
+            Some((OsString::from(alias), value.clone()))
+        })
+        .collect();
+    env_vars.extend(aliases);
+}
+
 fn message_listener_state_root() -> Option<String> {
     [
         OZ_MESSAGE_LISTENER_STATE_ROOT_ENV,
@@ -331,7 +346,8 @@ fn task_env_vars_for_harness_name(
     parent_run_id: Option<&str>,
     selected_harness: Harness,
 ) -> HashMap<OsString, OsString> {
-    let mut env_vars = HashMap::with_capacity(7);
+    // Sized for the OZ_/WARP_ pairs `insert_warp_aliases` produces below.
+    let mut env_vars = HashMap::with_capacity(14);
 
     if let Some(id) = task_id {
         env_vars.insert(
@@ -404,6 +420,8 @@ fn task_env_vars_for_harness_name(
         }
     }
 
+    insert_warp_aliases(&mut env_vars);
+
     env_vars
 }
 
@@ -415,6 +433,10 @@ pub(crate) fn remove_claude_externally_managed_listener_env_vars(
         LEGACY_OZ_PARENT_LISTENER_MANAGED_EXTERNALLY_ENV,
     ] {
         env_vars.remove(OsStr::new(env_name));
+        // The alias is injected alongside the OZ_ name, so it has to leave with it.
+        if let Some(alias) = warp_alias_env_var(env_name) {
+            env_vars.remove(OsStr::new(&alias));
+        }
     }
 }
 
