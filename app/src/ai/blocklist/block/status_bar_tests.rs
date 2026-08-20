@@ -146,7 +146,9 @@ fn ends_the_fallback_message_in_a_period_and_the_named_message_in_an_ellipsis() 
 }
 
 /// A fallback model is still the model in use, so naming it does not depend on the
-/// older fallback flag surviving — only the explanation line does.
+/// older fallback flag surviving — only the explanation line does. The copy is the
+/// new one, ellipsis and all, because the period belongs to the fallback message
+/// and that message does not exist with its flag off.
 #[test]
 fn names_a_fallback_model_without_the_explanation_line() {
     let _naming = FeatureFlag::WarpingModelName.override_enabled(true);
@@ -218,7 +220,7 @@ fn names_the_previous_exchanges_fallback_model_on_agent_follow_ups() {
             is_new_user_query: false,
         }),
         Some(WarpingModelMessage {
-            text: "Warping with Claude Haiku 4.5...".to_owned(),
+            text: "Warping with Claude Haiku 4.5.".to_owned(),
             model_display_name: Some("Claude Haiku 4.5".to_owned()),
             show_fallback_explanation: true,
         })
