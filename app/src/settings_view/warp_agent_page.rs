@@ -59,10 +59,10 @@ use super::remove_custom_endpoint_confirmation_dialog::{
 };
 use super::set_default_model_modal::{SetDefaultModelModalBody, SetDefaultModelModalBodyEvent};
 use super::settings_page::{
-    CONTENT_FONT_SIZE, HEADER_PADDING, LocalOnlyIconState, MatchData, PageType, SettingsPageMeta,
-    SettingsPageViewHandle, SettingsWidget, TOGGLE_BUTTON_RIGHT_PADDING, ToggleState,
-    build_sub_header, build_toggle_element, render_body_item_label, render_dropdown_item,
-    render_filterable_dropdown_item, render_separator,
+    CONTENT_FONT_SIZE, Category, HEADER_PADDING, LocalOnlyIconState, MatchData, PageType,
+    SettingsPageMeta, SettingsPageViewHandle, SettingsWidget, TOGGLE_BUTTON_RIGHT_PADDING,
+    ToggleState, build_sub_header, build_toggle_element, render_body_item_label,
+    render_dropdown_item, render_filterable_dropdown_item,
 };
 use super::{
     SettingActionPairContexts, SettingActionPairDescriptions, SettingsAction, SettingsSection,
@@ -1893,9 +1893,17 @@ impl WarpAgentPageView {
     fn build_page(ctx: &mut ViewContext<Self>) -> PageType<Self> {
         let ai_settings = AISettings::as_ref(ctx);
 
-        let mut widgets: Vec<Box<dyn SettingsWidget<View = WarpAgentPageView>>> = Vec::new();
+        // This page is multi-section: each category holds the widget(s) for one
+        // section. Most sections are a single, self-contained widget that draws
+        // its own subheader (so the category itself carries no title); "Input"
+        // is split across two widgets that share one "Input" subheader owned by
+        // the category, so that subheader survives search as long as either
+        // widget matches (see gui-settings-ui skill: the widget is the search
+        // unit, and a shared section header must live at the category level,
+        // not inside just one of the widgets it covers).
+        let mut categories: Vec<Category<WarpAgentPageView>> =
+            vec![Category::new("", vec![Box::new(GlobalAIWidget::default())])];
 
-        widgets.push(Box::new(GlobalAIWidget::default()));
         if ai_settings
             .intelligent_autosuggestions_enabled_internal
             .is_supported_on_current_platform()
@@ -1915,32 +1923,51 @@ impl WarpAgentPageView {
                     .git_operations_autogen_enabled_internal
                     .is_supported_on_current_platform())
         {
-            widgets.push(Box::new(ActiveAIWidget::new(ctx)));
+            categories.push(Category::new("", vec![Box::new(ActiveAIWidget::new(ctx))]));
         }
-        widgets.push(Box::new(AIInputWidget::default()));
+        categories.push(Category::new(
+            "Input",
+            vec![
+                Box::new(AIInputWidget::default()),
+                Box::new(AiCommandSearchHashTriggerWidget::default()),
+            ],
+        ));
         let voice_supported = cfg!(feature = "voice_input")
             && ai_settings
                 .voice_input_enabled_internal
                 .is_supported_on_current_platform();
         if voice_supported {
-            widgets.push(Box::new(VoiceWidget::default()));
+            categories.push(Category::new("", vec![Box::new(VoiceWidget::default())]));
         }
-        widgets.push(Box::new(CloudHandoffWidget::default()));
-        widgets.push(Box::new(ApiKeysWidget::new(ctx)));
-        widgets.push(Box::new(AwsBedrockWidget::new(ctx)));
-        widgets.push(Box::new(GeminiEnterpriseWidget::new(ctx)));
+        categories.push(Category::new(
+            "",
+            vec![Box::new(CloudHandoffWidget::default())],
+        ));
+        categories.push(Category::new("", vec![Box::new(ApiKeysWidget::new(ctx))]));
+        categories.push(Category::new(
+            "",
+            vec![Box::new(AwsBedrockWidget::new(ctx))],
+        ));
+        categories.push(Category::new(
+            "",
+            vec![Box::new(GeminiEnterpriseWidget::new(ctx))],
+        ));
         if FeatureFlag::CustomModelRouters.is_enabled() {
-            widgets.push(Box::new(CustomModelRoutersWidget));
+            categories.push(Category::new("", vec![Box::new(CustomModelRoutersWidget)]));
         }
-        widgets.push(Box::new(AgentAttributionWidget::default()));
-        widgets.push(Box::new(OtherAIWidget::default()));
+        categories.push(Category::new(
+            "",
+            vec![Box::new(AgentAttributionWidget::default())],
+        ));
+        categories.push(Category::new("", vec![Box::new(OtherAIWidget::default())]));
         if FeatureFlag::AgentModeComputerUse.is_enabled() {
-            widgets.push(Box::new(CloudAgentComputerUseWidget::default()));
+            categories.push(Category::new(
+                "",
+                vec![Box::new(CloudAgentComputerUseWidget::default())],
+            ));
         }
 
-        // This page is multi-section: it renders its own subheader-sized
-        // section titles inside each widget, so it gets no page-level title.
-        PageType::new_uncategorized(widgets, None)
+        PageType::new_categorized(categories, None)
     }
 
     fn handle_detection_denylist_editor_event(
@@ -3098,37 +3125,35 @@ impl SettingsWidget for ActiveAIWidget {
     ) -> Box<dyn Element> {
         let ai_settings = AISettings::as_ref(app);
         let is_any_ai_enabled = ai_settings.is_any_ai_enabled(app);
-        let mut column = Flex::column()
-            .with_child(render_separator(appearance))
-            .with_child(
-                Container::new(
-                    Flex::row()
-                        .with_main_axis_size(MainAxisSize::Max)
-                        .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
-                        .with_child(
-                            build_sub_header(
-                                appearance,
-                                "Active AI",
-                                Some(styles::header_font_color(is_any_ai_enabled, app)),
-                            )
-                            .finish(),
-                        )
-                        .with_child(
-                            Container::new(render_ai_feature_switch(
-                                self.active_ai_toggle.clone(),
-                                *ai_settings.is_active_ai_enabled_internal,
-                                is_any_ai_enabled,
-                                WarpAgentPageAction::ToggleActiveAI,
-                                app,
-                            ))
-                            .with_padding_right(TOGGLE_BUTTON_RIGHT_PADDING)
-                            .finish(),
+        let mut column = Flex::column().with_child(
+            Container::new(
+                Flex::row()
+                    .with_main_axis_size(MainAxisSize::Max)
+                    .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
+                    .with_child(
+                        build_sub_header(
+                            appearance,
+                            "Active AI",
+                            Some(styles::header_font_color(is_any_ai_enabled, app)),
                         )
                         .finish(),
-                )
-                .with_padding_bottom(HEADER_PADDING)
-                .finish(),
-            );
+                    )
+                    .with_child(
+                        Container::new(render_ai_feature_switch(
+                            self.active_ai_toggle.clone(),
+                            *ai_settings.is_active_ai_enabled_internal,
+                            is_any_ai_enabled,
+                            WarpAgentPageAction::ToggleActiveAI,
+                            app,
+                        ))
+                        .with_padding_right(TOGGLE_BUTTON_RIGHT_PADDING)
+                        .finish(),
+                    )
+                    .finish(),
+            )
+            .with_padding_bottom(HEADER_PADDING)
+            .finish(),
+        );
 
         if self.is_next_command_toggleable(app) {
             column.add_child(self.render_next_command_section(view, app));
@@ -3164,7 +3189,6 @@ struct AIInputWidget {
     autodetection_toggle: SwitchStateHandle,
     nld_in_terminal_toggle: SwitchStateHandle,
     show_input_hint_toggle: SwitchStateHandle,
-    hash_trigger_toggle: SwitchStateHandle,
     show_agent_tips_toggle: SwitchStateHandle,
     include_agent_commands_in_history_toggle: SwitchStateHandle,
     auto_approve_bypasses_command_denylist_toggle: SwitchStateHandle,
@@ -3174,7 +3198,7 @@ impl SettingsWidget for AIInputWidget {
     type View = WarpAgentPageView;
 
     fn search_terms(&self) -> &str {
-        "oz agent ai input natural language detection autodetection prompt terminal command commands history shell executed execution queue interrupt submission submit auto-queue response while responding default long-running long running lrc auto-approve fast forward denylist permissions # hash pound trigger ai command search shorthand shell comment"
+        "oz agent ai input natural language detection autodetection prompt terminal command commands history shell executed execution queue interrupt submission submit auto-queue response while responding default long-running long running lrc auto-approve fast forward denylist permissions"
     }
 
     fn render(
@@ -3185,14 +3209,6 @@ impl SettingsWidget for AIInputWidget {
     ) -> Box<dyn Element> {
         let ai_settings = AISettings::as_ref(app);
         let is_any_ai_enabled = ai_settings.is_any_ai_enabled(app);
-
-        let input_header = build_sub_header(
-            appearance,
-            "Input",
-            Some(styles::header_font_color(is_any_ai_enabled, app)),
-        )
-        .with_padding_bottom(HEADER_PADDING)
-        .finish();
 
         let natural_language_detection_section = Self::render_natural_language_detection_section(
             self.incorrect_autodetection_highlight_index.clone(),
@@ -3214,23 +3230,7 @@ impl SettingsWidget for AIInputWidget {
             app,
         );
 
-        let hash_trigger_toggle = render_ai_setting_toggle::<EnableAiCommandSearchHashTrigger>(
-            "Enable '#' trigger for AI Command Search",
-            WarpAgentPageAction::ToggleAiCommandSearchHashTrigger,
-            *InputSettings::as_ref(app).enable_ai_command_search_hash_trigger,
-            is_any_ai_enabled,
-            self.hash_trigger_toggle.clone(),
-            &view.local_only_icon_tooltip_states,
-            app,
-        );
-
-        let mut widget_children = vec![
-            render_separator(appearance),
-            input_header,
-            natural_language_detection_section,
-            show_input_hint_text,
-            hash_trigger_toggle,
-        ];
+        let mut widget_children = vec![natural_language_detection_section, show_input_hint_text];
 
         if FeatureFlag::AgentTips.is_enabled() {
             let agent_tips_toggle = render_ai_setting_toggle::<ShowAgentTips>(
@@ -3326,6 +3326,41 @@ impl SettingsWidget for AIInputWidget {
         }
 
         Flex::column().with_children(widget_children).finish()
+    }
+}
+
+/// Isolated from `AIInputWidget` so a search for it (e.g. "hash" or "AI
+/// Command Search") matches just this row instead of the whole Input
+/// mega-widget. Shares the "Input" subheader with `AIInputWidget` via the
+/// enclosing `Category` (see `WarpAgentPageView::build_page`).
+#[derive(Default)]
+struct AiCommandSearchHashTriggerWidget {
+    switch_state: SwitchStateHandle,
+}
+
+impl SettingsWidget for AiCommandSearchHashTriggerWidget {
+    type View = WarpAgentPageView;
+
+    fn search_terms(&self) -> &str {
+        "# hash pound trigger ai command search shorthand shell comment"
+    }
+
+    fn render(
+        &self,
+        view: &Self::View,
+        _appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
+        let is_any_ai_enabled = AISettings::as_ref(app).is_any_ai_enabled(app);
+        render_ai_setting_toggle::<EnableAiCommandSearchHashTrigger>(
+            "Enable '#' trigger for AI Command Search",
+            WarpAgentPageAction::ToggleAiCommandSearchHashTrigger,
+            *InputSettings::as_ref(app).enable_ai_command_search_hash_trigger,
+            is_any_ai_enabled,
+            self.switch_state.clone(),
+            &view.local_only_icon_tooltip_states,
+            app,
+        )
     }
 }
 
@@ -3598,7 +3633,6 @@ impl SettingsWidget for VoiceWidget {
         let ai_settings = AISettings::as_ref(app);
         let is_any_ai_enabled = ai_settings.is_any_ai_enabled(app);
         Flex::column()
-            .with_child(render_separator(appearance))
             .with_child(
                 build_sub_header(
                     appearance,
@@ -3727,17 +3761,15 @@ impl SettingsWidget for OtherAIWidget {
         let is_any_ai_enabled = ai_settings.is_any_ai_enabled(app);
         let is_toggleable = is_any_ai_enabled;
 
-        let mut column = Flex::column()
-            .with_child(render_separator(appearance))
-            .with_child(
-                build_sub_header(
-                    appearance,
-                    "Other",
-                    Some(styles::header_font_color(is_any_ai_enabled, app)),
-                )
-                .with_padding_bottom(HEADER_PADDING)
-                .finish(),
-            );
+        let mut column = Flex::column().with_child(
+            build_sub_header(
+                appearance,
+                "Other",
+                Some(styles::header_font_color(is_any_ai_enabled, app)),
+            )
+            .with_padding_bottom(HEADER_PADDING)
+            .finish(),
+        );
 
         if FeatureFlag::AgentView.is_enabled() {
             let mut agent_view_column = Flex::column()
@@ -3950,7 +3982,6 @@ impl SettingsWidget for AgentAttributionWidget {
         );
 
         Flex::column()
-            .with_child(render_separator(appearance))
             .with_child(
                 build_sub_header(
                     appearance,
@@ -4055,7 +4086,6 @@ impl SettingsWidget for CloudAgentComputerUseWidget {
         );
 
         Flex::column()
-            .with_child(render_separator(appearance))
             .with_child(
                 build_sub_header(
                     appearance,
@@ -4155,7 +4185,6 @@ impl SettingsWidget for CloudHandoffWidget {
         );
 
         let mut column = Flex::column()
-            .with_child(render_separator(appearance))
             .with_child(
                 build_sub_header(
                     appearance,
@@ -5093,7 +5122,7 @@ impl SettingsWidget for ApiKeysWidget {
             managed_byok_byoe_enabled,
         } = visibility;
 
-        let mut column = Flex::column().with_child(render_separator(appearance));
+        let mut column = Flex::column();
 
         if visibility.show_section() {
             // Header row: "Custom Inference" + info icon on left, "+ Add custom model" on right
@@ -5756,7 +5785,6 @@ impl SettingsWidget for AwsBedrockWidget {
             UserWorkspaces::as_ref(app).is_aws_bedrock_available_from_workspace();
 
         let column = Flex::column()
-            .with_child(render_separator(appearance))
             .with_child(
                 build_sub_header(
                     appearance,
@@ -5995,7 +6023,6 @@ impl SettingsWidget for GeminiEnterpriseWidget {
         let is_gemini_enterprise_available =
             UserWorkspaces::as_ref(app).is_gemini_enterprise_available_from_workspace();
         let column = Flex::column()
-            .with_child(render_separator(appearance))
             .with_child(
                 build_sub_header(
                     appearance,
@@ -6070,7 +6097,6 @@ impl SettingsWidget for CustomModelRoutersWidget {
             .finish();
 
         let column = Flex::column()
-            .with_child(render_separator(appearance))
             .with_child(
                 Container::new(header_row)
                     .with_padding_bottom(HEADER_PADDING)

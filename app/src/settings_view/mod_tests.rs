@@ -1,4 +1,7 @@
-use settings_page::{FilteredPageType, MatchData, PageType, SettingsWidget, search_terms_match};
+use settings_page::{
+    Category, FilteredCategory, FilteredPageType, MatchData, PageType, SettingsWidget,
+    search_terms_match,
+};
 use warpui::elements::Empty;
 use warpui::{App, AppContext, Element, Entity, View};
 
@@ -892,6 +895,118 @@ fn empty_query_after_reapply_shows_all_widgets() {
                 5,
                 "an empty query restores every widget on the subpage"
             );
+        });
+    });
+}
+
+// ── Category filter isolation (APP-5557 review finding) ──────────────────────
+// A Category shares one subheader across several widgets. Splitting a setting
+// out of a mega-widget into its own SettingsWidget only isolates it in search
+// if the pair still shares a Category: the shared subheader must survive as
+// long as *either* widget matches, and a query unique to one widget must not
+// drag the other along with it (see gui-settings-ui skill: the widget is the
+// search unit, and a shared section header lives at the Category level).
+
+/// A category mirroring the Warp Agent "Input" section: two widgets (an
+/// unrelated mega-widget stand-in and the isolated one under test) sharing one
+/// "Input" subheader, alongside an unrelated single-widget category.
+fn stub_categorized_page() -> PageType<TestSettingsView> {
+    let categories = vec![
+        Category::new(
+            "Input",
+            vec![
+                Box::new(StubWidget {
+                    terms: "natural language detection autodetection show input hint text",
+                }) as Box<dyn SettingsWidget<View = TestSettingsView>>,
+                Box::new(StubWidget {
+                    terms: "hash pound trigger ai command search",
+                }),
+            ],
+        ),
+        Category::new(
+            "Voice",
+            vec![Box::new(StubWidget {
+                terms: "voice input speech",
+            })],
+        ),
+    ];
+    PageType::new_categorized(categories, None)
+}
+
+/// The category the page would render under its current filter, by title.
+fn visible_category<'a, V: View>(
+    page: &'a PageType<V>,
+    title: &str,
+) -> Option<FilteredCategory<'a, V>> {
+    let FilteredPageType::Categorized { categories, .. } = page.get_filtered() else {
+        panic!("expected Categorized page");
+    };
+    categories.into_iter().find(|c| c.title == title)
+}
+
+#[test]
+fn query_unique_to_one_widget_isolates_it_within_the_shared_category() {
+    // Searching a term unique to the hash-trigger stub must show only that
+    // widget, not its sibling mega-widget stand-in.
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            let mut page = stub_categorized_page();
+            page.update_filter("hash", ctx);
+
+            let input_category = visible_category(&page, "Input")
+                .expect("the Input category must still render when one of its widgets matches");
+            assert_eq!(
+                input_category.widgets.len(),
+                1,
+                "only the widget matching 'hash' should render, not its Input-section sibling"
+            );
+
+            assert!(
+                visible_category(&page, "Voice").is_none(),
+                "an unrelated category must not survive a query it doesn't match"
+            );
+        });
+    });
+}
+
+#[test]
+fn shared_category_header_survives_when_either_sibling_widget_matches() {
+    // The "Input" subheader is owned by the Category, not by either widget, so
+    // it must still render regardless of which sibling widget the query hits.
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            let mut hash_query_page = stub_categorized_page();
+            hash_query_page.update_filter("hash", ctx);
+            assert!(
+                visible_category(&hash_query_page, "Input").is_some(),
+                "the Input header must survive a query matching only the hash-trigger widget"
+            );
+
+            let mut hint_query_page = stub_categorized_page();
+            hint_query_page.update_filter("hint text", ctx);
+            let input_category = visible_category(&hint_query_page, "Input").expect(
+                "the Input header must survive a query matching only the other Input widget",
+            );
+            assert_eq!(
+                input_category.widgets.len(),
+                1,
+                "only the widget matching 'hint text' should render"
+            );
+        });
+    });
+}
+
+#[test]
+fn empty_query_on_categorized_page_shows_every_widget_in_every_category() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            let mut page = stub_categorized_page();
+            page.update_filter("", ctx);
+
+            let input_category =
+                visible_category(&page, "Input").expect("Input category should be visible");
+            assert_eq!(input_category.widgets.len(), 2);
+            assert!(visible_category(&page, "Voice").is_some());
         });
     });
 }
