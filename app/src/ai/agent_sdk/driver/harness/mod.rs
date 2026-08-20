@@ -351,7 +351,7 @@ fn task_env_vars_for_harness_name(
         insert_task_env_var_names(
             &mut env_vars,
             &[OZ_RUN_ID_ENV, WARP_RUN_ID_ENV],
-            &id.to_string(),
+            id.to_string(),
         );
     }
 
@@ -371,7 +371,7 @@ fn task_env_vars_for_harness_name(
     insert_task_env_var_names(
         &mut env_vars,
         &[OZ_HARNESS_ENV, WARP_HARNESS_ENV],
-        &selected_harness.to_string(),
+        selected_harness.to_string(),
     );
     if selected_harness == Harness::Claude && task_id.is_some() {
         insert_task_env_var_names(
