@@ -434,10 +434,19 @@ $null = New-Module -Name Warp-Module -ScriptBlock {
                     # `$_.Na` -- which is narrower than (and can disagree with) the client's own
                     # whitespace-derived guess. Report it so the client uses it instead: without
                     # this, filtering the shell's own already-correct candidates against the
-                    # client's wrong guess discards them. ReplacementIndex/ReplacementLength are
-                    # .NET string (UTF-16 code unit) offsets; sent as-is, so this is only exact
-                    # for ASCII lines -- the reported cases all are, and getting this precisely
-                    # right for non-ASCII lines is a larger undertaking left as a known gap.
+                    # client's wrong guess discards them.
+                    #
+                    # ReplacementIndex/ReplacementLength are .NET string (UTF-16 code unit)
+                    # offsets, but the client's buffer is UTF-8 bytes and slices it directly at
+                    # these offsets -- sending them as-is panicked the app whenever a multi-byte
+                    # character (an accented letter, a CJK character, an emoji) appeared to the
+                    # left of the completed token, since the index then lands inside that
+                    # character's UTF-8 encoding rather than on a boundary (measured with a
+                    # literal CJK character before "Get-Ch"). Convert to UTF-8 byte offsets here,
+                    # where the exact string is known, using .NET's own encoder rather than
+                    # hand-rolled surrogate-pair math: substring on UTF-16 code-unit boundaries
+                    # (which ReplacementIndex/Length already are, so this never splits a
+                    # surrogate pair) and count the UTF-8 bytes that substring encodes to.
                     #
                     # A whitespace-only line (measured: e.g. "   ") reports a negative
                     # ReplacementIndex/ReplacementLength -- CompleteInput has nothing to anchor a
@@ -446,7 +455,11 @@ $null = New-Module -Name Warp-Module -ScriptBlock {
                     # trivially reachable input; the client's whitespace-derived fallback span is
                     # exactly as good as anything a negative index could have conveyed anyway.
                     if ($completion.ReplacementIndex -ge 0) {
-                        Write-Host -NoNewline "$([char]0x1b)]9280;S;$($completion.ReplacementIndex),$($completion.ReplacementLength)$oscEnd"
+                        $utf8 = [System.Text.Encoding]::UTF8
+                        $replacementStartBytes = $utf8.GetByteCount($line.Substring(0, $completion.ReplacementIndex))
+                        $replacementEndBytes = $utf8.GetByteCount(
+                            $line.Substring(0, $completion.ReplacementIndex + $completion.ReplacementLength))
+                        Write-Host -NoNewline "$([char]0x1b)]9280;S;$replacementStartBytes,$($replacementEndBytes - $replacementStartBytes)$oscEnd"
                     }
                     foreach ($match in $completion.CompletionMatches) {
                         Write-Host -NoNewline "$([char]0x1b)]9280;C;$($match.CompletionText)$oscEnd"
