@@ -104,7 +104,8 @@ fn stays_generic_when_the_reported_model_has_no_display_name() {
 }
 
 /// Today's shipped configuration — naming off, fallback messaging on — must behave
-/// as it did before naming existed, apart from the ellipsis.
+/// exactly as it did before naming existed, down to the full stop. The fallback
+/// message keeps its period while everything named since ends in an ellipsis.
 #[test]
 fn names_a_fallback_model_without_the_naming_flag() {
     let _naming = FeatureFlag::WarpingModelName.override_enabled(false);
@@ -113,10 +114,34 @@ fn names_a_fallback_model_without_the_naming_flag() {
     assert_eq!(
         warping_model_message(for_current(Some(fallback("Claude Haiku 4.5")))),
         Some(WarpingModelMessage {
-            text: "Warping with Claude Haiku 4.5...".to_owned(),
+            text: "Warping with Claude Haiku 4.5.".to_owned(),
             model_display_name: Some("Claude Haiku 4.5".to_owned()),
             show_fallback_explanation: true,
         })
+    );
+}
+
+/// The two copy rules side by side, so neither can drift into the other: the
+/// fallback message ends in a period, the model naming ends in an ellipsis.
+#[test]
+fn ends_the_fallback_message_in_a_period_and_the_named_message_in_an_ellipsis() {
+    let _naming = FeatureFlag::WarpingModelName.override_enabled(true);
+
+    let fallback_text = {
+        let _fallback_messaging =
+            FeatureFlag::FallbackModelLoadOutputMessaging.override_enabled(true);
+        warping_model_message(for_current(Some(fallback("Claude Haiku 4.5")))).map(|m| m.text)
+    };
+    let named_text =
+        warping_model_message(for_current(Some(named("Claude Haiku 4.5")))).map(|m| m.text);
+
+    assert_eq!(
+        fallback_text.as_deref(),
+        Some("Warping with Claude Haiku 4.5.")
+    );
+    assert_eq!(
+        named_text.as_deref(),
+        Some("Warping with Claude Haiku 4.5...")
     );
 }
 
@@ -138,7 +163,7 @@ fn names_a_fallback_model_without_the_explanation_line() {
 }
 
 /// Goes through the conversion rather than hand-building the input, so this also
-/// covers what an empty display name renders as: "Warping with ..." before the
+/// covers what an empty display name renders as: "Warping with ." before the
 /// normalization, this afterwards. No name means no name for the other status
 /// messages either.
 #[test]
@@ -152,6 +177,22 @@ fn describes_an_unnamed_fallback_model_generically() {
             model_display_name: None,
             show_fallback_explanation: true,
         })
+    );
+}
+
+/// Without the fallback message there is no copy for a model that arrived with no
+/// name, so the row keeps its generic text rather than borrowing the fallback's.
+#[test]
+fn stays_generic_for_an_unnamed_fallback_model_when_fallback_messaging_is_disabled() {
+    let _naming = FeatureFlag::WarpingModelName.override_enabled(true);
+    let _fallback_messaging = FeatureFlag::FallbackModelLoadOutputMessaging.override_enabled(false);
+
+    assert_eq!(
+        warping_model_message(for_current(Some(ModelInUse {
+            display_name: None,
+            is_fallback: true,
+        }))),
+        None
     );
 }
 

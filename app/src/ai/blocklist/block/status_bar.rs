@@ -1147,7 +1147,14 @@ struct WarpingModelInputs {
     is_new_user_query: bool,
 }
 
-const UNNAMED_FALLBACK_MODEL_WARPING_TEXT: &str = "Warping with another model...";
+const UNNAMED_FALLBACK_MODEL_WARPING_TEXT: &str = "Warping with another model.";
+
+/// The fallback message's copy. It shipped before model naming existed and keeps
+/// its full stop, where everything named since ends in the row's ellipsis. The
+/// inconsistency is deliberate and was chosen by the requester: do not "fix" it.
+fn fallback_warping_text(display_name: &str) -> String {
+    format!("Warping with {display_name}.")
+}
 
 /// Warping text for the model a response is running on, e.g. "Warping with Claude
 /// Sonnet 4.5...". `None` keeps the row on its generic copy, which is what `auto`
@@ -1185,12 +1192,18 @@ fn warping_model_message(inputs: WarpingModelInputs) -> Option<WarpingModelMessa
         return None;
     }
 
-    let text = match model_in_use.display_name.as_deref() {
-        Some(display_name) => status_message_naming_model(LOAD_OUTPUT_MESSAGE, display_name),
-        // An unnamed fallback still has something to say; an unnamed ordinary
-        // model does not, so the row keeps its generic copy.
-        None if model_in_use.is_fallback => UNNAMED_FALLBACK_MODEL_WARPING_TEXT.to_owned(),
-        None => return None,
+    let text = match (
+        model_in_use.display_name.as_deref(),
+        show_fallback_explanation,
+    ) {
+        (Some(display_name), true) => fallback_warping_text(display_name),
+        // An unnamed fallback still has something to say.
+        (None, true) => UNNAMED_FALLBACK_MODEL_WARPING_TEXT.to_owned(),
+        (Some(display_name), false) => {
+            status_message_naming_model(LOAD_OUTPUT_MESSAGE, display_name)
+        }
+        // No name, and no fallback message to fall back on: keep the generic copy.
+        (None, false) => return None,
     };
 
     Some(WarpingModelMessage {
