@@ -509,7 +509,7 @@ impl AIConversation {
                 })
                 .collect();
 
-            let mut tasks_by_id = HashMap::new();
+            let mut tasks_by_id = hashbrown::HashMap::new();
             // Defer root selection until we've seen every parentless task so
             // we can deterministically prefer a candidate with non-empty
             // messages. Heals legacy DB rows that contain an orphan

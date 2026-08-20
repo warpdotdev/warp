@@ -1002,7 +1002,15 @@ impl TuiTerminalSessionView {
             return;
         };
         let honor_ps1_enabled = match &completed.block_type {
-            BlockType::User(user_block) => user_block.serialized_block.honor_ps1,
+            BlockType::User(user_block) => {
+                user_block
+                    .serialized_block
+                    .get_with(|compute| {
+                        let model = self.terminal_model.lock();
+                        compute(model.block_list())
+                    })
+                    .honor_ps1
+            }
             BlockType::BootstrapVisible(serialized_block) => serialized_block.honor_ps1,
             BlockType::BootstrapHidden
             | BlockType::Restored
@@ -1013,6 +1021,10 @@ impl TuiTerminalSessionView {
         let BlockType::User(user_block) = &completed.block_type else {
             return;
         };
+        let serialized_block = user_block.serialized_block.get_with(|compute| {
+            let model = self.terminal_model.lock();
+            compute(model.block_list())
+        });
         warp::send_telemetry_from_ctx!(
             TelemetryEvent::BlockCompleted {
                 block_finished_to_precmd_delay_ms: delay.as_millis() as u64,
@@ -1020,17 +1032,14 @@ impl TuiTerminalSessionView {
                 num_secrets_redacted: completed.num_secrets_obfuscated,
                 num_output_lines: user_block.num_output_lines,
                 num_output_lines_truncated: user_block.num_output_lines_truncated,
-                terminal_session_id: user_block.serialized_block.session_id,
+                terminal_session_id: serialized_block.session_id,
                 is_udi_enabled: false,
                 is_in_agent_view: true,
             },
             ctx
         );
         if ChannelState::channel().is_dogfood() {
-            let duration = match (
-                user_block.serialized_block.start_ts,
-                user_block.serialized_block.completed_ts,
-            ) {
+            let duration = match (serialized_block.start_ts, serialized_block.completed_ts) {
                 (Some(start), Some(completed)) => (completed - start).to_std().unwrap_or_default(),
                 (None, _) | (_, None) => Duration::default(),
             };
@@ -1041,10 +1050,16 @@ impl TuiTerminalSessionView {
                     num_secrets_redacted: completed.num_secrets_obfuscated,
                     num_output_lines: user_block.num_output_lines,
                     num_output_lines_truncated: user_block.num_output_lines_truncated,
-                    command: user_block.command_with_obfuscated_secrets.clone(),
+                    command: user_block
+                        .command_with_obfuscated_secrets
+                        .get_with(|compute| {
+                            let model = self.terminal_model.lock();
+                            compute(model.block_list())
+                        })
+                        .to_owned(),
                     duration,
-                    exit_code: user_block.serialized_block.exit_code,
-                    terminal_session_id: user_block.serialized_block.session_id,
+                    exit_code: serialized_block.exit_code,
+                    terminal_session_id: serialized_block.session_id,
                 },
                 ctx
             );

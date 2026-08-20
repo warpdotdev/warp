@@ -98,6 +98,7 @@ use warpui::elements::{
     ParentOffsetBounds, PositionedElementAnchor, PositionedElementOffsetBounds, Radius, Rect,
     SavePosition, Shrinkable, SizeConstraintCondition, SizeConstraintSwitch, Stack, Text,
 };
+use warpui::event::KeyState;
 use warpui::fonts::{Properties, Weight};
 use warpui::geometry::vector::{Vector2F, vec2f};
 use warpui::keymap::Context;
@@ -365,8 +366,8 @@ use crate::tab::{
     COMPACT_TAB_WIDTH_THRESHOLD, ColorPickerTarget, MOVE_TO_GROUP_LABEL, NewSessionMenuItem,
     PaneNameMenuTarget, SelectedTabColor, TAB_BAR_BORDER_HEIGHT, TAB_INDICATOR_HEIGHT,
     TAB_PIN_INDICATOR_ICON_SIZE, TAB_PIN_VANISH_THRESHOLD, TabBarState, TabComponent, TabData,
-    TabTelemetryAction, color_picker_menu_items, next_tab_color, tab_position_id,
-    uses_vertical_tabs,
+    TabShortcutModifierState, TabTelemetryAction, color_picker_menu_items, next_tab_color,
+    tab_position_id, uses_vertical_tabs,
 };
 use crate::tab_configs::action_sidecar::SidecarItemKind;
 use crate::tab_configs::remove_confirmation_dialog::{
@@ -2932,6 +2933,9 @@ impl Workspace {
         let state_handle = WindowManager::handle(ctx);
         ctx.subscribe_to_model(&state_handle, |me, _, event, ctx| {
             me.handle_window_state_change(event, ctx);
+        });
+        ctx.observe(&TabShortcutModifierState::handle(ctx), |_, _, ctx| {
+            ctx.notify();
         });
 
         ctx.observe(&RelaunchModel::handle(ctx), |_, _, ctx| {
@@ -18902,6 +18906,17 @@ impl Workspace {
             StateEvent::ValueChanged { current, previous } => {
                 let did_window_change_focus =
                     WindowManager::did_window_change_focus(self.window_id, current, previous);
+                let window_lost_focus = previous.active_window == Some(self.window_id)
+                    && current.active_window != Some(self.window_id);
+                let app_lost_focus = previous.stage == ApplicationStage::Active
+                    && current.stage != ApplicationStage::Active;
+                if window_lost_focus || app_lost_focus {
+                    TabShortcutModifierState::handle(ctx).update(ctx, |state, ctx| {
+                        if state.clear_held_keys() {
+                            ctx.notify();
+                        }
+                    });
+                }
                 let cached_window_is_active = current.active_window == Some(self.window_id);
                 let app_became_active = previous.stage != ApplicationStage::Active
                     && current.stage == ApplicationStage::Active;
@@ -23873,6 +23888,11 @@ impl TypedActionView for Workspace {
         match action {
             ActivateTab(index) => self.activate_tab(*index, ctx),
             ActivateTabByNumber(num) => self.activate_tab(num.saturating_sub(1), ctx),
+            SetTabShortcutModifierKey { key_code, pressed } => {
+                TabShortcutModifierState::handle(ctx).update(ctx, |state, ctx| {
+                    state.set_key_held(*key_code, *pressed, ctx);
+                });
+            }
             ActivatePrevTab => self.activate_prev_tab(ctx),
             OpenLaunchConfigSaveModal => self.open_launch_config_save_modal(ctx),
             ActivateNextTab => self.activate_next_tab(ctx),
@@ -27876,6 +27896,15 @@ impl View for Workspace {
                     DispatchEventResult::StopPropagation
                 });
         }
+
+        let event_handler =
+            event_handler.on_modifier_state_changed(|ctx, _app, key_code, state| {
+                ctx.dispatch_typed_action(WorkspaceAction::SetTabShortcutModifierKey {
+                    key_code: *key_code,
+                    pressed: matches!(state, KeyState::Pressed),
+                });
+                DispatchEventResult::PropagateToParent
+            });
 
         event_handler.finish()
     }

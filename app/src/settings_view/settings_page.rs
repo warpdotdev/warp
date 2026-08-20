@@ -1800,6 +1800,8 @@ impl<V: warpui::View> PageType<V> {
                 highlighted_widget_id,
                 ..
             } => {
+                let categories = categories_with_visible_content(categories, app);
+
                 let mut page = Flex::column();
                 if let Some(title) = title {
                     page.add_child(render_page_title(title, HEADER_FONT_SIZE, appearance));
@@ -1981,6 +1983,21 @@ pub(super) struct FilteredCategory<'a, V: warpui::View> {
     pub(super) title: &'static str,
     pub(super) subtitle: Option<&'static str>,
     pub(super) widgets: Vec<&'a dyn SettingsWidget<View = V>>,
+}
+
+pub(super) fn categories_with_visible_content<'a, V: warpui::View>(
+    categories: Vec<FilteredCategory<'a, V>>,
+    app: &AppContext,
+) -> Vec<FilteredCategory<'a, V>> {
+    categories
+        .into_iter()
+        .filter(|category| {
+            category
+                .widgets
+                .iter()
+                .any(|widget| widget.should_render(app))
+        })
+        .collect()
 }
 
 /// Widgets are pieces of renderable settings modal content which can be associated with search
