@@ -11,6 +11,7 @@ use anyhow::anyhow;
 use async_trait::async_trait;
 use base64::Engine;
 use chrono::{DateTime, Utc};
+use cloud_object_models::CodeForge;
 use cynic::{MutationBuilder, QueryBuilder};
 use itertools::Itertools;
 #[cfg(test)]
@@ -409,6 +410,24 @@ pub struct AgentRunClientSetupMetricPayload {
     pub finish_ts: DateTime<Utc>,
     pub latency_ms: i64,
     pub is_error: bool,
+}
+#[derive(Debug, Clone, serde::Serialize, PartialEq, Eq)]
+pub struct AgentRunRepositoryRevisionsRequest {
+    pub snapshot_uuid: String,
+    pub captured_at: DateTime<Utc>,
+    pub unresolved_repository_count: usize,
+    pub repositories: Vec<AgentRunRepositoryRevision>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, PartialEq, Eq)]
+pub struct AgentRunRepositoryRevision {
+    pub code_forge: CodeForge,
+    pub repo_owner: String,
+    pub repo_name: String,
+    pub checkout_path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub requested_checkout_ref: Option<String>,
+    pub resolved_head_sha: String,
 }
 
 impl AgentRunClientEventRequest {
@@ -1497,6 +1516,11 @@ pub trait AIClient: 'static + Send + Sync {
         &self,
         run_id: &AmbientAgentTaskId,
         request: AgentRunClientEventRequest,
+    ) -> anyhow::Result<(), anyhow::Error>;
+    async fn post_agent_run_repository_revisions(
+        &self,
+        run_id: &AmbientAgentTaskId,
+        request: AgentRunRepositoryRevisionsRequest,
     ) -> anyhow::Result<(), anyhow::Error>;
 
     async fn mark_message_delivered(&self, message_id: &str) -> anyhow::Result<(), anyhow::Error>;
@@ -2942,6 +2966,19 @@ impl AIClient for ServerApi {
         self.post_public_api_response_for_task(
             run_id,
             &format!("agent/runs/{run_id}/client-events"),
+            &request,
+        )
+        .await?;
+        Ok(())
+    }
+    async fn post_agent_run_repository_revisions(
+        &self,
+        run_id: &AmbientAgentTaskId,
+        request: AgentRunRepositoryRevisionsRequest,
+    ) -> anyhow::Result<(), anyhow::Error> {
+        self.post_public_api_response_for_task(
+            run_id,
+            &format!("agent/runs/{run_id}/repository-revisions"),
             &request,
         )
         .await?;
