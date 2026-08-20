@@ -1450,13 +1450,33 @@ esac
     # descriptions in $__dscr!
 
     # $PREFIX is the part of the current word these matches replace -- everything before it
-    # ($IPREFIX, a literal quote in $QIPREFIX, other already-typed words) is left untouched.
+    # ($IPREFIX, a literal quote in $QIPREFIX, other already-typed words) is left untouched --
+    # *except* when the completion function has already reported part of $PREFIX itself as a
+    # hint via `-p`/`-P` (parsed above into $hpre/$apre). `_path_files` does exactly this for a
+    # multi-component path: it restores $PREFIX to the *entire* remaining path (e.g. `/et` for
+    # `cd /et`, not just `et`) before calling compadd, and reports the directory portion
+    # (`/`) separately via `-p` for *display* -- the real, narrower text these particular
+    # matches replace is only what's left of $PREFIX after that hint prefix (`et`), since the
+    # match strings themselves are bare basenames (`etc`), never the full path. Using the whole
+    # $PREFIX here would report a span no real candidate starts with, which the client's own
+    # filter then discards entirely -- Tab silently doing nothing for any multi-component path
+    # (confirmed empirically for `cd /tmp/somedir/et`: $PREFIX measured as the full
+    # `/tmp/somedir/et`, `hpre` as `/tmp/somedir/`, and the real matches as bare `etc`/
+    # `etcetera`). $hpre/$apre are otherwise unused here (unlike $asuf below) specifically
+    # because of this: they only matter for narrowing the replaced substring, never for the
+    # inserted text.
+    local __hint_prefix="${(v)apre}${(v)hpre}"
+    local __replaced_prefix="$PREFIX"
+    if [[ -n $__hint_prefix && $PREFIX == "${__hint_prefix}"* ]]; then
+        __replaced_prefix="${PREFIX#$__hint_prefix}"
+    fi
+
     # Since native completions only ever complete up to the cursor (see generator_command_for's
-    # doc comment), there's no $SUFFIX, so $PREFIX is always a trailing substring of the full
-    # line: its start is simply the line's length minus its own. This holds however $PREFIX got
-    # there -- a bare path segment, one following a literal `/` or `$`/`${` IPREFIX, one inside
-    # an open quote, or one with a literal (unexpanded) `~` or backslash-escape -- because
-    # $PREFIX always carries the exact characters typed for that segment, not an expanded or
+    # doc comment), there's no $SUFFIX, so $__replaced_prefix is always a trailing substring of
+    # the full line: its start is simply the line's length minus its own. This holds however it
+    # got there -- a bare path segment, one following a literal `/` or `$`/`${` IPREFIX, one
+    # inside an open quote, or one with a literal (unexpanded) `~` or backslash-escape -- because
+    # it always carries the exact characters typed for that segment, not an expanded or
     # dequoted form (verified against each of these shapes empirically; see the PR description).
     #
     # The OSC wire format is byte offsets (matching every other shell's own span, and the
@@ -1470,7 +1490,7 @@ esac
     # `$#__hits`/`$#__dscr`/`${#dirsuf}` below are array element counts, unaffected by locale,
     # and the description prefix-strip (`##$__hits[$i] #`) is a literal byte-for-byte match.
     local LC_ALL=C
-    warp_mark_replacement_span_for_compadd_override $(( ${#_WARP_NATIVE_COMPLETIONS_LINE} - ${#PREFIX} )) ${#PREFIX}
+    warp_mark_replacement_span_for_compadd_override $(( ${#_WARP_NATIVE_COMPLETIONS_LINE} - ${#__replaced_prefix} )) ${#__replaced_prefix}
 
     # display all matches
     #
