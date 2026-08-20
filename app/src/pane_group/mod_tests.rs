@@ -2137,7 +2137,11 @@ fn test_close_last_pane_clears_share_modal_state() {
 
         pane_group.update(&mut app, |panes, ctx| {
             let pane_id = get_newly_created_pane_id(panes, &[]);
-            panes.terminal_with_open_share_block_modal = Some(pane_id.as_terminal_pane_id());
+            panes.terminal_with_open_share_block_modal = Some(
+                pane_id
+                    .as_terminal_pane_id()
+                    .expect("newly created pane should be a terminal"),
+            );
 
             panes.close_pane(pane_id, ctx);
 
