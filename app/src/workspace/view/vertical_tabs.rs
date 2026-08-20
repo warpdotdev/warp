@@ -411,7 +411,7 @@ fn render_pane_row_element(
         pane_rename_editor: _,
         is_pinned,
         container_is_hovered,
-        tab_index: _,
+        shortcut_hint_tab_index: _,
     } = props;
     let is_selected = is_active_tab && is_focused;
     let show_pin = FeatureFlag::PinnedTabs.is_enabled() && is_pinned && !container_is_hovered;
@@ -857,7 +857,7 @@ struct PaneProps<'a> {
     /// True when the tab container containing this pane is hovered.
     /// The pin icon is hidden when a tab is hovered.
     container_is_hovered: bool,
-    tab_index: usize,
+    shortcut_hint_tab_index: Option<usize>,
 }
 
 struct PaneRowState {
@@ -1240,7 +1240,7 @@ impl VerticalTabsPanelState {
                                 None,
                                 tab.pinned,
                                 false,
-                                *tab_index,
+                                Some(*tab_index),
                                 app,
                             )
                             .is_some_and(|props| pane_matches_query(&props, &query_lower, app))
@@ -1848,7 +1848,7 @@ fn render_groups(
                                     None,
                                     tab.pinned,
                                     false,
-                                    tab_index,
+                                    Some(tab_index),
                                     app,
                                 )
                                 .is_some_and(|props| {
@@ -1880,7 +1880,7 @@ fn render_groups(
                                 None,
                                 tab.pinned,
                                 false,
-                                tab_index,
+                                Some(tab_index),
                                 app,
                             )
                             .is_some_and(|props| pane_matches_query(&props, &query_lower, app))
@@ -2240,7 +2240,7 @@ fn render_tab_group_internal(
                     None,
                     tab.pinned,
                     group_state.is_hovered(),
-                    tab_index,
+                    Some(tab_index),
                     app,
                 ) else {
                     return Empty::new().finish();
@@ -2300,7 +2300,7 @@ fn render_tab_group_internal(
                     is_pane_being_renamed.then_some(workspace.pane_rename_editor.clone()),
                     tab.pinned,
                     group_state.is_hovered(),
-                    tab_index,
+                    Some(tab_index),
                     app,
                 ) else {
                     continue;
@@ -3448,10 +3448,11 @@ fn shows_shortcut_hint(modifier_held: bool, tab_index: usize) -> bool {
 /// Resolves the switch-to-tab shortcut label for a row while the reveal
 /// modifier is held. Returns `None` when no hint should be shown.
 fn shortcut_hint_label(props: &PaneProps<'_>, app: &AppContext) -> Option<String> {
-    if !shows_shortcut_hint(reveals_tab_shortcut_hints(app), props.tab_index) {
+    let tab_index = props.shortcut_hint_tab_index?;
+    if !shows_shortcut_hint(reveals_tab_shortcut_hints(app), tab_index) {
         return None;
     }
-    keybinding_name_to_display_string(TAB_ACTIVATE_BINDING_NAMES[props.tab_index], app)
+    keybinding_name_to_display_string(TAB_ACTIVATE_BINDING_NAMES[tab_index], app)
 }
 
 /// Inline label showing the switch-to-tab keyboard shortcut, mirroring the
@@ -3914,7 +3915,7 @@ impl<'a> PaneProps<'a> {
         pane_rename_editor: Option<ViewHandle<EditorView>>,
         is_pinned: bool,
         container_is_hovered: bool,
-        tab_index: usize,
+        shortcut_hint_tab_index: Option<usize>,
         app: &AppContext,
     ) -> Option<Self> {
         let pane = pane_group.pane_by_id(pane_id)?;
@@ -3969,7 +3970,7 @@ impl<'a> PaneProps<'a> {
             pane_rename_editor,
             is_pinned,
             container_is_hovered,
-            tab_index,
+            shortcut_hint_tab_index,
         })
     }
 
@@ -6808,9 +6809,7 @@ fn detail_pane_props<'a>(
         None,
         false,
         false,
-        // The detail sidecar never renders a tab shortcut hint, so the tab
-        // index is unused here; pass the active tab as a harmless stand-in.
-        workspace.active_tab_index,
+        None,
         app,
     )
 }

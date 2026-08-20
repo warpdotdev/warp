@@ -1,3 +1,4 @@
+use std::iter::once;
 use std::path::PathBuf;
 
 use pathfinder_geometry::rect::RectF;
@@ -27,9 +28,7 @@ use crate::context_chips::display_chip::GitLineChanges;
 use crate::pane_group::pane::IPaneType;
 use crate::pane_group::{PaneId, TerminalPaneId};
 use crate::safe_triangle::SafeTriangle;
-use crate::tab::{
-    ShortcutModifierKind, TAB_ACTIVATE_BINDING_NAMES, reveals_shortcut_hints,
-};
+use crate::tab::{ShortcutModifierKind, TAB_ACTIVATE_BINDING_NAMES, reveals_shortcut_hints};
 use crate::terminal::CLIAgent;
 use crate::workspace::tab_settings::VerticalTabsDisplayGranularity;
 
@@ -1208,10 +1207,10 @@ fn tab_activate_binding_names_cover_first_eight_tabs_in_order() {
 
 #[test]
 fn reveals_shortcut_hints_requires_overlap_with_binding_modifiers() {
-    let super_kind = std::iter::once(ShortcutModifierKind::Super).collect();
+    let super_kind = once(ShortcutModifierKind::Super).collect();
     assert!(reveals_shortcut_hints(&super_kind, &super_kind));
 
-    let alt_kind = std::iter::once(ShortcutModifierKind::Alt).collect();
+    let alt_kind = once(ShortcutModifierKind::Alt).collect();
     assert!(!reveals_shortcut_hints(&alt_kind, &super_kind));
 
     let empty = std::collections::HashSet::new();
