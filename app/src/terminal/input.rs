@@ -12936,7 +12936,12 @@ impl Input {
             let cursor_end_offset = input.end_byte_index_of_last_selection(ctx);
 
             // Add a space to the end if the end of the selection/replacement
-            // is at the end of the buffer and the completion result doesn't end with a slash.
+            // is at the end of the buffer and the completion result doesn't end with a slash
+            // or an equals sign. A trailing slash means more of a path is expected next; a
+            // trailing equals sign (e.g. `--color=`) means an option's value is expected
+            // directly afterward, with no space, the same convention shells themselves follow
+            // when completing this shape (confirmed for zsh's `_arguments`-driven `-S '='`
+            // completions).
             // If completions as you type is turned on and classic completions is off, then
             // _don't_ add a space.
             let is_classic_completions_enabled = self.is_classic_completions_enabled(ctx);
@@ -12944,6 +12949,7 @@ impl Input {
                 || is_classic_completions_enabled)
                 && cursor_end_offset.as_usize() == input.buffer_text(ctx).len()
                 && !completion_result.ends_with(self.path_separators(ctx).main)
+                && !completion_result.ends_with('=')
                 && executing == Executing::No
             {
                 format!("{completion_result} ").into()
