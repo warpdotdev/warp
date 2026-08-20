@@ -1623,16 +1623,27 @@ pub struct ChargedUsageTotals {
     pub output_tokens: u32,
     pub input_cache_read_tokens: u32,
     pub input_cache_write_tokens: u32,
+    /// Number of web searches performed, summed across every usage category
+    /// and model. `#[serde(default)]` so blobs persisted before this field
+    /// existed still deserialize.
+    #[serde(default)]
+    pub web_search_count: u32,
+    /// Cumulative cost of web searches performed, in US cents. Included in
+    /// [`Self::total_cost_in_cents`] since it's part of the real, actually-
+    /// charged dollar total (see `warp-proto-apis` PR #363).
+    #[serde(default)]
+    pub web_search_cost_in_cents: f32,
 }
 
 impl ChargedUsageTotals {
-    /// Total inference + platform cost, in US cents.
+    /// Total inference + platform + web-search cost, in US cents.
     pub fn total_cost_in_cents(&self) -> f32 {
         self.input_cost_in_cents
             + self.output_cost_in_cents
             + self.input_cache_read_cost_in_cents
             + self.input_cache_write_cost_in_cents
             + self.platform_cost_in_cents
+            + self.web_search_cost_in_cents
     }
 
     /// Total tokens across every category (input + output + cache-read + cache-write).
@@ -1656,6 +1667,8 @@ impl ChargedUsageTotals {
             self.input_cache_read_cost_in_cents += token_cost.input_cache_read_cost_in_cents;
             self.input_cache_write_cost_in_cents += token_cost.input_cache_write_cost_in_cents;
         }
+        self.web_search_count += usage.web_search_count;
+        self.web_search_cost_in_cents += usage.web_search_cost_in_cents;
     }
 }
 
@@ -1670,6 +1683,8 @@ impl std::ops::AddAssign for ChargedUsageTotals {
         self.output_tokens += rhs.output_tokens;
         self.input_cache_read_tokens += rhs.input_cache_read_tokens;
         self.input_cache_write_tokens += rhs.input_cache_write_tokens;
+        self.web_search_count += rhs.web_search_count;
+        self.web_search_cost_in_cents += rhs.web_search_cost_in_cents;
     }
 }
 

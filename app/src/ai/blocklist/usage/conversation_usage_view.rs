@@ -810,11 +810,12 @@ impl ConversationUsageView {
     }
 
     /// Pushes a "PRICING BREAKDOWN" section with a row per inference
-    /// token category (input, cache read, cache write, output), gated by
-    /// `FeatureFlag::PricingTransparency`. Absent entirely when the flag is
-    /// off or the breakdown is unavailable (e.g. the settings usage-history
-    /// surface, which sources this view from a GraphQL query that doesn't
-    /// yet expose a per-category cost breakdown — documented gap).
+    /// token category (input, cache read, cache write, output) plus web
+    /// search cost, gated by `FeatureFlag::PricingTransparency`. Absent
+    /// entirely when the flag is off or the breakdown is unavailable (e.g.
+    /// the settings usage-history surface, which sources this view from a
+    /// GraphQL query that doesn't yet expose a per-category cost breakdown
+    /// — documented gap).
     fn append_pricing_breakdown_section(
         &self,
         labels: &mut Vec<Box<dyn Element>>,
@@ -844,11 +845,12 @@ impl ConversationUsageView {
         ));
         values.push(render_section_header("".to_string(), appearance));
 
-        let rows: [(&str, f32); 4] = [
+        let rows: [(&str, f32); 5] = [
             ("Input", charged_usage.input_cost_in_cents),
             ("Cache read", charged_usage.input_cache_read_cost_in_cents),
             ("Cache write", charged_usage.input_cache_write_cost_in_cents),
             ("Output", charged_usage.output_cost_in_cents),
+            ("Web search", charged_usage.web_search_cost_in_cents),
         ];
         for (label, cost_in_cents) in rows {
             labels.push(render_label_text(label, appearance));

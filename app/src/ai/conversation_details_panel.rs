@@ -2332,7 +2332,7 @@ impl View for ConversationDetailsPanel {
             }
 
             if let Some(charged_usage) = self.data.charged_usage {
-                let rows: [(&str, f32); 4] = [
+                let rows: [(&str, f32); 5] = [
                     ("Input cost", charged_usage.input_cost_in_cents),
                     (
                         "Cache read cost",
@@ -2343,6 +2343,7 @@ impl View for ConversationDetailsPanel {
                         charged_usage.input_cache_write_cost_in_cents,
                     ),
                     ("Output cost", charged_usage.output_cost_in_cents),
+                    ("Web search cost", charged_usage.web_search_cost_in_cents),
                 ];
                 for (label, cost_in_cents) in rows {
                     let formatted = format!("${:.2}", cost_in_cents / 100.0);
