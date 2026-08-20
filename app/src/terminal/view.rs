@@ -17295,9 +17295,6 @@ impl TerminalView {
         items
     }
 
-    /// Builds the "Paste" entry for the terminal right-click context menu,
-    /// dispatching the same [`TerminalAction::Paste`] as the `terminal:paste`
-    /// keybinding. Disabled when the clipboard has nothing to paste.
     fn paste_menu_item(&self, ctx: &mut ViewContext<Self>) -> MenuItem<TerminalAction> {
         let is_clipboard_empty = ctx.clipboard().read().is_empty();
         MenuItemFields::new("Paste")

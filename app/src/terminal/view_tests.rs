@@ -4552,18 +4552,33 @@ fn test_context_menu_includes_paste_when_clipboard_has_content() {
             ctx.clipboard()
                 .write(ClipboardContent::plain_text("hello".to_string()));
 
-            let menu_source = BlockListMenuSource::OutsideBlockRightClick {
-                position_in_terminal_view: Vector2F::zero(),
-            };
-            let items = view.context_menu_items(&menu_source, ctx);
-            let paste_item = items
-                .iter()
-                .find_map(|item| item.fields().filter(|fields| fields.label() == "Paste"))
-                .expect("Expected `Paste` menu item");
-            assert!(
-                !paste_item.is_disabled(),
-                "Expected `Paste` to be enabled when the clipboard has content"
-            );
+            // Every block-ish right-click source should offer an enabled `Paste`.
+            let menu_sources = [
+                BlockListMenuSource::RegularBlockRightClick {
+                    block_index: BlockIndex::zero(),
+                    position_in_terminal_view: Vector2F::zero(),
+                },
+                BlockListMenuSource::RichContentBlockRightClick {
+                    rich_content_view_id: EntityId::new(),
+                    position_in_terminal_view: Vector2F::zero(),
+                },
+                BlockListMenuSource::OutsideBlockRightClick {
+                    position_in_terminal_view: Vector2F::zero(),
+                },
+            ];
+            for menu_source in menu_sources {
+                let items = view.context_menu_items(&menu_source, ctx);
+                let paste_item = items
+                    .iter()
+                    .find_map(|item| item.fields().filter(|fields| fields.label() == "Paste"))
+                    .unwrap_or_else(|| {
+                        panic!("Expected `Paste` menu item for {menu_source:?}")
+                    });
+                assert!(
+                    !paste_item.is_disabled(),
+                    "Expected `Paste` to be enabled for {menu_source:?} when the clipboard has content"
+                );
+            }
         });
     })
 }
@@ -4610,18 +4625,28 @@ fn test_context_menu_omits_paste_for_text_right_click() {
             ctx.clipboard()
                 .write(ClipboardContent::plain_text("hello".to_string()));
 
-            let menu_source = BlockListMenuSource::RegularTextRightClick {
-                position_in_terminal_view: Vector2F::zero(),
-            };
-            let items = view.context_menu_items(&menu_source, ctx);
-            let labels: Vec<&str> = items
-                .iter()
-                .filter_map(|item| item.fields().map(|fields| fields.label()))
-                .collect();
-            assert!(
-                !labels.contains(&"Paste"),
-                "Did not expect `Paste` in text-selection right-click menu, got {labels:?}"
-            );
+            // Neither text-selection right-click source should offer `Paste`; they already
+            // offer "Insert into input" as their own paste-like action.
+            let menu_sources = [
+                BlockListMenuSource::RegularTextRightClick {
+                    position_in_terminal_view: Vector2F::zero(),
+                },
+                BlockListMenuSource::RichContentTextRightClick {
+                    rich_content_view_id: EntityId::new(),
+                    position_in_rich_content: Vector2F::zero(),
+                },
+            ];
+            for menu_source in menu_sources {
+                let items = view.context_menu_items(&menu_source, ctx);
+                let labels: Vec<&str> = items
+                    .iter()
+                    .filter_map(|item| item.fields().map(|fields| fields.label()))
+                    .collect();
+                assert!(
+                    !labels.contains(&"Paste"),
+                    "Did not expect `Paste` for {menu_source:?}, got {labels:?}"
+                );
+            }
         });
     })
 }
