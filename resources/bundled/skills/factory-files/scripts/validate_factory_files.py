@@ -239,26 +239,61 @@ class Outcome:
 
 
 def server_root(argument: Optional[str]) -> str:
-    """Resolve the server to ask, so a local or staging root needs no code change."""
-    chosen = argument or os.environ.get("WARP_SERVER_ROOT") or DEFAULT_SERVER_ROOT
+    """Resolve the server to ask, so a local or staging root needs no code change.
+
+    WARP_SERVER_ROOT_URL is the name an Oz sandbox exports; without it here, a
+    sandbox that never sets the older WARP_SERVER_ROOT silently validates
+    against production instead of the server it actually belongs to.
+    """
+    chosen = (
+        argument
+        or os.environ.get("WARP_SERVER_ROOT")
+        or os.environ.get("WARP_SERVER_ROOT_URL")
+        or DEFAULT_SERVER_ROOT
+    )
     return chosen.rstrip("/")
 
 
-def _request_json(url: str, token: Optional[str] = None, payload: Optional[Any] = None) -> Any:
-    """Post or fetch JSON, turning every failure class into NotValidated."""
-    data = None
+def _fetch(url: str, data: Optional[bytes], token: Optional[str]) -> bytes:
+    """Send one request and return its raw body, letting errors propagate."""
     headers = {"Accept": "application/json"}
-    if payload is not None:
-        data = json.dumps(payload).encode("utf-8")
+    if data is not None:
         headers["Content-Type"] = "application/json"
     if token:
         headers["Authorization"] = "Bearer " + token
     request = urllib.request.Request(url, data=data, headers=headers)
+    with urllib.request.urlopen(request, timeout=REQUEST_TIMEOUT_SECONDS) as response:
+        return response.read(MAX_RESPONSE_BYTES + 1)
+
+
+def _request_json(url: str, token: Optional[str] = None, payload: Optional[Any] = None) -> Any:
+    """Post or fetch JSON, turning every failure class into NotValidated.
+
+    A 401 or 403 drawn by a forwarded token is retried once without it: the
+    endpoint needs no credential, so a stale or mismatched WARP_API_KEY must
+    not be able to block validation. The drop is reported, because a key the
+    server rejects is worth knowing about even when validation then succeeds.
+    """
+    data = json.dumps(payload).encode("utf-8") if payload is not None else None
     try:
-        with urllib.request.urlopen(request, timeout=REQUEST_TIMEOUT_SECONDS) as response:
-            body = response.read(MAX_RESPONSE_BYTES + 1)
+        body = _fetch(url, data, token)
     except urllib.error.HTTPError as error:
-        raise NotValidated(f"the server answered HTTP {error.code}") from error
+        if token and error.code in (401, 403):
+            print(
+                f"WARP_API_KEY was rejected with HTTP {error.code}; retrying without it, "
+                "since this endpoint needs no credential.",
+                file=sys.stderr,
+            )
+            try:
+                body = _fetch(url, data, token=None)
+            except urllib.error.HTTPError as retry_error:
+                raise NotValidated(f"the server answered HTTP {retry_error.code}") from retry_error
+            except Exception as retry_error:  # DNS, TLS, connection, timeout, proxy, ...
+                raise NotValidated(
+                    f"the server could not be reached: {retry_error}"
+                ) from retry_error
+        else:
+            raise NotValidated(f"the server answered HTTP {error.code}") from error
     except Exception as error:  # DNS, TLS, connection, timeout, proxy, ...
         raise NotValidated(f"the server could not be reached: {error}") from error
     if len(body) > MAX_RESPONSE_BYTES:
@@ -279,7 +314,9 @@ def validate(root: Path, base_url: str) -> Outcome:
     The endpoint needs no credential. WARP_API_KEY is forwarded when the
     environment already carries one, as an Oz sandbox does, so the request is
     attributable there; nothing requires it, because a local authoring agent
-    runs in a shell that cannot see the Warp client's session.
+    runs in a shell that cannot see the Warp client's session. A stale or
+    mismatched key is retried without itself, in _request_json, rather than
+    blocking validation.
     """
     token = os.environ.get("WARP_API_KEY")
     files, problems = collect_tree(root)
@@ -318,8 +355,8 @@ def main() -> int:
     parser.add_argument(
         "--server-root",
         default=None,
-        help="warp-server root to validate against; defaults to $WARP_SERVER_ROOT then "
-        + DEFAULT_SERVER_ROOT,
+        help="warp-server root to validate against; defaults to $WARP_SERVER_ROOT, then "
+        "$WARP_SERVER_ROOT_URL, then " + DEFAULT_SERVER_ROOT,
     )
     args = parser.parse_args()
 
