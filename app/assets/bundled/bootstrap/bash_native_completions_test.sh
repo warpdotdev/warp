@@ -61,6 +61,14 @@ __make_style_complete() {
 }
 complete -F __make_style_complete make-cli
 
+__semicolon_style_complete() {
+  # A literal `;` in a candidate (e.g. a real filename) is not itself unusual -- OSC 9280's
+  # own params are semicolon-delimited, and this used to truncate everything after the `;`
+  # rather than round-trip it (see decode_hex_completions_payload in ansi/mod.rs).
+  COMPREPLY=("semi;colon.txt")
+}
+complete -F __semicolon_style_complete semicolon-cli
+
 assert_reply() {
   local desc="$1"
   shift
@@ -92,11 +100,22 @@ assert_descriptions() {
 collect_replies() {
   # _warp_native_bash_completions emits one OSC per match with no separator between them
   # ("\e]9280;C;<match>\a\e]9280;C;<match>\a..."), so extract every match/description with
-  # `grep -oP` rather than treating the output as newline-delimited.
+  # `grep -oP` rather than treating the output as newline-delimited. Each payload is
+  # hex-encoded on the wire (see decode_hex_completions_payload in ansi/mod.rs), so decode it
+  # back the same way the Rust client does before comparing against plain-text expectations.
   local output
   output="$(_warp_native_bash_completions "$1" 2>/dev/null)"
-  mapfile -t replies < <(command -p grep -oP '(?<=9280;C;)[^\x07]*' <<< "$output")
-  mapfile -t descriptions < <(command -p grep -oP '(?<=9280;D\?description;)[^\x07]*' <<< "$output")
+  local -a hex_replies hex_descriptions
+  mapfile -t hex_replies < <(command -p grep -oP '(?<=9280;C;)[^\x07]*' <<< "$output")
+  mapfile -t hex_descriptions < <(command -p grep -oP '(?<=9280;D\?description;)[^\x07]*' <<< "$output")
+  replies=()
+  for hex in "${hex_replies[@]}"; do
+    replies+=("$(warp_hex_decode_string "$hex")")
+  done
+  descriptions=()
+  for hex in "${hex_descriptions[@]}"; do
+    descriptions+=("$(warp_hex_decode_string "$hex")")
+  done
 }
 
 collect_replies "cobra-cli che"
@@ -109,6 +128,10 @@ assert_reply "ordinary bash-completion-style entry is unaffected" "checkout" "ch
 
 collect_replies "make-cli sub/dir/"
 assert_reply "make-style entry keeps the full directory-prefixed path under COMP_TYPE 9" "sub/dir/deploy"
+
+collect_replies "semicolon-cli s"
+assert_reply "a literal semicolon in the match text round-trips intact instead of truncating" \
+  "semi;colon.txt"
 
 if [[ $failures -eq 0 ]]; then
   echo "All bash native completions tests passed."

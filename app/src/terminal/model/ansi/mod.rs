@@ -184,6 +184,23 @@ fn osc_7_host_is_local(host: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// Decodes a completions OSC's hex-encoded match/description payload (see the shells' own
+/// `warp_hex_encode_string`/`Warp-Encode-HexString`, the same idiom already used for the
+/// in-progress buffer text and JSON hooks). The raw text can otherwise contain a `;` (which
+/// OSC parameter parsing has already split on before this code even runs, silently truncating
+/// everything after it and corrupting *insertion*, not just display -- e.g. a file named
+/// `semi;colon.txt` would insert as the unterminated `./semi`), a BEL, or an ESC (either of
+/// which would end the whole OSC sequence at the ansi-parsing level before this code runs at
+/// all). Hex-encoding sidesteps all three at once, since a hex string only ever contains
+/// `[0-9a-f]`. Returns `None` if `param` is absent, isn't valid hex, or doesn't decode to valid
+/// UTF-8 -- callers are expected to degrade gracefully (skip the match, or treat as no
+/// description) rather than use a wrong string.
+fn decode_hex_completions_payload(param: Option<&&[u8]>) -> Option<String> {
+    let hex_str = param.map(|osc_data| String::from_utf8_lossy(osc_data))?;
+    let decoded_bytes = hex::decode(&*hex_str).ok()?;
+    String::from_utf8(decoded_bytes).ok()
+}
+
 /// Percent-decode an ASCII URI path segment into a UTF-8 String. Returns `None`
 /// if the input contains a malformed `%xx` escape (including `%` not followed
 /// by two hex digits, e.g. truncated at the end of the string) or the decoded
@@ -1189,18 +1206,18 @@ where
                     self.handler.end_completions_output();
                 }
                 Some(&WARP_COMPLETIONS_MATCH_RESULT_BYTE) => {
-                    // The payload for the OSC is contained in the third parameter.
-                    let Some(data_str) = params
-                        .get(2)
-                        .map(|osc_data| String::from_utf8_lossy(osc_data))
-                    else {
+                    // The payload for the OSC is contained in the third parameter, hex-encoded
+                    // (see `decode_hex_completions_payload` for why: a raw match string can
+                    // otherwise corrupt this OSC, not just its own display).
+                    let Some(match_text) = decode_hex_completions_payload(params.get(2)) else {
                         log::warn!(
-                            "Warp completions match result OSC marker did not contain payload"
+                            "Warp completions match result OSC marker was missing or had an \
+                             invalid hex payload; skipping this match"
                         );
                         return;
                     };
 
-                    let shell_completion_result = ShellCompletion::new(data_str.to_string());
+                    let shell_completion_result = ShellCompletion::new(match_text);
 
                     self.handler
                         .on_completion_result_received(shell_completion_result);
@@ -1244,24 +1261,18 @@ where
                         return;
                     };
 
-                    // Read out the payload for the OSC (stored in the 3rd parameter).
-                    let Some(data_str) = params
-                        .get(2)
-                        .map(|osc_data| String::from_utf8_lossy(osc_data))
-                    else {
-                        log::warn!(
-                            "Warp completions match metadata OSC marker did not contain payload"
-                        );
-                        return;
-                    };
-
                     // Determine which field we are trying to update.
                     match &parameter[2..] {
                         "description" => {
+                            // The payload (3rd parameter) is hex-encoded, same as the match text
+                            // above -- see `decode_hex_completions_payload`. Degrade a missing
+                            // or malformed payload to "no description" (an empty value is a
+                            // no-op update, see `ShellCompletion::update`) rather than a wrong
+                            // string.
+                            let value =
+                                decode_hex_completions_payload(params.get(2)).unwrap_or_default();
                             self.handler.update_last_completion_result(
-                                ShellCompletionUpdate::Description {
-                                    value: data_str.into(),
-                                },
+                                ShellCompletionUpdate::Description { value },
                             );
                         }
                         _ => {

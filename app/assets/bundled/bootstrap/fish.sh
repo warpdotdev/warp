@@ -210,9 +210,13 @@ function warp_run_generator_command_native_completions
         # returning one "match\tdescription" pair per line.
         for entry in (complete -C "$line")
             set -l parts (string split -m 1 \t -- $entry)
-            printf '\e]9280;C;%s\a' $parts[1]
+            # Hex-encode both fields: OSC params are semicolon-delimited and only the third
+            # one is read (see decode_hex_completions_payload in ansi/mod.rs), so a literal
+            # `;` in a match or description (e.g. a filename) would otherwise truncate
+            # everything after it; a BEL or ESC byte would end the OSC itself.
+            printf '\e]9280;C;%s\a' (warp_hex_encode_string $parts[1])
             if test (count $parts) -gt 1 -a -n "$parts[2]"
-                printf '\e]9280;D?description;%s\a' $parts[2]
+                printf '\e]9280;D?description;%s\a' (warp_hex_encode_string $parts[2])
             end
         end
     end

@@ -1491,8 +1491,12 @@ esac
 
         local match="$__hits[$i]$dsuf$asuf_str"
 
-        print -n "\e]9280;C"$OSC_PARAM_SEPARATOR$match$OSC_END
-        print -n "\e]9280;D?description"$OSC_PARAM_SEPARATOR$dscr$OSC_END
+        # Hex-encode both fields: OSC params are semicolon-delimited and only the third one
+        # is read (see decode_hex_completions_payload in ansi/mod.rs), so a literal `;` in a
+        # match or description (e.g. a filename, or a zstyle-formatted description) would
+        # otherwise truncate everything after it; a BEL or ESC byte would end the OSC itself.
+        print -n "\e]9280;C"$OSC_PARAM_SEPARATOR$(warp_hex_encode_string $match)$OSC_END
+        print -n "\e]9280;D?description"$OSC_PARAM_SEPARATOR$(warp_hex_encode_string $dscr)$OSC_END
     done
   }
 

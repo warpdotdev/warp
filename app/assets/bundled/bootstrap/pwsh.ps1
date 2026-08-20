@@ -462,13 +462,18 @@ $null = New-Module -Name Warp-Module -ScriptBlock {
                         Write-Host -NoNewline "$([char]0x1b)]9280;S;$replacementStartBytes,$($replacementEndBytes - $replacementStartBytes)$oscEnd"
                     }
                     foreach ($match in $completion.CompletionMatches) {
-                        Write-Host -NoNewline "$([char]0x1b)]9280;C;$($match.CompletionText)$oscEnd"
+                        # Hex-encode both fields: OSC params are semicolon-delimited and only the
+                        # third one is read (see decode_hex_completions_payload in ansi/mod.rs), so
+                        # a literal `;` in a match or description (e.g. a .NET tooltip like
+                        # "int Count { get; }", or a filename) would otherwise truncate everything
+                        # after it; a BEL or ESC byte would end the OSC itself.
+                        Write-Host -NoNewline "$([char]0x1b)]9280;C;$(Warp-Encode-HexString $match.CompletionText)$oscEnd"
                         if (-not [string]::IsNullOrEmpty($match.ToolTip) -and $match.ToolTip -ne $match.CompletionText) {
                             # Cmdlet/parameter tooltips can span multiple lines (e.g. one syntax
                             # set per parameter combination); collapse to a single line for
                             # display.
                             $description = ($match.ToolTip -split '\r?\n' | Where-Object { $_.Trim() -ne '' }) -join ' '
-                            Write-Host -NoNewline "$([char]0x1b)]9280;D?description;$description$oscEnd"
+                            Write-Host -NoNewline "$([char]0x1b)]9280;D?description;$(Warp-Encode-HexString $description)$oscEnd"
                         }
                     }
                 }

@@ -405,9 +405,13 @@ if [ -z "$WARP_BOOTSTRAPPED" ]; then
           reply_description="${BASH_REMATCH[2]}"
         fi
 
-        printf '\e]9280;C;%s\a' "$reply"
+        # Hex-encode both fields: OSC params are semicolon-delimited and only the third one
+        # is read (see decode_hex_completions_payload in ansi/mod.rs), so a literal `;` in a
+        # match or description (e.g. a filename) would otherwise truncate everything after
+        # it; a BEL or ESC byte would end the OSC itself.
+        printf '\e]9280;C;%s\a' "$(warp_hex_encode_string "$reply")"
         if [[ -n "$reply_description" ]]; then
-          printf '\e]9280;D?description;%s\a' "$reply_description"
+          printf '\e]9280;D?description;%s\a' "$(warp_hex_encode_string "$reply_description")"
         fi
       done
     }
