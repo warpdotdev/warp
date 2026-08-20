@@ -2490,6 +2490,7 @@ fn response_summary_visibility_is_independent_from_the_footer_usage_mode() {
             credits_spent: 2.5,
             cost_in_cents: Some(3.2),
             has_usage: true,
+            charged_usage: None,
         };
 
         assert_eq!(
@@ -4856,6 +4857,7 @@ fn footer_renders_agent_sections_left_aligned() {
                     credits_spent: 2.5,
                     cost_in_cents: Some(0.0),
                     has_usage: true,
+                    charged_usage: None,
                 },
                 ctx,
                 |_, _| {},
@@ -4949,6 +4951,7 @@ fn footer_usage_entry_shows_unknown_cost_even_with_zero_credits() {
                     credits_spent: 0.0,
                     cost_in_cents: None,
                     has_usage: true,
+                    charged_usage: None,
                 },
                 ctx,
                 |_, _| {},

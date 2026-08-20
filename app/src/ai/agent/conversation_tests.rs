@@ -15,7 +15,9 @@ use crate::ai::llms::LLMPreferences;
 use crate::auth::AuthStateProvider;
 use crate::auth::auth_manager::AuthManager;
 use crate::network::NetworkStatus;
-use crate::persistence::model::{AgentConversationData, ConversationUsageMetadata};
+use crate::persistence::model::{
+    AgentConversationData, ChargedUsageTotals, ConversationUsageMetadata,
+};
 use crate::server::server_api::ServerApiProvider;
 use crate::test_util::settings::initialize_settings_for_tests;
 use crate::workspaces::user_workspaces::UserWorkspaces;
@@ -932,6 +934,36 @@ fn usage_totals_reads_gui_credits_and_accumulates_provider_cost() {
                 - 2.7)
                 .abs()
                 < 1e-6
+        );
+    });
+}
+
+#[test]
+fn update_cost_and_usage_resets_stale_charged_usage_for_last_block_on_new_user_turn() {
+    App::test((), |mut app| async move {
+        initialize_custom_endpoint_usage_test_app(&mut app);
+        app.add_singleton_model(LLMPreferences::new);
+
+        let mut conversation = AIConversation::new(false, false);
+        // Simulate a stale last-block breakdown left over from a previous
+        // response, as would happen if this turn's request carries no
+        // `request_charges` (e.g. the flag is off for it).
+        conversation.set_charged_usage_for_last_block_for_test(Some(ChargedUsageTotals {
+            input_tokens: 500,
+            ..Default::default()
+        }));
+
+        app.read(|ctx| {
+            conversation
+                .update_cost_and_usage_for_request(None, None, vec![], None, true, ctx)
+                .expect("usage should update");
+        });
+
+        assert_eq!(
+            conversation.charged_usage_for_last_block(),
+            None,
+            "a new user-initiated turn must clear the previous block's stale charged usage, \
+             even when this turn's request itself carries no charges"
         );
     });
 }

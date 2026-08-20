@@ -819,6 +819,20 @@ impl AIConversation {
         self.conversation_usage_metadata.total_charged_usage = charged_usage;
     }
 
+    /// Test-only helper that sets (or clears) the conversation's last-block
+    /// charged-usage breakdown directly, mirroring what a real
+    /// `StreamFinished.request_charges` update would populate. Used to set
+    /// up a "stale" precondition for regression tests covering the reset
+    /// behavior in `update_cost_and_usage_for_request`.
+    #[cfg(test)]
+    pub(crate) fn set_charged_usage_for_last_block_for_test(
+        &mut self,
+        charged_usage: Option<ChargedUsageTotals>,
+    ) {
+        self.conversation_usage_metadata
+            .charged_usage_for_last_block = charged_usage;
+    }
+
     /// Test-only helper that simulates the root-task upgrade performed by the
     /// `Action::CreateTask` branch of `apply_client_action` when the server
     /// confirms the root for a newly started conversation. Replaces the
@@ -2287,18 +2301,23 @@ impl AIConversation {
             self.total_request_cost += request_cost;
         }
 
+        // Mirrors the `credits_spent_for_last_block` reset above: a
+        // user-initiated request starts a new response block. Reset
+        // unconditionally (not only inside the `Some(request_charges)`
+        // branch below) so a later request in the same turn that happens
+        // to carry no charges (e.g. the flag is off for it) doesn't leave
+        // the previous block's stale totals in place, which would pair a
+        // fresh credits figure with stale token/cost details.
+        if was_user_initiated_request {
+            self.conversation_usage_metadata
+                .charged_usage_for_last_block = None;
+        }
         if let Some(request_charges) = request_charges {
             let totals = ChargedUsageTotals::from(&request_charges);
             let charged_usage_for_last_block = self
                 .conversation_usage_metadata
                 .charged_usage_for_last_block
                 .get_or_insert_with(ChargedUsageTotals::default);
-
-            // Mirrors the `credits_spent_for_last_block` reset above: a
-            // user-initiated request starts a new response block.
-            if was_user_initiated_request {
-                *charged_usage_for_last_block = ChargedUsageTotals::default();
-            }
             *charged_usage_for_last_block += totals;
         }
 
