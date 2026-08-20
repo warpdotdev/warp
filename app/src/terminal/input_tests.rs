@@ -1450,6 +1450,32 @@ fn maybe_route_ai_query_to_remote_target_blocks_read_only_viewer() {
 }
 
 #[test]
+fn unresolved_ambient_task_blocks_submission() {
+    // REMOTE-2661: eligibility that is merely unresolved (the ambient task is not in
+    // `AgentConversationsModel` yet) must fail closed for every submission path, rather than
+    // fall back to the direct viewer path or a new local conversation.
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let tips_model = app.add_model(|_| TipsCompleted::default());
+        let (_, terminal) = app.add_window(WindowStyle::NotStealFocus, move |ctx| {
+            TerminalView::new_for_test(tips_model, None, ctx)
+        });
+        let input = terminal.read(&app, |view, _| view.input().clone());
+        let task_id: crate::ai::ambient_agents::AmbientAgentTaskId =
+            "550e8400-e29b-41d4-a716-000000000099".parse().unwrap();
+
+        let blocked = input.update(&mut app, |input, ctx| {
+            input.block_submission_while_ambient_task_unresolved(Some(task_id), ctx)
+        });
+        assert!(
+            blocked,
+            "an uncached ambient task must block the submission instead of resolving eligibility"
+        );
+    });
+}
+
+#[test]
 fn maybe_route_ai_query_to_remote_target_forwards_executor_viewer_prompt() {
     // An executor viewer forwards the prompt to the sharer (SendAgentPrompt) instead of running
     // it on the viewer's local machine.

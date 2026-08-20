@@ -2356,6 +2356,10 @@ impl View for AgentInputFooter {
             AIQueryRouting::NewCloudVm { .. } => {
                 left_buttons.add_child(ChildView::new(&self.new_cloud_vm_indicator).finish());
             }
+            // A debug follow-up lands on the still-retained session, not a new VM.
+            AIQueryRouting::RetainedSetupFailureDebug { .. } => {
+                left_buttons.add_child(ChildView::new(&self.live_session_indicator).finish());
+            }
             // Shared *local* session viewers (no ambient task) and non-live panes show no indicator.
             AIQueryRouting::LiveRemoteVm {
                 ambient_agent_task_id: None,

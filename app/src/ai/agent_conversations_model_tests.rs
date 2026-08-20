@@ -79,6 +79,8 @@ fn create_test_task(
         is_sandbox_running: false,
         last_event_sequence: None,
         children: vec![],
+        debug_agent_available: false,
+        scope: None,
     }
 }
 
@@ -2437,6 +2439,8 @@ fn test_task_status_maps_blocked_state_to_blocked() {
         task.status_message = Some(TaskStatusMessage {
             message: "Needs clarification".to_string(),
             error_code: None,
+            session_debug_until: None,
+            debug_agent_active: false,
         });
 
         app.update(|ctx| {

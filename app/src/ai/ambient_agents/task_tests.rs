@@ -36,6 +36,8 @@ fn make_task(snapshot_name: Option<&str>, title: &str) -> AmbientAgentTask {
         artifacts: vec![],
         last_event_sequence: None,
         children: vec![],
+        debug_agent_available: false,
+        scope: None,
     }
 }
 

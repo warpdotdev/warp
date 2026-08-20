@@ -154,7 +154,8 @@ pub fn wire_ambient_agent_session_events(
                 | AmbientAgentViewModelEvent::HandoffSnapshotUploadFailed { .. }
                 | AmbientAgentViewModelEvent::UpdatedSetupCommandVisibility
                 | AmbientAgentViewModelEvent::AuthSecretSelected
-                | AmbientAgentViewModelEvent::RunLifecycleChanged => {}
+                | AmbientAgentViewModelEvent::RunLifecycleChanged
+                | AmbientAgentViewModelEvent::FollowupSubmissionFailed { .. } => {}
             }
         });
     });
