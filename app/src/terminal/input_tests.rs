@@ -9639,3 +9639,48 @@ fn upload_files_then_submit_cloud_followup_restores_input_on_upload_error() {
         );
     });
 }
+
+/// A shared-session follow-up handed straight to a third-party CLI harness's PTY never reaches
+/// the Oz dispatch that emits `SentRequest`, so the sharer has to clear the shared input itself.
+///
+/// Pairs with `unfreeze_agent_input_does_not_clear_buffer`: unfreezing alone deliberately leaves
+/// the submitted text in the buffer, which is exactly what left an accepted steer sitting in the
+/// input. Clearing it as a system edit emits the CRDT delete ops that empty the buffer for the
+/// sharer and every viewer.
+#[test]
+fn clear_buffer_after_shared_session_agent_prompt_empties_the_shared_input() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let tips_model = app.add_model(|_| TipsCompleted::default());
+        let (_, terminal) = app.add_window(WindowStyle::NotStealFocus, move |ctx| {
+            TerminalView::new_for_test(tips_model, None, ctx)
+        });
+        terminal.update(&mut app, |view, _| {
+            let mut model = view.model.lock();
+            model.block_list_mut().set_bootstrapped();
+            model.set_shared_session_status(SharedSessionStatus::ActiveSharer);
+        });
+        let input = terminal.read(&app, |view, _| view.input().clone());
+
+        input.update(&mut app, |input, ctx| {
+            input.replace_buffer_content("actually, run the tests first", ctx);
+        });
+        assert_eq!(
+            input.read(&app, |i, ctx| i.buffer_text(ctx)),
+            "actually, run the tests first"
+        );
+
+        // The sharer-side sequence once the follow-up has been written to the CLI agent's PTY.
+        input.update(&mut app, |input, ctx| {
+            input.unfreeze_agent_input(false, ctx);
+            input.clear_buffer_after_shared_session_agent_prompt(ctx);
+        });
+
+        assert_eq!(
+            input.read(&app, |i, ctx| i.buffer_text(ctx)),
+            "",
+            "an accepted shared-session follow-up must leave the input empty"
+        );
+    });
+}

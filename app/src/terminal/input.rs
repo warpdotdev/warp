@@ -7799,6 +7799,22 @@ impl Input {
         }
     }
 
+    /// Clears the input as a system edit after a shared-session agent prompt has been
+    /// dispatched, emitting the CRDT delete operations that clear the buffer for the sharer and
+    /// every viewer.
+    ///
+    /// The Oz-harness path gets this for free: dispatching the prompt emits
+    /// [`BlocklistAIControllerEvent::SentRequest`], whose subscriber calls
+    /// `system_clear_buffer`. A prompt handed straight to a third-party CLI agent's PTY never
+    /// reaches that dispatch, so without an explicit clear the submitted text stays in the
+    /// input on both sides of the session.
+    pub fn clear_buffer_after_shared_session_agent_prompt(&mut self, ctx: &mut ViewContext<Self>) {
+        self.editor.update(ctx, |editor, ctx| {
+            editor.system_clear_buffer(true, ctx);
+        });
+        ctx.notify();
+    }
+
     /// Restores a VM-down cloud follow-up after an attachment upload fails. Unlike
     /// [`Self::unfreeze_agent_input`], this path runs on a disconnected cloud pane rather than an
     /// active shared-session viewer, so it must restore the visible prompt and editable state

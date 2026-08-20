@@ -691,6 +691,24 @@ impl BlocklistAIController {
             self.cancel_conversation_progress(active_conversation_id, cancellation_reason, ctx);
         }
 
+        // The surface's active conversation is the one most recently streamed, which is not
+        // necessarily the conversation this query targets: a shared-session participant's
+        // steer is routed to whichever conversation its server token maps to, a fired queued
+        // row targets the conversation it was queued on, and a passive request never marks
+        // its conversation active at all. Cancelling only the active conversation would leave
+        // the target's stream in flight, and `send_request_input` then refuses the query
+        // ("there is an in-flight request") and drops it with no user-visible feedback and no
+        // `SentRequest` to clear the input. Cancel the target too so the steer always lands.
+        if active_conversation_id != Some(conversation_id) {
+            self.cancel_conversation_progress(
+                conversation_id,
+                CancellationReason::FollowUpSubmitted {
+                    is_for_same_conversation: true,
+                },
+                ctx,
+            );
+        }
+
         if let Some(slash_command_request) = SlashCommandRequest::from_query(query.as_str()) {
             // Only fired queued rows carry `queued_query_id`. For those rows, keep slash commands
             // (e.g. queued `/compact`) on the conversation they were queued on; direct slash
