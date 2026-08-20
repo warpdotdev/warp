@@ -612,6 +612,12 @@ pub trait WindowManager {
     fn active_display_id(&self) -> DisplayId;
     fn display_count(&self) -> usize;
     fn bounds_for_display_idx(&self, idx: DisplayIdx) -> Option<RectF>;
+    /// Returns the bounds of the display containing the mouse cursor, or `None`
+    /// if the platform cannot determine it. Callers should fall back to
+    /// `active_display_bounds`.
+    fn display_bounds_containing_mouse(&self) -> Option<RectF> {
+        None
+    }
 
     fn active_cursor_position_updated(&self);
 

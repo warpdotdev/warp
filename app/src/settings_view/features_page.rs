@@ -71,7 +71,7 @@ use crate::settings::{
     EnableSlashCommandsInTerminal, ErrorUnderliningEnabled, ExtraMetaKeys, GPUSettings,
     GlobalHotkeyMode, InputSettings, InputSettingsChangedEvent, LinuxSelectionClipboard,
     MiddleClickPasteEnabled, MouseScrollMultiplier, OutlineCodebaseSymbolsForAtContextMenu,
-    PreferLowPowerGPU, PreferredGraphicsBackend, QUAKE_WINDOW_AUTOHIDE_SUPPORTED,
+    PreferLowPowerGPU, PreferredGraphicsBackend, QUAKE_WINDOW_AUTOHIDE_SUPPORTED, QuakeModeScreen,
     QuakeModeSettings, ScrollSettings, ScrollSettingsChangedEvent, SelectionSettings,
     ShowAutosuggestionIgnoreButton, ShowChangelogAfterUpdate, ShowTerminalInputMessageBar,
     SshSettings, SyntaxHighlighting, TabBehavior, UserNativeRedirectPreference, VimModeEnabled,
@@ -759,7 +759,7 @@ pub enum FeaturesPageAction {
     QuakeKeybindEditorCancel,
     QuakeKeybindEditorSave,
     QuakeEditorSetPinPosition(QuakeModePinPosition),
-    QuakeEditorSetPinScreen(Option<DisplayIdx>),
+    QuakeEditorSetPinScreen(Option<QuakeModeScreen>),
     QuakeEditorSetWidthPercentage,
     QuakeEditorSetHeightPercentage,
     QuakeEditorResetWidthHeight,
@@ -1053,7 +1053,7 @@ impl FeaturesPageAction {
             Self::QuakeEditorSetPinScreen(screen) => TelemetryEvent::FeaturesPageAction {
                 action: "QuakeEditorSetPinScreen".to_string(),
                 value: screen
-                    .map(|idx| format!("{idx}"))
+                    .map(|screen| format!("{screen}"))
                     .unwrap_or_else(|| "Active Screen".into()),
             },
             Self::QuakeEditorResetWidthHeight => TelemetryEvent::FeaturesPageAction {
@@ -4526,22 +4526,33 @@ fn init_display_count_dropdown(
     );
     let mut items = vec![no_preference];
     items.push(DropdownItem::new(
+        format!("{}", QuakeModeScreen::Mouse),
+        FeaturesPageAction::QuakeEditorSetPinScreen(Some(QuakeModeScreen::Mouse)),
+    ));
+    items.push(DropdownItem::new(
         format!("{}", DisplayIdx::Primary),
         //move ||
-        FeaturesPageAction::QuakeEditorSetPinScreen(Some(DisplayIdx::Primary)),
+        FeaturesPageAction::QuakeEditorSetPinScreen(Some(QuakeModeScreen::Display(
+            DisplayIdx::Primary,
+        ))),
     ));
 
     (1..display_count).for_each(|idx| {
         items.push(DropdownItem::new(
             format!("{}", DisplayIdx::External(idx - 1)),
             //move || {
-            FeaturesPageAction::QuakeEditorSetPinScreen(Some(DisplayIdx::External(idx - 1))), //},
+            FeaturesPageAction::QuakeEditorSetPinScreen(Some(QuakeModeScreen::Display(
+                DisplayIdx::External(idx - 1),
+            ))), //},
         ));
     });
 
     dropdown.set_items(items, ctx);
     match quake_mode_settings.pin_screen {
-        Some(idx) if idx.is_valid_given_display_count(display_count) => {
+        Some(QuakeModeScreen::Mouse) => {
+            dropdown.set_selected_by_name(format!("{}", QuakeModeScreen::Mouse), ctx)
+        }
+        Some(QuakeModeScreen::Display(idx)) if idx.is_valid_given_display_count(display_count) => {
             dropdown.set_selected_by_name(format!("{idx}"), ctx)
         }
         _ => dropdown.set_selected_by_name("Active Screen", ctx),
