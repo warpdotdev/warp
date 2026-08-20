@@ -55,7 +55,8 @@ use crate::ai::orchestration::{
 use crate::cloud_object::CloudObjectLookup as _;
 use crate::server::ids::{ServerId, SyncId};
 use crate::server::server_api::ai::{
-    AIClient, AgentConfigSnapshot, AttachmentInput, InitialSnapshotToken, SpawnAgentRequest,
+    AIClient, AgentConfigSnapshot, AgentRunScope, AttachmentInput, InitialSnapshotToken,
+    SpawnAgentRequest,
 };
 use crate::settings::AISettings;
 
@@ -981,7 +982,7 @@ fn build_spawn_request(
         mode,
         config: Some(config),
         title,
-        team: None,
+        scope: AgentRunScope::Personal,
         skill: None,
         attachments,
         interactive: Some(true),

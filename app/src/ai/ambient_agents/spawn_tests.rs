@@ -10,7 +10,9 @@ use super::{
 };
 use crate::ai::agent::UserQueryMode;
 use crate::ai::ambient_agents::{AmbientAgentTask, AmbientAgentTaskState};
-use crate::server::server_api::ai::{MockAIClient, SpawnAgentResponse, TaskStatusMessage};
+use crate::server::server_api::ai::{
+    AgentRunScope, MockAIClient, SpawnAgentResponse, TaskStatusMessage,
+};
 use crate::terminal::shared_session;
 
 fn task_with(
@@ -735,7 +737,7 @@ async fn poll_retries_transient_429_errors() {
         mode: crate::ai::agent::UserQueryMode::Normal,
         config: None,
         title: None,
-        team: None,
+        scope: AgentRunScope::Personal,
         agent_identity_uid: None,
         skill: None,
         attachments: vec![],
@@ -804,7 +806,7 @@ async fn poll_fails_on_permanent_http_error() {
         mode: crate::ai::agent::UserQueryMode::Normal,
         config: None,
         title: None,
-        team: None,
+        scope: AgentRunScope::Personal,
         agent_identity_uid: None,
         skill: None,
         attachments: vec![],
@@ -874,7 +876,7 @@ async fn poll_gives_up_after_max_transient_retries() {
         mode: crate::ai::agent::UserQueryMode::Normal,
         config: None,
         title: None,
-        team: None,
+        scope: AgentRunScope::Personal,
         agent_identity_uid: None,
         skill: None,
         attachments: vec![],
@@ -938,7 +940,7 @@ async fn poll_stops_on_terminal_failure_like_state() {
         mode: UserQueryMode::Normal,
         config: None,
         title: None,
-        team: None,
+        scope: AgentRunScope::Personal,
         agent_identity_uid: None,
         skill: None,
         attachments: vec![],
@@ -1085,7 +1087,7 @@ async fn poll_for_session_join_info_waits_until_link_is_available() {
         mode: UserQueryMode::Normal,
         config: None,
         title: None,
-        team: None,
+        scope: AgentRunScope::Personal,
         agent_identity_uid: None,
         skill: None,
         attachments: vec![],

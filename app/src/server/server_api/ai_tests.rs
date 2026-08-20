@@ -6,7 +6,7 @@ use warp_server_client::base_client::CLOUD_AGENT_ID_HEADER;
 
 use super::super::ServerApi;
 use super::{
-    AgentMessageHeader, AgentRunEvent, AgentSource, AmbientAgentTaskState, Artifact,
+    AgentMessageHeader, AgentRunEvent, AgentRunScope, AgentSource, AmbientAgentTaskState, Artifact,
     ArtifactDownloadResponse, ArtifactType, CONNECTED_SELF_HOSTED_WORKERS_PATH,
     ConnectedSelfHostedWorker, ExecutionLocation, ForkConversationResponse,
     ListConnectedSelfHostedWorkersResponse, ListRunsResponse, PrepareAttachmentUploadsResponse,
@@ -15,6 +15,7 @@ use super::{
     build_list_agent_runs_url, build_run_followup_url,
 };
 use crate::notebooks::NotebookId;
+use crate::server::ids::ServerId;
 use crate::server::server_api::presigned_upload::upload_to_target;
 
 #[test]
@@ -48,7 +49,7 @@ fn spawn_agent_request_serializes_agent_uid_as_agent_identity_uid() {
         mode: UserQueryMode::Normal,
         config: None,
         title: None,
-        team: None,
+        scope: AgentRunScope::Personal,
         agent_identity_uid: Some("agent_123".to_string()),
         skill: None,
         attachments: vec![],
@@ -69,6 +70,40 @@ fn spawn_agent_request_serializes_agent_uid_as_agent_identity_uid() {
         Some("agent_123")
     );
     assert!(value.get("agent_uid").is_none());
+}
+
+#[test]
+fn spawn_agent_request_serializes_team_scope_matching_prior_boolean_wire_shape() {
+    fn request(scope: AgentRunScope) -> SpawnAgentRequest {
+        SpawnAgentRequest {
+            prompt: None,
+            mode: UserQueryMode::Normal,
+            config: None,
+            title: None,
+            scope,
+            agent_identity_uid: None,
+            skill: None,
+            attachments: vec![],
+            interactive: None,
+            parent_run_id: None,
+            runtime_skills: vec![],
+            referenced_attachments: vec![],
+            conversation_id: None,
+            initial_snapshot_token: None,
+            snapshot_disabled: None,
+            orchestration_handoff: None,
+        }
+    }
+
+    // `Personal` matches the old omitted-`team`-field wire shape.
+    let personal_value = serde_json::to_value(request(AgentRunScope::Personal)).unwrap();
+    assert!(personal_value.get("team").is_none());
+
+    // `Team` matches the old `team: Some(true)` wire shape; the raw UID never appears on the
+    // wire itself (it goes into the `X-Warp-Team-Uid` header, built separately by
+    // `ServerApi::team_uid_header`).
+    let team_value = serde_json::to_value(request(AgentRunScope::Team(ServerId::from(1)))).unwrap();
+    assert_eq!(team_value.get("team").and_then(|v| v.as_bool()), Some(true));
 }
 
 #[test]
@@ -126,7 +161,7 @@ fn spawn_agent_request_omits_prompt_when_none() {
         mode: UserQueryMode::Normal,
         config: None,
         title: None,
-        team: None,
+        scope: AgentRunScope::Personal,
         agent_identity_uid: None,
         skill: None,
         attachments: vec![],

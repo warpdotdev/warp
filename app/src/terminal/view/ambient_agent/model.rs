@@ -42,7 +42,7 @@ use crate::server::cloud_objects::update_manager::UpdateManager;
 use crate::server::ids::{ServerId, SyncId};
 use crate::server::server_api::ServerApiProvider;
 use crate::server::server_api::ai::{
-    AgentConfigSnapshot, AmbientAgentTaskState, AttachmentInput, SpawnAgentRequest,
+    AgentConfigSnapshot, AgentRunScope, AmbientAgentTaskState, AttachmentInput, SpawnAgentRequest,
 };
 use crate::terminal::CLIAgent;
 use crate::terminal::view::ambient_agent::{SetupCommandGroupId, SetupCommandState};
@@ -1068,7 +1068,7 @@ impl AmbientAgentViewModel {
             mode,
             config,
             title: None,
-            team: None,
+            scope: AgentRunScope::Personal,
             agent_identity_uid: None,
             skill: None,
             attachments,
