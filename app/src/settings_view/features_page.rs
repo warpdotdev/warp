@@ -68,14 +68,14 @@ use crate::settings::{
     ChangelogSettings, CloudPreferencesSettings, CodeEditorLineNumberMode,
     CodeEditorLineNumberModeSetting, CodeSettings, CommandCorrections, CompletionsOpenWhileTyping,
     CopyOnSelect, CtrlTabBehavior, DEFAULT_QUAKE_MODE_SIZE_PERCENTAGES, DefaultSessionMode,
-    EnableSlashCommandsInTerminal, ErrorUnderliningEnabled, ExtraMetaKeys, GPUSettings,
-    GlobalHotkeyMode, InputSettings, InputSettingsChangedEvent, LinuxSelectionClipboard,
-    MiddleClickPasteEnabled, MouseScrollMultiplier, OutlineCodebaseSymbolsForAtContextMenu,
-    PreferLowPowerGPU, PreferredGraphicsBackend, QUAKE_WINDOW_AUTOHIDE_SUPPORTED,
-    QuakeModeSettings, ScrollSettings, ScrollSettingsChangedEvent, SelectionSettings,
-    ShowAutosuggestionIgnoreButton, ShowChangelogAfterUpdate, ShowTerminalInputMessageBar,
-    SshSettings, SyntaxHighlighting, TabBehavior, UserNativeRedirectPreference, VimModeEnabled,
-    VimStatusBar, VimUnnamedSystemClipboard,
+    EnableAiCommandSearchHashTrigger, EnableSlashCommandsInTerminal, ErrorUnderliningEnabled,
+    ExtraMetaKeys, GPUSettings, GlobalHotkeyMode, InputSettings, InputSettingsChangedEvent,
+    LinuxSelectionClipboard, MiddleClickPasteEnabled, MouseScrollMultiplier,
+    OutlineCodebaseSymbolsForAtContextMenu, PreferLowPowerGPU, PreferredGraphicsBackend,
+    QUAKE_WINDOW_AUTOHIDE_SUPPORTED, QuakeModeSettings, ScrollSettings, ScrollSettingsChangedEvent,
+    SelectionSettings, ShowAutosuggestionIgnoreButton, ShowChangelogAfterUpdate,
+    ShowTerminalInputMessageBar, SshSettings, SyntaxHighlighting, TabBehavior,
+    UserNativeRedirectPreference, VimModeEnabled, VimStatusBar, VimUnnamedSystemClipboard,
 };
 use crate::terminal::alt_screen_reporting::{
     AltScreenReporting, FocusReportingEnabled, MouseReportingEnabled, ScrollReportingEnabled,
@@ -631,6 +631,23 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
             ),
         );
     }
+    if AISettings::as_ref(app).is_any_ai_enabled(app) {
+        toggle_binding_pairs.push(
+            ToggleSettingActionPair::new(
+                "'#' trigger for AI command search",
+                builder(SettingsAction::FeaturesPageToggle(
+                    FeaturesPageAction::ToggleAiCommandSearchHashTrigger,
+                )),
+                context,
+                flags::AI_COMMAND_SEARCH_HASH_TRIGGER_FLAG,
+            )
+            .is_supported_on_current_platform(
+                InputSettings::as_ref(app)
+                    .enable_ai_command_search_hash_trigger
+                    .is_supported_on_current_platform(),
+            ),
+        );
+    }
     if FeatureFlag::AIContextMenuCode.is_enabled() {
         toggle_binding_pairs.push(
             ToggleSettingActionPair::new(
@@ -804,6 +821,7 @@ pub enum FeaturesPageAction {
     ToggleShowAutosuggestionIgnoreButton,
     ToggleAtContextMenuInTerminalMode,
     ToggleSlashCommandsInTerminalMode,
+    ToggleAiCommandSearchHashTrigger,
     ToggleOutlineCodebaseSymbolsForAtContextMenu,
     ToggleAutoOpenCodeReviewPane,
     ToggleShowTerminalInputMessageLine,
@@ -1297,6 +1315,14 @@ impl FeaturesPageAction {
                 value: to_string(
                     *InputSettings::as_ref(ctx)
                         .enable_slash_commands_in_terminal
+                        .value(),
+                ),
+            },
+            Self::ToggleAiCommandSearchHashTrigger => TelemetryEvent::FeaturesPageAction {
+                action: "ToggleAiCommandSearchHashTrigger".to_string(),
+                value: to_string(
+                    *InputSettings::as_ref(ctx)
+                        .enable_ai_command_search_hash_trigger
                         .value(),
                 ),
             },
@@ -2114,6 +2140,15 @@ impl TypedActionView for FeaturesPageView {
                     report_if_error!(
                         input_settings
                             .enable_slash_commands_in_terminal
+                            .toggle_and_save_value(ctx)
+                    );
+                });
+            }
+            ToggleAiCommandSearchHashTrigger => {
+                InputSettings::handle(ctx).update(ctx, |input_settings, ctx| {
+                    report_if_error!(
+                        input_settings
+                            .enable_ai_command_search_hash_trigger
                             .toggle_and_save_value(ctx)
                     );
                 });
@@ -2965,6 +3000,13 @@ impl FeaturesPageView {
                 .is_supported_on_current_platform()
         {
             editor_widgets.push(Box::new(SlashCommandsInTerminalModeWidget::default()));
+        }
+
+        if input_settings
+            .enable_ai_command_search_hash_trigger
+            .is_supported_on_current_platform()
+        {
+            editor_widgets.push(Box::new(AiCommandSearchHashTriggerWidget::default()));
         }
 
         if input_settings
@@ -6391,6 +6433,60 @@ impl SettingsWidget for SlashCommandsInTerminalModeWidget {
                     ctx.dispatch_typed_action(
                         FeaturesPageAction::ToggleSlashCommandsInTerminalMode,
                     );
+                })
+                .finish(),
+            None,
+        )
+    }
+}
+
+#[derive(Default)]
+struct AiCommandSearchHashTriggerWidget {
+    switch_state: SwitchStateHandle,
+}
+
+impl SettingsWidget for AiCommandSearchHashTriggerWidget {
+    type View = FeaturesPageView;
+
+    fn search_terms(&self) -> &str {
+        "# hash pound trigger ai command search shorthand shell comment"
+    }
+
+    fn should_render(&self, app: &AppContext) -> bool {
+        AISettings::as_ref(app).is_any_ai_enabled(app)
+    }
+
+    fn render(
+        &self,
+        view: &Self::View,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
+        let ui_builder = appearance.ui_builder();
+        render_body_item::<FeaturesPageAction>(
+            "Enable '#' trigger for AI Command Search".into(),
+            None,
+            LocalOnlyIconState::for_setting(
+                EnableAiCommandSearchHashTrigger::storage_key(),
+                EnableAiCommandSearchHashTrigger::sync_to_cloud(),
+                &mut view
+                    .button_mouse_states
+                    .local_only_icon_tooltip_states
+                    .borrow_mut(),
+                app,
+            ),
+            ToggleState::Enabled,
+            appearance,
+            ui_builder
+                .switch(self.switch_state.clone())
+                .check(
+                    *InputSettings::as_ref(app)
+                        .enable_ai_command_search_hash_trigger
+                        .value(),
+                )
+                .build()
+                .on_click(move |ctx, _, _| {
+                    ctx.dispatch_typed_action(FeaturesPageAction::ToggleAiCommandSearchHashTrigger);
                 })
                 .finish(),
             None,

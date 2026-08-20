@@ -23477,6 +23477,11 @@ impl Workspace {
         if *input_settings.at_context_menu_in_terminal_mode.value() {
             context.set.insert(flags::AT_CONTEXT_MENU_IN_TERMINAL_FLAG);
         }
+        if *input_settings.enable_ai_command_search_hash_trigger.value() {
+            context
+                .set
+                .insert(flags::AI_COMMAND_SEARCH_HASH_TRIGGER_FLAG);
+        }
 
         if *input_settings
             .outline_codebase_symbols_for_at_context_menu
