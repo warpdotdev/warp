@@ -42,7 +42,9 @@ use warp_graphql::workspace::{
     WriteToPtyAutonomyValue as GqlWriteToPtyAutonomyValue,
     WriteToPtySettingInfo as GqlWriteToPtySettingInfo,
 };
-use warpui::{AddSingletonModel, App, WindowId};
+use warpui::elements::Empty;
+use warpui::platform::WindowStyle;
+use warpui::{AddSingletonModel, App, Element, TypedActionView, View, ViewHandle, WindowId};
 use warpui_extras::user_preferences;
 
 use super::*;
@@ -1024,6 +1026,243 @@ fn test_window_team_assignment_reconciles_when_current_workspace_changes() {
             assert_eq!(
                 UserWorkspaces::as_ref(ctx).team_uid_for_window(window_id),
                 Some(second_team.uid)
+            );
+        });
+    })
+}
+
+#[derive(Default)]
+struct TeamContextTestView;
+
+impl Entity for TeamContextTestView {
+    type Event = ();
+}
+
+impl View for TeamContextTestView {
+    fn ui_name() -> &'static str {
+        "TeamContextTestView"
+    }
+
+    fn render(&self, _: &AppContext) -> Box<dyn Element> {
+        Empty::new().finish()
+    }
+}
+
+impl TypedActionView for TeamContextTestView {
+    type Action = ();
+}
+
+fn create_test_window(app: &mut App) -> (WindowId, ViewHandle<TeamContextTestView>) {
+    app.add_window(WindowStyle::NotStealFocus, |_| TeamContextTestView)
+}
+
+/// Two distinct teams in the same workspace, for tests that need to tell one
+/// window's team apart from another's.
+fn two_teams() -> (Team, Team) {
+    let team_a = team_for_test();
+    let mut team_b = team_for_test();
+    team_b.uid = 456.into();
+    team_b.name = "team-b".to_string();
+    (team_a, team_b)
+}
+
+#[test]
+fn test_team_context_for_view_resolves_each_windows_own_team() {
+    let (team_a, team_b) = two_teams();
+    let mut workspace = workspace_for_test(&team_a);
+    workspace.teams.push(team_b.clone());
+
+    App::test((), |mut app| async move {
+        initialize_window_team_test_app(&mut app, vec![workspace]);
+
+        let (window_a, view_a) = create_test_window(&mut app);
+        let (window_b, view_b) = create_test_window(&mut app);
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.set_team_for_window(window_a, team_a.uid, ctx);
+            user_workspaces.set_team_for_window(window_b, team_b.uid, ctx);
+        });
+
+        let context_a = view_a.update(&mut app, |_, ctx| {
+            UserWorkspaces::as_ref(ctx).team_context_for_view(ctx)
+        });
+        let context_b = view_b.update(&mut app, |_, ctx| {
+            UserWorkspaces::as_ref(ctx).team_context_for_view(ctx)
+        });
+
+        app.read(|ctx| {
+            let user_workspaces = UserWorkspaces::as_ref(ctx);
+            assert_eq!(
+                context_a
+                    .as_ref()
+                    .and_then(|context| user_workspaces.team_for_context(context))
+                    .map(|team| team.uid),
+                Some(team_a.uid),
+                "the view in window A should mint a context resolving to team A"
+            );
+            assert_eq!(
+                context_b
+                    .as_ref()
+                    .and_then(|context| user_workspaces.team_for_context(context))
+                    .map(|team| team.uid),
+                Some(team_b.uid),
+                "the view in window B should mint a context resolving to team B"
+            );
+        });
+    })
+}
+
+#[test]
+fn test_captured_team_context_never_retargets_when_window_team_changes() {
+    let (team_a, team_b) = two_teams();
+    let mut workspace = workspace_for_test(&team_a);
+    workspace.teams.push(team_b.clone());
+
+    App::test((), |mut app| async move {
+        initialize_window_team_test_app(&mut app, vec![workspace]);
+
+        let (window_id, view) = create_test_window(&mut app);
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.set_team_for_window(window_id, team_a.uid, ctx);
+        });
+
+        let context_a = view
+            .update(&mut app, |_, ctx| {
+                UserWorkspaces::as_ref(ctx).team_context_for_view(ctx)
+            })
+            .expect("a window assigned to team A should mint a context");
+
+        // The window's team assignment only changes via reconciliation, which
+        // runs when its current team disappears from the workspace.
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.update_workspaces(vec![workspace_for_test(&team_b)], ctx);
+        });
+
+        app.read(|ctx| {
+            let user_workspaces = UserWorkspaces::as_ref(ctx);
+            assert_eq!(
+                user_workspaces.team_uid_for_window(window_id),
+                Some(team_b.uid),
+                "the window itself should reconcile onto team B"
+            );
+            assert_ne!(
+                user_workspaces
+                    .team_for_context(&context_a)
+                    .map(|team| team.uid),
+                Some(team_b.uid),
+                "a context captured for team A must never resolve as team B"
+            );
+        });
+    })
+}
+
+#[test]
+fn test_team_render_context_follows_window_team_change() {
+    let (team_a, team_b) = two_teams();
+    let mut workspace = workspace_for_test(&team_a);
+    workspace.teams.push(team_b.clone());
+
+    App::test((), |mut app| async move {
+        initialize_window_team_test_app(&mut app, vec![workspace]);
+
+        let (window_id, view) = create_test_window(&mut app);
+        let weak_view = view.downgrade();
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.set_team_for_window(window_id, team_a.uid, ctx);
+        });
+
+        app.read(|ctx| {
+            assert_eq!(
+                UserWorkspaces::as_ref(ctx)
+                    .team_render_context_for_view_handle(&weak_view, ctx)
+                    .map(|render| render.team.uid),
+                Some(team_a.uid)
+            );
+        });
+
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.update_workspaces(vec![workspace_for_test(&team_b)], ctx);
+        });
+
+        app.read(|ctx| {
+            assert_eq!(
+                UserWorkspaces::as_ref(ctx)
+                    .team_render_context_for_view_handle(&weak_view, ctx)
+                    .map(|render| render.team.uid),
+                Some(team_b.uid),
+                "a freshly resolved render context should follow the window to its new team"
+            );
+        });
+    })
+}
+
+#[test]
+fn test_team_context_and_render_context_return_none_without_a_team() {
+    App::test((), |mut app| async move {
+        initialize_window_team_test_app(&mut app, vec![]);
+
+        let (window_id, view) = create_test_window(&mut app);
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.register_window(window_id, None, ctx);
+        });
+
+        let context = view.update(&mut app, |_, ctx| {
+            UserWorkspaces::as_ref(ctx).team_context_for_view(ctx)
+        });
+        assert!(
+            context.is_none(),
+            "a window with no team should not mint a TeamContext"
+        );
+
+        let weak_view = view.downgrade();
+        app.read(|ctx| {
+            assert!(
+                UserWorkspaces::as_ref(ctx)
+                    .team_render_context_for_view_handle(&weak_view, ctx)
+                    .is_none(),
+                "a window with no team should not resolve a TeamRenderContext"
+            );
+        });
+    })
+}
+
+#[test]
+fn test_removed_team_context_stops_resolving_while_render_follows_reconciled_team() {
+    let (team_a, team_b) = two_teams();
+    let mut workspace = workspace_for_test(&team_a);
+    workspace.teams.push(team_b.clone());
+
+    App::test((), |mut app| async move {
+        initialize_window_team_test_app(&mut app, vec![workspace]);
+
+        let (window_id, view) = create_test_window(&mut app);
+        let weak_view = view.downgrade();
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.set_team_for_window(window_id, team_a.uid, ctx);
+        });
+
+        let context_a = view
+            .update(&mut app, |_, ctx| {
+                UserWorkspaces::as_ref(ctx).team_context_for_view(ctx)
+            })
+            .expect("a window assigned to team A should mint a context");
+
+        // Team A is removed from the workspace; only team B remains.
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.update_workspaces(vec![workspace_for_test(&team_b)], ctx);
+        });
+
+        app.read(|ctx| {
+            let user_workspaces = UserWorkspaces::as_ref(ctx);
+            assert!(
+                user_workspaces.team_for_context(&context_a).is_none(),
+                "a context captured for a removed team should stop resolving"
+            );
+            assert_eq!(
+                user_workspaces
+                    .team_render_context_for_view_handle(&weak_view, ctx)
+                    .map(|render| render.team.uid),
+                Some(team_b.uid),
+                "the next render should resolve the window's reconciled team"
             );
         });
     })
