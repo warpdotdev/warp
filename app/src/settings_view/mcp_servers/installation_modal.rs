@@ -13,8 +13,8 @@ use warpui::keymap::Keystroke;
 use warpui::platform::Cursor;
 use warpui::ui_components::components::{UiComponent, UiComponentStyles};
 use warpui::{
-    AppContext, Element, Entity, FocusContext, SingletonEntity, TypedActionView, View, ViewContext,
-    ViewHandle,
+    AppContext, Element, Entity, EntityId, FocusContext, SingletonEntity, TypedActionView, View,
+    ViewContext, ViewHandle,
 };
 
 use crate::ai::mcp::templatable_installation::{VariableType, VariableValue};
@@ -486,6 +486,27 @@ impl View for InstallationModalBody {
         "MCPTemplateInstallationModalBody"
     }
 
+    fn child_view_ids(&self, _app: &AppContext) -> Vec<EntityId> {
+        // `variable_inputs`' `TextInput` editors are created via plain
+        // `ctx.add_view` (no structural parent edge), and this view only
+        // renders them while `templatable_mcp_server` is set (i.e. while an
+        // install is pending), not while the modal is closed (see
+        // `MCPServersSettingsPageView::get_modal_content`). On Cancel the
+        // pending server/inputs are left populated (only cleared on a
+        // completed Install), so a cross-window tab drag could otherwise
+        // orphan these editors exactly like `AboutPageView` /
+        // `BillingAndUsageDispatchView` did for `SettingsView` (APP-5314).
+        // Declaring them here keeps them in the transferable subtree
+        // regardless of the modal's open/closed state.
+        self.variable_inputs
+            .values()
+            .map(|input| match input {
+                VariableInput::TextInput(handle) => handle.id(),
+                VariableInput::Dropdown { handle, .. } => handle.id(),
+            })
+            .collect()
+    }
+
     fn on_focus(&mut self, focus_ctx: &FocusContext, ctx: &mut ViewContext<Self>) {
         if focus_ctx.is_self_focused() {
             // Focus the first text input editor, if any.
@@ -574,3 +595,7 @@ impl TypedActionView for InstallationModalBody {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "installation_modal_tests.rs"]
+mod tests;

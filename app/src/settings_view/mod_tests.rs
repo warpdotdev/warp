@@ -1,6 +1,7 @@
 use settings_page::{FilteredPageType, MatchData, PageType, SettingsWidget, search_terms_match};
 use warpui::elements::Empty;
-use warpui::{App, AppContext, Element, Entity, View};
+use warpui::platform::WindowStyle;
+use warpui::{App, AppContext, Element, Entity, TypedActionView, View, ViewHandle};
 
 use super::*;
 use crate::appearance::Appearance;
@@ -893,5 +894,110 @@ fn empty_query_after_reapply_shows_all_widgets() {
                 "an empty query restores every widget on the subpage"
             );
         });
+    });
+}
+
+// ── SettingsView::child_view_ids coverage (APP-5314) ────────────────────────
+// Regression test for the Settings cross-window drag crash: `SettingsView`
+// must report every owned page (and its other directly-held handles) via
+// `child_view_ids`, or a page that was never made active can be orphaned by
+// `transfer_view_tree_to_window` and later panic when the destination window
+// tries to render it.
+//
+// This exercises `SettingsView::owned_view_ids` directly — the exact
+// function `View::child_view_ids` delegates to (see `mod.rs`) — against
+// real `SettingsPage`/`SettingsPageViewHandle` values built from the real
+// `AboutPageView`, rather than against a synthetic stand-in. Constructing a
+// full `SettingsView` here isn't practical: `SettingsView::new` pulls in
+// singleton models for ~18 pages spanning billing, teams, warp drive,
+// referrals, and MCP servers (some of which kick off live async server
+// calls), which would make the test slow and flaky rather than a reliable
+// unit test.
+#[derive(Default)]
+struct ChildViewIdsTestRoot;
+
+impl Entity for ChildViewIdsTestRoot {
+    type Event = ();
+}
+
+impl View for ChildViewIdsTestRoot {
+    fn ui_name() -> &'static str {
+        "ChildViewIdsTestRoot"
+    }
+
+    fn render(&self, _: &AppContext) -> Box<dyn Element> {
+        Empty::new().finish()
+    }
+}
+
+impl TypedActionView for ChildViewIdsTestRoot {
+    type Action = ();
+}
+
+#[test]
+fn settings_view_owned_view_ids_covers_pages_and_own_handles() {
+    App::test((), |mut app| async move {
+        crate::test_util::settings::initialize_settings_for_tests(&mut app);
+        // Mirrors `environments_page_tests::init_env_page_view_test_models`:
+        // most Settings page views assume these singleton models exist.
+        app.add_singleton_model(|_| crate::server::server_api::ServerApiProvider::new_for_test());
+        app.add_singleton_model(|_| crate::auth::AuthStateProvider::new_for_test());
+        app.add_singleton_model(|_| Appearance::mock());
+        app.add_singleton_model(crate::cloud_object::model::persistence::CloudModel::mock);
+        app.add_singleton_model(crate::workspaces::user_workspaces::UserWorkspaces::default_mock);
+        app.add_singleton_model(crate::settings::PrivacySettings::mock);
+        app.add_singleton_model(|_| crate::network::NetworkStatus::new());
+        app.add_singleton_model(crate::workspaces::team_tester::TeamTesterStatus::mock);
+        app.add_singleton_model(crate::server::sync_queue::SyncQueue::mock);
+        app.add_singleton_model(crate::server::cloud_objects::update_manager::UpdateManager::mock);
+        app.add_singleton_model(|_| {
+            crate::settings_view::keybindings::KeybindingChangedNotifier::new()
+        });
+        app.add_singleton_model(|_| {
+            crate::ai::ambient_agents::github_auth_notifier::GitHubAuthNotifier::new()
+        });
+
+        let (window_id, _) = app.add_window(WindowStyle::NotStealFocus, |_| ChildViewIdsTestRoot);
+
+        // Two real pages. Both happen to be `SettingsPageViewHandle::About`
+        // since `AboutPageView` is the only settings page cheap enough to
+        // construct without mocking a large dependency graph (see comment
+        // above). What's under test is the mapping over `settings_pages`,
+        // not per-variant coverage: every arm of the exhaustive
+        // `SettingsPageViewHandle::view_id` match is structurally identical
+        // (`Variant(handle) => handle.id()`), and the compiler enforces that
+        // no variant is missing from that match.
+        let about_1: ViewHandle<AboutPageView> = app.add_view(window_id, AboutPageView::new);
+        let about_2: ViewHandle<AboutPageView> = app.add_view(window_id, AboutPageView::new);
+        let about_1_id = about_1.id();
+        let about_2_id = about_2.id();
+        let settings_pages = vec![SettingsPage::new(about_1), SettingsPage::new(about_2)];
+
+        let font_family = app.update(|ctx| Appearance::as_ref(ctx).ui_font_family());
+        let search_editor = app.add_typed_action_view(window_id, |ctx| {
+            EditorView::single_line(
+                SingleLineEditorOptions {
+                    text: TextOptions {
+                        font_family_override: Some(font_family),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+                ctx,
+            )
+        });
+        let search_editor_id = search_editor.id();
+
+        let context_menu: ViewHandle<Menu<SettingsAction>> =
+            app.add_typed_action_view(window_id, |_| Menu::new());
+        let context_menu_id = context_menu.id();
+
+        let ids = SettingsView::owned_view_ids(&settings_pages, &search_editor, &context_menu);
+
+        assert_eq!(
+            ids,
+            vec![about_1_id, about_2_id, search_editor_id, context_menu_id],
+            "child_view_ids must cover every page plus search_editor and context_menu"
+        );
     });
 }

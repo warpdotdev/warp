@@ -26,7 +26,7 @@ use warpui::platform::Cursor;
 use warpui::ui_components::button::{Button, ButtonVariant};
 use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
 use warpui::units::Pixels;
-use warpui::{Action, AppContext, SingletonEntity, ViewContext, ViewHandle};
+use warpui::{Action, AppContext, EntityId, SingletonEntity, ViewContext, ViewHandle};
 
 use super::SettingsSection;
 use super::about_page::AboutPageView;
@@ -158,6 +158,42 @@ impl SettingsPageViewHandle {
             BillingAndUsage(view_handle) => ChildView::new(view_handle).finish(),
             MCPServers(view_handle) => ChildView::new(view_handle).finish(),
             WarpDrive(view_handle) => ChildView::new(view_handle).finish(),
+        }
+    }
+
+    /// Returns the entity id of the wrapped page view handle.
+    ///
+    /// This match is intentionally exhaustive (no wildcard arm) so that
+    /// adding a new [`SettingsPageViewHandle`] variant forces a compile
+    /// error here, the same way it already does in [`Self::child_view`].
+    /// `SettingsView::child_view_ids` builds its list by iterating
+    /// `settings_pages` and calling this method, so every page is covered
+    /// automatically without a separate hand-maintained id list.
+    pub fn view_id(&self) -> EntityId {
+        use SettingsPageViewHandle::*;
+        match self {
+            Main(view_handle) => view_handle.id(),
+            Appearance(view_handle) => view_handle.id(),
+            Features(view_handle) => view_handle.id(),
+            SharedBlocks(view_handle) => view_handle.id(),
+            Keybindings(view_handle) => view_handle.id(),
+            About(view_handle) => view_handle.id(),
+            CodeIndexing(view_handle) => view_handle.id(),
+            EditorAndCodeReview(view_handle) => view_handle.id(),
+            Teams(view_handle) => view_handle.id(),
+            OzCloudAPIKeys(view_handle) => view_handle.id(),
+            Privacy(view_handle) => view_handle.id(),
+            Warpify(view_handle) => view_handle.id(),
+            Referrals(view_handle) => view_handle.id(),
+            Scripting(view_handle) => view_handle.id(),
+            WarpAgent(view_handle) => view_handle.id(),
+            AgentProfiles(view_handle) => view_handle.id(),
+            Knowledge(view_handle) => view_handle.id(),
+            CLIAgents(view_handle) => view_handle.id(),
+            CloudEnvironments(view_handle) => view_handle.id(),
+            BillingAndUsage(view_handle) => view_handle.id(),
+            MCPServers(view_handle) => view_handle.id(),
+            WarpDrive(view_handle) => view_handle.id(),
         }
     }
 }

@@ -46,7 +46,7 @@ use warpui::elements::{
 use warpui::fonts::{Properties, Weight};
 use warpui::keymap::{ContextPredicate, EnabledPredicate, FixedBinding};
 use warpui::{
-    Action, AppContext, Element, Entity, ModelHandle, SingletonEntity, TypedActionView,
+    Action, AppContext, Element, Entity, EntityId, ModelHandle, SingletonEntity, TypedActionView,
     UpdateView as _, View, ViewContext, ViewHandle, id,
 };
 
@@ -1525,6 +1525,45 @@ impl SettingsView {
             })
     }
 
+    /// Computes the ids of every view `SettingsView` directly owns: every
+    /// page's handle plus `search_editor` and `context_menu`. This is the
+    /// literal body of `View::child_view_ids` below, split out into a
+    /// standalone function of plain inputs (rather than `&self`) so it can be
+    /// exercised directly in a unit test against real `SettingsPage`/
+    /// `SettingsPageViewHandle` values, without needing to construct a full
+    /// `SettingsView` (whose `new` pulls in singleton models for ~18 pages
+    /// spanning billing, teams, warp drive, and MCP servers). See
+    /// `settings_view_child_view_ids_covers_pages_and_own_handles` in
+    /// `mod_tests.rs`.
+    ///
+    /// `SettingsView` owns every settings page, but `render` only ever embeds
+    /// the currently active one (see `filtered_pages` above), so inactive
+    /// pages are invisible to the render-time parent graph. Most pages are
+    /// created with `add_typed_action_view`, which records a structural
+    /// parent edge, but a couple (e.g. `AboutPageView`,
+    /// `BillingAndUsageDispatchView`) use plain `ctx.add_view` and have no
+    /// such edge. Without this, a cross-window tab drag can leave those pages
+    /// orphaned in the source window, and the destination window later
+    /// panics trying to render them (see APP-5314).
+    ///
+    /// `settings_pages` is the single source of truth for the page list, so
+    /// iterating it here (via the exhaustive `SettingsPageViewHandle::view_id`
+    /// match) keeps this self-maintaining: a newly added page is covered
+    /// automatically, with no separate list to remember to update.
+    fn owned_view_ids(
+        settings_pages: &[SettingsPage],
+        search_editor: &ViewHandle<EditorView>,
+        context_menu: &ViewHandle<Menu<SettingsAction>>,
+    ) -> Vec<EntityId> {
+        let mut ids: Vec<EntityId> = settings_pages
+            .iter()
+            .map(|page| page.view_handle.view_id())
+            .collect();
+        ids.push(search_editor.id());
+        ids.push(context_menu.id());
+        ids
+    }
+
     fn handle_search_editor_event(
         &mut self,
         editor: ViewHandle<EditorView>,
@@ -2443,6 +2482,14 @@ impl Entity for SettingsView {
 impl View for SettingsView {
     fn ui_name() -> &'static str {
         "SettingsViewInTab"
+    }
+
+    fn child_view_ids(&self, _app: &AppContext) -> Vec<EntityId> {
+        Self::owned_view_ids(
+            &self.settings_pages,
+            &self.search_editor,
+            &self.context_menu,
+        )
     }
 
     fn render(&self, app: &AppContext) -> Box<dyn Element> {

@@ -1062,3 +1062,179 @@ fn test_transfer_view_tree_reconciles_views_known_only_to_target_presenter() {
         });
     });
 }
+
+#[test]
+fn test_transfer_view_tree_moves_add_view_pages_never_made_active_when_declared_via_child_view_ids()
+{
+    // NOTE: this is a transfer-machinery test, not an APP-5314 regression
+    // test. It exercises a synthetic `SettingsViewLike` type that supplies
+    // its own `child_view_ids` override, mirroring the *shape* of the real
+    // `app::settings_view::SettingsView` bug (a view that renders only its
+    // active child, with a mix of structural `add_typed_action_view`
+    // children and plain `add_view` children) — but it does not call, and
+    // therefore cannot catch a regression in, the real
+    // `SettingsView::child_view_ids`. The actual APP-5314 regression
+    // coverage lives in `app/src/settings_view/mod_tests.rs`
+    // (`settings_view_owned_view_ids_covers_pages_and_own_handles`), which
+    // exercises `SettingsView::owned_view_ids` directly against real
+    // `SettingsPage`/`SettingsPageViewHandle` values. This test is kept
+    // because it's still a valid, generic check that
+    // `transfer_view_tree_to_window` honors `View::child_view_ids` for
+    // views whose owned children are a mix of structural and non-structural
+    // (never-rendered) handles — the general mechanism the real fix relies
+    // on — not because it protects `SettingsView` itself.
+    //
+    // `SettingsView` owns every settings page, but `SettingsView::render`
+    // (via `filtered_pages`) only ever embeds the currently *active* page, so
+    // inactive pages are invisible to the render-time parent graph. Most
+    // pages are created with `ctx.add_typed_action_view` (which records a
+    // structural parent edge), but `AboutPageView` and
+    // `BillingAndUsageDispatchView` are created with plain `ctx.add_view` and
+    // get no such edge. Before `SettingsView::child_view_ids` was added to
+    // report every owned page, a cross-window tab drag left those two pages
+    // orphaned in the source window, and the destination window later
+    // panicked trying to render them ("circular view reference", i.e. the
+    // missing-view branch of `AppContext::view`).
+    struct StructuralPage;
+
+    impl Entity for StructuralPage {
+        type Event = ();
+    }
+
+    impl View for StructuralPage {
+        fn render(&self, _: &AppContext) -> Box<dyn Element> {
+            Empty::new().finish()
+        }
+
+        fn ui_name() -> &'static str {
+            "StructuralPage"
+        }
+    }
+
+    impl TypedActionView for StructuralPage {
+        type Action = ();
+    }
+
+    // Stands in for `AboutPageView` / `BillingAndUsageDispatchView`: created
+    // via plain `ctx.add_view`, so it gets no structural parent edge.
+    struct AddViewOnlyPage;
+
+    impl Entity for AddViewOnlyPage {
+        type Event = ();
+    }
+
+    impl View for AddViewOnlyPage {
+        fn render(&self, _: &AppContext) -> Box<dyn Element> {
+            Empty::new().finish()
+        }
+
+        fn ui_name() -> &'static str {
+            "AddViewOnlyPage"
+        }
+    }
+
+    struct SettingsViewLike {
+        // Every owned page is kept alive here, mirroring how the real
+        // `SettingsView` retains each page's `ViewHandle` inside its
+        // `settings_pages: Vec<SettingsPage>` field. If a handle were instead
+        // dropped after construction (keeping only its id), the view would be
+        // removed by the framework's ref-counted cleanup before any transfer
+        // ever ran, which would defeat the point of this test.
+        structural_pages: Vec<ViewHandle<StructuralPage>>,
+        add_view_pages: Vec<ViewHandle<AddViewOnlyPage>>,
+    }
+
+    impl Entity for SettingsViewLike {
+        type Event = ();
+    }
+
+    impl View for SettingsViewLike {
+        fn render(&self, _: &AppContext) -> Box<dyn Element> {
+            // Only the active (first) page is ever embedded, exactly like
+            // `SettingsView::render` -> `filtered_pages`.
+            ChildView::new(&self.structural_pages[0]).finish()
+        }
+
+        fn ui_name() -> &'static str {
+            "SettingsViewLike"
+        }
+
+        fn child_view_ids(&self, _app: &AppContext) -> Vec<EntityId> {
+            self.structural_pages
+                .iter()
+                .map(|handle| handle.id())
+                .chain(self.add_view_pages.iter().map(|handle| handle.id()))
+                .collect()
+        }
+    }
+
+    impl TypedActionView for SettingsViewLike {
+        type Action = ();
+    }
+
+    App::test((), |mut app| async move {
+        let (window_1_id, _) = app.add_window(WindowStyle::NotStealFocus, |_| StructuralPage);
+        let (window_2_id, _) = app.add_window(WindowStyle::NotStealFocus, |_| StructuralPage);
+
+        let mut about_id = None;
+        let mut billing_id = None;
+        let settings = app.add_typed_action_view(window_1_id, |ctx| {
+            // Structural (typed-action) pages, like MainSettingsPageView, AI
+            // SettingsPageView, etc: these already survive a transfer via the
+            // structural parent/child graph, with or without our fix.
+            let active = ctx.add_typed_action_view(|_| StructuralPage);
+            let other_structural = ctx.add_typed_action_view(|_| StructuralPage);
+
+            // Plain `add_view` pages, like AboutPageView and
+            // BillingAndUsageDispatchView: never active, never rendered, and
+            // (before the fix) not reachable from the parent at all.
+            let about = ctx.add_view(|_| AddViewOnlyPage);
+            let billing_and_usage = ctx.add_view(|_| AddViewOnlyPage);
+            about_id = Some(about.id());
+            billing_id = Some(billing_and_usage.id());
+
+            SettingsViewLike {
+                structural_pages: vec![active, other_structural],
+                add_view_pages: vec![about, billing_and_usage],
+            }
+        });
+        let settings_id = settings.id();
+        let about_id = about_id.expect("about page should have been created");
+        let billing_id = billing_id.expect("billing page should have been created");
+
+        let transferred = app
+            .update(|ctx| ctx.transfer_view_tree_to_window(settings_id, window_1_id, window_2_id));
+
+        assert!(
+            transferred.contains(&settings_id),
+            "SettingsView-like root should be transferred"
+        );
+        assert!(
+            transferred.contains(&about_id),
+            "AboutPageView-like page should be transferred even though it's never active"
+        );
+        assert!(
+            transferred.contains(&billing_id),
+            "BillingAndUsageDispatchView-like page should be transferred even though it's never active"
+        );
+
+        app.read(|ctx| {
+            assert!(
+                ctx.windows[&window_2_id].views.contains_key(&about_id),
+                "About page should now live in window 2, not be orphaned in window 1"
+            );
+            assert!(
+                !ctx.windows[&window_1_id].views.contains_key(&about_id),
+                "About page should no longer be in window 1"
+            );
+            assert!(
+                ctx.windows[&window_2_id].views.contains_key(&billing_id),
+                "Billing and usage page should now live in window 2, not be orphaned in window 1"
+            );
+            assert!(
+                !ctx.windows[&window_1_id].views.contains_key(&billing_id),
+                "Billing and usage page should no longer be in window 1"
+            );
+        });
+    });
+}
