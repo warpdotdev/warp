@@ -156,6 +156,42 @@ pub struct CreateTeamResponse {
     pub team: Team,
 }
 
+/// The owned operation scope for a team inferred from the current view and window.
+///
+/// A `TeamContext` is a stable snapshot captured once from a [`ViewContext`]. It then
+/// moves through commands, events, models, futures, and transport without resolving
+/// the originating view or window again, and it never retargets if the window's team
+/// selection later changes. [`UserWorkspaces::team_context_for_view`] is its only
+/// minting authority for general application code.
+///
+/// Holding a `TeamContext` is not proof of current team membership or server
+/// authorization; the server still authenticates and authorizes every request scoped
+/// by it.
+pub(crate) struct TeamContext {
+    team_uid: ServerId,
+}
+
+impl TeamContext {
+    fn new(team_uid: ServerId) -> Self {
+        Self { team_uid }
+    }
+}
+
+/// The borrowed read scope for current-team rendering.
+///
+/// A `TeamRenderContext` borrows the current [`Team`] from [`UserWorkspaces`] and is
+/// resolved again on every render via
+/// [`UserWorkspaces::team_render_context_for_view_handle`]. Its lifetime keeps it out
+/// of `'static` futures and stored model state, and it has no conversion to a raw
+/// team UID or to an owned [`TeamContext`].
+///
+/// Holding a `TeamRenderContext` is not proof of current team membership or server
+/// authorization; the server still authenticates and authorizes every request scoped
+/// by it.
+pub(crate) struct TeamRenderContext<'a> {
+    team: &'a Team,
+}
+
 impl UserWorkspaces {
     #[cfg(any(test, all(feature = "tui", feature = "test-util")))]
     pub fn mock(
@@ -347,6 +383,38 @@ impl UserWorkspaces {
         view_handle
             .window_id(ctx)
             .and_then(|window_id| self.team_for_window(window_id))
+    }
+
+    /// Snapshots the team currently assigned to `ctx`'s window into a stable
+    /// [`TeamContext`] for a logical operation to carry forward. See [`TeamContext`]
+    /// for the guarantees this snapshot upholds.
+    pub(crate) fn team_context_for_view<T: Entity>(
+        &self,
+        ctx: &ViewContext<T>,
+    ) -> Option<TeamContext> {
+        self.team_uid_for_window(ctx.window_id())
+            .map(TeamContext::new)
+    }
+
+    /// Resolves the team assigned to `view`'s current window for one synchronous
+    /// render. See [`TeamRenderContext`] for the guarantees this borrow upholds.
+    pub(crate) fn team_render_context_for_view_handle<'a, T: Entity>(
+        &'a self,
+        view: &WeakViewHandle<T>,
+        app: &AppContext,
+    ) -> Option<TeamRenderContext<'a>> {
+        let window_id = view.window_id(app)?;
+        let team_uid = self.team_uid_for_window(window_id)?;
+        let team = self.team_from_uid(team_uid)?;
+
+        Some(TeamRenderContext { team })
+    }
+
+    /// Reads the metadata for a captured [`TeamContext`]. Returns `None` when the
+    /// captured team no longer exists in the current workspace, e.g. after the user
+    /// has left it.
+    pub(crate) fn team_for_context(&self, context: &TeamContext) -> Option<&Team> {
+        self.team_from_uid(context.team_uid)
     }
 
     /// Returns the windows whose team assignment changed.
