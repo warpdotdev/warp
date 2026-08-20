@@ -1,14 +1,23 @@
 #!/usr/bin/env bash
 # Regression test for the cobra description-padding fix in `_warp_native_bash_completions`
-# (see the COMP_TYPE comment in bash_body.sh). Exercises two synthetic completion functions
-# rather than real `gh`/`git` binaries, so it runs deterministically without external tools:
+# (see the COMP_TYPE comment in bash_body.sh). Exercises synthetic completion functions rather
+# than real `gh`/`git`/`make` binaries, so it runs deterministically without external tools --
+# but each one reproduces a real, measured completion script's own behavior:
 #
 #   - `__cobra_style_complete` reproduces cobra's documented COMP_TYPE branch (see
-#     https://github.com/spf13/cobra/issues/1508): under COMP_TYPE 9 (plain Tab) with more than
-#     one match it bakes a padded "name  (description)" string into COMPREPLY; under 37 or 42 it
-#     strips descriptions and emits bare names regardless of match count.
+#     https://github.com/spf13/cobra/issues/1508): under COMP_TYPE 9 (plain Tab, what we always
+#     use) with more than one match it bakes a padded "name  (description)" string into
+#     COMPREPLY. `_warp_native_bash_completions` is expected to split that shape apart into a
+#     bare name and a separate description after the call, not by switching COMP_TYPE.
 #   - `__ordinary_style_complete` reproduces a bash-completion-style function that ignores
-#     COMP_TYPE entirely and always emits bare names -- the shape the fix must not break.
+#     COMP_TYPE entirely and always emits bare names -- the shape the fix must not touch.
+#   - `__make_style_complete` reproduces bash-completion's real `make` script, the one
+#     completion function (out of 841 in a stock install) that actually reads $COMP_TYPE: it
+#     returns the *directory prefix plus* the next path component under COMP_TYPE 9, and just
+#     the bare next component under any other COMP_TYPE. Switching COMP_TYPE away from 9 (an
+#     earlier version of this fix did, to dodge the cobra padding) silently broke this --
+#     completing a prefixed target returned a bare component that no longer contains the typed
+#     prefix, so the client's own filter discarded it and no menu appeared at all.
 #
 # Usage: bash bash_native_completions_test.sh
 
@@ -27,7 +36,9 @@ source "$REPO_ROOT/app/assets/bundled/bootstrap/bash_body.sh" >/dev/null 2>&1
 __cobra_style_complete() {
   if [[ "$COMP_TYPE" == 9 && ${#COMPREPLY[@]} -ge 0 ]]; then
     # Cobra's actual condition is "more than one match"; reproduce that by hard-coding two
-    # matches for this fixture, as the real cobra scripts do for a real multi-match prefix.
+    # matches for this fixture, as the real cobra scripts do for a real multi-match prefix. One
+    # entry needs more padding than the other, to catch a regex that over-consumes trailing
+    # spaces into the name instead of the padding (measured against the real `gh` binary).
     COMPREPLY=("checkout  (Check out a pull request)" "checks    (Show CI status)")
   else
     COMPREPLY=("checkout" "checks")
@@ -40,6 +51,15 @@ __ordinary_style_complete() {
   COMPREPLY=("checkout" "cherry-pick" "cherry")
 }
 complete -F __ordinary_style_complete ordinary-cli
+
+__make_style_complete() {
+  if (( COMP_TYPE != 9 )); then
+    COMPREPLY=("deploy")
+  else
+    COMPREPLY=("sub/dir/deploy")
+  fi
+}
+complete -F __make_style_complete make-cli
 
 assert_reply() {
   local desc="$1"
@@ -55,20 +75,40 @@ assert_reply() {
   fi
 }
 
+assert_descriptions() {
+  local desc="$1"
+  shift
+  local -a expected=("$@")
+  if [[ "${descriptions[*]}" != "${expected[*]}" ]]; then
+    echo "FAIL: $desc"
+    echo "  expected: ${expected[*]}"
+    echo "  actual:   ${descriptions[*]}"
+    failures=$((failures + 1))
+  else
+    echo "PASS: $desc"
+  fi
+}
+
 collect_replies() {
   # _warp_native_bash_completions emits one OSC per match with no separator between them
-  # ("\e]9280;C;<match>\a\e]9280;C;<match>\a..."), so extract every match with `grep -oP`
-  # rather than treating the output as newline-delimited.
-  mapfile -t replies < <(
-    _warp_native_bash_completions "$1" 2>/dev/null | command -p grep -oP '(?<=9280;C;)[^\x07]*'
-  )
+  # ("\e]9280;C;<match>\a\e]9280;C;<match>\a..."), so extract every match/description with
+  # `grep -oP` rather than treating the output as newline-delimited.
+  local output
+  output="$(_warp_native_bash_completions "$1" 2>/dev/null)"
+  mapfile -t replies < <(command -p grep -oP '(?<=9280;C;)[^\x07]*' <<< "$output")
+  mapfile -t descriptions < <(command -p grep -oP '(?<=9280;D\?description;)[^\x07]*' <<< "$output")
 }
 
 collect_replies "cobra-cli che"
-assert_reply "cobra-style entry stays a bare name (no baked-in description)" "checkout" "checks"
+assert_reply "cobra-style entry is split to a bare name (no baked-in description)" "checkout" "checks"
+assert_descriptions "cobra-style entry's description is recovered, not just discarded" \
+  "Check out a pull request" "Show CI status"
 
 collect_replies "ordinary-cli ch"
 assert_reply "ordinary bash-completion-style entry is unaffected" "checkout" "cherry-pick" "cherry"
+
+collect_replies "make-cli sub/dir/"
+assert_reply "make-style entry keeps the full directory-prefixed path under COMP_TYPE 9" "sub/dir/deploy"
 
 if [[ $failures -eq 0 ]]; then
   echo "All bash native completions tests passed."

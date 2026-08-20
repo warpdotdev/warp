@@ -361,21 +361,24 @@ if [ -z "$WARP_BOOTSTRAPPED" ]; then
       # COMP_POINT is a byte offset into COMP_LINE, not a character count: ${#line} counts
       # characters under the session's locale, which undercounts for multibyte text.
       local COMP_POINT=$(( $(LC_ALL=C printf '%s' "$line" | LC_ALL=C command wc -c) ))
-      # 37 ('%', menu-complete) rather than 9 (plain Tab). cobra-generated "bash completion
-      # V2" scripts (kubectl, gh, and most modern Go CLIs) branch on this: for an ordinary
-      # Tab (9) with more than one match, they bake a padded "name  (description)" string
-      # directly into the COMPREPLY entry -- safe for real readline, which only ever inserts
-      # an entry when it's unique, but not for us, since we display every entry in a menu and
-      # insert whichever one is picked (measured: `gh __complete pr che` -> COMPREPLY holds
-      # "checkout  (Check out a pull request in git)" verbatim under COMP_TYPE=9, and would
-      # be inserted as that whole string). cobra's own case statement guarantees entries stay
-      # bare names under 37 or 42 regardless of match count -- see
-      # https://github.com/spf13/cobra/issues/1508, the issue this behavior is documented
-      # against. Confirmed empirically this has no effect on non-cobra completion functions:
-      # bash-completion (which drives the vast majority of scripts, including git's) never
-      # reads $COMP_TYPE at all, and calling `_git`'s completion function under 37 produces
-      # byte-identical output to 9.
-      local COMP_TYPE=37
+      # 9 (plain Tab), matching real interactive completion. cobra-generated "bash completion
+      # V2" scripts (kubectl, gh, and most modern Go CLIs) bake a padded "name  (description)"
+      # string into the COMPREPLY entry under this COMP_TYPE when there's more than one match --
+      # safe for real readline, which only ever inserts an entry when it's unique, but not for
+      # us, since we display every entry in a menu and insert whichever one is picked. Switching
+      # to 37 (menu-complete) avoids that padding -- cobra's own case statement guarantees bare
+      # names under 37/42 regardless of match count, see
+      # https://github.com/spf13/cobra/issues/1508 -- but was reverted: bash-completion's own
+      # `make` completion (the one script out of 841 in a stock bash-completion install that
+      # reads $COMP_TYPE at all) branches on it to choose between a full relative path (9) and
+      # just the next path component (37/anything else), so 37 silently broke completing a
+      # prefixed target (`make sub/dir/` -> `deploy` instead of `sub/dir/deploy`; the bare
+      # component doesn't contain the typed prefix, so the client's own filter discards it and
+      # no menu appears at all). 9 is faithful to real readline for all 841 stock scripts;
+      # nothing else reads $COMP_TYPE, confirmed by grepping the installed bash-completion
+      # tree. The cobra padding is instead split back apart below, after the call, which gets
+      # bare names *and* real descriptions -- something neither COMP_TYPE value alone can.
+      local COMP_TYPE=9
       local COMP_KEY=9
 
       # compopt is only meaningful while bash's own readline machinery is driving a
@@ -389,7 +392,23 @@ if [ -z "$WARP_BOOTSTRAPPED" ]; then
         # is unambiguous); trim it so the client controls spacing.
         reply="${reply% }"
         [[ -z "$reply" ]] && continue
+
+        # Split cobra's own padded shape -- a name, two or more spaces (real readline's own
+        # column alignment, never used by a real completion candidate on its own), then a
+        # parenthesised description running to the very end of the entry -- back into a bare
+        # name and a description. Anchored narrowly (both the multi-space run and the
+        # trailing, unescaped `)$` must be present) so a legitimate candidate that merely
+        # contains parentheses elsewhere passes through unchanged.
+        local reply_description=""
+        if [[ "$reply" =~ ^(.*[^[:space:]])[[:space:]]{2,}\((.*)\)$ ]]; then
+          reply="${BASH_REMATCH[1]}"
+          reply_description="${BASH_REMATCH[2]}"
+        fi
+
         printf '\e]9280;C;%s\a' "$reply"
+        if [[ -n "$reply_description" ]]; then
+          printf '\e]9280;D?description;%s\a' "$reply_description"
+        fi
       done
     }
 

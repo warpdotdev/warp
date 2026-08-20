@@ -62,6 +62,10 @@ else
     echo "No Powershell detected! skipping PSScriptAnalyzer!"
 fi
 
+echo "Running bash native completions regression tests..."
+bash app/assets/bundled/bootstrap/bash_native_completions_test.sh
+echo "bash native completions regression tests succeeded..."
+
 echo "Running tests via nextest..."
 cargo nextest run --no-fail-fast --workspace --exclude command-signatures-v2
 # Run warp_completer tests with the "v2" (completions-on-js) flag enabled. We do this to ensure that
