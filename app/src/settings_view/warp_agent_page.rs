@@ -2393,26 +2393,23 @@ impl TypedActionView for WarpAgentPageView {
                 });
             }
             WarpAgentPageAction::ToggleAiCommandSearchHashTrigger => {
-                InputSettings::handle(ctx).update(ctx, |input_settings, ctx| match input_settings
-                    .enable_ai_command_search_hash_trigger
-                    .toggle_and_save_value(ctx)
-                {
-                    Ok(new_value) => {
-                        send_telemetry_from_ctx!(
-                            TelemetryEvent::FeaturesPageAction {
-                                action: "ToggleAiCommandSearchHashTrigger".to_string(),
-                                value: format!("{new_value}"),
-                            },
-                            ctx
-                        );
-                    }
-                    Err(e) => {
-                        log::warn!(
-                            "Failed to set value for AI Command Search '#' trigger setting: {e:?}"
-                        );
-                    }
+                InputSettings::handle(ctx).update(ctx, |input_settings, ctx| {
+                    report_if_error!(
+                        input_settings
+                            .enable_ai_command_search_hash_trigger
+                            .toggle_and_save_value(ctx)
+                    );
+                    send_telemetry_from_ctx!(
+                        TelemetryEvent::FeaturesPageAction {
+                            action: "ToggleAiCommandSearchHashTrigger".to_string(),
+                            value: format!(
+                                "{}",
+                                *input_settings.enable_ai_command_search_hash_trigger
+                            ),
+                        },
+                        ctx
+                    );
                 });
-                ctx.notify();
             }
             WarpAgentPageAction::ToggleShowAgentTips => {
                 InputSettings::handle(ctx).update(ctx, |input_settings, ctx| match input_settings
