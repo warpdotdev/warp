@@ -105,7 +105,9 @@ fn stays_generic_when_the_reported_model_has_no_display_name() {
 
 /// Today's shipped configuration — naming off, fallback messaging on — must behave
 /// exactly as it did before naming existed, down to the full stop. The fallback
-/// message keeps its period while everything named since ends in an ellipsis.
+/// message keeps its period while everything named since ends in an ellipsis, and
+/// `model_display_name` stays `None` so the legacy flag cannot smuggle the name
+/// into the row's other messages.
 #[test]
 fn names_a_fallback_model_without_the_naming_flag() {
     let _naming = FeatureFlag::WarpingModelName.override_enabled(false);
@@ -115,7 +117,7 @@ fn names_a_fallback_model_without_the_naming_flag() {
         warping_model_message(for_current(Some(fallback("Claude Haiku 4.5")))),
         Some(WarpingModelMessage {
             text: "Warping with Claude Haiku 4.5.".to_owned(),
-            model_display_name: Some("Claude Haiku 4.5".to_owned()),
+            model_display_name: None,
             show_fallback_explanation: true,
         })
     );
@@ -126,12 +128,10 @@ fn names_a_fallback_model_without_the_naming_flag() {
 #[test]
 fn ends_the_fallback_message_in_a_period_and_the_named_message_in_an_ellipsis() {
     let _naming = FeatureFlag::WarpingModelName.override_enabled(true);
+    let _fallback_messaging = FeatureFlag::FallbackModelLoadOutputMessaging.override_enabled(true);
 
-    let fallback_text = {
-        let _fallback_messaging =
-            FeatureFlag::FallbackModelLoadOutputMessaging.override_enabled(true);
-        warping_model_message(for_current(Some(fallback("Claude Haiku 4.5")))).map(|m| m.text)
-    };
+    let fallback_text =
+        warping_model_message(for_current(Some(fallback("Claude Haiku 4.5")))).map(|m| m.text);
     let named_text =
         warping_model_message(for_current(Some(named("Claude Haiku 4.5")))).map(|m| m.text);
 
@@ -209,8 +209,11 @@ fn stays_generic_for_a_fallback_model_when_both_flags_are_disabled() {
     );
 }
 
+/// Naming is on here so the `None` below is attributable to the name being
+/// borrowed rather than to the flag.
 #[test]
 fn names_the_previous_exchanges_fallback_model_on_agent_follow_ups() {
+    let _naming = FeatureFlag::WarpingModelName.override_enabled(true);
     let _fallback_messaging = FeatureFlag::FallbackModelLoadOutputMessaging.override_enabled(true);
 
     assert_eq!(
@@ -221,7 +224,9 @@ fn names_the_previous_exchanges_fallback_model_on_agent_follow_ups() {
         }),
         Some(WarpingModelMessage {
             text: "Warping with Claude Haiku 4.5.".to_owned(),
-            model_display_name: Some("Claude Haiku 4.5".to_owned()),
+            // Borrowed, so it stays out of the row's other messages: the lookback
+            // was justified for this one sentence, not for five more.
+            model_display_name: None,
             show_fallback_explanation: true,
         })
     );

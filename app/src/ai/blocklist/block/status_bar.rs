@@ -25,9 +25,9 @@ use super::cli_controller::{CLISubagentController, CLISubagentEvent, UserTakeOve
 use super::model::{AIBlockModel, AIBlockModelImpl, AIBlockOutputStatus};
 use super::view_impl::common::{
     AutoExecuteButtonProps, ButtonProps, ForceRefreshButtonProps, LOAD_OUTPUT_MESSAGE,
-    MaybeShimmeringText, WAITING_FOR_USER_INPUT_MESSAGE, WarpingIndicatorProps, WarpingProps,
-    render_switch_control_to_user_button, render_warping_indicator, render_warping_indicator_base,
-    status_message_naming_model,
+    MaybeShimmeringText, STATUS_MESSAGE_ELLIPSIS, WAITING_FOR_USER_INPUT_MESSAGE,
+    WarpingIndicatorProps, WarpingProps, render_switch_control_to_user_button,
+    render_warping_indicator, render_warping_indicator_base, status_message_naming_model,
 };
 use crate::ai::AgentTip;
 use crate::ai::agent::conversation::AIConversationId;
@@ -1152,8 +1152,15 @@ const UNNAMED_FALLBACK_MODEL_WARPING_TEXT: &str = "Warping with another model.";
 /// The fallback message's copy. It shipped before model naming existed and keeps
 /// its full stop, where everything named since ends in the row's ellipsis. The
 /// inconsistency is deliberate and was chosen by the requester: do not "fix" it.
+///
+/// When `FallbackModelLoadOutputMessaging` is eventually removed, keep this branch
+/// live. Cleaning the flag up in the "treat as false" direction would silently
+/// flip every fallback message to the ellipsis copy and drop its explanation line.
 fn fallback_warping_text(display_name: &str) -> String {
-    format!("Warping with {display_name}.")
+    let stem = LOAD_OUTPUT_MESSAGE
+        .strip_suffix(STATUS_MESSAGE_ELLIPSIS)
+        .unwrap_or(LOAD_OUTPUT_MESSAGE);
+    format!("{stem} with {display_name}.")
 }
 
 /// Warping text for the model a response is running on, e.g. "Warping with Claude
@@ -1173,8 +1180,8 @@ fn fallback_warping_text(display_name: &str) -> String {
 /// model on its own flag alone; every other naming needs `WarpingModelName`.
 fn warping_model_message(inputs: WarpingModelInputs) -> Option<WarpingModelMessage> {
     let fallback_messaging_enabled = FeatureFlag::FallbackModelLoadOutputMessaging.is_enabled();
-    let model_in_use = match inputs.current {
-        Some(current) => current,
+    let (model_in_use, is_current_exchange) = match inputs.current {
+        Some(current) => (current, true),
         None => {
             if !fallback_messaging_enabled || inputs.is_new_user_query {
                 return None;
@@ -1183,19 +1190,17 @@ fn warping_model_message(inputs: WarpingModelInputs) -> Option<WarpingModelMessa
             if !previous.is_fallback {
                 return None;
             }
-            previous
+            (previous, false)
         }
     };
 
-    let show_fallback_explanation = model_in_use.is_fallback && fallback_messaging_enabled;
-    if !FeatureFlag::WarpingModelName.is_enabled() && !show_fallback_explanation {
+    let is_fallback_message = model_in_use.is_fallback && fallback_messaging_enabled;
+    let naming_enabled = FeatureFlag::WarpingModelName.is_enabled();
+    if !naming_enabled && !is_fallback_message {
         return None;
     }
 
-    let text = match (
-        model_in_use.display_name.as_deref(),
-        show_fallback_explanation,
-    ) {
+    let text = match (model_in_use.display_name.as_deref(), is_fallback_message) {
         (Some(display_name), true) => fallback_warping_text(display_name),
         // An unnamed fallback still has something to say.
         (None, true) => UNNAMED_FALLBACK_MODEL_WARPING_TEXT.to_owned(),
@@ -1208,8 +1213,15 @@ fn warping_model_message(inputs: WarpingModelInputs) -> Option<WarpingModelMessa
 
     Some(WarpingModelMessage {
         text,
-        model_display_name: model_in_use.display_name,
-        show_fallback_explanation,
+        // The row's other messages get a name only under the naming flag, and only
+        // for this exchange's own model. The fallback message's flag must not
+        // smuggle naming into them on the shipped configuration, and the lookback's
+        // borrowed guess was justified for the one sentence it replaces, not for
+        // spreading across five more messages.
+        model_display_name: (naming_enabled && is_current_exchange)
+            .then_some(model_in_use.display_name)
+            .flatten(),
+        show_fallback_explanation: is_fallback_message,
     })
 }
 
