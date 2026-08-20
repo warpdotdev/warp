@@ -315,13 +315,18 @@ fn insert_non_empty_task_env_var(
 /// derives one name from the other, so retiring the `OZ_` half later means deleting it from
 /// these lists. `task_env_vars_mirror_every_oz_var_to_a_warp_name` fails if a name is added
 /// here under only one of the two spellings.
+///
+/// Takes `AsRef<OsStr>` rather than `&str` so a path-valued variable stays byte-exact: `OZ_CLI`
+/// holds an executable path that agents exec, and a lossy conversion would replace non-UTF-8
+/// bytes and leave them unable to launch it.
 fn insert_task_env_var_names(
     env_vars: &mut HashMap<OsString, OsString>,
     keys: &[&'static str],
-    value: &str,
+    value: impl AsRef<OsStr>,
 ) {
+    let value = value.as_ref();
     for key in keys {
-        env_vars.insert(OsString::from(key), OsString::from(value));
+        env_vars.insert(OsString::from(key), value.to_os_string());
     }
 }
 
@@ -360,11 +365,7 @@ fn task_env_vars_for_harness_name(
 
     let cli_path = std::env::current_exe()
         .unwrap_or_else(|_| ChannelState::channel().cli_command_name().into());
-    insert_task_env_var_names(
-        &mut env_vars,
-        &[OZ_CLI_ENV, WARP_CLI_ENV],
-        &cli_path.to_string_lossy(),
-    );
+    insert_task_env_var_names(&mut env_vars, &[OZ_CLI_ENV, WARP_CLI_ENV], &cli_path);
     // The harness name is only consumed by child orchestration telemetry when the child
     // CLI emits `run message *` events.
     insert_task_env_var_names(
