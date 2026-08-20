@@ -1056,8 +1056,6 @@ fn create_test_window(app: &mut App) -> (WindowId, ViewHandle<TeamContextTestVie
     app.add_window(WindowStyle::NotStealFocus, |_| TeamContextTestView)
 }
 
-/// Two distinct teams in the same workspace, for tests that need to tell one
-/// window's team apart from another's.
 fn two_teams() -> (Team, Team) {
     let team_a = team_for_test();
     let mut team_b = team_for_test();
@@ -1111,52 +1109,10 @@ fn test_team_context_for_view_resolves_each_windows_own_team() {
     })
 }
 
+/// A window only changes teams by reconciling away from a team that left the workspace, so
+/// that is also the only way to observe a captured context and a live render diverging.
 #[test]
-fn test_captured_team_context_never_retargets_when_window_team_changes() {
-    let (team_a, team_b) = two_teams();
-    let mut workspace = workspace_for_test(&team_a);
-    workspace.teams.push(team_b.clone());
-
-    App::test((), |mut app| async move {
-        initialize_window_team_test_app(&mut app, vec![workspace]);
-
-        let (window_id, view) = create_test_window(&mut app);
-        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
-            user_workspaces.set_team_for_window(window_id, team_a.uid, ctx);
-        });
-
-        let context_a = view
-            .update(&mut app, |_, ctx| {
-                UserWorkspaces::as_ref(ctx).team_context_for_view(ctx)
-            })
-            .expect("a window assigned to team A should mint a context");
-
-        // The window's team assignment only changes via reconciliation, which
-        // runs when its current team disappears from the workspace.
-        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
-            user_workspaces.update_workspaces(vec![workspace_for_test(&team_b)], ctx);
-        });
-
-        app.read(|ctx| {
-            let user_workspaces = UserWorkspaces::as_ref(ctx);
-            assert_eq!(
-                user_workspaces.team_uid_for_window(window_id),
-                Some(team_b.uid),
-                "the window itself should reconcile onto team B"
-            );
-            assert_ne!(
-                user_workspaces
-                    .team_for_context(&context_a)
-                    .map(|team| team.uid),
-                Some(team_b.uid),
-                "a context captured for team A must never resolve as team B"
-            );
-        });
-    })
-}
-
-#[test]
-fn test_team_render_context_follows_window_team_change() {
+fn test_window_team_reconciliation_moves_rendering_but_not_a_captured_context() {
     let (team_a, team_b) = two_teams();
     let mut workspace = workspace_for_test(&team_a);
     workspace.teams.push(team_b.clone());
@@ -1169,6 +1125,12 @@ fn test_team_render_context_follows_window_team_change() {
         UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
             user_workspaces.set_team_for_window(window_id, team_a.uid, ctx);
         });
+
+        let context_a = view
+            .update(&mut app, |_, ctx| {
+                UserWorkspaces::as_ref(ctx).team_context_for_view(ctx)
+            })
+            .expect("a window assigned to team A should mint a context");
 
         app.read(|ctx| {
             assert_eq!(
@@ -1184,12 +1146,18 @@ fn test_team_render_context_follows_window_team_change() {
         });
 
         app.read(|ctx| {
+            let user_workspaces = UserWorkspaces::as_ref(ctx);
             assert_eq!(
-                UserWorkspaces::as_ref(ctx)
+                user_workspaces
                     .team_render_context_for_view_handle(&weak_view, ctx)
                     .map(|render| render.team.uid),
                 Some(team_b.uid),
-                "a freshly resolved render context should follow the window to its new team"
+                "a freshly resolved render context should follow the window to team B"
+            );
+            assert!(
+                user_workspaces.team_for_context(&context_a).is_none(),
+                "a context captured for team A should stop resolving rather than follow the \
+                 window onto team B"
             );
         });
     })
@@ -1220,49 +1188,6 @@ fn test_team_context_and_render_context_return_none_without_a_team() {
                     .team_render_context_for_view_handle(&weak_view, ctx)
                     .is_none(),
                 "a window with no team should not resolve a TeamRenderContext"
-            );
-        });
-    })
-}
-
-#[test]
-fn test_removed_team_context_stops_resolving_while_render_follows_reconciled_team() {
-    let (team_a, team_b) = two_teams();
-    let mut workspace = workspace_for_test(&team_a);
-    workspace.teams.push(team_b.clone());
-
-    App::test((), |mut app| async move {
-        initialize_window_team_test_app(&mut app, vec![workspace]);
-
-        let (window_id, view) = create_test_window(&mut app);
-        let weak_view = view.downgrade();
-        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
-            user_workspaces.set_team_for_window(window_id, team_a.uid, ctx);
-        });
-
-        let context_a = view
-            .update(&mut app, |_, ctx| {
-                UserWorkspaces::as_ref(ctx).team_context_for_view(ctx)
-            })
-            .expect("a window assigned to team A should mint a context");
-
-        // Team A is removed from the workspace; only team B remains.
-        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
-            user_workspaces.update_workspaces(vec![workspace_for_test(&team_b)], ctx);
-        });
-
-        app.read(|ctx| {
-            let user_workspaces = UserWorkspaces::as_ref(ctx);
-            assert!(
-                user_workspaces.team_for_context(&context_a).is_none(),
-                "a context captured for a removed team should stop resolving"
-            );
-            assert_eq!(
-                user_workspaces
-                    .team_render_context_for_view_handle(&weak_view, ctx)
-                    .map(|render| render.team.uid),
-                Some(team_b.uid),
-                "the next render should resolve the window's reconciled team"
             );
         });
     })

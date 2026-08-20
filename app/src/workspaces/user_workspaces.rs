@@ -156,38 +156,31 @@ pub struct CreateTeamResponse {
     pub team: Team,
 }
 
-/// The owned operation scope for a team inferred from the current view and window.
+/// The team an operation is scoped to, captured once from the window that started it.
 ///
-/// A `TeamContext` is a stable snapshot captured once from a [`ViewContext`]. It then
-/// moves through commands, events, models, futures, and transport without resolving
-/// the originating view or window again, and it never retargets if the window's team
-/// selection later changes. [`UserWorkspaces::team_context_for_view`] is its only
-/// minting authority for general application code.
+/// A logical operation carries its `TeamContext` from start to finish instead of asking a
+/// window which team is selected now, so concurrent windows on different teams stay
+/// independent and a later team switch cannot retarget work already in flight.
 ///
-/// Holding a `TeamContext` is not proof of current team membership or server
-/// authorization; the server still authenticates and authorizes every request scoped
-/// by it.
+/// Deliberately neither `Clone` nor `Copy`. Moves make the handoff between the parts of an
+/// operation explicit and reviewable, whereas copies let a scope leak sideways into work
+/// that never established it. Wanting to duplicate one is a sign the second consumer is
+/// really a separate operation that should capture its own scope; if the parts genuinely
+/// share a lifetime, restructure so they share the single owner instead.
+///
+/// This is scope, not authority: the server still authorizes every request made under it.
 pub(crate) struct TeamContext {
     team_uid: ServerId,
 }
 
-impl TeamContext {
-    fn new(team_uid: ServerId) -> Self {
-        Self { team_uid }
-    }
-}
-
-/// The borrowed read scope for current-team rendering.
+/// The team a view renders as, borrowed for the duration of a single render.
 ///
-/// A `TeamRenderContext` borrows the current [`Team`] from [`UserWorkspaces`] and is
-/// resolved again on every render via
-/// [`UserWorkspaces::team_render_context_for_view_handle`]. Its lifetime keeps it out
-/// of `'static` futures and stored model state, and it has no conversion to a raw
-/// team UID or to an owned [`TeamContext`].
-///
-/// Holding a `TeamRenderContext` is not proof of current team membership or server
-/// authorization; the server still authenticates and authorizes every request scoped
-/// by it.
+/// Current-team UI must reflect the window's team as of this frame, so this is resolved
+/// per render rather than cached. The borrow is what enforces that: it cannot be stored in
+/// view state or moved into a `'static` future, and it deliberately offers no conversion to
+/// a team UID or to a [`TeamContext`]. A [`WeakViewHandle`] locates a window to read from;
+/// it is not evidence that the holder is running in that window, which is what minting
+/// operation scope requires.
 pub(crate) struct TeamRenderContext<'a> {
     team: &'a Team,
 }
@@ -385,19 +378,17 @@ impl UserWorkspaces {
             .and_then(|window_id| self.team_for_window(window_id))
     }
 
-    /// Snapshots the team currently assigned to `ctx`'s window into a stable
-    /// [`TeamContext`] for a logical operation to carry forward. See [`TeamContext`]
-    /// for the guarantees this snapshot upholds.
+    /// Captures the team selected in `ctx`'s window as an operation's [`TeamContext`]. This
+    /// is the only way application code mints one.
     pub(crate) fn team_context_for_view<T: Entity>(
         &self,
         ctx: &ViewContext<T>,
     ) -> Option<TeamContext> {
         self.team_uid_for_window(ctx.window_id())
-            .map(TeamContext::new)
+            .map(|team_uid| TeamContext { team_uid })
     }
 
-    /// Resolves the team assigned to `view`'s current window for one synchronous
-    /// render. See [`TeamRenderContext`] for the guarantees this borrow upholds.
+    /// Resolves `view`'s window team for one render. See [`TeamRenderContext`].
     pub(crate) fn team_render_context_for_view_handle<'a, T: Entity>(
         &'a self,
         view: &WeakViewHandle<T>,
@@ -410,9 +401,8 @@ impl UserWorkspaces {
         Some(TeamRenderContext { team })
     }
 
-    /// Reads the metadata for a captured [`TeamContext`]. Returns `None` when the
-    /// captured team no longer exists in the current workspace, e.g. after the user
-    /// has left it.
+    /// Reads a captured team's metadata. Returns `None` once that team is gone from the
+    /// current workspace, e.g. after the user leaves it.
     pub(crate) fn team_for_context(&self, context: &TeamContext) -> Option<&Team> {
         self.team_from_uid(context.team_uid)
     }
