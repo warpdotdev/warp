@@ -1565,14 +1565,36 @@ fn strip_control_characters(text: &str) -> Cow<'_, str> {
     }
 }
 
+/// The subset of editor state relevant to deciding whether an as-you-type native-completions
+/// retry should fire -- text and selections, not a full `EditorSnapshot`. `EditorSnapshot`'s own
+/// derived `PartialEq` compares more than that (its `buffer_text_runs`, not just the text they
+/// spell out) and was confirmed, empirically, to compare unequal across a completions round trip
+/// even when the visible text and selections were identical -- the round trip itself perturbs the
+/// snapshot. Comparing only this narrower state instead avoids retrying on a buffer that hasn't
+/// actually changed from the user's perspective.
+#[derive(Clone, PartialEq)]
+struct AsYouTypeCompletionsBufferState {
+    text: String,
+    selections: Vec1<Range<CharOffset>>,
+}
+
+impl AsYouTypeCompletionsBufferState {
+    fn from_editor_snapshot(snapshot: &EditorSnapshot) -> Self {
+        Self {
+            text: snapshot.text(),
+            selections: snapshot.selections().clone(),
+        }
+    }
+}
+
 /// Whether an as-you-type native-completions retry (see
-/// `Input::retry_as_you_type_completions_if_buffer_changed`) should fire, given the editor
-/// snapshot the last dispatch was computed from (if any) and the current one. `None` means
-/// nothing has been dispatched since the last retry (or ever), so there's nothing to catch up on.
+/// `Input::retry_as_you_type_completions_if_buffer_changed`) should fire, given the buffer state
+/// the last dispatch was computed from (if any) and the current one. `None` means nothing has
+/// been dispatched since the last retry (or ever), so there's nothing to catch up on.
 ///
 /// Generic and pure so this -- the exact invariant that keeps the retry from looping forever --
-/// can be unit tested without needing a live `EditorSnapshot`, which has no public constructor
-/// outside its own module.
+/// can be unit tested against the real `AsYouTypeCompletionsBufferState` type used in production
+/// (see the tests below), not just a stand-in.
 fn should_retry_as_you_type_completions<T: PartialEq>(
     last_dispatched_snapshot: Option<&T>,
     current_snapshot: &T,
@@ -1783,6 +1805,60 @@ mod should_retry_as_you_type_completions_tests {
     }
 }
 
+#[cfg(test)]
+mod as_you_type_completions_buffer_state_tests {
+    use string_offset::CharOffset;
+    use vec1::Vec1;
+
+    use super::{AsYouTypeCompletionsBufferState, should_retry_as_you_type_completions};
+
+    fn state(text: &str, cursor: usize) -> AsYouTypeCompletionsBufferState {
+        AsYouTypeCompletionsBufferState {
+            text: text.to_string(),
+            selections: Vec1::new(CharOffset::from(cursor)..CharOffset::from(cursor)),
+        }
+    }
+
+    // These bind `should_retry_as_you_type_completions` to the exact type used in production
+    // (`AsYouTypeCompletionsBufferState`, built from the real `EditorSnapshot` accessors), not a
+    // stand-in like `String` -- a real regression here compared two states built from separate
+    // `EditorSnapshot`s that had identical text and selections but still compared unequal (because
+    // `EditorSnapshot`'s own derived `PartialEq` also compares its internal `buffer_text_runs`,
+    // which a completions round trip perturbs), and every test up to this one used `String`, so
+    // none of them could have caught it.
+    #[test]
+    fn identical_text_and_cursor_do_not_trigger_a_retry() {
+        let dispatched = state("git checkout ", 13);
+        let current = state("git checkout ", 13);
+        assert!(!should_retry_as_you_type_completions(
+            Some(&dispatched),
+            &current
+        ));
+    }
+
+    #[test]
+    fn changed_text_triggers_a_retry() {
+        let dispatched = state("git", 3);
+        let current = state("git checkout ", 13);
+        assert!(should_retry_as_you_type_completions(
+            Some(&dispatched),
+            &current
+        ));
+    }
+
+    #[test]
+    fn changed_cursor_with_unchanged_text_triggers_a_retry() {
+        // The cursor moving without the text changing (e.g. the user moved to a different
+        // argument) still means the last dispatch's completions no longer apply.
+        let dispatched = state("git checkout main", 3);
+        let current = state("git checkout main", 18);
+        assert!(should_retry_as_you_type_completions(
+            Some(&dispatched),
+            &current
+        ));
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum DenyExecutionReason {
     /// Can't execute command because shell bootstrapping is still underway; shell isn't ready to
@@ -1869,17 +1945,18 @@ pub struct Input {
     decorations_future_handle: Option<SpawnedFutureHandle>,
     autosuggestions_abort_handle: Option<AbortHandle>,
 
-    /// The editor snapshot the most recently dispatched as-you-type native-shell-completions
-    /// request was computed from, if any. `open_completion_suggestions`'s `is_command_grid_active`
-    /// gate blocks any new dispatch for as long as a previous native-completions request's own
-    /// generator command is still running as a foreground command on the shell, and that gate is
-    /// only ever rechecked by a *new* keystroke -- so if the user keeps typing faster than a
-    /// request's round trip, no request ever gets dispatched for the buffer state they're left
-    /// looking at, even once the shell goes idle again. Compared against the current editor state
-    /// on every `AnsiHandlerEvent::Precmd` (i.e. every time the shell returns to idle) so a request
-    /// can be re-dispatched once for the current buffer if it moved on. See
+    /// The buffer state (text + selections; see `AsYouTypeCompletionsBufferState`) the most
+    /// recently dispatched as-you-type native-shell-completions request was computed from, if
+    /// any. `open_completion_suggestions`'s `is_command_grid_active` gate blocks any new dispatch
+    /// for as long as a previous native-completions request's own generator command is still
+    /// running as a foreground command on the shell, and that gate is only ever rechecked by a
+    /// *new* keystroke -- so if the user keeps typing faster than a request's round trip, no
+    /// request ever gets dispatched for the buffer state they're left looking at, even once the
+    /// shell goes idle again. Compared against the current editor state on every
+    /// `AnsiHandlerEvent::Precmd` (i.e. every time the shell returns to idle) so a request can be
+    /// re-dispatched once for the current buffer if it moved on. See
     /// `retry_as_you_type_completions_if_buffer_changed`.
-    native_completions_as_you_type_dispatch_snapshot: Option<EditorSnapshot>,
+    native_completions_as_you_type_dispatch_snapshot: Option<AsYouTypeCompletionsBufferState>,
 
     pub prompt_render_helper: PromptRenderHelper,
     prompt_type: ModelHandle<PromptType>,
@@ -12480,10 +12557,12 @@ impl Input {
         let current_snapshot = self
             .editor
             .read(ctx, |editor, ctx| editor.snapshot_model(ctx));
+        let current_state =
+            AsYouTypeCompletionsBufferState::from_editor_snapshot(&current_snapshot);
         if !should_retry_as_you_type_completions(
             self.native_completions_as_you_type_dispatch_snapshot
                 .as_ref(),
-            &current_snapshot,
+            &current_state,
         ) {
             return;
         }
@@ -12608,10 +12687,12 @@ impl Input {
             if completions_trigger == CompletionsTrigger::AsYouType {
                 // Track what this dispatch was computed from so a later `Precmd` (the shell
                 // returning to idle) can tell whether the buffer has moved on since -- see the
-                // field's doc comment for why this is needed. Cloned rather than reusing
-                // `editor_snapshot` directly since that's moved into the spawned future below.
-                self.native_completions_as_you_type_dispatch_snapshot =
-                    Some(editor_snapshot.clone());
+                // field's doc comment for why this is needed. Computed from `editor_snapshot`
+                // rather than storing it directly (see `AsYouTypeCompletionsBufferState`'s doc
+                // comment for why), and before it's moved into the spawned future below.
+                self.native_completions_as_you_type_dispatch_snapshot = Some(
+                    AsYouTypeCompletionsBufferState::from_editor_snapshot(&editor_snapshot),
+                );
             }
             // If we're using native shell completions, construct a future that
             // will be resolved with any completions data provided by the shell.
