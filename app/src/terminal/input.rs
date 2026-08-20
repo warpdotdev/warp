@@ -1565,6 +1565,21 @@ fn strip_control_characters(text: &str) -> Cow<'_, str> {
     }
 }
 
+/// Whether an as-you-type native-completions retry (see
+/// `Input::retry_as_you_type_completions_if_buffer_changed`) should fire, given the editor
+/// snapshot the last dispatch was computed from (if any) and the current one. `None` means
+/// nothing has been dispatched since the last retry (or ever), so there's nothing to catch up on.
+///
+/// Generic and pure so this -- the exact invariant that keeps the retry from looping forever --
+/// can be unit tested without needing a live `EditorSnapshot`, which has no public constructor
+/// outside its own module.
+fn should_retry_as_you_type_completions<T: PartialEq>(
+    last_dispatched_snapshot: Option<&T>,
+    current_snapshot: &T,
+) -> bool {
+    last_dispatched_snapshot.is_some_and(|last| last != current_snapshot)
+}
+
 /// The completions fallback strategy to use for a given trigger, given whether this request will
 /// use native shell completions (see `should_use_native_shell_completions`).
 fn completions_fallback_strategy_for_trigger(
@@ -1730,6 +1745,44 @@ mod strip_control_characters_tests {
     }
 }
 
+#[cfg(test)]
+mod should_retry_as_you_type_completions_tests {
+    use super::should_retry_as_you_type_completions;
+
+    #[test]
+    fn does_not_retry_when_nothing_was_dispatched() {
+        // No prior dispatch at all -- there's nothing to catch up on.
+        assert!(!should_retry_as_you_type_completions(
+            None,
+            &"git checkout ".to_string()
+        ));
+    }
+
+    #[test]
+    fn does_not_retry_when_buffer_is_unchanged() {
+        // This is the loop-guard invariant: once a retry dispatches for the current buffer, the
+        // next check (with the buffer still unchanged) must not dispatch again, or every retry
+        // would trigger another retry forever.
+        let dispatched = "git checkout ".to_string();
+        assert!(!should_retry_as_you_type_completions(
+            Some(&dispatched),
+            &dispatched.clone()
+        ));
+    }
+
+    #[test]
+    fn retries_when_buffer_changed_since_dispatch() {
+        // The actual bug this exists for: the user kept typing past what the last dispatched
+        // request was computed from.
+        let dispatched = "git".to_string();
+        let current = "git checkout ".to_string();
+        assert!(should_retry_as_you_type_completions(
+            Some(&dispatched),
+            &current
+        ));
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum DenyExecutionReason {
     /// Can't execute command because shell bootstrapping is still underway; shell isn't ready to
@@ -1815,6 +1868,18 @@ pub struct Input {
     completions_abort_handle: Option<AbortHandle>,
     decorations_future_handle: Option<SpawnedFutureHandle>,
     autosuggestions_abort_handle: Option<AbortHandle>,
+
+    /// The editor snapshot the most recently dispatched as-you-type native-shell-completions
+    /// request was computed from, if any. `open_completion_suggestions`'s `is_command_grid_active`
+    /// gate blocks any new dispatch for as long as a previous native-completions request's own
+    /// generator command is still running as a foreground command on the shell, and that gate is
+    /// only ever rechecked by a *new* keystroke -- so if the user keeps typing faster than a
+    /// request's round trip, no request ever gets dispatched for the buffer state they're left
+    /// looking at, even once the shell goes idle again. Compared against the current editor state
+    /// on every `AnsiHandlerEvent::Precmd` (i.e. every time the shell returns to idle) so a request
+    /// can be re-dispatched once for the current buffer if it moved on. See
+    /// `retry_as_you_type_completions_if_buffer_changed`.
+    native_completions_as_you_type_dispatch_snapshot: Option<EditorSnapshot>,
 
     pub prompt_render_helper: PromptRenderHelper,
     prompt_type: ModelHandle<PromptType>,
@@ -2900,6 +2965,11 @@ impl Input {
         ctx.subscribe_to_model(&model_events, |me, _, event, ctx| {
             if let crate::terminal::model_events::ModelEvent::TerminalModeSwapped(_) = event {
                 me.update_cli_agent_editor_text_colors(ctx);
+            } else if let crate::terminal::model_events::ModelEvent::Handler(
+                crate::terminal::model_events::AnsiHandlerEvent::Precmd,
+            ) = event
+            {
+                me.retry_as_you_type_completions_if_buffer_changed(ctx);
             }
         });
         ctx.subscribe_to_model(&TerminalSettings::handle(ctx), move |_, _, event, ctx| {
@@ -4141,6 +4211,7 @@ impl Input {
             decorations_future_handle: None,
             autosuggestions_abort_handle: None,
             completions_abort_handle: None,
+            native_completions_as_you_type_dispatch_snapshot: None,
             menu_positioning_provider,
             universal_developer_input_button_bar,
             terminal_input_message_bar,
@@ -12390,6 +12461,35 @@ impl Input {
             .value()
     }
 
+    /// Re-checks whether the buffer has moved on since the most recently dispatched as-you-type
+    /// native-completions request, and if so, dispatches once more for the current buffer. Called
+    /// on every `AnsiHandlerEvent::Precmd` (i.e. every time the active block returns to idle) --
+    /// see `native_completions_as_you_type_dispatch_snapshot`'s doc comment for why this is needed
+    /// and why it must be re-evaluated on every such transition rather than only once typing
+    /// appears to have stopped: the gate this works around can also block a keystroke landing
+    /// mid-burst during otherwise-slow typing, not only a fast burst's final character.
+    ///
+    /// Comparing against the last *dispatched* snapshot (not just checking whether results are
+    /// pending) is what keeps this from looping: once dispatched here, the snapshot is updated to
+    /// the current buffer, so the next `Precmd` sees no difference and does nothing unless the
+    /// user has typed more in the meantime.
+    fn retry_as_you_type_completions_if_buffer_changed(&mut self, ctx: &mut ViewContext<Self>) {
+        if !self.should_show_completions_while_typing(ctx) {
+            return;
+        }
+        let current_snapshot = self
+            .editor
+            .read(ctx, |editor, ctx| editor.snapshot_model(ctx));
+        if !should_retry_as_you_type_completions(
+            self.native_completions_as_you_type_dispatch_snapshot
+                .as_ref(),
+            &current_snapshot,
+        ) {
+            return;
+        }
+        self.open_completion_suggestions(CompletionsTrigger::AsYouType, ctx);
+    }
+
     fn open_completion_suggestions(
         &mut self,
         completions_trigger: CompletionsTrigger,
@@ -12505,6 +12605,14 @@ impl Input {
 
         let cursor_position = cursor_position.as_usize();
         let native_results_fut = if use_native_shell_completions {
+            if completions_trigger == CompletionsTrigger::AsYouType {
+                // Track what this dispatch was computed from so a later `Precmd` (the shell
+                // returning to idle) can tell whether the buffer has moved on since -- see the
+                // field's doc comment for why this is needed. Cloned rather than reusing
+                // `editor_snapshot` directly since that's moved into the spawned future below.
+                self.native_completions_as_you_type_dispatch_snapshot =
+                    Some(editor_snapshot.clone());
+            }
             // If we're using native shell completions, construct a future that
             // will be resolved with any completions data provided by the shell.
             let (results_tx, results_rx) = async_channel::unbounded();
