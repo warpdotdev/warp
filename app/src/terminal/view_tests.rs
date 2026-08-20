@@ -4539,6 +4539,94 @@ fn test_context_menu_omits_clear_for_text_right_click() {
 }
 
 #[test]
+fn test_context_menu_includes_paste_when_clipboard_has_content() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+
+        let terminal = add_window_with_terminal(&mut app, None);
+        terminal.update(&mut app, |view, ctx| {
+            {
+                let mut model = view.model.lock();
+                model.simulate_block("ls", "foo");
+            }
+            ctx.clipboard()
+                .write(ClipboardContent::plain_text("hello".to_string()));
+
+            let menu_source = BlockListMenuSource::OutsideBlockRightClick {
+                position_in_terminal_view: Vector2F::zero(),
+            };
+            let items = view.context_menu_items(&menu_source, ctx);
+            let paste_item = items
+                .iter()
+                .find_map(|item| item.fields().filter(|fields| fields.label() == "Paste"))
+                .expect("Expected `Paste` menu item");
+            assert!(
+                !paste_item.is_disabled(),
+                "Expected `Paste` to be enabled when the clipboard has content"
+            );
+        });
+    })
+}
+
+#[test]
+fn test_context_menu_disables_paste_when_clipboard_empty() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+
+        let terminal = add_window_with_terminal(&mut app, None);
+        terminal.update(&mut app, |view, ctx| {
+            {
+                let mut model = view.model.lock();
+                model.simulate_block("ls", "foo");
+            }
+
+            let menu_source = BlockListMenuSource::OutsideBlockRightClick {
+                position_in_terminal_view: Vector2F::zero(),
+            };
+            let items = view.context_menu_items(&menu_source, ctx);
+            let paste_item = items
+                .iter()
+                .find_map(|item| item.fields().filter(|fields| fields.label() == "Paste"))
+                .expect("Expected `Paste` menu item");
+            assert!(
+                paste_item.is_disabled(),
+                "Expected `Paste` to be disabled when the clipboard is empty"
+            );
+        });
+    })
+}
+
+#[test]
+fn test_context_menu_omits_paste_for_text_right_click() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+
+        let terminal = add_window_with_terminal(&mut app, None);
+        terminal.update(&mut app, |view, ctx| {
+            {
+                let mut model = view.model.lock();
+                model.simulate_block("ls", "foo");
+            }
+            ctx.clipboard()
+                .write(ClipboardContent::plain_text("hello".to_string()));
+
+            let menu_source = BlockListMenuSource::RegularTextRightClick {
+                position_in_terminal_view: Vector2F::zero(),
+            };
+            let items = view.context_menu_items(&menu_source, ctx);
+            let labels: Vec<&str> = items
+                .iter()
+                .filter_map(|item| item.fields().map(|fields| fields.label()))
+                .collect();
+            assert!(
+                !labels.contains(&"Paste"),
+                "Did not expect `Paste` in text-selection right-click menu, got {labels:?}"
+            );
+        });
+    })
+}
+
+#[test]
 fn test_clear_buffer_clears_autosuggestion() {
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);

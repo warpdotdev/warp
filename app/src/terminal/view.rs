@@ -17253,24 +17253,31 @@ impl TerminalView {
                 | BlockListMenuSource::RichContentTextRightClick { .. }
                 | BlockListMenuSource::OutsideBlockRightClick { .. }
         ) {
-            // Surface "Clear Blocks" in the right-click menu so it's
-            // discoverable without the keyboard shortcut. We skip
+            // Surface "Paste" and "Clear Blocks" in the right-click menu so
+            // they're discoverable without the keyboard shortcut. We skip
             // text-selection contexts (`Regular*TextRightClick` /
             // `RichContentTextRightClick`) because those menus are scoped to
-            // actions on the selected text.
-            let include_clear = matches!(
+            // actions on the selected text, and already offer "Insert into
+            // input" as their own paste-like action.
+            let include_general_terminal_actions = matches!(
                 menu_source,
                 BlockListMenuSource::RegularBlockRightClick { .. }
                     | BlockListMenuSource::RichContentBlockRightClick { .. }
                     | BlockListMenuSource::OutsideBlockRightClick { .. }
             );
-            let clear_menu_item = include_clear
-                .then(|| self.clear_buffer_menu_item(&model, ctx))
-                .flatten();
-            if let Some(clear_menu_item) = clear_menu_item {
+
+            if include_general_terminal_actions {
                 if !items.is_empty() {
                     items.push(MenuItem::Separator);
                 }
+                items.push(self.paste_menu_item(ctx));
+            }
+
+            let clear_menu_item = include_general_terminal_actions
+                .then(|| self.clear_buffer_menu_item(&model, ctx))
+                .flatten();
+            if let Some(clear_menu_item) = clear_menu_item {
+                items.push(MenuItem::Separator);
                 items.push(clear_menu_item);
             }
 
@@ -17286,6 +17293,18 @@ impl TerminalView {
         }
 
         items
+    }
+
+    /// Builds the "Paste" entry for the terminal right-click context menu,
+    /// dispatching the same [`TerminalAction::Paste`] as the `terminal:paste`
+    /// keybinding. Disabled when the clipboard has nothing to paste.
+    fn paste_menu_item(&self, ctx: &mut ViewContext<Self>) -> MenuItem<TerminalAction> {
+        let is_clipboard_empty = ctx.clipboard().read().is_empty();
+        MenuItemFields::new("Paste")
+            .with_on_select_action(TerminalAction::Paste)
+            .with_key_shortcut_label(keybinding_name_to_display_string("terminal:paste", ctx))
+            .with_disabled(is_clipboard_empty)
+            .into_item()
     }
 
     /// Builds the "Clear Blocks" entry for the terminal right-click context
