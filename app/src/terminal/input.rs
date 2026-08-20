@@ -1542,6 +1542,29 @@ fn should_use_native_shell_completions(
         && !is_ai_input
 }
 
+/// Strips control characters (`char::is_control`: C0, C1, and DEL) from text about to be
+/// inserted as an accepted shell completion match/prefix. A completion candidate is plain
+/// text sourced from the shell's own completion machinery, not typed or pasted by the user,
+/// so a literal control character in it (e.g. a newline in a real but pathological filename)
+/// is never something the user intended to insert into the buffer -- unlike a deliberate
+/// multi-line paste, which the editor otherwise supports. Left uninserted, a raw newline in
+/// particular puts the editor into a stuck multi-row state (`Ctrl+U` only clears the current
+/// logical row) and silently disables native shell completions for the rest of that buffer
+/// (`should_use_native_shell_completions` bails on a multiline buffer). A BEL or ESC is less
+/// disruptive -- it renders as a harmless box glyph rather than restructuring the editor --
+/// but is stripped for the same reason: an accepted match's text should never smuggle a
+/// control character into the buffer, whichever one it is.
+fn strip_control_characters(text: &str) -> Cow<'_, str> {
+    if text.chars().any(|c| c.is_control()) {
+        text.chars()
+            .filter(|c| !c.is_control())
+            .collect::<String>()
+            .into()
+    } else {
+        text.into()
+    }
+}
+
 /// The completions fallback strategy to use for a given trigger, given whether this request will
 /// use native shell completions (see `should_use_native_shell_completions`).
 fn completions_fallback_strategy_for_trigger(
@@ -1650,6 +1673,60 @@ mod native_shell_completions_eligibility_tests {
                 CompletionsFallbackStrategy::None
             ));
         }
+    }
+}
+
+#[cfg(test)]
+mod strip_control_characters_tests {
+    use super::strip_control_characters;
+
+    #[test]
+    fn leaves_ordinary_text_untouched() {
+        assert_eq!(strip_control_characters("checkout").as_ref(), "checkout");
+    }
+
+    #[test]
+    fn strips_a_newline() {
+        // The class of bug this exists for: a completion candidate containing a real
+        // newline (e.g. a pathological but legal filename) previously put the editor into a
+        // stuck multi-row state and silently disabled native shell completions for the rest
+        // of the buffer.
+        assert_eq!(
+            strip_control_characters("line1\nline2").as_ref(),
+            "line1line2"
+        );
+    }
+
+    #[test]
+    fn strips_a_carriage_return() {
+        assert_eq!(strip_control_characters("a\rb").as_ref(), "ab");
+    }
+
+    #[test]
+    fn strips_a_bel() {
+        assert_eq!(strip_control_characters("a\u{7}b").as_ref(), "ab");
+    }
+
+    #[test]
+    fn strips_an_esc() {
+        assert_eq!(strip_control_characters("a\u{1b}b").as_ref(), "ab");
+    }
+
+    #[test]
+    fn strips_a_tab() {
+        assert_eq!(strip_control_characters("a\tb").as_ref(), "ab");
+    }
+
+    #[test]
+    fn strips_del_and_a_c1_control() {
+        // DEL (0x7f) and the C1 range (0x80-0x9f) are both `char::is_control`, distinct from
+        // the C0 range the other cases cover.
+        assert_eq!(strip_control_characters("a\u{7f}b\u{85}c").as_ref(), "abc");
+    }
+
+    #[test]
+    fn preserves_surrounding_multibyte_text() {
+        assert_eq!(strip_control_characters("café\nΓεια").as_ref(), "caféΓεια");
     }
 }
 
@@ -12833,10 +12910,11 @@ impl Input {
         completion_prefix: &str,
         replacement_start: usize,
     ) {
+        let completion_prefix = strip_control_characters(completion_prefix);
         self.editor.update(ctx, |input, ctx| {
             let cursor_end_offset = input.end_byte_index_of_last_selection(ctx);
             input.select_and_replace(
-                completion_prefix,
+                &completion_prefix,
                 [ByteOffset::from(replacement_start)..cursor_end_offset],
                 PlainTextEditorViewAction::AcceptCompletionSuggestion,
                 ctx,
@@ -12852,6 +12930,7 @@ impl Input {
         executing: Executing,
         ctx: &mut ViewContext<Input>,
     ) {
+        let completion_result = strip_control_characters(completion_result);
         let is_completions_as_you_type_enabled = self.is_completions_while_typing_turned_on(ctx);
         self.editor.update(ctx, |input, ctx| {
             let cursor_end_offset = input.end_byte_index_of_last_selection(ctx);
@@ -12869,7 +12948,7 @@ impl Input {
             {
                 format!("{completion_result} ").into()
             } else {
-                completion_result.into()
+                completion_result.clone()
             };
 
             input.select_and_replace(

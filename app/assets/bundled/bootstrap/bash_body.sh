@@ -386,23 +386,47 @@ if [ -z "$WARP_BOOTSTRAPPED" ]; then
       # swallow it along with the rest of the completion function's stderr.
       "$func" "$cmd" "${words[$cword]}" "${words[$((cword > 0 ? cword - 1 : 0))]}" 2>/dev/null
 
-      local reply
+      # cobra's own padded shape: a name, two or more spaces (real readline's own column
+      # alignment, never used by a real completion candidate on its own), then a
+      # parenthesised description running to the very end of the entry. The first capture
+      # group is restricted to single-space-separated tokens (never containing a 2+-space
+      # run itself), so it always stops at the *first* such run rather than backtracking to
+      # the last one -- otherwise a description that itself contains a parenthesised,
+      # multi-space-padded aside (e.g. "cmd    (outer  (inner) tail)") would greedily fold
+      # part of the description into the name (measured: split as name "cmd    (outer",
+      # description "inner) tail" -- both wrong).
+      local cobra_padded_shape='^([^[:space:]]+([[:space:]][^[:space:]]+)*)[[:space:]]{2,}\((.*)\)$'
+
+      # Structural guard: cobra only emits this padding when a reply has more than one
+      # match (see the COMP_TYPE=9 comment above), and pads *every* entry in such a reply,
+      # not just some. A real candidate that happens to look padded (e.g. a file named
+      # "Backup  (copy)") is therefore only mistakeable for this shape when it is the *sole*
+      # match (cobra would never have padded it alone), or when everything else in the same
+      # reply also happens to look padded (accepted as a rare, unavoidable coincidence, not
+      # chased further). Decide once for the whole reply, rather than per entry, so a
+      # genuine cobra reply isn't left half-split and a non-cobra one never is.
+      local reply cobra_shaped_count=0 non_empty_count=0
+      for reply in "${COMPREPLY[@]}"; do
+        reply="${reply% }"
+        [[ -z "$reply" ]] && continue
+        non_empty_count=$((non_empty_count + 1))
+        [[ "$reply" =~ $cobra_padded_shape ]] && cobra_shaped_count=$((cobra_shaped_count + 1))
+      done
+      local split_cobra_padding=0
+      if (( non_empty_count > 1 && cobra_shaped_count == non_empty_count )); then
+        split_cobra_padding=1
+      fi
+
       for reply in "${COMPREPLY[@]}"; do
         # COMPREPLY entries can carry a trailing space (bash appends one when a completion
         # is unambiguous); trim it so the client controls spacing.
         reply="${reply% }"
         [[ -z "$reply" ]] && continue
 
-        # Split cobra's own padded shape -- a name, two or more spaces (real readline's own
-        # column alignment, never used by a real completion candidate on its own), then a
-        # parenthesised description running to the very end of the entry -- back into a bare
-        # name and a description. Anchored narrowly (both the multi-space run and the
-        # trailing, unescaped `)$` must be present) so a legitimate candidate that merely
-        # contains parentheses elsewhere passes through unchanged.
         local reply_description=""
-        if [[ "$reply" =~ ^(.*[^[:space:]])[[:space:]]{2,}\((.*)\)$ ]]; then
+        if (( split_cobra_padding )) && [[ "$reply" =~ $cobra_padded_shape ]]; then
+          reply_description="${BASH_REMATCH[3]}"
           reply="${BASH_REMATCH[1]}"
-          reply_description="${BASH_REMATCH[2]}"
         fi
 
         # Hex-encode both fields: OSC params are semicolon-delimited and only the third one
@@ -902,12 +926,31 @@ if [ -z "$WARP_BOOTSTRAPPED" ]; then
        command -p tr '\n\n' ' ' <<< "$*" | command -p od -An -v -tx1 | command -p tr -d ' \n'
     }
 
-    # warp_hex_encode_string encodes the entire DCS string (JSON) with od making it essentially
-    # a very long hexadecimal string.
-    # Afterwards it's decoded in rust and parsed as usual.
-    # Accepts one argument: DCS JSON string
+    # warp_hex_encode_string hex-encodes its argument entirely with bash builtins (no external
+    # process forks), so it's essentially a very long hexadecimal string. Afterwards it's
+    # decoded in rust and parsed as usual.
+    # Accepts one argument: the string to encode.
+    #
+    # Previously piped through `echo "$1" | od | tr`: `echo` treats an argument that looks
+    # like one of its own flags (`-n`, `-e`, `-E`) as that flag instead of literal text --
+    # measured, `kubectl -`/`ssh -`/`npm -` all offer exactly such a candidate as a real
+    # completion -- so `-n` encoded to nothing and `-e`/`-E` encoded to just `echo`'s own
+    # trailing newline; `echo` itself also appended that trailing newline to every payload
+    # (latent until now, since a JSON parser or this OSC protocol's own consumers happened to
+    # tolerate it). Also, forking two processes per call was measured to cost ~4x on a large
+    # completions result set (thousands of matches, each hex-encoded twice for match +
+    # description) versus this builtin loop. `LC_ALL=C` makes `${#input}`/`${input:i:1}`
+    # index by byte rather than by locale-aware multi-byte character, so this stays correct
+    # for UTF-8 text (confirmed against café/日本).
     warp_hex_encode_string () {
-      echo "$1" | command -p od -An -v -tx1 | command -p tr -d ' \n'
+      local LC_ALL=C
+      local input="$1"
+      local i byte_hex hex=""
+      for (( i = 0; i < ${#input}; i++ )); do
+        printf -v byte_hex '%02x' "'${input:i:1}"
+        hex+="$byte_hex"
+      done
+      printf '%s' "$hex"
     }
 
     # Reverses warp_hex_encode_string: decodes a hex-encoded string back to its original
