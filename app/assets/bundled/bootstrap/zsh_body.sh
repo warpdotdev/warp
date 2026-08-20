@@ -1504,8 +1504,18 @@ esac
     local asuf_str="${(v)asuf}"
     local dsuf dscr
     for i in {1..$#__hits}; do
-        # add a dir suffix?
-        (( dirsuf )) && [[ -d $__hits[$i] ]] && dsuf=/ || dsuf=
+        # add a dir suffix? Test the real path the match names, not the bare basename alone:
+        # $__hits[$i] is only ever a basename when $__hint_prefix is non-empty (see its own
+        # comment above), so testing it alone resolves relative to $PWD instead of the directory
+        # the completion is actually in -- giving a wrong answer (missing or spurious `/`) any
+        # time $PWD doesn't happen to also contain a same-named entry. When $__hint_prefix is
+        # empty, this is unchanged from before (matches are already relative to $PWD). $__hint_prefix
+        # can itself carry a literal, unexpanded `~` (see its own comment above -- hpre/apre
+        # preserve exactly what was typed); the `${~...}` flag forces tilde/glob expansion on its
+        # value, since a `~` arriving via parameter substitution is otherwise never expanded by
+        # the shell (confirmed empirically: plain `${__hint_prefix}$__hits[$i]`, quoted or not,
+        # leaves `~` literal and the -d test silently fails for a `~`-relative directory).
+        (( dirsuf )) && [[ -d ${~__hint_prefix}$__hits[$i] ]] && dsuf=/ || dsuf=
         # description to be displayed afterwards
         (( $#__dscr >= $i )) && dscr="${${__dscr[$i]}##$__hits[$i] #}" || dscr=""
 
