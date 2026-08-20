@@ -2503,10 +2503,7 @@ impl FeaturesPageView {
         });
 
         ctx.subscribe_to_model(&SelectionSettings::handle(ctx), |me, _, event, ctx| {
-            if matches!(
-                event,
-                SelectionSettingsChangedEvent::RightClickBehaviorSetting { .. }
-            ) {
+            if let SelectionSettingsChangedEvent::RightClickBehaviorSetting { .. } = event {
                 Self::update_right_click_behavior_dropdown(
                     me.right_click_behavior_dropdown.clone(),
                     ctx,

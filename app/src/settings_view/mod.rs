@@ -2626,7 +2626,7 @@ impl View for SettingsView {
                     })
                     .finish(),
             )
-            .on_right_mouse_down(|event, _app, position| {
+            .on_right_mouse_down(|event, _app, position, _| {
                 let Some(parent_bounds) = event.element_position_by_id(POSITION_ID) else {
                     return DispatchEventResult::PropagateToParent;
                 };

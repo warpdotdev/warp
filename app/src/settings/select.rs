@@ -7,7 +7,6 @@ use settings::{RespectUserSyncSetting, Setting, SupportedPlatforms, SyncToCloud}
 use warpui::AppContext;
 use warpui::clipboard::ClipboardContent;
 
-/// The terminal's right-click behavior.
 #[derive(
     Debug,
     Copy,

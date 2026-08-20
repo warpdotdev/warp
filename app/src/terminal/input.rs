@@ -109,7 +109,6 @@ use warpui::{
 use self::decorations::InputBackgroundJobOptions;
 pub use self::handoff_compose::{HandoffComposeState, HandoffComposeStateEvent};
 use super::alias::is_expandable_alias;
-use super::alt_screen::should_right_click_paste;
 use super::block_list_viewport::InputMode;
 use super::event::{BlockCompletedEvent, BlockType, UserBlockCompleted};
 use super::ligature_settings::LigatureSettings;
@@ -145,7 +144,10 @@ use super::view::{
     ExecuteCommandEvent, PADDING_LEFT as TERMINAL_VIEW_PADDING_LEFT, SyncInputType, TerminalAction,
 };
 use super::warpify::SubshellSource;
-use super::{History, HistoryEntry, SizeInfo, TerminalModel, UpArrowHistoryConfig, prompt};
+use super::{
+    History, HistoryEntry, SizeInfo, TerminalModel, UpArrowHistoryConfig, prompt,
+    should_right_click_paste,
+};
 #[allow(unused_imports)]
 use crate::ASSETS;
 use crate::ai::AIRequestUsageModel;
@@ -15854,8 +15856,8 @@ impl Input {
         let input_editor_save_position_id = self.editor_save_position_id();
         SavePosition::new(
             EventHandler::new(input_box)
-                .on_right_mouse_down_with_shift(move |ctx, app, position, shift| {
-                    if should_right_click_paste(shift, app) {
+                .on_right_mouse_down(move |ctx, app, position, modifiers| {
+                    if should_right_click_paste(modifiers.shift, app) {
                         // Same path as the `terminal:paste` keybinding, so escaped-path
                         // processing and CLI-agent image handling behave identically.
                         ctx.dispatch_typed_action(TerminalAction::Paste);

@@ -44,7 +44,7 @@ impl Input {
         let input_editor_save_position_id = self.editor_save_position_id();
         let editor_element = SavePosition::new(
             EventHandler::new(input_box)
-                .on_right_mouse_down(move |ctx, _, position| {
+                .on_right_mouse_down(move |ctx, _, position, _| {
                     let input_rect = ctx
                         .element_position_by_id(input_editor_save_position_id.clone())
                         .expect("input editor position id should be saved");

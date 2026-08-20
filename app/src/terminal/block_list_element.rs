@@ -70,9 +70,7 @@ use crate::pane_group::SplitPaneState;
 use crate::settings::{
     AISettings, DebugSettings, EnforceMinimumContrast, PrivacySettings, TerminalSpacing,
 };
-use crate::terminal::alt_screen::{
-    should_intercept_mouse, should_intercept_scroll, should_right_click_paste,
-};
+use crate::terminal::alt_screen::{should_intercept_mouse, should_intercept_scroll};
 use crate::terminal::block_list_viewport::AutoscrollBehavior;
 use crate::terminal::blockgrid_renderer::BlockGridParams;
 use crate::terminal::input::inline_menu::InlineMenuPositioner;
@@ -89,7 +87,7 @@ use crate::terminal::model::terminal_model::BlockIndex;
 use crate::terminal::safe_mode_settings::get_secret_obfuscation_mode;
 use crate::terminal::view::TerminalAction;
 use crate::terminal::warpify::SubshellSource;
-use crate::terminal::{SizeInfo, grid_renderer};
+use crate::terminal::{SizeInfo, grid_renderer, should_right_click_paste};
 use crate::themes::theme::{Fill, WarpTheme};
 use crate::ui_components::{self, icons as UIIcon};
 use crate::util::color::Opacity;

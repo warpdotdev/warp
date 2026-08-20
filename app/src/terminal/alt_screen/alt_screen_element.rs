@@ -22,7 +22,7 @@ use warpui::{
     start_trace,
 };
 
-use super::{should_intercept_mouse, should_right_click_paste};
+use super::should_intercept_mouse;
 use crate::appearance::Appearance;
 use crate::pane_group::SplitPaneState;
 use crate::settings::EnforceMinimumContrast;
@@ -47,7 +47,9 @@ use crate::terminal::shared_session::presence_manager::{
 use crate::terminal::view::{
     ActiveSessionState, TerminalAction, TerminalEditor, TerminalViewRenderContext,
 };
-use crate::terminal::{SizeInfo, TerminalModel, grid_renderer, heights_approx_eq};
+use crate::terminal::{
+    SizeInfo, TerminalModel, grid_renderer, heights_approx_eq, should_right_click_paste,
+};
 
 const CLI_SUBAGENT_HORIZONTAL_MARGIN: f32 = 8.;
 const CLI_SUBAGENT_VERTICAL_MARGIN: f32 = 8.;

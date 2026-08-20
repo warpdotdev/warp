@@ -641,7 +641,7 @@ impl PromptRenderHelper {
                 } else {
                     prompt_with_padding_container
                 })
-                .on_right_mouse_down(move |ctx, _, position| {
+                .on_right_mouse_down(move |ctx, _, position, _| {
                     let position_id = format!("prompt_area_{view_id}");
                     let Some(prompt_rect) = ctx.element_position_by_id(position_id) else {
                         return DispatchEventResult::PropagateToParent;
@@ -691,7 +691,7 @@ impl PromptRenderHelper {
 
         SavePosition::new(
             EventHandler::new(prompt_with_padding_container)
-                .on_right_mouse_down(move |ctx, _, position| {
+                .on_right_mouse_down(move |ctx, _, position, _| {
                     let position_id = format!("prompt_area_{view_id}");
                     let Some(prompt_rect) = ctx.element_position_by_id(position_id) else {
                         return DispatchEventResult::PropagateToParent;

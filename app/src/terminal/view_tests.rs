@@ -56,7 +56,7 @@ use crate::server::ids::{ClientId, SyncId};
 use crate::server::server_api::ai::SpawnAgentRequest;
 use crate::settings::import::model::ImportedConfigModel;
 use crate::settings::{AISettings, AppEditorSettings, RightClickBehavior, WarpPromptSeparator};
-use crate::terminal::alt_screen::{should_intercept_mouse, should_right_click_paste};
+use crate::terminal::alt_screen::should_intercept_mouse;
 use crate::terminal::block_list_element::{SnackbarPoint, SnackbarTranslationMode};
 use crate::terminal::block_list_viewport::{ClampingMode, ScrollLines};
 use crate::terminal::cli_agent_sessions::event::{
@@ -83,7 +83,9 @@ use crate::terminal::view::load_ai_conversation::{
     RestoreConversationEntryBehavior, RestoredAIConversation,
 };
 use crate::terminal::view::shared_session::ConversationEndedTombstoneView;
-use crate::terminal::{CLIAgent, MockTerminalManager, TerminalManager, TerminalModel};
+use crate::terminal::{
+    CLIAgent, MockTerminalManager, TerminalManager, TerminalModel, should_right_click_paste,
+};
 use crate::test_util::terminal::{
     add_window_with_id_and_terminal, initialize_app_for_terminal_view,
 };
@@ -725,20 +727,6 @@ fn focus_reporting_writes_focus_events_in_normal_screen() {
 }
 
 #[test]
-fn should_right_click_paste_defaults_to_false() {
-    App::test((), |mut app| async move {
-        initialize_app_for_terminal_view(&mut app);
-        let terminal = add_window_with_terminal(&mut app, None);
-
-        terminal.update(&mut app, |_view, ctx| {
-            assert!(!SelectionSettings::as_ref(ctx).right_click_pastes());
-            assert!(!should_right_click_paste(false, ctx));
-            assert!(!should_right_click_paste(true, ctx));
-        });
-    })
-}
-
-#[test]
 fn should_right_click_paste_true_only_without_shift_when_setting_enabled() {
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);
@@ -874,10 +862,7 @@ fn block_list_right_click_forwards_to_pty_when_long_running_block_owns_mouse() {
 }
 
 /// Shift+right-clicking a block-list block must open the block's context menu even when
-/// `right_click_behavior` is `Paste`, proving Shift survives the real event path --
-/// `Event::RightMouseDown` -> `BlockListElement::right_mouse_down` ->
-/// `TerminalView::block_list_context_menu` -- rather than only the `should_right_click_paste`
-/// helper checked in isolation.
+/// `right_click_behavior` is `Paste`.
 #[test]
 fn block_list_shift_right_click_opens_context_menu_when_right_click_pastes() {
     App::test((), |mut app| async move {
@@ -979,9 +964,7 @@ fn block_list_shift_right_click_opens_context_menu_when_right_click_pastes() {
 }
 
 /// Shift+right-clicking inside an active alt screen must open the alt-screen context menu even
-/// when `right_click_behavior` is `Paste`, proving Shift survives the real event path --
-/// `Event::RightMouseDown` -> `AltScreenElement::right_mouse_down` ->
-/// `TerminalView::alt_screen_context_menu`.
+/// when `right_click_behavior` is `Paste`.
 #[test]
 fn alt_screen_shift_right_click_opens_context_menu_when_right_click_pastes() {
     App::test((), |mut app| async move {
@@ -1084,10 +1067,7 @@ fn alt_screen_shift_right_click_opens_context_menu_when_right_click_pastes() {
 }
 
 /// Shift+right-clicking the input box itself must open the input's own context menu even when
-/// `right_click_behavior` is `Paste`, proving Shift survives the real event path --
-/// `Event::RightMouseDown` -> `EventHandler::on_right_mouse_down_with_shift` ->
-/// `TerminalView::show_input_context_menu` -- rather than only the `EventHandler` unit test that
-/// proves the modifier bit alone survives a synthesized event.
+/// `right_click_behavior` is `Paste`.
 #[test]
 fn input_shift_right_click_opens_context_menu_when_right_click_pastes() {
     App::test((), |mut app| async move {

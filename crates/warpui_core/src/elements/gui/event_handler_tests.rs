@@ -157,8 +157,8 @@ impl crate::core::View for View {
                     evt.dispatch_action("event_handler_test:mouse_down", ElementIdentifier::Base);
                     DispatchEventResult::StopPropagation
                 })
-                .on_right_mouse_down_with_shift(|evt, _, _, shift| {
-                    evt.dispatch_action("event_handler_test:right_click_shift", shift);
+                .on_right_mouse_down(|evt, _, _, modifiers| {
+                    evt.dispatch_action("event_handler_test:right_click_shift", modifiers.shift);
                     DispatchEventResult::StopPropagation
                 })
                 .on_mouse_in(

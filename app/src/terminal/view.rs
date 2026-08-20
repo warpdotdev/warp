@@ -24960,7 +24960,7 @@ impl TerminalView {
             SavePosition::new(
                 EventHandler::new(child)
                     .on_right_mouse_down(
-                        enclose!((position_id, input_position_id) move |ctx, _app, position | {
+                        enclose!((position_id, input_position_id) move |ctx, _app, position, _| {
                                 if let Some(position_in_terminal_view) = offset_position_outside_block(
                                     position,
                                     &position_id,
