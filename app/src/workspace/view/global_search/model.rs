@@ -477,30 +477,31 @@ impl GlobalSearch {
         }
     }
 
-    /// Expand a single match (which may contain multiple submatches
-    /// on the same line) into one result per submatch. Each result gets the
-    /// line text trimmed of leading whitespace up to that submatch.
+    /// Expand a single match into one result per submatch. Each result gets the line text trimmed
+    /// of leading whitespace up to that submatch.
     fn expand_submatches(m: GlobalSearchMatch) -> Vec<GlobalSearchMatch> {
-        if m.submatches.len() <= 1 {
-            let submatch = m.submatches.into_iter().next();
-            let column_num = Self::column_from_submatch(&m.line_text, submatch.as_ref());
+        if m.submatches.is_empty() {
             return vec![Self::trim_leading_whitespace_for_submatch(
                 &m.line_text,
                 m.location,
                 m.line_number,
-                column_num,
-                submatch,
+                None,
+                None,
             )];
         }
 
         m.submatches
             .into_iter()
             .map(|sub| {
-                let column_num = Self::column_from_submatch(&m.line_text, Some(&sub));
+                let (line_offset, column_num) =
+                    Self::source_position_from_submatch(&m.line_text, &sub)
+                        .map_or((0, None), |(line_offset, column_num)| {
+                            (line_offset, Some(column_num))
+                        });
                 Self::trim_leading_whitespace_for_submatch(
                     &m.line_text,
                     m.location.clone(),
-                    m.line_number,
+                    m.line_number.saturating_add(line_offset),
                     column_num,
                     Some(sub),
                 )
@@ -508,13 +509,17 @@ impl GlobalSearch {
             .collect()
     }
 
-    /// Returns the original 1-based character column for a submatch.
-    fn column_from_submatch(line_text: &str, submatch: Option<&Submatch>) -> Option<usize> {
-        let byte_start = submatch?.byte_start.as_usize();
+    /// Returns the 0-based line offset and 1-based character column for a submatch.
+    fn source_position_from_submatch(line_text: &str, submatch: &Submatch) -> Option<(u32, usize)> {
+        let byte_start = submatch.byte_start.as_usize();
         if byte_start > line_text.len() || !line_text.is_char_boundary(byte_start) {
             return None;
         }
-        Some(line_text[..byte_start].chars().count() + 1)
+        let prefix = &line_text[..byte_start];
+        let line_offset = prefix.bytes().filter(|byte| *byte == b'\n').count();
+        let line_offset = u32::try_from(line_offset).unwrap_or(u32::MAX);
+        let line_prefix = prefix.rsplit_once('\n').map_or(prefix, |(_, line)| line);
+        Some((line_offset, line_prefix.chars().count() + 1))
     }
 
     /// Trim leading whitespace from a line up to the given submatch,
