@@ -786,10 +786,8 @@ impl AIConversation {
         self.conversation_usage_metadata.platform_credits_spent
     }
 
-    /// Test-only helper that sets the conversation's credit total directly.
-    /// Used by unit tests that exercise downstream credit-aware logic
-    /// (e.g. the orchestration credit rollup) without having to wire up a
-    /// full `StreamFinished` event.
+    /// Test-only helper that sets the conversation's credit total directly,
+    /// without wiring up a full `StreamFinished` event.
     #[cfg(test)]
     pub(crate) fn set_credits_spent_for_test(&mut self, credits: f32) {
         self.conversation_usage_metadata.credits_spent = credits;
@@ -798,9 +796,7 @@ impl AIConversation {
 
     /// Test-only helper that sets (or clears) the conversation's dollar-cost
     /// baseline directly, mirroring what `set_server_metadata` would derive
-    /// from a real snapshot. Used by unit tests that exercise downstream
-    /// cost-aware logic (e.g. the orchestration credit rollup's dollar
-    /// figure) without wiring up a full server metadata snapshot.
+    /// from a real snapshot, without wiring up a full snapshot.
     #[cfg(test)]
     pub(crate) fn set_cost_in_cents_for_test(&mut self, cost_in_cents: Option<f32>) {
         self.total_provider_cost_in_cents = cost_in_cents;
@@ -810,10 +806,8 @@ impl AIConversation {
 
     /// Test-only helper that sets (or clears) the conversation's cumulative
     /// charged-usage breakdown directly, mirroring what a real
-    /// `ConversationUsageMetadata.total_charges` update would populate. Used
-    /// by unit tests that exercise downstream token-count-aware logic (e.g.
-    /// the orchestration credit rollup's token figure) without wiring up a
-    /// full `StreamFinished` event.
+    /// `ConversationUsageMetadata.total_charges` update would populate,
+    /// without wiring up a full `StreamFinished` event.
     #[cfg(test)]
     pub(crate) fn set_charged_usage_for_test(&mut self, charged_usage: Option<ChargedUsageTotals>) {
         self.conversation_usage_metadata.total_charged_usage = charged_usage;
@@ -821,9 +815,7 @@ impl AIConversation {
 
     /// Test-only helper that sets (or clears) the conversation's last-block
     /// charged-usage breakdown directly, mirroring what a real
-    /// `StreamFinished.request_charges` update would populate. Used to set
-    /// up a "stale" precondition for regression tests covering the reset
-    /// behavior in `update_cost_and_usage_for_request`.
+    /// `StreamFinished.request_charges` update would populate.
     #[cfg(test)]
     pub(crate) fn set_charged_usage_for_last_block_for_test(
         &mut self,
