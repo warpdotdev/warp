@@ -169,6 +169,9 @@ pub struct CreateTeamResponse {
 /// share a lifetime, restructure so they share the single owner instead.
 ///
 /// This is scope, not authority: the server still authorizes every request made under it.
+// Only tests construct one today; remove this once a Group 1 migration PR mints one from a
+// real call site.
+#[allow(dead_code)]
 pub(crate) struct TeamContext {
     team_uid: ServerId,
 }
@@ -181,6 +184,9 @@ pub(crate) struct TeamContext {
 /// a team UID or to a [`TeamContext`]. A [`WeakViewHandle`] locates a window to read from;
 /// it is not evidence that the holder is running in that window, which is what minting
 /// operation scope requires.
+// Only tests construct one today; remove this once a Group 1 migration PR resolves one from a
+// real render.
+#[allow(dead_code)]
 pub(crate) struct TeamRenderContext<'a> {
     team: &'a Team,
 }
@@ -380,6 +386,8 @@ impl UserWorkspaces {
 
     /// Captures the team selected in `ctx`'s window as an operation's [`TeamContext`]. This
     /// is the only way application code mints one.
+    // Only tests call this today; remove once a Group 1 migration PR has a real call site.
+    #[allow(dead_code)]
     pub(crate) fn team_context_for_view<T: Entity>(
         &self,
         ctx: &ViewContext<T>,
@@ -389,6 +397,8 @@ impl UserWorkspaces {
     }
 
     /// Resolves `view`'s window team for one render. See [`TeamRenderContext`].
+    // Only tests call this today; remove once a Group 1 migration PR has a real call site.
+    #[allow(dead_code)]
     pub(crate) fn team_render_context_for_view_handle<'a, T: Entity>(
         &'a self,
         view: &WeakViewHandle<T>,
@@ -403,6 +413,8 @@ impl UserWorkspaces {
 
     /// Reads a captured team's metadata. Returns `None` once that team is gone from the
     /// current workspace, e.g. after the user leaves it.
+    // Only tests call this today; remove once a Group 1 migration PR has a real call site.
+    #[allow(dead_code)]
     pub(crate) fn team_for_context(&self, context: &TeamContext) -> Option<&Team> {
         self.team_from_uid(context.team_uid)
     }
