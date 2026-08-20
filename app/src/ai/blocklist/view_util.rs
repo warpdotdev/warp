@@ -3,6 +3,7 @@ use std::sync::LazyLock;
 
 use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::vec2f;
+use thousands::Separable;
 use warp_core::features::FeatureFlag;
 use warp_core::ui::appearance::Appearance;
 use warpui::elements::{
@@ -297,14 +298,18 @@ pub fn format_credits(credits: f32) -> String {
     }
 }
 
-/// Builds the `"12345 tokens, $0.36"`-style parenthetical shared by
+/// Builds the `"12,345 tokens, $0.36"`-style parenthetical shared by
 /// [`format_credits_with_cost`] and the conversation details panel's
 /// compact "Credits used" line, gated by `FeatureFlag::PricingTransparency`.
 ///
 /// `tokens` and `cost_in_cents` are independent: either, both, or neither
 /// may be `None` (no baseline is available for that figure — never coerced
-/// to zero), and only the figures that are present are included. Returns
-/// `None` when the flag is disabled, or when both figures are `None`.
+/// to zero), and only the figures that are present are included. A `tokens`
+/// value of `0` is treated the same as `None` (omitted) since a "0 tokens"
+/// figure next to a non-zero credit/cost figure would be confusing rather
+/// than informative (e.g. a purely platform-cost request like a paid web
+/// search). Returns `None` when the flag is disabled, or when both figures
+/// are `None`/omitted.
 ///
 /// This intentionally supersedes the previous standalone "PRICING
 /// BREAKDOWN" section (per-category input/cache/output/platform/web-search
@@ -319,7 +324,9 @@ pub fn format_usage_parenthetical(
     if !FeatureFlag::PricingTransparency.is_enabled() {
         return None;
     }
-    let token_part = tokens.map(|tokens| format!("{tokens} tokens"));
+    let token_part = tokens
+        .filter(|&tokens| tokens > 0)
+        .map(|tokens| format!("{} tokens", tokens.separate_with_commas()));
     let cost_part = cost_in_cents.map(|cost_in_cents| format!("${:.2}", cost_in_cents / 100.0));
     match (token_part, cost_part) {
         (Some(token_part), Some(cost_part)) => Some(format!("{token_part}, {cost_part}")),
@@ -330,7 +337,7 @@ pub fn format_usage_parenthetical(
 }
 
 /// Formats a credit count together with its total token count and real
-/// dollar cost, e.g. `"20 credits (12345 tokens, $0.36)"`. See
+/// dollar cost, e.g. `"20 credits (12,345 tokens, $0.36)"`. See
 /// [`format_usage_parenthetical`] for how the parenthetical is built and
 /// when it's omitted (including always, when `FeatureFlag::PricingTransparency`
 /// is disabled).
