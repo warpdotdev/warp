@@ -1068,7 +1068,9 @@ impl AmbientAgentViewModel {
             mode,
             config,
             title: None,
-            scope: AgentRunScope::Personal,
+            // Preserves the pre-existing omitted-scope wire behavior; this pane has no
+            // window-selected team wired through yet.
+            scope: AgentRunScope::Unspecified,
             agent_identity_uid: None,
             skill: None,
             attachments,

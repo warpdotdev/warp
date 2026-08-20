@@ -293,7 +293,9 @@ pub fn prepare_remote_child_launch(
             ..Default::default()
         }),
         title: (!title.is_empty()).then_some(title),
-        scope: AgentRunScope::Personal,
+        // A remote child inherits scope from `parent_run_id` server-side; preserves the
+        // pre-existing omitted-scope wire behavior rather than forcing personal ownership.
+        scope: AgentRunScope::Unspecified,
         skill: None,
         attachments: Vec::new(),
         interactive: Some(true),

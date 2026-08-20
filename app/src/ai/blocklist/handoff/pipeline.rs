@@ -982,7 +982,9 @@ fn build_spawn_request(
         mode,
         config: Some(config),
         title,
-        scope: AgentRunScope::Personal,
+        // Preserves the pre-existing omitted-scope wire behavior; handoff has no
+        // window-selected team wired through yet.
+        scope: AgentRunScope::Unspecified,
         skill: None,
         attachments,
         interactive: Some(true),

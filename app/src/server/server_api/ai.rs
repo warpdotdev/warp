@@ -201,25 +201,32 @@ impl TaskStatusUpdate {
     }
 }
 
-/// The execution scope for a new agent run: the caller's personal account, or an explicit
-/// team. Replaces the ambiguous `team: Option<bool>` boolean previously constructed directly
-/// at call sites; `Team` carries the raw team UID so `AIClient::spawn_agent` can put the same
-/// team into both the wire flag and the `X-Warp-Team-Uid` header. See
-/// `specs/multi-team-api-context/TECH.md`.
+/// The execution scope for a new agent run. Replaces the ambiguous `team: Option<bool>`
+/// boolean previously constructed directly at call sites, while preserving all three wire
+/// states it could take on `POST /agent/run`'s `team` field — they are not equivalent, since
+/// the server treats an omitted value as its own default (team ownership for a single-team
+/// account) rather than as personal:
+/// - `Unspecified` omits `team` entirely: the caller expressed no preference (e.g. no
+///   `--team`/`--personal` flag), so the server applies its own default.
+/// - `Personal` sends `team: false`: the caller explicitly asked for personal ownership.
+/// - `Team(uid)` sends `team: true` plus `uid` in the `X-Warp-Team-Uid` header.
+///
+/// See `specs/multi-team-api-context/TECH.md`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AgentRunScope {
+    Unspecified,
     Personal,
     Team(ServerId),
 }
 
 impl AgentRunScope {
-    fn is_personal(&self) -> bool {
-        matches!(self, Self::Personal)
+    fn is_unspecified(&self) -> bool {
+        matches!(self, Self::Unspecified)
     }
 
     fn team_uid(self) -> Option<ServerId> {
         match self {
-            Self::Personal => None,
+            Self::Unspecified | Self::Personal => None,
             Self::Team(team_uid) => Some(team_uid),
         }
     }
@@ -230,7 +237,12 @@ impl serde::Serialize for AgentRunScope {
     where
         S: serde::Serializer,
     {
-        serializer.serialize_bool(matches!(self, Self::Team(_)))
+        match self {
+            // `skip_serializing_if` omits this variant before the serializer is ever reached.
+            Self::Unspecified => serializer.serialize_bool(false),
+            Self::Personal => serializer.serialize_bool(false),
+            Self::Team(_) => serializer.serialize_bool(true),
+        }
     }
 }
 
@@ -247,7 +259,7 @@ pub struct SpawnAgentRequest {
     pub config: Option<AgentConfigSnapshot>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
-    #[serde(rename = "team", skip_serializing_if = "AgentRunScope::is_personal")]
+    #[serde(rename = "team", skip_serializing_if = "AgentRunScope::is_unspecified")]
     pub scope: AgentRunScope,
     /// Agent identity UID to use as the execution principal for the run.
     #[serde(rename = "agent_identity_uid", skip_serializing_if = "Option::is_none")]

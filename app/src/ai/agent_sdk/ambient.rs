@@ -512,8 +512,10 @@ impl AmbientAgentRunner {
             };
             // The headless CLI has no window to infer a team from, so `--team` must resolve to
             // an unambiguous single-team account; a multi-team account has no way here to name
-            // which team, unlike the current-window case `TeamContext` covers. `--personal` and
-            // the no-flag default both mean "not team-owned" and collapse to the same scope.
+            // which team, unlike the current-window case `TeamContext` covers. `--personal` is
+            // an explicit request for personal ownership (sent as `team: false`); omitting both
+            // flags leaves the scope unspecified so the server applies its own default — the two
+            // are not the same wire value, so they must not collapse to the same scope.
             let scope = if args.scope.team {
                 match UserWorkspaces::as_ref(ctx).sole_team_uid() {
                     Some(team_uid) => AgentRunScope::Team(team_uid),
@@ -528,8 +530,10 @@ impl AmbientAgentRunner {
                         return;
                     }
                 }
-            } else {
+            } else if args.scope.personal {
                 AgentRunScope::Personal
+            } else {
+                AgentRunScope::Unspecified
             };
             let request = SpawnAgentRequest {
                 prompt,
