@@ -121,6 +121,13 @@ impl DiffApplicationError {
                 format!("{file} does not exist. Is the path correct?")
             }
             DiffApplicationError::AlreadyExists { file } => {
+                // Deliberately neutral: this client always advertises
+                // supports_create_file_rewrite, but a server predating that capability
+                // ignores the flag and serves the legacy create_file schema (no `rewrite`
+                // argument). Naming `rewrite: true` here would send the model into a retry
+                // that such a server can't honor, manufacturing exactly the extra exchange
+                // the flag exists to remove. A model whose create_file schema does include
+                // `rewrite` already knows about it from that schema and can choose to use it.
                 format!("Could not create {file} because it already exists.")
             }
             DiffApplicationError::ReadFailed { file, .. } => {
@@ -287,6 +294,14 @@ struct DiffResult {
     warnings: Vec<DiffWarning>,
 }
 
+/// A pending file-creation request, keyed by file path in `apply_edits_internal`.
+struct NewFileRequest {
+    content: String,
+    /// If `true` and the file already exists, its contents are fully replaced instead of
+    /// raising an already-exists error.
+    rewrite: bool,
+}
+
 /// You generally want to use `apply_edits`, however, if you don't want to report telemetry or be as
 /// strict, this is available.  For example, we use this when debug importing conversations.
 async fn apply_edits_internal<F, Fut>(
@@ -300,7 +315,7 @@ where
 {
     let mut search_replace_deltas: HashMap<String, Vec<SearchAndReplace>> = HashMap::new();
     let mut v4a_deltas: HashMap<String, Vec<V4AHunk>> = HashMap::new();
-    let mut new_files: HashMap<String, String> = HashMap::new();
+    let mut new_files: HashMap<String, NewFileRequest> = HashMap::new();
     let mut deleted_files: HashSet<String> = HashSet::new();
     let mut file_renames: HashMap<String, String> = HashMap::new();
     let mut result = DiffResult::default();
@@ -339,7 +354,11 @@ where
                     }
                 };
             }
-            FileEdit::Create { file, content } => {
+            FileEdit::Create {
+                file,
+                content,
+                rewrite,
+            } => {
                 let Some(file_path) = file else { continue };
 
                 match new_files.entry(file_path) {
@@ -355,7 +374,7 @@ where
                         let Some(content) = content else {
                             continue;
                         };
-                        entry.insert(content);
+                        entry.insert(NewFileRequest { content, rewrite });
                     }
                 }
             }
@@ -403,7 +422,7 @@ where
         .await;
     }
 
-    for (file, content) in new_files {
+    for (file, request) in new_files {
         if search_replace_files.contains(&file)
             || v4a_files.contains(&file)
             || file_renames.contains_key(&file)
@@ -412,9 +431,24 @@ where
                 .errors
                 .push(DiffApplicationError::MultipleFileCreation { file });
         } else if replacement_file_paths.contains(&file) {
-            apply_replace_file(file, content, session_context, read_file, &mut result).await;
+            apply_replace_file(
+                file,
+                request.content,
+                session_context,
+                read_file,
+                &mut result,
+            )
+            .await;
         } else {
-            apply_create_file(file, content, session_context, read_file, &mut result).await;
+            apply_create_file(
+                file,
+                request.content,
+                request.rewrite,
+                session_context,
+                read_file,
+                &mut result,
+            )
+            .await;
         }
     }
 
@@ -439,6 +473,35 @@ where
     result
 }
 
+/// Records a diff that fully replaces `file_path`'s existing `original_content` with
+/// `new_content`.
+fn push_full_replace_diff(
+    result: &mut DiffResult,
+    file_path: String,
+    original_content: String,
+    new_content: String,
+) {
+    let num_lines = original_content.lines().count();
+    let replacement_line_range = if num_lines == 0 {
+        0..0
+    } else {
+        1..num_lines.saturating_add(1)
+    };
+
+    result.diffs.push(AIRequestedCodeDiff {
+        file_name: file_path,
+        diff_type: DiffType::update(
+            vec![DiffDelta {
+                replacement_line_range,
+                insertion: new_content,
+            }],
+            None,
+        ),
+        failures: None,
+        original_content,
+    });
+}
+
 async fn apply_replace_file<F, Fut>(
     file_path: String,
     content: String,
@@ -457,25 +520,7 @@ async fn apply_replace_file<F, Fut>(
 
     match read_file(absolute_path.clone()).await {
         FileReadResult::Found(file_content) => {
-            let num_lines = file_content.lines().count();
-            let replacement_line_range = if num_lines == 0 {
-                0..0
-            } else {
-                1..num_lines.saturating_add(1)
-            };
-
-            result.diffs.push(AIRequestedCodeDiff {
-                file_name: file_path,
-                diff_type: DiffType::update(
-                    vec![DiffDelta {
-                        replacement_line_range,
-                        insertion: content,
-                    }],
-                    None,
-                ),
-                failures: None,
-                original_content: file_content,
-            });
+            push_full_replace_diff(result, file_path, file_content, content);
         }
         FileReadResult::NotFound => {
             result
@@ -495,10 +540,12 @@ async fn apply_replace_file<F, Fut>(
     }
 }
 
-/// Converts a file-creation request into a diff.
+/// Converts a file-creation request into a diff. If `rewrite` is `true` and the file already
+/// exists, its contents are fully replaced instead of raising an already-exists error.
 async fn apply_create_file<F, Fut>(
     file_path: String,
     content: String,
+    rewrite: bool,
     session_context: &SessionContext,
     read_file: &F,
     result: &mut DiffResult,
@@ -513,14 +560,18 @@ async fn apply_create_file<F, Fut>(
     );
 
     match read_file(absolute_path.clone()).await {
-        FileReadResult::Found(_) => {
-            safe_warn!(
-                safe: ("Agent Code tried to create a file that already exists"),
-                full: ("Agent Code tried to create a file that already exists: {absolute_path:?}")
-            );
-            result
-                .errors
-                .push(DiffApplicationError::AlreadyExists { file: file_path });
+        FileReadResult::Found(existing_content) => {
+            if rewrite {
+                push_full_replace_diff(result, file_path, existing_content, content);
+            } else {
+                safe_warn!(
+                    safe: ("Agent Code tried to create a file that already exists"),
+                    full: ("Agent Code tried to create a file that already exists: {absolute_path:?}")
+                );
+                result
+                    .errors
+                    .push(DiffApplicationError::AlreadyExists { file: file_path });
+            }
         }
         FileReadResult::NotFound => {
             result.diffs.push(AIRequestedCodeDiff {

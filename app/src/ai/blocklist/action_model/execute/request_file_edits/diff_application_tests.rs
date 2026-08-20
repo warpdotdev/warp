@@ -398,10 +398,12 @@ fn test_multiple_file_create_edits_for_same_path() {
         let create_edit1 = FileEdit::Create {
             file: Some(file_path.clone()),
             content: Some("First content".to_string()),
+            rewrite: false,
         };
         let create_edit2 = FileEdit::Create {
             file: Some(file_path.clone()),
             content: Some("Second content".to_string()),
+            rewrite: false,
         };
 
         let ai_identifiers = &AIIdentifiers::default();
@@ -440,6 +442,7 @@ fn test_mixed_create_and_edit_for_same_path() {
         let create_edit = FileEdit::Create {
             file: Some(file_path.clone()),
             content: Some("New file content".to_string()),
+            rewrite: false,
         };
         let edit_diff = ParsedDiff::StrReplaceEdit {
             file: Some(file_path.clone()),
@@ -488,6 +491,7 @@ fn test_delete_and_create_same_path_replaces_existing_file() {
         let create_edit = FileEdit::Create {
             file: Some(file_path.clone()),
             content: Some("New file content".to_string()),
+            rewrite: false,
         };
 
         let result = apply_edits(
@@ -524,6 +528,7 @@ fn test_create_then_delete_same_path_replaces_existing_file() {
         let create_edit = FileEdit::Create {
             file: Some(file_path.clone()),
             content: Some("New file content".to_string()),
+            rewrite: false,
         };
         let delete_edit = FileEdit::Delete {
             file: Some(file_path.clone()),
@@ -565,6 +570,7 @@ fn test_delete_create_and_edit_same_path_still_fails() {
         let create_edit = FileEdit::Create {
             file: Some(file_path.clone()),
             content: Some("New file content".to_string()),
+            rewrite: false,
         };
         let edit_diff = ParsedDiff::StrReplaceEdit {
             file: Some(file_path.clone()),
@@ -605,6 +611,7 @@ fn test_create_edit_for_existing_file() {
         let create_edit = FileEdit::Create {
             file: Some(file_path.clone()),
             content: Some("New content".to_string()),
+            rewrite: false,
         };
 
         let ai_identifiers = &AIIdentifiers::default();
@@ -630,6 +637,91 @@ fn test_create_edit_for_existing_file() {
                 assert_eq!(*file, file_path);
             }
             other => panic!("Expected a single AlreadyExists error, got {other:?}"),
+        }
+
+        // The message stays neutral (doesn't name `rewrite: true`): this client always
+        // advertises the capability, but a server predating it ignores the flag and serves a
+        // create_file schema without `rewrite`, so naming it here could send the model into a
+        // retry the server can't honor. A model whose schema does include `rewrite` already
+        // knows about it independently of this message.
+        let message = DiffApplicationError::error_for_conversation(&errors);
+        assert!(!message.contains("rewrite"));
+        assert!(message.contains("already exists"));
+    });
+}
+
+#[test]
+fn test_create_with_rewrite_replaces_existing_file() {
+    App::test((), |app| async move {
+        let mut temp_file = NamedTempFile::new().expect("Failed to create temporary file");
+        let file_path = temp_file.path().to_string_lossy().to_string();
+        writeln!(&mut temp_file, "Old line one\nOld line two").unwrap();
+
+        let create_edit = FileEdit::Create {
+            file: Some(file_path.clone()),
+            content: Some("New file content".to_string()),
+            rewrite: true,
+        };
+
+        let result = apply_edits(
+            vec![create_edit],
+            &SessionContext::new_for_test(),
+            &AIIdentifiers::default(),
+            app.background_executor(),
+            Arc::new(AuthState::new_for_test()),
+            false,
+            |path| async move { FileReadResult::from(std::fs::read_to_string(path)) },
+        )
+        .await;
+
+        // rewrite: true on an existing file should succeed with a full replacement, not the
+        // AlreadyExists error a plain create_file call would raise.
+        assert!(result.is_ok(), "Expected Ok result but got: {result:?}");
+        let diffs = result.unwrap();
+        assert_eq!(diffs.len(), 1);
+        assert_eq!(diffs[0].file_name, file_path);
+        assert_eq!(diffs[0].original_content, "Old line one\nOld line two\n");
+
+        let deltas = update_deltas(&diffs[0]);
+        assert_eq!(deltas.len(), 1);
+        assert_eq!(deltas[0].replacement_line_range, 1..3);
+        assert_eq!(deltas[0].insertion, "New file content");
+    });
+}
+
+#[test]
+fn test_create_with_rewrite_on_nonexistent_file_creates_normally() {
+    App::test((), |app| async move {
+        let non_existent_file = "non_existent_rewrite_file.txt".to_string();
+
+        let create_edit = FileEdit::Create {
+            file: Some(non_existent_file.clone()),
+            content: Some("New file content".to_string()),
+            rewrite: true,
+        };
+
+        let result = apply_edits(
+            vec![create_edit],
+            &SessionContext::new_for_test(),
+            &AIIdentifiers::default(),
+            app.background_executor(),
+            Arc::new(AuthState::new_for_test()),
+            false,
+            |path| async move { FileReadResult::from(std::fs::read_to_string(path)) },
+        )
+        .await;
+
+        // rewrite is a no-op when the file doesn't already exist: it's just a normal creation.
+        assert!(result.is_ok(), "Expected Ok result but got: {result:?}");
+        let diffs = result.unwrap();
+        assert_eq!(diffs.len(), 1);
+        assert_eq!(diffs[0].file_name, non_existent_file);
+
+        match &diffs[0].diff_type {
+            DiffType::Create { delta } => {
+                assert_eq!(delta.insertion, "New file content");
+            }
+            other => panic!("Expected Create diff_type, got {other:?}"),
         }
     });
 }
