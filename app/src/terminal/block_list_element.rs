@@ -1415,7 +1415,7 @@ impl BlockListElement {
     fn right_mouse_down(
         &self,
         position: Vector2F,
-        shift: bool,
+        modifiers: &ModifiersState,
         ctx: &mut EventContext,
         app: &AppContext,
     ) -> bool {
@@ -1423,6 +1423,7 @@ impl BlockListElement {
             return false;
         }
 
+        let shift = modifiers.shift;
         let position_in_terminal_view = self.position_in_terminal_view(position);
 
         let blocklist_point = self.coord_to_point(
@@ -1443,10 +1444,31 @@ impl BlockListElement {
             (block_index, mouse_owned_by_running_app)
         };
 
-        // A bare right-click pastes when the setting is enabled, unless the app underneath a
-        // long-running command owns the mouse (mouse reporting enabled), in which case it keeps
-        // getting today's behavior instead of having its right-click hijacked.
-        if !mouse_owned_by_running_app && should_right_click_paste(shift, app) {
+        // When a long-running app underneath owns the mouse (mouse reporting enabled), forward
+        // the raw right-click to it instead of pasting or showing our own context menu, the same
+        // way left mouse down/up/drag/scroll do for this block under the same condition.
+        if mouse_owned_by_running_app {
+            let model = self.model.lock();
+            let viewport = self.viewport_state_after_layout(model.block_list());
+            let within_block = blocklist_point.and_then(|point| {
+                viewport
+                    .block_list_point_to_grid_point(point)
+                    .map(|within_block| point_from_first_visible_row(&viewport, within_block))
+            });
+            drop(model);
+
+            if let Some(grid_point) = within_block {
+                let mouse_state =
+                    MouseState::new(MouseButton::Right, MouseAction::Pressed, *modifiers);
+                ctx.dispatch_typed_action(TerminalAction::AltMouseAction(
+                    mouse_state.set_point(grid_point),
+                ));
+                return true;
+            }
+        }
+
+        // A bare right-click pastes when the setting is enabled.
+        if should_right_click_paste(shift, app) {
             ctx.dispatch_typed_action(TerminalAction::Paste);
             return true;
         }
@@ -4642,8 +4664,22 @@ impl Element for BlockListElement {
                 app,
             ),
             Event::RightMouseDown {
-                position, shift, ..
-            } if !handled => self.right_mouse_down(*position, *shift, ctx, app),
+                position,
+                cmd,
+                shift,
+                ..
+            } if !handled => self.right_mouse_down(
+                *position,
+                &ModifiersState {
+                    alt: false,
+                    cmd: *cmd,
+                    shift: *shift,
+                    ctrl: false,
+                    func: false,
+                },
+                ctx,
+                app,
+            ),
             Event::LeftMouseUp {
                 position,
                 modifiers,

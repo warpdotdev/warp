@@ -142,8 +142,7 @@ use super::view::inline_banner::{
 };
 use super::view::queued_prompts_panel::{QueuedPromptsPanelEvent, QueuedPromptsPanelView};
 use super::view::{
-    ExecuteCommandEvent, InputContextMenuAction, PADDING_LEFT as TERMINAL_VIEW_PADDING_LEFT,
-    SyncInputType, TerminalAction,
+    ExecuteCommandEvent, PADDING_LEFT as TERMINAL_VIEW_PADDING_LEFT, SyncInputType, TerminalAction,
 };
 use super::warpify::SubshellSource;
 use super::{History, HistoryEntry, SizeInfo, TerminalModel, UpArrowHistoryConfig, prompt};
@@ -15857,9 +15856,9 @@ impl Input {
             EventHandler::new(input_box)
                 .on_right_mouse_down_with_shift(move |ctx, app, position, shift| {
                     if should_right_click_paste(shift, app) {
-                        ctx.dispatch_typed_action(TerminalAction::InputContextMenuItem(
-                            InputContextMenuAction::Paste,
-                        ));
+                        // Same path as the `terminal:paste` keybinding, so escaped-path
+                        // processing and CLI-agent image handling behave identically.
+                        ctx.dispatch_typed_action(TerminalAction::Paste);
                         return DispatchEventResult::StopPropagation;
                     }
 
