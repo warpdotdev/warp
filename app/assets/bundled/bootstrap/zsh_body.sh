@@ -1458,6 +1458,18 @@ esac
     # an open quote, or one with a literal (unexpanded) `~` or backslash-escape -- because
     # $PREFIX always carries the exact characters typed for that segment, not an expanded or
     # dequoted form (verified against each of these shapes empirically; see the PR description).
+    #
+    # The OSC wire format is byte offsets (matching every other shell's own span, and the
+    # client's own buffer indexing), but zsh's `${#...}` counts *characters*, not bytes, once
+    # any non-ASCII text appears in the line -- measured: any accented or CJK character before
+    # the completed token shifts the reported start left by exactly the extra UTF-8 byte count
+    # (e.g. `ls /tmp/café/xy` off by 1, `ls /tmp/日本/ni` off by 4), the same class of bug as
+    # PowerShell's UTF-16-code-unit offsets. `LC_ALL=C` makes `${#...}` count bytes instead
+    # (confirmed empirically). `local` scopes it to the rest of this call (not just this
+    # computation), which is fine: nothing later in this function does character counting --
+    # `$#__hits`/`$#__dscr`/`${#dirsuf}` below are array element counts, unaffected by locale,
+    # and the description prefix-strip (`##$__hits[$i] #`) is a literal byte-for-byte match.
+    local LC_ALL=C
     warp_mark_replacement_span_for_compadd_override $(( ${#_WARP_NATIVE_COMPLETIONS_LINE} - ${#PREFIX} )) ${#PREFIX}
 
     # display all matches
