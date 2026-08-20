@@ -919,7 +919,11 @@ fn stub_categorized_page() -> PageType<TestSettingsView> {
                     terms: "natural language detection autodetection show input hint text",
                 }) as Box<dyn SettingsWidget<View = TestSettingsView>>,
                 Box::new(StubWidget {
-                    terms: "hash pound trigger ai command search",
+                    // Mirrors AiCommandSearchHashTriggerWidget's real terms: row-specific
+                    // words plus the shared "input" context so a compound query like
+                    // "input hash" (which someone hunting for this setting would type)
+                    // still finds it.
+                    terms: "input hash pound trigger ai command search",
                 }),
             ],
         ),
@@ -1007,6 +1011,30 @@ fn empty_query_on_categorized_page_shows_every_widget_in_every_category() {
                 visible_category(&page, "Input").expect("Input category should be visible");
             assert_eq!(input_category.widgets.len(), 2);
             assert!(visible_category(&page, "Voice").is_some());
+        });
+    });
+}
+
+#[test]
+fn compound_query_combining_shared_context_and_row_specific_term_finds_the_widget() {
+    // A query combining the shared section context ("input") with a
+    // row-specific term ("hash") is exactly what someone looking for this
+    // setting would type. Since `update_filter` matches each widget's terms
+    // independently (never the category title), the isolated widget must
+    // carry both words itself or a compound query like this would match
+    // nothing at all.
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            let mut page = stub_categorized_page();
+            page.update_filter("input hash", ctx);
+
+            let input_category = visible_category(&page, "Input")
+                .expect("the Input category must render for a compound 'input hash' query");
+            assert_eq!(
+                input_category.widgets.len(),
+                1,
+                "only the hash-trigger stub carries both 'input' and 'hash'"
+            );
         });
     });
 }

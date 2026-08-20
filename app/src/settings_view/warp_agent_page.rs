@@ -3342,7 +3342,7 @@ impl SettingsWidget for AiCommandSearchHashTriggerWidget {
     type View = WarpAgentPageView;
 
     fn search_terms(&self) -> &str {
-        "# hash pound trigger ai command search shorthand shell comment"
+        "terminal input # hash pound trigger ai command search shorthand shell comment"
     }
 
     fn render(
