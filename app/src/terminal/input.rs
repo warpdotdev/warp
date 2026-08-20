@@ -109,6 +109,7 @@ use warpui::{
 use self::decorations::InputBackgroundJobOptions;
 pub use self::handoff_compose::{HandoffComposeState, HandoffComposeStateEvent};
 use super::alias::is_expandable_alias;
+use super::alt_screen::should_right_click_paste;
 use super::block_list_viewport::InputMode;
 use super::event::{BlockCompletedEvent, BlockType, UserBlockCompleted};
 use super::ligature_settings::LigatureSettings;
@@ -141,7 +142,8 @@ use super::view::inline_banner::{
 };
 use super::view::queued_prompts_panel::{QueuedPromptsPanelEvent, QueuedPromptsPanelView};
 use super::view::{
-    ExecuteCommandEvent, PADDING_LEFT as TERMINAL_VIEW_PADDING_LEFT, SyncInputType, TerminalAction,
+    ExecuteCommandEvent, InputContextMenuAction, PADDING_LEFT as TERMINAL_VIEW_PADDING_LEFT,
+    SyncInputType, TerminalAction,
 };
 use super::warpify::SubshellSource;
 use super::{History, HistoryEntry, SizeInfo, TerminalModel, UpArrowHistoryConfig, prompt};
@@ -15805,7 +15807,14 @@ impl Input {
         let input_editor_save_position_id = self.editor_save_position_id();
         SavePosition::new(
             EventHandler::new(input_box)
-                .on_right_mouse_down(move |ctx, _, position| {
+                .on_right_mouse_down_with_shift(move |ctx, app, position, shift| {
+                    if should_right_click_paste(shift, app) {
+                        ctx.dispatch_typed_action(TerminalAction::InputContextMenuItem(
+                            InputContextMenuAction::Paste,
+                        ));
+                        return DispatchEventResult::StopPropagation;
+                    }
+
                     let input_rect = ctx
                         .element_position_by_id(input_editor_save_position_id.clone())
                         .expect("input editor position id should be saved");

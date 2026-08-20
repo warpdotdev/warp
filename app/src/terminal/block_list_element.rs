@@ -70,7 +70,9 @@ use crate::pane_group::SplitPaneState;
 use crate::settings::{
     AISettings, DebugSettings, EnforceMinimumContrast, PrivacySettings, TerminalSpacing,
 };
-use crate::terminal::alt_screen::{should_intercept_mouse, should_intercept_scroll};
+use crate::terminal::alt_screen::{
+    should_intercept_mouse, should_intercept_scroll, should_right_click_paste,
+};
 use crate::terminal::block_list_viewport::AutoscrollBehavior;
 use crate::terminal::blockgrid_renderer::BlockGridParams;
 use crate::terminal::input::inline_menu::InlineMenuPositioner;
@@ -1410,63 +1412,82 @@ impl BlockListElement {
         )
     }
 
-    fn right_mouse_down(&self, position: Vector2F, ctx: &mut EventContext) -> bool {
-        if self.is_mouse_position_within_bounds(position) {
-            let position_in_terminal_view = self.position_in_terminal_view(position);
+    fn right_mouse_down(
+        &self,
+        position: Vector2F,
+        shift: bool,
+        ctx: &mut EventContext,
+        app: &AppContext,
+    ) -> bool {
+        if !self.is_mouse_position_within_bounds(position) {
+            return false;
+        }
 
-            if self.is_mouse_position_within_selection(position) {
-                ctx.dispatch_typed_action(TerminalAction::BlockListContextMenu(
-                    BlockListMenuSource::RegularTextRightClick {
-                        position_in_terminal_view,
-                    },
-                ));
-                return true;
-            }
+        let position_in_terminal_view = self.position_in_terminal_view(position);
 
-            let blocklist_point = self.coord_to_point(
-                SnackbarPoint::within_snackbar(position),
-                ClampingMode::ClampToGridIfWithinBlock,
-            );
+        let blocklist_point = self.coord_to_point(
+            SnackbarPoint::within_snackbar(position),
+            ClampingMode::ClampToGridIfWithinBlock,
+        );
 
-            let block_index = blocklist_point.and_then(|point| {
-                let model = self.model.lock();
-                let viewport = self.viewport_state_after_layout(model.block_list());
-                viewport.block_index_from_point(point)
-            });
+        let (block_index, mouse_owned_by_running_app) = {
+            let model = self.model.lock();
+            let viewport = self.viewport_state_after_layout(model.block_list());
+            let block_index =
+                blocklist_point.and_then(|point| viewport.block_index_from_point(point));
+            let on_long_running_block = block_index
+                .and_then(|index| model.block_list().block_at(index))
+                .is_some_and(|block| block.is_active_and_long_running());
+            let mouse_owned_by_running_app =
+                on_long_running_block && !should_intercept_mouse(&model, shift, app);
+            (block_index, mouse_owned_by_running_app)
+        };
 
-            let source = match block_index {
-                Some(index) => BlockListMenuSource::RegularBlockRightClick {
-                    block_index: index,
+        // A bare right-click pastes when the setting is enabled, unless the app underneath a
+        // long-running command owns the mouse (mouse reporting enabled), in which case it keeps
+        // getting today's behavior instead of having its right-click hijacked.
+        if !mouse_owned_by_running_app && should_right_click_paste(shift, app) {
+            ctx.dispatch_typed_action(TerminalAction::Paste);
+            return true;
+        }
+
+        if self.is_mouse_position_within_selection(position) {
+            ctx.dispatch_typed_action(TerminalAction::BlockListContextMenu(
+                BlockListMenuSource::RegularTextRightClick {
                     position_in_terminal_view,
                 },
-                None => {
-                    let rich_content_view_id = blocklist_point.and_then(|point| {
-                        let model = self.model.lock();
-                        let viewport = self.viewport_state_after_layout(model.block_list());
-                        match viewport.block_height_item_from_point(point) {
-                            Some(BlockHeightItem::RichContent(item)) => Some(item.view_id),
-                            _ => None,
-                        }
-                    });
-                    match rich_content_view_id {
-                        Some(rich_content_view_id) => {
-                            BlockListMenuSource::RichContentBlockRightClick {
-                                rich_content_view_id,
-                                position_in_terminal_view,
-                            }
-                        }
-                        None => BlockListMenuSource::OutsideBlockRightClick {
-                            position_in_terminal_view,
-                        },
-                    }
-                }
-            };
-
-            ctx.dispatch_typed_action(TerminalAction::BlockListContextMenu(source));
-            true
-        } else {
-            false
+            ));
+            return true;
         }
+
+        let source = match block_index {
+            Some(index) => BlockListMenuSource::RegularBlockRightClick {
+                block_index: index,
+                position_in_terminal_view,
+            },
+            None => {
+                let rich_content_view_id = blocklist_point.and_then(|point| {
+                    let model = self.model.lock();
+                    let viewport = self.viewport_state_after_layout(model.block_list());
+                    match viewport.block_height_item_from_point(point) {
+                        Some(BlockHeightItem::RichContent(item)) => Some(item.view_id),
+                        _ => None,
+                    }
+                });
+                match rich_content_view_id {
+                    Some(rich_content_view_id) => BlockListMenuSource::RichContentBlockRightClick {
+                        rich_content_view_id,
+                        position_in_terminal_view,
+                    },
+                    None => BlockListMenuSource::OutsideBlockRightClick {
+                        position_in_terminal_view,
+                    },
+                }
+            }
+        };
+
+        ctx.dispatch_typed_action(TerminalAction::BlockListContextMenu(source));
+        true
     }
 
     fn middle_mouse_down(&self, position: Vector2F, ctx: &mut EventContext) -> bool {
@@ -4620,9 +4641,9 @@ impl Element for BlockListElement {
                 ctx,
                 app,
             ),
-            Event::RightMouseDown { position, .. } if !handled => {
-                self.right_mouse_down(*position, ctx)
-            }
+            Event::RightMouseDown {
+                position, shift, ..
+            } if !handled => self.right_mouse_down(*position, *shift, ctx, app),
             Event::LeftMouseUp {
                 position,
                 modifiers,

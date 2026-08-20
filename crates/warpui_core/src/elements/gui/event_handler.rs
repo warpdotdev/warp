@@ -11,6 +11,8 @@ use crate::keymap::Keystroke;
 use crate::platform::keyboard::KeyCode;
 
 type Handler = Box<dyn FnMut(&mut EventContext, &AppContext, Vector2F) -> DispatchEventResult>;
+type ShiftAwareHandler =
+    Box<dyn FnMut(&mut EventContext, &AppContext, Vector2F, bool) -> DispatchEventResult>;
 type KeyHandler = Box<dyn FnMut(&mut EventContext, &AppContext, &Keystroke) -> DispatchEventResult>;
 type ScrollHandler = Box<
     dyn FnMut(&mut EventContext, &AppContext, &Vector2F, &ModifiersState) -> DispatchEventResult,
@@ -47,6 +49,7 @@ pub struct EventHandler {
     left_mouse_up: Option<RefCell<Handler>>,
     middle_mouse_down: Option<RefCell<Handler>>,
     right_mouse_down: Option<RefCell<Handler>>,
+    right_mouse_down_with_shift: Option<RefCell<ShiftAwareHandler>>,
     forward_mouse_down: Option<RefCell<Handler>>,
     back_mouse_down: Option<RefCell<Handler>>,
     mouse_in: Option<RefCell<Handler>>,
@@ -75,6 +78,7 @@ impl EventHandler {
             left_mouse_up: None,
             middle_mouse_down: None,
             right_mouse_down: None,
+            right_mouse_down_with_shift: None,
             forward_mouse_down: None,
             back_mouse_down: None,
             mouse_in: None,
@@ -132,6 +136,17 @@ impl EventHandler {
         F: 'static + FnMut(&mut EventContext, &AppContext, Vector2F) -> DispatchEventResult,
     {
         self.right_mouse_down = Some(RefCell::new(Box::new(callback)));
+        self
+    }
+
+    /// Like [`Self::on_right_mouse_down`], but also passes whether Shift was held, for
+    /// callers that need to special-case Shift+right-click (e.g. to reveal a context menu
+    /// that a bare right-click would otherwise bypass).
+    pub fn on_right_mouse_down_with_shift<F>(mut self, callback: F) -> Self
+    where
+        F: 'static + FnMut(&mut EventContext, &AppContext, Vector2F, bool) -> DispatchEventResult,
+    {
+        self.right_mouse_down_with_shift = Some(RefCell::new(Box::new(callback)));
         self
     }
 
@@ -306,7 +321,18 @@ impl Element for EventHandler {
                     return true;
                 }
             }
-            Some(Event::RightMouseDown { position, .. }) => {
+            Some(Event::RightMouseDown {
+                position, shift, ..
+            }) => {
+                if let Some(callback) = self.right_mouse_down_with_shift.as_ref()
+                    && let Some(rect) = ctx.visible_rect(self.origin.unwrap(), self.size().unwrap())
+                    && rect.contains_point(*position)
+                {
+                    return match callback.borrow_mut()(ctx, app, *position, *shift) {
+                        DispatchEventResult::PropagateToParent => false,
+                        DispatchEventResult::StopPropagation => true,
+                    };
+                }
                 if self.dispatch_callback(self.right_mouse_down.as_ref(), ctx, *position, app) {
                     return true;
                 }

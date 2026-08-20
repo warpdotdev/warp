@@ -55,8 +55,8 @@ use crate::pane_group::{BackingView, TerminalPaneId};
 use crate::server::ids::{ClientId, SyncId};
 use crate::server::server_api::ai::SpawnAgentRequest;
 use crate::settings::import::model::ImportedConfigModel;
-use crate::settings::{AISettings, AppEditorSettings, WarpPromptSeparator};
-use crate::terminal::alt_screen::should_intercept_mouse;
+use crate::settings::{AISettings, AppEditorSettings, RightClickBehavior, WarpPromptSeparator};
+use crate::terminal::alt_screen::{should_intercept_mouse, should_right_click_paste};
 use crate::terminal::block_list_element::{SnackbarPoint, SnackbarTranslationMode};
 use crate::terminal::block_list_viewport::{ClampingMode, ScrollLines};
 use crate::terminal::cli_agent_sessions::event::{
@@ -721,6 +721,45 @@ fn focus_reporting_writes_focus_events_in_normal_screen() {
                 escape_sequences::EscCodes::FOCUS_IN.to_vec(),
             ]
         );
+    })
+}
+
+#[test]
+fn should_right_click_paste_defaults_to_false() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+
+        terminal.update(&mut app, |_view, ctx| {
+            assert!(!SelectionSettings::as_ref(ctx).right_click_pastes());
+            assert!(!should_right_click_paste(false, ctx));
+            assert!(!should_right_click_paste(true, ctx));
+        });
+    })
+}
+
+#[test]
+fn should_right_click_paste_true_only_without_shift_when_setting_enabled() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+
+        SelectionSettings::handle(&app).update(&mut app, |settings, ctx| {
+            let _ = settings
+                .right_click_behavior
+                .set_value(RightClickBehavior::Paste, ctx);
+        });
+
+        terminal.update(&mut app, |_view, ctx| {
+            assert!(
+                should_right_click_paste(false, ctx),
+                "a bare right-click should paste once the setting is enabled"
+            );
+            assert!(
+                !should_right_click_paste(true, ctx),
+                "Shift+right-click should always reveal the context menu, even with the setting enabled"
+            );
+        });
     })
 }
 
