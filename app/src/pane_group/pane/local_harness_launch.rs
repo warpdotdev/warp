@@ -240,12 +240,15 @@ pub(super) async fn prepare_local_harness_child_launch(
         Harness::Gemini => unreachable!("normalize_local_child_harness filters out Gemini"),
     };
 
+    // This is a local child of an existing run; team scope is inherited from the parent task,
+    // not re-derived from a window, so no `TeamContext` is captured here.
     let task_id = ai_client
         .create_agent_task(
             prompt.clone(),
             None,
             parent_run_id.clone(),
             local_child_task_config(harness, agent_name),
+            None,
         )
         .await
         .map_err(|error| {

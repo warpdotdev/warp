@@ -15,6 +15,7 @@ use warp_util::standardized_path::StandardizedPath;
 
 use crate::ai::agent_sdk::driver::upload_snapshot_for_handoff;
 use crate::ai::blocklist::handoff::touched_repos::derive_touched_workspace;
+use crate::server::ids::ServerId;
 use crate::server::server_api::ai::{AIClient, InitialSnapshotToken};
 
 /// Gather the workspace snapshot from the given absolute paths and upload it.
@@ -32,6 +33,7 @@ use crate::server::server_api::ai::{AIClient, InitialSnapshotToken};
 /// for hard failures (auth, network).
 pub(crate) async fn gather_and_upload_handoff_snapshot(
     paths: Vec<StandardizedPath>,
+    team_uid: Option<ServerId>,
     ai_client: Arc<dyn AIClient>,
     http: &http_client::Client,
 ) -> Result<Option<InitialSnapshotToken>> {
@@ -63,5 +65,8 @@ pub(crate) async fn gather_and_upload_handoff_snapshot(
         orphan_file_paths.len()
     );
 
-    upload_snapshot_for_handoff(repo_paths, orphan_file_paths, ai_client, http).await
+    // `team_uid` was captured by the client from its window at handoff-start time and
+    // forwarded over the `UploadHandoffSnapshot` RPC; the daemon itself has no window/view
+    // context of its own to derive one from.
+    upload_snapshot_for_handoff(repo_paths, orphan_file_paths, ai_client, http, team_uid).await
 }

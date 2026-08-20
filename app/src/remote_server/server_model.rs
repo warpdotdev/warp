@@ -2892,13 +2892,18 @@ impl ServerModel {
                 }
             })
             .collect();
+        let team_uid = msg
+            .team_uid
+            .map(crate::server::ids::ServerId::from_string_lossy);
         let request_id_for_response = request_id.clone();
 
         let handle = self.spawn_request_handler(
             request_id.clone(),
             async move {
-                super::handoff_snapshot::gather_and_upload_handoff_snapshot(paths, ai_client, &http)
-                    .await
+                super::handoff_snapshot::gather_and_upload_handoff_snapshot(
+                    paths, team_uid, ai_client, &http,
+                )
+                .await
             },
             move |me, result, _ctx| {
                 let response = upload_result_to_proto(result);

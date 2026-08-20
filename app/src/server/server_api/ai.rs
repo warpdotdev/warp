@@ -1222,11 +1222,18 @@ pub trait AIClient: 'static + Send + Sync {
         last_updated_end_timestamp: Option<warp_graphql::scalars::Time>,
     ) -> Result<Vec<ConversationUsage>, anyhow::Error>;
 
-    async fn get_feature_model_choices(&self) -> Result<ModelsByFeature, anyhow::Error>;
+    /// `team_uid` selects which team's entry to read from the server's per-team response
+    /// (see `Self::create_agent_task` doc for why this can't yet be cached per-team on the
+    /// client). `None` keeps the pre-existing personal/no-team behavior.
+    async fn get_feature_model_choices(
+        &self,
+        team_uid: Option<ServerId>,
+    ) -> Result<ModelsByFeature, anyhow::Error>;
 
     async fn get_available_harnesses(&self) -> Result<Vec<HarnessAvailability>, anyhow::Error>;
     async fn list_connected_self_hosted_workers(
         &self,
+        team_uid: Option<ServerId>,
     ) -> Result<ListConnectedSelfHostedWorkersResponse, anyhow::Error>;
 
     /// Fetches the free-tier available models without requiring authentication.
@@ -1257,12 +1264,18 @@ pub trait AIClient: 'static + Send + Sync {
         request_ids: Vec<String>,
     ) -> anyhow::Result<i32, anyhow::Error>;
 
+    /// `team_uid` is the request-local team scope for a fresh, window-initiated task. Child
+    /// runs that already have `parent_run_id` inherit their scope from the parent instead and
+    /// pass `None`; the server is expected to validate a supplied header against
+    /// `environment_uid`'s owning team and against `parent_run_id`'s task, rejecting a
+    /// mismatch, rather than trusting the header in isolation.
     async fn create_agent_task(
         &self,
         prompt: String,
         environment_uid: Option<String>,
         parent_run_id: Option<String>,
         config: Option<AgentConfigSnapshot>,
+        team_uid: Option<ServerId>,
     ) -> anyhow::Result<AmbientAgentTaskId, anyhow::Error>;
 
     /// Updates a run's server-side record. Every argument is independently optional; omitted
@@ -1291,6 +1304,7 @@ pub trait AIClient: 'static + Send + Sync {
     async fn upload_local_handoff_snapshot(
         &self,
         request: UploadLocalHandoffSnapshotRequest,
+        team_uid: Option<ServerId>,
     ) -> anyhow::Result<UploadLocalHandoffSnapshotResponse, anyhow::Error>;
 
     /// Materialize a server-side fork of a conversation.
@@ -1475,9 +1489,13 @@ pub trait AIClient: 'static + Send + Sync {
         task_id: String,
     ) -> anyhow::Result<Vec<TaskAttachment>, anyhow::Error>;
 
+    /// `team_uid` is required for a current-window artifact upload; when `request` already
+    /// names a `conversation_id`/`run_id`, the server validates the header against that
+    /// resource's team rather than trusting it standalone.
     async fn create_file_artifact_upload_target(
         &self,
         request: CreateFileArtifactUploadRequest,
+        team_uid: Option<ServerId>,
     ) -> anyhow::Result<CreateFileArtifactUploadResponse, anyhow::Error>;
 
     async fn confirm_file_artifact_upload(
@@ -1568,6 +1586,32 @@ pub trait AIClient: 'static + Send + Sync {
         &self,
         request: GenerateCodeReviewContentRequest,
     ) -> Result<GenerateCodeReviewContentResponse, anyhow::Error>;
+}
+
+/// Selects which entry of `GetFeatureModelChoices`'s per-team `workspaces` array belongs to
+/// `team_uid`. The server returns one entry per team the caller can see, in no guaranteed
+/// order, so a caller scoped to a specific team must match on `uid` rather than trust
+/// position — blindly taking index 0 previously meant a request could silently receive an
+/// arbitrary team's model choices.
+///
+/// Returns `None` when `team_uid` is `Some` but has no matching entry in the response; the
+/// caller must fail the request rather than substitute another team's model choices —
+/// falling back to index 0 in that case would just be the original defect wearing a fix's
+/// clothing. Returns index 0 only for the explicit no-team-scope (personal) form, where
+/// there is no team identity to match against.
+///
+/// Pure and free of I/O so the selection logic itself is unit-testable without a live or
+/// mocked GraphQL response; see `ai_tests.rs`.
+fn select_feature_model_choice_workspace_index(
+    workspaces: &[warp_graphql::queries::get_feature_model_choices::Workspace],
+    team_uid: Option<ServerId>,
+) -> Option<usize> {
+    match team_uid {
+        Some(team_uid) => workspaces
+            .iter()
+            .position(|workspace| workspace.uid == team_uid.uid().into()),
+        None => Some(0),
+    }
 }
 
 fn into_file_artifact_record(
@@ -1919,22 +1963,38 @@ impl AIClient for ServerApi {
         }
     }
 
-    async fn get_feature_model_choices(&self) -> Result<ModelsByFeature, anyhow::Error> {
+    async fn get_feature_model_choices(
+        &self,
+        team_uid: Option<ServerId>,
+    ) -> Result<ModelsByFeature, anyhow::Error> {
         let variables = GetFeatureModelChoicesVariables {
             request_context: get_request_context(),
         };
         let operation = GetFeatureModelChoices::build(variables);
-        let response = self.send_graphql_request(operation, None).await?;
+        let extra_headers = Self::team_uid_header(team_uid);
+        let response = self
+            .send_graphql_request_with_headers(operation, None, extra_headers)
+            .await?;
 
         match response.user {
             warp_graphql::queries::get_feature_model_choices::UserResult::UserOutput(
                 warp_graphql::queries::get_feature_model_choices::UserOutput {
-                    user: warp_graphql::queries::get_feature_model_choices::User { mut workspaces },
+                    user: warp_graphql::queries::get_feature_model_choices::User { workspaces },
                 },
             ) if !workspaces.is_empty() => {
-                // This is safe (`remove()` can panic) because we ensure workspaces is non-empty
-                // above.
-                workspaces.remove(0).feature_model_choice.try_into()
+                let Some(selected) =
+                    select_feature_model_choice_workspace_index(&workspaces, team_uid)
+                else {
+                    return Err(anyhow!(
+                        "Server response did not include model choices for the requested team"
+                    ));
+                };
+                workspaces
+                    .into_iter()
+                    .nth(selected)
+                    .expect("selected index is within bounds")
+                    .feature_model_choice
+                    .try_into()
             }
             _ => Err(anyhow!("Failed to get available feature model choices")),
         }
@@ -2130,6 +2190,7 @@ impl AIClient for ServerApi {
         environment_uid: Option<String>,
         parent_run_id: Option<String>,
         config: Option<AgentConfigSnapshot>,
+        team_uid: Option<ServerId>,
     ) -> anyhow::Result<AmbientAgentTaskId, anyhow::Error> {
         if let Some(config) = &config {
             if let Some(worker_host) = &config.worker_host {
@@ -2161,7 +2222,10 @@ impl AIClient for ServerApi {
         };
 
         let operation = CreateAgentTask::build(variables);
-        let response = self.send_graphql_request(operation, None).await?;
+        let extra_headers = Self::team_uid_header(team_uid);
+        let response = self
+            .send_graphql_request_with_headers(operation, None, extra_headers)
+            .await?;
 
         match response.create_agent_task {
             CreateAgentTaskResult::CreateAgentTaskOutput(output) => output
@@ -2232,17 +2296,21 @@ impl AIClient for ServerApi {
 
     async fn list_connected_self_hosted_workers(
         &self,
+        team_uid: Option<ServerId>,
     ) -> anyhow::Result<ListConnectedSelfHostedWorkersResponse, anyhow::Error> {
-        self.get_public_api(CONNECTED_SELF_HOSTED_WORKERS_PATH)
+        let extra_headers = Self::team_uid_header(team_uid);
+        self.get_public_api_with_headers(CONNECTED_SELF_HOSTED_WORKERS_PATH, &extra_headers)
             .await
     }
 
     async fn upload_local_handoff_snapshot(
         &self,
         request: UploadLocalHandoffSnapshotRequest,
+        team_uid: Option<ServerId>,
     ) -> anyhow::Result<UploadLocalHandoffSnapshotResponse, anyhow::Error> {
+        let extra_headers = Self::team_uid_header(team_uid);
         let response: UploadLocalHandoffSnapshotResponse = self
-            .post_public_api("agent/handoff/upload-snapshot", &request)
+            .post_public_api_with_headers("agent/handoff/upload-snapshot", &request, &extra_headers)
             .await?;
         Ok(response)
     }
@@ -2765,6 +2833,7 @@ impl AIClient for ServerApi {
     async fn create_file_artifact_upload_target(
         &self,
         request: CreateFileArtifactUploadRequest,
+        team_uid: Option<ServerId>,
     ) -> anyhow::Result<CreateFileArtifactUploadResponse, anyhow::Error> {
         let variables = CreateFileArtifactUploadTargetVariables {
             input: CreateFileArtifactUploadTargetInput {
@@ -2779,7 +2848,10 @@ impl AIClient for ServerApi {
             request_context: get_request_context(),
         };
         let operation = CreateFileArtifactUploadTarget::build(variables);
-        let response = self.send_graphql_request(operation, None).await?;
+        let extra_headers = Self::team_uid_header(team_uid);
+        let response = self
+            .send_graphql_request_with_headers(operation, None, extra_headers)
+            .await?;
 
         match response.create_file_artifact_upload_target {
             CreateFileArtifactUploadTargetResult::CreateFileArtifactUploadTargetOutput(output) => {
