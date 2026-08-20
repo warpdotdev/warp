@@ -167,8 +167,9 @@ pub(super) async fn run_declarations_script(
     //
     // Setting `current_dir` ensures `$PWD` in the bash script is the workspace even when the
     // driver process's own CWD has drifted (e.g. the macOS startup path does `cd $HOME`).
-    // Setting `OZ_SNAPSHOT_DECLARATIONS_FILE` keeps the script and the upload pipeline in sync
-    // on which file to read/write.
+    // Setting the declarations-file path, under both `OZ_SNAPSHOT_DECLARATIONS_FILE` and its
+    // `WARP_` alias, keeps the script and the upload pipeline in sync on which file to
+    // read/write.
     let declarations_path = resolve_declarations_path(Some(task_id));
     log::info!(
         "Running snapshot declarations script {} with cwd={} output={} (task {task_id})",
