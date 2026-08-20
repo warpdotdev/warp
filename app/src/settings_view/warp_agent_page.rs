@@ -4265,7 +4265,12 @@ impl SettingsWidget for CloudHandoffWidget {
             ));
         }
 
-        column.finish()
+        // Add trailing space beneath this section (matching sibling sections like
+        // AWS Bedrock and Custom Routers) so the following section's title isn't
+        // crowded against this one's last row.
+        Container::new(column.finish())
+            .with_margin_bottom(HEADER_PADDING)
+            .finish()
     }
 }
 
