@@ -381,13 +381,42 @@ impl CLIAgent {
     }
 
     /// Returns whether the command's executable name identifies this CLI agent.
-    pub(super) fn matches_command(&self, command: &str, escape_char: Option<EscapeChar>) -> bool {
+    pub(crate) fn matches_command(&self, command: &str, escape_char: Option<EscapeChar>) -> bool {
         let Some(first_word) = Self::extract_first_command(command.trim_start(), escape_char)
         else {
             return false;
         };
         let basename = first_word.rsplit(['/', '\\']).next().unwrap_or(&first_word);
         self.command_prefixes().contains(&basename)
+    }
+
+    /// Resolves the full command through aliases. If the first word matches an
+    /// alias, it is replaced with the alias value to produce the resolved command,
+    /// which is the command line the shell actually ran.
+    ///
+    /// Only resolvable while the originating shell session is alive, which is why callers that
+    /// care about the resolved form — detection, and recording an agent's own flags — have to do
+    /// it as they observe the command rather than when they later use it.
+    pub(crate) fn resolve_command_aliases<'a>(
+        command: &'a str,
+        escape_char: Option<EscapeChar>,
+        aliases: Option<&HashMap<SmolStr, String>>,
+    ) -> Cow<'a, str> {
+        let trimmed = command.trim_start();
+        let Some(first_word) = Self::extract_first_command(trimmed, escape_char) else {
+            return Cow::Borrowed(trimmed);
+        };
+
+        aliases
+            .and_then(|a| a.get(first_word.as_str()))
+            .map(|alias_value| {
+                let rest = trimmed
+                    .find(first_word.as_str())
+                    .map(|pos| &trimmed[pos + first_word.len()..])
+                    .unwrap_or("");
+                Cow::Owned(format!("{}{}", alias_value.trim(), rest))
+            })
+            .unwrap_or(Cow::Borrowed(trimmed))
     }
 
     /// Detects the CLI agent from a command string.
@@ -408,20 +437,9 @@ impl CLIAgent {
         ctx: &AppContext,
     ) -> Option<CLIAgent> {
         let trimmed = command.trim_start();
-        let first_word = Self::extract_first_command(trimmed, escape_char)?;
-
-        // Resolve the full command through aliases. If the first word matches an
-        // alias, replace it with the alias value to produce the resolved command.
-        let resolved_command: Cow<'_, str> = aliases
-            .and_then(|a| a.get(first_word.as_str()))
-            .map(|alias_value| {
-                let rest = trimmed
-                    .find(first_word.as_str())
-                    .map(|pos| &trimmed[pos + first_word.len()..])
-                    .unwrap_or("");
-                Cow::Owned(format!("{}{}", alias_value.trim(), rest))
-            })
-            .unwrap_or(Cow::Borrowed(trimmed));
+        // A command without a first word names no program, so it identifies no agent.
+        Self::extract_first_command(trimmed, escape_char)?;
+        let resolved_command = Self::resolve_command_aliases(trimmed, escape_char, aliases);
 
         // Check if resolved command matches any known CLI agent.
         // Also matches `aifx agent run claude` as Claude for Uber employees.

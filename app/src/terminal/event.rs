@@ -309,6 +309,11 @@ pub struct UserBlockCompleted {
     /// `true` if the block was run as a requested command or was part of a CLI subagent interaction.
     pub was_part_of_agent_interaction: bool,
 
+    /// `true` if Warp wrote this command itself with nobody asking for it — today only an agent
+    /// session resume. Carried separately from [`Self::was_part_of_agent_interaction`], which is
+    /// derived from the block's `ai_metadata` and is structurally `false` for a resume.
+    pub was_warp_authored: bool,
+
     /// Time that we started the command grid (i.e. immediately after the user
     /// hit enter).
     pub started_at: Option<Instant>,
@@ -319,6 +324,17 @@ pub struct UserBlockCompleted {
     /// The number of lines of output that were truncated while the block
     /// was active and receiving output.
     pub num_output_lines_truncated: u64,
+}
+
+impl UserBlockCompleted {
+    /// `true` when a person put this command in the pane, either by typing it or by asking an
+    /// agent to run it.
+    ///
+    /// Everything Warp attributes to the person behind a pane — history, suggestions, one-time
+    /// dismissals, notifications — keys off this rather than off a user block merely existing.
+    pub fn was_user_authored(&self) -> bool {
+        !self.was_part_of_agent_interaction && !self.was_warp_authored
+    }
 }
 
 /// Emitted upon completion of an executor command that goes through the pty, such as the

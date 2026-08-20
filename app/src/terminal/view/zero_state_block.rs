@@ -66,8 +66,13 @@ impl TerminalViewZeroStateBlock {
         ctx.subscribe_to_model(
             model_events_dispatcher,
             move |me, model_events_dispatcher, event, ctx| {
+                // R24: the affordance is spent by the user's first block. A resume Warp wrote
+                // itself is Warp filling the pane in, not the user starting to work in it.
                 if let ModelEvent::BlockCompleted(block_completed) = event
-                    && matches!(block_completed.block_type, BlockType::User(..))
+                    && matches!(
+                        &block_completed.block_type,
+                        BlockType::User(user_block) if user_block.was_user_authored()
+                    )
                 {
                     me.should_hide = true;
                     ctx.unsubscribe_to_model(&model_events_dispatcher);
@@ -409,3 +414,7 @@ mod styles {
 
     pub const TITLE_MARGIN_BOTTOM: f32 = 8.;
 }
+
+#[cfg(test)]
+#[path = "zero_state_block_tests.rs"]
+mod tests;

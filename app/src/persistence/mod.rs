@@ -47,7 +47,7 @@ use self::model::{AgentConversation, AgentConversationData, Project};
 use crate::ai::blocklist::PersistedAIInput;
 use crate::ai::mcp::TemplatableMCPServerInstallation;
 use crate::ai::persisted_workspace::EnablementState;
-use crate::app_state::AppState;
+use crate::app_state::{AppState, RecordedAgentSession};
 use crate::auth::auth_manager::PersistedCurrentUserInformation;
 use crate::cloud_object::model::actions::ObjectAction;
 use crate::cloud_object::model::generic_string_model::CloudStringObject;
@@ -346,6 +346,21 @@ pub struct FinishedCommandMetadata {
 pub enum ModelEvent {
     SaveBlock(BlockCompleted),
     DeleteBlocks(Vec<u8>),
+    /// Records the agent CLI a pane is running, or that it is running none. Deliberately not
+    /// folded into [`ModelEvent::Snapshot`]: snapshots rebuild the pane tables wholesale, so this
+    /// state needs a write of its own to survive them.
+    ///
+    /// Recording and clearing are one event rather than two so that everything a pane says about
+    /// its agent stays in one order: a clear that overtook the record it supersedes would leave a
+    /// finished agent looking resumable.
+    ///
+    /// A pane removed for good clears through this same event rather than one of its own, for
+    /// that same reason: with one ordered, per-pane-coalesced stream the pane's last word wins,
+    /// whether it came from the agent ending or from the pane going away.
+    SetAgentSession {
+        pane_id: Vec<u8>,
+        session: Option<RecordedAgentSession>,
+    },
     Snapshot(AppState),
     UpsertWorkflows(Vec<CloudWorkflow>),
     UpsertNotebooks(Vec<CloudNotebook>),

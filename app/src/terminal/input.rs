@@ -897,6 +897,14 @@ pub enum CommandExecutionSource {
 
     /// A normal command execution request.
     User,
+
+    /// Warp's own invocation reattaching a restored pane to the agent session it was running
+    /// before the restart.
+    ///
+    /// Neither the user's line nor an agent's: nobody asked for it, so it must leave none of the
+    /// traces a first user command in a pane leaves.
+    AgentSessionResume,
+
     /// A command dispatched by the queued-prompts panel. It should execute like a user command but
     /// must not treat the current editor contents as the submitted command.
     QueuedCommand,
@@ -919,6 +927,11 @@ impl CommandExecutionSource {
                     ..
                 }
         )
+    }
+
+    /// Whether Warp wrote this command itself, with no person behind it.
+    pub fn is_warp_authored(&self) -> bool {
+        matches!(self, CommandExecutionSource::AgentSessionResume)
     }
 
     pub fn should_preserve_input(&self) -> bool {
@@ -6994,7 +7007,7 @@ impl Input {
 
         // If the last block was empty, don't create any suggestions.
         // Also don't create suggestions for requested commands part of an agent mode conversation.
-        if block_completed.command.is_empty() || block_completed.was_part_of_agent_interaction {
+        if block_completed.command.is_empty() || !block_completed.was_user_authored() {
             return;
         }
 
@@ -7495,6 +7508,23 @@ impl Input {
         }
     }
 
+    /// Runs the invocation that reattaches a restored pane to the agent session it had before the
+    /// restart.
+    ///
+    /// The command arrives as data rather than through the editor: it is Warp's line, not a draft
+    /// the user is holding, so it never touches their buffer on the way to the shell.
+    pub(crate) fn execute_agent_session_resume(
+        &mut self,
+        command: &str,
+        ctx: &mut ViewContext<Self>,
+    ) -> bool {
+        self.try_execute_command_from_source(
+            command,
+            CommandExecutionSource::AgentSessionResume,
+            ctx,
+        )
+    }
+
     /// Executes a command drained or sent immediately from the queued-prompts panel and keeps the
     /// remaining queue paused until the command's terminal block finishes.
     pub(crate) fn execute_queued_command(
@@ -7538,7 +7568,11 @@ impl Input {
         ctx: &mut ViewContext<Self>,
     ) -> bool {
         if let CanExecuteCommand::No(reason) = self.can_execute_command(ctx) {
-            if reason.is_existing_active_command() {
+            // A resume is Warp's own line rather than a submission the user is waiting on, and a
+            // pane that cannot run it has to look exactly like a pane that was never offered one.
+            let is_internal_invocation =
+                matches!(source, CommandExecutionSource::AgentSessionResume);
+            if reason.is_existing_active_command() && !is_internal_invocation {
                 const MAX_COMMAND_LENGTH: usize = 43;
                 let truncated_command = truncate_from_end(command, MAX_COMMAND_LENGTH);
 
@@ -7558,6 +7592,8 @@ impl Input {
             log::warn!("Tried to execute command but can_execute_command was false: {reason:?}");
             return false;
         }
+
+        let is_warp_authored = source.is_warp_authored();
 
         // Save the zero state next command state before clearing it.
         let zerostate_next_command_suggestion_info = self
@@ -7627,7 +7663,11 @@ impl Input {
         {
             // Skip any empty blocks created by the user. Keep the last zero-state autosuggestion
             // until the user executes a command.
+            //
+            // A Warp-authored command is excluded outright: this arm reports the executed command
+            // text, and a resume invocation is a line the user never typed.
             if !command.is_empty()
+                && !is_warp_authored
                 && let Some(ZeroStateSuggestionInfo {
                     request,
                     response,
@@ -7673,23 +7713,27 @@ impl Input {
             // Reset state for whether the user accepted the intelligent autosuggestion.
             self.was_intelligent_autosuggestion_accepted = false;
 
-            self.tips_completed.update(ctx, |tips, ctx| {
-                mark_feature_used_and_write_to_user_defaults(
-                    Tip::Hint(TipHint::CreateBlock),
-                    tips,
-                    ctx,
-                );
-                ctx.notify();
-            });
-
-            if !command.is_empty() {
-                IgnoredSuggestionsModel::handle(ctx).update(ctx, |model, ctx| {
-                    model.remove_ignored_suggestion(
-                        command.to_string(),
-                        SuggestionType::ShellCommand,
+            // R24: the one-time state below is what Warp spends on a user's first command in a
+            // pane. A Warp-authored command has no user behind it, so it spends none of it.
+            if !is_warp_authored {
+                self.tips_completed.update(ctx, |tips, ctx| {
+                    mark_feature_used_and_write_to_user_defaults(
+                        Tip::Hint(TipHint::CreateBlock),
+                        tips,
                         ctx,
                     );
+                    ctx.notify();
                 });
+
+                if !command.is_empty() {
+                    IgnoredSuggestionsModel::handle(ctx).update(ctx, |model, ctx| {
+                        model.remove_ignored_suggestion(
+                            command.to_string(),
+                            SuggestionType::ShellCommand,
+                            ctx,
+                        );
+                    });
+                }
             }
 
             self.start_block_and_write_command_to_pty(command, source, ctx);
@@ -15147,8 +15191,9 @@ impl Input {
                     &self.model.lock(),
                     ctx,
                 );
-            // Only clear the input buffer for user-executed commands, not agent-executed ones.
-            let should_clear_buffer = !user_block.was_part_of_agent_interaction
+            // Only clear the input buffer for user-executed commands, not agent-executed ones and
+            // not a resume Warp wrote itself.
+            let should_clear_buffer = user_block.was_user_authored()
                 && !cloud_setup_pre_first_exchange
                 && !self.has_queued_command_in_flight(ctx);
             let latest_block_id = self.model.lock().block_list().active_block_id().clone();
@@ -15392,7 +15437,9 @@ impl Input {
             workflow_id,
             session_id,
             workflow_command,
-            should_add_command_to_history: true,
+            // KTD7 layer one: a command Warp wrote itself is not the user's history. This same
+            // flag gates the persisted commands table in `terminal_manager_util`.
+            should_add_command_to_history: !source.is_warp_authored(),
             source,
         })));
         end_trace!();
