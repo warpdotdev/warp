@@ -153,6 +153,7 @@ fn prepare_falls_back_to_auto_for_an_implicit_local_model() {
                         SnapshotUploadTarget::Local {
                             ai_client: provider.get_ai_client(),
                             http: provider.get_http_client(),
+                            team_uid: None,
                         },
                         HandoffEntryPoint::Ampersand,
                         HandoffSurface::Gui,
@@ -276,6 +277,7 @@ fn pending(
         snapshot_target: SnapshotUploadTarget::Local {
             ai_client,
             http: Arc::new(http_client::Client::new_for_test()),
+            team_uid: None,
         },
         snapshot_disabled: true,
         orchestration_handoff: Some(true),
@@ -367,6 +369,7 @@ fn prepare_rejects_an_empty_source_without_a_prompt() {
                     SnapshotUploadTarget::Local {
                         ai_client: provider.get_ai_client(),
                         http: provider.get_http_client(),
+                        team_uid: None,
                     },
                     HandoffEntryPoint::Ampersand,
                     HandoffSurface::Gui,
@@ -398,6 +401,7 @@ fn prepare_accepts_a_cwd_snapshot_without_a_source_or_prompt() {
                         SnapshotUploadTarget::Local {
                             ai_client: provider.get_ai_client(),
                             http: provider.get_http_client(),
+                            team_uid: None,
                         },
                         HandoffEntryPoint::Ampersand,
                         HandoffSurface::Gui,
@@ -446,6 +450,7 @@ fn prepare_preserves_untransferred_source_attachments() {
                         SnapshotUploadTarget::Local {
                             ai_client: provider.get_ai_client(),
                             http: provider.get_http_client(),
+                            team_uid: None,
                         },
                         HandoffEntryPoint::Ampersand,
                         HandoffSurface::Gui,
@@ -544,6 +549,7 @@ fn prepare_collects_completed_descendant_paths() {
                         SnapshotUploadTarget::Local {
                             ai_client: provider.get_ai_client(),
                             http: provider.get_http_client(),
+                            team_uid: None,
                         },
                         HandoffEntryPoint::Ampersand,
                         HandoffSurface::Gui,
@@ -640,6 +646,7 @@ fn prepare_orders_guards_cancellation_token_check_and_attachment_transfer() {
                     SnapshotUploadTarget::Local {
                         ai_client: provider.get_ai_client(),
                         http: provider.get_http_client(),
+                        team_uid: None,
                     },
                     HandoffEntryPoint::Ampersand,
                     HandoffSurface::Gui,
@@ -682,6 +689,7 @@ fn prepare_orders_guards_cancellation_token_check_and_attachment_transfer() {
                     SnapshotUploadTarget::Local {
                         ai_client: provider.get_ai_client(),
                         http: provider.get_http_client(),
+                        team_uid: None,
                     },
                     HandoffEntryPoint::Ampersand,
                     HandoffSurface::Gui,
@@ -729,6 +737,7 @@ fn prepare_orders_guards_cancellation_token_check_and_attachment_transfer() {
                     SnapshotUploadTarget::Local {
                         ai_client: provider.get_ai_client(),
                         http: provider.get_http_client(),
+                        team_uid: None,
                     },
                     HandoffEntryPoint::Ampersand,
                     HandoffSurface::Gui,
@@ -983,7 +992,7 @@ async fn snapshot_failure_degrades_to_spawn_without_token() {
     mock.expect_fork_conversation().times(0);
     mock.expect_upload_local_handoff_snapshot()
         .times(1)
-        .returning(|_| Err(anyhow::anyhow!("snapshot unavailable")));
+        .returning(|_, _| Err(anyhow::anyhow!("snapshot unavailable")));
     mock.expect_spawn_agent().times(1).returning(|request| {
         assert!(request.initial_snapshot_token.is_none());
         Ok(SpawnAgentResponse {

@@ -148,19 +148,25 @@ impl FileArtifactUploader {
         description: Option<String>,
         artifact: &PreparedUploadArtifact,
     ) -> Result<CreateFileArtifactUploadResponse> {
+        // This uploader always resolves an existing conversation/run association first (see
+        // `resolve_upload_association`), so the server can validate ownership against that
+        // resource; there is no window here to capture a fresh `TeamContext` from.
         self.ai_client
-            .create_file_artifact_upload_target(CreateFileArtifactUploadRequest {
-                conversation_id: association
-                    .conversation_id
-                    .as_ref()
-                    .map(|token| token.as_str().to_string()),
-                run_id: association.run_id.as_ref().map(ToString::to_string),
-                filepath: artifact.filepath.clone(),
-                title,
-                description,
-                mime_type: Some(artifact.mime_type.clone()),
-                size_bytes: artifact.graphql_size_bytes(),
-            })
+            .create_file_artifact_upload_target(
+                CreateFileArtifactUploadRequest {
+                    conversation_id: association
+                        .conversation_id
+                        .as_ref()
+                        .map(|token| token.as_str().to_string()),
+                    run_id: association.run_id.as_ref().map(ToString::to_string),
+                    filepath: artifact.filepath.clone(),
+                    title,
+                    description,
+                    mime_type: Some(artifact.mime_type.clone()),
+                    size_bytes: artifact.graphql_size_bytes(),
+                },
+                None,
+            )
             .await
             .context("Failed to create file artifact upload target")
     }

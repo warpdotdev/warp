@@ -419,6 +419,14 @@ impl UserWorkspaces {
         self.team_from_uid(context.team_uid)
     }
 
+    /// Extracts the raw team UID for the one sanctioned transport use: placing the same
+    /// selected team into a request header or body. Not proof of membership; the server
+    /// still authorizes every request made under it. Call this only immediately before
+    /// building the wire request for that same operation.
+    pub(crate) fn team_uid_for_transport(context: &TeamContext) -> ServerId {
+        context.team_uid
+    }
+
     /// Returns the windows whose team assignment changed.
     #[must_use]
     fn reconcile_window_team_assignments(&mut self) -> Vec<WindowId> {

@@ -38,6 +38,9 @@ pub struct User {
 
 #[derive(cynic::QueryFragment, Debug)]
 pub struct Workspace {
+    /// Identifies which team this entry's `feature_model_choice` belongs to, so a caller
+    /// scoped to a specific team can select its entry instead of trusting array position.
+    pub uid: cynic::Id,
     pub feature_model_choice: FeatureModelChoice,
 }
 

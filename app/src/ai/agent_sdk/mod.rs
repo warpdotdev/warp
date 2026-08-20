@@ -1165,8 +1165,10 @@ impl AgentDriverRunner {
             Some(config)
         };
 
+        // This driver runs headless (no window), and this CLI surface has no `--team`
+        // selector yet, so this fresh top-level task is created with no team scope.
         let task_id = match server_api
-            .create_agent_task(prompt, environment, None, task_config)
+            .create_agent_task(prompt, environment, None, task_config, None)
             .await
             .context("Failed to create task")
         {

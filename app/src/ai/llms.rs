@@ -1659,8 +1659,12 @@ impl LLMPreferences {
         }
 
         let ai_api_client = ServerApiProvider::as_ref(ctx).get_ai_client();
+        // TODO(multi-team): `LLMPreferences` is a process-global singleton with no per-team
+        // storage yet (that's PR 3A's scope, see specs/multi-team-context/TECH.md), so this
+        // refresh has no team to scope to. `get_feature_model_choices` still benefits from
+        // selecting the matching entry instead of `workspaces[0]` once a team is supplied.
         ctx.spawn(
-            async move { ai_api_client.get_feature_model_choices().await },
+            async move { ai_api_client.get_feature_model_choices(None).await },
             |me, result, ctx| match result {
                 Ok(update) => {
                     if update != me.models_by_feature {

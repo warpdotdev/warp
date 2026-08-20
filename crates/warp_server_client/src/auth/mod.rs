@@ -164,7 +164,11 @@ pub trait AuthClient: Send + Sync {
     async fn expire_api_key(&self, key_uid: &ApiKeyUid) -> Result<ExpireApiKeyResult>;
 
     /// Fetches the list of named agent identities for the user's team.
-    async fn list_agent_identities(&self) -> Result<Vec<AgentIdentity>>;
+    ///
+    /// `team_uid` selects a specific team's identities; the server authorizes it
+    /// independently and rejects a caller who isn't a member. `None` keeps the pre-existing
+    /// personal/no-team behavior.
+    async fn list_agent_identities(&self, team_uid: Option<String>) -> Result<Vec<AgentIdentity>>;
 }
 
 /// Implements the [`AuthClient`] trait on top of a base client and auth session.
@@ -458,9 +462,15 @@ impl AuthClient for AuthClientImpl {
         Ok(response.expire_api_key)
     }
 
-    async fn list_agent_identities(&self) -> Result<Vec<AgentIdentity>> {
-        let response: AgentIdentitiesResponse =
-            self.base_client.get_public_api("agent/identities").await?;
+    async fn list_agent_identities(&self, team_uid: Option<String>) -> Result<Vec<AgentIdentity>> {
+        let extra_headers: Vec<(String, String)> = team_uid
+            .map(|uid| (crate::base_client::TEAM_UID_HEADER.to_string(), uid))
+            .into_iter()
+            .collect();
+        let response: AgentIdentitiesResponse = self
+            .base_client
+            .get_public_api_with_headers("agent/identities", &extra_headers)
+            .await?;
         Ok(response.agents)
     }
 }

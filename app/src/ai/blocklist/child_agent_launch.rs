@@ -37,6 +37,7 @@ pub fn prepare_local_oz_child_launch(
     let prompt = prompt.to_owned();
     let parent_run_id = parent_run_id.map(str::to_owned);
     async move {
+        // A local Oz child inherits its scope from `parent_run_id`, not from a window.
         let task_id = ai_client
             .create_agent_task(
                 prompt,
@@ -46,6 +47,7 @@ pub fn prepare_local_oz_child_launch(
                     name: agent_name,
                     ..Default::default()
                 }),
+                None,
             )
             .await?;
         Ok(PreparedLocalOzChildLaunch {

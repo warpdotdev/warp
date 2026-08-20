@@ -173,6 +173,87 @@ fn spawn_agent_request_serializes_all_three_scope_wire_states() {
     assert_eq!(team_value.get("team").and_then(|v| v.as_bool()), Some(true));
 }
 
+fn minimal_available_llms() -> warp_graphql::queries::get_feature_model_choices::AvailableLlms {
+    warp_graphql::queries::get_feature_model_choices::AvailableLlms {
+        default_id: String::new(),
+        choices: vec![],
+        preferred_codex_model_id: None,
+    }
+}
+
+fn minimal_feature_model_choice()
+-> warp_graphql::queries::get_feature_model_choices::FeatureModelChoice {
+    warp_graphql::queries::get_feature_model_choices::FeatureModelChoice {
+        agent_mode: minimal_available_llms(),
+        planning: minimal_available_llms(),
+        coding: minimal_available_llms(),
+        cli_agent: minimal_available_llms(),
+        computer_use_agent: minimal_available_llms(),
+    }
+}
+
+/// Regression coverage for the real bug this PR fixes independent of any header work: the
+/// client used to take `workspaces[0]` unconditionally, so a request could silently receive
+/// an arbitrary team's model choices regardless of which team it asked about.
+#[test]
+fn select_feature_model_choice_workspace_index_matches_requested_team() {
+    let first_team = ServerId::from(11);
+    let second_team = ServerId::from(22);
+    let workspaces = vec![
+        warp_graphql::queries::get_feature_model_choices::Workspace {
+            uid: cynic::Id::new(first_team.uid()),
+            feature_model_choice: minimal_feature_model_choice(),
+        },
+        warp_graphql::queries::get_feature_model_choices::Workspace {
+            uid: cynic::Id::new(second_team.uid()),
+            feature_model_choice: minimal_feature_model_choice(),
+        },
+    ];
+
+    // Matches the second entry, not the first — proves selection isn't positional.
+    assert_eq!(
+        super::select_feature_model_choice_workspace_index(&workspaces, Some(second_team)),
+        Some(1)
+    );
+    // No team scope (personal): falls back to the first entry, preserving the pre-existing
+    // no-team behavior.
+    assert_eq!(
+        super::select_feature_model_choice_workspace_index(&workspaces, None),
+        Some(0)
+    );
+}
+
+/// A team the response doesn't include must fail the request rather than substitute another
+/// team's model choices — the fallback this replaces was the original `workspaces[0]` defect
+/// wearing a fix's clothing.
+#[test]
+fn select_feature_model_choice_workspace_index_returns_none_for_missing_team() {
+    let present_team = ServerId::from(11);
+    let requested_team = ServerId::from(99);
+    let workspaces = vec![
+        warp_graphql::queries::get_feature_model_choices::Workspace {
+            uid: cynic::Id::new(present_team.uid()),
+            feature_model_choice: minimal_feature_model_choice(),
+        },
+    ];
+
+    assert_eq!(
+        super::select_feature_model_choice_workspace_index(&workspaces, Some(requested_team)),
+        None
+    );
+}
+
+/// An empty response has no entry for any team, including no team scope at all.
+#[test]
+fn select_feature_model_choice_workspace_index_returns_none_for_empty_response() {
+    let workspaces: Vec<warp_graphql::queries::get_feature_model_choices::Workspace> = vec![];
+
+    assert_eq!(
+        super::select_feature_model_choice_workspace_index(&workspaces, Some(ServerId::from(11))),
+        None
+    );
+}
+
 #[test]
 fn connected_self_hosted_workers_path_uses_public_api_route() {
     assert_eq!(

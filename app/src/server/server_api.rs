@@ -567,6 +567,29 @@ impl ServerApi {
         )
     }
 
+    /// Same as [`Self::send_graphql_request`], with additional caller-supplied headers (e.g.
+    /// `X-Warp-Team-Uid`, built via [`Self::team_uid_header`]) attached to the request.
+    pub(crate) fn send_graphql_request_with_headers<
+        'a,
+        QF,
+        O: warp_graphql::client::Operation<QF> + Send + 'a,
+    >(
+        &'a self,
+        operation: O,
+        timeout: Option<Duration>,
+        extra_headers: Vec<(String, String)>,
+    ) -> BoxFuture<'a, Result<QF>>
+    where
+        QF: 'a,
+    {
+        warp_server_client::graphql_helpers::send_graphql_request_with_headers(
+            &self.base_client,
+            operation,
+            timeout,
+            extra_headers,
+        )
+    }
+
     /// Opens an SSE stream to the agent event-push endpoint.
     ///
     /// The returned `EventSourceStream` yields `reqwest_eventsource::Event`
