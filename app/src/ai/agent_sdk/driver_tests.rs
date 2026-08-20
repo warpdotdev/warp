@@ -15,7 +15,7 @@ use warp_cli::mcp::MCPSpec;
 use warp_cli::skill::SkillSpec;
 use warp_cli::{
     OZ_CLI_ENV, OZ_HARNESS_ENV, OZ_PARENT_RUN_ID_ENV, OZ_RUN_ID_ENV, SERVER_ROOT_URL_OVERRIDE_ENV,
-    SESSION_SHARING_SERVER_URL_OVERRIDE_ENV, WS_SERVER_URL_OVERRIDE_ENV, warp_alias_env_var,
+    SESSION_SHARING_SERVER_URL_OVERRIDE_ENV, WS_SERVER_URL_OVERRIDE_ENV,
 };
 use warp_core::channel::ChannelState;
 use warp_core::features::FeatureFlag;
@@ -1103,32 +1103,43 @@ fn task_env_vars_propagate_message_listener_state_root_with_legacy_alias() {
     );
 }
 
-/// Every `OZ_` variable injected into a harness subprocess is also injected under its `WARP_`
-/// alias with the same value. Derived from the assembled map, so a future `OZ_` variable is
-/// covered without extending this test.
+/// Nothing derives the `WARP_` names any more: every set site writes both outright. This is
+/// the guard that keeps them in step, by failing when an `OZ_` variable reaches a harness
+/// subprocess without a `WARP_` one carrying the same value.
+///
+/// The legacy `OZ_PARENT_*` listener names are exempt: they exist only to keep an external
+/// Claude plugin working through its migration and are deliberately not given `WARP_` twins.
 #[test]
-fn task_env_vars_mirror_every_oz_var_to_a_warp_alias() {
+fn task_env_vars_mirror_every_oz_var_to_a_warp_name() {
+    const LEGACY_ONLY: [&str; 2] = [
+        "OZ_PARENT_LISTENER_MANAGED_EXTERNALLY",
+        "OZ_PARENT_STATE_ROOT",
+    ];
+
     let task_id: AmbientAgentTaskId = "550e8400-e29b-41d4-a716-446655440005".parse().unwrap();
     let env_vars = task_env_vars(Some(&task_id), Some("parent-run-789"), Harness::Claude);
 
-    let expected_aliases: Vec<(OsString, OsString)> = env_vars
-        .iter()
-        .filter_map(|(name, value)| {
-            let alias = warp_alias_env_var(name.to_str()?)?;
-            Some((OsString::from(alias), value.clone()))
-        })
-        .collect();
-    assert!(
-        !expected_aliases.is_empty(),
-        "no OZ_ variables were injected, so the assertions below would prove nothing"
-    );
-    for (alias, value) in expected_aliases {
+    let mut paired = 0;
+    for (name, value) in &env_vars {
+        let Some(name) = name.to_str() else { continue };
+        let Some(suffix) = name.strip_prefix("OZ_") else {
+            continue;
+        };
+        if LEGACY_ONLY.contains(&name) {
+            continue;
+        }
+        paired += 1;
+        let warp_name = OsString::from(format!("WARP_{suffix}"));
         assert_eq!(
-            env_vars.get(&alias),
-            Some(&value),
-            "{alias:?} should mirror the OZ_ variable it aliases"
+            env_vars.get(&warp_name),
+            Some(value),
+            "{name} is injected without a matching WARP_{suffix} carrying the same value"
         );
     }
+    assert!(
+        paired > 0,
+        "no OZ_ variables were injected, so the assertions above would prove nothing"
+    );
 }
 
 #[test]

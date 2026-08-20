@@ -23,21 +23,26 @@ fn identifies_worker_subcommands() {
     assert!(!is_worker_invocation("--prompt"));
 }
 
+/// The `OZ_` and `WARP_` constants are written out independently rather than derived from one
+/// another, so this pins that each pair actually names the same variable. A typo in either
+/// half would otherwise go unnoticed until a consumer read the wrong name.
 #[test]
-fn warp_alias_env_var_swaps_the_oz_prefix() {
-    assert_eq!(
-        warp_alias_env_var(OZ_RUN_ID_ENV).as_deref(),
-        Some("WARP_RUN_ID")
-    );
-    assert_eq!(
-        warp_alias_env_var(OZ_PARENT_RUN_ID_ENV).as_deref(),
-        Some("WARP_PARENT_RUN_ID")
-    );
-    assert_eq!(warp_alias_env_var(OZ_CLI_ENV).as_deref(), Some("WARP_CLI"));
-    // Only the exact `OZ_` prefix aliases; an already-Warp-named or unrelated variable does not.
-    assert_eq!(warp_alias_env_var(SERVER_ROOT_URL_OVERRIDE_ENV), None);
-    assert_eq!(warp_alias_env_var("OZONE"), None);
-    assert_eq!(warp_alias_env_var("HOME"), None);
+fn oz_and_warp_env_var_constants_name_the_same_variables() {
+    for (oz_name, warp_name) in [
+        (OZ_RUN_ID_ENV, WARP_RUN_ID_ENV),
+        (OZ_PARENT_RUN_ID_ENV, WARP_PARENT_RUN_ID_ENV),
+        (OZ_CLI_ENV, WARP_CLI_ENV),
+        (OZ_HARNESS_ENV, WARP_HARNESS_ENV),
+    ] {
+        let suffix = oz_name
+            .strip_prefix("OZ_")
+            .unwrap_or_else(|| panic!("{oz_name} should be OZ_-prefixed"));
+        assert_eq!(
+            warp_name,
+            format!("WARP_{suffix}"),
+            "{warp_name} does not correspond to {oz_name}"
+        );
+    }
 }
 
 fn parse_run_cloud(args: &[&str]) -> crate::agent::RunCloudArgs {

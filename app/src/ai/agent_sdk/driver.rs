@@ -188,9 +188,15 @@ pub(crate) const AUTO_RESUME_TIMEOUT: Duration = Duration::from_secs(120);
 /// invocations keep working.
 pub(crate) const OZ_MESSAGE_LISTENER_MANAGED_EXTERNALLY_ENV: &str =
     "OZ_MESSAGE_LISTENER_MANAGED_EXTERNALLY";
+/// Warp-branded name for the same signal, injected alongside the `OZ_` one with the same
+/// value. Written out rather than derived, so retiring the `OZ_` name is a deletion.
+pub(crate) const WARP_MESSAGE_LISTENER_MANAGED_EXTERNALLY_ENV: &str =
+    "WARP_MESSAGE_LISTENER_MANAGED_EXTERNALLY";
 /// Optional root directory for the per-session Claude message-listener state
 /// that Warp and the Claude hook scripts share.
 pub(crate) const OZ_MESSAGE_LISTENER_STATE_ROOT_ENV: &str = "OZ_MESSAGE_LISTENER_STATE_ROOT";
+/// Warp-branded name for the same state root, injected alongside the `OZ_` one.
+pub(crate) const WARP_MESSAGE_LISTENER_STATE_ROOT_ENV: &str = "WARP_MESSAGE_LISTENER_STATE_ROOT";
 // Keep exporting the legacy `OZ_PARENT_*` names to child hooks until the
 // external Claude plugin has fully migrated to the canonical
 // `OZ_MESSAGE_LISTENER_*` names.

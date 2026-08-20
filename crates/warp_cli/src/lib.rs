@@ -39,26 +39,21 @@ pub mod schedule;
 pub mod secret;
 pub mod share;
 pub mod task;
+// Each of these variables is injected under both its `OZ_` and its `WARP_` name, carrying the
+// identical value. Neither name is derived from the other: both are written out at every set
+// site, so retiring the `OZ_` half later is a deletion rather than an unwinding. Read sites
+// still use the `OZ_` names.
 pub const OZ_RUN_ID_ENV: &str = "OZ_RUN_ID";
+pub const WARP_RUN_ID_ENV: &str = "WARP_RUN_ID";
 pub const OZ_PARENT_RUN_ID_ENV: &str = "OZ_PARENT_RUN_ID";
+pub const WARP_PARENT_RUN_ID_ENV: &str = "WARP_PARENT_RUN_ID";
 pub const OZ_CLI_ENV: &str = "OZ_CLI";
+pub const WARP_CLI_ENV: &str = "WARP_CLI";
 pub const OZ_HARNESS_ENV: &str = "OZ_HARNESS";
+pub const WARP_HARNESS_ENV: &str = "WARP_HARNESS";
 pub const SERVER_ROOT_URL_OVERRIDE_ENV: &str = "WARP_SERVER_ROOT_URL";
 pub const WS_SERVER_URL_OVERRIDE_ENV: &str = "WARP_WS_SERVER_URL";
 pub const SESSION_SHARING_SERVER_URL_OVERRIDE_ENV: &str = "WARP_SESSION_SHARING_SERVER_URL";
-
-const OZ_ENV_PREFIX: &str = "OZ_";
-const WARP_ENV_PREFIX: &str = "WARP_";
-
-/// Returns the `WARP_`-prefixed alias of an `OZ_`-prefixed cloud agent variable, or [`None`]
-/// when `name` is not `OZ_`-prefixed.
-///
-/// Every `OZ_` variable the cloud agent stack injects is injected under this alias too,
-/// carrying the identical value. Nothing reads the alias in place of the `OZ_` name.
-pub fn warp_alias_env_var(name: &str) -> Option<String> {
-    name.strip_prefix(OZ_ENV_PREFIX)
-        .map(|suffix| format!("{WARP_ENV_PREFIX}{suffix}"))
-}
 
 /// Options related to the parent process that spawned this Warp instance.
 #[derive(Debug, Default, Clone, clap::Args)]
