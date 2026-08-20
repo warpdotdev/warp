@@ -78,7 +78,7 @@ pub struct SubMenu<A: Action + Clone = ()> {
 /// Menu contains the menu items and defines the logic for managing the actions and rendering of the
 /// items. It has two variants (scrollable and fixed) which slightly change the way it's laid out.
 /// TODO: In the future, if we keep bumping into more rendering changes here, it may make sense to
-/// abstract the Menu functionality into a trait and have separte implementations for dropdown and
+/// abstract the Menu functionality into a trait and have separate implementations for dropdown and
 /// context menu.
 pub struct Menu<A: Action + Clone = ()> {
     /// Whether or not the element should make the rest of the window unresponsive. All mouse events
