@@ -72,8 +72,18 @@ end
 # trailing newline; `echo` itself also appended that trailing newline to every payload
 # (latent until now, since a JSON parser or this OSC protocol's own consumers happened to
 # tolerate it). `printf '%s'` has neither problem.
-function warp_hex_encode_string 
-  printf '%s' "$argv" | od -An -v -tx1 | command tr -d ' \n'
+#
+# Only forks `od`, not `od | tr`: fish has no byte-safe equivalent of bash's `LC_ALL=C`
+# string-indexing trick (fish strings are Unicode codepoints internally, not raw bytes), so
+# a true no-fork encoder isn't available here the way it was for bash -- but stripping od's
+# spaces/newlines with fish's own builtin `string replace` instead of forking `tr` still
+# halves the per-call fork count, which matters since this runs once per match and once per
+# description in the native-completions loop below. `od`'s output is captured as a fish list
+# split on newlines (it wraps every 16 bytes by default for longer text), so join before
+# stripping spaces.
+function warp_hex_encode_string
+  set -l od_output (printf '%s' "$argv" | od -An -v -tx1)
+  string replace -a -- ' ' '' (string join '' $od_output)
 end
 
 # Reverses warp_hex_encode_string: decodes a hex-encoded string back to its original bytes.
