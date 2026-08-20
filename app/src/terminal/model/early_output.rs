@@ -315,6 +315,17 @@ impl EarlyOutput {
         self.expected_echo_positions.extend(rewound);
     }
 
+    /// Whether at least one live candidate position (see `expected_echo_positions`) still has
+    /// more of the registered pattern ahead of it. Used to scope wrapped-line space-fill
+    /// swallowing (see `EarlyOutputHandler::input()`) to redraws that are genuinely still in
+    /// progress, rather than to every space received for as long as the window happens to stay
+    /// open.
+    fn awaiting_more_expected_echo(&self) -> bool {
+        self.expected_echo_positions
+            .iter()
+            .any(|&position| position < self.expected_echo.len())
+    }
+
     /// Shifts every currently-live candidate position forward by `distance` and adds the
     /// result to the set of live candidates, without discarding the originals. Called on CUF
     /// (`move_forward`) with the column count from the escape sequence. Unlike a rewind, where
@@ -519,6 +530,24 @@ macro_rules! delegate {
 impl ansi::Handler for EarlyOutputHandler<'_> {
     fn input(&mut self, c: char) {
         if self.inner().consume_expected_echo(c) {
+            return;
+        }
+        // A wrapped line's redraw clears the remainder of a display row with literal space
+        // characters, not an erase-to-end-of-line escape, before moving to the next row (CUD;
+        // see `move_down`) -- measured on real zsh sessions. Those spaces are still part of the
+        // very redraw being matched, not real output, but they don't appear in the buffer text
+        // itself, so they'd otherwise be treated as the first real mismatch and end the window
+        // (see below), leaking everything from the wrap point on even though it does go on to
+        // match. A space is therefore swallowed without ending the window whenever at least one
+        // live candidate still expects more of the pattern -- i.e. this is deliberately
+        // narrower than "the window is open at all": once every live candidate has reached the
+        // pattern's own end, there is nothing left to redraw, so a stray space at that point is
+        // far more likely to be unrelated output than wrap padding, and is left to the normal
+        // mismatch handling below. This can still swallow a leading space of unrelated
+        // background output that happens to start while a redraw is genuinely still in
+        // progress, the same bounded, already-accepted trade-off as the single-character
+        // exposure described below.
+        if c == ' ' && self.inner().awaiting_more_expected_echo() {
             return;
         }
         // The first *real* character the pattern can't explain ends its window (see

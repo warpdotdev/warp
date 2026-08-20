@@ -658,6 +658,82 @@ fn test_push_expected_echo_staleness_is_bounded_by_the_next_registration_not_by_
 }
 
 #[test]
+fn test_push_expected_echo_survives_wrapped_line_space_fill_at_the_wrap_boundary() {
+    // Reproduces a wrapped-line redraw, measured on Linux zsh: once the restored buffer is
+    // longer than the terminal width minus the prompt's own width, ZLE's redraw clears the
+    // remainder of the first display row with literal space characters (not an erase-to-
+    // end-of-line escape) before moving to the next row with CUD (`\x1b[1B`) -- so the byte
+    // stream for a buffer that exactly fills the first row and continues onto a second is the
+    // first row's own characters, then space-fill, then CUD, then the rest of the buffer.
+    // Measured: every byte from the wrap point on leaked into a background block, exactly
+    // `total - (columns - prompt_width)` bytes -- i.e. the *first* character that fails to
+    // match (a space, not part of the actual buffer text) ends the window per
+    // `EarlyOutputHandler::input()`'s existing rule, so the rest of the real redraw that
+    // follows leaks in full even though it does match the buffer.
+    let mut block_list = new_block_list(
+        ChannelEventListener::new_for_test(),
+        TypeaheadMode::ShellReported,
+    );
+
+    block_list
+        .early_output_mut()
+        .push_expected_echo("echo xxxxxxxxxx");
+
+    // First display row: exactly fills the (simulated) terminal width.
+    for ch in "echo xxxxx".chars() {
+        block_list.input(ch);
+    }
+    // Space-fill clearing the remainder of the row before wrapping -- doesn't match the
+    // buffer's own text at this position.
+    block_list.input(' ');
+    block_list.input(' ');
+    // CUD onto the second display row.
+    block_list.move_down(1);
+    // The rest of the buffer, continuing correctly on the second row.
+    for ch in "xxxxx".chars() {
+        block_list.input(ch);
+    }
+    block_list.on_finish_byte_processing(&ansi::ProcessorInput::new(&[]));
+
+    assert!(
+        block_list.background_block_mut().is_none(),
+        "space-fill padding at a wrap boundary must not leak the rest of the redraw"
+    );
+}
+
+#[test]
+fn test_a_stray_space_after_a_full_match_still_leaks_normally() {
+    // The space-fill swallow added for the wrapped-line case above is deliberately scoped to
+    // redraws that are still genuinely in progress (see `awaiting_more_expected_echo`), not to
+    // every space received while the window happens to still be open. Once the whole pattern
+    // has already been matched, there is nothing left to redraw, so a stray space at that
+    // point must render like any other unmatched character.
+    let mut block_list = new_block_list(
+        ChannelEventListener::new_for_test(),
+        TypeaheadMode::ShellReported,
+    );
+
+    block_list.early_output_mut().push_expected_echo("gi");
+    for ch in "gi".chars() {
+        block_list.input(ch);
+    }
+
+    // Unrelated output that happens to start with a space, after the pattern is fully matched.
+    for ch in " ls".chars() {
+        block_list.input(ch);
+    }
+    block_list.on_finish_byte_processing(&ansi::ProcessorInput::new(&[]));
+
+    assert_eq!(
+        block_list
+            .background_block_mut()
+            .expect("a space arriving after the pattern is fully matched must still render")
+            .output_to_string(),
+        " ls"
+    );
+}
+
+#[test]
 fn test_queued_typeahead_shell_reported() {
     let mut block_list = new_block_list(
         ChannelEventListener::new_for_test(),
