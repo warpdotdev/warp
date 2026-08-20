@@ -30,7 +30,7 @@ use warpui::elements::{
     Align, Border, ChildAnchor, ChildView, ConstrainedBox, Container, CornerRadius,
     CrossAxisAlignment, Empty, Expanded, Fill, Flex, FormattedTextElement, Hoverable,
     MainAxisAlignment, MainAxisSize, NewScrollable, OffsetPositioning, ParentAnchor, ParentElement,
-    ParentOffsetBounds, Radius, Shrinkable, Stack, Text, Wrap,
+    ParentOffsetBounds, Radius, SavePosition, Shrinkable, Stack, Text, Wrap,
 };
 use warpui::keymap::Keystroke;
 use warpui::platform::{Cursor, OperatingSystem};
@@ -3774,50 +3774,61 @@ fn render_usage_button(props: Props, app: &AppContext) -> Box<dyn Element> {
             .finish(),
         );
 
-    Hoverable::new(
-        props.state_handles.usage_button_handle.clone(),
-        |mouse_state| {
-            let mut content = Container::new(button_row.finish());
+    SavePosition::new(
+        Hoverable::new(
+            props.state_handles.usage_button_handle.clone(),
+            |mouse_state| {
+                let mut content = Container::new(button_row.finish());
 
-            if mouse_state.is_hovered() || mouse_state.is_clicked() {
-                let background = if mouse_state.is_clicked() {
-                    appearance.theme().background()
+                if mouse_state.is_hovered() || mouse_state.is_clicked() {
+                    let background = if mouse_state.is_clicked() {
+                        appearance.theme().background()
+                    } else {
+                        blended_colors::neutral_4(appearance.theme()).into()
+                    };
+
+                    content = content
+                        .with_background(background)
+                        .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.)));
+
+                    // Show tooltip on hover or while clicked
+                    let mut stack = Stack::new().with_child(content.finish());
+                    let tooltip = ui_builder
+                        .tool_tip("Show credit usage details".to_string())
+                        .build()
+                        .finish();
+                    stack.add_positioned_overlay_child(
+                        tooltip,
+                        OffsetPositioning::offset_from_parent(
+                            vec2f(0., 8.),
+                            ParentOffsetBounds::WindowByPosition,
+                            ParentAnchor::BottomMiddle,
+                            ChildAnchor::TopMiddle,
+                        ),
+                    );
+
+                    stack.finish()
                 } else {
-                    blended_colors::neutral_4(appearance.theme()).into()
-                };
-
-                content = content
-                    .with_background(background)
-                    .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.)));
-
-                // Show tooltip on hover or while clicked
-                let mut stack = Stack::new().with_child(content.finish());
-                let tooltip = ui_builder
-                    .tool_tip("Show credit usage details".to_string())
-                    .build()
-                    .finish();
-                stack.add_positioned_overlay_child(
-                    tooltip,
-                    OffsetPositioning::offset_from_parent(
-                        vec2f(0., 8.),
-                        ParentOffsetBounds::WindowByPosition,
-                        ParentAnchor::BottomMiddle,
-                        ChildAnchor::TopMiddle,
-                    ),
-                );
-
-                stack.finish()
-            } else {
-                content.finish()
-            }
-        },
+                    content.finish()
+                }
+            },
+        )
+        .on_click(|ctx, _, _| {
+            ctx.dispatch_typed_action(AIBlockAction::ToggleIsUsageFooterExpanded);
+        })
+        .with_cursor(Cursor::PointingHand)
+        .finish(),
+        USAGE_BUTTON_POSITION_ID,
     )
-    .on_click(|ctx, _, _| {
-        ctx.dispatch_typed_action(AIBlockAction::ToggleIsUsageFooterExpanded);
-    })
-    .with_cursor(Cursor::PointingHand)
     .finish()
 }
+
+/// Position id for the usage-summary pill button, so integration tests can
+/// open the footer via `with_click_on_saved_position` instead of pixel
+/// coordinates. Only one AI block's usage button is realistically visible
+/// per hermetic test scenario, so this does not need to be parameterized
+/// per block.
+const USAGE_BUTTON_POSITION_ID: &str = "usage_footer:open_button";
 
 pub fn action_icon<V: View>(
     action_id: &AIAgentActionId,

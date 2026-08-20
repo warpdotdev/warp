@@ -2374,6 +2374,39 @@ enum DummyAIBlockOutput {
     Cancelled(crate::ai::agent::AIAgentOutput),
 }
 
+/// Credit and tool-call usage to seed on a dummy or restored conversation for
+/// tests, so the orchestration usage rollup (QUALITY-1703) can be exercised
+/// without a live multi-agent run. See
+/// [`TerminalView::seed_orchestration_rollup_usage_for_test`].
+#[cfg(any(test, feature = "integration_tests"))]
+#[derive(Clone, Copy, Default)]
+pub struct DummyConversationUsage {
+    pub credits_spent: f32,
+    pub files_changed: i32,
+    pub lines_added: i32,
+    pub lines_removed: i32,
+    pub commands_executed: i32,
+}
+
+#[cfg(any(test, feature = "integration_tests"))]
+impl DummyConversationUsage {
+    fn into_tool_usage_metadata(self) -> crate::persistence::model::ToolUsageMetadata {
+        crate::persistence::model::ToolUsageMetadata {
+            apply_file_diff_stats: crate::persistence::model::ApplyFileDiffStats {
+                count: 0,
+                lines_added: self.lines_added,
+                lines_removed: self.lines_removed,
+                files_changed: self.files_changed,
+            },
+            run_command_stats: crate::persistence::model::RunCommandStats {
+                count: 0,
+                commands_executed: self.commands_executed,
+            },
+            ..Default::default()
+        }
+    }
+}
+
 /// Where content was routed when sent to a CLI agent.
 /// Returned by [`TerminalView::try_send_text_to_cli_agent_or_rich_input`]
 /// so callers can report the correct telemetry destination without a
@@ -23280,6 +23313,59 @@ impl TerminalView {
             .find(|rc| !rc.is_usage_footer() && !rc.is_pending_user_query())
             .and_then(|rich_content| rich_content.ai_block_metadata())
             .map(|ai_metadata| ai_metadata.ai_block_handle.clone())
+    }
+
+    /// Sets `orchestrator_usage` on the conversation backing the most
+    /// recently inserted AI block (see [`Self::last_ai_block`]), then spawns
+    /// one locally-loaded child conversation per `child_agents` entry with
+    /// its own usage, so the orchestration usage rollup (QUALITY-1703:
+    /// credits, diffs, files changed, commands executed) has real per-agent
+    /// data to aggregate without a live multi-agent run.
+    ///
+    /// Call this after inserting a real (non-fake) AI block — e.g. via
+    /// [`Self::load_conversation_from_tasks`] — whose `AIBlockModel`
+    /// resolves a real `conversation_id`, so the usage button actually
+    /// renders. `FakeAIBlockModel`-backed blocks (`insert_dummy_ai_block`)
+    /// do not resolve a conversation and are not usable here.
+    #[cfg(any(test, feature = "integration_tests"))]
+    pub fn seed_orchestration_rollup_usage_for_test(
+        &mut self,
+        orchestrator_usage: DummyConversationUsage,
+        child_agents: Vec<(String, DummyConversationUsage)>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let Some(orchestrator_id) = self
+            .last_ai_block()
+            .map(|block| block.read(ctx, |block, _| block.conversation_id()))
+        else {
+            report_error!(
+                "seed_orchestration_rollup_usage_for_test: no AI block exists to seed usage on"
+            );
+            return;
+        };
+        let terminal_view_id = self.view_id;
+        BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, model_ctx| {
+            if let Some(conversation) = history.conversation_mut(&orchestrator_id) {
+                conversation.set_credits_spent_for_test(orchestrator_usage.credits_spent);
+                conversation.set_tool_usage_metadata_for_test(
+                    orchestrator_usage.into_tool_usage_metadata(),
+                );
+            }
+            for (name, usage) in child_agents {
+                let child_id = history.start_new_child_conversation(
+                    terminal_view_id,
+                    name,
+                    orchestrator_id,
+                    None,
+                    false,
+                    model_ctx,
+                );
+                if let Some(conversation) = history.conversation_mut(&child_id) {
+                    conversation.set_credits_spent_for_test(usage.credits_spent);
+                    conversation.set_tool_usage_metadata_for_test(usage.into_tool_usage_metadata());
+                }
+            }
+        });
     }
 
     /// Returns the environment setup mode selector view handle for tab-level rendering.

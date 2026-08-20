@@ -3,6 +3,7 @@ use warpui::{App, EntityId};
 use super::*;
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::blocklist::BlocklistAIHistoryModel;
+use crate::persistence::model::{ApplyFileDiffStats, RunCommandStats, ToolUsageMetadata};
 use crate::test_util::settings::initialize_history_persistence_for_tests;
 
 fn set_credits(
@@ -16,6 +17,38 @@ fn set_credits(
             .conversation_mut(&id)
             .expect("conversation must be loaded")
             .set_credits_spent_for_test(credits);
+    });
+}
+
+/// Sets a conversation's `apply_file_diff_stats` and `run_command_stats`
+/// directly, mirroring `set_credits` above for the tool-call-stats side of
+/// the rollup.
+fn set_tool_usage_stats(
+    app: &mut App,
+    history: &warpui::ModelHandle<BlocklistAIHistoryModel>,
+    id: AIConversationId,
+    files_changed: i32,
+    lines_added: i32,
+    lines_removed: i32,
+    commands_executed: i32,
+) {
+    history.update(app, |history, _| {
+        history
+            .conversation_mut(&id)
+            .expect("conversation must be loaded")
+            .set_tool_usage_metadata_for_test(ToolUsageMetadata {
+                apply_file_diff_stats: ApplyFileDiffStats {
+                    count: 0,
+                    lines_added,
+                    lines_removed,
+                    files_changed,
+                },
+                run_command_stats: RunCommandStats {
+                    count: 0,
+                    commands_executed,
+                },
+                ..Default::default()
+            });
     });
 }
 
@@ -84,16 +117,19 @@ fn sums_orchestrator_and_loaded_descendants() {
             let rollup = compute_orchestration_rollup(orchestrator_id, history)
                 .expect("rollup should be Some");
             assert_eq!(rollup.total_credits, 33.0);
-            assert_eq!(rollup.per_agent.len(), 2);
+            assert_eq!(rollup.credits_per_agent.len(), 2);
             // Child spent more, sorted first.
-            assert_eq!(rollup.per_agent[0].conversation_id, child_id);
-            assert_eq!(rollup.per_agent[0].credits_spent, 30.0);
-            assert_eq!(rollup.per_agent[0].avatar, AgentAvatar::Child);
-            assert_eq!(rollup.per_agent[0].display_name, "DesignBot");
-            assert_eq!(rollup.per_agent[1].conversation_id, orchestrator_id);
-            assert_eq!(rollup.per_agent[1].credits_spent, 3.0);
-            assert_eq!(rollup.per_agent[1].avatar, AgentAvatar::Orchestrator);
-            assert_eq!(rollup.per_agent[1].display_name, "Orchestrator");
+            assert_eq!(rollup.credits_per_agent[0].conversation_id, child_id);
+            assert_eq!(rollup.credits_per_agent[0].credits_spent, 30.0);
+            assert_eq!(rollup.credits_per_agent[0].avatar, AgentAvatar::Child);
+            assert_eq!(rollup.credits_per_agent[0].display_name, "DesignBot");
+            assert_eq!(rollup.credits_per_agent[1].conversation_id, orchestrator_id);
+            assert_eq!(rollup.credits_per_agent[1].credits_spent, 3.0);
+            assert_eq!(
+                rollup.credits_per_agent[1].avatar,
+                AgentAvatar::Orchestrator
+            );
+            assert_eq!(rollup.credits_per_agent[1].display_name, "Orchestrator");
         });
     });
 }
@@ -138,9 +174,9 @@ fn excludes_zero_credit_descendants_from_breakdown() {
             let rollup = compute_orchestration_rollup(orchestrator_id, history)
                 .expect("rollup should be Some");
             assert_eq!(rollup.total_credits, 19.0);
-            assert_eq!(rollup.per_agent.len(), 3);
+            assert_eq!(rollup.credits_per_agent.len(), 3);
             let ordered_ids: Vec<_> = rollup
-                .per_agent
+                .credits_per_agent
                 .iter()
                 .map(|entry| entry.conversation_id)
                 .collect();
@@ -177,7 +213,7 @@ fn rolls_up_grandchildren_transitively() {
                 .expect("rollup should be Some");
             assert_eq!(rollup.total_credits, 14.0);
             let ordered_ids: Vec<_> = rollup
-                .per_agent
+                .credits_per_agent
                 .iter()
                 .map(|entry| entry.conversation_id)
                 .collect();
@@ -213,7 +249,7 @@ fn returns_six_contributors_for_show_n_more_caller() {
         history.read(&app, |history, _| {
             let rollup = compute_orchestration_rollup(orchestrator_id, history)
                 .expect("rollup should be Some");
-            assert_eq!(rollup.per_agent.len(), 6);
+            assert_eq!(rollup.credits_per_agent.len(), 6);
         });
     });
 }
@@ -276,9 +312,9 @@ fn ties_break_by_spawn_order_earlier_first() {
         history.read(&app, |history, _| {
             let rollup = compute_orchestration_rollup(orchestrator_id, history)
                 .expect("rollup should be Some");
-            assert_eq!(rollup.per_agent.len(), 2);
-            assert_eq!(rollup.per_agent[0].conversation_id, first_id);
-            assert_eq!(rollup.per_agent[1].conversation_id, second_id);
+            assert_eq!(rollup.credits_per_agent.len(), 2);
+            assert_eq!(rollup.credits_per_agent[0].conversation_id, first_id);
+            assert_eq!(rollup.credits_per_agent[1].conversation_id, second_id);
         });
     });
 }
@@ -315,8 +351,166 @@ fn unloaded_descendant_id_is_silently_skipped() {
             let rollup = compute_orchestration_rollup(orchestrator_id, history)
                 .expect("rollup should be Some");
             assert_eq!(rollup.total_credits, 4.0);
-            assert_eq!(rollup.per_agent.len(), 1);
-            assert_eq!(rollup.per_agent[0].conversation_id, real_child_id);
+            assert_eq!(rollup.credits_per_agent.len(), 1);
+            assert_eq!(rollup.credits_per_agent[0].conversation_id, real_child_id);
+        });
+    });
+}
+
+#[test]
+fn sums_diffs_and_tool_stats_across_orchestrator_and_descendants() {
+    App::test((), |mut app| async move {
+        initialize_history_persistence_for_tests(&mut app);
+        let terminal_view_id = EntityId::new();
+        let history = app.add_singleton_model(|_| BlocklistAIHistoryModel::new_for_test());
+
+        let orchestrator_id = history.update(&mut app, |history, ctx| {
+            history.start_new_conversation(terminal_view_id, false, false, false, ctx)
+        });
+        let child_id = spawn_child(
+            &mut app,
+            &history,
+            "DesignBot",
+            orchestrator_id,
+            terminal_view_id,
+        );
+
+        set_tool_usage_stats(&mut app, &history, orchestrator_id, 1, 5, 2, 3);
+        set_tool_usage_stats(&mut app, &history, child_id, 4, 40, 10, 7);
+
+        history.read(&app, |history, _| {
+            let rollup = compute_orchestration_rollup(orchestrator_id, history)
+                .expect("rollup should be Some");
+            assert_eq!(rollup.total_files_changed, 5);
+            assert_eq!(rollup.total_lines_added, 45);
+            assert_eq!(rollup.total_lines_removed, 12);
+            assert_eq!(rollup.total_commands_executed, 10);
+            assert_eq!(rollup.diffs_per_agent.len(), 2);
+            // Child changed more lines (50 vs 7), sorted first.
+            assert_eq!(rollup.diffs_per_agent[0].conversation_id, child_id);
+            assert_eq!(rollup.diffs_per_agent[0].lines_added, 40);
+            assert_eq!(rollup.diffs_per_agent[0].lines_removed, 10);
+            assert_eq!(rollup.diffs_per_agent[0].avatar, AgentAvatar::Child);
+            assert_eq!(rollup.diffs_per_agent[1].conversation_id, orchestrator_id);
+            assert_eq!(rollup.diffs_per_agent[1].lines_added, 5);
+            assert_eq!(rollup.diffs_per_agent[1].lines_removed, 2);
+        });
+    });
+}
+
+#[test]
+fn excludes_zero_diff_descendants_from_diffs_breakdown() {
+    App::test((), |mut app| async move {
+        initialize_history_persistence_for_tests(&mut app);
+        let terminal_view_id = EntityId::new();
+        let history = app.add_singleton_model(|_| BlocklistAIHistoryModel::new_for_test());
+
+        let orchestrator_id = history.update(&mut app, |history, ctx| {
+            history.start_new_conversation(terminal_view_id, false, false, false, ctx)
+        });
+        let editor_id = spawn_child(
+            &mut app,
+            &history,
+            "Editor",
+            orchestrator_id,
+            terminal_view_id,
+        );
+        let _reader_id = spawn_child(
+            &mut app,
+            &history,
+            "ReadOnlyChild",
+            orchestrator_id,
+            terminal_view_id,
+        );
+
+        // The orchestrator and "ReadOnlyChild" never touch a diff, only
+        // "Editor" does. All three still contribute to the totals via
+        // credits/commands, but only "Editor" should appear in the diffs
+        // breakdown.
+        set_credits(&mut app, &history, orchestrator_id, 1.0);
+        set_tool_usage_stats(&mut app, &history, editor_id, 2, 8, 1, 0);
+
+        history.read(&app, |history, _| {
+            let rollup = compute_orchestration_rollup(orchestrator_id, history)
+                .expect("rollup should be Some");
+            assert_eq!(rollup.total_lines_added, 8);
+            assert_eq!(rollup.total_lines_removed, 1);
+            assert_eq!(rollup.diffs_per_agent.len(), 1);
+            assert_eq!(rollup.diffs_per_agent[0].conversation_id, editor_id);
+        });
+    });
+}
+
+#[test]
+fn rolls_up_diffs_grandchildren_transitively() {
+    App::test((), |mut app| async move {
+        initialize_history_persistence_for_tests(&mut app);
+        let terminal_view_id = EntityId::new();
+        let history = app.add_singleton_model(|_| BlocklistAIHistoryModel::new_for_test());
+
+        let orchestrator_id = history.update(&mut app, |history, ctx| {
+            history.start_new_conversation(terminal_view_id, false, false, false, ctx)
+        });
+        let child_id = spawn_child(
+            &mut app,
+            &history,
+            "ChildA",
+            orchestrator_id,
+            terminal_view_id,
+        );
+        let grandchild_id = spawn_child(&mut app, &history, "GrandA1", child_id, terminal_view_id);
+
+        set_tool_usage_stats(&mut app, &history, orchestrator_id, 1, 1, 0, 0);
+        set_tool_usage_stats(&mut app, &history, child_id, 1, 4, 0, 0);
+        set_tool_usage_stats(&mut app, &history, grandchild_id, 1, 9, 3, 0);
+
+        history.read(&app, |history, _| {
+            let rollup = compute_orchestration_rollup(orchestrator_id, history)
+                .expect("rollup should be Some");
+            assert_eq!(rollup.total_files_changed, 3);
+            assert_eq!(rollup.total_lines_added, 14);
+            assert_eq!(rollup.total_lines_removed, 3);
+            let ordered_ids: Vec<_> = rollup
+                .diffs_per_agent
+                .iter()
+                .map(|entry| entry.conversation_id)
+                .collect();
+            assert_eq!(ordered_ids, vec![grandchild_id, child_id, orchestrator_id]);
+        });
+    });
+}
+
+#[test]
+fn rollup_applies_when_only_diffs_are_nonzero_and_credits_are_zero() {
+    App::test((), |mut app| async move {
+        initialize_history_persistence_for_tests(&mut app);
+        let terminal_view_id = EntityId::new();
+        let history = app.add_singleton_model(|_| BlocklistAIHistoryModel::new_for_test());
+
+        let orchestrator_id = history.update(&mut app, |history, ctx| {
+            history.start_new_conversation(terminal_view_id, false, false, false, ctx)
+        });
+        let child_id = spawn_child(
+            &mut app,
+            &history,
+            "Editor",
+            orchestrator_id,
+            terminal_view_id,
+        );
+
+        // Nobody has spent credits, but the child applied a diff. The
+        // rollup as a whole should still apply so "Diffs applied" can
+        // aggregate, while the credits row keeps rendering without a
+        // "View details" toggle (its own gating is independent).
+        set_tool_usage_stats(&mut app, &history, child_id, 1, 3, 1, 0);
+
+        history.read(&app, |history, _| {
+            let rollup = compute_orchestration_rollup(orchestrator_id, history)
+                .expect("rollup should be Some even though nobody spent credits");
+            assert_eq!(rollup.total_credits, 0.0);
+            assert!(rollup.credits_per_agent.is_empty());
+            assert_eq!(rollup.diffs_per_agent.len(), 1);
+            assert_eq!(rollup.diffs_per_agent[0].conversation_id, child_id);
         });
     });
 }

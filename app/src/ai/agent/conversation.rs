@@ -780,14 +780,23 @@ impl AIConversation {
         self.conversation_usage_metadata.platform_credits_spent
     }
 
-    /// Test-only helper that sets the conversation's credit total directly.
-    /// Used by unit tests that exercise downstream credit-aware logic
-    /// (e.g. the orchestration credit rollup) without having to wire up a
-    /// full `StreamFinished` event.
-    #[cfg(test)]
-    pub(crate) fn set_credits_spent_for_test(&mut self, credits: f32) {
+    /// Test/integration-only helper that sets the conversation's credit
+    /// total directly. Used by tests that exercise downstream credit-aware
+    /// logic (e.g. the orchestration usage rollup) without having to wire up
+    /// a full `StreamFinished` event.
+    #[cfg(any(test, feature = "integration_tests"))]
+    pub fn set_credits_spent_for_test(&mut self, credits: f32) {
         self.conversation_usage_metadata.credits_spent = credits;
         self.conversation_usage_metadata.platform_credits_spent = 0.0;
+    }
+
+    /// Test/integration-only helper that sets the conversation's tool usage
+    /// metadata directly. Used by tests that exercise downstream
+    /// tool-usage-aware logic (e.g. the orchestration usage rollup) without
+    /// having to wire up a full `StreamFinished` event.
+    #[cfg(any(test, feature = "integration_tests"))]
+    pub fn set_tool_usage_metadata_for_test(&mut self, metadata: ToolUsageMetadata) {
+        self.conversation_usage_metadata.tool_usage_metadata = metadata;
     }
 
     /// Test-only helper that simulates the root-task upgrade performed by the

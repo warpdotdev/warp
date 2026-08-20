@@ -330,6 +330,10 @@ integration_tests! {
     test_selection_last_to_ai_lines,
     test_restored_ai_block_renders_mermaid_and_local_images,
     test_cancelled_run_agents_card_renders_cancelled_state,
+    // Manual test: requires a real display to render and screenshot the
+    // usage footer's orchestration rollup (QUALITY-1703).
+    #[ignore = "Manual test: requires real display for usage-footer screenshot verification"]
+    test_orchestration_usage_rollup_aggregates_diffs_applied,
 
     // Middle-click-paste is only implemented for Linux right now.
     #[cfg(any(target_os = "linux", target_os = "freebsd"))]

@@ -9,7 +9,7 @@ use warp_core::ui::theme::color::internal_colors;
 use warpui::elements::{
     Border, ChildAnchor, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, DropShadow,
     Empty, Flex, Hoverable, MainAxisSize, MouseStateHandle, OffsetPositioning, ParentAnchor,
-    ParentElement, ParentOffsetBounds, Radius, Stack, Text,
+    ParentElement, ParentOffsetBounds, Radius, SavePosition, Stack, Text,
 };
 use warpui::fonts::{Properties, Weight};
 use warpui::platform::Cursor;
@@ -23,7 +23,8 @@ use crate::ai::blocklist::agent_view::orchestration_pill_bar::{
 use crate::ai::blocklist::orchestration_topology::descendant_conversation_ids_in_spawn_order;
 use crate::ai::blocklist::usage::render_context_window_usage_icon;
 use crate::ai::blocklist::usage::rollup::{
-    AgentAvatar, OrchestrationCreditRollup, PerAgentCreditEntry, compute_orchestration_rollup,
+    AgentAvatar, OrchestrationUsageRollup, PerAgentCreditEntry, PerAgentDiffEntry,
+    compute_orchestration_rollup,
 };
 use crate::ai::blocklist::view_util::format_credits;
 use crate::ai::blocklist::{BlocklistAIHistoryEvent, BlocklistAIHistoryModel};
@@ -73,16 +74,22 @@ pub struct TimingInfo {
 
 /// Typed actions dispatched by widgets inside [`ConversationUsageView`]. The
 /// view uses a single typed action surface for the "View details" /
-/// "Hide details" toggle and the "Show N more" affordance so each row's
+/// "Hide details" toggles and the "Show N more" affordances so each row's
 /// click handler can dispatch through the regular action pipeline without
-/// borrowing the view directly.
+/// borrowing the view directly. Credits and diffs each get their own
+/// toggle/reveal pair so the two breakdowns expand independently.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ConversationUsageViewAction {
-    /// Flip the "View details" / "Hide details" toggle.
-    ToggleDetailsExpanded,
+    /// Flip the credits "View details" / "Hide details" toggle.
+    ToggleCreditsDetailsExpanded,
     /// Reveal the truncated rows beyond the first 5 in the per-agent
-    /// breakdown.
-    ShowAllAgentRows,
+    /// credits breakdown.
+    ShowAllCreditsAgentRows,
+    /// Flip the diffs-applied "View details" / "Hide details" toggle.
+    ToggleDiffsDetailsExpanded,
+    /// Reveal the truncated rows beyond the first 5 in the per-agent
+    /// diffs-applied breakdown.
+    ShowAllDiffsAgentRows,
     /// Flip the context-window per-segment breakdown expand toggle.
     ToggleContextWindowExpanded,
 }
@@ -96,28 +103,40 @@ pub struct ConversationUsageView {
     /// Optional timing information for the last set of responses (only shown in the footer version of this view).
     pub timing_info: Option<TimingInfo>,
     full_terminal_use_tooltip_mouse_state: MouseStateHandle,
-    /// Orchestration credit rollup context. When `Some`, the parent
+    /// Orchestration usage rollup context. When `Some`, the parent
     /// conversation is an orchestrator with at least one locally-loaded
     /// descendant; the rollup itself is recomputed at render time from
     /// `parent_conversation_id` so descendant updates always read fresh
     /// values.
     parent_conversation_id: Option<AIConversationId>,
-    /// Local UI state: whether the "View details" toggle is currently
-    /// expanded. Resets to `false` whenever the footer is rebuilt — the
-    /// rich-content view backing this struct is dropped and recreated on
-    /// every collapse / reopen cycle, satisfying PRODUCT invariant 6.
-    details_expanded: bool,
+    /// Local UI state: whether the credits "View details" toggle is
+    /// currently expanded. Resets to `false` whenever the footer is
+    /// rebuilt — the rich-content view backing this struct is dropped and
+    /// recreated on every collapse / reopen cycle, satisfying PRODUCT
+    /// invariant 6.
+    credits_details_expanded: bool,
     /// Local UI state: whether the user clicked "Show N more" to reveal the
-    /// rows beyond the first 5. Resets on view rebuild for the same reason
-    /// as `details_expanded`.
-    show_all_clicked: bool,
-    /// Per-row mouse states for the "View details" / "Hide details" link
-    /// and the "Show N more" link. Stored on the view so hover/click state
-    /// survives across renders.
-    details_toggle_mouse_state: MouseStateHandle,
-    show_more_mouse_state: MouseStateHandle,
+    /// credits rows beyond the first 5. Resets on view rebuild for the same
+    /// reason as `credits_details_expanded`.
+    credits_show_all_clicked: bool,
+    /// Per-row mouse states for the credits "View details" / "Hide details"
+    /// link and the "Show N more" link. Stored on the view so hover/click
+    /// state survives across renders.
+    credits_details_toggle_mouse_state: MouseStateHandle,
+    credits_show_more_mouse_state: MouseStateHandle,
+    /// Local UI state mirroring `credits_details_expanded`, but for the
+    /// "Diffs applied" per-agent breakdown, so the two disclosures expand
+    /// independently of each other.
+    diffs_details_expanded: bool,
+    /// Mirrors `credits_show_all_clicked`, but for the diffs-applied
+    /// breakdown.
+    diffs_show_all_clicked: bool,
+    /// Mouse states for the diffs-applied "View details" / "Hide details"
+    /// link and its "Show N more" link.
+    diffs_details_toggle_mouse_state: MouseStateHandle,
+    diffs_show_more_mouse_state: MouseStateHandle,
     /// Local UI state: whether the context-window per-segment breakdown is
-    /// expanded. Resets on view rebuild, like `details_expanded`.
+    /// expanded. Resets on view rebuild, like `credits_details_expanded`.
     context_window_expanded: bool,
     /// Mouse state for the context-window breakdown toggle link.
     context_window_toggle_mouse_state: MouseStateHandle,
@@ -138,10 +157,14 @@ impl ConversationUsageView {
             timing_info,
             full_terminal_use_tooltip_mouse_state,
             parent_conversation_id: None,
-            details_expanded: false,
-            show_all_clicked: false,
-            details_toggle_mouse_state: MouseStateHandle::default(),
-            show_more_mouse_state: MouseStateHandle::default(),
+            credits_details_expanded: false,
+            credits_show_all_clicked: false,
+            credits_details_toggle_mouse_state: MouseStateHandle::default(),
+            credits_show_more_mouse_state: MouseStateHandle::default(),
+            diffs_details_expanded: false,
+            diffs_show_all_clicked: false,
+            diffs_details_toggle_mouse_state: MouseStateHandle::default(),
+            diffs_show_more_mouse_state: MouseStateHandle::default(),
             context_window_expanded: false,
             context_window_toggle_mouse_state: MouseStateHandle::default(),
             context_window_other_tooltip_mouse_state: MouseStateHandle::default(),
@@ -149,7 +172,7 @@ impl ConversationUsageView {
     }
 
     /// Constructs the view in `DisplayMode::Footer` with orchestration
-    /// credit rollup wired in. The view subscribes to
+    /// usage rollup wired in. The view subscribes to
     /// [`BlocklistAIHistoryEvent::ConversationUsageMetadataUpdated`] so it
     /// re-renders whenever any contributing conversation's usage metadata
     /// changes (PRODUCT invariant 7).
@@ -212,10 +235,14 @@ impl ConversationUsageView {
             timing_info,
             full_terminal_use_tooltip_mouse_state,
             parent_conversation_id: Some(parent_conversation_id),
-            details_expanded: false,
-            show_all_clicked: false,
-            details_toggle_mouse_state: MouseStateHandle::default(),
-            show_more_mouse_state: MouseStateHandle::default(),
+            credits_details_expanded: false,
+            credits_show_all_clicked: false,
+            credits_details_toggle_mouse_state: MouseStateHandle::default(),
+            credits_show_more_mouse_state: MouseStateHandle::default(),
+            diffs_details_expanded: false,
+            diffs_show_all_clicked: false,
+            diffs_details_toggle_mouse_state: MouseStateHandle::default(),
+            diffs_show_more_mouse_state: MouseStateHandle::default(),
             context_window_expanded: false,
             context_window_toggle_mouse_state: MouseStateHandle::default(),
             context_window_other_tooltip_mouse_state: MouseStateHandle::default(),
@@ -225,10 +252,11 @@ impl ConversationUsageView {
     /// Returns the current orchestration rollup for this view, or `None`
     /// when the view is in settings mode, the parent conversation isn't
     /// known, or the orchestrator has no locally-loaded descendants with
-    /// non-zero credits. The feature is self-gating: settings-mode views
-    /// and conversations without descendants short-circuit before any
-    /// rollup-specific UI is built, so no feature flag is needed.
-    fn rollup(&self, app: &AppContext) -> Option<OrchestrationCreditRollup> {
+    /// any non-zero rolled-up metric. The feature is self-gating:
+    /// settings-mode views and conversations without descendants
+    /// short-circuit before any rollup-specific UI is built, so no feature
+    /// flag is needed.
+    fn rollup(&self, app: &AppContext) -> Option<OrchestrationUsageRollup> {
         if self.display_mode != DisplayMode::Footer {
             return None;
         }
@@ -365,7 +393,7 @@ impl ConversationUsageView {
         // of the card. The rows are pushed into the same two-column
         // label/value layout as the rest of the usage summary; the
         // existing flex spacing handles indentation.
-        self.append_per_agent_rows(&mut labels, &mut values, rollup.as_ref(), appearance);
+        self.append_per_agent_credit_rows(&mut labels, &mut values, rollup.as_ref(), appearance);
 
         labels.push(render_label_text("Tool calls", appearance));
         values.push(render_value_text(
@@ -502,6 +530,7 @@ impl ConversationUsageView {
                         "Hide breakdown",
                         "View breakdown",
                         ConversationUsageViewAction::ToggleContextWindowExpanded,
+                        CONTEXT_WINDOW_TOGGLE_POSITION_ID,
                         appearance,
                     ));
         }
@@ -533,52 +562,49 @@ impl ConversationUsageView {
         ));
         values.push(render_section_header("".to_string(), appearance));
 
+        // Files changed / Diffs applied / Commands executed all use the
+        // rollup total when available, otherwise the orchestrator's own
+        // self total (today's behavior) — same pattern as "Credits spent
+        // (total)" above. Only "Diffs applied" gets a per-agent
+        // disclosure: it is the row the user explicitly asked to drill
+        // into, and a third and fourth toggle beside it would make this
+        // section noisier than the plain totals are worth for files/
+        // commands.
+        let total_files_changed = rollup
+            .as_ref()
+            .map(|r| r.total_files_changed)
+            .unwrap_or(self.usage_info.files_changed);
+        let total_lines_added = rollup
+            .as_ref()
+            .map(|r| r.total_lines_added)
+            .unwrap_or(self.usage_info.lines_added);
+        let total_lines_removed = rollup
+            .as_ref()
+            .map(|r| r.total_lines_removed)
+            .unwrap_or(self.usage_info.lines_removed);
+        let total_commands_executed = rollup
+            .as_ref()
+            .map(|r| r.total_commands_executed)
+            .unwrap_or(self.usage_info.commands_executed);
+
         labels.push(render_label_text("Files changed", appearance));
         values.push(render_value_text(
-            format_value_text(self.usage_info.files_changed, "file"),
+            format_value_text(total_files_changed, "file"),
             appearance,
         ));
 
         labels.push(render_label_text("Diffs applied", appearance));
-        let diffs_element = Flex::row()
-            .with_cross_axis_alignment(CrossAxisAlignment::Center)
-            .with_child(
-                Text::new(
-                    format!("+ {}", self.usage_info.lines_added),
-                    appearance.ui_font_family(),
-                    font_size,
-                )
-                .with_color(theme.ansi_fg_green())
-                .finish(),
-            )
-            .with_child(
-                Container::new(
-                    ConstrainedBox::new(Empty::new().finish())
-                        .with_width(4.)
-                        .with_height(4.)
-                        .finish(),
-                )
-                .with_corner_radius(CornerRadius::with_all(Radius::Percentage(50.)))
-                .with_background(internal_colors::neutral_6(theme))
-                .with_margin_left(8.)
-                .with_margin_right(8.)
-                .finish(),
-            )
-            .with_child(
-                Text::new(
-                    format!("- {}", self.usage_info.lines_removed),
-                    appearance.ui_font_family(),
-                    font_size,
-                )
-                .with_color(theme.ansi_fg_red())
-                .finish(),
-            )
-            .finish();
-        values.push(diffs_element);
+        values.push(self.render_diffs_value_row(
+            total_lines_added,
+            total_lines_removed,
+            rollup.as_ref(),
+            appearance,
+        ));
+        self.append_per_agent_diff_rows(&mut labels, &mut values, rollup.as_ref(), appearance);
 
         labels.push(render_label_text("Commands executed", appearance));
         values.push(render_value_text(
-            format_value_text(self.usage_info.commands_executed, "command"),
+            format_value_text(total_commands_executed, "command"),
             appearance,
         ));
 
@@ -651,34 +677,35 @@ impl ConversationUsageView {
         .finish()
     }
 
-    /// Pushes the per-agent breakdown rows (and the optional "Show N
-    /// more" link) into the two-column layout when the rollup is active
-    /// and the user has expanded the details. Pushed in two-column
+    /// Pushes the per-agent credit breakdown rows (and the optional "Show
+    /// N more" link) into the two-column layout when the credits rollup is
+    /// active and the user has expanded the details. Pushed in two-column
     /// (label, value) pairs so they slot into the existing flex layout.
     /// The label column carries the avatar + display name; the value
     /// column carries the credit value.
-    fn append_per_agent_rows(
+    fn append_per_agent_credit_rows(
         &self,
         labels: &mut Vec<Box<dyn Element>>,
         values: &mut Vec<Box<dyn Element>>,
-        rollup: Option<&OrchestrationCreditRollup>,
+        rollup: Option<&OrchestrationUsageRollup>,
         appearance: &Appearance,
     ) {
         let Some(rollup) = rollup else {
             return;
         };
-        if !self.details_expanded {
+        if !self.credits_details_expanded {
             return;
         }
-        let total_entries = rollup.per_agent.len();
-        let shown_entries: usize =
-            if total_entries > PER_AGENT_BREAKDOWN_TRUNCATION_CAP && !self.show_all_clicked {
-                PER_AGENT_BREAKDOWN_TRUNCATION_CAP
-            } else {
-                total_entries
-            };
-        for entry in rollup.per_agent.iter().take(shown_entries) {
-            let (label_el, value_el) = self.render_per_agent_row(entry, appearance);
+        let total_entries = rollup.credits_per_agent.len();
+        let shown_entries: usize = if total_entries > PER_AGENT_BREAKDOWN_TRUNCATION_CAP
+            && !self.credits_show_all_clicked
+        {
+            PER_AGENT_BREAKDOWN_TRUNCATION_CAP
+        } else {
+            total_entries
+        };
+        for entry in rollup.credits_per_agent.iter().take(shown_entries) {
+            let (label_el, value_el) = self.render_per_agent_credit_row(entry, appearance);
             labels.push(label_el);
             values.push(value_el);
         }
@@ -689,31 +716,38 @@ impl ConversationUsageView {
             // height so the right column stays in lock-step with the
             // left and the subsequent "Tool calls" / value row pair
             // doesn't slip out of alignment.
-            labels.push(self.render_show_more_link(hidden_count, appearance));
+            labels.push(self.render_show_more_link(
+                self.credits_show_more_mouse_state.clone(),
+                hidden_count,
+                ConversationUsageViewAction::ShowAllCreditsAgentRows,
+                appearance,
+            ));
             values.push(render_value_text_placeholder(appearance));
         }
     }
 
-    /// Renders the "Credits spent (total)" value cell. When a rollup
-    /// applies, the cell is a row with the value followed by a
-    /// "View details ▾" / "Hide details ▴" toggle.
+    /// Renders the "Credits spent (total)" value cell. When the credits
+    /// rollup has at least one contributing agent, the cell is a row with
+    /// the value followed by a "View details ▾" / "Hide details ▴" toggle.
     fn render_total_credits_value_row(
         &self,
         total_credits: f32,
-        rollup: Option<&OrchestrationCreditRollup>,
+        rollup: Option<&OrchestrationUsageRollup>,
         appearance: &Appearance,
     ) -> Box<dyn Element> {
         let value_text = render_value_text(format_credits(total_credits), appearance);
-        if rollup.is_none() {
+        let has_credit_breakdown = rollup.is_some_and(|r| !r.credits_per_agent.is_empty());
+        if !has_credit_breakdown {
             return value_text;
         }
 
         let toggle = render_toggle_link(
-            self.details_toggle_mouse_state.clone(),
-            self.details_expanded,
+            self.credits_details_toggle_mouse_state.clone(),
+            self.credits_details_expanded,
             "Hide details",
             "View details",
-            ConversationUsageViewAction::ToggleDetailsExpanded,
+            ConversationUsageViewAction::ToggleCreditsDetailsExpanded,
+            CREDITS_DETAILS_TOGGLE_POSITION_ID,
             appearance,
         );
         Flex::row()
@@ -723,6 +757,82 @@ impl ConversationUsageView {
             .with_child(value_text)
             .with_child(toggle)
             .finish()
+    }
+
+    /// Renders the "Diffs applied" value cell. When the diffs rollup has at
+    /// least one contributing agent, the cell is a row with the +/- value
+    /// followed by a "View details ▾" / "Hide details ▴" toggle, mirroring
+    /// [`Self::render_total_credits_value_row`].
+    fn render_diffs_value_row(
+        &self,
+        lines_added: i32,
+        lines_removed: i32,
+        rollup: Option<&OrchestrationUsageRollup>,
+        appearance: &Appearance,
+    ) -> Box<dyn Element> {
+        let value_element = render_diff_stats_text(lines_added, lines_removed, appearance);
+        let has_diff_breakdown = rollup.is_some_and(|r| !r.diffs_per_agent.is_empty());
+        if !has_diff_breakdown {
+            return value_element;
+        }
+
+        let toggle = render_toggle_link(
+            self.diffs_details_toggle_mouse_state.clone(),
+            self.diffs_details_expanded,
+            "Hide details",
+            "View details",
+            ConversationUsageViewAction::ToggleDiffsDetailsExpanded,
+            DIFFS_DETAILS_TOGGLE_POSITION_ID,
+            appearance,
+        );
+        Flex::row()
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_main_axis_size(MainAxisSize::Min)
+            .with_spacing(8.)
+            .with_child(value_element)
+            .with_child(toggle)
+            .finish()
+    }
+
+    /// Pushes the per-agent diffs-applied breakdown rows (and the optional
+    /// "Show N more" link) into the two-column layout when the diffs
+    /// rollup is active and the user has expanded the details. Mirrors
+    /// [`Self::append_per_agent_credit_rows`].
+    fn append_per_agent_diff_rows(
+        &self,
+        labels: &mut Vec<Box<dyn Element>>,
+        values: &mut Vec<Box<dyn Element>>,
+        rollup: Option<&OrchestrationUsageRollup>,
+        appearance: &Appearance,
+    ) {
+        let Some(rollup) = rollup else {
+            return;
+        };
+        if !self.diffs_details_expanded {
+            return;
+        }
+        let total_entries = rollup.diffs_per_agent.len();
+        let shown_entries: usize =
+            if total_entries > PER_AGENT_BREAKDOWN_TRUNCATION_CAP && !self.diffs_show_all_clicked {
+                PER_AGENT_BREAKDOWN_TRUNCATION_CAP
+            } else {
+                total_entries
+            };
+        for entry in rollup.diffs_per_agent.iter().take(shown_entries) {
+            let (label_el, value_el) = self.render_per_agent_diff_row(entry, appearance);
+            labels.push(label_el);
+            values.push(value_el);
+        }
+        if total_entries > shown_entries {
+            let hidden_count = total_entries - shown_entries;
+            labels.push(self.render_show_more_link(
+                self.diffs_show_more_mouse_state.clone(),
+                hidden_count,
+                ConversationUsageViewAction::ShowAllDiffsAgentRows,
+                appearance,
+            ));
+            values.push(render_value_text_placeholder(appearance));
+        }
     }
 
     /// Pushes the per-segment context-window breakdown rows into the
@@ -784,42 +894,38 @@ impl ConversationUsageView {
         }
     }
 
-    /// Renders the avatar + label cell for a per-agent breakdown row,
-    /// plus the credit value cell, returned as a `(label, value)` pair so
-    /// the caller can append them to the existing two-column flex layout.
+    /// Renders the avatar + display-name cell shared by every per-agent
+    /// breakdown row (credits and diffs alike).
     ///
-    /// Color choices:
-    /// * Agent name uses the same color as the "USAGE SUMMARY" section
-    ///   header (the disabled-text token) so the rollup rows read as a
-    ///   sub-list of that section rather than competing with primary
-    ///   labels.
-    /// * Credit value uses the label-row color (`text_sub`) so it
-    ///   visually echoes the "Credits spent" label rather than the
-    ///   primary credit count beside it.
+    /// Color choice: the agent name uses the same color as the "USAGE
+    /// SUMMARY" section header (the disabled-text token) so the rollup
+    /// rows read as a sub-list of that section rather than competing with
+    /// primary labels.
     ///
     /// Name length: agent names are clipped to the same max width and
     /// ellipsis treatment used by the orchestration pill bar
     /// ([`PER_AGENT_LABEL_MAX_WIDTH`]) so a long child-agent name in the
-    /// footer doesn't push the credit-value column off-screen.
-    fn render_per_agent_row(
+    /// footer doesn't push the value column off-screen.
+    fn render_per_agent_label(
         &self,
-        entry: &PerAgentCreditEntry,
+        avatar: &AgentAvatar,
+        display_name: &str,
         appearance: &Appearance,
-    ) -> (Box<dyn Element>, Box<dyn Element>) {
+    ) -> Box<dyn Element> {
         let theme = appearance.theme();
         let bg = theme.surface_2();
         let font_size = appearance.ui_font_size() + 2.;
         const ROW_AVATAR_SIZE: f32 = 16.;
-        let avatar = match entry.avatar {
+        let avatar_element = match avatar {
             AgentAvatar::Orchestrator => {
                 render_orchestrator_avatar_disc(ROW_AVATAR_SIZE, theme, appearance)
             }
             AgentAvatar::Child => {
-                render_agent_avatar_disc(&entry.display_name, ROW_AVATAR_SIZE, theme, appearance)
+                render_agent_avatar_disc(display_name, ROW_AVATAR_SIZE, theme, appearance)
             }
         };
         let name_text = Text::new(
-            entry.display_name.clone(),
+            display_name.to_string(),
             appearance.ui_font_family(),
             font_size,
         )
@@ -830,13 +936,29 @@ impl ConversationUsageView {
         let name_element = ConstrainedBox::new(name_text)
             .with_max_width(PER_AGENT_LABEL_MAX_WIDTH)
             .finish();
-        let label = Flex::row()
+        Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_main_axis_size(MainAxisSize::Min)
             .with_spacing(8.)
-            .with_child(avatar)
+            .with_child(avatar_element)
             .with_child(name_element)
-            .finish();
+            .finish()
+    }
+
+    /// Renders one credit-breakdown row as a `(label, value)` pair so the
+    /// caller can append them to the existing two-column flex layout. The
+    /// credit value uses the label-row color (`text_sub`) so it visually
+    /// echoes the "Credits spent" label rather than the primary credit
+    /// count beside it.
+    fn render_per_agent_credit_row(
+        &self,
+        entry: &PerAgentCreditEntry,
+        appearance: &Appearance,
+    ) -> (Box<dyn Element>, Box<dyn Element>) {
+        let theme = appearance.theme();
+        let bg = theme.surface_2();
+        let font_size = appearance.ui_font_size() + 2.;
+        let label = self.render_per_agent_label(&entry.avatar, &entry.display_name, appearance);
         let value = Text::new(
             format_credits(entry.credits_spent),
             appearance.ui_font_family(),
@@ -847,22 +969,39 @@ impl ConversationUsageView {
         (label, value)
     }
 
+    /// Renders one diffs-breakdown row as a `(label, value)` pair. The +/-
+    /// value cell reuses the same green/red treatment as the main "Diffs
+    /// applied" row so a row reads as a drill-down of that value.
+    fn render_per_agent_diff_row(
+        &self,
+        entry: &PerAgentDiffEntry,
+        appearance: &Appearance,
+    ) -> (Box<dyn Element>, Box<dyn Element>) {
+        let label = self.render_per_agent_label(&entry.avatar, &entry.display_name, appearance);
+        let value = render_diff_stats_text(entry.lines_added, entry.lines_removed, appearance);
+        (label, value)
+    }
+
     /// Renders the "Show N more" link row shown beneath the first 5
-    /// per-agent rows when the breakdown has more entries than the
+    /// per-agent rows when a breakdown has more entries than the
     /// truncation cap. Clicking the link replaces the truncated list with
     /// the full list on the next render (PRODUCT invariant 5f). Uses the
     /// same hyperlink-blue color as the "View details" toggle so the
-    /// affordances visually match.
+    /// affordances visually match. Shared by the credits and diffs
+    /// breakdowns, which each pass their own mouse state and action so
+    /// their "Show N more" state stays independent.
     fn render_show_more_link(
         &self,
+        mouse_state: MouseStateHandle,
         hidden_count: usize,
+        action: ConversationUsageViewAction,
         appearance: &Appearance,
     ) -> Box<dyn Element> {
         let theme = appearance.theme();
         let font_size = appearance.ui_font_size() + 2.;
         let link_color = theme.ansi_fg_blue();
         let label = format!("Show {hidden_count} more");
-        Hoverable::new(self.show_more_mouse_state.clone(), move |_hover_state| {
+        Hoverable::new(mouse_state, move |_hover_state| {
             Text::new(label.clone(), appearance.ui_font_family(), font_size)
                 .with_color(link_color)
                 .with_style(Properties {
@@ -873,8 +1012,8 @@ impl ConversationUsageView {
                 .finish()
         })
         .with_cursor(Cursor::PointingHand)
-        .on_click(|ctx, _, _| {
-            ctx.dispatch_typed_action(ConversationUsageViewAction::ShowAllAgentRows);
+        .on_click(move |ctx, _, _| {
+            ctx.dispatch_typed_action(action.clone());
         })
         .finish()
     }
@@ -937,18 +1076,29 @@ impl TypedActionView for ConversationUsageView {
 
     fn handle_action(&mut self, action: &Self::Action, ctx: &mut ViewContext<Self>) {
         match action {
-            ConversationUsageViewAction::ToggleDetailsExpanded => {
-                self.details_expanded = !self.details_expanded;
+            ConversationUsageViewAction::ToggleCreditsDetailsExpanded => {
+                self.credits_details_expanded = !self.credits_details_expanded;
                 // Collapsing the breakdown resets the "Show N more"
                 // expansion so the user lands back on the truncated list
                 // the next time they expand.
-                if !self.details_expanded {
-                    self.show_all_clicked = false;
+                if !self.credits_details_expanded {
+                    self.credits_show_all_clicked = false;
                 }
                 ctx.notify();
             }
-            ConversationUsageViewAction::ShowAllAgentRows => {
-                self.show_all_clicked = true;
+            ConversationUsageViewAction::ShowAllCreditsAgentRows => {
+                self.credits_show_all_clicked = true;
+                ctx.notify();
+            }
+            ConversationUsageViewAction::ToggleDiffsDetailsExpanded => {
+                self.diffs_details_expanded = !self.diffs_details_expanded;
+                if !self.diffs_details_expanded {
+                    self.diffs_show_all_clicked = false;
+                }
+                ctx.notify();
+            }
+            ConversationUsageViewAction::ShowAllDiffsAgentRows => {
+                self.diffs_show_all_clicked = true;
                 ctx.notify();
             }
             ConversationUsageViewAction::ToggleContextWindowExpanded => {
@@ -957,6 +1107,53 @@ impl TypedActionView for ConversationUsageView {
             }
         }
     }
+}
+
+/// Renders the "+ N" / "- N" diffs-applied value: green added-lines count,
+/// a small dot separator, red removed-lines count. Shared by the main
+/// "Diffs applied" row and each per-agent diffs-breakdown row so both
+/// levels of the rollup read as the same visual language.
+fn render_diff_stats_text(
+    lines_added: i32,
+    lines_removed: i32,
+    appearance: &Appearance,
+) -> Box<dyn Element> {
+    let theme = appearance.theme();
+    let font_size = appearance.ui_font_size() + 2.;
+    Flex::row()
+        .with_cross_axis_alignment(CrossAxisAlignment::Center)
+        .with_child(
+            Text::new(
+                format!("+ {lines_added}"),
+                appearance.ui_font_family(),
+                font_size,
+            )
+            .with_color(theme.ansi_fg_green())
+            .finish(),
+        )
+        .with_child(
+            Container::new(
+                ConstrainedBox::new(Empty::new().finish())
+                    .with_width(4.)
+                    .with_height(4.)
+                    .finish(),
+            )
+            .with_corner_radius(CornerRadius::with_all(Radius::Percentage(50.)))
+            .with_background(internal_colors::neutral_6(theme))
+            .with_margin_left(8.)
+            .with_margin_right(8.)
+            .finish(),
+        )
+        .with_child(
+            Text::new(
+                format!("- {lines_removed}"),
+                appearance.ui_font_family(),
+                font_size,
+            )
+            .with_color(theme.ansi_fg_red())
+            .finish(),
+        )
+        .finish()
 }
 
 /// Render the main header for a usage section.
@@ -1005,12 +1202,17 @@ fn render_value_text(text: String, appearance: &Appearance) -> Box<dyn Element> 
 }
 
 /// Renders a hyperlink-styled expand/collapse toggle with a chevron.
+///
+/// Wrapped in a [`SavePosition`] under a stable `position_id` so integration
+/// tests can drive the toggle via `with_click_on_saved_position` without
+/// depending on layout-sensitive pixel coordinates.
 fn render_toggle_link(
     mouse_state: MouseStateHandle,
     expanded: bool,
     expanded_label: &'static str,
     collapsed_label: &'static str,
     action: ConversationUsageViewAction,
+    position_id: &str,
     appearance: &Appearance,
 ) -> Box<dyn Element> {
     let theme = appearance.theme();
@@ -1022,29 +1224,42 @@ fn render_toggle_link(
     } else {
         (collapsed_label, Icon::ChevronDown)
     };
-    Hoverable::new(mouse_state, move |_hover_state| {
-        let text_element = Text::new(label.to_string(), appearance.ui_font_family(), font_size)
-            .with_color(link_color)
-            .with_selectable(false)
-            .finish();
-        let icon_element = ConstrainedBox::new(icon.to_warpui_icon(link_color.into()).finish())
-            .with_width(icon_size)
-            .with_height(icon_size)
-            .finish();
-        Flex::row()
-            .with_cross_axis_alignment(CrossAxisAlignment::Center)
-            .with_main_axis_size(MainAxisSize::Min)
-            .with_spacing(4.)
-            .with_child(text_element)
-            .with_child(icon_element)
-            .finish()
-    })
-    .with_cursor(Cursor::PointingHand)
-    .on_click(move |ctx, _, _| {
-        ctx.dispatch_typed_action(action.clone());
-    })
+    SavePosition::new(
+        Hoverable::new(mouse_state, move |_hover_state| {
+            let text_element = Text::new(label.to_string(), appearance.ui_font_family(), font_size)
+                .with_color(link_color)
+                .with_selectable(false)
+                .finish();
+            let icon_element = ConstrainedBox::new(icon.to_warpui_icon(link_color.into()).finish())
+                .with_width(icon_size)
+                .with_height(icon_size)
+                .finish();
+            Flex::row()
+                .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                .with_main_axis_size(MainAxisSize::Min)
+                .with_spacing(4.)
+                .with_child(text_element)
+                .with_child(icon_element)
+                .finish()
+        })
+        .with_cursor(Cursor::PointingHand)
+        .on_click(move |ctx, _, _| {
+            ctx.dispatch_typed_action(action.clone());
+        })
+        .finish(),
+        position_id,
+    )
     .finish()
 }
+
+/// Position ids for the usage-footer expand/collapse toggles, so integration
+/// tests can drive them via `with_click_on_saved_position` instead of pixel
+/// coordinates. Only one usage footer is open at a time in practice (opening
+/// a new AI block's footer, or a new exchange, closes any other open one),
+/// so these do not need to be parameterized per conversation.
+const CREDITS_DETAILS_TOGGLE_POSITION_ID: &str = "usage_footer:credits_details_toggle";
+const DIFFS_DETAILS_TOGGLE_POSITION_ID: &str = "usage_footer:diffs_details_toggle";
+const CONTEXT_WINDOW_TOGGLE_POSITION_ID: &str = "usage_footer:context_window_toggle";
 
 /// Computes the per-segment display rows for the context-window breakdown.
 /// Each row's percentage is derived as
