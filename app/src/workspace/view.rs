@@ -2928,6 +2928,9 @@ impl Workspace {
         ctx.subscribe_to_model(&state_handle, |me, _, event, ctx| {
             me.handle_window_state_change(event, ctx);
         });
+        ctx.observe(&TabShortcutModifierState::handle(ctx), |_, _, ctx| {
+            ctx.notify();
+        });
 
         ctx.observe(&RelaunchModel::handle(ctx), |_, _, ctx| {
             ctx.notify();
@@ -18901,11 +18904,13 @@ impl Workspace {
                     && current.active_window != Some(self.window_id);
                 let app_lost_focus = previous.stage == ApplicationStage::Active
                     && current.stage != ApplicationStage::Active;
-                let shortcut_state_changed = if window_lost_focus || app_lost_focus {
-                    TabShortcutModifierState::as_ref(ctx).clear_held_keys()
-                } else {
-                    false
-                };
+                if window_lost_focus || app_lost_focus {
+                    TabShortcutModifierState::handle(ctx).update(ctx, |state, ctx| {
+                        if state.clear_held_keys() {
+                            ctx.notify();
+                        }
+                    });
+                }
                 let cached_window_is_active = current.active_window == Some(self.window_id);
                 let app_became_active = previous.stage != ApplicationStage::Active
                     && current.stage == ApplicationStage::Active;
@@ -18933,10 +18938,8 @@ impl Workspace {
                     );
                 }
 
-                // Re-render if fullscreen or shortcut-hint visibility changed.
-                if current.is_active_window_fullscreen != previous.is_active_window_fullscreen
-                    || shortcut_state_changed
-                {
+                // Re-render if fullscreen changed.
+                if current.is_active_window_fullscreen != previous.is_active_window_fullscreen {
                     ctx.notify();
                 } else if did_window_change_focus {
                     // Re-render if this window's focus state has changed.
@@ -23875,11 +23878,9 @@ impl TypedActionView for Workspace {
             ActivateTab(index) => self.activate_tab(*index, ctx),
             ActivateTabByNumber(num) => self.activate_tab(num.saturating_sub(1), ctx),
             SetTabShortcutModifierKey { key_code, pressed } => {
-                let changed =
-                    TabShortcutModifierState::as_ref(ctx).set_key_held(*key_code, *pressed);
-                if changed {
-                    ctx.notify();
-                }
+                TabShortcutModifierState::handle(ctx).update(ctx, |state, ctx| {
+                    state.set_key_held(*key_code, *pressed, ctx);
+                });
             }
             ActivatePrevTab => self.activate_prev_tab(ctx),
             OpenLaunchConfigSaveModal => self.open_launch_config_save_modal(ctx),

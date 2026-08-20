@@ -42,11 +42,13 @@ fn sole_member_of_group_hides_new_group_and_offers_remove() {
 
 #[test]
 fn tab_shortcut_modifier_state_clear_reports_whether_state_changed() {
-    let state = TabShortcutModifierState::new();
+    let mut state = TabShortcutModifierState::new();
 
     assert!(!state.clear_held_keys());
 
-    assert!(state.set_key_held(KeyCode::SuperLeft, true));
+    assert!(state.held_keys.insert(KeyCode::SuperLeft));
+    assert!(state.held_kinds().is_empty());
+    assert!(state.reveal_key_if_held(KeyCode::SuperLeft));
     assert_eq!(
         state.held_kinds(),
         [ShortcutModifierKind::Super].into_iter().collect()
@@ -55,6 +57,18 @@ fn tab_shortcut_modifier_state_clear_reports_whether_state_changed() {
     assert!(state.clear_held_keys());
     assert!(state.held_kinds().is_empty());
     assert!(!state.clear_held_keys());
+}
+
+#[test]
+fn tab_shortcut_modifier_state_only_reveals_keys_that_remain_held() {
+    let mut state = TabShortcutModifierState::new();
+
+    assert!(!state.reveal_key_if_held(KeyCode::SuperLeft));
+
+    assert!(state.held_keys.insert(KeyCode::SuperLeft));
+    assert!(state.held_keys.remove(&KeyCode::SuperLeft));
+    assert!(!state.reveal_key_if_held(KeyCode::SuperLeft));
+    assert!(state.held_kinds().is_empty());
 }
 
 // GH-13073 follow-up: a tab that shares a group with siblings SHOULD still be

@@ -1,4 +1,3 @@
-use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
@@ -11,6 +10,7 @@ use warp_core::context_flag::ContextFlag;
 use warp_core::ui::builder::UiBuilder;
 use warp_core::ui::theme::AnsiColors;
 use warp_core::ui::theme::color::internal_colors;
+use warpui::r#async::{SpawnedFutureHandle, Timer};
 use warpui::elements::{
     Align, Border, ChildAnchor, Clipped, ConstrainedBox, Container, CornerRadius,
     CrossAxisAlignment, DragAxis, Draggable, DraggableState, DropTarget, Element, Empty, Fill,
@@ -25,7 +25,7 @@ use warpui::platform::keyboard::KeyCode;
 use warpui::text_layout::ClipConfig;
 use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
 use warpui::ui_components::text_input::TextInput;
-use warpui::{AppContext, Entity, SingletonEntity, ViewHandle};
+use warpui::{AppContext, Entity, ModelContext, SingletonEntity, ViewHandle};
 
 use crate::BlocklistAIHistoryModel;
 use crate::ai::agent::conversation::ConversationStatus;
@@ -62,6 +62,7 @@ use crate::workspace::{
 
 pub const TAB_BAR_BORDER_HEIGHT: f32 = 1.0;
 pub(crate) const TAB_INDICATOR_HEIGHT: f32 = 14.0;
+const TAB_SHORTCUT_HINT_REVEAL_DELAY: Duration = Duration::from_millis(750);
 
 /// Binding names for switching to tabs 1–8 (tab index 0–7), used to surface the
 /// effective keystroke (including user overrides) on each tab.
@@ -122,12 +123,11 @@ pub(crate) fn reveals_shortcut_hints(
     held.intersection(binding_kinds).next().is_some()
 }
 
-/// Tracks which physical modifier keys are currently held, so tab surfaces can
-/// temporarily show switch-to-tab shortcut hints while a relevant modifier is
-/// down.
 #[derive(Default)]
 pub struct TabShortcutModifierState {
-    held_keys: RefCell<HashSet<KeyCode>>,
+    held_keys: HashSet<KeyCode>,
+    revealed_keys: HashSet<KeyCode>,
+    reveal_tasks: HashMap<KeyCode, SpawnedFutureHandle>,
 }
 
 impl TabShortcutModifierState {
@@ -135,30 +135,51 @@ impl TabShortcutModifierState {
         Default::default()
     }
 
-    /// Returns whether the held-key set changed.
-    pub fn set_key_held(&self, key_code: KeyCode, pressed: bool) -> bool {
-        let mut held_keys = self.held_keys.borrow_mut();
+    pub fn set_key_held(&mut self, key_code: KeyCode, pressed: bool, ctx: &mut ModelContext<Self>) {
         if pressed {
-            held_keys.insert(key_code)
+            if !self.held_keys.insert(key_code) {
+                return;
+            }
+
+            let task = ctx.spawn_abortable(
+                Timer::after(TAB_SHORTCUT_HINT_REVEAL_DELAY),
+                move |state, _, ctx| {
+                    state.reveal_tasks.remove(&key_code);
+                    if state.reveal_key_if_held(key_code) {
+                        ctx.notify();
+                    }
+                },
+                |_, _| {},
+            );
+            self.reveal_tasks.insert(key_code, task);
         } else {
-            held_keys.remove(&key_code)
+            self.held_keys.remove(&key_code);
+            if let Some(task) = self.reveal_tasks.remove(&key_code) {
+                task.abort();
+            }
+            if self.revealed_keys.remove(&key_code) {
+                ctx.notify();
+            }
         }
     }
 
-    /// Clears all held keys and returns whether the held-key set changed.
-    pub fn clear_held_keys(&self) -> bool {
-        let mut held_keys = self.held_keys.borrow_mut();
-        if held_keys.is_empty() {
-            false
-        } else {
-            held_keys.clear();
-            true
+    fn reveal_key_if_held(&mut self, key_code: KeyCode) -> bool {
+        self.held_keys.contains(&key_code) && self.revealed_keys.insert(key_code)
+    }
+
+    /// Clears all held keys and returns whether shortcut-hint visibility changed.
+    pub fn clear_held_keys(&mut self) -> bool {
+        for (_, task) in self.reveal_tasks.drain() {
+            task.abort();
         }
+        self.held_keys.clear();
+        let changed = !self.revealed_keys.is_empty();
+        self.revealed_keys.clear();
+        changed
     }
 
     fn held_kinds(&self) -> HashSet<ShortcutModifierKind> {
-        self.held_keys
-            .borrow()
+        self.revealed_keys
             .iter()
             .filter_map(|key| shortcut_modifier_kind(*key))
             .collect()
