@@ -83,19 +83,23 @@ pub struct EarlyOutput {
     ///   candidate without discarding whatever was already live, so both possibilities stay
     ///   open until the characters that follow resolve it.
     /// - Absolute cursor addressing (CUP/CHA, `goto`/`goto_col`), measured from PSReadLine's own
-    ///   redraw -- but only trusted when the column is 0. A carriage return unconditionally
-    ///   means "column 0", by definition; an arbitrary absolute column from CUP/CHA does not
-    ///   unconditionally mean "the buffer's own position 0" -- if a redraw re-renders a
-    ///   nonempty prompt together with the buffer, the column addressed partway through that
-    ///   redraw could just as easily be the prompt's own width as the buffer's start, and
-    ///   nothing in the byte stream distinguishes the two cases. Column 0 is safe under either
-    ///   reading (it is either genuinely the buffer's start, or so early into a redrawn prompt
-    ///   that nothing of the pattern could be confused with prompt text there); anything else
-    ///   is deliberately left as no information rather than risked as a wrong position. This is
-    ///   narrower than what was measured (a real session with a nonempty prompt has not yet
-    ///   been captured to confirm or rule out the wider-column concern) and should be widened
-    ///   only once that measurement exists, via the same `rearm_at_column(column)` backing
-    ///   both this and the carriage-return case above.
+    ///   redraw -- rearmed at position 0 regardless of the column addressed. Measured directly
+    ///   with a nonempty prompt: PSReadLine's own redraw always re-renders the *entire* buffer
+    ///   from its own start, so a CUP always means "the buffer's own position 0" no matter what
+    ///   column that lands on -- column 1 with a zero-width prompt and column 30 with a 29-wide
+    ///   one were both measured to be the buffer's start, and even an "empty" prompt isn't
+    ///   column 0 (PowerShell substitutes its own `PS>` fallback, measured at column 8), so the
+    ///   column itself carries no information worth gating on for this line editor. An earlier,
+    ///   more conservative version of this trusted only column 0, reasoning that a redraw could
+    ///   re-render an addressed column that reflects the prompt's own width rather than the
+    ///   buffer's start -- that concern doesn't apply to PSReadLine specifically (confirmed
+    ///   above), and zsh (the other line editor this matters for) was separately measured to
+    ///   never emit absolute cursor addressing at all for this restore, so widening this rule
+    ///   has no effect on it. The echo this rearms for is also *cumulative*, not one-shot: a
+    ///   restored buffer is measured to re-echo as an increasingly long prefix across many
+    ///   redraws (e.g. a 12-character buffer as "1", "12", "123", ... across 12 rewinds, not
+    ///   once), so every CUP needs its own rearm call -- already true here, since `goto`/
+    ///   `goto_col` call `rearm_at_column` on every occurrence, not just the first.
     /// - A backspace or CUB (`move_backward`), whose distance *is* known from the input itself
     ///   (always 1 for a backspace; the escape sequence's own parameter for CUB) --
     ///   `rearm_after_rewind` shifts every existing candidate back by that exact distance and
@@ -746,16 +750,13 @@ impl ansi::Handler for EarlyOutputHandler<'_> {
     fn goto(&mut self, row: super::index::VisibleRow, col: usize) {
         // Absolute cursor addressing (CUP) is a rewind like carriage return, backspace and CUB,
         // just to an absolute rather than relative column -- see `rearm_at_column`. The row is
-        // irrelevant to matching, which only tracks a linear character stream. Deliberately
-        // conservative about which column to trust: unlike a carriage return, which always
-        // means "column 0" by construction, an absolute column here could reflect a prompt's
-        // width rather than the buffer's own start if the redraw re-renders both together, and
-        // there is no way to tell from this byte alone which case applies. Column 0 is safe
-        // either way (see `rearm_at_column`'s doc comment); anything else is treated as no
-        // information rather than risked as a wrong position.
-        if col == 0 {
-            self.inner().rearm_at_column(col);
-        }
+        // irrelevant to matching, which only tracks a linear character stream. Rearmed at
+        // position 0 regardless of `col`: PSReadLine (the only line editor observed using CUP
+        // for this) always redraws the whole buffer from its own start, so any CUP means "the
+        // buffer's own position 0" no matter which screen column that happens to land on --
+        // see the doc comment on `expected_echo_positions` for the measurements ruling out the
+        // narrower, column-0-only version of this rule.
+        self.inner().rearm_at_column(0);
         delegate!(self.goto(row, col));
     }
 
@@ -764,11 +765,8 @@ impl ansi::Handler for EarlyOutputHandler<'_> {
     }
 
     fn goto_col(&mut self, col: usize) {
-        // CHA: the same absolute rewind as `goto`, just without a row component, and the same
-        // deliberate conservatism about trusting only column 0. See `goto`.
-        if col == 0 {
-            self.inner().rearm_at_column(col);
-        }
+        // CHA: the same absolute rewind as `goto`, just without a row component. See `goto`.
+        self.inner().rearm_at_column(0);
         delegate!(self.goto_col(col));
     }
 

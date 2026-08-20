@@ -516,6 +516,67 @@ fn test_push_expected_echo_survives_absolute_cursor_addressing_before_a_full_rep
 }
 
 #[test]
+fn test_push_expected_echo_survives_absolute_cursor_addressing_to_a_nonzero_column() {
+    // Reproduces PSReadLine's redraw with a nonempty prompt, measured live: the CUP addresses
+    // column 29 (a 29-column prompt), not column 0, but PSReadLine always redraws the *entire*
+    // buffer from its own start regardless of the column that redraw happens to land on -- so
+    // this must rearm exactly like the column-0 case does, not be treated as no information
+    // (which an earlier, more conservative version of this rule did, causing every restore
+    // with a nonempty prompt to leak in full).
+    let mut block_list = new_block_list(
+        ChannelEventListener::new_for_test(),
+        TypeaheadMode::ShellReported,
+    );
+
+    block_list
+        .early_output_mut()
+        .push_expected_echo("starship pr");
+
+    block_list.input('s');
+    block_list.goto(VisibleRow(1), 29);
+    for ch in "starship pr".chars() {
+        block_list.input(ch);
+    }
+    block_list.on_finish_byte_processing(&ansi::ProcessorInput::new(&[]));
+
+    assert!(
+        block_list.background_block_mut().is_none(),
+        "a CUP to a nonzero column matching the prompt's own width must still rearm and not leak"
+    );
+}
+
+#[test]
+fn test_push_expected_echo_survives_cumulative_reecho_across_many_cup_redraws() {
+    // PSReadLine's redraw of a restored buffer is not one-shot: measured, a 12-character
+    // buffer is re-echoed as an increasingly long prefix across 12 separate redraws ("1",
+    // "12", "123", ... rather than the full buffer once) -- each preceded by its own CUP back
+    // to the buffer's start. A rearm that only fired on the *first* CUP would leave every
+    // later, longer echo mismatching partway through and leak the remainder; each CUP must
+    // rearm independently, which is already true here since `goto` calls `rearm_at_column`
+    // unconditionally on every occurrence.
+    let mut block_list = new_block_list(
+        ChannelEventListener::new_for_test(),
+        TypeaheadMode::ShellReported,
+    );
+
+    let buffer = "echo hi";
+    block_list.early_output_mut().push_expected_echo(buffer);
+
+    for end in 1..=buffer.chars().count() {
+        block_list.goto(VisibleRow(1), 29);
+        for ch in buffer.chars().take(end) {
+            block_list.input(ch);
+        }
+    }
+    block_list.on_finish_byte_processing(&ansi::ProcessorInput::new(&[]));
+
+    assert!(
+        block_list.background_block_mut().is_none(),
+        "a cumulative re-echo across many CUP-preceded redraws must not leak"
+    );
+}
+
+#[test]
 fn test_a_rearm_can_still_leak_exactly_one_coincidentally_matching_character() {
     // The residual, acknowledged exposure of clearing on the first genuine mismatch rather
     // than on a signal that reliably lands only after the real echo has arrived: if a fully-
