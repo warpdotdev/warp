@@ -808,6 +808,17 @@ impl AIConversation {
             .total_provider_cost_in_cents = cost_in_cents;
     }
 
+    /// Test-only helper that sets (or clears) the conversation's cumulative
+    /// charged-usage breakdown directly, mirroring what a real
+    /// `ConversationUsageMetadata.total_charges` update would populate. Used
+    /// by unit tests that exercise downstream token-count-aware logic (e.g.
+    /// the orchestration credit rollup's token figure) without wiring up a
+    /// full `StreamFinished` event.
+    #[cfg(test)]
+    pub(crate) fn set_charged_usage_for_test(&mut self, charged_usage: Option<ChargedUsageTotals>) {
+        self.conversation_usage_metadata.total_charged_usage = charged_usage;
+    }
+
     /// Test-only helper that simulates the root-task upgrade performed by the
     /// `Action::CreateTask` branch of `apply_client_action` when the server
     /// confirms the root for a newly started conversation. Replaces the

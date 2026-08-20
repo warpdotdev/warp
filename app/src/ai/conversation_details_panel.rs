@@ -12,7 +12,6 @@ use pathfinder_geometry::vector::vec2f;
 use warp_cli::agent::Harness;
 use warp_cli::skill::SkillSpec;
 use warp_core::channel::ChannelState;
-use warp_core::features::FeatureFlag;
 use warp_core::ui::color::coloru_with_opacity;
 use warp_graphql::queries::get_runners::Runner;
 use warpui::clipboard::ClipboardContent;
@@ -50,6 +49,7 @@ use crate::ai::ambient_agents::task::TaskPrincipalInfo;
 use crate::ai::ambient_agents::{AmbientAgentTaskId, cancel_task_with_toast};
 use crate::ai::artifacts::{Artifact, ArtifactButtonsRow, ArtifactButtonsRowEvent};
 use crate::ai::blocklist::BlocklistAIHistoryModel;
+use crate::ai::blocklist::view_util::format_usage_parenthetical;
 use crate::ai::cloud_environments::{AmbientAgentEnvironment, CloudAmbientAgentEnvironment};
 use crate::ai::harness_availability::HarnessAvailabilityModel;
 use crate::ai::harness_display;
@@ -2310,50 +2310,27 @@ impl View for ConversationDetailsPanel {
         }
 
         if let Some(credits) = self.data.credits {
-            let formatted = format!("{credits:.1}");
+            // A single compact "X (N tokens, $Y)" line rather than separate
+            // rows for credits/tokens/per-category cost: for now this
+            // inline figure is enough (see `format_usage_parenthetical` doc
+            // comment for why the deeper per-category breakdown was dropped
+            // from display, though it's still computed and available on
+            // `self.data.charged_usage` for a future expandable treatment).
+            let cost_in_cents = self
+                .data
+                .charged_usage
+                .map(|charged_usage| charged_usage.total_cost_in_cents());
+            let mut formatted = format!("{credits:.1}");
+            if let Some(parenthetical) =
+                format_usage_parenthetical(self.data.total_tokens, cost_in_cents)
+            {
+                formatted = format!("{formatted} ({parenthetical})");
+            }
             content.add_child(
                 Container::new(self.render_simple_field("Credits used", &formatted, appearance))
                     .with_margin_bottom(FIELD_SPACING)
                     .finish(),
             );
-        }
-
-        if FeatureFlag::PricingTransparency.is_enabled() {
-            if let Some(total_tokens) = self.data.total_tokens {
-                content.add_child(
-                    Container::new(self.render_simple_field(
-                        "Tokens used",
-                        &total_tokens.to_string(),
-                        appearance,
-                    ))
-                    .with_margin_bottom(FIELD_SPACING)
-                    .finish(),
-                );
-            }
-
-            if let Some(charged_usage) = self.data.charged_usage {
-                let rows: [(&str, f32); 5] = [
-                    ("Input cost", charged_usage.input_cost_in_cents),
-                    (
-                        "Cache read cost",
-                        charged_usage.input_cache_read_cost_in_cents,
-                    ),
-                    (
-                        "Cache write cost",
-                        charged_usage.input_cache_write_cost_in_cents,
-                    ),
-                    ("Output cost", charged_usage.output_cost_in_cents),
-                    ("Web search cost", charged_usage.web_search_cost_in_cents),
-                ];
-                for (label, cost_in_cents) in rows {
-                    let formatted = format!("${:.2}", cost_in_cents / 100.0);
-                    content.add_child(
-                        Container::new(self.render_simple_field(label, &formatted, appearance))
-                            .with_margin_bottom(FIELD_SPACING)
-                            .finish(),
-                    );
-                }
-            }
         }
 
         if let Some(duration) = self.data.run_time {

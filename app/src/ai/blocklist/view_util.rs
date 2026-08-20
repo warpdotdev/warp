@@ -297,23 +297,53 @@ pub fn format_credits(credits: f32) -> String {
     }
 }
 
-/// Formats a credit count together with its real dollar cost, e.g.
-/// `"20 credits ($0.36)"`, gated by `FeatureFlag::PricingTransparency`.
+/// Builds the `"12345 tokens, $0.36"`-style parenthetical shared by
+/// [`format_credits_with_cost`] and the conversation details panel's
+/// compact "Credits used" line, gated by `FeatureFlag::PricingTransparency`.
 ///
-/// When the flag is disabled, returns exactly [`format_credits`] with no
-/// dollar suffix, so flag-off output stays byte-identical to today's. When
-/// the flag is enabled but `cost_in_cents` is `None` (no cost baseline is
-/// available for this figure — never coerced to zero), the dollar figure is
-/// gracefully omitted rather than showing "$0.00".
-pub fn format_credits_with_cost(credits: f32, cost_in_cents: Option<f32>) -> String {
-    let credits_text = format_credits(credits);
+/// `tokens` and `cost_in_cents` are independent: either, both, or neither
+/// may be `None` (no baseline is available for that figure — never coerced
+/// to zero), and only the figures that are present are included. Returns
+/// `None` when the flag is disabled, or when both figures are `None`.
+///
+/// This intentionally supersedes the previous standalone "PRICING
+/// BREAKDOWN" section (per-category input/cache/output/platform/web-search
+/// rows): for now a single inline token+dollar figure next to credits is
+/// enough. The deeper `ChargedUsageTotals` breakdown that section rendered
+/// is still computed and available for a future expandable/dropdown
+/// treatment.
+pub fn format_usage_parenthetical(
+    tokens: Option<u32>,
+    cost_in_cents: Option<f32>,
+) -> Option<String> {
     if !FeatureFlag::PricingTransparency.is_enabled() {
-        return credits_text;
+        return None;
     }
-    let Some(cost_in_cents) = cost_in_cents else {
+    let token_part = tokens.map(|tokens| format!("{tokens} tokens"));
+    let cost_part = cost_in_cents.map(|cost_in_cents| format!("${:.2}", cost_in_cents / 100.0));
+    match (token_part, cost_part) {
+        (Some(token_part), Some(cost_part)) => Some(format!("{token_part}, {cost_part}")),
+        (Some(token_part), None) => Some(token_part),
+        (None, Some(cost_part)) => Some(cost_part),
+        (None, None) => None,
+    }
+}
+
+/// Formats a credit count together with its total token count and real
+/// dollar cost, e.g. `"20 credits (12345 tokens, $0.36)"`. See
+/// [`format_usage_parenthetical`] for how the parenthetical is built and
+/// when it's omitted (including always, when `FeatureFlag::PricingTransparency`
+/// is disabled).
+pub fn format_credits_with_cost(
+    credits: f32,
+    tokens: Option<u32>,
+    cost_in_cents: Option<f32>,
+) -> String {
+    let credits_text = format_credits(credits);
+    let Some(parenthetical) = format_usage_parenthetical(tokens, cost_in_cents) else {
         return credits_text;
     };
-    format!("{credits_text} (${:.2})", cost_in_cents / 100.0)
+    format!("{credits_text} ({parenthetical})")
 }
 
 /// Renders a secondary button with an MCP/skill provider icon and a text label.

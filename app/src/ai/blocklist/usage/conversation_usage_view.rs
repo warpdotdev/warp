@@ -29,8 +29,8 @@ use crate::ai::blocklist::view_util::format_credits;
 use crate::ai::blocklist::{BlocklistAIHistoryEvent, BlocklistAIHistoryModel};
 use crate::appearance::Appearance;
 use crate::persistence::model::{
-    ChargedUsageTotals, ContextWindowSegment, ContextWindowSegmentType, FULL_TERMINAL_USE_CATEGORY,
-    ModelTokenUsage, PRIMARY_AGENT_CATEGORY, token_usage_category_display_name,
+    ContextWindowSegment, ContextWindowSegmentType, FULL_TERMINAL_USE_CATEGORY, ModelTokenUsage,
+    PRIMARY_AGENT_CATEGORY, token_usage_category_display_name,
 };
 use crate::ui_components::blended_colors;
 
@@ -56,14 +56,6 @@ pub struct ConversationUsageInfo {
     pub lines_added: i32,
     pub lines_removed: i32,
     pub commands_executed: i32,
-    /// Cumulative per-category charged-usage breakdown (input/output/
-    /// cache-read/cache-write cost + token counts) for the whole
-    /// conversation so far, gated by `FeatureFlag::PricingTransparency`.
-    /// `None` when the server didn't provide it (flag off, or the source
-    /// doesn't yet carry it — e.g. the settings usage-history surface,
-    /// which sources this view from a GraphQL query that doesn't yet
-    /// expose the breakdown; documented gap, see `gql_convert.rs`).
-    pub charged_usage: Option<ChargedUsageTotals>,
 }
 
 /// Timing information for the last set of agent responses
@@ -537,8 +529,6 @@ impl ConversationUsageView {
             appearance,
         );
 
-        self.append_pricing_breakdown_section(&mut labels, &mut values, appearance);
-
         // Space between sections
         labels.push(
             Container::new(Empty::new().finish())
@@ -806,58 +796,6 @@ impl ConversationUsageView {
                 .with_color(value_color)
                 .finish(),
             );
-        }
-    }
-
-    /// Pushes a "PRICING BREAKDOWN" section with a row per inference
-    /// token category (input, cache read, cache write, output) plus web
-    /// search cost, gated by `FeatureFlag::PricingTransparency`. Absent
-    /// entirely when the flag is off or the breakdown is unavailable (e.g.
-    /// the settings usage-history surface, which sources this view from a
-    /// GraphQL query that doesn't yet expose a per-category cost breakdown
-    /// — documented gap).
-    fn append_pricing_breakdown_section(
-        &self,
-        labels: &mut Vec<Box<dyn Element>>,
-        values: &mut Vec<Box<dyn Element>>,
-        appearance: &Appearance,
-    ) {
-        if !FeatureFlag::PricingTransparency.is_enabled() {
-            return;
-        }
-        let Some(charged_usage) = self.usage_info.charged_usage else {
-            return;
-        };
-
-        labels.push(
-            Container::new(Empty::new().finish())
-                .with_margin_top(12.)
-                .finish(),
-        );
-        values.push(
-            Container::new(Empty::new().finish())
-                .with_margin_top(12.)
-                .finish(),
-        );
-        labels.push(render_section_header(
-            "PRICING BREAKDOWN".to_string(),
-            appearance,
-        ));
-        values.push(render_section_header("".to_string(), appearance));
-
-        let rows: [(&str, f32); 5] = [
-            ("Input", charged_usage.input_cost_in_cents),
-            ("Cache read", charged_usage.input_cache_read_cost_in_cents),
-            ("Cache write", charged_usage.input_cache_write_cost_in_cents),
-            ("Output", charged_usage.output_cost_in_cents),
-            ("Web search", charged_usage.web_search_cost_in_cents),
-        ];
-        for (label, cost_in_cents) in rows {
-            labels.push(render_label_text(label, appearance));
-            values.push(render_value_text(
-                format!("${:.2}", cost_in_cents / 100.0),
-                appearance,
-            ));
         }
     }
 

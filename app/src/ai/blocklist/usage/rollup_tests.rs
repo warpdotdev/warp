@@ -3,6 +3,7 @@ use warpui::{App, EntityId};
 use super::*;
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::blocklist::BlocklistAIHistoryModel;
+use crate::persistence::model::ChargedUsageTotals;
 use crate::test_util::settings::initialize_history_persistence_for_tests;
 
 fn set_credits(
@@ -30,6 +31,23 @@ fn set_cost_in_cents(
             .conversation_mut(&id)
             .expect("conversation must be loaded")
             .set_cost_in_cents_for_test(cost_in_cents);
+    });
+}
+
+fn set_charged_usage_tokens(
+    app: &mut App,
+    history: &warpui::ModelHandle<BlocklistAIHistoryModel>,
+    id: AIConversationId,
+    total_tokens: Option<u32>,
+) {
+    history.update(app, |history, _| {
+        history
+            .conversation_mut(&id)
+            .expect("conversation must be loaded")
+            .set_charged_usage_for_test(total_tokens.map(|input_tokens| ChargedUsageTotals {
+                input_tokens,
+                ..Default::default()
+            }));
     });
 }
 
@@ -171,6 +189,69 @@ fn omits_cost_in_cents_when_any_contributor_lacks_a_baseline() {
             let rollup = compute_orchestration_rollup(orchestrator_id, history)
                 .expect("rollup should be Some");
             assert_eq!(rollup.total_cost_in_cents, None);
+        });
+    });
+}
+
+#[test]
+fn sums_tokens_when_all_contributors_have_a_count() {
+    App::test((), |mut app| async move {
+        initialize_history_persistence_for_tests(&mut app);
+        let terminal_view_id = EntityId::new();
+        let history = app.add_singleton_model(|_| BlocklistAIHistoryModel::new_for_test());
+
+        let orchestrator_id = history.update(&mut app, |history, ctx| {
+            history.start_new_conversation(terminal_view_id, false, false, false, ctx)
+        });
+        let child_id = spawn_child(
+            &mut app,
+            &history,
+            "DesignBot",
+            orchestrator_id,
+            terminal_view_id,
+        );
+
+        set_credits(&mut app, &history, orchestrator_id, 3.0);
+        set_credits(&mut app, &history, child_id, 30.0);
+        set_charged_usage_tokens(&mut app, &history, orchestrator_id, Some(100));
+        set_charged_usage_tokens(&mut app, &history, child_id, Some(900));
+
+        history.read(&app, |history, _| {
+            let rollup = compute_orchestration_rollup(orchestrator_id, history)
+                .expect("rollup should be Some");
+            assert_eq!(rollup.total_tokens, Some(1000));
+        });
+    });
+}
+
+#[test]
+fn omits_tokens_when_any_contributor_lacks_a_count() {
+    App::test((), |mut app| async move {
+        initialize_history_persistence_for_tests(&mut app);
+        let terminal_view_id = EntityId::new();
+        let history = app.add_singleton_model(|_| BlocklistAIHistoryModel::new_for_test());
+
+        let orchestrator_id = history.update(&mut app, |history, ctx| {
+            history.start_new_conversation(terminal_view_id, false, false, false, ctx)
+        });
+        let child_id = spawn_child(
+            &mut app,
+            &history,
+            "DesignBot",
+            orchestrator_id,
+            terminal_view_id,
+        );
+
+        set_credits(&mut app, &history, orchestrator_id, 3.0);
+        set_credits(&mut app, &history, child_id, 30.0);
+        set_charged_usage_tokens(&mut app, &history, orchestrator_id, Some(100));
+        // Child has no known token count (e.g. flag off, or a legacy conversation).
+        set_charged_usage_tokens(&mut app, &history, child_id, None);
+
+        history.read(&app, |history, _| {
+            let rollup = compute_orchestration_rollup(orchestrator_id, history)
+                .expect("rollup should be Some");
+            assert_eq!(rollup.total_tokens, None);
         });
     });
 }

@@ -3697,6 +3697,14 @@ fn render_usage_button(props: Props, app: &AppContext) -> Box<dyn Element> {
         .as_ref()
         .map(|r| r.total_cost_in_cents)
         .unwrap_or_else(|| conversation.usage_totals().cost_in_cents);
+    // Same rollup-vs-own-totals split as `headline_cost_in_cents`, for the
+    // token count shown alongside it.
+    let headline_tokens = rollup.as_ref().map(|r| r.total_tokens).unwrap_or_else(|| {
+        conversation
+            .usage_totals()
+            .charged_usage
+            .map(|usage| usage.total_tokens())
+    });
     let has_any_usage = headline_credits > 0.0
         || conversation.credits_spent_for_last_block().is_some()
         || !conversation.token_usage().is_empty()
@@ -3716,7 +3724,7 @@ fn render_usage_button(props: Props, app: &AppContext) -> Box<dyn Element> {
 
     let total_credits_spent = headline_credits;
     let mut credit_usage_text =
-        format_credits_with_cost(total_credits_spent, headline_cost_in_cents);
+        format_credits_with_cost(total_credits_spent, headline_tokens, headline_cost_in_cents);
     if let Some(credits_spent_for_last_block) = conversation.credits_spent_for_last_block() {
         // Only show the credits spent for the last block if it is different from the total credits spent
         // and we spent a non-zero amount of credits for the last block.
