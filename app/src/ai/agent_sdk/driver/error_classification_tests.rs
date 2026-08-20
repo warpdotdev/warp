@@ -338,3 +338,12 @@ fn sandbox_deadline_reached_is_error_with_exact_message_and_no_error_code() {
          maximum agent runtime and cannot be configured per run."
     );
 }
+
+#[test]
+fn wait_for_events_checkpoint_failed_is_error_with_internal() {
+    assert_state_and_code(
+        AgentDriverError::WaitForEventsCheckpointFailed,
+        AgentTaskState::Error,
+        Some(PlatformErrorCode::InternalError),
+    );
+}

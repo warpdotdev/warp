@@ -3184,6 +3184,17 @@ pub enum BlocklistAIHistoryEvent {
         conversation_id: AIConversationId,
         session_id: session_sharing_protocol::common::SessionId,
     },
+
+    /// Emitted when a `wait_for_events` action's warm wait window expires
+    /// with no inbound event. The conversation's `ConversationStatus`
+    /// remains `WaitingForEvents` (unchanged), so this carries the signal
+    /// on its own rather than riding along with `UpdatedConversationStatus`.
+    /// Drivers use this to end the run without starting another model turn
+    /// or waiting for an `idle_on_complete` window.
+    WaitForEventsYielded {
+        conversation_id: AIConversationId,
+        terminal_surface_id: EntityId,
+    },
 }
 
 impl BlocklistAIHistoryEvent {
@@ -3266,6 +3277,10 @@ impl BlocklistAIHistoryEvent {
             | BlocklistAIHistoryEvent::ConversationServerTokenAssigned {
                 terminal_surface_id,
                 ..
+            }
+            | BlocklistAIHistoryEvent::WaitForEventsYielded {
+                terminal_surface_id,
+                ..
             } => Some(*terminal_surface_id),
             // UpdatedConversationMetadata can have None when updating historical-only conversations
             BlocklistAIHistoryEvent::UpdatedConversationMetadata {
@@ -3304,6 +3319,19 @@ impl BlocklistAIHistoryModel {
         ctx.emit(BlocklistAIHistoryEvent::NewConversationRequestComplete {
             request_id,
             conversation_id,
+        });
+    }
+
+    /// Emits [`BlocklistAIHistoryEvent::WaitForEventsYielded`].
+    pub fn mark_wait_for_events_yielded(
+        &mut self,
+        terminal_surface_id: EntityId,
+        conversation_id: AIConversationId,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        ctx.emit(BlocklistAIHistoryEvent::WaitForEventsYielded {
+            conversation_id,
+            terminal_surface_id,
         });
     }
 }

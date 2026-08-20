@@ -384,6 +384,11 @@ pub fn classify_driver_error(error: &AgentDriverError) -> (AgentTaskState, TaskS
             AgentTaskState::Error,
             TaskStatusUpdate::message(error.to_string()),
         ),
+
+        AgentDriverError::WaitForEventsCheckpointFailed => (
+            AgentTaskState::Error,
+            TaskStatusUpdate::with_error_code(error.to_string(), PlatformErrorCode::InternalError),
+        ),
     }
 }
 

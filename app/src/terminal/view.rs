@@ -6098,7 +6098,8 @@ impl TerminalView {
             | BlocklistAIHistoryEvent::NewConversationRequestComplete { .. }
             | BlocklistAIHistoryEvent::OrchestrationConfigUpdated { .. }
             | BlocklistAIHistoryEvent::ConversationUsageMetadataUpdated { .. }
-            | BlocklistAIHistoryEvent::LocalSharedSessionEstablished { .. } => None,
+            | BlocklistAIHistoryEvent::LocalSharedSessionEstablished { .. }
+            | BlocklistAIHistoryEvent::WaitForEventsYielded { .. } => None,
         }
     }
 
@@ -6643,7 +6644,8 @@ impl TerminalView {
             | BlocklistAIHistoryEvent::NewConversationRequestComplete { .. }
             | BlocklistAIHistoryEvent::OrchestrationConfigUpdated { .. }
             | BlocklistAIHistoryEvent::ConversationUsageMetadataUpdated { .. }
-            | BlocklistAIHistoryEvent::LocalSharedSessionEstablished { .. } => {}
+            | BlocklistAIHistoryEvent::LocalSharedSessionEstablished { .. }
+            | BlocklistAIHistoryEvent::WaitForEventsYielded { .. } => {}
         }
         ctx.notify();
     }
@@ -7425,6 +7427,7 @@ impl TerminalView {
                 }
             }
             BlocklistAIActionEvent::QueuedAction(_) => {}
+            BlocklistAIActionEvent::WaitForEventsYielded { .. } => {}
         }
     }
 

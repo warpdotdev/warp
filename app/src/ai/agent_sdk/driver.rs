@@ -381,6 +381,10 @@ fn idle_window_for_terminal_status(
         | SDKConversationOutputStatus::Blocked { .. }
         | SDKConversationOutputStatus::Cancelled { .. } => idle_on_complete,
         SDKConversationOutputStatus::Error { .. } => idle_on_fail,
+        // Hibernation is the point: never hold the sandbox open for a
+        // follow-up window after the first no-event wait timeout.
+        SDKConversationOutputStatus::YieldedForEvents
+        | SDKConversationOutputStatus::YieldedForEventsCheckpointFailed => None,
     }
 }
 
@@ -410,6 +414,10 @@ fn terminal_status_log_outcome(status: &SDKConversationOutputStatus) -> &'static
         | SDKConversationOutputStatus::Blocked { .. }
         | SDKConversationOutputStatus::Cancelled { .. } => "non_error_completion",
         SDKConversationOutputStatus::Error { .. } => "error",
+        SDKConversationOutputStatus::YieldedForEvents => "yielded_for_events",
+        SDKConversationOutputStatus::YieldedForEventsCheckpointFailed => {
+            "yielded_for_events_checkpoint_failed"
+        }
     }
 }
 
@@ -580,6 +588,12 @@ pub struct AgentDriver {
     /// pure no-op for local and disabled runs.
     snapshot_file_writer: Option<snapshot::DeclarationsWriterHandle>,
 
+    /// Set once the `WaitForEventsYielded` handler has already attempted the final
+    /// checkpoint upload for this run's clean exit (see `SDKConversationOutputStatus::
+    /// YieldedForEvents` / `YieldedForEventsCheckpointFailed`), so the unconditional
+    /// end-of-run cleanup in `run` does not redundantly upload a second final checkpoint.
+    final_checkpoint_uploaded_for_yield: bool,
+
     /// Whether the driver should skip dispatching the initial
     /// `StartFromAmbientRunPrompt`. Mirror of `AgentDriverOptions::skip_initial_turn`,
     /// sourced from the `--skip-initial-turn` CLI flag. Read by `execute_run`
@@ -596,15 +610,31 @@ pub struct AgentDriver {
 #[derive(Clone)]
 pub(crate) enum SDKConversationOutputStatus {
     Success,
-    Error { error: RenderableAIError },
-    Cancelled { reason: CancellationReason },
-    Blocked { blocked_action: String },
+    Error {
+        error: RenderableAIError,
+    },
+    Cancelled {
+        reason: CancellationReason,
+    },
+    Blocked {
+        blocked_action: String,
+    },
+    /// A `wait_for_events` warm wait window expired with no inbound event.
+    /// The execution ends cleanly without another model turn; server
+    /// finalization projects the durable BLOCKED task state from the
+    /// yield marker persisted on the closed tool call.
+    YieldedForEvents,
+    /// Same trigger as `YieldedForEvents`, but the final checkpoint upload
+    /// failed. Reported as an execution error rather than a clean yield,
+    /// since resumability from the checkpoint isn't proven.
+    YieldedForEventsCheckpointFailed,
 }
 
 impl SDKConversationOutputStatus {
     pub fn into_result(self) -> Result<(), AgentDriverError> {
         match self {
-            SDKConversationOutputStatus::Success => Ok(()),
+            SDKConversationOutputStatus::Success
+            | SDKConversationOutputStatus::YieldedForEvents => Ok(()),
             SDKConversationOutputStatus::Error { error } => {
                 Err(AgentDriverError::ConversationError { error })
             }
@@ -614,6 +644,9 @@ impl SDKConversationOutputStatus {
             }
             SDKConversationOutputStatus::Blocked { blocked_action } => {
                 Err(AgentDriverError::ConversationBlocked { blocked_action })
+            }
+            SDKConversationOutputStatus::YieldedForEventsCheckpointFailed => {
+                Err(AgentDriverError::WaitForEventsCheckpointFailed)
             }
         }
     }
@@ -795,6 +828,14 @@ pub enum AgentDriverError {
          maximum agent runtime and cannot be configured per run."
     )]
     SandboxDeadlineReached,
+    /// The final checkpoint upload failed after a `wait_for_events` warm
+    /// wait window expired. Reported as an error rather than a clean
+    /// yield because resumability from the checkpoint isn't proven.
+    #[error(
+        "Failed to upload the resumable checkpoint after the wait_for_events warm wait window \
+         expired."
+    )]
+    WaitForEventsCheckpointFailed,
 }
 
 impl ErrorExt for AgentDriverError {
@@ -1024,6 +1065,7 @@ impl AgentDriver {
             parent_run_id: parent_run_id_for_self,
             third_party_harness_model_config,
             snapshot_file_writer,
+            final_checkpoint_uploaded_for_yield: false,
             skip_initial_turn,
             strict_mcp_startup,
             mcp_startup_timeout: mcp_startup_timeout.unwrap_or(MCP_SERVER_STARTUP_TIMEOUT),
@@ -1073,6 +1115,7 @@ impl AgentDriver {
             parent_run_id: None,
             third_party_harness_model_config: None,
             snapshot_file_writer: None,
+            final_checkpoint_uploaded_for_yield: false,
             skip_initial_turn: false,
             strict_mcp_startup: false,
             mcp_startup_timeout: MCP_SERVER_STARTUP_TIMEOUT,
@@ -1292,7 +1335,13 @@ impl AgentDriver {
                          (reason={actual_reason:?}): {finalization_result:?}"
                     );
                 }
-                Self::run_snapshot_upload(&foreground).await;
+                let already_uploaded_for_yield = foreground
+                    .spawn(|me, _| me.final_checkpoint_uploaded_for_yield)
+                    .await
+                    .unwrap_or(false);
+                if !already_uploaded_for_yield {
+                    let _ = Self::run_snapshot_upload(&foreground, false).await;
+                }
 
                 if tx.send(result).is_err() {
                     report_error!("Caller did not wait for agent driver to finish");
@@ -4023,6 +4072,52 @@ impl AgentDriver {
                     // Continuing an existing conversation should reset the idle timer.
                     run_exit.cancel_idle_timeout();
                 }
+                BlocklistAIHistoryEvent::WaitForEventsYielded {
+                    terminal_surface_id: event_tid,
+                    ..
+                } => {
+                    if *event_tid != terminal_id {
+                        return;
+                    }
+                    // The warm wait window closed with no inbound event. Upload the
+                    // final checkpoint before ending the run — without an idle
+                    // window, since a later event starts a fresh execution rather
+                    // than extending this one — so the resumed execution has a
+                    // history containing the closed wait call and its empty result.
+                    log::info!(
+                        "Ambient agent idle lifecycle: event=checkpoint_upload_started task_id={:?} terminal_view_id={terminal_id:?} outcome=yielded_for_events",
+                        me.task_id
+                    );
+                    let checkpoint_run_exit = run_exit.clone();
+                    let checkpoint_task_id = me.task_id;
+                    let checkpoint_foreground = ctx.spawner();
+                    ctx.spawn(
+                        async move {
+                            // `require_genuine_checkpoint=true`: a hibernation may only
+                            // claim success when a resumable checkpoint was actually
+                            // produced. Unlike most callers of `run_snapshot_upload`, a
+                            // skipped upload (checkpointing disabled, no cloud task id,
+                            // or `--no-snapshot`) is not "nothing to fail" here -- it
+                            // means the closed wait tool call has no persisted result to
+                            // rehydrate from, so it must not be reported as success.
+                            Self::run_snapshot_upload(&checkpoint_foreground, true).await
+                        },
+                        move |me, checkpoint_succeeded, _ctx| {
+                            log::info!(
+                                "Ambient agent idle lifecycle: event=run_completion_immediate task_id={checkpoint_task_id:?} terminal_view_id={terminal_id:?} outcome=yielded_for_events checkpoint_succeeded={checkpoint_succeeded}"
+                            );
+                            // Attempted (successfully or not) here, so the unconditional
+                            // end-of-run cleanup must not upload a second final checkpoint.
+                            me.final_checkpoint_uploaded_for_yield = true;
+                            let status = if checkpoint_succeeded {
+                                SDKConversationOutputStatus::YieldedForEvents
+                            } else {
+                                SDKConversationOutputStatus::YieldedForEventsCheckpointFailed
+                            };
+                            checkpoint_run_exit.complete_with_optional_idle(None, status);
+                        },
+                    );
+                }
                 BlocklistAIHistoryEvent::StartedNewConversation { .. }
                 | BlocklistAIHistoryEvent::ReassignedExchange { .. }
                 | BlocklistAIHistoryEvent::ClearedConversationsForTerminalSurface { .. }
@@ -4421,18 +4516,32 @@ impl AgentDriver {
     }
 
     /// Invoke the end-of-run snapshot upload pipeline if the feature flag is enabled and this
-    /// driver is associated with a cloud task. Errors are logged internally; this helper always
-    /// returns so cleanup can proceed.
+    /// driver is associated with a cloud task. Returns whether the upload is known to have
+    /// succeeded. Most callers treat this as best-effort and ignore the result; a caller that
+    /// must prove resumability (e.g. the `wait_for_events` warm-wait-window yield) inspects it
+    /// and passes `require_genuine_checkpoint=true`.
+    ///
+    /// When `require_genuine_checkpoint` is `false` (the default for ordinary end-of-run
+    /// cleanup), a skipped upload (feature disabled, no task id, `--no-snapshot`) counts as
+    /// success: there was nothing to fail; so does any periodic-coordinator `finalize`
+    /// outcome, since that path is itself best-effort here. When it is `true`, those same
+    /// skip conditions return `false` instead, and a periodic-coordinator finalize is only
+    /// treated as success when it actually committed a checkpoint (see `FinalizeOutcome`):
+    /// a hibernation cannot claim a checkpoint it never produced, so the caller must treat
+    /// anything else as a failed yield rather than a clean one.
     #[tracing::instrument(skip_all, fields(tags.cloud_agent = true))]
-    async fn run_snapshot_upload(spawner: &ModelSpawner<Self>) {
+    async fn run_snapshot_upload(
+        spawner: &ModelSpawner<Self>,
+        require_genuine_checkpoint: bool,
+    ) -> bool {
         if !FeatureFlag::OzHandoff.is_enabled() {
-            return;
+            return !require_genuine_checkpoint;
         }
 
         // Snapshot upload is only meaningful for cloud task runs, so short-circuit before
         // pulling the rest of the context onto this task.
         let Ok((
-            Some(task_id),
+            maybe_task_id,
             snapshot_disabled,
             upload_timeout,
             script_timeout,
@@ -4449,24 +4558,48 @@ impl AgentDriver {
             })
             .await
         else {
-            return;
+            return !require_genuine_checkpoint;
+        };
+        let Some(task_id) = maybe_task_id else {
+            return !require_genuine_checkpoint;
         };
         if snapshot_disabled {
             log::info!("Skipping snapshot upload because --no-snapshot was specified");
-            return;
+            return !require_genuine_checkpoint;
         }
 
         // An active coordinator replaces the legacy upload below. Budget must come from
         // `finalize_budget`: the coordinator's floor is `script_timeout + upload_timeout`,
         // so a smaller budget silently skips the final attempt.
         if let Some(coordinator) = checkpoint_coordinator {
-            coordinator
+            let outcome = coordinator
                 .finalize(checkpoint_coordinator::finalize_budget(
                     script_timeout,
                     upload_timeout,
                 ))
                 .await;
-            return;
+            match &outcome {
+                checkpoint_coordinator::FinalizeOutcome::Committed { generation } => {
+                    log::info!(
+                        "Periodic checkpoint coordinator finalize committed generation={}",
+                        generation.as_str()
+                    );
+                }
+                checkpoint_coordinator::FinalizeOutcome::NotCommitted { result } => {
+                    log::info!(
+                        "Periodic checkpoint coordinator finalize did not commit: {result:?}"
+                    );
+                }
+                checkpoint_coordinator::FinalizeOutcome::Unknown => {
+                    log::info!("Periodic checkpoint coordinator finalize outcome unknown");
+                }
+            }
+            // Ordinary best-effort cleanup does not care whether the periodic coordinator's
+            // last attempt actually committed. A caller requiring proof of a resumable
+            // checkpoint does: `finalize` acknowledging is not itself evidence of a commit --
+            // it also acks on skip/failure/timeout/a dropped result channel (see
+            // `FinalizeOutcome`) -- so only a genuine commit satisfies that requirement.
+            return outcome.is_committed() || !require_genuine_checkpoint;
         }
 
         let Ok((working_dir, client)) = spawner
@@ -4480,7 +4613,7 @@ impl AgentDriver {
                 "Unable to retrieve snapshot upload context for cleanup",
                 extra: { "task_id" => %task_id }
             );
-            return;
+            return false;
         };
 
         // Drain any pending declarations writes from the history subscription before the
@@ -4505,7 +4638,9 @@ impl AgentDriver {
                 "Snapshot upload timed out; continuing with cleanup",
                 extra: { "timeout" => ?upload_timeout, "task_id" => %task_id }
             );
+            return false;
         }
+        true
     }
 }
 

@@ -97,7 +97,38 @@ pub(super) fn finalize_budget(script_timeout: Duration, upload_timeout: Duration
 /// shutdown can proceed.
 struct FinalizeRequest {
     deadline: Instant,
-    ack: oneshot::Sender<()>,
+    ack: oneshot::Sender<FinalizeOutcome>,
+}
+
+/// The result [`CheckpointCoordinatorHandle::finalize`] actually observed, so a caller that
+/// must prove resumability (the `wait_for_events` warm-wait-window yield) can require a
+/// genuinely committed checkpoint instead of assuming one happened.
+#[derive(Debug)]
+pub(super) enum FinalizeOutcome {
+    /// The final attempt committed a checkpoint.
+    Committed { generation: CheckpointGeneration },
+    /// An attempt ran (or was already in flight) and resolved to something other than a
+    /// commit: skipped (nothing to checkpoint) or failed.
+    NotCommitted { result: CheckpointResult },
+    /// No confirmed result: below the budget floor, the attempt didn't resolve within its
+    /// bounded wait, or its result channel was dropped without a value. Treated the same as
+    /// "not committed" by callers that require proof, since none of these establish that a
+    /// resumable checkpoint exists.
+    Unknown,
+}
+
+impl FinalizeOutcome {
+    fn from_result(result: CheckpointResult) -> Self {
+        match result {
+            CheckpointResult::Committed { generation } => Self::Committed { generation },
+            other => Self::NotCommitted { result: other },
+        }
+    }
+
+    /// Whether this outcome proves a genuinely committed, resumable checkpoint exists.
+    pub(super) fn is_committed(&self) -> bool {
+        matches!(self, Self::Committed { .. })
+    }
 }
 
 /// Handle used by `AgentDriver` to request finalization of the periodic checkpoint
@@ -210,11 +241,14 @@ impl CheckpointCoordinatorHandle {
     /// stop the coordinator. Bounded by `budget` end to end. Safe to call at most
     /// once; safe to never call.
     ///
+    /// Returns the actual [`FinalizeOutcome`] observed, so a caller that must prove
+    /// resumability does not have to assume success just because this returned.
+    ///
     /// Callers should derive `budget` from [`finalize_budget`] rather than passing a
     /// per-attempt timeout directly: the floor in [`finalize_with_new_attempt`] is
     /// `script_timeout + upload_timeout`, so a smaller budget silently skips the final
     /// attempt.
-    pub(super) async fn finalize(&self, budget: Duration) {
+    pub(super) async fn finalize(&self, budget: Duration) -> FinalizeOutcome {
         let (ack_tx, ack_rx) = oneshot::channel();
         let request = FinalizeRequest {
             deadline: Instant::now() + budget,
@@ -222,7 +256,7 @@ impl CheckpointCoordinatorHandle {
         };
         if self.finalize_tx.send(request).is_err() {
             // Coordinator task already exited; nothing to wait for.
-            return;
+            return FinalizeOutcome::Unknown;
         }
         // The coordinator always acks well within `budget` (either immediately, when
         // below the floor, or after its own internally bounded attempt). This extra
@@ -230,7 +264,10 @@ impl CheckpointCoordinatorHandle {
         // the added slack: bounding on exactly `budget` would routinely preempt the
         // attempt the coordinator is legitimately still finishing, instead of only
         // catching a bug.
-        let _ = tokio::time::timeout(budget + FINALIZE_ACK_SLACK, ack_rx).await;
+        match tokio::time::timeout(budget + FINALIZE_ACK_SLACK, ack_rx).await {
+            Ok(Ok(outcome)) => outcome,
+            Ok(Err(_)) | Err(_) => FinalizeOutcome::Unknown,
+        }
     }
 }
 
@@ -454,7 +491,7 @@ async fn finalize_with_new_attempt(
 ) {
     let floor = script_timeout + upload_timeout;
     let remaining = request.deadline.saturating_duration_since(Instant::now());
-    if remaining > floor {
+    let outcome = if remaining > floor {
         log::info!(
             "Starting final checkpoint attempt at shutdown (remaining budget {remaining:?})"
         );
@@ -467,8 +504,12 @@ async fn finalize_with_new_attempt(
             upload_timeout,
             generation,
         );
-        if tokio::time::timeout(remaining, attempt).await.is_err() {
-            log::warn!("Final checkpoint attempt did not complete within {remaining:?}");
+        match tokio::time::timeout(remaining, attempt).await {
+            Ok(result) => FinalizeOutcome::from_result(result),
+            Err(_) => {
+                log::warn!("Final checkpoint attempt did not complete within {remaining:?}");
+                FinalizeOutcome::Unknown
+            }
         }
     } else {
         // Callers must size the budget with `finalize_budget`; anything at or below the
@@ -477,8 +518,9 @@ async fn finalize_with_new_attempt(
             "Skipping final checkpoint attempt: remaining shutdown budget {remaining:?} \
              is below the {floor:?} floor"
         );
-    }
-    let _ = request.ack.send(());
+        FinalizeOutcome::Unknown
+    };
+    let _ = request.ack.send(outcome);
 }
 
 /// Handle a finalize request received while an attempt started by the periodic
@@ -489,12 +531,14 @@ async fn finalize_with_in_flight_attempt(
     result_rx: oneshot::Receiver<CheckpointResult>,
 ) {
     let remaining = request.deadline.saturating_duration_since(Instant::now());
-    match tokio::time::timeout(remaining, result_rx).await {
+    let outcome = match tokio::time::timeout(remaining, result_rx).await {
         Ok(Ok(result)) => {
             log::info!("In-flight checkpoint attempt resolved during finalization: {result:?}");
+            FinalizeOutcome::from_result(result)
         }
         Ok(Err(_)) => {
             log::warn!("In-flight checkpoint attempt's result channel dropped without a result");
+            FinalizeOutcome::Unknown
         }
         Err(_) => {
             // The spawned attempt keeps running in the background regardless; we
@@ -503,9 +547,10 @@ async fn finalize_with_in_flight_attempt(
                 "In-flight checkpoint attempt did not resolve within the remaining \
                  {remaining:?} shutdown budget; continuing shutdown without it"
             );
+            FinalizeOutcome::Unknown
         }
-    }
-    let _ = request.ack.send(());
+    };
+    let _ = request.ack.send(outcome);
 }
 
 /// The coordinator's main loop. `Idle` and `Due` are collapsed into the top of the

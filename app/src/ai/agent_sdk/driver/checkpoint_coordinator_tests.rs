@@ -839,6 +839,42 @@ async fn coordinator_failed_attempt_returns_to_idle_and_retries_next_interval() 
 }
 
 #[tokio::test]
+async fn coordinator_finalize_reports_not_committed_when_final_attempt_fails() {
+    // QUALITY-1759 review finding 3: `finalize` acking must not be conflated with a genuine
+    // commit. A caller requiring proof of a resumable checkpoint (the wait_for_events yield)
+    // needs to see that this attempt failed, not silently get treated as success.
+    let client = FailingUploadTargetsClient::new();
+    let task_id = fresh_task_id();
+    let tempdir = TempDir::new().unwrap();
+    let file_path = tempdir.path().join("note.txt");
+    std::fs::write(&file_path, b"hi").unwrap();
+    let _decl = DeclarationsFixture::new(&task_id, &file_path);
+    let always_safe: BoundaryCheck = Arc::new(|| Box::pin(async { Boundary::Safe }));
+
+    let handle = CheckpointCoordinatorHandle::new_for_test(
+        client.clone(),
+        task_id,
+        tempdir.path().to_path_buf(),
+        always_safe,
+        Duration::from_secs(600), // never fires during this test
+        Duration::from_secs(5),
+        Duration::from_secs(5),
+        test_background(),
+    );
+
+    let outcome = handle.finalize(Duration::from_secs(30)).await;
+
+    assert!(
+        !outcome.is_committed(),
+        "a failed final attempt must not be reported as committed: {outcome:?}"
+    );
+    assert!(
+        client.call_count.load(Ordering::SeqCst) >= 1,
+        "the final attempt must actually have run"
+    );
+}
+
+#[tokio::test]
 async fn coordinator_finalize_from_idle_skips_attempt_below_floor() {
     let client = FailingUploadTargetsClient::new();
     let task_id = fresh_task_id();

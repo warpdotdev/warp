@@ -72,7 +72,7 @@ use suggest_new_conversation::SuggestNewConversationExecutor;
 pub use suggest_prompt::PromptSuggestionExecutor;
 use upload_artifact::UploadArtifactExecutor;
 use use_computer::UseComputerExecutor;
-use wait_for_events::WaitForEventsExecutor;
+use wait_for_events::{WaitForEventsExecutor, WaitForEventsExecutorEvent};
 use warp_core::execution_mode::AppExecutionMode;
 #[cfg(feature = "local_fs")]
 use warp_files::{FileModel, TextFileReadResult};
@@ -89,7 +89,7 @@ use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent::{
     AIAgentAction, AIAgentActionId, AIAgentActionResult, AIAgentActionResultType,
     AIAgentActionType, AIAgentActionTypeDiscriminants, CancellationReason, FileContext,
-    FileLocations, ReadFilesFailedFile, ServerOutputId,
+    FileLocations, ReadFilesFailedFile, ServerOutputId, WaitForEventsResult,
 };
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::blocklist::action_model::recording_controller::RecordingController;
@@ -347,6 +347,23 @@ impl BlocklistAIActionExecutor {
             ctx.add_model(|_| AskUserQuestionExecutor::new(terminal_view_id));
         let wait_for_events_executor =
             ctx.add_model(|ctx| WaitForEventsExecutor::new(terminal_view_id, ctx));
+        ctx.subscribe_to_model(&wait_for_events_executor, |me, _, event, ctx| {
+            let WaitForEventsExecutorEvent::WarmWaitWindowExpired {
+                conversation_id,
+                tool_call_id,
+                server_idle_timeout_seconds,
+                used_fallback,
+                resolved_watchdog,
+            } = event;
+            me.yield_wait_for_events(
+                *conversation_id,
+                tool_call_id,
+                *server_idle_timeout_seconds,
+                *used_fallback,
+                *resolved_watchdog,
+                ctx,
+            );
+        });
         Self {
             shell_command_executor,
             read_files_executor,
@@ -915,6 +932,48 @@ impl BlocklistAIActionExecutor {
         }
     }
 
+    /// Yields a `WaitForEvents` action whose warm wait window expired with
+    /// no inbound event, closing its tool call with an empty `Completed`
+    /// result instead of the shared cancellation path (which would report
+    /// `Cancelled`).
+    ///
+    /// Removes the action from `async_executing_actions` before dropping
+    /// the executor's pending sender, so the generic async-completion
+    /// callback discards the future's defensive resolution instead of
+    /// emitting a second `FinishedAction` for this action.
+    fn yield_wait_for_events(
+        &mut self,
+        conversation_id: AIConversationId,
+        tool_call_id: &str,
+        server_idle_timeout_seconds: i32,
+        used_fallback: bool,
+        resolved_watchdog: std::time::Duration,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let Some(action_id) = self.find_running_wait_for_events(conversation_id) else {
+            return;
+        };
+        let Some(running) = self.async_executing_actions.remove(&action_id) else {
+            return;
+        };
+        self.wait_for_events_executor.update(ctx, |executor, _| {
+            executor.take_pending_wait(conversation_id);
+        });
+        let result = Arc::new(AIAgentActionResult {
+            id: action_id,
+            task_id: running.action.task_id,
+            result: AIAgentActionResultType::WaitForEvents(WaitForEventsResult::Completed),
+        });
+        ctx.emit(BlocklistAIActionExecutorEvent::WaitForEventsYielded {
+            result,
+            conversation_id: running.conversation_id,
+            tool_call_id: tool_call_id.to_string(),
+            server_idle_timeout_seconds,
+            used_fallback,
+            resolved_watchdog,
+        });
+    }
+
     /// Drops executor-held per-action state now that the action has reached a
     /// terminal result. Called from the action model's terminal-result choke
     /// point (`handle_action_result`), which every outcome — success, failure,
@@ -1067,6 +1126,19 @@ pub enum BlocklistAIActionExecutorEvent {
         repo_path: PathBuf,
         comments: Vec<ai::agent::action::InsertReviewComment>,
         base_branch: Option<String>,
+    },
+
+    /// A `WaitForEvents` action's warm wait window expired with no inbound
+    /// event. Distinct from `FinishedAction` so the action model can close
+    /// the tool call without triggering ordinary action-completion
+    /// follow-up.
+    WaitForEventsYielded {
+        result: Arc<AIAgentActionResult>,
+        conversation_id: AIConversationId,
+        tool_call_id: String,
+        server_idle_timeout_seconds: i32,
+        used_fallback: bool,
+        resolved_watchdog: std::time::Duration,
     },
 }
 

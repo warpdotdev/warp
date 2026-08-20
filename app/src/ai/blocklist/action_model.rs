@@ -305,6 +305,24 @@ impl BlocklistAIActionModel {
                     base_branch: base_branch.clone(),
                 });
             }
+            BlocklistAIActionExecutorEvent::WaitForEventsYielded {
+                result,
+                conversation_id,
+                tool_call_id,
+                server_idle_timeout_seconds,
+                used_fallback,
+                resolved_watchdog,
+            } => {
+                me.handle_wait_for_events_yielded(
+                    *conversation_id,
+                    result.clone(),
+                    tool_call_id.clone(),
+                    *server_idle_timeout_seconds,
+                    *used_fallback,
+                    *resolved_watchdog,
+                    ctx,
+                );
+            }
         });
 
         Self {
@@ -1447,6 +1465,61 @@ impl BlocklistAIActionModel {
         }
     }
 
+    /// Closes a `WaitForEvents` tool call whose warm wait window expired
+    /// with no inbound event. Unlike [`Self::handle_action_result`], this
+    /// does not emit `FinishedAction`: it must not trigger ordinary
+    /// action-completion follow-up or stamp a new conversation status. The
+    /// conversation stays `WaitingForEvents` until server lifecycle state
+    /// projects `BLOCKED`.
+    #[allow(clippy::too_many_arguments)]
+    fn handle_wait_for_events_yielded(
+        &mut self,
+        conversation_id: AIConversationId,
+        result: Arc<AIAgentActionResult>,
+        tool_call_id: String,
+        server_idle_timeout_seconds: i32,
+        used_fallback: bool,
+        resolved_watchdog: std::time::Duration,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let should_remove_entry =
+            self.running_actions
+                .get_mut(&conversation_id)
+                .is_some_and(|running| {
+                    running.remove_action(&result.id);
+                    running.is_empty()
+                });
+        if should_remove_entry {
+            self.running_actions.remove(&conversation_id);
+        }
+
+        let action_id = result.id.clone();
+        self.executor.update(ctx, |executor, ctx| {
+            executor.discard_action_state(&action_id, ctx);
+        });
+
+        self.finished_action_results
+            .entry(conversation_id)
+            .or_default()
+            .push(result);
+
+        log::info!(
+            "WaitForEvents warm wait window closed: conversation_id={conversation_id:?} \
+             tool_call_id={tool_call_id} server_idle_timeout_seconds={server_idle_timeout_seconds} \
+             used_fallback={used_fallback} resolved_watchdog_seconds={}",
+            resolved_watchdog.as_secs(),
+        );
+
+        ctx.emit(BlocklistAIActionEvent::WaitForEventsYielded {
+            action_id: action_id.clone(),
+            conversation_id,
+        });
+
+        BlocklistAIHistoryModel::handle(ctx).update(ctx, |history_model, ctx| {
+            history_model.mark_wait_for_events_yielded(self.terminal_view_id, conversation_id, ctx);
+        });
+    }
+
     /// In shared-session viewer (view-only) mode, ensure document-related action results
     /// are backed by documents in the local `AIDocumentModel` and that their
     /// `DocumentContext` versions match. For CreateDocuments, restore missing documents
@@ -1550,6 +1623,13 @@ pub enum BlocklistAIActionEvent {
         comments: Vec<ai::agent::action::InsertReviewComment>,
         base_branch: Option<String>,
     },
+    /// A `WaitForEvents` tool call was closed by a warm-wait-window timeout
+    /// rather than ordinary action completion. No follow-up request is sent
+    /// for this outcome.
+    WaitForEventsYielded {
+        action_id: AIAgentActionId,
+        conversation_id: AIConversationId,
+    },
 }
 
 impl BlocklistAIActionEvent {
@@ -1562,6 +1642,7 @@ impl BlocklistAIActionEvent {
             BlocklistAIActionEvent::InitProject(action_id) => action_id,
             BlocklistAIActionEvent::ToggleCodeReview(action_id) => action_id,
             BlocklistAIActionEvent::InsertCodeReviewComments { action_id, .. } => action_id,
+            BlocklistAIActionEvent::WaitForEventsYielded { action_id, .. } => action_id,
         }
     }
 }

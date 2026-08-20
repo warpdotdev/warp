@@ -8,6 +8,7 @@ use std::time::Duration;
 
 use futures::FutureExt;
 use futures::future::BoxFuture;
+use warp_core::features::FeatureFlag;
 use warpui::r#async::SpawnedFutureHandle;
 use warpui::{Entity, EntityId, ModelContext, SingletonEntity};
 
@@ -51,6 +52,32 @@ struct PendingWait {
     /// Handle to the watchdog timer. Aborted on cancel so the future
     /// doesn't survive up to ~30 minutes past supersede.
     watchdog_handle: SpawnedFutureHandle,
+    /// The raw `idle_timeout_seconds` carried on the action (0 means unset).
+    /// Recorded for telemetry so a fallback-resolved wait can still be
+    /// distinguished from a stamped one that happens to resolve to the
+    /// same duration.
+    server_idle_timeout_seconds: i32,
+    /// Whether [`watchdog_timeout_for_stamped_seconds`] fell back to the
+    /// client default because the server stamp was absent or invalid.
+    used_fallback: bool,
+    /// The resolved watchdog duration, after the safety margin.
+    resolved_watchdog: Duration,
+}
+
+/// Emitted by [`WaitForEventsExecutor`] when a pending wait's watchdog
+/// fires with no inbound event.
+#[derive(Debug, Clone)]
+pub enum WaitForEventsExecutorEvent {
+    /// The warm wait window closed with no inbound event. The action
+    /// remains registered in the executor until the action model yields
+    /// it via [`WaitForEventsExecutor::take_pending_wait`].
+    WarmWaitWindowExpired {
+        conversation_id: AIConversationId,
+        tool_call_id: String,
+        server_idle_timeout_seconds: i32,
+        used_fallback: bool,
+        resolved_watchdog: Duration,
+    },
 }
 
 pub struct WaitForEventsExecutor {
@@ -102,7 +129,9 @@ impl WaitForEventsExecutor {
 
         let tool_call_id = tool_call_id.clone();
         let conversation_id = input.conversation_id;
-        let timeout = watchdog_timeout_for_stamped_seconds(*idle_timeout_seconds);
+        let server_idle_timeout_seconds = *idle_timeout_seconds;
+        let used_fallback = server_idle_timeout_seconds <= 0;
+        let timeout = watchdog_timeout_for_stamped_seconds(server_idle_timeout_seconds);
 
         // Blocking on descendants is the trigger to confirm parent status
         // against the server and register for the owner-side ancestor stream,
@@ -147,6 +176,9 @@ impl WaitForEventsExecutor {
                 tool_call_id: tool_call_id.clone(),
                 sender,
                 watchdog_handle,
+                server_idle_timeout_seconds,
+                used_fallback,
+                resolved_watchdog: timeout,
             },
         ) {
             prev.watchdog_handle.abort();
@@ -243,19 +275,65 @@ impl WaitForEventsExecutor {
             self.pending.remove(&conversation_id);
             return;
         }
+        // Copy out the small fields needed below before any further
+        // mutable access to `self.pending`, so the immutable borrow of
+        // `pending` ends here.
+        let server_idle_timeout_seconds = pending.server_idle_timeout_seconds;
+        let used_fallback = pending.used_fallback;
+        let resolved_watchdog = pending.resolved_watchdog;
+
+        // The hibernate-on-timeout path is enforced entirely in the client
+        // action path (not by prompting the model), gated behind a
+        // feature flag so a disabled flag restores the old repeated
+        // long-poll behavior.
+        if !FeatureFlag::HibernateOnFirstWaitTimeout.is_enabled() {
+            let Some(pending) = self.pending.remove(&conversation_id) else {
+                return;
+            };
+            log::info!(
+                "WaitForEventsExecutor: watchdog fired conversation_id={conversation_id:?} \
+                 tool_call_id={tool_call_id}"
+            );
+            let _ = pending.sender.try_send(WaitForEventsResult::Completed);
+            return;
+        }
+
+        // Leave the pending entry registered: the action model removes it
+        // (and drops the sender) via `take_pending_wait` once it has
+        // finished yielding the action, so a defensive `Completed` value
+        // from the dropped sender never surfaces as a second result.
+        log::info!(
+            "WaitForEventsExecutor: warm wait window expired conversation_id={conversation_id:?} \
+             tool_call_id={tool_call_id} server_idle_timeout_seconds={server_idle_timeout_seconds} \
+             used_fallback={used_fallback} resolved_watchdog_seconds={}",
+            resolved_watchdog.as_secs(),
+        );
+        ctx.emit(WaitForEventsExecutorEvent::WarmWaitWindowExpired {
+            conversation_id,
+            tool_call_id: tool_call_id.to_string(),
+            server_idle_timeout_seconds,
+            used_fallback,
+            resolved_watchdog,
+        });
+    }
+
+    /// Removes and drops the pending wait for `conversation_id` after its
+    /// warm wait window has expired, aborting the (already-fired) watchdog
+    /// handle. Dropping the sender resolves the executor's async action
+    /// future; the caller must remove the action from
+    /// `async_executing_actions` first so that resolution is discarded
+    /// instead of surfacing a second result.
+    pub(crate) fn take_pending_wait(&mut self, conversation_id: AIConversationId) {
         let Some(pending) = self.pending.remove(&conversation_id) else {
             return;
         };
-        log::info!(
-            "WaitForEventsExecutor: watchdog fired conversation_id={conversation_id:?} \
-             tool_call_id={tool_call_id}"
-        );
-        let _ = pending.sender.try_send(WaitForEventsResult::Completed);
+        pending.watchdog_handle.abort();
+        drop(pending.sender);
     }
 }
 
 impl Entity for WaitForEventsExecutor {
-    type Event = ();
+    type Event = WaitForEventsExecutorEvent;
 }
 
 #[cfg(test)]

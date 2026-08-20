@@ -975,6 +975,13 @@ pub enum FeatureFlag {
     /// always forwarded unchanged and the harness process/sandbox are never
     /// signaled or torn down.
     CtrlCCancelsThirdPartyHarness,
+
+    /// Hibernates the sandbox on the first `wait_for_events` watchdog
+    /// timeout instead of starting another model turn. When disabled, the
+    /// watchdog firing resumes the old behavior of returning an empty tool
+    /// result and permitting the model to call `wait_for_events` again,
+    /// which repeats the 30-minute long poll indefinitely.
+    HibernateOnFirstWaitTimeout,
 }
 
 static FLAG_STATES: [AtomicBool; cardinality::<FeatureFlag>()] =
@@ -1050,6 +1057,7 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::PricingTransparency,
     FeatureFlag::PeriodicHandoffCheckpoints,
     FeatureFlag::CtrlCCancelsThirdPartyHarness,
+    FeatureFlag::HibernateOnFirstWaitTimeout,
 ];
 
 /// Features enabled for feature preview build users (e.g.: Friends of Warp).
