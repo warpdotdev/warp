@@ -46,7 +46,7 @@ use crate::server::telemetry::{TelemetryAgentViewEntryOrigin, TelemetryEvent};
 use crate::terminal::cli_agent_sessions::{
     CLIAgentInputState, CLIAgentSessionsModel, CLIAgentSessionsModelEvent,
 };
-use crate::terminal::safe_mode_settings::get_secret_obfuscation_mode;
+use crate::terminal::safe_mode_settings::get_secret_obfuscation_mode_for_window;
 use crate::terminal::session_settings::{SessionSettings, SessionSettingsChangedEvent};
 use crate::terminal::shared_session::manager::Manager;
 use crate::terminal::shared_session::permissions_manager::SessionPermissionsManager;
@@ -1610,7 +1610,10 @@ impl TerminalManager<TerminalView> {
 
         // Change the status of the session to unshared.
         model_lock.set_shared_session_status(SharedSessionStatus::NotShared);
-        model_lock.set_obfuscate_secrets(get_secret_obfuscation_mode(ctx));
+        model_lock.set_obfuscate_secrets(get_secret_obfuscation_mode_for_window(
+            terminal_view.window_id(ctx),
+            ctx,
+        ));
         model_lock.clear_ordered_terminal_events_for_shared_session_tx();
 
         // Drop the lock so that it can be taken by the other entities that

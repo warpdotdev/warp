@@ -627,6 +627,20 @@ impl UserWorkspaces {
             .unwrap_or(false)
     }
 
+    /// Whether `team`'s effective policy enables enterprise secret redaction, sourced from
+    /// `team.settings` (the server's already-effective per-team value) rather than the
+    /// workspace-wide `is_enterprise_secret_redaction_enabled` baseline a team can override.
+    /// `None` (no-team) returns `false` rather than falling back to any team, per the
+    /// no-default-team rule.
+    ///
+    /// NOTE: this duplicates a method also added by #15367 (PR 3D part 1, not yet merged as of
+    /// this PR). This PR was asked to branch from `origin/master` independently rather than
+    /// stack on that unmerged branch, so the duplication is temporary and intentional; once
+    /// #15367 merges, this copy should be deleted and callers pointed at that one instead.
+    pub fn is_enterprise_secret_redaction_enabled_for_team(&self, team: Option<&Team>) -> bool {
+        team.is_some_and(|team| team.settings.secret_redaction.enabled.value)
+    }
+
     /// The add-on credits purchase policy for the current viewer context: the
     /// current workspace's policy when one exists, else the user-level policy
     /// from the workspaces-metadata response (how teamless users get one).

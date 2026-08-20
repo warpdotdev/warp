@@ -1,6 +1,6 @@
 use settings::macros::define_settings_group;
 use settings::{RespectUserSyncSetting, Setting, SupportedPlatforms, SyncToCloud};
-use warpui::{AppContext, SingletonEntity};
+use warpui::{AppContext, SingletonEntity, WindowId};
 
 use crate::terminal::model::ObfuscateSecrets;
 use crate::workspaces::user_workspaces::UserWorkspaces;
@@ -105,11 +105,39 @@ define_settings_group!(SafeModeSettings, settings: [
 ]);
 
 /// Returns whether the rendering should obfuscate secrets given the current safe mode settings.
+///
+/// This is ambient: it does not consider which window is asking, so it reads the workspace-wide
+/// enterprise-redaction baseline rather than any specific team's policy. Prefer
+/// [`get_secret_obfuscation_mode_for_window`] wherever a window is known -- most call sites
+/// render one specific terminal and do have one.
 pub fn get_secret_obfuscation_mode(app: &AppContext) -> ObfuscateSecrets {
-    let safe_mode_settings = SafeModeSettings::as_ref(app);
     let is_enterprise_secret_redaction_enabled =
         UserWorkspaces::as_ref(app).is_enterprise_secret_redaction_enabled();
+    get_secret_obfuscation_mode_with_enterprise_flag(is_enterprise_secret_redaction_enabled, app)
+}
 
+/// [`get_secret_obfuscation_mode`], but scoped to `window_id`'s current team: the enterprise
+/// redaction flag comes from that team's own policy rather than the ambient workspace-wide
+/// baseline. Resolving this fresh from the window (rather than a value captured once) is what
+/// lets a terminal's redaction follow a team switch and keeps two windows on different teams
+/// independent, matching the guarantee `TeamRenderContext` gives current-team UI elsewhere.
+pub fn get_secret_obfuscation_mode_for_window(
+    window_id: WindowId,
+    app: &AppContext,
+) -> ObfuscateSecrets {
+    let user_workspaces = UserWorkspaces::as_ref(app);
+    let is_enterprise_secret_redaction_enabled = user_workspaces
+        .is_enterprise_secret_redaction_enabled_for_team(
+            user_workspaces.team_for_window(window_id),
+        );
+    get_secret_obfuscation_mode_with_enterprise_flag(is_enterprise_secret_redaction_enabled, app)
+}
+
+fn get_secret_obfuscation_mode_with_enterprise_flag(
+    is_enterprise_secret_redaction_enabled: bool,
+    app: &AppContext,
+) -> ObfuscateSecrets {
+    let safe_mode_settings = SafeModeSettings::as_ref(app);
     if !is_enterprise_secret_redaction_enabled && !*safe_mode_settings.safe_mode_enabled.value() {
         ObfuscateSecrets::No
     } else {
@@ -133,3 +161,7 @@ pub fn get_effective_secret_display_mode(
         current_mode
     }
 }
+
+#[cfg(test)]
+#[path = "safe_mode_settings_tests.rs"]
+mod tests;
