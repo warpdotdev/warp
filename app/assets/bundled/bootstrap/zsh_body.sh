@@ -1461,6 +1461,15 @@ esac
     warp_mark_replacement_span_for_compadd_override $(( ${#_WARP_NATIVE_COMPLETIONS_LINE} - ${#PREFIX} )) ${#PREFIX}
 
     # display all matches
+    #
+    # $asuf (from compadd's -S) is the string it adds after every match and is meant to
+    # actually be inserted -- e.g. `_arguments`'s '--color=-(never auto always)' spec passes
+    # -S '=' so the option and its value are joined correctly. $hsuf (from -s) is its
+    # display-only counterpart (a "hint" shown but never inserted, mirroring $hpre for -p),
+    # so only $asuf belongs in the inserted text. Without it, accepting a match like
+    # `--color` for `ls --col` inserted `--color` with no `=`, silently turning the next
+    # accepted value into a separate positional argument instead of the option's value.
+    local asuf_str="${(v)asuf}"
     local dsuf dscr
     for i in {1..$#__hits}; do
         # add a dir suffix?
@@ -1468,7 +1477,7 @@ esac
         # description to be displayed afterwards
         (( $#__dscr >= $i )) && dscr="${${__dscr[$i]}##$__hits[$i] #}" || dscr=""
 
-        local match="$__hits[$i]$dsuf"
+        local match="$__hits[$i]$dsuf$asuf_str"
 
         print -n "\e]9280;C"$OSC_PARAM_SEPARATOR$match$OSC_END
         print -n "\e]9280;D?description"$OSC_PARAM_SEPARATOR$dscr$OSC_END
