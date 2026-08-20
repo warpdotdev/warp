@@ -66,8 +66,8 @@ use crate::code_review::CodeReviewTelemetryEvent;
 use crate::notebooks::NotebookId;
 use crate::persistence::ModelEvent;
 use crate::persistence::model::{
-    AgentConversationData, ContextWindowSegment, ConversationUsageMetadata, ModelTokenUsage,
-    PersistedAutoexecuteMode, ToolUsageMetadata,
+    AgentConversationData, ChargedUsageTotals, ContextWindowSegment, ConversationUsageMetadata,
+    ModelTokenUsage, PersistedAutoexecuteMode, ToolUsageMetadata,
 };
 use crate::server::ids::ServerId;
 use crate::terminal::general_settings::GeneralSettings;
@@ -193,6 +193,12 @@ pub struct ConversationUsageTotals {
     /// while a restored legacy conversation with real usage but an unknown
     /// historical cost still shows it.
     pub has_usage: bool,
+    /// Cumulative per-category charged-usage breakdown (input/output/
+    /// cache-read/cache-write cost + token counts) for the whole
+    /// conversation so far, from `ConversationUsageMetadata.total_charges`.
+    /// `None` when the server didn't provide it (flag off, or a legacy
+    /// conversation).
+    pub charged_usage: Option<ChargedUsageTotals>,
 }
 
 /// Whether persisted or server usage metadata carries evidence that the
@@ -790,6 +796,18 @@ impl AIConversation {
         self.conversation_usage_metadata.platform_credits_spent = 0.0;
     }
 
+    /// Test-only helper that sets (or clears) the conversation's dollar-cost
+    /// baseline directly, mirroring what `set_server_metadata` would derive
+    /// from a real snapshot. Used by unit tests that exercise downstream
+    /// cost-aware logic (e.g. the orchestration credit rollup's dollar
+    /// figure) without wiring up a full server metadata snapshot.
+    #[cfg(test)]
+    pub(crate) fn set_cost_in_cents_for_test(&mut self, cost_in_cents: Option<f32>) {
+        self.total_provider_cost_in_cents = cost_in_cents;
+        self.conversation_usage_metadata
+            .total_provider_cost_in_cents = cost_in_cents;
+    }
+
     /// Test-only helper that simulates the root-task upgrade performed by the
     /// `Action::CreateTask` branch of `apply_client_action` when the server
     /// confirms the root for a newly started conversation. Replaces the
@@ -821,6 +839,18 @@ impl AIConversation {
         self.conversation_usage_metadata
             .credits_spent_for_last_block
             .map(|credits| (credits * 10.0).round() / 10.0)
+    }
+
+    /// Per-category charged-usage breakdown over the last block, where the
+    /// block comprises all agent outputs since the most recent user input
+    /// (mirrors [`Self::credits_spent_for_last_block`], but as a full
+    /// input/output/cache-read/cache-write cost + token breakdown rather
+    /// than a bare credits figure). `None` when the server didn't provide
+    /// `StreamFinished.request_charges` (flag off) or before any block has
+    /// completed.
+    pub fn charged_usage_for_last_block(&self) -> Option<ChargedUsageTotals> {
+        self.conversation_usage_metadata
+            .charged_usage_for_last_block
     }
 
     /// Time to first token for the last completed set of agent responses
@@ -1140,6 +1170,21 @@ impl AIConversation {
             self.total_provider_cost_in_cents = Some(total_provider_cost_in_cents);
             self.conversation_usage_metadata
                 .total_provider_cost_in_cents = Some(total_provider_cost_in_cents);
+        }
+        // Same never-regress reasoning as `total_provider_cost_in_cents`
+        // above, applied to the per-category charged-usage aggregate: this
+        // is the historical/GraphQL-sourced path (conversation reload after
+        // restart, cloud metadata merge), which must not clobber a fresher
+        // total the live proto stream already accumulated.
+        if let Some(total_charged_usage) = metadata.usage.total_charged_usage
+            && self
+                .conversation_usage_metadata
+                .total_charged_usage
+                .is_none_or(|current| {
+                    total_charged_usage.total_cost_in_cents() >= current.total_cost_in_cents()
+                })
+        {
+            self.conversation_usage_metadata.total_charged_usage = Some(total_charged_usage);
         }
         // Usage evidence is derived from the metadata's contents (not its
         // presence) so a zero-usage conversation keeps the footer entry
@@ -2198,6 +2243,7 @@ impl AIConversation {
     pub fn update_cost_and_usage_for_request(
         &mut self,
         request_cost: Option<RequestCost>,
+        request_charges: Option<stream_finished::RequestCharges>,
         token_usage: Vec<TokenUsage>,
         usage_metadata: Option<stream_finished::ConversationUsageMetadata>,
         was_user_initiated_request: bool,
@@ -2245,6 +2291,25 @@ impl AIConversation {
             self.total_request_cost += request_cost;
         }
 
+        // Mirrors the `credits_spent_for_last_block` reset above: a
+        // user-initiated request starts a new response block. This must
+        // happen unconditionally (not just when `request_charges` is
+        // present this round), otherwise a new user-initiated request that
+        // happens to arrive without charges would leave the previous
+        // block's totals in place and the UI would show stale pricing.
+        if was_user_initiated_request {
+            self.conversation_usage_metadata
+                .charged_usage_for_last_block = Some(ChargedUsageTotals::default());
+        }
+        if let Some(request_charges) = request_charges {
+            let totals = ChargedUsageTotals::from(&request_charges);
+            let charged_usage_for_last_block = self
+                .conversation_usage_metadata
+                .charged_usage_for_last_block
+                .get_or_insert_with(ChargedUsageTotals::default);
+            *charged_usage_for_last_block += totals;
+        }
+
         if let Some(usage_metadata) = usage_metadata {
             self.conversation_usage_metadata.context_window_usage =
                 usage_metadata.context_window_usage;
@@ -2254,6 +2319,10 @@ impl AIConversation {
                 self.conversation_usage_metadata.platform_credits_spent =
                     usage_metadata.platform_credits_spent;
             }
+            self.conversation_usage_metadata.total_charged_usage = usage_metadata
+                .total_charges
+                .as_ref()
+                .map(ChargedUsageTotals::from);
             let llm_preferences = LLMPreferences::as_ref(ctx);
             self.conversation_usage_metadata.token_usage =
                 footer_model_token_usage(&usage_metadata, llm_preferences);
@@ -3770,6 +3839,7 @@ impl AIConversation {
             credits_spent: self.inference_credits_spent() + self.platform_credits_spent(),
             cost_in_cents: self.total_provider_cost_in_cents,
             has_usage: self.has_usage_metadata,
+            charged_usage: self.conversation_usage_metadata.total_charged_usage,
         }
     }
 

@@ -859,6 +859,57 @@ type ContextWindowSegment {
   tokenCount: Int!
 }
 
+"""
+Aggregate, per-token-type dollar cost breakdown (in US cents), summed across
+every usage category and model in a conversation. Excludes non-token costs
+(e.g. web search), which are tracked separately.
+"""
+type TokenCostBreakdown {
+  inputCostCents: Float!
+  outputCostCents: Float!
+  cacheReadCostCents: Float!
+  cacheWriteCostCents: Float!
+}
+
+"""
+Which inference channel a model's usage within a ChargedUsageEntry was charged
+through.
+"""
+enum ChargedUsageType {
+  DIRECT_API
+  BYOK
+  CUSTOM_ENDPOINT
+}
+
+"""Per-token-type token counts for a single ChargedUsageEntry."""
+type ChargedUsageTokenCount {
+  input: Int!
+  output: Int!
+  cacheRead: Int!
+  cacheWrite: Int!
+}
+
+"""
+A single per-category, per-usage-type, per-model entry from the full,
+un-summed charged-usage breakdown for a conversation.
+"""
+type ChargedUsageEntry {
+  category: String!
+  usageType: ChargedUsageType!
+  modelId: String!
+  tokenCount: ChargedUsageTokenCount!
+  tokenCost: TokenCostBreakdown!
+}
+
+"""
+Per-category platform cost (in US cents). Platform cost is tracked per usage
+category only, not further broken down by usage type or model.
+"""
+type PlatformUsageByCategoryEntry {
+  category: String!
+  platformCostInCents: Float!
+}
+
 """Represents usage data for a single multi-agent conversation."""
 type ConversationUsage {
   conversationId: String!
@@ -871,6 +922,14 @@ type ConversationUsage {
 type ConversationUsageMetadata {
   """Token usage using a user's API key, keyed by model."""
   byokTokenUsage: [TokenUsage!]!
+
+  """
+  The full, un-summed inference usage breakdown for the conversation: one
+  entry per usage category, usage type (direct API/BYOK/custom endpoint), and
+  model. See totalTokenCost for the summed aggregate. Null when pricing
+  transparency is disabled server-side.
+  """
+  chargedUsageByCategory: [ChargedUsageEntry!]
 
   """
   A breakdown of the context window usage into segments, each carrying a
@@ -886,6 +945,28 @@ type ConversationUsageMetadata {
 
   """The total number of platform credits spent so far in the conversation."""
   platformCreditsSpent: Float!
+
+  """
+  The full, un-summed platform cost breakdown for the conversation: one entry
+  per usage category. See totalPlatformCostInCents for the summed aggregate.
+  Null when pricing transparency is disabled server-side.
+  """
+  platformUsageByCategory: [PlatformUsageByCategoryEntry!]
+
+  """
+  Aggregate per-token-type cost charged so far in the conversation, summed
+  across every usage category and model. Excludes non-token costs (e.g. web
+  search), which are tracked separately. Null when pricing transparency is
+  disabled server-side.
+  """
+  totalTokenCost: TokenCostBreakdown
+
+  """
+  Aggregate platform cost (in US cents) charged so far in the conversation,
+  summed across every usage category and model. Null when pricing
+  transparency is disabled server-side.
+  """
+  totalPlatformCostInCents: Float
   """The cumulative provider cost in US cents, when available."""
   totalProviderCostInCents: Float
   summarized: Boolean!

@@ -352,6 +352,7 @@ impl From<&gql_usage::ConversationUsage> for ConversationUsageInfo {
             tool_usage_metadata: tool,
             context_window_usage,
             context_window_segments,
+            total_charged_usage,
             ..
         } = (&gql.usage_metadata).into();
         ConversationUsageInfo {
@@ -366,6 +367,13 @@ impl From<&gql_usage::ConversationUsage> for ConversationUsageInfo {
             lines_added: tool.apply_file_diff_stats.lines_added,
             lines_removed: tool.apply_file_diff_stats.lines_removed,
             commands_executed: tool.run_command_stats.commands_executed,
+            // Sourced from `conversationUsage`'s aggregate
+            // `totalTokenCost`/`totalPlatformCostInCents` fields (task
+            // 3.1). `None` when the server didn't provide them (pricing
+            // transparency disabled server-side); the shared view's
+            // pricing-breakdown section also checks the client-side flag
+            // before rendering.
+            charged_usage: total_charged_usage,
         }
     }
 }

@@ -104,7 +104,8 @@ use crate::ai::blocklist::keyboard_navigable_buttons::KeyboardNavigableButtons;
 use crate::ai::blocklist::secret_redaction::SecretRedactionState;
 use crate::ai::blocklist::usage::rollup::compute_orchestration_rollup;
 use crate::ai::blocklist::view_util::{
-    FAILED_OUTPUT_USAGE_NOTICE_TEXT, format_credits, should_show_failed_output_usage_notice,
+    FAILED_OUTPUT_USAGE_NOTICE_TEXT, format_credits_with_cost,
+    should_show_failed_output_usage_notice,
 };
 use crate::ai::blocklist::{AIBlockResponseRating, BlocklistAIActionModel, SuggestionChipView};
 use crate::ai::paths::shell_native_absolute_path;
@@ -3689,6 +3690,13 @@ fn render_usage_button(props: Props, app: &AppContext) -> Box<dyn Element> {
         .as_ref()
         .map(|r| r.total_credits)
         .unwrap_or_else(|| conversation.credits_spent());
+    // Only the rollup path (summed across sub-agents) has a matching
+    // aggregated cost figure; a non-orchestrator conversation's own dollar
+    // cost comes from its usage totals directly.
+    let headline_cost_in_cents = rollup
+        .as_ref()
+        .map(|r| r.total_cost_in_cents)
+        .unwrap_or_else(|| conversation.usage_totals().cost_in_cents);
     let has_any_usage = headline_credits > 0.0
         || conversation.credits_spent_for_last_block().is_some()
         || !conversation.token_usage().is_empty()
@@ -3707,7 +3715,8 @@ fn render_usage_button(props: Props, app: &AppContext) -> Box<dyn Element> {
     };
 
     let total_credits_spent = headline_credits;
-    let mut credit_usage_text = format_credits(total_credits_spent);
+    let mut credit_usage_text =
+        format_credits_with_cost(total_credits_spent, headline_cost_in_cents);
     if let Some(credits_spent_for_last_block) = conversation.credits_spent_for_last_block() {
         // Only show the credits spent for the last block if it is different from the total credits spent
         // and we spent a non-zero amount of credits for the last block.

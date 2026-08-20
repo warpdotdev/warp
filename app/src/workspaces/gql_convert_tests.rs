@@ -75,6 +75,110 @@ fn drop_every_team_when_user_has_no_team_membership() {
     assert!(team_names(&workspace).is_empty());
 }
 
+mod conversation_usage_conversion {
+    use warp_graphql::queries::get_conversation_usage::{
+        ApplyFileDiffStats, ConversationUsage, ConversationUsageMetadata, TokenCostBreakdown,
+        ToolCallStats, ToolUsageMetadata,
+    };
+    use warp_graphql::scalars::Time;
+
+    use super::*;
+
+    fn zero_tool_call_stats() -> ToolCallStats {
+        ToolCallStats { count: 0 }
+    }
+
+    fn zero_tool_usage_metadata() -> ToolUsageMetadata {
+        ToolUsageMetadata {
+            run_command_stats: zero_tool_call_stats(),
+            run_commands_executed: 0,
+            read_files_stats: zero_tool_call_stats(),
+            search_codebase_stats: zero_tool_call_stats(),
+            grep_stats: zero_tool_call_stats(),
+            file_glob_stats: zero_tool_call_stats(),
+            call_mcp_tool_stats: zero_tool_call_stats(),
+            read_mcp_resource_stats: zero_tool_call_stats(),
+            suggest_plan_stats: zero_tool_call_stats(),
+            suggest_create_plan_stats: zero_tool_call_stats(),
+            write_to_long_running_shell_command_stats: zero_tool_call_stats(),
+            apply_file_diff_stats: ApplyFileDiffStats {
+                count: 0,
+                lines_added: 0,
+                lines_removed: 0,
+                files_changed: 0,
+            },
+            read_shell_command_output_stats: zero_tool_call_stats(),
+            use_computer_stats: zero_tool_call_stats(),
+        }
+    }
+
+    fn sample_conversation_usage(
+        total_token_cost: Option<TokenCostBreakdown>,
+        total_platform_cost_in_cents: Option<f64>,
+    ) -> ConversationUsage {
+        ConversationUsage {
+            conversation_id: "conv-1".to_string(),
+            last_updated: Time::from(chrono::Utc::now()),
+            title: "Test conversation".to_string(),
+            usage_metadata: ConversationUsageMetadata {
+                context_window_usage: 0.0,
+                context_window_segments: vec![],
+                credits_spent: 5.0,
+                platform_credits_spent: 0.0,
+                total_provider_cost_in_cents: None,
+                summarized: false,
+                token_usage: vec![],
+                warp_token_usage: vec![],
+                byok_token_usage: vec![],
+                total_token_cost,
+                total_platform_cost_in_cents,
+                tool_usage_metadata: zero_tool_usage_metadata(),
+            },
+        }
+    }
+
+    /// The Settings usage-history entry sources its "PRICING BREAKDOWN"
+    /// section from `conversationUsage`'s aggregate `totalTokenCost`/
+    /// `totalPlatformCostInCents` fields (task 3.1). Historical detail
+    /// must render the same breakdown the live path showed for the same
+    /// conversation.
+    #[test]
+    fn populates_charged_usage_from_aggregate_fields() {
+        let gql = sample_conversation_usage(
+            Some(TokenCostBreakdown {
+                input_cost_cents: 10.0,
+                output_cost_cents: 20.0,
+                cache_read_cost_cents: 1.5,
+                cache_write_cost_cents: 2.5,
+            }),
+            Some(3.0),
+        );
+
+        let info = ConversationUsageInfo::from(&gql);
+        let charged_usage = info
+            .charged_usage
+            .expect("aggregate fields should populate charged_usage");
+
+        assert_eq!(charged_usage.input_cost_in_cents, 10.0);
+        assert_eq!(charged_usage.output_cost_in_cents, 20.0);
+        assert_eq!(charged_usage.input_cache_read_cost_in_cents, 1.5);
+        assert_eq!(charged_usage.input_cache_write_cost_in_cents, 2.5);
+        assert_eq!(charged_usage.platform_cost_in_cents, 3.0);
+    }
+
+    /// When the server omits the aggregate fields (pricing transparency
+    /// disabled server-side), `charged_usage` must be `None` rather than a
+    /// coincidentally-zero breakdown.
+    #[test]
+    fn leaves_charged_usage_none_when_aggregate_fields_absent() {
+        let gql = sample_conversation_usage(None, None);
+
+        let info = ConversationUsageInfo::from(&gql);
+
+        assert_eq!(info.charged_usage, None);
+    }
+}
+
 mod pending_email_invites_conversion {
     use warp_graphql::workspace::EmailInvite as GqlEmailInvite;
 

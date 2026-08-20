@@ -31,6 +31,8 @@ query GetConversationUsage(
             tokenUsage { modelId totalTokens }
             warpTokenUsage { modelId totalTokens tokenUsageByCategory { category tokens } }
             byokTokenUsage { modelId totalTokens tokenUsageByCategory { category tokens } }
+            totalTokenCost { inputCostCents outputCostCents cacheReadCostCents cacheWriteCostCents }
+            totalPlatformCostInCents
             toolUsageMetadata {
               runCommandStats { count }
               runCommandsExecuted
@@ -123,7 +125,55 @@ pub struct ConversationUsageMetadata {
     pub token_usage: Vec<ModelTokenUsage>,
     pub warp_token_usage: Vec<TokenUsage>,
     pub byok_token_usage: Vec<TokenUsage>,
+    /// Aggregate per-token-type cost charged so far in the conversation,
+    /// summed across every usage category and model. Excludes non-token
+    /// costs (e.g. web search), which are tracked separately. `None` when
+    /// pricing transparency is disabled server-side.
+    pub total_token_cost: Option<TokenCostBreakdown>,
+    /// Aggregate platform cost (in US cents) charged so far in the
+    /// conversation. `None` when pricing transparency is disabled
+    /// server-side.
+    pub total_platform_cost_in_cents: Option<f64>,
     pub tool_usage_metadata: ToolUsageMetadata,
+}
+
+/// Aggregate, per-token-type dollar cost breakdown (in US cents), summed
+/// across every usage category and model in a conversation. Excludes
+/// non-token costs (e.g. web search), which are tracked separately.
+#[derive(cynic::QueryFragment, Debug, Clone)]
+pub struct TokenCostBreakdown {
+    pub input_cost_cents: f64,
+    pub output_cost_cents: f64,
+    pub cache_read_cost_cents: f64,
+    pub cache_write_cost_cents: f64,
+}
+
+/// Converts the GraphQL aggregate cost-breakdown fields (task 3.1,
+/// `ConversationUsageMetadata.totalTokenCost`/`totalPlatformCostInCents`)
+/// into the persistence-layer `ChargedUsageTotals` shape used by the shared
+/// "Tokens used" + pricing-breakdown display convention. Token counts are
+/// left at zero: the aggregate GraphQL fields only carry costs, not token
+/// counts, and the pricing-breakdown section only renders costs. `None`
+/// when the server didn't provide either field (pricing transparency
+/// disabled server-side).
+pub(crate) fn charged_usage_totals_from_aggregate(
+    total_token_cost: Option<&TokenCostBreakdown>,
+    total_platform_cost_in_cents: Option<f64>,
+) -> Option<persistence::model::ChargedUsageTotals> {
+    if total_token_cost.is_none() && total_platform_cost_in_cents.is_none() {
+        return None;
+    }
+    let mut totals = persistence::model::ChargedUsageTotals::default();
+    if let Some(cost) = total_token_cost {
+        totals.input_cost_in_cents = cost.input_cost_cents as f32;
+        totals.output_cost_in_cents = cost.output_cost_cents as f32;
+        totals.input_cache_read_cost_in_cents = cost.cache_read_cost_cents as f32;
+        totals.input_cache_write_cost_in_cents = cost.cache_write_cost_cents as f32;
+    }
+    if let Some(platform_cost) = total_platform_cost_in_cents {
+        totals.platform_cost_in_cents = platform_cost as f32;
+    }
+    Some(totals)
 }
 
 #[derive(cynic::Enum, Clone, Copy, Debug, PartialEq, Eq)]
@@ -198,6 +248,14 @@ impl From<&ConversationUsageMetadata> for persistence::model::ConversationUsageM
             platform_credits_spent: gql.platform_credits_spent as f32,
             total_provider_cost_in_cents: gql.total_provider_cost_in_cents.map(|cost| cost as f32),
             credits_spent_for_last_block: None,
+            // The live per-block breakdown has no GraphQL counterpart --
+            // `conversationUsage` only ever reports the conversation-wide
+            // cumulative total.
+            charged_usage_for_last_block: None,
+            total_charged_usage: charged_usage_totals_from_aggregate(
+                gql.total_token_cost.as_ref(),
+                gql.total_platform_cost_in_cents,
+            ),
             token_usage: convert_token_usage(&gql.warp_token_usage, &gql.byok_token_usage),
             tool_usage_metadata: (&gql.tool_usage_metadata).into(),
             context_window_segments: gql.context_window_segments.iter().map(Into::into).collect(),

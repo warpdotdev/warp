@@ -15,7 +15,9 @@ use crate::ai::llms::LLMPreferences;
 use crate::auth::AuthStateProvider;
 use crate::auth::auth_manager::AuthManager;
 use crate::network::NetworkStatus;
-use crate::persistence::model::{AgentConversationData, ConversationUsageMetadata};
+use crate::persistence::model::{
+    AgentConversationData, ChargedUsageTotals, ConversationUsageMetadata,
+};
 use crate::server::server_api::ServerApiProvider;
 use crate::test_util::settings::initialize_settings_for_tests;
 use crate::workspaces::user_workspaces::UserWorkspaces;
@@ -666,6 +668,7 @@ fn restored_usage_totals_preserve_server_provider_cost_and_add_follow_up() {
                 conversation
                     .update_cost_and_usage_for_request(
                         None,
+                        None,
                         vec![stream_token_usage("model-a", 10, 2, 1.2)],
                         Some(credits_usage_metadata(1.0, 0.0)),
                         false,
@@ -739,6 +742,7 @@ fn restored_legacy_conversation_keeps_provider_cost_unavailable_after_follow_up(
             conversation
                 .update_cost_and_usage_for_request(
                     None,
+                    None,
                     vec![stream_token_usage("legacy-model", 10, 2, 1.5)],
                     Some(credits_usage_metadata(1.0, 0.0)),
                     false,
@@ -750,6 +754,69 @@ fn restored_legacy_conversation_keeps_provider_cost_unavailable_after_follow_up(
         let totals = conversation.usage_totals();
         assert_eq!(totals.cost_in_cents, None);
         assert!(totals.has_usage);
+    });
+}
+
+/// Regression: a new user-initiated request must clear the previous
+/// block's charged-usage totals even when this round's response doesn't
+/// carry `request_charges` — otherwise the UI would keep showing the
+/// prior block's stale pricing breakdown for a new user query.
+#[test]
+fn charged_usage_for_last_block_clears_on_new_user_initiated_request_without_charges() {
+    App::test((), |mut app| async move {
+        initialize_custom_endpoint_usage_test_app(&mut app);
+        app.add_singleton_model(LLMPreferences::new);
+
+        let mut conversation = AIConversation::new(false, false);
+
+        let mut usage_by_category = HashMap::new();
+        usage_by_category.insert(
+            "primary_agent".to_string(),
+            api::response_event::stream_finished::ChargedUsage {
+                platform_usage_in_cents: 5.0,
+                ..Default::default()
+            },
+        );
+        let request_charges =
+            api::response_event::stream_finished::RequestCharges { usage_by_category };
+
+        app.read(|ctx| {
+            conversation
+                .update_cost_and_usage_for_request(
+                    None,
+                    Some(request_charges),
+                    vec![],
+                    None,
+                    true,
+                    ctx,
+                )
+                .expect("usage should update");
+        });
+
+        assert_eq!(
+            conversation
+                .conversation_usage_metadata
+                .charged_usage_for_last_block
+                .expect("first user-initiated block should record charges")
+                .platform_cost_in_cents,
+            5.0
+        );
+
+        app.read(|ctx| {
+            conversation
+                .update_cost_and_usage_for_request(None, None, vec![], None, true, ctx)
+                .expect("usage should update");
+        });
+
+        let charged_usage_for_last_block = conversation
+            .conversation_usage_metadata
+            .charged_usage_for_last_block
+            .expect("a new user-initiated block resets to a fresh (zeroed) breakdown");
+        assert_eq!(
+            charged_usage_for_last_block,
+            ChargedUsageTotals::default(),
+            "stale pricing from the previous block must not survive a new user-initiated request"
+        );
     });
 }
 
@@ -779,6 +846,7 @@ fn update_cost_and_usage_resolves_custom_endpoint_alias_for_footer_usage() {
         app.read(|ctx| {
             conversation
                 .update_cost_and_usage_for_request(
+                    None,
                     None,
                     vec![],
                     Some(custom_endpoint_usage_metadata("config-key", 6)),
@@ -814,6 +882,7 @@ fn update_cost_and_usage_uses_fallback_label_for_unknown_custom_endpoint() {
         app.read(|ctx| {
             conversation
                 .update_cost_and_usage_for_request(
+                    None,
                     None,
                     vec![],
                     Some(custom_endpoint_usage_metadata("missing-config-key", 9)),
@@ -889,12 +958,14 @@ fn usage_totals_reads_gui_credits_and_accumulates_provider_cost() {
                 credits_spent: 0.0,
                 cost_in_cents: Some(0.0),
                 has_usage: false,
+                charged_usage: None,
             }
         );
 
         app.read(|ctx| {
             conversation
                 .update_cost_and_usage_for_request(
+                    None,
                     None,
                     vec![stream_token_usage("model-a", 100, 20, 1.5)],
                     Some(credits_usage_metadata(2.0, 0.5)),
@@ -907,6 +978,7 @@ fn usage_totals_reads_gui_credits_and_accumulates_provider_cost() {
             // summing, while provider cost accumulates per request.
             conversation
                 .update_cost_and_usage_for_request(
+                    None,
                     None,
                     vec![stream_token_usage("model-a", 50, 10, 1.2)],
                     Some(credits_usage_metadata(3.0, 0.5)),

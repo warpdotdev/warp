@@ -1,6 +1,6 @@
 use super::*;
 use crate::queries::get_conversation_usage::{
-    ApplyFileDiffStats, CategoryTokenBreakdown, ToolCallStats,
+    ApplyFileDiffStats, CategoryTokenBreakdown, TokenCostBreakdown, ToolCallStats,
 };
 
 fn tool_call_stats(count: i32) -> ToolCallStats {
@@ -69,6 +69,8 @@ fn conversion_populates_token_usage_and_tool_usage_metadata() {
                 tokens: 300,
             }],
         }],
+        total_token_cost: None,
+        total_platform_cost_in_cents: None,
         tool_usage_metadata: sample_tool_usage_metadata(),
     };
 
@@ -140,6 +142,8 @@ fn conversion_merges_warp_and_byok_usage_for_same_model() {
             total_tokens: 50,
             token_usage_by_category: vec![],
         }],
+        total_token_cost: None,
+        total_platform_cost_in_cents: None,
         tool_usage_metadata: sample_tool_usage_metadata(),
     };
 
@@ -150,6 +154,68 @@ fn conversion_merges_warp_and_byok_usage_for_same_model() {
     assert_eq!(usage.model_id, "claude-4-7-opus-high");
     assert_eq!(usage.warp_tokens, 100);
     assert_eq!(usage.byok_tokens, 50);
+}
+
+/// The restore query's aggregate `totalTokenCost`/`totalPlatformCostInCents`
+/// fields (task 3.1) must convert into `ChargedUsageTotals` so the
+/// conversation-details panel's historical/GraphQL-sourced path can render
+/// the same "PRICING BREAKDOWN" section the live path shows.
+#[test]
+fn conversion_populates_charged_usage_aggregate_from_graphql_fields() {
+    let gql = ConversationUsageMetadata {
+        context_window_usage: 0.0,
+        context_window_segments: vec![],
+        credits_spent: 0.0,
+        platform_credits_spent: 0.0,
+        total_provider_cost_in_cents: None,
+        summarized: false,
+        warp_token_usage: vec![],
+        byok_token_usage: vec![],
+        total_token_cost: Some(TokenCostBreakdown {
+            input_cost_cents: 10.0,
+            output_cost_cents: 20.0,
+            cache_read_cost_cents: 1.5,
+            cache_write_cost_cents: 2.5,
+        }),
+        total_platform_cost_in_cents: Some(3.0),
+        tool_usage_metadata: sample_tool_usage_metadata(),
+    };
+
+    let converted: persistence::model::ConversationUsageMetadata = (&gql).into();
+    let charged_usage = converted
+        .total_charged_usage
+        .expect("aggregate fields should populate total_charged_usage");
+
+    assert_eq!(charged_usage.input_cost_in_cents, 10.0);
+    assert_eq!(charged_usage.output_cost_in_cents, 20.0);
+    assert_eq!(charged_usage.input_cache_read_cost_in_cents, 1.5);
+    assert_eq!(charged_usage.input_cache_write_cost_in_cents, 2.5);
+    assert_eq!(charged_usage.platform_cost_in_cents, 3.0);
+}
+
+/// When the server omits both aggregate fields (pricing transparency
+/// disabled), the conversion must produce `None` rather than a
+/// coincidentally-zero `ChargedUsageTotals` -- proving the client renders
+/// nothing rather than a fabricated all-zero breakdown.
+#[test]
+fn conversion_leaves_charged_usage_aggregate_none_when_fields_absent() {
+    let gql = ConversationUsageMetadata {
+        context_window_usage: 0.0,
+        context_window_segments: vec![],
+        credits_spent: 0.0,
+        platform_credits_spent: 0.0,
+        total_provider_cost_in_cents: None,
+        summarized: false,
+        warp_token_usage: vec![],
+        byok_token_usage: vec![],
+        total_token_cost: None,
+        total_platform_cost_in_cents: None,
+        tool_usage_metadata: sample_tool_usage_metadata(),
+    };
+
+    let converted: persistence::model::ConversationUsageMetadata = (&gql).into();
+
+    assert_eq!(converted.total_charged_usage, None);
 }
 
 /// The conversation restore query must actually select the token-usage and

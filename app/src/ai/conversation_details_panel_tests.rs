@@ -1,8 +1,9 @@
 use std::collections::HashMap;
 
 use chrono::{Local, Utc};
-use persistence::model::{AgentConversationData, ConversationUsageMetadata};
+use persistence::model::{AgentConversationData, ChargedUsageTotals, ConversationUsageMetadata};
 use warp_cli::agent::Harness;
+use warp_core::features::FeatureFlag;
 use warp_multi_agent_api as api;
 use warpui::{App, EntityId, SingletonEntity};
 
@@ -187,6 +188,8 @@ fn create_test_server_metadata(
             platform_credits_spent: 0.0,
             total_provider_cost_in_cents: None,
             credits_spent_for_last_block: None,
+            charged_usage_for_last_block: None,
+            total_charged_usage: None,
             token_usage: vec![],
             tool_usage_metadata: Default::default(),
             context_window_segments: Vec::new(),
@@ -568,6 +571,118 @@ fn test_from_task_leaves_the_runner_absent_when_the_run_names_none() {
                     ..
                 }
             ));
+        });
+    });
+}
+
+/// The historical/GraphQL-sourced path (conversation reload after restart,
+/// or cloud metadata merge) sets `total_charged_usage` via
+/// `set_server_metadata` rather than the live proto stream. The details
+/// panel's `from_conversation` must pick it up the same way it does for the
+/// live path, so the "PRICING BREAKDOWN" section renders identically
+/// regardless of source.
+#[test]
+fn test_from_conversation_reflects_charged_usage_from_historical_server_metadata() {
+    let _flag = FeatureFlag::PricingTransparency.override_enabled(true);
+    App::test((), |mut app| async move {
+        let conversation_id = AIConversationId::new();
+        let mut conversation = create_restored_conversation(
+            conversation_id,
+            "root-task",
+            "/tmp/historical-charged-usage",
+            AgentConversationData {
+                server_conversation_token: None,
+                conversation_usage_metadata: None,
+                reverted_action_ids: None,
+                forked_from_server_conversation_token: None,
+                artifacts_json: None,
+                parent_agent_id: None,
+                agent_name: None,
+                orchestration_harness_type: None,
+                parent_conversation_id: None,
+                is_remote_child: false,
+                root_task_is_optimistic: None,
+                run_id: None,
+                autoexecute_override: None,
+                last_event_sequence: None,
+                pinned: false,
+            },
+        );
+
+        let charged_usage = ChargedUsageTotals {
+            input_cost_in_cents: 10.0,
+            output_cost_in_cents: 20.0,
+            input_cache_read_cost_in_cents: 1.5,
+            input_cache_write_cost_in_cents: 2.5,
+            platform_cost_in_cents: 0.0,
+            ..Default::default()
+        };
+        let mut metadata = create_test_server_metadata("server-token-historical", None, None);
+        metadata.usage.total_charged_usage = Some(charged_usage);
+        conversation.set_server_metadata(metadata);
+
+        app.update(|ctx| {
+            let data = ConversationDetailsData::from_conversation(&conversation, ctx);
+            assert_eq!(data.charged_usage, Some(charged_usage));
+        });
+    });
+}
+
+/// `set_server_metadata` must not clobber a fresher charged-usage total the
+/// live proto stream already accumulated with a stale async snapshot --
+/// mirroring the existing `total_provider_cost_in_cents` never-regress
+/// behavior.
+#[test]
+fn test_set_server_metadata_does_not_regress_charged_usage() {
+    App::test((), |mut app| async move {
+        let conversation_id = AIConversationId::new();
+        let mut conversation = create_restored_conversation(
+            conversation_id,
+            "root-task",
+            "/tmp/no-regress-charged-usage",
+            AgentConversationData {
+                server_conversation_token: None,
+                conversation_usage_metadata: None,
+                reverted_action_ids: None,
+                forked_from_server_conversation_token: None,
+                artifacts_json: None,
+                parent_agent_id: None,
+                agent_name: None,
+                orchestration_harness_type: None,
+                parent_conversation_id: None,
+                is_remote_child: false,
+                root_task_is_optimistic: None,
+                run_id: None,
+                autoexecute_override: None,
+                last_event_sequence: None,
+                pinned: false,
+            },
+        );
+
+        let higher_total = ChargedUsageTotals {
+            input_cost_in_cents: 100.0,
+            ..Default::default()
+        };
+        let mut higher_metadata =
+            create_test_server_metadata("server-token-no-regress", None, None);
+        higher_metadata.usage.total_charged_usage = Some(higher_total);
+        conversation.set_server_metadata(higher_metadata);
+
+        let lower_total = ChargedUsageTotals {
+            input_cost_in_cents: 1.0,
+            ..Default::default()
+        };
+        let mut lower_metadata = create_test_server_metadata("server-token-no-regress", None, None);
+        lower_metadata.usage.total_charged_usage = Some(lower_total);
+        conversation.set_server_metadata(lower_metadata);
+
+        app.update(|ctx| {
+            let data = ConversationDetailsData::from_conversation(&conversation, ctx);
+            assert_eq!(
+                data.charged_usage.map(|c| c.input_cost_in_cents),
+                Some(100.0),
+                "a stale, lower snapshot must not regress the displayed charged-usage total"
+            );
         });
     });
 }

@@ -1,6 +1,9 @@
 use crate::object::ObjectMetadata;
 use crate::object_permissions::ObjectPermissions;
-use crate::queries::get_conversation_usage::{TokenUsage, ToolUsageMetadata, convert_token_usage};
+use crate::queries::get_conversation_usage::{
+    TokenCostBreakdown, TokenUsage, ToolUsageMetadata, charged_usage_totals_from_aggregate,
+    convert_token_usage,
+};
 use crate::scalars::Time;
 use crate::schema;
 use crate::user::PublicUserProfile;
@@ -205,6 +208,15 @@ pub struct ConversationUsageMetadata {
     pub summarized: bool,
     pub warp_token_usage: Vec<TokenUsage>,
     pub byok_token_usage: Vec<TokenUsage>,
+    /// Aggregate per-token-type cost charged so far in the conversation,
+    /// summed across every usage category and model. Excludes non-token
+    /// costs (e.g. web search), which are tracked separately. `None` when
+    /// pricing transparency is disabled server-side.
+    pub total_token_cost: Option<TokenCostBreakdown>,
+    /// Aggregate platform cost (in US cents) charged so far in the
+    /// conversation. `None` when pricing transparency is disabled
+    /// server-side.
+    pub total_platform_cost_in_cents: Option<f64>,
     pub tool_usage_metadata: ToolUsageMetadata,
 }
 
@@ -217,6 +229,14 @@ impl From<&ConversationUsageMetadata> for persistence::model::ConversationUsageM
             platform_credits_spent: gql.platform_credits_spent as f32,
             total_provider_cost_in_cents: gql.total_provider_cost_in_cents.map(|cost| cost as f32),
             credits_spent_for_last_block: None,
+            // The live per-block breakdown has no GraphQL counterpart --
+            // `conversationUsage` only ever reports the conversation-wide
+            // cumulative total.
+            charged_usage_for_last_block: None,
+            total_charged_usage: charged_usage_totals_from_aggregate(
+                gql.total_token_cost.as_ref(),
+                gql.total_platform_cost_in_cents,
+            ),
             token_usage: convert_token_usage(&gql.warp_token_usage, &gql.byok_token_usage),
             tool_usage_metadata: (&gql.tool_usage_metadata).into(),
             context_window_segments: gql.context_window_segments.iter().map(Into::into).collect(),
