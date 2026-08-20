@@ -145,10 +145,20 @@ Figma: none provided. The behavior in this document is the source of truth.
     - The final position is the same position produced by the current non-precise wheel path.
     - Repeated input, reversal, precise-input interruption, direct jumps, and boundaries follow
       the shared behaviors above.
+    - The controller tracks only the relative, unapplied remainder of an animation; the terminal's
+      existing `ScrollPosition` (including its `FollowsBottomOfMostRecentBlock` sticky-bottom mode
+      and `ScrollLines` top/bottom anchoring) stays the sole owner of the actual scroll position, so
+      new output arriving mid-animation is handled by the same clamping and mode logic that already
+      handles it for an immediate scroll, with no animation-specific special-casing.
 
 15. A terminal scroll animation cancels when another terminal operation changes scroll position.
-    This includes keyboard navigation, jump-to-bottom behavior, find navigation, block navigation,
-    and autoscroll that follows new output.
+    A single choke point (`TerminalView::update_scroll_position_locking`) receives every
+    direct/programmatic scroll-position change, so cancellation is a single, universal guard
+    rather than a per-operation concern; the following list is the same set of operations that
+    already flow through that choke point, not a set requiring individual wiring:
+    keyboard navigation (including page/home/end), jump-to-bottom behavior, find navigation, block
+    and rich-content navigation, filter apply/clear, resize correction, command-execution-started
+    and agent-view entry/exit, clear, and autoscroll that follows new output.
 
 16. Phase 2 never smooths or rewrites wheel input that belongs to the PTY.
     - Alternate-screen scrolling remains immediate and keeps its existing mouse-reporting or

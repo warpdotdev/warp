@@ -116,28 +116,32 @@ Use one running segment per axis instead of a list of independent contributions:
   bezier parameter `t` (Newton-Raphson, falling back to bisection), then returning `y(t)`, the
   same technique browsers use for `cubic-bezier()` timing functions.
 - **Duration**: inversely proportional to the notch's delta magnitude
-  (`DurationBehavior::kInverseDelta`). Chromium's published reference points are
-  `kInverseDeltaMaxDuration` = 200ms at a 120px delta and `kInverseDeltaMinDuration` = 100ms at
-  480px, clamped at both ends; Chromium's exact interpolation between them is not available to
-  us, so fit a simple `A / delta + B` hyperbola through those two points instead.
+  (`DurationBehavior::kInverseDelta`), a direct port of the linear ramp in
+  `cc/animation/scroll_offset_animation_curve.cc`: `kInverseDeltaMaxDuration` = 200ms at or below
+  a 120px delta (`kInverseDeltaRampStartPx`), `kInverseDeltaMinDuration` = 100ms at or above 480px
+  (`kInverseDeltaRampEndPx`), and a linear interpolation (`kInverseDeltaSlope`/
+  `kInverseDeltaOffset`) between them.
 - **Retarget**: on a same-direction notch arriving mid-flight, reshape the curve so its starting
   slope (in normalized time/progress space) matches the outgoing segment's velocity at that
   instant, rather than starting a fresh, independent, zero-velocity contribution. Implement this
   by holding the bezier's first control point's `x`-coordinate fixed and solving for its
   `y`-coordinate from the desired starting slope (`y1 = slope * x1`, clamped to avoid visible
   overshoot), keeping the second control point fixed so every curve still eases out to a stop at
-  its target. This is the same curve-reshaping Chromium's `EaseInOutWithInitialSlope` describes
-  doing, though its exact reshaping formula is not published, so this is our own derivation of an
-  equivalent construction.
-- **Velocity-based duration bound**: cap a retarget's duration so its reshaped starting slope
-  cannot exceed a safe threshold when the controller is already moving fast toward a small
-  remaining distance -- Chromium's `VelocityBasedDurationBound`, which exists specifically to
-  stop a rubber-banding overshoot in that scenario.
+  its target. This matches `cc::EaseInOutWithInitialSlope` in the same Chromium source file,
+  which likewise fixes its first control point's x-coordinate at 0.42 and varies only its
+  y-coordinate to encode a starting slope.
+- **Velocity-based duration bound**: a direct port of `VelocityBasedDurationBound` in the same
+  source file, which caps a retarget's duration to `(remaining_delta / current_velocity).abs() *
+  2.5` so its reshaped starting slope cannot overshoot when the controller is already moving fast
+  toward a small remaining distance. Returns zero when there's no remaining delta, and an
+  unbounded duration when the current velocity is zero or points away from the remaining delta
+  (the bound only applies while the controller is already moving toward the new target).
 - Opposite-direction input keeps the existing behavior unchanged: cancel at the currently
   displayed position (zero velocity), then ease in fresh toward the new target.
 
 Every other approved behavior (exact landing on target, cancellation semantics, unchanged
-multiplier and 40px-per-line conversion, independent axes) is unaffected.
+multiplier and 40px-per-line conversion, independent axes) is unaffected. Source:
+[`cc/animation/scroll_offset_animation_curve.cc`](https://chromium.googlesource.com/chromium/src/+/main/cc/animation/scroll_offset_animation_curve.cc).
 
 ### Keep animation ownership at the scroll consumer
 Options:
@@ -302,32 +306,103 @@ their existing `axis_should_handle_scroll_wheel` routing so Phase 1 does not cap
 vertical wheel events.
 
 ### Phase 2: normal terminal scrollback
-Add a `SmoothScrollController` field to `TerminalView` using `Lines` as its logical unit. Reuse the
-shared easing and lifecycle logic; do not convert terminal animation state to pixels.
+#### Amendment: cancellation-surface audit, and the shape that actually shipped
+Before implementation, the ~20 `ScrollPositionUpdate` variants and the call sites that reach them
+were audited to determine whether cancellation collapses into a single guard or needs bespoke
+handling per call site -- Phase 1's manual/legacy-wrapper surface had turned out materially larger
+than its first estimate, and this was the equivalent risk for Phase 2.
 
-In `BlockListElement::scroll_internal`, preserve routing order:
-1. Reject out-of-bounds and disabled scrolling as today.
-2. Convert precise pixels to fractional lines as today.
-3. Determine whether a long-running-block event must be forwarded as `AltMouseAction`.
-4. Forward PTY-bound input immediately and return. Do not touch the controller.
-5. For normal block-list scrolling, dispatch the input source and delta to `TerminalView`.
+Finding: `TerminalView::update_scroll_position_locking` is the **sole** call site of
+`ScrollState::update` (grep-verified: every one of the ~30 call sites across `view.rs` and related
+files that changes scroll position -- page/home/end, jump-to-block, jump-to-exchange, filter
+apply/clear, resize, clear, command-execution-started, agent-view entry/exit, and every other
+`ScrollPositionUpdate` variant -- routes through this one function). This makes cancellation a
+single, universal guard rather than an M-vs-L-defining per-site concern: cancel any in-flight
+animation on every update **except** `AfterScrollEvent`, placed once inside
+`update_scroll_position_locking`. The one call site that needs bespoke handling is the wheel-input
+entry point itself (`TerminalView::scroll`), because it must distinguish an `AfterScrollEvent` that
+is its own animation-frame increment (must not cancel) from one that is an immediate precise/
+flag-off scroll (must explicitly cancel first, since the universal guard exempts the variant).
+This audit found the cancellation surface materially cleaner than Phase 1's, not materially worse.
 
-In `TerminalView`:
-- Precise input cancels the controller and uses `ScrollPositionUpdate::AfterScrollEvent` immediately.
-- Eligible non-precise input updates the controller target.
-- Each frame applies an incremental fractional `Lines` delta through the existing
-  `scroll_position_for_delta` path.
-- Reaching the bottom preserves `FollowsBottomOfMostRecentBlock`.
-- Every non-animation `ScrollPositionUpdate` that directly changes position cancels active
-  contributions. This includes page/home/end, block and find navigation, resize correction,
-  command-driven follow-bottom, clear, and rich-block autoscroll.
+The rest of this section describes the actual shipped shape, which differs from the original
+proposal below in one respect: rather than the controller emitting a full delta that
+`TerminalView` applies as one incremental `Lines` value per repaint, the controller tracks only
+the unapplied remainder of an animation (mirroring Phase 1's `Manual`-axis `take_smooth_scroll_
+increment` pattern in intent, though not in delivery mechanism -- see the revisions below), since
+`TerminalView::scroll` (which owns the only code path that can call
+`update_scroll_position_locking`) requires a `ViewContext`, unavailable during `BlockListElement`'s
+paint. Concretely:
+
+- `SmoothScrollHandle` (`app/src/terminal/block_list_viewport.rs`) wraps a
+  `SmoothScrollController` behind an `Arc<Mutex<_>>`, tracking only the relative, unapplied
+  remainder of an animation -- not an absolute position, unlike `ClippedScrollStateHandle`.
+  `TerminalView` owns the persistent handle; `TerminalViewRenderContext` and `BlockListElement`
+  each hold a clone, mirroring how `horizontal_clipped_scroll_state` is already threaded through.
+- `TerminalView::scroll(delta, precise, ctx)`: for precise input or the flag off, cancels the
+  handle and applies `AfterScrollEvent` immediately, exactly as before. For eligible non-precise
+  input, calls `SmoothScrollHandle::add_delta`, then, if a drive loop for this animation isn't
+  already running (`SmoothScrollHandle::try_start_driving`), starts `TerminalView::
+  drive_smooth_scroll`.
+- **Revision**: the first shipped version of `drive_smooth_scroll` used `BlockListElement::
+  paint`'s `ctx.repaint_after(SMOOTH_SCROLL_FRAME_INTERVAL)` plus an unconditional
+  `TerminalAction::AdvanceSmoothScroll` dispatch from `BlockListElement::dispatch_event`, mirroring
+  Phase 1's `Manual`-axis pattern exactly. That depended on the app's synthetic-`MouseMoved`
+  replay (`AppContext::build_scene`) to actually invoke `dispatch_event`, which only fires once a
+  *real* `MouseMoved` has already been cached for the window -- a window scrolled before ever
+  receiving one would register an animation and repaint forever without ever applying it. Fixed by
+  driving the animation independently of any dispatched event or cached pointer state:
+  `TerminalView::drive_smooth_scroll(handle, ctx)` builds a `futures::stream::unfold` that ticks
+  every `SMOOTH_SCROLL_FRAME_INTERVAL` via `Timer::after` and checks `is_animating()` directly on
+  the thread-safe handle, ending the stream once settled; `ctx.spawn_stream_local` spawns this
+  stream once per animation (not once per tick -- see below) and invokes `TerminalView::
+  advance_smooth_scroll` on the main thread for each tick the stream yields, with `on_done` marking
+  the loop stopped. `TerminalAction::AdvanceSmoothScroll` and `BlockListElement`'s paint/dispatch
+  involvement in this no longer exist.
+- **Second revision**: the first version of this fix re-spawned a *new* background-executor task
+  via `ctx.spawn(Timer::after(...), ...)` recursively, once per tick, rather than one long-lived
+  stream -- a fresh background-task-spawn-and-channel-bridge round trip on every ~8ms tick, which
+  is fine for this file's other, infrequent one-shot delayed actions but disproportionate overhead
+  for a tight repeating cadence, and a plausible source of the real-world scheduling latency a
+  hands-on visual pass reported (the terminal settling noticeably slower than an equivalent
+  Settings-page burst). The single-stream version above replaced it.
+- `TerminalView::advance_smooth_scroll` takes the pending increment via `SmoothScrollHandle::
+  take_increment` and, if non-zero, applies it via
+  `update_scroll_position_locking(AfterScrollEvent{..})` -- the same existing path a direct scroll
+  uses, so `scroll_position_for_delta`'s clamping and `FollowsBottomOfMostRecentBlock` transition
+  logic runs unmodified, against whatever the block list's current state is that frame. This is
+  what makes content arriving mid-animation a non-issue: each increment is small and re-resolved
+  against current state, not a captured absolute target.
+- `TerminalView::render` cancels `self.smooth_scroll` whenever alt screen is active, so an
+  animation in flight when alt screen opens doesn't keep silently advancing the hidden block-list
+  position (the drive loop above is independent of which element is on screen, so without this it
+  would have kept ticking during alt screen too).
+
+In `BlockListElement::scroll_internal`, the routing order is preserved exactly as originally
+proposed (reject-out-of-bounds, precise-to-lines conversion, long-running-block
+`AltMouseAction` decision, PTY-bound early return, then dispatch to `TerminalView`) -- confirmed
+structurally clean: alt-screen input never reaches `BlockListElement` at all (a separate element
+entirely, swapped in by `TerminalView::render`), and the long-running-block forwarding decision is
+a single branch, so the animation cannot leak into either path. `TerminalAction::Scroll` gained a
+`precise: bool` field (threaded through every construction site, including scrollbar-drag and
+keyboard-single-line-scroll call sites, which pass `precise: true` since they are not real wheel
+notches) since the action previously discarded that information before it reached `TerminalView`.
+
+One pre-existing bug this exposed and fixed: `scroll_position_for_delta`'s `fix_to_bottom` check
+used a raw `new_top >= max_scroll_top` comparison. An animated scroll composes its final position
+from the last of several small increments rather than one one-shot delta; in one observed case a
+large-overshoot animation settled a hair short of `max_scroll_top` (floating-point precision, not a
+logic error), which the raw comparison rejected -- leaving the view in `FixedAtPosition` right at
+the boundary instead of the `FollowsBottomOfMostRecentBlock` sticky-bottom mode an equivalent
+immediate scroll would reach. Changed to the codebase's existing `heights_approx_gte` tolerance
+(already used for every other boundary comparison in this file).
 
 Do not change `AltScreenElement::on_scroll`, `TerminalView::alt_scroll`,
-`alt_screen_scroll_to_pty_bytes`, `TerminalAction::AltMouseAction`, or mouse protocol encoding except
-for any exhaustive match updates required by new internal event metadata.
+`alt_screen_scroll_to_pty_bytes`, `TerminalAction::AltMouseAction`, or mouse protocol encoding --
+confirmed unchanged.
 
-Phase 2 must be a follow-up implementation after Phase 1. It reuses the controller and frame driver
-but does not block Phase 1 release.
+Phase 2 shipped as a follow-up PR after Phase 1, stacked on the Phase 1 branch so its diff shows
+only the terminal work; it retargets to `master` once Phase 1 merges.
 
 ## Testing and validation
 ### Automated tests
@@ -344,8 +419,21 @@ the amendment above (this list supersedes the original one, which named tests fo
 - `zero_delta_is_a_no_op`
 - `long_rapid_same_direction_burst_reaches_exact_sum_of_deltas`
 - `inverse_delta_duration_ramps_between_the_two_reference_points`
+- `inverse_delta_duration_ramps_linearly_not_hyperbolically`: pins the exact mid-ramp shape (a
+  linear interpolation, ported directly from Chromium's `kInverseDeltaSlope`/
+  `kInverseDeltaOffset`) rather than merely checking the ramp is monotonic and unbroken -- an
+  earlier revision used an `A/delta + B` hyperbola fit through the same two endpoints instead,
+  which this assertion would fail under.
 - `velocity_preserving_duration_bound_shrinks_when_moving_fast_toward_a_small_remaining_delta`
+- `velocity_based_duration_bound_guards`: direct coverage of the two guards ported from
+  Chromium's `VelocityBasedDurationBound` (zero when already at target; unbounded when velocity
+  is zero or points away from the remaining delta), plus the exact `* 2.5` fudge factor.
 - `cubic_bezier_ease_in_out_matches_known_reference_values`
+- `take_increment_reports_only_the_unapplied_remainder` /
+  `cancel_and_set_position_immediately_resync_take_increment`: cover
+  `SmoothScrollController::take_increment`, hoisted from what `ScrollState`
+  (`crates/warpui_core/src/elements/gui/scrollable.rs`) and `SmoothScrollHandle`
+  (`app/src/terminal/block_list_viewport.rs`) used to hand-roll independently.
 
 Extend `new_scrollable/scrollable_tests.rs`, legacy `scrollable_tests.rs`, and
 `clipped_scrollable_tests.rs`:
@@ -359,15 +447,44 @@ Extend `new_scrollable/scrollable_tests.rs`, legacy `scrollable_tests.rs`, and
 - Dual-axis input animates axes independently.
 - A stale frame cannot move a rebuilt or cancelled scrollable.
 
-Add Phase 2 terminal tests:
-- Normal non-precise block-list input reaches the same final fractional-line position.
-- Precise input cancels and applies immediately.
-- Page/home/end, jump-to-bottom, find navigation, and follow-bottom updates cancel.
-- Bottom clamping preserves `FollowsBottomOfMostRecentBlock`.
-- Alternate-screen wheel input produces the same PTY bytes with the flag on and off.
-- Mouse-reporting and long-running-block `AltMouseAction` receive exactly one unchanged action per
-  source wheel event.
-- No animation frame is emitted to a PTY.
+Phase 2 terminal tests added in `app/src/terminal/view_tests.rs`. Some drive `TerminalView::
+scroll`/`advance_smooth_scroll` directly (focusing on precise/flag branching and the cancellation
+guard); others deliberately drive the animation purely through the real `drive_smooth_scroll`
+stream (via `Timer::after` and real polling), since that mechanism changed twice during revision
+and is exactly what a manual-poke-based test cannot exercise:
+- `test_smooth_scroll_wheel_animates_and_settles_to_exact_target`: a non-precise notch defers
+  (doesn't apply synchronously), shows partial progress mid-flight, and lands exactly where an
+  immediate scroll of the same delta would have.
+- `test_smooth_scroll_precise_input_applies_immediately` / `..._disabled_flag_applies_immediately`:
+  precise input, and non-precise input with the flag off, both apply synchronously.
+- `test_smooth_scroll_direct_action_cancels_in_flight_animation`: a direct operation (`AfterHome`)
+  arriving mid-animation cancels it; advancing the animation afterward is a no-op.
+- `test_smooth_scroll_animation_settles_into_follows_bottom_of_most_recent_block`: a large
+  animated overshoot settles into sticky-bottom mode, not stuck at `FixedAtPosition` right at the
+  boundary (this is the test that found the `heights_approx_gte` fix above).
+- `test_smooth_scroll_advances_on_its_own_without_any_cached_mouse_position`: a window that has
+  never received a real `MouseMoved` still settles, driven purely by `drive_smooth_scroll`'s
+  independent stream -- this is the regression test for the stall the first revision fixed.
+- `test_smooth_scroll_drive_loop_settles_within_modeled_duration_via_real_polling`: polls
+  `scroll_position` via real sleeps (not a manual poke) for an 8-notch burst and asserts it
+  settles within ~300ms of real wall-clock time -- the regression test for the per-tick
+  background-task-spawn overhead the second revision fixed.
+- `test_smooth_scroll_cancels_when_entering_alt_screen_before_animation_settles` /
+  `..._settled_position_survives_alt_screen_round_trip`: an animation in flight when alt screen
+  opens is cancelled outright (not merely paused), and a round trip after the animation already
+  settled leaves the position untouched.
+- `test_smooth_scroll_handles_content_growing_mid_animation`: new blocks arriving mid-animation
+  (growing `max_scroll_top`) don't derail the animation; it still settles within the new bounds.
+
+`smooth_scroll_handle_tests` in `block_list_viewport.rs` covers the `Lines`-to-pixel-equivalent
+normalization at the `SmoothScrollHandle` boundary specifically (a 1-line delta takes the slow
+end of the duration ramp, a 20-line delta the fast end) -- this is the regression test for the
+unit-mismatch finding fixed above.
+
+Not covered by an automated test, and flagged rather than silently skipped: a live, real-content-
+streaming-mid-animation scenario against genuinely arriving PTY output (as opposed to the
+synthetic block-insertion the automated test above uses) during an active animation. Recommend
+this get a pass during human/visual verification.
 
 Run focused tests while implementing:
 
@@ -443,8 +560,11 @@ On each platform, confirm:
 Implementation is sequential across phases:
 - **Phase 1:** Reuse this spec PR after approval. Own shared controller, frame driving, flag wiring,
   and generic WarpUI scrollables on `factory/smooth-scrolling-spec`.
-- **Phase 2:** Start after the Phase 1 controller contract is merged. Use a follow-up branch
-  `factory/smooth-scrolling-terminal` and a separate PR so terminal work cannot block Phase 1.
+- **Phase 2:** Started after the Phase 1 controller contract merged, per the audit above. Shipped
+  on branch `factory/smooth-scrolling-phase2`, stacked on `factory/smooth-scrolling-phase1` (not
+  `factory/smooth-scrolling-terminal`, and including this spec amendment as its first commit
+  rather than a separate spec PR, per the requester's explicit preference), as a separate PR so
+  terminal work does not block Phase 1.
 
 Within each phase, implementation and core unit-test edits touch the same state and should remain one
 workstream. After local validation passes, platform verification can fan out to independent remote

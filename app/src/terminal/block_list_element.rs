@@ -1387,7 +1387,10 @@ impl BlockListElement {
                     }
                 }
             }
-            ctx.dispatch_typed_action(TerminalAction::Scroll { delta: delta_lines });
+            ctx.dispatch_typed_action(TerminalAction::Scroll {
+                delta: delta_lines,
+                precise,
+            });
             true
         } else {
             false
@@ -4779,8 +4782,11 @@ impl ScrollableElement for BlockListElement {
     }
 
     fn scroll(&mut self, delta: Pixels, ctx: &mut EventContext) {
+        // Reached via the generic `ScrollableElement` scrollbar-drag path, never a wheel notch,
+        // so it always applies immediately rather than animating.
         ctx.dispatch_typed_action(TerminalAction::Scroll {
             delta: delta.to_lines(self.line_height.unwrap()),
+            precise: true,
         });
     }
 }
