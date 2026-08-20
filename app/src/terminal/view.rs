@@ -23162,6 +23162,38 @@ impl TerminalView {
         self.insert_dummy_ai_block_internal(query, DummyAIBlockOutput::Cancelled(output), ctx)
     }
 
+    /// Test-only: adds a remote-child conversation with `credits` already
+    /// applied under `orchestrator_block`'s conversation, then opens that
+    /// block's usage summary footer. Exercises the orchestration credit
+    /// rollup footer (QUALITY-1702) end to end — the "Credits spent (total)"
+    /// row reflects the orchestrator + remote child sum and the "View
+    /// details" affordance appears — without a live server connection.
+    #[cfg(any(test, feature = "integration_tests"))]
+    pub fn insert_dummy_remote_child_credits_and_open_usage_footer(
+        &mut self,
+        orchestrator_block: &ViewHandle<AIBlock>,
+        agent_name: String,
+        credits: f32,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let parent_id = orchestrator_block.as_ref(ctx).conversation_id();
+        let terminal_view_id = ctx.view_id();
+        BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
+            let child_id = history.start_new_child_conversation(
+                terminal_view_id,
+                agent_name,
+                parent_id,
+                None,
+                true,
+                ctx,
+            );
+            history.apply_remote_child_task_credit_estimate(child_id, credits, ctx);
+        });
+        orchestrator_block.update(ctx, |block, ctx| {
+            block.handle_action(&AIBlockAction::ToggleIsUsageFooterExpanded, ctx);
+        });
+    }
+
     #[cfg(any(test, feature = "integration_tests"))]
     fn dummy_server_output_id() -> crate::ai::agent::ServerOutputId {
         use rand::distributions::{Alphanumeric, DistString};

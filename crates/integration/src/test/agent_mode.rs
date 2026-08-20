@@ -283,6 +283,54 @@ pub fn test_cancelled_run_agents_card_renders_cancelled_state() -> Builder {
         )
 }
 
+/// QUALITY-1702 visual verification: an orchestrator AI block with a
+/// synthetic remote-child conversation (credits applied directly, without a
+/// live server connection) must show the child rolled into the expanded
+/// usage footer's "Credits spent (total)" row, with the "View details"
+/// affordance present to indicate the rollup is active.
+pub fn test_orchestrator_usage_footer_includes_remote_child_credits() -> Builder {
+    new_builder()
+        .with_real_display()
+        .with_step(wait_until_bootstrapped_single_pane_for_tab(0))
+        .with_step(clear_blocklist_to_remove_bootstrapped_blocks())
+        .with_step(
+            new_step_with_default_assertions(
+                "Insert orchestrator block with a remote child and open its usage footer",
+            )
+            .with_action(|app, window_id, _| {
+                let terminal_view = single_terminal_view_for_tab(app, window_id, 0);
+                terminal_view.update(app, |view, ctx| {
+                    let block = view.insert_dummy_ai_block(
+                        "Fix the flaky release pipeline and add a regression test.".to_owned(),
+                        "Delegating triage to a subagent while I continue with the fix.".to_owned(),
+                        ctx,
+                    );
+                    view.insert_dummy_remote_child_credits_and_open_usage_footer(
+                        &block,
+                        "Triage".to_owned(),
+                        42.3,
+                        ctx,
+                    );
+                });
+            }),
+        )
+        .with_step(
+            TestStep::new("Capture the orchestrator usage footer with the remote child rolled up")
+                .set_timeout(Duration::from_secs(20))
+                .set_post_step_pause(Duration::from_secs(1))
+                .with_take_screenshot("orchestrator_usage_footer_remote_child_credits.png")
+                .add_assertion(|app, window_id| {
+                    let terminal_view = single_terminal_view_for_tab(app, window_id, 0);
+                    terminal_view.read(app, |view, _ctx| {
+                        async_assert!(
+                            view.last_ai_block().is_some(),
+                            "Orchestrator AI block should exist"
+                        )
+                    })
+                }),
+        )
+}
+
 fn select_first_to_last_through_ai_simple(is_copy_on_select: bool) -> Builder {
     let mut builder = builder_with_setup();
     // TODO(INT-339): There should be a "T" to the left of the query "Can you produce some dummy output for me?"

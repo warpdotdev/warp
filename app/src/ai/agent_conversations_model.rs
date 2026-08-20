@@ -168,6 +168,16 @@ impl InitialConversationLoadState {
     }
 }
 
+/// Outcome of `AgentConversationsModel::upsert_task` relative to what was
+/// previously cached for that task id, so callers can pick the right
+/// `NewTasksReceived` / `TasksUpdated` event without re-diffing themselves.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TaskUpsertKind {
+    New,
+    Updated,
+    Unchanged,
+}
+
 /// Tracks the cooldown window for RTC-triggered task-list refreshes. Pending events keep
 /// the earliest timestamp in the burst because `updated_after` is a lower bound; using the
 /// latest timestamp could skip tasks that changed earlier in the same window.
@@ -1081,7 +1091,7 @@ impl AgentConversationsModel {
                     if !tasks.is_empty() {
                         log::info!("Updating model with {} tasks", tasks.len());
                         for task in tasks {
-                            model.tasks.insert(task.task_id, task);
+                            model.upsert_task(task, ctx);
                         }
                     }
 
@@ -1252,16 +1262,11 @@ impl AgentConversationsModel {
         let mut has_updated_tasks = false;
 
         for task in tasks {
-            let task_id = task.task_id;
-            match self.tasks.get(&task_id) {
-                Some(existing_task) => {
-                    if existing_task != &task {
-                        has_updated_tasks = true
-                    }
-                }
-                None => has_new_tasks = true,
-            };
-            self.tasks.insert(task_id, task);
+            match self.upsert_task(task, ctx) {
+                TaskUpsertKind::New => has_new_tasks = true,
+                TaskUpsertKind::Updated => has_updated_tasks = true,
+                TaskUpsertKind::Unchanged => {}
+            }
         }
 
         if has_new_tasks {
@@ -1269,6 +1274,51 @@ impl AgentConversationsModel {
         } else if has_updated_tasks {
             ctx.emit(AgentConversationsModelEvent::TasksUpdated);
         }
+    }
+
+    /// Inserts (or replaces) a single task in the model. This is the sole
+    /// path that writes into `self.tasks`, so every task ingestion route
+    /// (initial cloud sync, filtered fetch, periodic/RTC polling, and
+    /// on-demand single-task fetch) always applies the live remote-child
+    /// credit estimate below — none of them can accidentally bypass it
+    /// (QUALITY-1702). Returns whether the task is new or changed relative
+    /// to what was previously cached, so callers can emit the right event.
+    fn upsert_task(
+        &mut self,
+        task: AmbientAgentTask,
+        ctx: &mut ModelContext<Self>,
+    ) -> TaskUpsertKind {
+        Self::apply_task_credit_estimate(&task, ctx);
+        let task_id = task.task_id;
+        let kind = match self.tasks.get(&task_id) {
+            Some(existing_task) if existing_task != &task => TaskUpsertKind::Updated,
+            Some(_) => TaskUpsertKind::Unchanged,
+            None => TaskUpsertKind::New,
+        };
+        self.tasks.insert(task_id, task);
+        kind
+    }
+
+    /// Feeds a remote child's live credit estimate — from its ambient agent
+    /// task's polled `credits_used()` — into its local placeholder
+    /// conversation, so the orchestration credit rollup counts a running
+    /// remote child's spend without waiting for its cloud transcript to be
+    /// hydrated, which only happens once the run is terminal (QUALITY-1702).
+    /// No-op when the task carries no usage data yet or has no matching
+    /// local placeholder conversation.
+    fn apply_task_credit_estimate(task: &AmbientAgentTask, ctx: &mut ModelContext<Self>) {
+        let Some(credits) = task.credits_used() else {
+            return;
+        };
+        let run_id = task.run_id().to_string();
+        let Some(conversation_id) =
+            BlocklistAIHistoryModel::as_ref(ctx).conversation_id_for_agent_id(&run_id)
+        else {
+            return;
+        };
+        BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
+            history.apply_remote_child_task_credit_estimate(conversation_id, credits, ctx);
+        });
     }
 
     /// Returns whether the unfiltered conversation list contains any entries.
@@ -1860,7 +1910,7 @@ impl AgentConversationsModel {
             move |model, result, ctx| match result {
                 RequestState::RequestSucceeded(task) => {
                     let fetched_id = task.task_id;
-                    model.tasks.insert(fetched_id, task);
+                    model.upsert_task(task, ctx);
                     model.task_fetch_state.remove(&fetched_id);
                     ctx.emit(AgentConversationsModelEvent::TasksUpdated);
                 }
@@ -2047,16 +2097,11 @@ impl AgentConversationsModel {
                     let mut has_updated_tasks = false;
 
                     for task in tasks {
-                        let task_id = task.task_id;
-                        match model.tasks.get(&task_id) {
-                            Some(existing_task) => {
-                                if existing_task != &task {
-                                    has_updated_tasks = true;
-                                }
-                            }
-                            None => has_new_tasks = true,
-                        };
-                        model.tasks.insert(task_id, task);
+                        match model.upsert_task(task, ctx) {
+                            TaskUpsertKind::New => has_new_tasks = true,
+                            TaskUpsertKind::Updated => has_updated_tasks = true,
+                            TaskUpsertKind::Unchanged => {}
+                        }
                     }
 
                     // Enforce task cap

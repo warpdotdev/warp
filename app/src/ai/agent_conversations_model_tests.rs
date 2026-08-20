@@ -673,6 +673,136 @@ fn create_test_model() -> AgentConversationsModel {
     }
 }
 
+/// QUALITY-1702: a task update carrying live `request_usage` for a remote
+/// child must feed a credit estimate into that child's loaded placeholder
+/// conversation, so the orchestration rollup counts it while the child is
+/// still running rather than only after transcript hydration.
+#[test]
+fn update_model_with_new_tasks_feeds_live_credits_into_remote_child_conversation() {
+    use crate::ai::ambient_agents::task::RequestUsage;
+
+    App::test((), |mut app| async move {
+        add_entry_projection_test_models(&mut app);
+        let history_model = BlocklistAIHistoryModel::handle(&app);
+        let terminal_view_id = EntityId::new();
+        let task_id = make_uuid(9800);
+
+        let conversation = create_restored_conversation(
+            AIConversationId::new(),
+            "root-task",
+            AgentConversationData {
+                server_conversation_token: None,
+                conversation_usage_metadata: None,
+                reverted_action_ids: None,
+                forked_from_server_conversation_token: None,
+                artifacts_json: None,
+                parent_agent_id: None,
+                agent_name: None,
+                orchestration_harness_type: None,
+                parent_conversation_id: None,
+                is_remote_child: true,
+                root_task_is_optimistic: None,
+                run_id: Some(task_id.clone()),
+                autoexecute_override: None,
+                last_event_sequence: None,
+                pinned: false,
+            },
+        );
+        let conversation_id = conversation.id();
+
+        history_model.update(&mut app, |model, ctx| {
+            model.restore_conversations(terminal_view_id, vec![conversation], ctx);
+        });
+
+        let model = app.add_singleton_model(|_| create_test_model());
+        let mut task = create_test_task(&task_id, "user-a", Utc::now());
+        task.state = AmbientAgentTaskState::InProgress;
+        task.request_usage = Some(RequestUsage {
+            inference_cost: Some(4.0),
+            compute_cost: Some(1.5),
+            platform_cost: Some(0.5),
+        });
+
+        model.update(&mut app, |model, ctx| {
+            model.update_model_with_new_tasks(vec![task], ctx);
+        });
+
+        history_model.read(&app, |history, _| {
+            let conversation = history
+                .conversation(&conversation_id)
+                .expect("remote child conversation should be loaded");
+            assert_eq!(
+                conversation.credits_spent(),
+                6.0,
+                "live task usage should be visible before the run is terminal",
+            );
+        });
+    });
+}
+
+/// A task update for a conversation that isn't a remote child (e.g. a local
+/// interactive conversation whose run_id happens to match) must not be
+/// touched — locally-driven conversations already get authoritative credits
+/// from `StreamFinished`.
+#[test]
+fn update_model_with_new_tasks_does_not_estimate_credits_for_non_remote_child() {
+    use crate::ai::ambient_agents::task::RequestUsage;
+
+    App::test((), |mut app| async move {
+        add_entry_projection_test_models(&mut app);
+        let history_model = BlocklistAIHistoryModel::handle(&app);
+        let terminal_view_id = EntityId::new();
+        let task_id = make_uuid(9801);
+
+        let conversation = create_restored_conversation(
+            AIConversationId::new(),
+            "root-task",
+            AgentConversationData {
+                server_conversation_token: None,
+                conversation_usage_metadata: None,
+                reverted_action_ids: None,
+                forked_from_server_conversation_token: None,
+                artifacts_json: None,
+                parent_agent_id: None,
+                agent_name: None,
+                orchestration_harness_type: None,
+                parent_conversation_id: None,
+                is_remote_child: false,
+                root_task_is_optimistic: None,
+                run_id: Some(task_id.clone()),
+                autoexecute_override: None,
+                last_event_sequence: None,
+                pinned: false,
+            },
+        );
+        let conversation_id = conversation.id();
+
+        history_model.update(&mut app, |model, ctx| {
+            model.restore_conversations(terminal_view_id, vec![conversation], ctx);
+        });
+
+        let model = app.add_singleton_model(|_| create_test_model());
+        let mut task = create_test_task(&task_id, "user-a", Utc::now());
+        task.state = AmbientAgentTaskState::InProgress;
+        task.request_usage = Some(RequestUsage {
+            inference_cost: Some(4.0),
+            compute_cost: Some(0.0),
+            platform_cost: Some(0.0),
+        });
+
+        model.update(&mut app, |model, ctx| {
+            model.update_model_with_new_tasks(vec![task], ctx);
+        });
+
+        history_model.read(&app, |history, _| {
+            let conversation = history
+                .conversation(&conversation_id)
+                .expect("conversation should be loaded");
+            assert_eq!(conversation.credits_spent(), 0.0);
+        });
+    });
+}
+
 #[test]
 fn local_conversation_sync_finishes_initial_load_without_starting_cloud_load() {
     App::test((), |mut app| async move {

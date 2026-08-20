@@ -790,6 +790,31 @@ impl AIConversation {
         self.conversation_usage_metadata.platform_credits_spent = 0.0;
     }
 
+    /// Applies a live credit estimate for a remote child from its ambient
+    /// agent task's polled usage (`AmbientAgentTask::credits_used`),
+    /// independent of the cloud-transcript hydration path that only runs
+    /// once the child's run goes terminal. Lets the orchestration credit
+    /// rollup (QUALITY-671) count a remote child's spend while it is still
+    /// running, per QUALITY-1702.
+    ///
+    /// Advance-only: a no-op unless `credits` exceeds the currently known
+    /// total, so a stale poll can never regress what's already displayed —
+    /// whether from a prior poll or from a completed transcript hydration,
+    /// which is authoritative and always overwrites this estimate once it
+    /// lands. No-op for anything other than a remote-child placeholder;
+    /// locally-driven conversations already get authoritative credits from
+    /// `StreamFinished`.
+    ///
+    /// Returns `true` when the estimate was applied.
+    pub fn apply_remote_child_task_credit_estimate(&mut self, credits: f32) -> bool {
+        if !self.is_remote_child || credits <= self.credits_spent() {
+            return false;
+        }
+        self.conversation_usage_metadata.credits_spent = credits;
+        self.conversation_usage_metadata.platform_credits_spent = 0.0;
+        true
+    }
+
     /// Test-only helper that simulates the root-task upgrade performed by the
     /// `Action::CreateTask` branch of `apply_client_action` when the server
     /// confirms the root for a newly started conversation. Replaces the

@@ -406,11 +406,12 @@ impl PaneGroup {
                         .filter_map(|task| task.source().cloned())
                         .collect();
                     let cloud_conversation = *cloud;
-                    match BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, _| {
+                    match BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
                         history.hydrate_remote_child_placeholder_with_cloud_transcript(
                             child_id,
                             tasks,
                             cloud_conversation,
+                            ctx,
                         )
                     }) {
                         Ok(merged) => merged,
@@ -908,11 +909,12 @@ impl PaneGroup {
                         .collect();
                     let cloud_conversation = *cloud;
                     let merge_result =
-                        BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, _| {
+                        BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
                             history.hydrate_remote_child_placeholder_with_cloud_transcript(
                                 child_id,
                                 tasks,
                                 cloud_conversation,
+                                ctx,
                             )
                         });
                     match merge_result {

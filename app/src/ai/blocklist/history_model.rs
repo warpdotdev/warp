@@ -2097,6 +2097,25 @@ impl BlocklistAIHistoryModel {
         }
     }
 
+    /// Applies a live credit estimate for a loaded remote-child placeholder
+    /// conversation, sourced from its ambient agent task's polled usage (see
+    /// `AIConversation::apply_remote_child_task_credit_estimate`). No-op when
+    /// `conversation_id` isn't loaded, isn't a remote child, or the estimate
+    /// doesn't advance its currently known credit total. See QUALITY-1702.
+    pub fn apply_remote_child_task_credit_estimate(
+        &mut self,
+        conversation_id: AIConversationId,
+        credits: f32,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let Some(conversation) = self.conversations_by_id.get_mut(&conversation_id) else {
+            return;
+        };
+        if conversation.apply_remote_child_task_credit_estimate(credits) {
+            ctx.emit(BlocklistAIHistoryEvent::ConversationUsageMetadataUpdated { conversation_id });
+        }
+    }
+
     pub fn mark_response_stream_cancelled(
         &mut self,
         stream_id: &ResponseStreamId,
@@ -2831,11 +2850,19 @@ impl BlocklistAIHistoryModel {
     /// (`pane_group::hydrate_remote_child_transcript_in_place`). Returns
     /// `Err` when the placeholder isn't loaded so the caller can fall back
     /// instead of silently producing a detached conversation.
+    ///
+    /// Emits `ConversationUsageMetadataUpdated` on success: the merge
+    /// replaces `conversation_usage_metadata` wholesale with the cloud's
+    /// authoritative figures (including a downward correction of a prior
+    /// live estimate — see `apply_remote_child_task_credit_estimate`), and
+    /// an already-open orchestration footer only re-renders on that event
+    /// (QUALITY-1702, PRODUCT invariant 7).
     pub fn hydrate_remote_child_placeholder_with_cloud_transcript(
         &mut self,
         local_placeholder_id: AIConversationId,
         tasks: Vec<warp_multi_agent_api::Task>,
         cloud_conversation: AIConversation,
+        ctx: &mut ModelContext<Self>,
     ) -> anyhow::Result<AIConversation> {
         let placeholder = self
             .conversations_by_id
@@ -2874,6 +2901,10 @@ impl BlocklistAIHistoryModel {
         if let Some(parent_id) = self.resolved_parent_conversation_id_for_conversation(&merged) {
             self.index_child_conversation(local_placeholder_id, parent_id);
         }
+
+        ctx.emit(BlocklistAIHistoryEvent::ConversationUsageMetadataUpdated {
+            conversation_id: local_placeholder_id,
+        });
 
         Ok(merged)
     }

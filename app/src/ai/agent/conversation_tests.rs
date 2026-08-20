@@ -583,6 +583,65 @@ fn restored_conversation_uses_persisted_remote_child_marker() {
     assert!(conversation.is_remote_child());
 }
 
+fn restored_remote_child_conversation() -> AIConversation {
+    let conversation_data: AgentConversationData =
+        serde_json::from_str(r#"{"server_conversation_token":null,"is_remote_child":true}"#)
+            .unwrap();
+    restored_conversation(Some(conversation_data))
+}
+
+/// QUALITY-1702: a remote child's live task-derived credit estimate must be
+/// applied so the orchestration rollup can count it while the child is
+/// still running, without waiting for cloud-transcript hydration.
+#[test]
+fn remote_child_task_credit_estimate_applies_for_remote_child() {
+    let mut conversation = restored_remote_child_conversation();
+
+    let applied = conversation.apply_remote_child_task_credit_estimate(12.5);
+
+    assert!(applied);
+    assert_eq!(conversation.credits_spent(), 12.5);
+}
+
+/// Locally-driven conversations already get authoritative credits from
+/// `StreamFinished`; the task-derived estimate must not touch them.
+#[test]
+fn remote_child_task_credit_estimate_is_noop_for_non_remote_child() {
+    let mut conversation = AIConversation::new(false, false);
+
+    let applied = conversation.apply_remote_child_task_credit_estimate(12.5);
+
+    assert!(!applied);
+    assert_eq!(conversation.credits_spent(), 0.0);
+}
+
+/// Advance-only: a stale poll reporting fewer credits than what's already
+/// known (e.g. from a prior poll or a completed transcript hydration) must
+/// never regress the displayed total.
+#[test]
+fn remote_child_task_credit_estimate_does_not_regress_a_higher_known_total() {
+    let mut conversation = restored_remote_child_conversation();
+    conversation.set_credits_spent_for_test(20.0);
+
+    let applied = conversation.apply_remote_child_task_credit_estimate(5.0);
+
+    assert!(!applied);
+    assert_eq!(conversation.credits_spent(), 20.0);
+}
+
+/// An estimate exactly equal to the known total is not an advance and must
+/// be a no-op, matching the `credits <= credits_spent()` gate.
+#[test]
+fn remote_child_task_credit_estimate_is_noop_when_equal_to_known_total() {
+    let mut conversation = restored_remote_child_conversation();
+    conversation.set_credits_spent_for_test(8.0);
+
+    let applied = conversation.apply_remote_child_task_credit_estimate(8.0);
+
+    assert!(!applied);
+    assert_eq!(conversation.credits_spent(), 8.0);
+}
+
 #[test]
 fn child_conversation_detection_uses_parent_agent_id() {
     let conversation_data: AgentConversationData = serde_json::from_str(
