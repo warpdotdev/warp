@@ -639,9 +639,14 @@ fn test_create_edit_for_existing_file() {
             other => panic!("Expected a single AlreadyExists error, got {other:?}"),
         }
 
-        // The error should point the agent at the retry that would have avoided it.
+        // The message stays neutral (doesn't name `rewrite: true`): this client always
+        // advertises the capability, but a server predating it ignores the flag and serves a
+        // create_file schema without `rewrite`, so naming it here could send the model into a
+        // retry the server can't honor. A model whose schema does include `rewrite` already
+        // knows about it independently of this message.
         let message = DiffApplicationError::error_for_conversation(&errors);
-        assert!(message.contains("rewrite: true"));
+        assert!(!message.contains("rewrite"));
+        assert!(message.contains("already exists"));
     });
 }
 
