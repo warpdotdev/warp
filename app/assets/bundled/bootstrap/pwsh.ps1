@@ -457,8 +457,12 @@ $null = New-Module -Name Warp-Module -ScriptBlock {
                     if ($completion.ReplacementIndex -ge 0) {
                         $utf8 = [System.Text.Encoding]::UTF8
                         $replacementStartBytes = $utf8.GetByteCount($line.Substring(0, $completion.ReplacementIndex))
-                        $replacementEndBytes = $utf8.GetByteCount(
-                            $line.Substring(0, $completion.ReplacementIndex + $completion.ReplacementLength))
+                        # Clamp to $line.Length: ReplacementIndex + ReplacementLength is expected to stay
+                        # within the line, but a `Substring` call past the end throws, which would otherwise
+                        # turn an unexpected shell-reported span into a silent, warning-free empty response
+                        # (swallowed by the surrounding try/catch) instead of a clearly wrong but visible one.
+                        $replacementEnd = [Math]::Min($completion.ReplacementIndex + $completion.ReplacementLength, $line.Length)
+                        $replacementEndBytes = $utf8.GetByteCount($line.Substring(0, $replacementEnd))
                         Write-Host -NoNewline "$([char]0x1b)]9280;S;$replacementStartBytes,$($replacementEndBytes - $replacementStartBytes)$oscEnd"
                     }
                     foreach ($match in $completion.CompletionMatches) {

@@ -99,8 +99,8 @@ impl Span {
     /// valid char boundary at or before it -- a defensive fallback, not a correctness
     /// guarantee: a caller with genuinely wrong offsets (e.g. a shell reporting offsets in a
     /// unit other than UTF-8 bytes, as PowerShell's own .NET UTF-16 code-unit offsets did
-    /// before the client-side conversion at the OSC boundary) gets a wrong slice instead of a
-    /// crash. A wrong menu is recoverable; a panicked window is not.
+    /// before the shell-side conversion in `pwsh.ps1`) gets a wrong slice instead of a crash.
+    /// A wrong menu is recoverable; a panicked window is not.
     pub fn slice<'a>(&self, source: &'a str) -> &'a str {
         let len = source.len();
         let start = floor_char_boundary(source, self.start.min(len));
