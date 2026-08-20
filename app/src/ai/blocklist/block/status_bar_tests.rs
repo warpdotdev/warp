@@ -49,7 +49,7 @@ fn reads_a_reported_model_off_the_exchange_output() {
 }
 
 /// An empty display name is an absent one, not a name: carrying it through would
-/// render "Warping with .".
+/// render "Warping with ...".
 #[test]
 fn treats_an_empty_display_name_as_no_name() {
     assert_eq!(ModelInUse::from(&model_info("", false)).display_name, None);
@@ -62,7 +62,8 @@ fn names_the_model_reported_for_the_exchange() {
     assert_eq!(
         warping_model_message(for_current(Some(named("Claude Sonnet 4.5")))),
         Some(WarpingModelMessage {
-            text: "Warping with Claude Sonnet 4.5.".to_owned(),
+            text: "Warping with Claude Sonnet 4.5...".to_owned(),
+            model_display_name: Some("Claude Sonnet 4.5".to_owned()),
             show_fallback_explanation: false,
         })
     );
@@ -103,7 +104,7 @@ fn stays_generic_when_the_reported_model_has_no_display_name() {
 }
 
 /// Today's shipped configuration — naming off, fallback messaging on — must behave
-/// exactly as it did before naming existed.
+/// as it did before naming existed, apart from the ellipsis.
 #[test]
 fn names_a_fallback_model_without_the_naming_flag() {
     let _naming = FeatureFlag::WarpingModelName.override_enabled(false);
@@ -112,7 +113,8 @@ fn names_a_fallback_model_without_the_naming_flag() {
     assert_eq!(
         warping_model_message(for_current(Some(fallback("Claude Haiku 4.5")))),
         Some(WarpingModelMessage {
-            text: "Warping with Claude Haiku 4.5.".to_owned(),
+            text: "Warping with Claude Haiku 4.5...".to_owned(),
+            model_display_name: Some("Claude Haiku 4.5".to_owned()),
             show_fallback_explanation: true,
         })
     );
@@ -128,15 +130,17 @@ fn names_a_fallback_model_without_the_explanation_line() {
     assert_eq!(
         warping_model_message(for_current(Some(fallback("Claude Haiku 4.5")))),
         Some(WarpingModelMessage {
-            text: "Warping with Claude Haiku 4.5.".to_owned(),
+            text: "Warping with Claude Haiku 4.5...".to_owned(),
+            model_display_name: Some("Claude Haiku 4.5".to_owned()),
             show_fallback_explanation: false,
         })
     );
 }
 
 /// Goes through the conversion rather than hand-building the input, so this also
-/// covers what an empty display name renders as: "Warping with ." before the
-/// normalization, this afterwards.
+/// covers what an empty display name renders as: "Warping with ..." before the
+/// normalization, this afterwards. No name means no name for the other status
+/// messages either.
 #[test]
 fn describes_an_unnamed_fallback_model_generically() {
     let _fallback_messaging = FeatureFlag::FallbackModelLoadOutputMessaging.override_enabled(true);
@@ -145,6 +149,7 @@ fn describes_an_unnamed_fallback_model_generically() {
         warping_model_message(for_current(Some(ModelInUse::from(&model_info("", true))))),
         Some(WarpingModelMessage {
             text: UNNAMED_FALLBACK_MODEL_WARPING_TEXT.to_owned(),
+            model_display_name: None,
             show_fallback_explanation: true,
         })
     );
@@ -172,7 +177,8 @@ fn names_the_previous_exchanges_fallback_model_on_agent_follow_ups() {
             is_new_user_query: false,
         }),
         Some(WarpingModelMessage {
-            text: "Warping with Claude Haiku 4.5.".to_owned(),
+            text: "Warping with Claude Haiku 4.5...".to_owned(),
+            model_display_name: Some("Claude Haiku 4.5".to_owned()),
             show_fallback_explanation: true,
         })
     );

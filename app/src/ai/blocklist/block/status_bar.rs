@@ -27,6 +27,7 @@ use super::view_impl::common::{
     AutoExecuteButtonProps, ButtonProps, ForceRefreshButtonProps, LOAD_OUTPUT_MESSAGE,
     MaybeShimmeringText, WAITING_FOR_USER_INPUT_MESSAGE, WarpingIndicatorProps, WarpingProps,
     render_switch_control_to_user_button, render_warping_indicator, render_warping_indicator_base,
+    status_message_naming_model,
 };
 use crate::ai::AgentTip;
 use crate::ai::agent::conversation::AIConversationId;
@@ -825,6 +826,9 @@ impl BlocklistAIStatusBar {
             || LOAD_OUTPUT_MESSAGE.to_owned(),
             |message| message.text.clone(),
         );
+        let model_in_use_name = model_warping_message
+            .as_ref()
+            .and_then(|message| message.model_display_name.clone());
         let secondary_element = match &model_warping_message {
             Some(message) if message.show_fallback_explanation => {
                 Some(render_fallback_explanation(model.as_ref(), app))
@@ -838,6 +842,7 @@ impl BlocklistAIStatusBar {
                 terminal_model: &terminal_model,
                 action_model: self.action_model.as_ref(app),
                 shimmering_text_handle: &self.shimmering_text_handle,
+                model_in_use_name,
                 summarization_start_time: self.summarization_start_time,
                 auto_execute_button: (!model.request_type(app).is_passive_code_diff()).then_some(
                     AutoExecuteButtonProps {
@@ -1120,11 +1125,15 @@ fn render_fallback_explanation<V: View>(
     .finish()
 }
 
-/// Warping text naming the model in use, plus whether the row should carry the
+/// Warping text naming the model in use, the name itself so the row's other
+/// status messages can name it too, and whether the row should carry the
 /// fallback explanation line beneath it.
 #[derive(Debug, PartialEq)]
 struct WarpingModelMessage {
     text: String,
+    /// `None` for a fallback whose model arrived without a display name: the text
+    /// can still say something useful, but there is no name to put in a message.
+    model_display_name: Option<String>,
     show_fallback_explanation: bool,
 }
 
@@ -1138,10 +1147,10 @@ struct WarpingModelInputs {
     is_new_user_query: bool,
 }
 
-const UNNAMED_FALLBACK_MODEL_WARPING_TEXT: &str = "Warping with another model.";
+const UNNAMED_FALLBACK_MODEL_WARPING_TEXT: &str = "Warping with another model...";
 
 /// Warping text for the model a response is running on, e.g. "Warping with Claude
-/// Sonnet 4.5.". `None` keeps the row on its generic copy, which is what `auto`
+/// Sonnet 4.5...". `None` keeps the row on its generic copy, which is what `auto`
 /// and custom routers get until routing picks a model and the server reports it.
 ///
 /// Naming the model is `WarpingModelName`'s. `FallbackModelLoadOutputMessaging`
@@ -1176,8 +1185,8 @@ fn warping_model_message(inputs: WarpingModelInputs) -> Option<WarpingModelMessa
         return None;
     }
 
-    let text = match model_in_use.display_name {
-        Some(display_name) => warping_text_for_model(display_name),
+    let text = match model_in_use.display_name.as_deref() {
+        Some(display_name) => status_message_naming_model(LOAD_OUTPUT_MESSAGE, display_name),
         // An unnamed fallback still has something to say; an unnamed ordinary
         // model does not, so the row keeps its generic copy.
         None if model_in_use.is_fallback => UNNAMED_FALLBACK_MODEL_WARPING_TEXT.to_owned(),
@@ -1186,12 +1195,9 @@ fn warping_model_message(inputs: WarpingModelInputs) -> Option<WarpingModelMessa
 
     Some(WarpingModelMessage {
         text,
+        model_display_name: model_in_use.display_name,
         show_fallback_explanation,
     })
-}
-
-fn warping_text_for_model(display_name: String) -> String {
-    format!("Warping with {display_name}.")
 }
 
 /// Collects the exchange state [`warping_model_message`] decides on.
