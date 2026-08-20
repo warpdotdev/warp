@@ -156,6 +156,41 @@ pub struct CreateTeamResponse {
     pub team: Team,
 }
 
+/// The team an operation is scoped to, captured once from the window that started it.
+///
+/// A logical operation carries its `TeamContext` from start to finish instead of asking a
+/// window which team is selected now, so concurrent windows on different teams stay
+/// independent and a later team switch cannot retarget work already in flight.
+///
+/// Deliberately neither `Clone` nor `Copy`. Moves make the handoff between the parts of an
+/// operation explicit and reviewable, whereas copies let a scope leak sideways into work
+/// that never established it. Wanting to duplicate one is a sign the second consumer is
+/// really a separate operation that should capture its own scope; if the parts genuinely
+/// share a lifetime, restructure so they share the single owner instead.
+///
+/// This is scope, not authority: the server still authorizes every request made under it.
+// Only tests construct one today; remove this once a Group 1 migration PR mints one from a
+// real call site.
+#[allow(dead_code)]
+pub(crate) struct TeamContext {
+    team_uid: ServerId,
+}
+
+/// The team a view renders as, borrowed for the duration of a single render.
+///
+/// Current-team UI must reflect the window's team as of this frame, so this is resolved
+/// per render rather than cached. The borrow is what enforces that: it cannot be stored in
+/// view state or moved into a `'static` future, and it deliberately offers no conversion to
+/// a team UID or to a [`TeamContext`]. A [`WeakViewHandle`] locates a window to read from;
+/// it is not evidence that the holder is running in that window, which is what minting
+/// operation scope requires.
+// Only tests construct one today; remove this once a Group 1 migration PR resolves one from a
+// real render.
+#[allow(dead_code)]
+pub(crate) struct TeamRenderContext<'a> {
+    team: &'a Team,
+}
+
 impl UserWorkspaces {
     #[cfg(any(test, all(feature = "tui", feature = "test-util")))]
     pub fn mock(
@@ -347,6 +382,41 @@ impl UserWorkspaces {
         view_handle
             .window_id(ctx)
             .and_then(|window_id| self.team_for_window(window_id))
+    }
+
+    /// Captures the team selected in `ctx`'s window as an operation's [`TeamContext`]. This
+    /// is the only way application code mints one.
+    // Only tests call this today; remove once a Group 1 migration PR has a real call site.
+    #[allow(dead_code)]
+    pub(crate) fn team_context_for_view<T: Entity>(
+        &self,
+        ctx: &ViewContext<T>,
+    ) -> Option<TeamContext> {
+        self.team_uid_for_window(ctx.window_id())
+            .map(|team_uid| TeamContext { team_uid })
+    }
+
+    /// Resolves `view`'s window team for one render. See [`TeamRenderContext`].
+    // Only tests call this today; remove once a Group 1 migration PR has a real call site.
+    #[allow(dead_code)]
+    pub(crate) fn team_render_context_for_view_handle<'a, T: Entity>(
+        &'a self,
+        view: &WeakViewHandle<T>,
+        app: &AppContext,
+    ) -> Option<TeamRenderContext<'a>> {
+        let window_id = view.window_id(app)?;
+        let team_uid = self.team_uid_for_window(window_id)?;
+        let team = self.team_from_uid(team_uid)?;
+
+        Some(TeamRenderContext { team })
+    }
+
+    /// Reads a captured team's metadata. Returns `None` once that team is gone from the
+    /// current workspace, e.g. after the user leaves it.
+    // Only tests call this today; remove once a Group 1 migration PR has a real call site.
+    #[allow(dead_code)]
+    pub(crate) fn team_for_context(&self, context: &TeamContext) -> Option<&Team> {
+        self.team_from_uid(context.team_uid)
     }
 
     /// Returns the windows whose team assignment changed.

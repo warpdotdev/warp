@@ -168,6 +168,7 @@ gloo = { version = "0.11.0", default-features = false, features = [
   "utils",
 ] }
 graphql-ws-client = { version = "0.11.1", default-features = false }
+hashbrown = "0.17.1"
 hex = "0.4.3"
 # This matches the version of hyper used by reqwest.
 hyper = "1.6.0"
