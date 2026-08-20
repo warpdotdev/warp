@@ -8,7 +8,9 @@ use std::time::Duration;
 use cloud_object_models::CodeForge;
 use futures::channel::oneshot;
 use futures::executor::block_on;
+use instant::Instant;
 use repo_metadata::{DirectoryWatcher, RepoMetadataEvent, RepoMetadataModel, RepositoryIdentifier};
+use serde_json::json;
 use tempfile::TempDir;
 use warp_cli::agent::Harness;
 use warp_cli::mcp::MCPSpec;
@@ -25,16 +27,19 @@ use warp_graphql::mutations::create_managed_mcp_client_config::{
 use warp_graphql::response_context::ResponseContext;
 use warp_managed_secrets::ManagedSecretValue;
 use warp_util::standardized_path::StandardizedPath;
+use warpui::r#async::Timer;
+use warpui::telemetry::EventPayload;
 use warpui::{App, SingletonEntity as _};
 
 use super::{
-    AgentDriver, AgentDriverError, CLIAgentSessionStatus, IdleTimeoutSender,
+    AgentDriver, AgentDriverError, AgentRunPrompt, CLIAgentSessionStatus, IdleTimeoutSender,
     LEGACY_OZ_PARENT_LISTENER_MANAGED_EXTERNALLY_ENV, LEGACY_OZ_PARENT_STATE_ROOT_ENV,
     OZ_MESSAGE_LISTENER_MANAGED_EXTERNALLY_ENV, OZ_MESSAGE_LISTENER_STATE_ROOT_ENV,
     PlatformErrorCode, SDKConversationOutputStatus, build_secret_env_vars,
     idle_window_for_cli_session_status, idle_window_for_terminal_status,
     setup_failure_status_update, terminal_status_log_outcome,
 };
+use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent::task::TaskId;
 use crate::ai::agent::{
     AIAgentActionResult, AIAgentActionResultType, AIAgentInput, AIAgentOutput,
@@ -43,6 +48,7 @@ use crate::ai::agent::{
 };
 use crate::ai::agent_sdk::task_env_vars;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
+use crate::ai::blocklist::BlocklistAIHistoryModel;
 use crate::ai::cloud_environments::{GithubRepo, SourceRepo};
 use crate::ai::mcp::JSONTransportType;
 use crate::ai::mcp::builtin::{FACTORY_MCP_INSTALLATION_UUID, FACTORY_MCP_SERVER_NAME};
@@ -1057,6 +1063,187 @@ fn run_snapshot_upload_fails_genuine_requirement_when_oz_handoff_disabled() {
             best_effort_result,
             "ordinary best-effort cleanup must still treat a skipped upload as success"
         );
+    });
+}
+
+// ── QUALITY-1775: formal telemetry for the wait_for_events yield chain ─────
+
+/// Returns every `AmbientAgents.WaitForEvents.EpisodeResolved` telemetry payload
+/// recorded for `execution_id`, draining the process-wide telemetry queue.
+/// Filtering by `execution_id` (a fresh UUID per driver) keeps this robust
+/// against events from other tests sharing the same queue.
+fn wait_for_events_episode_payloads_for(execution_id: &str) -> Vec<serde_json::Value> {
+    warpui::telemetry::flush_events()
+        .into_iter()
+        .filter_map(|event| match event.payload {
+            EventPayload::NamedEvent { name, value, .. }
+                if name == "AmbientAgents.WaitForEvents.EpisodeResolved" =>
+            {
+                value.filter(|value| value["execution_id"] == execution_id)
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// Polls for the first matching event (bounded by `timeout`), then keeps polling
+/// for `settle` longer so a spurious duplicate emission is also caught, rather
+/// than just the first arrival.
+async fn collect_wait_for_events_episode_payloads(
+    execution_id: &str,
+    timeout: Duration,
+    settle: Duration,
+) -> Vec<serde_json::Value> {
+    let deadline = Instant::now() + timeout;
+    let mut collected = Vec::new();
+    while collected.is_empty() && Instant::now() < deadline {
+        collected.extend(wait_for_events_episode_payloads_for(execution_id));
+        if collected.is_empty() {
+            Timer::after(Duration::from_millis(10)).await;
+        }
+    }
+    let settle_deadline = Instant::now() + settle;
+    while Instant::now() < settle_deadline {
+        collected.extend(wait_for_events_episode_payloads_for(execution_id));
+        Timer::after(Duration::from_millis(10)).await;
+    }
+    collected
+}
+
+/// Drives the real `wait_for_events` yield chain: a `BlocklistAIHistoryModel`
+/// `WaitForEventsYielded` event (standing in for what `action_model` emits on
+/// watchdog expiry) through the `AgentDriver` subscription installed by
+/// `execute_run`, its checkpoint attempt, and the telemetry emission at the end.
+/// `FeatureFlag::OzHandoff` is left at its default (disabled) state, so the
+/// checkpoint attempt deterministically fails without touching the network --
+/// see `wait_for_events_episode_resolved_event`'s doc comment for why the
+/// checkpoint-succeeded branch is covered separately, at the helper-function
+/// level, instead of through this same real chain.
+///
+/// Serialized against the sibling test below: both drain the same process-wide
+/// telemetry queue, and running concurrently risks one test's poll silently
+/// discarding the other's not-yet-matched event.
+#[test]
+#[serial_test::serial(wait_for_events_episode_telemetry)]
+fn wait_for_events_yielded_emits_single_telemetry_event_with_stamped_fields_when_checkpoint_fails()
+{
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let temp = TempDir::new().unwrap();
+        let working_dir = dunce::canonicalize(temp.path()).unwrap();
+        let terminal_view = add_window_with_terminal(&mut app, None);
+        let driver_handle = app.add_model(|ctx| {
+            let terminal_driver =
+                super::terminal::TerminalDriver::create_from_existing_view(terminal_view, ctx);
+            AgentDriver::new_for_test(working_dir.clone(), terminal_driver, ctx)
+        });
+
+        let task_id: AmbientAgentTaskId = "550e8400-e29b-41d4-a716-446655440020".parse().unwrap();
+        let conversation_id = AIConversationId::new();
+        let execution_id = driver_handle.update(&mut app, |driver, ctx| {
+            driver.task_id = Some(task_id);
+            driver.skip_initial_turn = true;
+            let execution_id = driver.execution_id.clone();
+            let terminal_id = driver.terminal_driver.as_ref(ctx).terminal_view().id();
+
+            std::mem::drop(driver.execute_run(AgentRunPrompt::Local(String::new()), ctx));
+
+            BlocklistAIHistoryModel::handle(ctx).update(ctx, |model, ctx| {
+                model.mark_wait_for_events_yielded(
+                    terminal_id,
+                    conversation_id,
+                    1800,
+                    false,
+                    Duration::from_secs(1770),
+                    ctx,
+                );
+            });
+
+            execution_id
+        });
+
+        let payloads = collect_wait_for_events_episode_payloads(
+            &execution_id,
+            Duration::from_secs(2),
+            Duration::from_millis(150),
+        )
+        .await;
+
+        assert_eq!(
+            payloads.len(),
+            1,
+            "expected exactly one telemetry event for this execution, got {payloads:?}"
+        );
+        let payload = &payloads[0];
+        assert_eq!(payload["task_id"], json!(task_id.to_string()));
+        assert_eq!(payload["execution_id"], json!(execution_id));
+        assert_eq!(payload["server_idle_timeout_seconds"], json!(1800));
+        assert_eq!(payload["used_fallback"], json!(false));
+        assert_eq!(payload["resolved_watchdog_seconds"], json!(1770));
+        assert_eq!(payload["hibernate_on_first_timeout_enabled"], json!(false));
+        assert_eq!(payload["wait_outcome"], json!("timeout"));
+        assert_eq!(payload["checkpoint_outcome"], json!("failed"));
+    });
+}
+
+/// Same real chain as above, with a different stamp (fallback used, zero
+/// timeout) and no cloud task id, so a dropped or swapped argument in either
+/// stamp shows up regardless of which fields happen to be set.
+///
+/// See the serialization note on the sibling test above.
+#[test]
+#[serial_test::serial(wait_for_events_episode_telemetry)]
+fn wait_for_events_yielded_threads_fallback_and_null_task_id_into_telemetry() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let temp = TempDir::new().unwrap();
+        let working_dir = dunce::canonicalize(temp.path()).unwrap();
+        let terminal_view = add_window_with_terminal(&mut app, None);
+        let driver_handle = app.add_model(|ctx| {
+            let terminal_driver =
+                super::terminal::TerminalDriver::create_from_existing_view(terminal_view, ctx);
+            AgentDriver::new_for_test(working_dir.clone(), terminal_driver, ctx)
+        });
+
+        let conversation_id = AIConversationId::new();
+        let execution_id = driver_handle.update(&mut app, |driver, ctx| {
+            driver.skip_initial_turn = true;
+            let execution_id = driver.execution_id.clone();
+            let terminal_id = driver.terminal_driver.as_ref(ctx).terminal_view().id();
+
+            std::mem::drop(driver.execute_run(AgentRunPrompt::Local(String::new()), ctx));
+
+            BlocklistAIHistoryModel::handle(ctx).update(ctx, |model, ctx| {
+                model.mark_wait_for_events_yielded(
+                    terminal_id,
+                    conversation_id,
+                    0,
+                    true,
+                    Duration::from_secs(1770),
+                    ctx,
+                );
+            });
+
+            execution_id
+        });
+
+        let payloads = collect_wait_for_events_episode_payloads(
+            &execution_id,
+            Duration::from_secs(2),
+            Duration::from_millis(150),
+        )
+        .await;
+
+        assert_eq!(
+            payloads.len(),
+            1,
+            "expected exactly one telemetry event for this execution, got {payloads:?}"
+        );
+        let payload = &payloads[0];
+        assert_eq!(payload["task_id"], serde_json::Value::Null);
+        assert_eq!(payload["server_idle_timeout_seconds"], json!(0));
+        assert_eq!(payload["used_fallback"], json!(true));
+        assert_eq!(payload["checkpoint_outcome"], json!("failed"));
     });
 }
 

@@ -51,6 +51,9 @@ use crate::ai::agent_sdk::driver::harness::{
     HarnessCleanupDisposition, HarnessKind, HarnessRunner, ResumePayload, SavePoint,
     ThirdPartyHarness, ThirdPartyHarnessTelemetryEvent, harness_model_env_vars, task_env_vars,
 };
+use crate::ai::agent_sdk::driver::telemetry::{
+    WaitForEventsTelemetryEvent, wait_for_events_episode_resolved_event,
+};
 use crate::ai::agent_sdk::setup_observability::{SetupClientEventReporter, SetupStep};
 use crate::ai::ambient_agents::task::HarnessModelConfig;
 use crate::ai::ambient_agents::{
@@ -86,7 +89,6 @@ use crate::ai::skills::{
 use crate::auth::AuthStateProvider;
 use crate::auth::credentials::Credentials;
 use crate::cloud_object::{CloudObject, CloudObjectLookup as _};
-use crate::send_telemetry_from_app_ctx;
 use crate::server::ids::{ServerId, SyncId};
 use crate::server::server_api::ServerApiProvider;
 use crate::server::server_api::ai::{AIClient, TaskStatusUpdate};
@@ -102,6 +104,7 @@ use crate::terminal::cli_agent_sessions::{
 };
 use crate::terminal::model::BlockId;
 use crate::terminal::view::ConversationRestorationInNewPaneType;
+use crate::{send_telemetry_from_app_ctx, send_telemetry_from_ctx};
 
 pub(crate) mod attachments;
 #[cfg(feature = "local_fs")]
@@ -115,6 +118,7 @@ pub(crate) mod harness;
 mod harness_output_monitor;
 pub(super) mod output;
 mod snapshot;
+mod telemetry;
 pub(crate) mod terminal;
 
 use environment::PrepareEnvironmentError;
@@ -521,6 +525,14 @@ pub struct AgentDriver {
 
     // The associated task ID for this agent run, if any.
     task_id: Option<AmbientAgentTaskId>,
+
+    /// Identifier for this particular driver process's execution attempt,
+    /// distinct from `task_id` (which persists across the multiple
+    /// executions a task can have, e.g. after a `wait_for_events`
+    /// hibernation wake). Generated fresh at construction; used to key
+    /// `wait_for_events` telemetry so a rollout dashboard can distinguish
+    /// attempts of the same task.
+    execution_id: String,
 
     /// Harness adapter for the running agent. This is only set if:
     /// - The harness has started successfully.
@@ -1043,6 +1055,7 @@ impl AgentDriver {
             resolved_env_vars,
             output_format: OutputFormat::default(),
             task_id,
+            execution_id: Uuid::new_v4().to_string(),
             harness: None,
             idle_on_complete,
             idle_on_fail,
@@ -1095,6 +1108,7 @@ impl AgentDriver {
             resolved_env_vars: Arc::new(HashMap::new()),
             output_format: OutputFormat::default(),
             task_id: None,
+            execution_id: Uuid::new_v4().to_string(),
             harness: None,
             idle_on_complete: None,
             idle_on_fail: None,
@@ -4074,6 +4088,9 @@ impl AgentDriver {
                 }
                 BlocklistAIHistoryEvent::WaitForEventsYielded {
                     terminal_surface_id: event_tid,
+                    server_idle_timeout_seconds,
+                    used_fallback,
+                    resolved_watchdog,
                     ..
                 } => {
                     if *event_tid != terminal_id {
@@ -4090,7 +4107,11 @@ impl AgentDriver {
                     );
                     let checkpoint_run_exit = run_exit.clone();
                     let checkpoint_task_id = me.task_id;
+                    let checkpoint_execution_id = me.execution_id.clone();
                     let checkpoint_foreground = ctx.spawner();
+                    let server_idle_timeout_seconds = *server_idle_timeout_seconds;
+                    let used_fallback = *used_fallback;
+                    let resolved_watchdog = *resolved_watchdog;
                     ctx.spawn(
                         async move {
                             // `require_genuine_checkpoint=true`: a hibernation may only
@@ -4102,9 +4123,23 @@ impl AgentDriver {
                             // rehydrate from, so it must not be reported as success.
                             Self::run_snapshot_upload(&checkpoint_foreground, true).await
                         },
-                        move |me, checkpoint_succeeded, _ctx| {
+                        move |me, checkpoint_succeeded, ctx| {
                             log::info!(
                                 "Ambient agent idle lifecycle: event=run_completion_immediate task_id={checkpoint_task_id:?} terminal_view_id={terminal_id:?} outcome=yielded_for_events checkpoint_succeeded={checkpoint_succeeded}"
+                            );
+                            send_telemetry_from_ctx!(
+                                WaitForEventsTelemetryEvent::EpisodeResolved(
+                                    wait_for_events_episode_resolved_event(
+                                        checkpoint_task_id.map(|id| id.to_string()),
+                                        checkpoint_execution_id,
+                                        server_idle_timeout_seconds,
+                                        used_fallback,
+                                        resolved_watchdog.as_secs(),
+                                        FeatureFlag::HibernateOnFirstWaitTimeout.is_enabled(),
+                                        checkpoint_succeeded,
+                                    )
+                                ),
+                                ctx
                             );
                             // Attempted (successfully or not) here, so the unconditional
                             // end-of-run cleanup must not upload a second final checkpoint.

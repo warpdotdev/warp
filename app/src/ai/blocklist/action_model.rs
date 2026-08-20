@@ -1513,10 +1513,20 @@ impl BlocklistAIActionModel {
         ctx.emit(BlocklistAIActionEvent::WaitForEventsYielded {
             action_id: action_id.clone(),
             conversation_id,
+            server_idle_timeout_seconds,
+            used_fallback,
+            resolved_watchdog,
         });
 
         BlocklistAIHistoryModel::handle(ctx).update(ctx, |history_model, ctx| {
-            history_model.mark_wait_for_events_yielded(self.terminal_view_id, conversation_id, ctx);
+            history_model.mark_wait_for_events_yielded(
+                self.terminal_view_id,
+                conversation_id,
+                server_idle_timeout_seconds,
+                used_fallback,
+                resolved_watchdog,
+                ctx,
+            );
         });
     }
 
@@ -1629,6 +1639,9 @@ pub enum BlocklistAIActionEvent {
     WaitForEventsYielded {
         action_id: AIAgentActionId,
         conversation_id: AIConversationId,
+        server_idle_timeout_seconds: i32,
+        used_fallback: bool,
+        resolved_watchdog: std::time::Duration,
     },
 }
 

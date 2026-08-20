@@ -3,6 +3,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 #[cfg(feature = "local_fs")]
 use std::sync::Mutex;
+use std::time::Duration;
 
 use ai::skills::SkillPathOrigin;
 use anyhow::anyhow;
@@ -3194,6 +3195,16 @@ pub enum BlocklistAIHistoryEvent {
     WaitForEventsYielded {
         conversation_id: AIConversationId,
         terminal_surface_id: EntityId,
+        /// The `idle_timeout_seconds` carried on the yielded action (0 meant
+        /// unset). Forwarded to telemetry at the driver's action execution
+        /// boundary so rollout can distinguish a stamped wait from a
+        /// fallback-resolved one.
+        server_idle_timeout_seconds: i32,
+        /// Whether the resolved watchdog fell back to the client default
+        /// because the server stamp was absent or invalid.
+        used_fallback: bool,
+        /// The resolved watchdog duration, after the safety margin.
+        resolved_watchdog: Duration,
     },
 }
 
@@ -3323,15 +3334,22 @@ impl BlocklistAIHistoryModel {
     }
 
     /// Emits [`BlocklistAIHistoryEvent::WaitForEventsYielded`].
+    #[allow(clippy::too_many_arguments)]
     pub fn mark_wait_for_events_yielded(
         &mut self,
         terminal_surface_id: EntityId,
         conversation_id: AIConversationId,
+        server_idle_timeout_seconds: i32,
+        used_fallback: bool,
+        resolved_watchdog: Duration,
         ctx: &mut ModelContext<Self>,
     ) {
         ctx.emit(BlocklistAIHistoryEvent::WaitForEventsYielded {
             conversation_id,
             terminal_surface_id,
+            server_idle_timeout_seconds,
+            used_fallback,
+            resolved_watchdog,
         });
     }
 }
