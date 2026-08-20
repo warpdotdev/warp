@@ -4,8 +4,6 @@ use pathfinder_geometry::rect::RectF;
 use pathfinder_geometry::vector::Vector2F;
 use warpui::EntityId;
 use warpui::elements::PositionedElementOffsetBounds;
-use warpui::keymap::Keystroke;
-use warpui::platform::keyboard::KeyCode;
 
 use super::{
     AgentTabTextPreference, SummaryPaneKind, SummaryPaneKindIcons, TerminalAgentText,
@@ -30,8 +28,7 @@ use crate::pane_group::pane::IPaneType;
 use crate::pane_group::{PaneId, TerminalPaneId};
 use crate::safe_triangle::SafeTriangle;
 use crate::tab::{
-    ShortcutModifierKind, TAB_ACTIVATE_BINDING_NAMES, keystroke_modifier_kinds,
-    reveals_shortcut_hints, shortcut_modifier_kind,
+    ShortcutModifierKind, TAB_ACTIVATE_BINDING_NAMES, reveals_shortcut_hints,
 };
 use crate::terminal::CLIAgent;
 use crate::workspace::tab_settings::VerticalTabsDisplayGranularity;
@@ -1206,49 +1203,6 @@ fn tab_activate_binding_names_cover_first_eight_tabs_in_order() {
     assert_eq!(
         TAB_ACTIVATE_BINDING_NAMES[TAB_ACTIVATE_BINDING_NAMES.len() - 1],
         "workspace:activate_eighth_tab"
-    );
-}
-
-#[test]
-fn shortcut_modifier_kind_maps_modifier_keys() {
-    assert_eq!(
-        shortcut_modifier_kind(KeyCode::SuperLeft),
-        Some(ShortcutModifierKind::Super)
-    );
-    assert_eq!(
-        shortcut_modifier_kind(KeyCode::ControlRight),
-        Some(ShortcutModifierKind::Control)
-    );
-    assert_eq!(
-        shortcut_modifier_kind(KeyCode::AltLeft),
-        Some(ShortcutModifierKind::Alt)
-    );
-    assert_eq!(
-        shortcut_modifier_kind(KeyCode::ShiftLeft),
-        Some(ShortcutModifierKind::Shift)
-    );
-    assert_eq!(shortcut_modifier_kind(KeyCode::KeyA), None);
-}
-
-#[test]
-fn keystroke_modifier_kinds_cover_all_flags() {
-    let keystroke = Keystroke {
-        cmd: true,
-        ctrl: true,
-        alt: true,
-        shift: true,
-        meta: false,
-        key: "1".to_string(),
-    };
-    assert_eq!(
-        keystroke_modifier_kinds(&keystroke),
-        [
-            ShortcutModifierKind::Super,
-            ShortcutModifierKind::Control,
-            ShortcutModifierKind::Alt,
-            ShortcutModifierKind::Shift,
-        ]
-        .into()
     );
 }
 

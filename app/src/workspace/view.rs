@@ -18938,7 +18938,7 @@ impl Workspace {
                     );
                 }
 
-                // Re-render if fullscreen changed.
+                // Re-render if fullscreen state for active window has changed.
                 if current.is_active_window_fullscreen != previous.is_active_window_fullscreen {
                     ctx.notify();
                 } else if did_window_change_focus {
