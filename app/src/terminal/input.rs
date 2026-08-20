@@ -12645,15 +12645,38 @@ impl Input {
             .and_then(|s| s.parse().ok())
             .unwrap_or(false);
 
+        let native_shell_completions_feature_enabled =
+            FeatureFlag::NativeShellCompletions.is_enabled() || force_native_shell_completions;
+        let shell_supports_native_shell_completions = completion_context
+            .session
+            .shell()
+            .supports_native_shell_completions();
         let use_native_shell_completions = should_use_native_shell_completions(
-            FeatureFlag::NativeShellCompletions.is_enabled() || force_native_shell_completions,
-            completion_context
-                .session
-                .shell()
-                .supports_native_shell_completions(),
+            native_shell_completions_feature_enabled,
+            shell_supports_native_shell_completions,
             buffer_text.contains('\n'),
             input_type.is_ai(),
         );
+
+        // Distinguish an AI-mode classification skip from the other reasons
+        // `use_native_shell_completions` can be false. This dispatch and the
+        // `retry_as_you_type_completions_if_buffer_changed` trailing-edge retry both reach here
+        // through the same function, and each re-reads `input_type` fresh at call time -- so an
+        // async input-type classification (`detect_and_set_input_type`) that resolves between an
+        // original dispatch and a later retry can silently take the shell out of native
+        // completions eligibility for one of them and not the other, with nothing distinguishing
+        // it in logs from the `open_completion_suggestions` gate blocking dispatch entirely. No
+        // buffer/command content logged here -- see the `logging-and-error-reporting` skill.
+        if !use_native_shell_completions
+            && input_type.is_ai()
+            && native_shell_completions_feature_enabled
+            && shell_supports_native_shell_completions
+            && !buffer_text.contains('\n')
+        {
+            log::debug!(
+                "Native shell completions skipped: input classified as AI mode (trigger={completions_trigger:?})"
+            );
+        }
 
         let fallback_strategy = completions_fallback_strategy_for_trigger(
             completions_trigger,
