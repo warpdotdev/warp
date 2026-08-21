@@ -2278,6 +2278,115 @@ fn test_powershell_parser_directives_for_flags() {
     );
 }
 
+/// Creates a keyword `Command` (no subcommands of its own) that takes a single required
+/// positional argument with the given suggested values, for use under a `repeatable_keywords`
+/// parent.
+#[cfg(feature = "v2")]
+fn repeatable_keyword(name: &str, values: &[&str]) -> crate::signatures::Command {
+    use crate::signatures::{Argument, ArgumentValue, Command, Suggestion};
+
+    Command {
+        name: name.to_owned(),
+        arguments: vec![Argument {
+            name: format!("{name}-value"),
+            values: values
+                .iter()
+                .map(|value| {
+                    ArgumentValue::Suggestion(Suggestion {
+                        value: (*value).to_owned(),
+                        ..Default::default()
+                    })
+                })
+                .collect(),
+            ..Default::default()
+        }],
+        ..Default::default()
+    }
+}
+
+/// A signature resembling `ip rule add`, where `add`'s subcommands (`iif`, `from`, `table`,
+/// `fwmark`) are repeatable, order-independent keywords rather than mutually exclusive
+/// subcommands. See https://github.com/warpdotdev/warp/issues/15048.
+#[cfg(feature = "v2")]
+fn ip_rule_add_signature() -> crate::signatures::CommandSignature {
+    use crate::signatures::{Command, CommandSignature};
+
+    CommandSignature {
+        command: Command {
+            name: "iptool".to_owned(),
+            subcommands: vec![Command {
+                name: "rule".to_owned(),
+                subcommands: vec![Command {
+                    name: "add".to_owned(),
+                    repeatable_keywords: true,
+                    subcommands: vec![
+                        repeatable_keyword("iif", &["eth0", "eth1"]),
+                        repeatable_keyword("from", &["10.0.0.0/8"]),
+                        repeatable_keyword("table", &["main"]),
+                        repeatable_keyword("fwmark", &["0x1"]),
+                    ],
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        },
+    }
+}
+
+/// Regression test for https://github.com/warpdotdev/warp/issues/15048: bare keywords in a
+/// `repeatable_keywords` grammar should keep completing their unused siblings, instead of only
+/// the first keyword ever completing.
+#[cfg(feature = "v2")]
+#[test]
+fn test_repeatable_keyword_siblings_complete_after_first_keyword() {
+    let registry = create_test_command_registry([ip_rule_add_signature()]);
+    let ctx = FakeCompletionContext::new(registry);
+
+    // Completing a keyword's own argument values should still work.
+    assert_eq!(
+        complete_at_end_of_line("iptool rule add iif ", &ctx),
+        vec!["eth0", "eth1"]
+    );
+
+    // Once the first keyword's argument has been supplied, its still-unused sibling keywords
+    // should be offered (this is the bug: previously only "iif" would ever be offered).
+    let mut results = complete_at_end_of_line("iptool rule add iif eth0 ", &ctx);
+    results.sort();
+    assert_eq!(results, vec!["from", "fwmark", "table"]);
+}
+
+/// Regression test for https://github.com/warpdotdev/warp/issues/15048: after using a second
+/// keyword, its remaining unused siblings (but not the already-used keywords) should still
+/// complete.
+#[cfg(feature = "v2")]
+#[test]
+fn test_repeatable_keyword_siblings_exclude_already_used_keywords() {
+    let registry = create_test_command_registry([ip_rule_add_signature()]);
+    let ctx = FakeCompletionContext::new(registry);
+
+    let mut results = complete_at_end_of_line("iptool rule add iif eth0 from 10.0.0.0/8 ", &ctx);
+    results.sort();
+    assert_eq!(results, vec!["fwmark", "table"]);
+}
+
+/// Regression test for https://github.com/warpdotdev/warp/issues/15048: `repeatable_keywords` is
+/// opt-in and defaults to `false`, so ordinary exclusive subcommand trees (like `git checkout`)
+/// must retain today's "descend and drop siblings" behavior.
+#[cfg(feature = "v2")]
+#[test]
+fn test_repeatable_keywords_opt_in_does_not_affect_exclusive_subcommand_trees() {
+    let registry = create_test_command_registry([git_signature()]);
+    let ctx = FakeCompletionContext::new(registry);
+
+    // "git checkout " should only offer checkout's own branch argument values, not its sibling
+    // subcommands ("add", "clone", "branch").
+    assert_eq!(
+        complete_at_end_of_line("git checkout ", &ctx),
+        vec!["漢字", "bob/卡b卡"]
+    );
+}
+
 /// TODO(CORE-2795)
 #[cfg(not(feature = "v2"))]
 #[test]

@@ -35,12 +35,17 @@ use crate::signatures::{
 };
 
 /// Returns completion suggestions for argument values based on the given `input`.
+///
+/// `eligible_sibling_keywords` contains any sibling keyword `Command`s (see
+/// `Command::repeatable_keywords`) that remain eligible for suggestion alongside
+/// `found_signature`'s own `subcommands`.
 #[allow(clippy::too_many_arguments)]
 pub async fn complete(
     input: &str,
     tokens_without_last_editing: &[&str],
     classified_command: ClassifiedCommand,
     found_signature: Option<&Command>,
+    eligible_sibling_keywords: &[&Command],
     location: &Spanned<LocationType>,
     session_env_vars: Option<&HashMap<String, String>>,
     parsed_argument: &ParsedToken,
@@ -62,6 +67,7 @@ pub async fn complete(
                         error,
                         &mut shell_command,
                         found_signature,
+                        eligible_sibling_keywords,
                         session_env_vars,
                         options,
                         ctx,
@@ -76,6 +82,7 @@ pub async fn complete(
                         &mut shell_command,
                         &location.span,
                         found_signature,
+                        eligible_sibling_keywords,
                         session_env_vars,
                         options,
                         ctx,
@@ -129,6 +136,7 @@ async fn suggestions_for_parse_error(
     root_err: ParseError,
     shell_command: &mut ShellCommand,
     command_signature: &Command,
+    eligible_sibling_keywords: &[&Command],
     session_env_vars: Option<&HashMap<String, String>>,
     options: &CompleterOptions,
     ctx: &dyn CompletionContext,
@@ -180,6 +188,7 @@ async fn suggestions_for_parse_error(
                     shell_command,
                     cursor,
                     command_signature,
+                    eligible_sibling_keywords,
                     session_env_vars,
                     options,
                     ctx,
@@ -221,6 +230,7 @@ async fn suggestions_for_parse_error(
                     shell_command,
                     cursor,
                     command_signature,
+                    eligible_sibling_keywords,
                     session_env_vars,
                     options,
                     ctx,
@@ -233,22 +243,27 @@ async fn suggestions_for_parse_error(
             error: UnexpectedArgument(arg),
         } => {
             if arg.span.end() == input.len() {
-                // The unexpected argument could be a prefix for a subcommand.
+                // The unexpected argument could be a prefix for a subcommand. This also includes
+                // any still-eligible sibling keywords (see `Command::repeatable_keywords`).
                 let prefix = arg.item.as_str();
-                let results = (command_signature.subcommands.iter().filter_map(|subcmd| {
-                    options
-                        .match_strategy
-                        .get_match_type(prefix, subcmd.name.as_str())
-                        .map(|match_type| {
-                            let suggestion = Suggestion::with_same_display_and_replacement(
-                                subcmd.name.clone(),
-                                subcmd.description.as_ref().cloned(),
-                                SuggestionType::Subcommand,
-                                subcmd.priority.into(),
-                            );
-                            MatchedSuggestion::new(suggestion, match_type)
-                        })
-                }))
+                let results = (command_signature
+                    .subcommands
+                    .iter()
+                    .chain(eligible_sibling_keywords.iter().copied())
+                    .filter_map(|subcmd| {
+                        options
+                            .match_strategy
+                            .get_match_type(prefix, subcmd.name.as_str())
+                            .map(|match_type| {
+                                let suggestion = Suggestion::with_same_display_and_replacement(
+                                    subcmd.name.clone(),
+                                    subcmd.description.as_ref().cloned(),
+                                    SuggestionType::Subcommand,
+                                    subcmd.priority.into(),
+                                );
+                                MatchedSuggestion::new(suggestion, match_type)
+                            })
+                    }))
                 .sorted_by(MatchedSuggestion::cmp_by_display)
                 .collect();
                 return (results, false);
@@ -268,6 +283,7 @@ async fn suggestions_for_last_argument(
     shell_command: &mut ShellCommand,
     cursor: &Span,
     command_signature: &Command,
+    eligible_sibling_keywords: &[&Command],
     session_env_vars: Option<&HashMap<String, String>>,
     options: &CompleterOptions,
     ctx: &dyn CompletionContext,
@@ -303,6 +319,7 @@ async fn suggestions_for_last_argument(
                     &shell_command,
                     arguments,
                     &command_signature.subcommands,
+                    eligible_sibling_keywords,
                     last_positional.item,
                     tokens_without_last_editing,
                     session_env_vars,
@@ -328,6 +345,7 @@ async fn suggestions_for_last_argument(
                 &shell_command,
                 &command_signature.arguments,
                 &command_signature.subcommands,
+                eligible_sibling_keywords,
                 last_positional.item,
                 tokens_without_last_editing,
                 session_env_vars,
@@ -391,6 +409,7 @@ async fn complete_positional(
     shell_command: &&mut ShellCommand,
     arguments: &[Argument],
     subcommands: &[Command],
+    eligible_sibling_keywords: &[&Command],
     parsed_token: &ParsedToken,
     tokens_without_last_editing: &[&str],
     session_env_vars: Option<&HashMap<String, String>>,
@@ -434,11 +453,13 @@ async fn complete_positional(
         }
     }
 
-    // Append subcommand suggestions to all argument suggestions.
+    // Append subcommand suggestions to all argument suggestions. This also includes any
+    // still-eligible sibling keywords (see `Command::repeatable_keywords`).
     if should_suggest_subcommands {
         suggestions.extend(
             subcommands
                 .iter()
+                .chain(eligible_sibling_keywords.iter().copied())
                 .filter_map(|subcmd| {
                     options
                         .match_strategy
