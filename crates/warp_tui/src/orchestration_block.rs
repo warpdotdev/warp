@@ -147,6 +147,11 @@ pub(crate) struct TuiOrchestrationBlock {
     fallback_base_model_id: Option<String>,
     /// Whether the block was restored from history (non-interactive).
     is_restored: bool,
+    /// Whether the backing exchange output already finished as `Cancelled`
+    /// or `Failed` while this action never reached a status of its own
+    /// (i.e. it was never queued). Kept in sync by [`Self::update_request`];
+    /// see [`render::is_orphaned_by_finished_output`].
+    block_finished_unsuccessfully: bool,
 
     // Interactive card state.
     orchestration_edit_state: OrchestrationEditState,
@@ -182,6 +187,7 @@ impl TuiOrchestrationBlock {
         run_agents_executor: ModelHandle<RunAgentsExecutor>,
         fallback_base_model_id: Option<String>,
         is_restored: bool,
+        block_finished_unsuccessfully: bool,
         ctx: &mut ViewContext<Self>,
     ) -> Self {
         let action_id = action.id.clone();
@@ -288,6 +294,7 @@ impl TuiOrchestrationBlock {
             controller,
             fallback_base_model_id,
             is_restored,
+            block_finished_unsuccessfully,
             identity_palette,
             ctx,
         );
@@ -305,6 +312,7 @@ impl TuiOrchestrationBlock {
         controller: Rc<dyn OrchestrationBlockController>,
         fallback_base_model_id: Option<String>,
         is_restored: bool,
+        block_finished_unsuccessfully: bool,
         identity_palette: Vec<AgentIdentity>,
         ctx: &mut ViewContext<Self>,
     ) -> Self {
@@ -323,6 +331,7 @@ impl TuiOrchestrationBlock {
             active_config,
             fallback_base_model_id,
             is_restored,
+            block_finished_unsuccessfully,
             orchestration_edit_state,
             mode: CardMode::Acceptance,
             selector,
@@ -403,20 +412,33 @@ impl TuiOrchestrationBlock {
     }
 
     /// Re-syncs edit state from the latest streaming request chunk
-    /// (mirroring the GUI card's `update_request`).
+    /// (mirroring the GUI card's `update_request`), and refreshes whether
+    /// the backing exchange output has since finished as cancelled or
+    /// failed (see [`render::is_orphaned_by_finished_output`]). The latter
+    /// is refreshed even when the request itself is unchanged, since a
+    /// conversation cancellation while streaming leaves the last-streamed
+    /// request untouched.
     pub(crate) fn update_request(
         &mut self,
         request: &RunAgentsRequest,
+        block_finished_unsuccessfully: bool,
         ctx: &mut ViewContext<Self>,
     ) {
         if self.spawning.is_some() || self.decided {
             return;
         }
+        let status_changed = self.block_finished_unsuccessfully != block_finished_unsuccessfully;
+        self.block_finished_unsuccessfully = block_finished_unsuccessfully;
+
         self.action.action = AIAgentActionType::RunAgents(request.clone());
         let new_state = Self::config_state_from_request(request, self.active_config.as_ref());
         let changed = self.request_fields != *request
             || self.orchestration_edit_state.orchestration_config_state != new_state;
         if !changed {
+            if status_changed {
+                ctx.emit(TuiOrchestrationBlockEvent::LayoutInvalidated);
+                ctx.notify();
+            }
             return;
         }
         self.request_fields = request.clone();

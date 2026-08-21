@@ -245,10 +245,22 @@ fn build_request_omits_the_auth_secret_when_the_picker_is_not_applicable() {
     );
 }
 
-#[derive(Default)]
 struct TestController {
     executed_requests: RefCell<Vec<RunAgentsRequest>>,
     accept_error: RefCell<Option<String>>,
+    /// Overridable action status; defaults to `Some(Blocked)` so existing
+    /// interactive-card tests keep behaving as before.
+    status: RefCell<Option<AIActionStatus>>,
+}
+
+impl Default for TestController {
+    fn default() -> Self {
+        Self {
+            executed_requests: RefCell::new(Vec::new()),
+            accept_error: RefCell::new(None),
+            status: RefCell::new(Some(AIActionStatus::Blocked)),
+        }
+    }
 }
 
 impl OrchestrationBlockController for TestController {
@@ -257,7 +269,7 @@ impl OrchestrationBlockController for TestController {
         _action_id: &AIAgentActionId,
         _ctx: &warpui::AppContext,
     ) -> Option<AIActionStatus> {
-        Some(AIActionStatus::Blocked)
+        self.status.borrow().clone()
     }
 
     fn snapshot_for_page(
@@ -376,6 +388,7 @@ fn test_block(
                 controller_for_view,
                 Some("auto".to_string()),
                 false,
+                false,
                 Vec::new(),
                 ctx,
             )
@@ -422,6 +435,7 @@ fn renderable_test_block(app: &mut App) -> ViewHandle<TuiOrchestrationBlock> {
                 controller,
                 Some("auto".to_string()),
                 false,
+                false,
                 Vec::new(),
                 ctx,
             )
@@ -439,6 +453,53 @@ fn rendered_block_lines(block: &ViewHandle<TuiOrchestrationBlock>, app: &App) ->
             )
             .buffer
             .to_lines()
+    })
+}
+
+/// Builds a block with the given restored/orphan-detection flags, backed by
+/// a controller returning `status` for [`is_awaiting_confirmation`]-style
+/// checks. Used for asserting the card's cancelled terminal row (see
+/// `super::render::is_orphaned_by_finished_output`).
+fn test_block_with_flags(
+    app: &mut App,
+    is_restored: bool,
+    block_finished_unsuccessfully: bool,
+    status: Option<AIActionStatus>,
+) -> ViewHandle<TuiOrchestrationBlock> {
+    register_tui_session_view_test_singletons(app);
+    let request = request("oz", RunAgentsExecutionMode::Local);
+    let action = AIAgentAction {
+        id: AIAgentActionId::from("run-agents-1".to_string()),
+        task_id: TaskId::new("task-1".to_string()),
+        action: AIAgentActionType::RunAgents(request.clone()),
+        requires_result: true,
+    };
+    let controller: Rc<dyn OrchestrationBlockController> = Rc::new(TestController {
+        status: RefCell::new(status),
+        ..TestController::default()
+    });
+    app.update(|ctx| {
+        let (window_id, _) = ctx.add_tui_window(
+            AddWindowOptions {
+                window_style: WindowStyle::NotStealFocus,
+                ..Default::default()
+            },
+            |_| TestHostView,
+        );
+        ctx.add_typed_action_tui_view(window_id, move |ctx| {
+            TuiOrchestrationBlock::from_parts(
+                AIConversationId::new(),
+                action,
+                &request,
+                None,
+                controller,
+                Some("auto".to_string()),
+                is_restored,
+                block_finished_unsuccessfully,
+                Vec::new(),
+                ctx,
+            )
+        })
     })
 }
 
@@ -793,5 +854,95 @@ fn accepting_dispatches_once_and_releases_focus() {
 
         assert_eq!(controller.executed_requests.borrow().as_slice(), &[request]);
         assert!(app.read(|ctx| !block.as_ref(ctx).is_awaiting_confirmation(ctx)));
+    });
+}
+
+/// A status-less tool call on a block that already finished as Cancelled
+/// must render the cancelled terminal row rather than getting stuck on the
+/// "Configuring agents…" placeholder forever.
+#[test]
+fn statusless_action_on_cancelled_block_renders_cancelled() {
+    App::test((), |mut app| async move {
+        let block = test_block_with_flags(&mut app, false, true, None);
+        let lines = rendered_block_lines(&block, &app);
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("Spawn agents cancelled")),
+            "expected the cancelled row: {lines:?}"
+        );
+    });
+}
+
+/// Same as above but standing in for a `Failed` block status: the render
+/// path only distinguishes "finished unsuccessfully" from "still in
+/// progress", not which of Cancelled/Failed it was (mirrors the GUI's
+/// `is_orphaned_by_finished_output`, which also treats both the same way).
+#[test]
+fn statusless_action_on_failed_block_renders_cancelled() {
+    App::test((), |mut app| async move {
+        let block = test_block_with_flags(&mut app, false, true, None);
+        let lines = rendered_block_lines(&block, &app);
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("Spawn agents cancelled")),
+            "expected the cancelled row: {lines:?}"
+        );
+    });
+}
+
+/// A restored-from-history block has lost its dispatch state entirely and
+/// must always render as cancelled, independent of the orphan check.
+#[test]
+fn restored_block_renders_cancelled() {
+    App::test((), |mut app| async move {
+        let block = test_block_with_flags(&mut app, true, false, None);
+        let lines = rendered_block_lines(&block, &app);
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("Spawn agents cancelled")),
+            "expected the cancelled row: {lines:?}"
+        );
+    });
+}
+
+/// A status-less tool call whose block is still streaming (not yet
+/// finished) must keep showing the in-progress placeholder, not the
+/// cancelled row.
+#[test]
+fn statusless_action_on_still_streaming_block_is_not_cancelled() {
+    App::test((), |mut app| async move {
+        let block = test_block_with_flags(&mut app, false, false, None);
+        let lines = rendered_block_lines(&block, &app);
+        assert!(
+            !lines
+                .iter()
+                .any(|line| line.contains("Spawn agents cancelled")),
+            "a still-streaming block must not render as cancelled: {lines:?}"
+        );
+        assert!(
+            lines.iter().any(|line| line.contains("Configuring agents")),
+            "expected the in-progress placeholder: {lines:?}"
+        );
+    });
+}
+
+/// A real `Blocked` status on a "finished unsuccessfully" block must still
+/// win: the action reached the queue, so it drives the interactive card
+/// instead of the orphan fallback (mirrors the GUI precedent, which never
+/// orphans an action that has a status of its own).
+#[test]
+fn blocked_status_on_finished_block_still_renders_interactively() {
+    App::test((), |mut app| async move {
+        let block = test_block_with_flags(&mut app, false, true, Some(AIActionStatus::Blocked));
+        let lines = rendered_block_lines(&block, &app);
+        assert!(
+            !lines
+                .iter()
+                .any(|line| line.contains("Spawn agents cancelled")),
+            "a Blocked action status must not be treated as orphaned: {lines:?}"
+        );
     });
 }

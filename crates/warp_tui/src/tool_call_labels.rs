@@ -47,6 +47,12 @@ pub(crate) struct ResolvedCommandBlock {
 /// header instead.
 const MAX_INLINE_LEN: usize = 80;
 
+/// Terminal label for a `RunAgents` tool call that ended without launching
+/// any agent. Shared with [`crate::orchestration_block::render`], which
+/// renders this exact row for an orphaned (status-less, finished-block)
+/// or restored-from-history orchestration card.
+pub(crate) const RUN_AGENTS_CANCELLED_LABEL: &str = "Spawn agents cancelled";
+
 /// Coarse presentation state for a tool call.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ToolCallDisplayState {
@@ -620,7 +626,7 @@ fn label_for_action(
                     }
                     _ => "Failed to start orchestration".to_owned(),
                 },
-                State::Cancelled => "Spawn agents cancelled".to_owned(),
+                State::Cancelled => RUN_AGENTS_CANCELLED_LABEL.to_owned(),
             }
         }
         AIAgentActionType::WaitForEvents { .. } => match state {
