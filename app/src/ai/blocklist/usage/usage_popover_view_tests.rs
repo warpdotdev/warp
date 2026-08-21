@@ -122,7 +122,10 @@ fn context_window_display_rows_percentages_sum_to_overall_usage() {
     ];
     let rows = context_window_display_rows(0.2, &segments);
     let total_pct: f32 = rows.iter().map(|r| r.pct).sum();
-    assert!((total_pct - 20.0).abs() < 0.01, "expected ~20%, got {total_pct}");
+    assert!(
+        (total_pct - 20.0).abs() < 0.01,
+        "expected ~20%, got {total_pct}"
+    );
 }
 
 fn per_agent_entry(name: &str, credits: f32) -> PerAgentCreditEntry {
@@ -136,7 +139,9 @@ fn per_agent_entry(name: &str, credits: f32) -> PerAgentCreditEntry {
 
 #[test]
 fn truncate_rollup_rows_shows_all_under_cap() {
-    let entries: Vec<_> = (0..3).map(|i| per_agent_entry(&format!("agent-{i}"), 1.0)).collect();
+    let entries: Vec<_> = (0..3)
+        .map(|i| per_agent_entry(&format!("agent-{i}"), 1.0))
+        .collect();
     let (shown, hidden) = truncate_rollup_rows(&entries, false);
     assert_eq!(shown.len(), 3);
     assert_eq!(hidden, 0);
@@ -144,7 +149,9 @@ fn truncate_rollup_rows_shows_all_under_cap() {
 
 #[test]
 fn truncate_rollup_rows_truncates_over_cap_until_show_all() {
-    let entries: Vec<_> = (0..8).map(|i| per_agent_entry(&format!("agent-{i}"), 1.0)).collect();
+    let entries: Vec<_> = (0..8)
+        .map(|i| per_agent_entry(&format!("agent-{i}"), 1.0))
+        .collect();
     let (shown, hidden) = truncate_rollup_rows(&entries, false);
     assert_eq!(shown.len(), ROLLUP_TRUNCATION_CAP);
     assert_eq!(hidden, 3);

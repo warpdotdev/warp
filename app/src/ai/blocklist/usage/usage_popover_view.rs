@@ -44,7 +44,7 @@ use crate::ai::blocklist::usage::colors::{color_for_context_window_category, col
 use crate::ai::blocklist::usage::rollup::{
     AgentAvatar, OrchestrationCreditRollup, PerAgentCreditEntry, compute_orchestration_rollup,
 };
-use crate::ai::blocklist::view_util::format_credits;
+use crate::ai::blocklist::view_util::{format_credits, format_credits_with_cost};
 use crate::appearance::Appearance;
 use crate::persistence::model::{
     ContextWindowSegment, ContextWindowSegmentType, FULL_TERMINAL_USE_CATEGORY, ModelTokenUsage,
@@ -159,7 +159,10 @@ impl UsagePopoverView {
         })
         .finish();
 
-        space_between_row().with_child(title).with_child(link).finish()
+        space_between_row()
+            .with_child(title)
+            .with_child(link)
+            .finish()
     }
 
     /// "Credits spent" summary row shown above the model/agent usage
@@ -178,16 +181,31 @@ impl UsagePopoverView {
             .map(|r| r.total_credits)
             .unwrap_or_else(|| conversation.credits_spent());
 
-        let mut value_text = format_credits(total_credits);
-        if let Some(cents) = conversation.total_provider_cost_in_cents() {
-            value_text = format!("{value_text} (${:.2})", cents / 100.);
-        }
+        // Total tokens across all models is only meaningful for the
+        // single-conversation case; the orchestration rollup only tracks
+        // credits per agent, so the parenthetical falls back to cost-only
+        // when a rollup applies.
+        let total_tokens: u32 = if rollup.is_some() {
+            0
+        } else {
+            conversation
+                .token_usage()
+                .iter()
+                .map(|model| model.warp_tokens + model.byok_tokens + model.custom_endpoint_tokens)
+                .sum()
+        };
+        let cost_in_cents = conversation.usage_totals().cost_in_cents;
+        let value_text = format_credits_with_cost(total_credits, Some(total_tokens), cost_in_cents);
 
         space_between_row()
             .with_child(
-                Text::new("Credits spent".to_string(), appearance.ui_font_family(), font_size)
-                    .with_color(blended_colors::text_sub(theme, background))
-                    .finish(),
+                Text::new(
+                    "Credits spent".to_string(),
+                    appearance.ui_font_family(),
+                    font_size,
+                )
+                .with_color(blended_colors::text_sub(theme, background))
+                .finish(),
             )
             .with_child(
                 Text::new(value_text, appearance.ui_font_family(), font_size)
@@ -296,9 +314,13 @@ impl UsagePopoverView {
         column.add_child(
             space_between_row()
                 .with_child(
-                    Text::new("All models".to_string(), appearance.ui_font_family(), font_size)
-                        .with_color(blended_colors::text_sub(theme, background))
-                        .finish(),
+                    Text::new(
+                        "All models".to_string(),
+                        appearance.ui_font_family(),
+                        font_size,
+                    )
+                    .with_color(blended_colors::text_sub(theme, background))
+                    .finish(),
                 )
                 .with_child(
                     Text::new(
@@ -324,7 +346,10 @@ impl UsagePopoverView {
                 (color_for_model(&row.model_id), pct)
             })
             .collect();
-        column.add_child(render_segmented_bar(&segments, theme.outline().into_solid()));
+        column.add_child(render_segmented_bar(
+            &segments,
+            theme.outline().into_solid(),
+        ));
 
         for row in &rows {
             column.add_child(self.render_model_usage_row(row, appearance));
@@ -333,7 +358,11 @@ impl UsagePopoverView {
         column.finish()
     }
 
-    fn render_model_usage_row(&self, row: &ModelUsageRow, appearance: &Appearance) -> Box<dyn Element> {
+    fn render_model_usage_row(
+        &self,
+        row: &ModelUsageRow,
+        appearance: &Appearance,
+    ) -> Box<dyn Element> {
         let theme = appearance.theme();
         let background = theme.surface_2();
         let font_size = appearance.ui_font_size();
@@ -366,7 +395,10 @@ impl UsagePopoverView {
         .with_color(blended_colors::text_sub(theme, background))
         .finish();
 
-        space_between_row().with_child(left.finish()).with_child(value).finish()
+        space_between_row()
+            .with_child(left.finish())
+            .with_child(value)
+            .finish()
     }
 
     /// Per-agent breakdown (Surface 6), adopting the same stacked-bar +
@@ -385,9 +417,13 @@ impl UsagePopoverView {
         column.add_child(
             space_between_row()
                 .with_child(
-                    Text::new("All agents".to_string(), appearance.ui_font_family(), font_size)
-                        .with_color(blended_colors::text_sub(theme, background))
-                        .finish(),
+                    Text::new(
+                        "All agents".to_string(),
+                        appearance.ui_font_family(),
+                        font_size,
+                    )
+                    .with_color(blended_colors::text_sub(theme, background))
+                    .finish(),
                 )
                 .with_child(
                     Text::new(
@@ -413,7 +449,10 @@ impl UsagePopoverView {
                 (agent_row_color(entry, theme), pct)
             })
             .collect();
-        column.add_child(render_segmented_bar(&segments, theme.outline().into_solid()));
+        column.add_child(render_segmented_bar(
+            &segments,
+            theme.outline().into_solid(),
+        ));
 
         let (shown, hidden_count) = truncate_rollup_rows(&rollup.per_agent, self.rollup_show_all);
         for entry in shown {
@@ -445,11 +484,15 @@ impl UsagePopoverView {
                 render_agent_avatar_disc(&entry.display_name, ROW_AVATAR_SIZE, theme, appearance)
             }
         };
-        let name = Text::new(entry.display_name.clone(), appearance.ui_font_family(), font_size)
-            .with_color(blended_colors::text_main(theme, background))
-            .soft_wrap(false)
-            .with_clip(ClipConfig::ellipsis())
-            .finish();
+        let name = Text::new(
+            entry.display_name.clone(),
+            appearance.ui_font_family(),
+            font_size,
+        )
+        .with_color(blended_colors::text_main(theme, background))
+        .soft_wrap(false)
+        .with_clip(ClipConfig::ellipsis())
+        .finish();
         let value = Text::new(
             format_credits(entry.credits_spent),
             appearance.ui_font_family(),
@@ -472,7 +515,11 @@ impl UsagePopoverView {
             .finish()
     }
 
-    fn render_show_more_link(&self, hidden_count: usize, appearance: &Appearance) -> Box<dyn Element> {
+    fn render_show_more_link(
+        &self,
+        hidden_count: usize,
+        appearance: &Appearance,
+    ) -> Box<dyn Element> {
         render_text_link(
             format!("Show {hidden_count} more"),
             self.show_more_mouse_state.clone(),
@@ -553,7 +600,10 @@ impl UsagePopoverView {
             .iter()
             .map(|row| (color_for_context_window_category(row.bucket), row.pct))
             .collect();
-        inner.add_child(render_segmented_bar(&segments, theme.outline().into_solid()));
+        inner.add_child(render_segmented_bar(
+            &segments,
+            theme.outline().into_solid(),
+        ));
 
         for row in &rows {
             inner.add_child(self.render_context_window_row(row, appearance));
@@ -589,14 +639,21 @@ impl UsagePopoverView {
             .finish();
 
         let value = Text::new(
-            format!("{} / {:.1}%", format_token_count(row.token_count as u64), row.pct),
+            format!(
+                "{} / {:.1}%",
+                format_token_count(row.token_count as u64),
+                row.pct
+            ),
             appearance.ui_font_family(),
             font_size,
         )
         .with_color(blended_colors::text_sub(theme, background))
         .finish();
 
-        space_between_row().with_child(left).with_child(value).finish()
+        space_between_row()
+            .with_child(left)
+            .with_child(value)
+            .finish()
     }
 
     fn render_tool_call_summary_section(
@@ -707,8 +764,16 @@ impl View for UsagePopoverView {
 
         let mut column = Flex::column().with_spacing(12.);
         column.add_child(self.render_header(appearance));
-        column.add_child(self.render_credits_summary_row(conversation, rollup.as_ref(), appearance));
-        column.add_child(self.render_usage_breakdown_section(conversation, rollup.as_ref(), appearance));
+        column.add_child(self.render_credits_summary_row(
+            conversation,
+            rollup.as_ref(),
+            appearance,
+        ));
+        column.add_child(self.render_usage_breakdown_section(
+            conversation,
+            rollup.as_ref(),
+            appearance,
+        ));
         column.add_child(self.render_context_window_section(conversation, appearance));
         column.add_child(self.render_tool_call_summary_section(conversation, appearance));
         column.add_child(self.render_response_time_section(conversation, appearance));
@@ -720,7 +785,9 @@ impl View for UsagePopoverView {
             .with_uniform_padding(12.)
             .finish();
 
-        ConstrainedBox::new(content).with_width(POPOVER_WIDTH).finish()
+        ConstrainedBox::new(content)
+            .with_width(POPOVER_WIDTH)
+            .finish()
     }
 }
 
@@ -777,8 +844,9 @@ fn model_usage_rows(models: &[ModelTokenUsage]) -> Vec<ModelUsageRow> {
     let mut rows: Vec<ModelUsageRow> = models
         .iter()
         .filter_map(|model| {
-            let tokens =
-                model.warp_tokens as u64 + model.byok_tokens as u64 + model.custom_endpoint_tokens as u64;
+            let tokens = model.warp_tokens as u64
+                + model.byok_tokens as u64
+                + model.custom_endpoint_tokens as u64;
             if tokens == 0 {
                 return None;
             }
@@ -852,15 +920,20 @@ fn context_window_display_rows(
         if segment.token_count == 0 {
             continue;
         }
-        *by_bucket.entry(segment.segment_type.context_window_panel_bucket()).or_default() +=
-            segment.token_count;
+        *by_bucket
+            .entry(segment.segment_type.context_window_panel_bucket())
+            .or_default() += segment.token_count;
     }
 
     let mut rows: Vec<ContextWindowDisplayRow> = by_bucket
         .into_iter()
         .filter_map(|(bucket, token_count)| {
             let pct = context_window_usage * (token_count as f32) / total_f * 100.;
-            (pct >= 0.05).then_some(ContextWindowDisplayRow { bucket, token_count, pct })
+            (pct >= 0.05).then_some(ContextWindowDisplayRow {
+                bucket,
+                token_count,
+                pct,
+            })
         })
         .collect();
 
@@ -882,7 +955,10 @@ fn truncate_rollup_rows(
     if show_all || entries.len() <= ROLLUP_TRUNCATION_CAP {
         (entries, 0)
     } else {
-        (&entries[..ROLLUP_TRUNCATION_CAP], entries.len() - ROLLUP_TRUNCATION_CAP)
+        (
+            &entries[..ROLLUP_TRUNCATION_CAP],
+            entries.len() - ROLLUP_TRUNCATION_CAP,
+        )
     }
 }
 
@@ -923,9 +999,13 @@ fn render_swatch(color: ColorU) -> Box<dyn Element> {
 fn render_role_pill(label: &str, appearance: &Appearance) -> Box<dyn Element> {
     let theme = appearance.theme();
     Container::new(
-        Text::new(label.to_string(), appearance.ui_font_family(), appearance.ui_font_size() - 2.)
-            .with_color(theme.background().into_solid())
-            .finish(),
+        Text::new(
+            label.to_string(),
+            appearance.ui_font_family(),
+            appearance.ui_font_size() - 2.,
+        )
+        .with_color(theme.background().into_solid())
+        .finish(),
     )
     .with_background_color(blended_colors::neutral_6(theme))
     .with_corner_radius(CornerRadius::with_all(Radius::Pixels(3.)))
@@ -946,8 +1026,13 @@ fn render_segmented_bar(segments: &[(ColorU, f32)], track_color: ColorU) -> Box<
         }
         used_pct += pct;
         row.add_child(
-            Expanded::new(*pct, Container::new(Empty::new().finish()).with_background_color(*color).finish())
-                .finish(),
+            Expanded::new(
+                *pct,
+                Container::new(Empty::new().finish())
+                    .with_background_color(*color)
+                    .finish(),
+            )
+            .finish(),
         );
     }
     let remainder = (100. - used_pct).max(0.);
@@ -955,13 +1040,17 @@ fn render_segmented_bar(segments: &[(ColorU, f32)], track_color: ColorU) -> Box<
         row.add_child(
             Expanded::new(
                 remainder,
-                Container::new(Empty::new().finish()).with_background_color(track_color).finish(),
+                Container::new(Empty::new().finish())
+                    .with_background_color(track_color)
+                    .finish(),
             )
             .finish(),
         );
     }
 
-    ConstrainedBox::new(row.finish()).with_height(BAR_HEIGHT).finish()
+    ConstrainedBox::new(row.finish())
+        .with_height(BAR_HEIGHT)
+        .finish()
 }
 
 fn render_label_value_row(label: &str, value: String, appearance: &Appearance) -> Box<dyn Element> {
@@ -982,29 +1071,45 @@ fn render_label_value_row(label: &str, value: String, appearance: &Appearance) -
         .finish()
 }
 
-fn render_diffs_row(lines_added: i32, lines_removed: i32, appearance: &Appearance) -> Box<dyn Element> {
+fn render_diffs_row(
+    lines_added: i32,
+    lines_removed: i32,
+    appearance: &Appearance,
+) -> Box<dyn Element> {
     let theme = appearance.theme();
     let background = theme.surface_2();
     let font_size = appearance.ui_font_size();
     space_between_row()
         .with_child(
-            Text::new("Diffs applied".to_string(), appearance.ui_font_family(), font_size)
-                .with_color(blended_colors::text_sub(theme, background))
-                .finish(),
+            Text::new(
+                "Diffs applied".to_string(),
+                appearance.ui_font_family(),
+                font_size,
+            )
+            .with_color(blended_colors::text_sub(theme, background))
+            .finish(),
         )
         .with_child(
             Flex::row()
                 .with_cross_axis_alignment(CrossAxisAlignment::Center)
                 .with_child(
-                    Text::new(format!("+{lines_added}"), appearance.ui_font_family(), font_size)
-                        .with_color(theme.ansi_fg_green())
-                        .finish(),
+                    Text::new(
+                        format!("+{lines_added}"),
+                        appearance.ui_font_family(),
+                        font_size,
+                    )
+                    .with_color(theme.ansi_fg_green())
+                    .finish(),
                 )
                 .with_child(
                     Container::new(
-                        Text::new(format!("-{lines_removed}"), appearance.ui_font_family(), font_size)
-                            .with_color(theme.ansi_fg_red())
-                            .finish(),
+                        Text::new(
+                            format!("-{lines_removed}"),
+                            appearance.ui_font_family(),
+                            font_size,
+                        )
+                        .with_color(theme.ansi_fg_red())
+                        .finish(),
                     )
                     .with_margin_left(6.)
                     .finish(),
