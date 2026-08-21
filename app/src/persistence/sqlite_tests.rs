@@ -14,7 +14,8 @@ use warp_graphql::scalars::time::ServerTimestamp;
 use super::{
     app_database_file_path, database_file_path_for_current_scope, database_file_path_for_scope,
     decode_path, deduplicate_events, encode_path, get_all_codebase_index_metadata,
-    read_sqlite_data, save_app_state, save_codebase_index_metadata, setup_database, start_writer,
+    is_terminal_panes_unique_violation, read_sqlite_data, save_app_state,
+    save_codebase_index_metadata, setup_database, start_writer,
 };
 use crate::app_state::{
     AppState, CodePaneSnapShot, CodePaneTabSnapshot, LeafContents, LeafSnapshot, PaneNodeSnapshot,
@@ -24,9 +25,10 @@ use crate::auth::UserUid;
 use crate::cloud_object::{CloudObjectPermissions, Owner};
 use crate::code::editor_management::CodeSource;
 use crate::notebooks::{CloudNotebook, CloudNotebookModel};
-use crate::persistence::model::ObjectPermissions;
+use crate::persistence::model::{self, ObjectPermissions};
 use crate::persistence::{
     BlockCompleted, ModelEvent, PersistedDataScope, PersistenceScope, StartedCommandMetadata,
+    schema,
 };
 use crate::server::ids::{ClientId, ServerId};
 use crate::tab::SelectedTabColor;
@@ -1053,6 +1055,107 @@ fn test_sqlite_drops_too_small_bounds_on_save() {
         row,
         (None, None, None, None),
         "save-path guard must persist NULL bound columns for sub-minimum geometry"
+    );
+}
+
+// Regression for APP-5285: two windows both holding a `TabData` for the same
+// pane group (the residual cross-window tab-drag dual-ownership bug) makes
+// `save_app_state`'s delete-then-insert transaction violate the
+// `terminal_panes.uuid` UNIQUE constraint. The save must fail atomically
+// (leaving the previously-saved snapshot intact, not a half-written one), and
+// the failure must be classified so the caller can throttle repeated reports.
+#[test]
+fn test_sqlite_save_app_state_rolls_back_on_duplicate_terminal_uuid() {
+    let tempdir = tempfile::tempdir().expect("tempdir should be created");
+    let database_path = tempdir.path().join("warp.sqlite");
+    let mut conn = setup_database(&database_path).expect("database should initialize");
+
+    // Establish a known-good baseline snapshot.
+    let good_state = AppState {
+        windows: vec![test_terminal_window_snapshot(false)],
+        active_window_index: Some(0),
+        block_lists: Default::default(),
+        running_mcp_servers: Default::default(),
+    };
+    save_app_state(&mut conn, &good_state).expect("baseline app state should save");
+
+    // Two windows referencing the same pane group would produce identical
+    // `terminal_panes.uuid` values, exactly like the dual-ownership bug.
+    let duplicate_state = AppState {
+        windows: vec![
+            test_terminal_window_snapshot(false),
+            test_terminal_window_snapshot(false),
+        ],
+        active_window_index: Some(0),
+        block_lists: Default::default(),
+        running_mcp_servers: Default::default(),
+    };
+    let err = save_app_state(&mut conn, &duplicate_state)
+        .expect_err("saving duplicate terminal pane uuids should fail");
+    assert!(
+        is_terminal_panes_unique_violation(&err),
+        "error should be classified as a terminal_panes UNIQUE violation: {err:#}"
+    );
+
+    // The failed save must not have partially overwritten the database: the
+    // transaction rolls back, so the previously-saved good snapshot survives.
+    let restored = read_sqlite_data(&mut conn, None, PersistedDataScope::Full)
+        .expect("persisted data should still load after the failed save")
+        .app_state
+        .expect("app state should be present for the full scope");
+    assert_eq!(restored.windows.len(), 1);
+}
+
+// Negative case for the throttle added alongside the rollback test above:
+// a UNIQUE violation on a *different* `terminal_panes` column (`id`, the
+// primary key) is a distinct corruption signal and must not be classified
+// as the `terminal_panes.uuid` violation this throttle specifically targets.
+#[test]
+fn test_terminal_panes_unique_violation_classifier_matches_uuid_column_only() {
+    use diesel::prelude::*;
+
+    let tempdir = tempfile::tempdir().expect("tempdir should be created");
+    let database_path = tempdir.path().join("warp.sqlite");
+    let mut conn = setup_database(&database_path).expect("database should initialize");
+
+    let app_state = AppState {
+        windows: vec![test_terminal_window_snapshot(false)],
+        active_window_index: Some(0),
+        block_lists: Default::default(),
+        running_mcp_servers: Default::default(),
+    };
+    save_app_state(&mut conn, &app_state).expect("app state should save");
+
+    // Reuse the id of the terminal pane just saved (which already has a
+    // matching `pane_nodes` / `pane_leaves` row to satisfy the foreign key)
+    // so a second insert collides on the `terminal_panes.id` primary key
+    // instead of the `uuid` column.
+    let existing_id: i32 = schema::terminal_panes::dsl::terminal_panes
+        .select(schema::terminal_panes::columns::id)
+        .first(&mut conn)
+        .expect("a terminal_panes row should exist");
+
+    let err = diesel::insert_into(schema::terminal_panes::dsl::terminal_panes)
+        .values(model::NewTerminalPane {
+            id: existing_id,
+            uuid: vec![99],
+            cwd: None,
+            is_active: false,
+            shell_launch_data: None,
+            input_config: None,
+            llm_model_override: None,
+            active_profile_id: None,
+            conversation_ids: None,
+            active_conversation_id: None,
+        })
+        .execute(&mut conn)
+        .expect_err("duplicate id should violate the terminal_panes primary key");
+    let err = anyhow::Error::new(err);
+
+    assert!(
+        !is_terminal_panes_unique_violation(&err),
+        "a UNIQUE violation on terminal_panes.id must not be classified as the \
+         terminal_panes.uuid violation this throttle targets: {err:#}"
     );
 }
 

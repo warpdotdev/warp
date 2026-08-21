@@ -19,6 +19,9 @@ The implementation therefore needs to coordinate source workspace state, target 
 - `app/src/tab.rs` — top tab-bar `Draggable` wiring, drag-axis gating, hover-overlay suppression, and the `for_drag_ghost` render shortcut used by the floating chip.
 - `app/src/root_view.rs` — `create_transferred_window`, which materializes the multi-tab preview window and adopts the transferred pane group.
 - `app/src/app_state.rs` — `get_app_state` skips serialization while a drag is active.
+- `app/src/lib.rs` — `on_window_will_close` app callback; skips `UndoCloseStack` registration for content-transferred closes.
+- `app/src/undo_close/stack.rs` — `UndoCloseStack`, the LIFO stack `Cmd+Shift+T` pops from.
+- `app/src/persistence/sqlite.rs` — `report_db_error` / `is_terminal_panes_unique_violation`, the `terminal_panes.uuid` UNIQUE-violation throttling.
 - `ui/src/core/app.rs` — `transfer_view_to_window` / `transfer_view_tree_to_window` / `transfer_structural_children`, focus-suppression hooks, view/window ownership state.
 - `ui/src/platform/mod.rs` — `WindowManager::ordered_window_ids`, `cancel_synthetic_drag`, `WindowStyle::PositionedNoFocus`, `TerminationMode::ContentTransferred`.
 - `crates/warpui/src/windowing/winit/window.rs` and `crates/warpui/src/platform/mac/{window.rs,objc/window.m}` — backend implementations of the platform contract.
@@ -305,6 +308,12 @@ Mitigation: `is_tab_drag_preview` is checked in `get_app_state`.
 Risk: between `finalize` and the OS-delivered `on_window_closed`, both source and target/promoted-preview workspaces hold the same pane group and `save_app` collides.
 Mitigation: lifecycle-driven `pending_source_window_closes` (set of window ids) keeps `is_active()` true through the close window; `Workspace::on_window_closed` clears the entry.
 
+### Content-transferred close resurrected via undo-close (APP-5285)
+
+Risk: a transfer-driven close (`TerminationMode::ContentTransferred`) does not clear the closing workspace's own `tabs` list, so the closing `Workspace` view still references a `PaneGroup` already adopted by another, still-open window. The top-level `on_window_will_close` app callback is generic — it does not know *why* a window closed — and previously pushed every close onto `UndoCloseStack` unconditionally. `Cmd+Shift+T` could then resurrect the stale `Workspace`, permanently duplicating ownership of the pane group across two windows (not just for the async gap `pending_source_window_closes` covers). The next `save_app` then fails the `terminal_panes.uuid` UNIQUE constraint on every subsequent trigger (window move/resize/focus), producing a sustained error storm instead of a single transient conflict, and the duplicated tab's session/conversation association becomes ambiguous between the two owners.
+Mitigation: `Workspace::on_window_closed` calls `CrossWindowTabDrag::mark_content_transferred_window_close` whenever `suppress_detach_panes_on_window_close` is true (i.e. this close is transfer-driven, not a real user close). This runs synchronously inside `AppContext::handle_window_closed`, before the top-level `on_window_will_close` callback (in `lib.rs`) receives the resulting `ClosedWindowData`. That callback consumes the marker via `CrossWindowTabDrag::take_content_transferred_window_close` and skips the `UndoCloseStack::handle_window_closed` registration when set, so undo-close cannot resurrect a window whose pane group has already moved elsewhere.
+Defense in depth: `report_db_error` (in `persistence/sqlite.rs`) classifies a `terminal_panes.uuid` UNIQUE violation via `is_terminal_panes_unique_violation` and reports it with `ReportErrorLogMode::OncePerRun` instead of every occurrence, so a residual or future instance of this class of bug produces one Sentry event instead of a storm.
+
 ### Put-back + new-window overlap
 
 Risk: a multi-tab put-back followed by a `Floating` drop in empty space leaves the preview holding a duplicate `TabData` referencing the source's pane group.
@@ -329,6 +338,7 @@ Integration tests in `crates/integration/src/test/workspace.rs` exercise:
 - detach into preview, attach into another window, drop, and continued drag after attach
 - starting from a single-tab source, attaching into another window, then dragging back out
 - repeated attach / detach cycles with assertions on final window count, total tab count, focus, and editor state
+- attaching into another window and releasing there is not resurrected by a subsequent undo-close (`test_undo_close_does_not_resurrect_content_transferred_window`)
 
 The tests are gated on `drag_tabs_feature_enabled()` (the feature flag), not on the host OS, which matches the cross-platform architecture.
 
@@ -342,6 +352,7 @@ The tests are gated on `drag_tabs_feature_enabled()` (the feature flag), not on 
 - no close-confirmation dialog appears for transfer-driven closes
 - the resulting active tab is focused after drop in every termination state
 - both top tabs and vertical tabs drive the same cross-window behavior
+- undo-close (`Cmd+Shift+T`) immediately after a content-transferred close (source window closing after attaching into another window, or a multi-tab preview closing after attaching) must not resurrect anything — see `test_undo_close_does_not_resurrect_content_transferred_window`
 
 ### What does not count as sufficient
 

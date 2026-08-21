@@ -100,3 +100,36 @@ fn single_tab_drag_never_collapses_a_slot() {
 
     assert_eq!(drag.collapsed_source_placeholder_index(source), None);
 }
+
+// Regression coverage for APP-5285: a cross-window content transfer must not
+// let the closing window's stale `TabData` get pushed onto the undo-close
+// stack, since it still references a `PaneGroup` already adopted by another,
+// still-open window.
+#[test]
+fn content_transferred_close_is_marked_and_consumed_once() {
+    let window_id = WindowId::from_usize(1);
+    let mut drag = CrossWindowTabDrag::new();
+
+    // Not marked yet: an ordinary window close should not be mistaken for a
+    // content transfer.
+    assert!(!drag.take_content_transferred_window_close(window_id));
+
+    drag.mark_content_transferred_window_close(window_id);
+    // Consumed exactly once: the top-level `on_window_will_close` handler
+    // only asks this question a single time per close.
+    assert!(drag.take_content_transferred_window_close(window_id));
+    assert!(!drag.take_content_transferred_window_close(window_id));
+}
+
+#[test]
+fn content_transferred_close_is_tracked_independently_per_window() {
+    let source = WindowId::from_usize(1);
+    let other = WindowId::from_usize(2);
+    let mut drag = CrossWindowTabDrag::new();
+
+    drag.mark_content_transferred_window_close(source);
+
+    // A different window's close is unaffected.
+    assert!(!drag.take_content_transferred_window_close(other));
+    assert!(drag.take_content_transferred_window_close(source));
+}

@@ -1,9 +1,10 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use pathfinder_geometry::rect::RectF;
 use serde::{Deserialize, Serialize};
+use warp_errors::{ReportErrorLogMode, report_error};
 use warpui::platform::FullscreenState;
 use warpui::{AppContext, SingletonEntity as _};
 
@@ -351,6 +352,45 @@ pub enum SplitDirection {
 #[derive(Clone, Debug, PartialEq)]
 pub struct PaneFlex(pub f32);
 
+/// Debug-time invariant check for APP-5285: no two workspaces may hold a
+/// `TabData` referencing the same `PaneGroup`. That dual ownership is what
+/// let `save_app_state` trip a `terminal_panes.uuid` UNIQUE-constraint
+/// storm; until now, that downstream DB error -- surfacing on the next
+/// `save_app` call, an arbitrary amount of time after the mutation that
+/// actually broke the invariant -- was the only symptom.
+///
+/// Checking here, right before `get_app_state` builds the snapshot that
+/// would encode the duplicate, catches it at the moment of formation
+/// instead. `debug_assert!` panics loudly in dev/dogfood builds, with a
+/// backtrace pointing at whatever mutation just broke the invariant.
+/// Release builds must not crash a user's session over a bookkeeping bug,
+/// so they only report once per run -- `report_error!`'s `OncePerRun` mode
+/// guarantees a single Sentry event even if this fires on every `save_app`
+/// call for the rest of the session, unlike the DB-level symptom it
+/// replaces (see `is_terminal_panes_unique_violation` in
+/// `persistence::sqlite`, which has to throttle the same way for the same
+/// reason).
+fn assert_no_duplicate_pane_group_ownership(app: &AppContext) {
+    let mut seen_pane_group_ids = HashSet::new();
+    for (_, workspace) in WorkspaceRegistry::as_ref(app).all_workspaces(app) {
+        for tab in &workspace.as_ref(app).tabs {
+            let pane_group_id = tab.pane_group.id();
+            if !seen_pane_group_ids.insert(pane_group_id) {
+                debug_assert!(
+                    false,
+                    "pane group {pane_group_id:?} is referenced by tabs in more than one \
+                     window -- dual ownership, see APP-5285"
+                );
+                report_error!(
+                    "Duplicate pane group ownership detected across workspaces",
+                    extra: { "pane_group_id" => ?pane_group_id },
+                    ReportErrorLogMode::OncePerRun
+                );
+            }
+        }
+    }
+}
+
 pub fn get_app_state(app: &AppContext) -> AppState {
     let active_window_id = app.windows().active_window();
     let quake_mode_id = quake_mode_window_id();
@@ -358,6 +398,8 @@ pub fn get_app_state(app: &AppContext) -> AppState {
     let mut active_window_index = None;
 
     let mut windows = vec![];
+
+    assert_no_duplicate_pane_group_ownership(app);
 
     for (index, window_id) in app.window_ids().enumerate() {
         // Determine index of active window
