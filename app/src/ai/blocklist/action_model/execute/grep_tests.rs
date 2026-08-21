@@ -108,3 +108,99 @@ fn build_select_string_command_single_quotes_powershell_substitution() {
         r#"Get-ChildItem -Path 'C:\repo path' -Recurse -File | Select-String -NoEmphasis -CaseSensitive -Pattern '$(New-Item C:\pwn); ''literal'''"#
     );
 }
+
+#[test]
+fn parse_grep_output_handles_colon_in_windows_path() {
+    let output = r#"C:\repo\file.rs:42:some content"#;
+
+    let matched_files = parse_grep_output(output, None, None).expect("Should parse successfully");
+
+    assert_eq!(matched_files.len(), 1);
+    assert_eq!(matched_files[0].file_path, r#"C:\repo\file.rs"#);
+    assert_eq!(
+        matched_files[0].matched_lines,
+        vec![GrepLineMatch { line_number: 42 }]
+    );
+}
+
+#[test]
+fn parse_grep_output_handles_colon_in_relative_path() {
+    let output = "path/with:colon/file.go:7:content";
+
+    let matched_files = parse_grep_output(output, None, None).expect("Should parse successfully");
+
+    assert_eq!(matched_files.len(), 1);
+    assert_eq!(matched_files[0].file_path, "path/with:colon/file.go");
+    assert_eq!(
+        matched_files[0].matched_lines,
+        vec![GrepLineMatch { line_number: 7 }]
+    );
+}
+
+#[test]
+fn parse_grep_output_handles_colon_in_go_module_path() {
+    let output = "vendor/github.com/foo/bar:v1/pkg/x.go:42:return nil";
+
+    let matched_files = parse_grep_output(output, None, None).expect("Should parse successfully");
+
+    assert_eq!(matched_files.len(), 1);
+    assert_eq!(
+        matched_files[0].file_path,
+        "vendor/github.com/foo/bar:v1/pkg/x.go"
+    );
+    assert_eq!(
+        matched_files[0].matched_lines,
+        vec![GrepLineMatch { line_number: 42 }]
+    );
+}
+
+#[test]
+fn parse_grep_output_skips_unparseable_lines_but_keeps_valid_matches() {
+    let output = "src/main.rs:10:foo\nthis line has no line number\nsrc/lib.rs:20:bar";
+
+    let mut matched_files =
+        parse_grep_output(output, None, None).expect("Should parse successfully");
+    matched_files.sort_by(|a, b| a.file_path.cmp(&b.file_path));
+    assert_eq!(
+        matched_files,
+        vec![
+            GrepFileMatch {
+                file_path: "src/lib.rs".to_string(),
+                matched_lines: vec![GrepLineMatch { line_number: 20 }],
+            },
+            GrepFileMatch {
+                file_path: "src/main.rs".to_string(),
+                matched_lines: vec![GrepLineMatch { line_number: 10 }],
+            },
+        ]
+    );
+}
+
+#[test]
+fn parse_grep_output_errors_when_every_line_is_unparseable() {
+    let output = "not a grep line\nneither is this one";
+
+    let result = parse_grep_output(output, None, None);
+
+    assert!(result.is_err());
+}
+
+#[test]
+fn parse_grep_output_returns_empty_for_empty_output() {
+    let matched_files = parse_grep_output("", None, None).expect("Should parse successfully");
+
+    assert!(matched_files.is_empty());
+}
+
+#[test]
+fn split_grep_line_ignores_leading_colon() {
+    assert_eq!(split_grep_line(":10:content"), None);
+}
+
+#[test]
+fn split_grep_line_finds_boundary_after_colon_in_path() {
+    assert_eq!(
+        split_grep_line("path/with:colon/file.go:7:content"),
+        Some(("path/with:colon/file.go", 7))
+    );
+}

@@ -639,38 +639,44 @@ fn build_select_string_command(queries: &[String], target_path: &str) -> String 
 /// back to the agent.
 ///
 /// Assumes the output is in the format:
-/// `{relative_file_path}:{line_number}:{line_contents}`.
+/// `{relative_file_path}:{line_number}:{line_contents}`. The file path itself
+/// can contain colons (e.g. an absolute Windows path like `C:\repo\file.rs`,
+/// or a Go module path like `vendor/example.com/foo:v1/x.go`), so lines are
+/// split by locating the `:<digits>:` boundary rather than by position. A
+/// line that doesn't contain such a boundary is skipped instead of failing
+/// the whole parse; an error is only returned when every line was
+/// unparseable, since that indicates the output isn't grep-formatted at all
+/// rather than containing one unusual path.
 fn parse_grep_output(
     output: &str,
     shell_launch_data: Option<ShellLaunchData>,
     current_working_directory: Option<String>,
 ) -> anyhow::Result<Vec<GrepFileMatch>> {
-    let mut matched_files = HashMap::new();
+    let mut matched_files: HashMap<&str, Vec<GrepLineMatch>> = HashMap::new();
+    let mut unparseable_line_count = 0usize;
 
     for line in output.trim().split("\n") {
-        let mut parts = line.split(":");
-        let file = parts.next();
-        let line_number = parts.next();
-
-        let (Some(file), Some(line_number)) = (file, line_number) else {
-            return Err(anyhow::anyhow!(
-                "Failed to parse Grep output, unexpected format"
-            ));
-        };
-        let line_number = match line_number.parse::<usize>() {
-            Ok(line_number) => line_number,
-            Err(e) => {
-                return Err(anyhow::anyhow!(
-                    "Failed to parse line number in Grep output: {:?}",
-                    e
-                ));
+        if line.is_empty() {
+            continue;
+        }
+        match split_grep_line(line) {
+            Some((file, line_number)) => {
+                matched_files
+                    .entry(file)
+                    .or_default()
+                    .push(GrepLineMatch { line_number });
             }
-        };
+            None => {
+                unparseable_line_count += 1;
+                log::warn!("Skipping a line of Grep output that could not be parsed");
+            }
+        }
+    }
 
-        matched_files
-            .entry(file)
-            .or_insert_with(Vec::new)
-            .push(GrepLineMatch { line_number });
+    if matched_files.is_empty() && unparseable_line_count > 0 {
+        return Err(anyhow::anyhow!(
+            "Failed to parse Grep output, unexpected format"
+        ));
     }
 
     Ok(matched_files
@@ -684,6 +690,36 @@ fn parse_grep_output(
             matched_lines,
         })
         .collect())
+}
+
+/// Splits a single line of grep output (`{file_path}:{line_number}:{line_contents}`)
+/// into its file path and line number by locating the `:<digits>:` boundary
+/// between them, since the file path may itself contain colons. Returns
+/// `None` if the line doesn't contain such a boundary.
+fn split_grep_line(line: &str) -> Option<(&str, usize)> {
+    let mut search_start = 0;
+    while let Some(relative_colon_pos) = line[search_start..].find(':') {
+        let colon_pos = search_start + relative_colon_pos;
+        search_start = colon_pos + 1;
+        if colon_pos == 0 {
+            continue;
+        }
+
+        let digits_start = colon_pos + 1;
+        let digit_count = line[digits_start..]
+            .bytes()
+            .take_while(|b| b.is_ascii_digit())
+            .count();
+        let digits_end = digits_start + digit_count;
+        if digit_count == 0 || line.as_bytes().get(digits_end) != Some(&b':') {
+            continue;
+        }
+
+        if let Ok(line_number) = line[digits_start..digits_end].parse::<usize>() {
+            return Some((&line[..colon_pos], line_number));
+        }
+    }
+    None
 }
 
 impl Entity for GrepExecutor {
