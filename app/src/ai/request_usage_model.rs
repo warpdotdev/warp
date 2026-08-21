@@ -696,7 +696,11 @@ impl AIRequestUsageModel {
         self.bonus_grants
             .iter()
             .filter(|grant| grant.scope == BonusGrantScope::User)
-            .filter(|grant| grant.grant_type != BonusGrantType::AmbientOnly)
+            // Only grants of a known interactive-spendable type count here. A
+            // grant type this client doesn't recognize (`Other`) is excluded
+            // rather than assumed spendable, to avoid overstating available
+            // credit.
+            .filter(|grant| grant.grant_type == BonusGrantType::Any)
             .filter(|grant| grant.expiration.is_none_or(|exp| now < exp))
             .map(|grant| grant.request_credits_remaining)
             .sum()
@@ -725,10 +729,14 @@ impl AIRequestUsageModel {
         // something to consider after launch
         // Ambient-only credits are usable for cloud agents and should not suppress this banner.
         let now = Utc::now();
+        // Only grants of a known interactive-spendable type suppress the
+        // banner. A grant type this client doesn't recognize (`Other`) is
+        // excluded rather than assumed spendable, to avoid hiding the banner
+        // when the user may not actually have usable credit.
         let has_non_ambient_bonus_credits = self
             .bonus_grants
             .iter()
-            .filter(|grant| grant.grant_type != BonusGrantType::AmbientOnly)
+            .filter(|grant| grant.grant_type == BonusGrantType::Any)
             .filter(|grant| grant.expiration.is_none_or(|exp| now < exp))
             .filter(|grant| grant.request_credits_remaining > 0)
             .any(|grant| match grant.scope {

@@ -297,6 +297,44 @@ fn test_buy_credits_banner_shows_with_only_ambient_bonus_credits() {
 }
 
 #[test]
+fn test_buy_credits_banner_shows_with_only_unknown_grant_type_bonus_credits() {
+    App::test((), |mut app| async move {
+        // A grant type this client doesn't recognize (a fallback `Other`
+        // from a newer server) must not be treated as spendable interactive
+        // credit, so the banner should behave as if there were no bonus
+        // credits at all.
+        let (_uid, mut workspace) = create_test_workspace();
+        workspace
+            .billing_metadata
+            .tier
+            .purchase_add_on_credits_policy = Some(standard_purchase_policy());
+
+        add_user_workspaces_with_workspace(&mut app, workspace);
+        let request_usage_model = add_request_usage_model(&mut app);
+
+        request_usage_model.update(&mut app, |model, ctx| {
+            model.request_limit_info = RequestLimitInfo::new_for_test(10, 10);
+            model.bonus_grants = vec![BonusGrant {
+                created_at: Utc::now(),
+                cost_cents: 0,
+                expiration: Some(Utc::now() + chrono::Duration::days(7)),
+                grant_type: BonusGrantType::Other,
+                reason: "unrecognized grant type".to_string(),
+                user_facing_message: None,
+                request_credits_granted: 1000,
+                request_credits_remaining: 1000,
+                scope: BonusGrantScope::User,
+            }];
+
+            assert_eq!(
+                model.compute_buy_addon_credits_banner_display_state(ctx),
+                BuyCreditsBannerDisplayState::OutOfCredits,
+            );
+        });
+    });
+}
+
+#[test]
 fn test_buy_credits_banner_shows_for_premium_enabled_plan_out_of_credits() {
     App::test((), |mut app| async move {
         // The test workspace has no teams: this covers the teamless fresh
@@ -774,6 +812,44 @@ fn test_total_workspace_and_team_bonus_credits_counts_both_scopes() {
                 model.total_workspace_and_team_bonus_credits_remaining(uid),
                 18
             );
+            assert_eq!(model.total_user_interactive_bonus_credits_remaining(), 5);
+        });
+    });
+}
+
+#[test]
+fn test_total_user_interactive_bonus_credits_remaining_excludes_unknown_grant_type() {
+    App::test((), |mut app| async move {
+        let (_uid, workspace) = create_test_workspace();
+        add_user_workspaces_with_workspace(&mut app, workspace);
+        let request_usage_model = add_request_usage_model(&mut app);
+
+        request_usage_model.update(&mut app, |model, _ctx| {
+            model.bonus_grants = vec![
+                BonusGrant {
+                    created_at: Utc::now(),
+                    cost_cents: 0,
+                    expiration: None,
+                    grant_type: BonusGrantType::Any,
+                    reason: "known interactive grant".to_string(),
+                    user_facing_message: None,
+                    request_credits_granted: 5,
+                    request_credits_remaining: 5,
+                    scope: BonusGrantScope::User,
+                },
+                BonusGrant {
+                    created_at: Utc::now(),
+                    cost_cents: 0,
+                    expiration: None,
+                    grant_type: BonusGrantType::Other,
+                    reason: "unrecognized grant type".to_string(),
+                    user_facing_message: None,
+                    request_credits_granted: 100,
+                    request_credits_remaining: 100,
+                    scope: BonusGrantScope::User,
+                },
+            ];
+
             assert_eq!(model.total_user_interactive_bonus_credits_remaining(), 5);
         });
     });
