@@ -138,11 +138,6 @@ impl Shell {
         self.shell_type.force_in_band_command_executor()
     }
 
-    /// Returns whether the current shell supports native shell completions.
-    pub fn supports_native_shell_completions(&self) -> bool {
-        self.shell_type.supports_native_shell_completions()
-    }
-
     /// Whether the shell supports "autocd" (`cd`ing into a directory without specifying
     /// `cd`).
     pub fn supports_autocd(&self) -> bool {
@@ -384,13 +379,6 @@ impl ShellType {
         match self {
             ShellType::Bash | ShellType::Zsh | ShellType::PowerShell => " && ",
             ShellType::Fish => "; and ",
-        }
-    }
-
-    /// Returns whether the current shell supports native shell completions.
-    fn supports_native_shell_completions(&self) -> bool {
-        match self {
-            ShellType::Zsh | ShellType::Bash | ShellType::Fish | ShellType::PowerShell => true,
         }
     }
 
