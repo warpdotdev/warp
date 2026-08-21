@@ -40,7 +40,7 @@ pub trait RepositorySubscriber: Send + Sync {
     fn on_files_updated(
         &mut self,
         repository: &Repository,
-        update: &RepositoryUpdate,
+        update: RepositoryUpdate,
         ctx: &mut ModelContext<Repository>,
     ) -> Pin<Box<dyn Future<Output = ()> + Send + 'static>>;
 
@@ -514,7 +514,7 @@ impl Repository {
     pub(crate) fn notify_subscriber(
         &mut self,
         subscriber_id: SubscriberId,
-        update: &RepositoryUpdate,
+        update: RepositoryUpdate,
         ctx: &mut ModelContext<Self>,
     ) -> Option<Pin<Box<dyn Future<Output = ()> + Send + 'static>>> {
         if let Some(mut subscription) = self.subscribers.remove(&subscriber_id) {
@@ -575,65 +575,65 @@ impl Entity for Repository {
 }
 
 /// Coalescing merge for RepositoryUpdate with normalization rules.
-fn merge_repository_updates(acc: &mut RepositoryUpdate, incoming: &RepositoryUpdate) {
+fn merge_repository_updates(acc: &mut RepositoryUpdate, incoming: RepositoryUpdate) {
     // 1) Moves first
-    for (to, from) in &incoming.moved {
-        if acc.added.remove(from) {
-            acc.added.insert(to.clone());
+    for (to, from) in incoming.moved {
+        if acc.added.remove(&from) {
+            acc.added.insert(to);
             return;
         }
-        if acc.modified.remove(from) {
-            acc.modified.insert(to.clone());
+        if acc.modified.remove(&from) {
+            acc.modified.insert(to);
             return;
         }
 
         // Collapse chain: if `from` was a prior destination, pull its original source
-        let original_from = if let Some(prev_from) = acc.moved.remove(from) {
+        let original_from = if let Some(prev_from) = acc.moved.remove(&from) {
             prev_from
         } else {
-            from.clone()
+            from
         };
-        acc.moved.insert(to.clone(), original_from);
+        acc.moved.insert(to, original_from);
     }
 
     // 2) Adds next
-    for p in &incoming.added {
-        acc.deleted.remove(p);
-        acc.moved.remove(p);
-        acc.modified.remove(p);
-        acc.added.insert(p.clone());
+    for p in incoming.added {
+        acc.deleted.remove(&p);
+        acc.moved.remove(&p);
+        acc.modified.remove(&p);
+        acc.added.insert(p);
     }
 
     // 3) Modifies next
-    for p in &incoming.modified {
-        if acc.added.contains(p) {
+    for p in incoming.modified {
+        if acc.added.contains(&p) {
             continue;
         }
-        acc.deleted.remove(p);
-        acc.moved.remove(p);
-        acc.modified.insert(p.clone());
+        acc.deleted.remove(&p);
+        acc.moved.remove(&p);
+        acc.modified.insert(p);
     }
 
     // 4) Deletes last
-    for p in &incoming.deleted {
+    for p in incoming.deleted {
         // Added then removed within window => cancel
-        if acc.added.remove(p) {
+        if acc.added.remove(&p) {
             continue;
         }
 
-        acc.modified.remove(p);
+        acc.modified.remove(&p);
 
         // Removing a move target => delete original source instead
-        if let Some(from) = acc.moved.remove(p) {
+        if let Some(from) = acc.moved.remove(&p) {
             acc.deleted.insert(from);
             continue;
         }
         // Deleting the source of a recorded move is redundant; move already implies source removal
-        let is_from_of_some_move = acc.moved.values().any(|f| f == p);
+        let is_from_of_some_move = acc.moved.values().any(|f| f == &p);
         if is_from_of_some_move {
             continue;
         }
-        acc.deleted.insert(p.clone());
+        acc.deleted.insert(p);
     }
 
     acc.commit_updated |= incoming.commit_updated;
@@ -682,7 +682,7 @@ where
     fn on_files_updated(
         &mut self,
         _repository: &Repository,
-        update: &RepositoryUpdate,
+        update: RepositoryUpdate,
         ctx: &mut ModelContext<Repository>,
     ) -> Pin<Box<dyn Future<Output = ()> + Send + 'static>> {
         {
@@ -732,7 +732,7 @@ where
                             return;
                         }
                         if let Ok(mut inner) = inner.lock() {
-                            let fut = inner.on_files_updated(repo_model, &merged, repo_ctx);
+                            let fut = inner.on_files_updated(repo_model, merged, repo_ctx);
                             // Drive the subscriber's async update to completion.
                             repo_ctx.spawn(fut, |_, _, _| {});
                         }

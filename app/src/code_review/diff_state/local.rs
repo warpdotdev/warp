@@ -2978,11 +2978,10 @@ impl RepositorySubscriber for LocalDiffStateModelRepositorySubscriber {
     fn on_files_updated(
         &mut self,
         repository: &Repository,
-        update: &repo_metadata::RepositoryUpdate,
+        update: repo_metadata::RepositoryUpdate,
         _ctx: &mut ModelContext<Repository>,
     ) -> std::pin::Pin<Box<dyn std::prelude::rust_2024::Future<Output = ()> + Send + 'static>> {
         let tx = self.repository_update_tx.clone();
-        let update = update.clone();
         let index_lock_path = repository.git_dir().join("index.lock");
         Box::pin(async move {
             // If commit state changed while the git index is locked (e.g. during

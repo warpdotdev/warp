@@ -99,13 +99,12 @@ impl RepositorySubscriber for FileMCPSubscriber {
     fn on_files_updated(
         &mut self,
         repository: &Repository,
-        update: &RepositoryUpdate,
+        update: RepositoryUpdate,
         _ctx: &mut ModelContext<Repository>,
     ) -> Pin<Box<dyn Future<Output = ()> + Send + 'static>> {
         let watched_dir = repository.root_dir().to_local_path_lossy();
         let stored_dir = self.stored_dir.clone();
         let tx = self.message_tx.clone();
-        let update = update.clone();
 
         Box::pin(async move {
             let _ = tx
