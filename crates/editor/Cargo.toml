@@ -76,3 +76,7 @@ harness = false
 name = "char_cell_bench"
 harness = false
 required-features = ["test-util"]
+
+[[bench]]
+name = "resolve_conflict_memory_bench"
+harness = false
