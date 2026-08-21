@@ -1504,7 +1504,15 @@ impl From<&stream_finished::ToolUsageMetadata> for ToolUsageMetadata {
 
 /// The kind of a context-window segment, mirroring the proto
 /// `ContextWindowSegmentType` enum.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+///
+/// `Rules`, `Skills`, and `Memory` are **client-only additions** (pricing
+/// transparency Surface 4) that do not yet have a corresponding value in the
+/// `stream_finished::ContextWindowSegmentType` proto (defined in the
+/// `warp-proto-apis` repo). Until the server/proto is updated to emit these
+/// as distinct segments, the server can never populate them, so today they
+/// can only be constructed by client-side code. See `From<i32>` / `Into<i32>`
+/// below for the wire-compatibility shim.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum ContextWindowSegmentType {
     #[default]
@@ -1515,6 +1523,16 @@ pub enum ContextWindowSegmentType {
     LatestInput,
     Images,
     Other,
+    /// User-authored project/user rules included in the prompt. Client-only
+    /// today; needs a proto value to be populated from server-computed
+    /// segments. See the enum-level doc comment.
+    Rules,
+    /// Skill definitions/content included in the prompt. Client-only today;
+    /// see the enum-level doc comment.
+    Skills,
+    /// Long-term/session memory content included in the prompt. Client-only
+    /// today; see the enum-level doc comment.
+    Memory,
 }
 
 impl ContextWindowSegmentType {
@@ -1528,6 +1546,46 @@ impl ContextWindowSegmentType {
             ContextWindowSegmentType::LatestInput => "latest_input",
             ContextWindowSegmentType::Images => "images",
             ContextWindowSegmentType::Other => "other",
+            ContextWindowSegmentType::Rules => "rules",
+            ContextWindowSegmentType::Skills => "skills",
+            ContextWindowSegmentType::Memory => "memory",
+        }
+    }
+
+    /// Display label for the pricing-transparency "Context window" breakdown
+    /// panel (Surface 4), matching the Figma taxonomy exactly: Conversation,
+    /// System prompt, Tools, Rules, Skills, Memory, plus an "Other" catch-all
+    /// bucket for everything the Figma taxonomy doesn't name (`Unknown`,
+    /// `LatestInput`, `Images`). This is intentionally distinct from
+    /// `token_usage_category_display_name`, which title-cases the raw
+    /// snake_case identifier (e.g. "System Prompt") rather than using the
+    /// Figma copy's sentence case ("System prompt").
+    pub fn context_window_panel_label(&self) -> &'static str {
+        match self {
+            ContextWindowSegmentType::ConversationHistory => "Conversation",
+            ContextWindowSegmentType::SystemPrompt => "System prompt",
+            ContextWindowSegmentType::ToolDefinitions => "Tools",
+            ContextWindowSegmentType::Rules => "Rules",
+            ContextWindowSegmentType::Skills => "Skills",
+            ContextWindowSegmentType::Memory => "Memory",
+            ContextWindowSegmentType::Unknown
+            | ContextWindowSegmentType::LatestInput
+            | ContextWindowSegmentType::Images
+            | ContextWindowSegmentType::Other => "Other",
+        }
+    }
+
+    /// The Surface-4 display bucket this segment folds into. Distinct
+    /// segment types can share a display bucket (e.g. `Unknown`,
+    /// `LatestInput`, and `Images` all fold into `Other`), so callers that
+    /// need to aggregate token counts per display row should group by this
+    /// key rather than by the raw segment type.
+    pub fn context_window_panel_bucket(&self) -> ContextWindowSegmentType {
+        match self {
+            ContextWindowSegmentType::Unknown
+            | ContextWindowSegmentType::LatestInput
+            | ContextWindowSegmentType::Images => ContextWindowSegmentType::Other,
+            other => *other,
         }
     }
 }
@@ -1543,7 +1601,10 @@ impl From<i32> for ContextWindowSegmentType {
             Ok(stream_finished::ContextWindowSegmentType::LatestInput) => Self::LatestInput,
             Ok(stream_finished::ContextWindowSegmentType::Images) => Self::Images,
             Ok(stream_finished::ContextWindowSegmentType::Other) => Self::Other,
-            // Unknown (0) and any unrecognized value map to Unknown.
+            // Unknown (0) and any unrecognized value map to Unknown. Note the
+            // proto has no Rules/Skills/Memory values yet (see the enum-level
+            // doc comment), so those variants can never round-trip through
+            // the wire today.
             _ => Self::Unknown,
         }
     }
@@ -1571,6 +1632,15 @@ impl From<ContextWindowSegmentType> for i32 {
                 stream_finished::ContextWindowSegmentType::Images as i32
             }
             ContextWindowSegmentType::Other => {
+                stream_finished::ContextWindowSegmentType::Other as i32
+            }
+            // No proto value exists yet for these client-only variants (see
+            // the enum-level doc comment); encode as `Other` rather than
+            // `Unknown` so downstream consumers group them with the other
+            // catch-all bucket instead of the true "couldn't parse" case.
+            ContextWindowSegmentType::Rules
+            | ContextWindowSegmentType::Skills
+            | ContextWindowSegmentType::Memory => {
                 stream_finished::ContextWindowSegmentType::Other as i32
             }
         }

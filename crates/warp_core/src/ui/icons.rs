@@ -170,6 +170,11 @@ pub enum Icon {
     User,
     Users,
     CoinsStacked,
+    /// Pie/donut-chart glyph used for the pricing-transparency footer usage
+    /// icon (Surface 1 of the pricing-transparency specs) — visually a
+    /// pie/donut chart, distinct from `CoinsStacked` despite the Figma
+    /// layer being named `coins-03`.
+    PieChart,
     Phone,
     Navigation,
     AutoUpdate,
@@ -516,6 +521,7 @@ impl From<Icon> for &'static str {
             Icon::User => "bundled/svg/user-02.svg",
             Icon::Users => "bundled/svg/users-02.svg",
             Icon::CoinsStacked => "bundled/svg/coins-stacked-02.svg",
+            Icon::PieChart => "bundled/svg/pie-chart.svg",
             Icon::Phone => "bundled/svg/phone.svg",
             Icon::Navigation => "bundled/svg/navigation.svg",
             Icon::AutoUpdate => "bundled/svg/autoupdate.svg",
