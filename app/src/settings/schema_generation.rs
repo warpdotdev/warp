@@ -11,7 +11,7 @@ use warp_core::channel::ChannelState;
 use warp_core::features::FeatureFlag;
 
 /// Writes the settings schema to a file or prints it to standard output.
-pub(crate) fn dump_settings_schema(output_path: Option<&Path>) -> Result<()> {
+pub fn dump_settings_schema(output_path: Option<&Path>) -> Result<()> {
     let output = settings_schema_json(|flag| flag.is_enabled())?;
 
     if let Some(path) = output_path {
