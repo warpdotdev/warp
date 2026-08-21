@@ -4510,7 +4510,7 @@ checksum = "6738d2e996274e499bc7b0d693c858b7720b9cd2543a0643a3087e6cb0a4fa16"
 dependencies = [
  "cfg-if",
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -6470,6 +6470,7 @@ dependencies = [
 name = "http_server"
 version = "0.0.0"
 dependencies = [
+ "anyhow",
  "axum",
  "log",
  "tokio",
@@ -7140,7 +7141,7 @@ checksum = "3640c1c38b8e4e43584d8df18be5fc6b0aa314ce6ebf51b53313d4306cca8e46"
 dependencies = [
  "hermit-abi 0.5.2",
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -7334,7 +7335,7 @@ dependencies = [
  "portable-atomic",
  "portable-atomic-util",
  "serde_core",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -9762,7 +9763,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7d8fae84b431384b68627d0f9b3b1245fcf9f46f6c0e3dc902e9dce64edd1967"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.45.0",
 ]
 
 [[package]]
@@ -10578,7 +10579,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "343d3bd7056eda839b03204e68deff7d1b13aba7af2b2fd16890697274262ee7"
 dependencies = [
  "heck 0.4.1",
- "itertools 0.14.0",
+ "itertools 0.11.0",
  "log",
  "multimap",
  "petgraph",
@@ -10597,7 +10598,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "27c6023962132f4b30eb4c172c91ce92d933da334c59c23cddee82358ddafb0b"
 dependencies = [
  "anyhow",
- "itertools 0.14.0",
+ "itertools 0.11.0",
  "proc-macro2",
  "quote",
  "syn 2.0.117",
@@ -11435,6 +11436,7 @@ dependencies = [
  "log",
  "notify-debouncer-full",
  "once_cell",
+ "parking_lot",
  "serde",
  "serde_json",
  "strum 0.27.1",
@@ -11847,7 +11849,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.11.0",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -11915,7 +11917,7 @@ dependencies = [
  "security-framework 3.5.1",
  "security-framework-sys",
  "webpki-root-certs 1.0.1",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -12682,6 +12684,12 @@ dependencies = [
  "cpufeatures 0.3.0",
  "digest 0.11.3",
 ]
+
+[[package]]
+name = "sha1_smol"
+version = "1.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bbfa15b3dddfee50a0fff136974b3e1bde555604ba463834a7eb7deb6417705d"
 
 [[package]]
 name = "sha2"
@@ -13605,7 +13613,7 @@ dependencies = [
  "getrandom 0.3.4",
  "once_cell",
  "rustix 1.1.2",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -14894,6 +14902,7 @@ dependencies = [
  "getrandom 0.3.4",
  "js-sys",
  "serde_core",
+ "sha1_smol",
  "wasm-bindgen",
 ]
 
@@ -15208,6 +15217,7 @@ dependencies = [
  "git2",
  "gloo",
  "handlebars",
+ "hashbrown 0.17.1",
  "hex",
  "http 1.4.0",
  "http_client",
@@ -15296,6 +15306,7 @@ dependencies = [
  "rmcp",
  "rquickjs",
  "rust-embed 8.7.2",
+ "rustc-hash 2.1.1",
  "rustls",
  "schemars 1.0.4",
  "security-framework-sys",
@@ -15409,7 +15420,7 @@ dependencies = [
 [[package]]
 name = "warp-command-signatures"
 version = "0.0.0"
-source = "git+https://github.com/warpdotdev/command-signatures.git?rev=d79e09c43b64eb8e55a81fec088423aeba6a48cd#d79e09c43b64eb8e55a81fec088423aeba6a48cd"
+source = "git+https://github.com/warpdotdev/command-signatures.git?rev=ac69f9b00c48d6de229ba5905056d9302da1c5c4#ac69f9b00c48d6de229ba5905056d9302da1c5c4"
 dependencies = [
  "cfg-if",
  "itertools 0.10.5",
@@ -15427,7 +15438,7 @@ dependencies = [
 [[package]]
 name = "warp-completion-metadata"
 version = "0.0.0"
-source = "git+https://github.com/warpdotdev/command-signatures.git?rev=d79e09c43b64eb8e55a81fec088423aeba6a48cd#d79e09c43b64eb8e55a81fec088423aeba6a48cd"
+source = "git+https://github.com/warpdotdev/command-signatures.git?rev=ac69f9b00c48d6de229ba5905056d9302da1c5c4#ac69f9b00c48d6de229ba5905056d9302da1c5c4"
 dependencies = [
  "html-escape",
  "itertools 0.10.5",
@@ -15712,6 +15723,7 @@ dependencies = [
  "serde",
  "thiserror 2.0.17",
  "warp_core",
+ "warp_errors",
  "warp_graphql_schema",
  "websocket",
  "ws_stream_wasm",
@@ -15808,7 +15820,7 @@ dependencies = [
 [[package]]
 name = "warp_multi_agent_api"
 version = "0.0.0"
-source = "git+https://github.com/warpdotdev/warp-proto-apis.git?rev=b0886a9523e2e05d102f61bd0a212dc15ade4835#b0886a9523e2e05d102f61bd0a212dc15ade4835"
+source = "git+https://github.com/warpdotdev/warp-proto-apis.git?rev=f0028fa6d05db1ba63726eaf6f8d33ab17abe37b#f0028fa6d05db1ba63726eaf6f8d33ab17abe37b"
 dependencies = [
  "prost",
  "prost-reflect",
@@ -16075,6 +16087,7 @@ dependencies = [
  "lazy_static",
  "log",
  "mime_guess",
+ "parking_lot",
  "pathdiff",
  "pin-project",
  "rand 0.8.6",
@@ -17000,7 +17013,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]

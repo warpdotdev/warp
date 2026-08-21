@@ -1,4 +1,7 @@
-use settings_page::{FilteredPageType, MatchData, PageType, SettingsWidget, search_terms_match};
+use settings_page::{
+    Category, FilteredPageType, MatchData, PageType, SettingsWidget,
+    categories_with_visible_content, search_terms_match,
+};
 use warpui::elements::Empty;
 use warpui::{App, AppContext, Element, Entity, View};
 
@@ -891,6 +894,76 @@ fn empty_query_after_reapply_shows_all_widgets() {
                 visible_widget_count(&rebuilt),
                 5,
                 "an empty query restores every widget on the subpage"
+            );
+        });
+    });
+}
+
+struct NeverRendersWidget {
+    terms: &'static str,
+}
+
+impl SettingsWidget for NeverRendersWidget {
+    type View = TestSettingsView;
+
+    fn search_terms(&self) -> &str {
+        self.terms
+    }
+
+    fn should_render(&self, _: &AppContext) -> bool {
+        false
+    }
+
+    fn render(&self, _: &Self::View, _: &Appearance, _: &AppContext) -> Box<dyn Element> {
+        Empty::new().finish()
+    }
+}
+
+#[test]
+fn category_whose_sole_widget_cannot_render_has_no_visible_content_before_any_filter_pass() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            let children: Vec<Box<dyn SettingsWidget<View = TestSettingsView>>> =
+                vec![Box::new(NeverRendersWidget {
+                    terms: "cloud handoff",
+                })];
+            let page =
+                PageType::new_categorized(vec![Category::new("Cloud Handoff", children)], None);
+
+            let FilteredPageType::Categorized { categories, .. } = page.get_filtered() else {
+                panic!("expected Categorized page");
+            };
+            assert_eq!(
+                categories.len(),
+                1,
+                "the untouched filter includes every widget index, so the category is still present here"
+            );
+            assert!(
+                categories_with_visible_content(categories, ctx).is_empty(),
+                "the category's sole widget can't render right now, so it has nothing visible to show"
+            );
+        });
+    });
+}
+
+#[test]
+fn category_whose_sole_widget_cannot_render_has_no_visible_content_after_an_empty_query() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            let children: Vec<Box<dyn SettingsWidget<View = TestSettingsView>>> =
+                vec![Box::new(NeverRendersWidget {
+                    terms: "cloud handoff",
+                })];
+            let mut page =
+                PageType::new_categorized(vec![Category::new("Cloud Handoff", children)], None);
+            page.update_filter("", ctx);
+
+            let FilteredPageType::Categorized { categories, .. } = page.get_filtered() else {
+                panic!("expected Categorized page");
+            };
+            assert!(
+                categories.is_empty(),
+                "an empty-query filter pass already drops a category with no should_render widgets"
             );
         });
     });

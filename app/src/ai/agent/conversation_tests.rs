@@ -15,7 +15,9 @@ use crate::ai::llms::LLMPreferences;
 use crate::auth::AuthStateProvider;
 use crate::auth::auth_manager::AuthManager;
 use crate::network::NetworkStatus;
-use crate::persistence::model::{AgentConversationData, ConversationUsageMetadata};
+use crate::persistence::model::{
+    AgentConversationData, ChargedUsageTotals, ConversationUsageMetadata,
+};
 use crate::server::server_api::ServerApiProvider;
 use crate::test_util::settings::initialize_settings_for_tests;
 use crate::workspaces::user_workspaces::UserWorkspaces;
@@ -304,6 +306,7 @@ fn custom_endpoint_usage_metadata(
         token_usage: vec![],
         tool_usage_metadata: None,
         total_input_tokens: 0,
+        total_charges: None,
         warp_token_usage: HashMap::new(),
         byok_token_usage: HashMap::new(),
         context_window_segments: Vec::new(),
@@ -665,6 +668,7 @@ fn restored_usage_totals_preserve_server_provider_cost_and_add_follow_up() {
                 conversation
                     .update_cost_and_usage_for_request(
                         None,
+                        None,
                         vec![stream_token_usage("model-a", 10, 2, 1.2)],
                         Some(credits_usage_metadata(1.0, 0.0)),
                         false,
@@ -738,6 +742,7 @@ fn restored_legacy_conversation_keeps_provider_cost_unavailable_after_follow_up(
             conversation
                 .update_cost_and_usage_for_request(
                     None,
+                    None,
                     vec![stream_token_usage("legacy-model", 10, 2, 1.5)],
                     Some(credits_usage_metadata(1.0, 0.0)),
                     false,
@@ -779,6 +784,7 @@ fn update_cost_and_usage_resolves_custom_endpoint_alias_for_footer_usage() {
             conversation
                 .update_cost_and_usage_for_request(
                     None,
+                    None,
                     vec![],
                     Some(custom_endpoint_usage_metadata("config-key", 6)),
                     false,
@@ -813,6 +819,7 @@ fn update_cost_and_usage_uses_fallback_label_for_unknown_custom_endpoint() {
         app.read(|ctx| {
             conversation
                 .update_cost_and_usage_for_request(
+                    None,
                     None,
                     vec![],
                     Some(custom_endpoint_usage_metadata("missing-config-key", 9)),
@@ -867,6 +874,7 @@ fn credits_usage_metadata(
         token_usage: vec![],
         tool_usage_metadata: None,
         total_input_tokens: 0,
+        total_charges: None,
         warp_token_usage: HashMap::new(),
         byok_token_usage: HashMap::new(),
         context_window_segments: Vec::new(),
@@ -887,12 +895,14 @@ fn usage_totals_reads_gui_credits_and_accumulates_provider_cost() {
                 credits_spent: 0.0,
                 cost_in_cents: Some(0.0),
                 has_usage: false,
+                charged_usage: None,
             }
         );
 
         app.read(|ctx| {
             conversation
                 .update_cost_and_usage_for_request(
+                    None,
                     None,
                     vec![stream_token_usage("model-a", 100, 20, 1.5)],
                     Some(credits_usage_metadata(2.0, 0.5)),
@@ -905,6 +915,7 @@ fn usage_totals_reads_gui_credits_and_accumulates_provider_cost() {
             // summing, while provider cost accumulates per request.
             conversation
                 .update_cost_and_usage_for_request(
+                    None,
                     None,
                     vec![stream_token_usage("model-a", 50, 10, 1.2)],
                     Some(credits_usage_metadata(3.0, 0.5)),
@@ -923,6 +934,36 @@ fn usage_totals_reads_gui_credits_and_accumulates_provider_cost() {
                 - 2.7)
                 .abs()
                 < 1e-6
+        );
+    });
+}
+
+#[test]
+fn update_cost_and_usage_resets_stale_charged_usage_for_last_block_on_new_user_turn() {
+    App::test((), |mut app| async move {
+        initialize_custom_endpoint_usage_test_app(&mut app);
+        app.add_singleton_model(LLMPreferences::new);
+
+        let mut conversation = AIConversation::new(false, false);
+        // Simulate a stale last-block breakdown left over from a previous
+        // response, as would happen if this turn's request carries no
+        // `request_charges` (e.g. the flag is off for it).
+        conversation.set_charged_usage_for_last_block_for_test(Some(ChargedUsageTotals {
+            input_tokens: 500,
+            ..Default::default()
+        }));
+
+        app.read(|ctx| {
+            conversation
+                .update_cost_and_usage_for_request(None, None, vec![], None, true, ctx)
+                .expect("usage should update");
+        });
+
+        assert_eq!(
+            conversation.charged_usage_for_last_block(),
+            None,
+            "a new user-initiated turn must clear the previous block's stale charged usage, \
+             even when this turn's request itself carries no charges"
         );
     });
 }
@@ -960,6 +1001,7 @@ fn footer_model_token_usage_keeps_custom_endpoint_usage_distinct_from_same_label
             token_usage: vec![],
             tool_usage_metadata: None,
             total_input_tokens: 0,
+            total_charges: None,
             warp_token_usage: HashMap::new(),
             byok_token_usage: HashMap::from([(
                 "Resolved custom".to_string(),
@@ -1025,6 +1067,7 @@ fn footer_model_token_usage_preserves_unresolved_custom_endpoint_usage_with_fall
             token_usage: vec![],
             tool_usage_metadata: None,
             total_input_tokens: 0,
+            total_charges: None,
             warp_token_usage: HashMap::new(),
             byok_token_usage: HashMap::new(),
             custom_endpoint_token_usage: HashMap::from([(

@@ -106,10 +106,15 @@ pub struct GeapMintBinding {
     pub federation: GeapFederation,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+// Keep every message static: `detail` carries the raw Google STS/IAM response
+// body, so interpolating it would leak it to Sentry via `report_error!`.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum LoadGeapCredentialsError {
+    #[error("failed to mint a Warp identity token")]
     MintIdentityToken { detail: String },
+    #[error("STS token exchange failed")]
     ExchangeToken { status: Option<u16>, detail: String },
+    #[error("service account impersonation failed")]
     ImpersonateServiceAccount { status: Option<u16>, detail: String },
 }
 

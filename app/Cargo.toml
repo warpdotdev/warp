@@ -273,6 +273,8 @@ warp_ripgrep.workspace = true
 warp_managed_secrets.workspace = true
 warp_multi_agent_client.workspace = true
 local_control.workspace = true
+hashbrown.workspace = true
+rustc-hash.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
 block.workspace = true
@@ -509,6 +511,8 @@ crash_reporting = [
 creating_shared_sessions = []
 cross_repo_context = []
 codebase_index_persistence = ["full_source_code_embedding"]
+well_known_mcp_ids = []
+factory_mcp = []
 default = [
     "agent_mode",
     "osc_hyperlinks",
@@ -707,6 +711,10 @@ default = [
     "cloud_runners",
     "cloud_agent_runners",
     "file_backed_execution_profiles",
+    "well_known_mcp_ids",
+    "factory_mcp",
+    "wait_for_events_parent_registration",
+    "orchestration_unified_stack",
 ]
 # Enable this feature to automatically perform heap profiling.  NOTE: This will
 # substantially slow down program execution.
@@ -1007,6 +1015,7 @@ skill_arguments = []
 active_conversation_requires_interaction = []
 incremental_auto_reload = []
 wait_for_events_parent_registration = []
+orchestration_unified_stack = []
 pending_user_query_indicator = []
 queue_slash_command = []
 queued_prompts_v2 = ["queue_slash_command"]

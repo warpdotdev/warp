@@ -124,6 +124,8 @@ mod warp_agent_page;
 mod warp_drive_page;
 mod warpify_page;
 
+#[cfg(feature = "tui")]
+pub(crate) use billing_and_usage::billing_cycle_usage_common::{format_cost_cents, format_credits};
 pub use billing_and_usage_page::create_discount_badge;
 #[cfg(not(target_family = "wasm"))]
 pub use cli_agents_page::cli_agent_settings_widget_id;
@@ -586,6 +588,7 @@ pub mod flags {
         "Preserve_Input_Focus_On_Block_Selection";
     pub const SLASH_COMMANDS_IN_TERMINAL_FLAG: &str = "Slash_Commands_In_Terminal";
     pub const AT_CONTEXT_MENU_IN_TERMINAL_FLAG: &str = "At_Context_Menu_In_Terminal";
+    pub const AI_COMMAND_SEARCH_HASH_TRIGGER_FLAG: &str = "AI_Command_Search_Hash_Trigger";
     pub const OUTLINE_CODEBASE_SYMBOLS_FOR_AT_CONTEXT_MENU_FLAG: &str =
         "Outline_Codebase_Symbols_For_At_Context_Menu";
     pub const AUTOSUGGESTIONS_ENABLED_FLAG: &str = "Autosuggestions_Enabled";
@@ -2624,7 +2627,7 @@ impl View for SettingsView {
                     })
                     .finish(),
             )
-            .on_right_mouse_down(|event, _app, position| {
+            .on_right_mouse_down(|event, _app, position, _| {
                 let Some(parent_bounds) = event.element_position_by_id(POSITION_ID) else {
                     return DispatchEventResult::PropagateToParent;
                 };

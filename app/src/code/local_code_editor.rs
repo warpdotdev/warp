@@ -1919,6 +1919,11 @@ impl LocalCodeEditorView {
         &self.editor
     }
 
+    /// The current vertical scroll position as a fraction of the scrollable range, in `0..=1`.
+    pub fn scroll_fraction(&self, ctx: &AppContext) -> f32 {
+        self.editor.as_ref(ctx).scroll_fraction(ctx)
+    }
+
     /// Accept the diff that is currently in the editor. For local files, this can only be called after the file contents
     /// have been loaded into the editor.
     /// If it is a local file, the diff content will be retrieved and the pending diff will be marked as completed.

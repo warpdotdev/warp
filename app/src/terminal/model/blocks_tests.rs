@@ -1,4 +1,5 @@
 use float_cmp::{approx_eq, assert_approx_eq};
+use parking_lot::FairMutex;
 use warp_core::features::FeatureFlag;
 use warpui::App;
 use warpui::elements::DEFAULT_UI_LINE_HEIGHT_RATIO;
@@ -10,8 +11,8 @@ use crate::settings::TerminalSpacing;
 use crate::terminal::event::Event;
 use crate::terminal::model::ansi::Handler;
 use crate::terminal::model::block::AgentInteractionMetadata;
-use crate::terminal::model::test_utils;
 use crate::terminal::model::test_utils::TestBlockListBuilder;
+use crate::terminal::model::{TerminalModel, test_utils};
 use crate::terminal::view::{InlineBannerItem, InlineBannerType};
 use crate::terminal::{BlockListSettings, SizeUpdateReason};
 
@@ -2264,8 +2265,14 @@ fn test_background_blocks_finished() {
     assert_eq!(block_completed_events.len(), 1);
     match &block_completed_events[0].block_type {
         BlockType::User(block) => {
-            assert_eq!(&block.command, "command");
-            assert_eq!(&block.output_truncated_with_obfuscated_secrets, "output");
+            assert_eq!(block.command.get(&block_list).as_str(), "command");
+            assert_eq!(
+                block
+                    .output_truncated_with_obfuscated_secrets
+                    .get(&block_list)
+                    .as_str(),
+                "output"
+            );
         }
         other => panic!("Expected BlockType::User, but was {other:?}"),
     }
@@ -2313,14 +2320,107 @@ fn test_background_blocks_finished() {
 
     match &block_completed_events[2].block_type {
         BlockType::User(block) => {
-            assert_eq!(&block.command, "next command");
+            assert_eq!(block.command.get(&block_list).as_str(), "next command");
             assert_eq!(
-                &block.output_truncated_with_obfuscated_secrets,
+                block
+                    .output_truncated_with_obfuscated_secrets
+                    .get(&block_list)
+                    .as_str(),
                 "next command output"
             );
         }
         other => panic!("Expected BlockType::User, but was {other:?}"),
     }
+}
+
+/// Regression test: `UserBlockCompleted`'s deferred fields must resolve by the block's stable
+/// `BlockId`, not by the `BlockIndex` captured at construction time. Removing an earlier block
+/// (e.g. clearing agent-attached command blocks) shifts every later block's `BlockIndex` down;
+/// resolving by the stale index alone would silently return whatever block now occupies it,
+/// even though the original block is still alive elsewhere in the list.
+#[test]
+fn deferred_fields_resolve_by_block_id_after_reindex() {
+    let (events_tx, events_rx) = async_channel::unbounded();
+    let event_proxy = ChannelEventListener::builder_for_test()
+        .with_terminal_events_tx(events_tx)
+        .build();
+
+    let mut model = TerminalModel::mock(None, None);
+    *model.block_list_mut() = new_bootstrapped_block_list(None, None, event_proxy);
+    let model = FairMutex::new(model);
+
+    command_finished_and_precmd(model.lock().block_list_mut());
+    // Flush events from bootstrapping.
+    while let Ok(_event) = events_rx.try_recv() {}
+
+    // A throwaway block that will be removed later, to reindex everything after it.
+    let throwaway_index = insert_block(
+        model.lock().block_list_mut(),
+        "throwaway_command\n",
+        "throwaway_output\n",
+    );
+
+    let first_index = insert_block(
+        model.lock().block_list_mut(),
+        "first_command\n",
+        "first_output\n",
+    );
+
+    let mut first_completed = None;
+    while let Ok(event) = events_rx.try_recv() {
+        if let Event::AfterBlockCompleted(event_content) = event
+            && let BlockType::User(user_block) = event_content.block_type
+        {
+            first_completed = Some(user_block);
+        }
+    }
+    let first_completed =
+        first_completed.expect("expected an AfterBlockCompleted event for the first block");
+
+    insert_block(
+        model.lock().block_list_mut(),
+        "second_command\n",
+        "second_output\n",
+    );
+
+    // Removing the throwaway block shifts every later block's `BlockIndex` down by one, so
+    // `first_completed`'s original index now belongs to "second_command" instead -- while the
+    // original block itself is still alive, just at a new index.
+    model
+        .lock()
+        .block_list_mut()
+        .remove_command_blocks_at_indices(vec![throwaway_index]);
+
+    // Confirm the collision: a genuinely different, still-existing block now sits at
+    // `first_index`.
+    assert_eq!(
+        model
+            .lock()
+            .block_list()
+            .block_at(first_index)
+            .expect("a block should still exist at the reused index")
+            .command_to_string(),
+        "second_command"
+    );
+
+    // Despite that, resolving `first_completed`'s deferred fields (by its stable `BlockId`, not
+    // the stale `first_index`) must still return its own data.
+    assert_eq!(
+        first_completed.command.get_with(|compute| {
+            let model = model.lock();
+            compute(model.block_list())
+        }),
+        "first_command"
+    );
+    assert_eq!(
+        first_completed
+            .output_truncated_with_obfuscated_secrets
+            .get_with(|compute| {
+                let model = model.lock();
+                compute(model.block_list())
+            }),
+        "first_output"
+    );
 }
 
 #[test]

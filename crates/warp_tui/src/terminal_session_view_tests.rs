@@ -244,9 +244,50 @@ fn out_of_credits_ctrl_o_binding_opens_upgrade() {
             });
         });
         view.update(&mut app, |view, ctx| {
-            view.handle_action(&TuiTerminalSessionAction::OpenOutOfCreditsUrl, ctx);
+            view.handle_action(&TuiTerminalSessionAction::OpenUpgradeUrl, ctx);
         });
         assert_eq!(opened_urls.borrow().as_slice(), &[expected_upgrade_url]);
+    });
+}
+
+#[test]
+fn usage_slash_command_opens_panel_and_enables_upgrade_binding() {
+    App::test((), |mut app| async move {
+        app.update(crate::keybindings::init);
+        let fixture = focus_test_fixture(&mut app);
+        let (view, _) = add_focus_test_session(&mut app, &fixture, true);
+
+        app.read(|ctx| {
+            let ctrl_o = Trigger::Keystrokes(vec![Keystroke::parse("ctrl-o").unwrap()]);
+            let input_view_id = view.as_ref(ctx).input_view.id();
+            assert!(
+                !ctx.key_bindings_for_view(fixture.window_id, input_view_id)
+                    .iter()
+                    .any(|binding| *binding.trigger == ctrl_o),
+                "ctrl-o should not be active before the /usage panel is opened"
+            );
+        });
+
+        view.update(&mut app, |view, ctx| {
+            view.execute_tui_slash_command(&slash_commands::USAGE, None, ctx);
+        });
+        view.read(&app, |view, ctx| {
+            assert_eq!(
+                view.suggestions_mode.as_ref(ctx).mode(),
+                TuiInputSuggestionsMode::ReadOnlyMenu(TuiReadOnlyMenuKind::Usage)
+            );
+        });
+
+        app.read(|ctx| {
+            let ctrl_o = Trigger::Keystrokes(vec![Keystroke::parse("ctrl-o").unwrap()]);
+            let input_view_id = view.as_ref(ctx).input_view.id();
+            assert!(
+                ctx.key_bindings_for_view(fixture.window_id, input_view_id)
+                    .iter()
+                    .any(|binding| *binding.trigger == ctrl_o),
+                "ctrl-o should open the upgrade page while the /usage panel is open"
+            );
+        });
     });
 }
 
@@ -2449,6 +2490,7 @@ fn response_summary_visibility_is_independent_from_the_footer_usage_mode() {
             credits_spent: 2.5,
             cost_in_cents: Some(3.2),
             has_usage: true,
+            charged_usage: None,
         };
 
         assert_eq!(
@@ -4815,6 +4857,7 @@ fn footer_renders_agent_sections_left_aligned() {
                     credits_spent: 2.5,
                     cost_in_cents: Some(0.0),
                     has_usage: true,
+                    charged_usage: None,
                 },
                 ctx,
                 |_, _| {},
@@ -4908,6 +4951,7 @@ fn footer_usage_entry_shows_unknown_cost_even_with_zero_credits() {
                     credits_spent: 0.0,
                     cost_in_cents: None,
                     has_usage: true,
+                    charged_usage: None,
                 },
                 ctx,
                 |_, _| {},

@@ -583,6 +583,10 @@ fn map_cli_session_status(
             AgentTaskState::Blocked,
             message.as_ref().map(TaskStatusUpdate::message),
         ),
+        CLIAgentSessionStatus::Cancelled => (
+            AgentTaskState::Cancelled,
+            Some(TaskStatusUpdate::message("Cancelled by user")),
+        ),
     }
 }
 

@@ -25,7 +25,7 @@ Param(
 
 $ErrorActionPreference = 'Stop'
 
-$ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+$ScriptDir = Split-Path -Path $MyInvocation.MyCommand.Path -Parent
 $RepoRoot = (Get-Item "$ScriptDir\..\.." | Select-Object -ExpandProperty FullName)
 $ResourcesSource = Join-Path $RepoRoot 'resources'
 

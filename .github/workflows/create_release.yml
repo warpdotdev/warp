@@ -129,7 +129,7 @@ jobs:
 
       - name: Create Sentry release
         if: ${{ steps.set_publish.outputs.should_publish == 'true' }}
-        uses: getsentry/action-release@5657c9e888b4e2cc85f4d29143ea4131fde4a73a # v3.6.0
+        uses: getsentry/action-release@ff07929a6537bac57790c3451cf4d364aca38528 # v3.7.0
         env:
           SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_RELEASE_TOKEN }}
           SENTRY_ORG: warpdotdev

@@ -47,7 +47,9 @@ use crate::terminal::shared_session::presence_manager::{
 use crate::terminal::view::{
     ActiveSessionState, TerminalAction, TerminalEditor, TerminalViewRenderContext,
 };
-use crate::terminal::{SizeInfo, TerminalModel, grid_renderer, heights_approx_eq};
+use crate::terminal::{
+    SizeInfo, TerminalModel, grid_renderer, heights_approx_eq, should_right_click_paste,
+};
 
 const CLI_SUBAGENT_HORIZONTAL_MARGIN: f32 = 8.;
 const CLI_SUBAGENT_VERTICAL_MARGIN: f32 = 8.;
@@ -299,11 +301,16 @@ impl AltScreenElement {
         }
 
         let point = self.coord_to_point(local_position);
+        let shift = mouse_state.modifiers().shift;
 
-        if should_intercept_mouse(&self.model.lock(), mouse_state.modifiers().shift, app) {
-            ctx.dispatch_typed_action(TerminalAction::AltScreenContextMenu {
-                position: local_position,
-            });
+        if should_intercept_mouse(&self.model.lock(), shift, app) {
+            if should_right_click_paste(shift, app) {
+                ctx.dispatch_typed_action(TerminalAction::Paste);
+            } else {
+                ctx.dispatch_typed_action(TerminalAction::AltScreenContextMenu {
+                    position: local_position,
+                });
+            }
         } else {
             ctx.dispatch_typed_action(TerminalAction::AltMouseAction(mouse_state.set_point(point)));
         }

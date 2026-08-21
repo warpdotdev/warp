@@ -179,6 +179,7 @@ fn managed_resolver_local_uuid_does_not_call_managed_client() {
         &[MCPSpec::Uuid(uuid)],
         &local_installed_uuids,
         Arc::new(mock),
+        None,
     ))
     .unwrap();
 
@@ -203,6 +204,7 @@ fn managed_resolver_non_local_uuid_calls_managed_client() {
         &[MCPSpec::Uuid(uuid)],
         &HashSet::new(),
         Arc::new(mock),
+        None,
     ))
     .unwrap();
 
@@ -226,6 +228,7 @@ fn well_known_spec_resolves_via_managed_client() {
         &[MCPSpec::WellKnown("linear".to_string())],
         &HashSet::new(),
         Arc::new(mock),
+        None,
     ))
     .unwrap();
 
@@ -247,6 +250,7 @@ fn well_known_resolution_failure_skips_server() {
         &[MCPSpec::WellKnown("linear".to_string())],
         &HashSet::new(),
         Arc::new(mock),
+        None,
     ))
     .unwrap();
 
@@ -279,6 +283,7 @@ fn well_known_resolution_failure_does_not_drop_other_specs() {
         ],
         &HashSet::new(),
         Arc::new(mock),
+        None,
     ))
     .unwrap();
 
@@ -296,6 +301,7 @@ fn well_known_spec_is_skipped_when_flag_disabled() {
         &[MCPSpec::WellKnown("linear".to_string())],
         &HashSet::new(),
         Arc::new(mock),
+        None,
     ))
     .unwrap();
 
@@ -307,6 +313,8 @@ fn well_known_spec_is_skipped_when_flag_disabled() {
 fn managed_command_config_env_placeholder_uses_local_secret() {
     let installations = AgentDriver::installations_from_managed_client_config_json(
         r#"{"mcpServers":{"GitHub MCP":{"command":"npx","env":{"API_TOKEN":"{{API_TOKEN}}"}}}}"#,
+        None,
+        "github",
     )
     .unwrap();
     let rendered = render_installations(
@@ -326,6 +334,8 @@ fn managed_command_config_env_placeholder_uses_local_secret() {
 fn managed_command_config_arg_placeholder_uses_local_secret() {
     let installations = AgentDriver::installations_from_managed_client_config_json(
         r#"{"mcpServers":{"GitHub MCP":{"command":"npx","args":["--token={{API_TOKEN}}"]}}}"#,
+        None,
+        "github",
     )
     .unwrap();
     let rendered = render_installations(
@@ -345,6 +355,8 @@ fn managed_command_config_arg_placeholder_uses_local_secret() {
 fn managed_command_config_preserves_literal_env_when_synthesizing_arg_placeholder() {
     let installations = AgentDriver::installations_from_managed_client_config_json(
         r#"{"mcpServers":{"GitHub MCP":{"command":"npx","args":["--token={{API_TOKEN}}"],"env":{"LOG_LEVEL":"info"}}}}"#,
+        None,
+        "github",
     )
     .unwrap();
     let rendered = render_installations(
@@ -365,6 +377,8 @@ fn managed_command_config_preserves_literal_env_when_synthesizing_arg_placeholde
 fn managed_url_config_preserves_proxy_url_and_header() {
     let installations = AgentDriver::installations_from_managed_client_config_json(
         r#"{"mcpServers":{"GitHub MCP":{"url":"https://proxy.example/mcp","headers":{"Authorization":"Bearer proxy-token"}}}}"#,
+        None,
+        "github",
     )
     .unwrap();
     let rendered = render_installations(installations, HashMap::new());
@@ -387,6 +401,8 @@ fn managed_url_config_preserves_header_despite_colliding_local_secret() {
     // happens to share the header's key name (`apply_secrets` implicit key-name match).
     let installations = AgentDriver::installations_from_managed_client_config_json(
         r#"{"mcpServers":{"GitHub MCP":{"url":"https://proxy.example/mcp","headers":{"Authorization":"Bearer proxy-token"}}}}"#,
+        None,
+        "github",
     )
     .unwrap();
     let rendered = render_installations(
@@ -412,6 +428,8 @@ fn managed_command_config_preserves_literal_env_despite_colliding_local_secret()
     // shares the env key name.
     let installations = AgentDriver::installations_from_managed_client_config_json(
         r#"{"mcpServers":{"GitHub MCP":{"command":"npx","env":{"LOG_LEVEL":"info"}}}}"#,
+        None,
+        "github",
     )
     .unwrap();
     let rendered = render_installations(
@@ -431,6 +449,8 @@ fn managed_command_config_preserves_literal_env_despite_colliding_local_secret()
 fn managed_command_config_missing_secret_leaves_placeholder() {
     let installations = AgentDriver::installations_from_managed_client_config_json(
         r#"{"mcpServers":{"GitHub MCP":{"command":"npx","args":["--token={{API_TOKEN}}"]}}}"#,
+        None,
+        "github",
     )
     .unwrap();
     let rendered = render_installations(installations, HashMap::new());
@@ -441,6 +461,111 @@ fn managed_command_config_missing_secret_leaves_placeholder() {
         }
         other => panic!("expected CLI server, got {other:?}"),
     }
+}
+
+// ── Ephemeral MCP installation ids: stable across rebuilds ─────────────────
+
+#[test]
+fn ephemeral_installation_id_is_stable_across_resolutions_for_same_run() {
+    let task_id: AmbientAgentTaskId = "550e8400-e29b-41d4-a716-446655440010".parse().unwrap();
+    let config_json =
+        r#"{"mcpServers":{"slack":{"url":"https://app.warp.dev/mcp/integration-proxy/slack"}}}"#;
+
+    // Same run re-resolving the same server after a rebuild.
+    let first = AgentDriver::installations_from_managed_client_config_json(
+        config_json,
+        Some(task_id),
+        "slack",
+    )
+    .unwrap();
+    let second = AgentDriver::installations_from_managed_client_config_json(
+        config_json,
+        Some(task_id),
+        "slack",
+    )
+    .unwrap();
+
+    assert_eq!(first.len(), 1);
+    assert_eq!(second.len(), 1);
+    assert_eq!(
+        first[0].uuid(),
+        second[0].uuid(),
+        "same run + same server must yield the same id across rebuilds"
+    );
+}
+
+#[test]
+fn ephemeral_installation_id_differs_across_runs() {
+    let task_id_a: AmbientAgentTaskId = "550e8400-e29b-41d4-a716-446655440011".parse().unwrap();
+    let task_id_b: AmbientAgentTaskId = "550e8400-e29b-41d4-a716-446655440012".parse().unwrap();
+    let config_json =
+        r#"{"mcpServers":{"slack":{"url":"https://app.warp.dev/mcp/integration-proxy/slack"}}}"#;
+
+    let a = AgentDriver::installations_from_managed_client_config_json(
+        config_json,
+        Some(task_id_a),
+        "slack",
+    )
+    .unwrap();
+    let b = AgentDriver::installations_from_managed_client_config_json(
+        config_json,
+        Some(task_id_b),
+        "slack",
+    )
+    .unwrap();
+
+    assert_ne!(
+        a[0].uuid(),
+        b[0].uuid(),
+        "different runs must not collide onto the same id"
+    );
+}
+
+#[test]
+fn ephemeral_installation_id_differs_across_servers_in_same_run() {
+    let task_id: AmbientAgentTaskId = "550e8400-e29b-41d4-a716-446655440013".parse().unwrap();
+    let slack_config =
+        r#"{"mcpServers":{"slack":{"url":"https://app.warp.dev/mcp/integration-proxy/slack"}}}"#;
+    let linear_config =
+        r#"{"mcpServers":{"linear":{"url":"https://app.warp.dev/mcp/integration-proxy/linear"}}}"#;
+
+    let slack = AgentDriver::installations_from_managed_client_config_json(
+        slack_config,
+        Some(task_id),
+        "slack",
+    )
+    .unwrap();
+    let linear = AgentDriver::installations_from_managed_client_config_json(
+        linear_config,
+        Some(task_id),
+        "linear",
+    )
+    .unwrap();
+
+    assert_ne!(
+        slack[0].uuid(),
+        linear[0].uuid(),
+        "different servers in one run must not collide onto the same id"
+    );
+}
+
+#[test]
+fn ephemeral_installation_id_is_random_without_task_id() {
+    let config_json =
+        r#"{"mcpServers":{"slack":{"url":"https://app.warp.dev/mcp/integration-proxy/slack"}}}"#;
+
+    let first =
+        AgentDriver::installations_from_managed_client_config_json(config_json, None, "slack")
+            .unwrap();
+    let second =
+        AgentDriver::installations_from_managed_client_config_json(config_json, None, "slack")
+            .unwrap();
+
+    assert_ne!(
+        first[0].uuid(),
+        second[0].uuid(),
+        "no task_id means no rebuild to survive, so ids stay random"
+    );
 }
 
 // ── Built-in Factory MCP injection tests ────────────────────────────────────
@@ -508,6 +633,7 @@ fn managed_resolution_failure_includes_uid_and_message() {
         &[MCPSpec::Uuid(uuid)],
         &HashSet::new(),
         Arc::new(mock),
+        None,
     ))
     .unwrap_err();
 
@@ -814,6 +940,15 @@ fn failed_cli_harness_session_defers_by_idle_on_fail() {
             idle_on_fail
         ),
         None
+    );
+    assert_eq!(
+        idle_window_for_cli_session_status(
+            &CLIAgentSessionStatus::Cancelled,
+            idle_on_complete,
+            idle_on_fail
+        ),
+        idle_on_complete,
+        "a Ctrl-C cancellation is a non-error completion, like Success or Blocked"
     );
 }
 

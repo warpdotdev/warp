@@ -30,7 +30,6 @@ use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
 use crate::ai::harness_availability::HarnessAvailabilityModel;
 use crate::ai::llms::{LLMId, LLMPreferences};
 use crate::ai::mcp::templatable_manager::TemplatableMCPServerManager;
-#[cfg(feature = "voice_input")]
 use crate::ai::request_usage_model::AIRequestUsageModel;
 use crate::auth::AuthStateProvider;
 use crate::auth::auth_manager::AuthManager;
@@ -342,11 +341,11 @@ pub fn register_tui_session_view_test_singletons(app: &mut warpui::App) {
     app.add_singleton_model(|ctx| {
         AIExecutionProfilesModel::new(&LaunchMode::new_for_unit_test(), ctx)
     });
+    app.add_singleton_model(|ctx| {
+        AIRequestUsageModel::new(ServerApiProvider::as_ref(ctx).get_ai_client(), ctx)
+    });
     #[cfg(feature = "voice_input")]
     {
-        app.add_singleton_model(|ctx| {
-            AIRequestUsageModel::new(ServerApiProvider::as_ref(ctx).get_ai_client(), ctx)
-        });
         app.add_singleton_model(voice_input::VoiceInput::new);
         app.add_singleton_model(|ctx| {
             VoiceTranscriber::new(Arc::new(ServerVoiceTranscriber::new(

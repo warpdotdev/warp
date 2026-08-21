@@ -168,6 +168,7 @@ gloo = { version = "0.11.0", default-features = false, features = [
   "utils",
 ] }
 graphql-ws-client = { version = "0.11.1", default-features = false }
+hashbrown = "0.17.1"
 hex = "0.4.3"
 # This matches the version of hyper used by reqwest.
 hyper = "1.6.0"
@@ -339,13 +340,13 @@ unicode-general-category = "1.1.0"
 unicode-linebreak = "0.1.5"
 unicode-segmentation = "1.11.0"
 unicode-width = "0.1.12"
-uuid = { version = "1.1.2", features = ["v4", "serde", "js"] }
+uuid = { version = "1.1.2", features = ["v4", "v5", "serde", "js"] }
 vec1 = { version = "1.8.0", features = ["serde"] }
 version-compare = "0.1"
 vte = { git = "https://github.com/warpdotdev/vte.git", rev = "4b399c87b63ba88f45709edaa6383fc519f6c900", default-features = false }
 walkdir = "2"
 warp-workflows = { git = "https://github.com/warpdotdev/workflows", rev = "793a98ddda6ef19682aed66364faebd2829f0e01" }
-warp_multi_agent_api = { git = "https://github.com/warpdotdev/warp-proto-apis.git", rev = "b0886a9523e2e05d102f61bd0a212dc15ade4835" }
+warp_multi_agent_api = { git = "https://github.com/warpdotdev/warp-proto-apis.git", rev = "f0028fa6d05db1ba63726eaf6f8d33ab17abe37b" }
 wasm-bindgen = "0.2.89"
 wasm-bindgen-futures = "0.4.42"
 web-sys = { version = "0.3.69", features = [
@@ -389,7 +390,7 @@ dirs = "6.0.0"
 rayon = "1.10.0"
 sha2 = "0.10"
 shellexpand = "3.1.1"
-warp-command-signatures = { git = "https://github.com/warpdotdev/command-signatures.git", rev = "d79e09c43b64eb8e55a81fec088423aeba6a48cd", default-features = false }
+warp-command-signatures = { git = "https://github.com/warpdotdev/command-signatures.git", rev = "ac69f9b00c48d6de229ba5905056d9302da1c5c4", default-features = false }
 winit = { git = "https://github.com/warpdotdev/winit.git", rev = "a4e0ecb5f9626ccac9445a73dc28354b52423abc" }
 x11rb = "0.13.0"
 mockito = "1.7.0"

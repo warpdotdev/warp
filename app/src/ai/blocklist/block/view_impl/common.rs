@@ -2314,7 +2314,7 @@ fn render_visual_markdown_block<A: Action>(
     }
 
     if let Some(copy_action_factory) = copy_action_factory {
-        event_handler = event_handler.on_right_mouse_down(move |ctx, _, _| {
+        event_handler = event_handler.on_right_mouse_down(move |ctx, _, _, _| {
             ctx.dispatch_typed_action(copy_action_factory(markdown_source.clone()));
             DispatchEventResult::StopPropagation
         });
