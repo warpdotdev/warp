@@ -877,6 +877,7 @@ fn admin_billing_link_for_default_team_targets_the_first_admin_team() {
         uid: user_uid,
         email: email.to_owned(),
         role: MembershipRole::Owner,
+        is_disabled: false,
     });
     let mut second_team = first_team.clone();
     second_team.uid = 456.into();
@@ -909,6 +910,7 @@ fn admin_billing_link_for_default_team_accepts_admin_when_multi_admin_is_enabled
         uid: user_uid,
         email: email.to_owned(),
         role: MembershipRole::Admin,
+        is_disabled: false,
     });
     let team_uid = team.uid;
     let workspace = workspace_for_test(&team);
@@ -937,6 +939,7 @@ fn admin_billing_link_for_default_team_rejects_admin_without_multi_admin_policy(
         uid: user_uid,
         email: email.to_owned(),
         role: MembershipRole::Admin,
+        is_disabled: false,
     });
     let workspace = workspace_for_test(&team);
 
@@ -961,6 +964,7 @@ fn admin_billing_link_for_default_team_rejects_regular_members() {
         uid: user_uid,
         email: email.to_owned(),
         role: MembershipRole::User,
+        is_disabled: false,
     });
     let workspace = workspace_for_test(&team);
 
@@ -1970,6 +1974,7 @@ fn test_remove_user_from_team_success_emits_success_event_and_refreshes_members(
         uid: user_uid,
         email: "member@example.com".to_string(),
         role: MembershipRole::User,
+        is_disabled: false,
     });
     let team_uid = team.uid;
     let workspace = workspace_for_test(&team);
@@ -2283,6 +2288,7 @@ fn gql_team(uid: &str, name: &str, member_uids: &[&str]) -> GqlTeam {
                 uid: (*member_uid).into(),
                 email: format!("{member_uid}@example.com"),
                 role: GqlMembershipRole::User,
+                is_disabled: false,
             })
             .collect(),
         settings: gql_team_settings(),

@@ -2754,6 +2754,8 @@ fn read_sqlite_data(
                     email: row.email,
                     role: serde_json::from_str(&row.role)
                         .unwrap_or(crate::workspaces::team::MembershipRole::User),
+                    // Not persisted; refreshed live from the server.
+                    is_disabled: false,
                 };
                 acc.entry(row.team_id).or_default().push(member);
                 acc

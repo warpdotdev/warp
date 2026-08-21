@@ -392,6 +392,7 @@ fn workspace_member(uid: &str) -> WorkspaceMember {
         uid: UserUid::new(uid),
         email: format!("{uid}@warp.dev"),
         role: MembershipRole::User,
+        is_disabled: false,
         usage_info: WorkspaceMemberUsageInfo {
             is_unlimited: false,
             request_limit: 0,
@@ -408,6 +409,7 @@ fn team_with_members(uids: &[&str]) -> Team {
             uid: UserUid::new(uid),
             email: format!("{uid}@warp.dev"),
             role: MembershipRole::User,
+            is_disabled: false,
         })
         .collect();
     Team::from_local_cache(

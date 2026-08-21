@@ -93,6 +93,7 @@ impl From<GqlTeamMember> for TeamMember {
             uid: UserUid::new(&gql_team_member.uid.into_inner()),
             email: gql_team_member.email,
             role: gql_team_member.role.into(),
+            is_disabled: gql_team_member.is_disabled,
         }
     }
 }
@@ -234,6 +235,7 @@ impl From<GqlWorkspaceMember> for WorkspaceMember {
             uid: UserUid::new(&gql_workspace_member.uid.into_inner()),
             email: gql_workspace_member.email,
             role: gql_workspace_member.role.into(),
+            is_disabled: gql_workspace_member.is_disabled,
             usage_info: gql_workspace_member.usage_info.into(),
         }
     }
