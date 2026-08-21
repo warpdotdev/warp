@@ -64,7 +64,7 @@ use warp_completer::completer::{
     ExplicitTabCompletion, MatchStrategy, MatchType, PathSeparators, PreparedSuggestion,
     SuggestionResults,
 };
-use warp_completer::meta::{HasSpan, Spanned};
+use warp_completer::meta::{HasSpan, Span, Spanned};
 use warp_completer::parsers::LiteCommand;
 use warp_completer::parsers::simple::command_at_cursor_position;
 use warp_completer::signatures::CommandRegistry;
@@ -115,6 +115,7 @@ use super::ligature_settings::LigatureSettings;
 use super::model::block::{
     AgentInteractionMetadata, BlockId, BlockMetadata, BlocklistEnvVarMetadata,
 };
+use super::model::completions::ShellCompletion;
 use super::model::session::{Session, SessionId, SessionType, Sessions};
 use super::prompt_render_helper::{
     PromptRenderHelper, SameLinePromptElements, should_render_prompt_on_same_line,
@@ -1618,6 +1619,81 @@ fn completions_fallback_strategy_for_trigger(
     }
 }
 
+/// When, if ever, a completions request asks the user's shell to compute native completions,
+/// relative to consulting Warp's own bundled completion specs. Kept as one explicit, named
+/// decision -- rather than an artifact of statement order in `run_completions_async` -- so the
+/// tradeoff is reviewable and testable.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NativeCompletionsDispatch {
+    /// Native shell completions aren't in use for this request; only the bundled spec results
+    /// (if any) are shown, and the shell is never asked.
+    Skip,
+    /// Ask the shell up front, before/without the bundled spec pass, and use its answer
+    /// unconditionally. Used under the `ForceNativeShellCompletions` pref, where the shell wins
+    /// regardless of the specs -- dispatching up front lets it compute concurrently rather than
+    /// after the spec pass, which is best for latency.
+    UpFront,
+    /// Consult the bundled specs first and ask the shell only if they come back empty. The
+    /// shipping flag-only configuration: the user's shell isn't made to pay for a foreground
+    /// round trip on a keystroke a bundled spec ultimately answers.
+    OnlyIfSpecsEmpty,
+}
+
+/// Decides the [`NativeCompletionsDispatch`] strategy for a completions request. See that enum's
+/// variants for the rationale behind each case.
+fn native_completions_dispatch(
+    use_native_shell_completions: bool,
+    force_native_shell_completions: bool,
+) -> NativeCompletionsDispatch {
+    match (use_native_shell_completions, force_native_shell_completions) {
+        (false, _) => NativeCompletionsDispatch::Skip,
+        (true, true) => NativeCompletionsDispatch::UpFront,
+        (true, false) => NativeCompletionsDispatch::OnlyIfSpecsEmpty,
+    }
+}
+
+/// Whether the bundled completion spec pass produced nothing usable -- i.e. the shell should now
+/// be asked, in the [`NativeCompletionsDispatch::OnlyIfSpecsEmpty`] path. `None` (the completer
+/// returned no result) and an empty suggestion list both count as empty.
+fn bundled_specs_are_empty(spec_suggestions: Option<&SuggestionResults>) -> bool {
+    match spec_suggestions {
+        Some(spec_suggestions) => spec_suggestions.suggestions.is_empty(),
+        None => true,
+    }
+}
+
+/// Builds [`SuggestionResults`] from a shell's native-completions reply, shared by both native
+/// dispatch paths (up front under force, or after empty specs). The shell's own reported span
+/// (`shell_replacement_span`) is preferred when present, since the whitespace-delimited token
+/// heuristic below assumes the token being completed is whitespace-delimited -- which doesn't hold
+/// for e.g. a `$_.` member-access completion in PowerShell, where the shell replaces a zero-length
+/// or sub-token span within a larger, non-whitespace-delimited expression. Not every shell reports
+/// a span yet, so the heuristic remains the fallback.
+fn native_shell_suggestion_results(
+    shell_results: Vec<ShellCompletion>,
+    shell_replacement_span: Option<Span>,
+    buffer_text: &str,
+    cursor_position: usize,
+) -> SuggestionResults {
+    let suggestions = shell_results.into_iter().map(Into::into).collect_vec();
+    let replacement_span = shell_replacement_span.unwrap_or_else(|| {
+        let token_end = cursor_position;
+        // Within the section of the buffer from the start to the end of this token, find the last
+        // whitespace char before the token end; the token starts just after it (or at the start
+        // of the buffer if there's none).
+        let token_start = buffer_text[0..token_end]
+            .rfind(char::is_whitespace)
+            .map(|pos| pos + 1)
+            .unwrap_or_default();
+        (token_start, token_end).into()
+    });
+    SuggestionResults {
+        replacement_span,
+        suggestions,
+        match_strategy: MatchStrategy::Fuzzy,
+    }
+}
+
 #[cfg(test)]
 mod native_shell_completions_eligibility_tests {
     use warp_completer::completer::CompletionsFallbackStrategy;
@@ -1714,12 +1790,82 @@ mod native_shell_completions_eligibility_tests {
 }
 
 #[cfg(test)]
+mod native_completions_dispatch_tests {
+    use warp_completer::completer::{MatchStrategy, SuggestionResults};
+
+    use super::{
+        NativeCompletionsDispatch, ShellCompletion, bundled_specs_are_empty,
+        native_completions_dispatch,
+    };
+
+    #[test]
+    fn skips_the_shell_when_native_completions_are_not_in_use() {
+        // Native shell completions off entirely -- the shell is never asked, regardless of the
+        // force pref.
+        assert_eq!(
+            native_completions_dispatch(false, false),
+            NativeCompletionsDispatch::Skip
+        );
+        assert_eq!(
+            native_completions_dispatch(false, true),
+            NativeCompletionsDispatch::Skip
+        );
+    }
+
+    #[test]
+    fn dispatches_up_front_under_the_force_pref() {
+        // The `ForceNativeShellCompletions` pref makes the shell's answer win unconditionally, so
+        // it's dispatched up front (before/without the bundled spec pass) for latency.
+        assert_eq!(
+            native_completions_dispatch(true, true),
+            NativeCompletionsDispatch::UpFront
+        );
+    }
+
+    #[test]
+    fn defers_to_the_shell_only_after_empty_specs_in_the_flag_only_configuration() {
+        // The shipping behavior: the shell is consulted conditionally (after the bundled specs
+        // come back empty), not up front on every keystroke.
+        assert_eq!(
+            native_completions_dispatch(true, false),
+            NativeCompletionsDispatch::OnlyIfSpecsEmpty
+        );
+    }
+
+    #[test]
+    fn a_bundled_spec_result_means_the_shell_is_not_asked() {
+        // The core of the fix: when a bundled spec produced suggestions, the flag-only path does
+        // not ask the shell at all (contrast with the old behavior, which dispatched the generator
+        // on every keystroke regardless of the specs).
+        let with_a_result = SuggestionResults {
+            replacement_span: (0usize, 0usize).into(),
+            suggestions: vec![ShellCompletion::new("checkout".to_string()).into()],
+            match_strategy: MatchStrategy::Fuzzy,
+        };
+        assert!(!bundled_specs_are_empty(Some(&with_a_result)));
+    }
+
+    #[test]
+    fn no_bundled_spec_results_means_the_shell_is_asked() {
+        // Both an empty suggestion list and no result at all count as empty, so the shell is
+        // asked in the flag-only path.
+        let empty = SuggestionResults {
+            replacement_span: (0usize, 0usize).into(),
+            suggestions: vec![],
+            match_strategy: MatchStrategy::Fuzzy,
+        };
+        assert!(bundled_specs_are_empty(Some(&empty)));
+        assert!(bundled_specs_are_empty(None));
+    }
+}
+
+#[cfg(test)]
 mod strip_control_characters_tests {
     use super::strip_control_characters;
 
     #[test]
     fn leaves_ordinary_text_untouched() {
-        assert_eq!(strip_control_characters("checkout").as_ref(), "checkout");
+        assert_eq!(&*strip_control_characters("checkout"), "checkout");
     }
 
     #[test]
@@ -1728,42 +1874,39 @@ mod strip_control_characters_tests {
         // newline (e.g. a pathological but legal filename) previously put the editor into a
         // stuck multi-row state and silently disabled native shell completions for the rest
         // of the buffer.
-        assert_eq!(
-            strip_control_characters("line1\nline2").as_ref(),
-            "line1line2"
-        );
+        assert_eq!(&*strip_control_characters("line1\nline2"), "line1line2");
     }
 
     #[test]
     fn strips_a_carriage_return() {
-        assert_eq!(strip_control_characters("a\rb").as_ref(), "ab");
+        assert_eq!(&*strip_control_characters("a\rb"), "ab");
     }
 
     #[test]
     fn strips_a_bel() {
-        assert_eq!(strip_control_characters("a\u{7}b").as_ref(), "ab");
+        assert_eq!(&*strip_control_characters("a\u{7}b"), "ab");
     }
 
     #[test]
     fn strips_an_esc() {
-        assert_eq!(strip_control_characters("a\u{1b}b").as_ref(), "ab");
+        assert_eq!(&*strip_control_characters("a\u{1b}b"), "ab");
     }
 
     #[test]
     fn strips_a_tab() {
-        assert_eq!(strip_control_characters("a\tb").as_ref(), "ab");
+        assert_eq!(&*strip_control_characters("a\tb"), "ab");
     }
 
     #[test]
     fn strips_del_and_a_c1_control() {
         // DEL (0x7f) and the C1 range (0x80-0x9f) are both `char::is_control`, distinct from
         // the C0 range the other cases cover.
-        assert_eq!(strip_control_characters("a\u{7f}b\u{85}c").as_ref(), "abc");
+        assert_eq!(&*strip_control_characters("a\u{7f}b\u{85}c"), "abc");
     }
 
     #[test]
     fn preserves_surrounding_multibyte_text() {
-        assert_eq!(strip_control_characters("café\nΓεια").as_ref(), "caféΓεια");
+        assert_eq!(&*strip_control_characters("café\nΓεια"), "caféΓεια");
     }
 }
 
@@ -12706,6 +12849,71 @@ impl Input {
         });
 
         let cursor_position = cursor_position.as_usize();
+
+        // In the shipping flag-only configuration, run Warp's own bundled completion specs first
+        // and ask the shell for native completions only if they come back empty -- so the user's
+        // shell isn't made to pay for a foreground round trip on a keystroke a bundled spec
+        // ultimately answers. This needs a two-phase spawn (the generator dispatch below needs the
+        // `ViewContext`, which the background spec-pass future doesn't have), so it's handled
+        // separately from the up-front/no-native cases that follow.
+        if let NativeCompletionsDispatch::OnlyIfSpecsEmpty = native_completions_dispatch(
+            use_native_shell_completions,
+            force_native_shell_completions,
+        ) {
+            let completion_session = completion_context.session.clone();
+            let abort_handle = ctx
+                .spawn_abortable(
+                    async move {
+                        let spec_suggestions = completer::suggestions(
+                            before_cursor_text.as_str(),
+                            cursor_position,
+                            session_env_vars.as_ref(),
+                            CompleterOptions {
+                                match_strategy: matcher,
+                                fallback_strategy,
+                                suggest_file_path_completions_only: input_type.is_ai(),
+                                parse_quotes_as_literals: input_type.is_ai(),
+                            },
+                            &completion_context,
+                        )
+                        .await;
+                        (spec_suggestions, completions_trigger, editor_snapshot)
+                    },
+                    move |input, (spec_suggestions, completions_trigger, editor_snapshot), ctx| {
+                        if bundled_specs_are_empty(spec_suggestions.as_ref()) {
+                            // Phase two: the bundled specs produced nothing, so ask the shell now.
+                            input.dispatch_native_shell_completions_after_empty_specs(
+                                buffer_text,
+                                cursor_position,
+                                completions_trigger,
+                                editor_snapshot,
+                                ctx,
+                            );
+                        } else {
+                            // A bundled spec won; the shell is never asked.
+                            input.handle_completion_suggestions_results(
+                                spec_suggestions,
+                                completions_trigger,
+                                editor_snapshot,
+                                ctx,
+                            );
+                        }
+                    },
+                    move |_, _| {
+                        completion_session.cancel_active_commands();
+                    },
+                )
+                .abort_handle();
+            self.completions_abort_handle = Some(abort_handle);
+            return;
+        }
+
+        // Either native shell completions aren't in use, or the `ForceNativeShellCompletions` pref
+        // is set. Under force, dispatch the generator up front so the shell computes concurrently
+        // with the spec pass (whose result is then discarded) -- the `!force_native_shell_completions`
+        // guard when selecting results below is what preserves the pref's "native or nothing"
+        // semantics (a bundled spec is never substituted under force, even if native returns
+        // nothing).
         let native_results_fut = if use_native_shell_completions {
             if completions_trigger == CompletionsTrigger::AsYouType {
                 // Track what this dispatch was computed from so a later `Precmd` (the shell
@@ -12757,36 +12965,12 @@ impl Input {
                         _ => native_results_fut
                             .await
                             .map(|(results, shell_replacement_span)| {
-                                let suggestions = results.into_iter().map(Into::into).collect_vec();
-
-                                // Prefer the shell's own notion of the range it's replacing (see
-                                // `Handler::on_completion_replacement_span_received`) over the
-                                // whitespace heuristic below: the heuristic assumes the token being
-                                // completed is whitespace-delimited, which doesn't hold for e.g. a
-                                // member-access completion like `$_.` in PowerShell, where the shell
-                                // replaces a zero-length or sub-token span within a larger,
-                                // non-whitespace-delimited expression. Not every shell reports this
-                                // yet, so the heuristic remains the fallback.
-                                let replacement_span =
-                                    shell_replacement_span.unwrap_or_else(|| {
-                                        let token_end = cursor_position;
-                                        // Within the section of the buffer from the start
-                                        // to the end of this token...
-                                        let token_start = buffer_text[0..token_end]
-                                            // Find the last whitespace char before the token end.
-                                            .rfind(char::is_whitespace)
-                                            // If we find one, the token start is the next char.
-                                            .map(|pos| pos + 1)
-                                            // Otherwise, the start is the beginning of the buffer.
-                                            .unwrap_or_default();
-                                        (token_start, token_end).into()
-                                    });
-
-                                SuggestionResults {
-                                    replacement_span,
-                                    suggestions,
-                                    match_strategy: MatchStrategy::Fuzzy,
-                                }
+                                native_shell_suggestion_results(
+                                    results,
+                                    shell_replacement_span,
+                                    &buffer_text,
+                                    cursor_position,
+                                )
                             }),
                     };
 
@@ -12806,6 +12990,85 @@ impl Input {
             )
             .abort_handle();
 
+        self.completions_abort_handle = Some(abort_handle);
+    }
+
+    /// Dispatches the native-shell-completions generator after the bundled spec pass came back
+    /// empty -- the second phase of the flag-only path (see the `OnlyIfSpecsEmpty` handling in
+    /// `run_completions_async`). Runs from the spec pass's foreground `on_resolve` because
+    /// dispatching the request needs the `ViewContext`.
+    fn dispatch_native_shell_completions_after_empty_specs(
+        &mut self,
+        buffer_text: String,
+        cursor_position: usize,
+        completions_trigger: CompletionsTrigger,
+        editor_snapshot: EditorSnapshot,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        // If the buffer moved on while the spec pass was running, this request is stale: don't ask
+        // the shell for it, and leave `completions_abort_handle` alone -- a newer request may
+        // already own it (an abort issued just after the spec pass resolved can arrive too late to
+        // stop this callback). Mirrors `handle_completion_suggestions_results`'s own staleness
+        // check; the shell-idle retry re-dispatches for the current buffer if one is warranted.
+        let current_editor_model = self
+            .editor
+            .read(ctx, |editor, ctx| editor.snapshot_model(ctx));
+        let buffer_text_now = self.editor.as_ref(ctx).buffer_text(ctx);
+        if buffer_text_now != editor_snapshot.text()
+            || current_editor_model.selections() != editor_snapshot.selections()
+        {
+            return;
+        }
+
+        // Record the buffer this generator is dispatched for so a later `Precmd` (the shell
+        // returning to idle) can tell whether the buffer has moved on since. Set here, at the
+        // actual dispatch -- unlike the up-front paths -- because in this path a generator only
+        // runs when the specs were empty, and the snapshot must track a buffer a generator was
+        // really dispatched for: the block only goes busy (and only fires the `Precmd` that drives
+        // the retry) when a generator actually runs. See
+        // `native_completions_as_you_type_dispatch_snapshot`.
+        if completions_trigger == CompletionsTrigger::AsYouType {
+            self.native_completions_as_you_type_dispatch_snapshot = Some(
+                AsYouTypeCompletionsBufferState::from_editor_snapshot(&editor_snapshot),
+            );
+        }
+
+        let (results_tx, results_rx) = async_channel::unbounded();
+        ctx.dispatch_typed_action(&TerminalAction::RunNativeShellCompletions {
+            buffer_text: buffer_text[0..cursor_position].to_owned(),
+            results_tx,
+        });
+
+        // `spawn`, not `spawn_abortable`: no on-abort cancellation is needed here. By this phase
+        // the bundled spec pass -- whose own in-band generator commands the first phase's
+        // `on_abort` cancels -- has already completed, and the native generator this awaits does
+        // not run through the session command executor that `cancel_active_commands` acts on (it
+        // goes straight through `PtyController::run_native_shell_completions`, which dedupes a
+        // superseded request itself). Aborting this phase only needs to stop stale results from
+        // rendering, which dropping the future does.
+        let abort_handle = ctx
+            .spawn(
+                async move {
+                    let suggestions = results_rx.recv().await.ok().map(|(results, span)| {
+                        native_shell_suggestion_results(
+                            results,
+                            span,
+                            &buffer_text,
+                            cursor_position,
+                        )
+                    });
+                    (suggestions, completions_trigger, editor_snapshot)
+                },
+                |input, (suggestions, completions_trigger, editor_model), ctx| {
+                    input.handle_completion_suggestions_results(
+                        suggestions,
+                        completions_trigger,
+                        editor_model,
+                        ctx,
+                    );
+                },
+            )
+            .abort_handle();
         self.completions_abort_handle = Some(abort_handle);
     }
 
