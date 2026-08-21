@@ -13,7 +13,8 @@ use warp_core::ui::color::contrast::{MinimumAllowedContrast, high_enough_contras
 use warp_core::ui::theme::{Details, Fill, WarpTheme, mock_terminal_colors};
 use warpui::color::ColorU;
 
-use super::readable_chip_label_color;
+use super::display_chip::{OperatingSystemInfo, OperatingSystemLogo};
+use super::{ChipResult, ChipValue, ContextChipKind, chips_to_string, readable_chip_label_color};
 
 /// Builds a solid-background/foreground theme (colors as `0xRRGGBBAA`). The
 /// terminal palette does not affect text/surface contrast, so a mock is fine.
@@ -92,4 +93,28 @@ fn chip_label_color_preserves_muted_color_where_already_legible() {
         muted,
         "dark-theme chips should keep their muted (unchanged) color"
     );
+}
+
+#[test]
+fn operating_system_logo_chip_has_no_plain_text_output() {
+    let prompt = chips_to_string(
+        [
+            ChipResult {
+                kind: ContextChipKind::OperatingSystemLogo,
+                value: Some(ChipValue::OperatingSystem(OperatingSystemInfo::new(
+                    "Fedora Linux",
+                    OperatingSystemLogo::Fedora,
+                ))),
+                on_click_values: Vec::new(),
+            },
+            ChipResult {
+                kind: ContextChipKind::WorkingDirectory,
+                value: Some(ChipValue::Text("~/projects".to_string())),
+                on_click_values: Vec::new(),
+            },
+        ]
+        .into_iter(),
+    );
+
+    assert_eq!(prompt, "~/projects");
 }
