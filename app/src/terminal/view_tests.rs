@@ -53,7 +53,7 @@ use crate::pane_group::focus_state::PaneGroupFocusState;
 use crate::pane_group::pane::PaneStack;
 use crate::pane_group::{BackingView, TerminalPaneId};
 use crate::server::ids::{ClientId, SyncId};
-use crate::server::server_api::ai::SpawnAgentRequest;
+use crate::server::server_api::ai::{AgentRunScope, SpawnAgentRequest};
 use crate::settings::import::model::ImportedConfigModel;
 use crate::settings::{AISettings, AppEditorSettings, RightClickBehavior, WarpPromptSeparator};
 use crate::terminal::alt_screen::should_intercept_mouse;
@@ -3433,7 +3433,7 @@ fn cloud_mode_dispatched_agent_inserts_queued_user_query() {
                             mode: UserQueryMode::Normal,
                             config: None,
                             title: None,
-                            team: None,
+                            scope: AgentRunScope::Personal,
                             agent_identity_uid: None,
                             skill: None,
                             attachments: vec![],

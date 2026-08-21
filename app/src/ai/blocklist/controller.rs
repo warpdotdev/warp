@@ -2532,7 +2532,13 @@ impl BlocklistAIController {
                 client_exchange_id: None,
                 model_id: Some(request_params.model.clone()),
             };
-            ResponseStream::new(request_params.clone(), ai_identifiers, recovery, ctx)
+            // TODO(multi-team): capture `TeamContext` at the originating view (one of
+            // `BlocklistAIController`'s ~20 public `send_*` entry points) and thread it down to
+            // this call so `X-Warp-Team-Uid` is sent on `/ai/multi-agent` requests. Deferred
+            // because `BlocklistAIController` itself must not store ambient `TeamContext` (it
+            // outlives any one operation); only the view that starts a request has one to give.
+            // See specs/multi-team-api-context/TECH.md.
+            ResponseStream::new(request_params.clone(), ai_identifiers, recovery, None, ctx)
         });
         let response_stream_id = response_stream.as_ref(ctx).id().clone();
         let response_stream_clone = response_stream.clone();

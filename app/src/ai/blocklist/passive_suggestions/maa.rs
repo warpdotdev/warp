@@ -198,8 +198,12 @@ impl PassiveSuggestionsModel {
 
         let stream_handle = ctx.spawn(
             async move {
+                // TODO(multi-team): thread `TeamContext` from the owning terminal view once
+                // `BlocklistAIController`'s request-construction path carries one (see the
+                // matching TODO in `controller.rs`). See specs/multi-team-api-context/TECH.md.
                 let stream_result =
-                    generate_multi_agent_output(server_api, request_params, cancellation_rx).await;
+                    generate_multi_agent_output(server_api, request_params, None, cancellation_rx)
+                        .await;
                 extract_suggestion_from_stream(stream_result).await
             },
             move |me, result, ctx| {

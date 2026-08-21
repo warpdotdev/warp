@@ -28,7 +28,7 @@ use crate::ai::blocklist::{
 };
 use crate::features::FeatureFlag;
 use crate::search::slash_command_menu::static_commands::commands;
-use crate::server::server_api::ai::SpawnAgentRequest;
+use crate::server::server_api::ai::{AgentRunScope, SpawnAgentRequest};
 use crate::terminal::input::{Event as InputEvent, Input};
 use crate::terminal::shared_session::SharedSessionStatus;
 use crate::terminal::view::ambient_agent::AmbientAgentViewModelEvent;
@@ -97,7 +97,7 @@ fn cloud_spawn_request(prompt: &str) -> SpawnAgentRequest {
         mode: UserQueryMode::Normal,
         config: None,
         title: None,
-        team: None,
+        scope: AgentRunScope::Personal,
         agent_identity_uid: None,
         skill: None,
         attachments: vec![],
@@ -120,7 +120,7 @@ fn promptless_cloud_spawn_request() -> SpawnAgentRequest {
         mode: UserQueryMode::Normal,
         config: None,
         title: None,
-        team: None,
+        scope: AgentRunScope::Personal,
         agent_identity_uid: None,
         skill: None,
         attachments: vec![],

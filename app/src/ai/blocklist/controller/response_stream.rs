@@ -18,6 +18,7 @@ use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent::{AIIdentifiers, CancellationReason};
 use crate::network::NetworkStatus;
 use crate::send_telemetry_from_ctx;
+use crate::server::ids::ServerId;
 use crate::server::retry_strategies::backoff_after_attempts;
 use crate::server::server_api::{AIApiError, ServerApiProvider};
 
@@ -295,6 +296,12 @@ pub struct ResponseStream {
     /// Note this is unique compared to `id`; this is unique across retry requests while the response
     /// stream id remains stable.
     current_request_id: Option<Uuid>,
+
+    /// The team this request is scoped to, captured once at construction and reused for every
+    /// retry so a retry cannot pick up a window's later team switch. `None` until the views that
+    /// start a request capture and thread through a `TeamContext`; see
+    /// `specs/multi-team-api-context/TECH.md`.
+    team_uid: Option<ServerId>,
 }
 
 impl ResponseStream {
@@ -328,6 +335,7 @@ impl ResponseStream {
             error_event_emitted: false,
             deferred_retry_pending: false,
             current_request_id: Some(Uuid::new_v4()),
+            team_uid: None,
         }
     }
 
@@ -335,13 +343,14 @@ impl ResponseStream {
         params: api::RequestParams,
         ai_identifiers: AIIdentifiers,
         recovery: RecoveryBudget,
+        team_uid: Option<ServerId>,
         ctx: &mut ModelContext<Self>,
     ) -> Self {
         let (cancellation_tx, cancellation_rx) = oneshot::channel();
         let start_time = Local::now();
 
         let request_id = Uuid::new_v4();
-        Self::spawn_request(request_id, params.clone(), cancellation_rx, ctx);
+        Self::spawn_request(request_id, params.clone(), team_uid, cancellation_rx, ctx);
         Self {
             id: ResponseStreamId(Uuid::new_v4().to_string()),
             params,
@@ -358,6 +367,7 @@ impl ResponseStream {
             error_event_emitted: false,
             deferred_retry_pending: false,
             current_request_id: Some(request_id),
+            team_uid,
         }
     }
 
@@ -428,7 +438,13 @@ impl ResponseStream {
 
         let request_id = Uuid::new_v4();
         self.current_request_id = Some(request_id);
-        Self::spawn_request(request_id, self.params.clone(), cancellation_rx, ctx);
+        Self::spawn_request(
+            request_id,
+            self.params.clone(),
+            self.team_uid,
+            cancellation_rx,
+            ctx,
+        );
     }
 
     /// Decides how to recover from `error` and starts the recovery, or reports the failure
@@ -515,6 +531,7 @@ impl ResponseStream {
     fn spawn_request(
         request_id: Uuid,
         params: api::RequestParams,
+        team_uid: Option<ServerId>,
         cancellation_rx: oneshot::Receiver<()>,
         ctx: &mut ModelContext<Self>,
     ) {
@@ -567,6 +584,7 @@ impl ResponseStream {
                                 Self::spawn_generate(
                                     request_id,
                                     me.params.clone(),
+                                    team_uid,
                                     cancellation_rx,
                                     ctx,
                                 );
@@ -627,6 +645,7 @@ impl ResponseStream {
                             Self::spawn_generate(
                                 request_id,
                                 me.params.clone(),
+                                team_uid,
                                 cancellation_rx,
                                 ctx,
                             );
@@ -637,7 +656,7 @@ impl ResponseStream {
             }
         }
 
-        Self::spawn_generate(request_id, params, cancellation_rx, ctx);
+        Self::spawn_generate(request_id, params, team_uid, cancellation_rx, ctx);
     }
 
     /// Emits a terminal, user-visible error for a failed request-time Grok token
@@ -662,12 +681,15 @@ impl ResponseStream {
     fn spawn_generate(
         request_id: Uuid,
         params: api::RequestParams,
+        team_uid: Option<ServerId>,
         cancellation_rx: oneshot::Receiver<()>,
         ctx: &mut ModelContext<Self>,
     ) {
         let server_api = ServerApiProvider::as_ref(ctx).get();
         let _ = ctx.spawn(
-            async move { generate_multi_agent_output(server_api, params, cancellation_rx).await },
+            async move {
+                generate_multi_agent_output(server_api, params, team_uid, cancellation_rx).await
+            },
             move |me, stream, ctx| {
                 me.handle_response_stream_result(request_id, stream, ctx);
             },
