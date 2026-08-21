@@ -60,6 +60,12 @@ integration_tests! {
     test_builtin_completions,
     // Tests bootstrap reports completable keywords.
     test_keyword_completions,
+    // Native shell completions: run against zsh, bash, and fish (not PowerShell -- see the
+    // module doc comment in src/test/native_shell_completions.rs).
+    test_native_shell_completions_menu,
+    test_command_runs_cleanly_after_native_shell_completion,
+    test_native_shell_completions_used_when_no_bundled_spec,
+    test_native_shell_completions_skipped_when_a_bundled_spec_answers,
     // Tests bash-specific behavior.
     test_histcontrol_env_var,
     // Tests initial working directory behavior.
