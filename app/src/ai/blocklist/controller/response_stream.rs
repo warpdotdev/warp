@@ -309,6 +309,36 @@ impl ResponseStream {
             event,
         ))));
     }
+
+    /// Emits this stream's own natural-completion event (mirrors the tail of
+    /// `on_response_stream_complete`), without needing a real spawned request behind it.
+    /// Lets tests drive the gap between a `Finished` response event being processed (which
+    /// does not clear the stream's `PendingResponseStreams`/`added_exchanges_by_response`
+    /// bookkeeping) and that bookkeeping actually being cleared.
+    #[cfg(test)]
+    pub fn emit_stream_finished_for_test(&mut self, ctx: &mut ModelContext<Self>) {
+        ctx.emit(ResponseStreamEvent::AfterStreamFinished { cancellation: None });
+        self.cancellation_tx = None;
+    }
+
+    /// Marks this stream as having a resume scheduled for once it finishes (mirrors what
+    /// `begin_recovery`'s `RecoveryAction::Resume` branch sets), without needing a real
+    /// recoverable failure. Lets tests drive the lifecycle where a stream failed after
+    /// dispatching client actions, so an automatic resume is scheduled alongside whatever
+    /// those actions' results end up doing.
+    #[cfg(test)]
+    pub fn set_pending_resume_for_test(&mut self, resume: PendingResume) {
+        self.pending_resume = Some(resume);
+    }
+
+    /// The recovery budget this stream's request is currently running with. Lets tests
+    /// verify that a request inherited a specific budget (e.g. one charged for an earlier
+    /// resume) instead of starting fresh.
+    #[cfg(test)]
+    pub(super) fn recovery_for_test(&self) -> RecoveryBudget {
+        self.recovery
+    }
+
     #[cfg(test)]
     pub fn new_for_test(id: ResponseStreamId) -> Self {
         let (cancellation_tx, _rx) = oneshot::channel();

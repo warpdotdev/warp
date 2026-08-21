@@ -563,7 +563,7 @@ impl BlocklistAIController {
                 });
                 return;
             }
-            me.send_follow_up_for_conversation(*conversation_id, ctx);
+            me.send_follow_up_for_conversation(*conversation_id, RecoveryBudget::fresh(), ctx);
             // Unlock any query queued during the pre-snapshot window now that the
             // snapshot has been sent.
             QueuedQueryModel::handle(ctx).update(ctx, |model, ctx| {
@@ -1467,7 +1467,7 @@ impl BlocklistAIController {
             .as_ref(ctx)
             .get_finished_action_results(conversation_id);
         if finished_action_results.is_some_and(|results| !results.is_empty()) {
-            self.send_follow_up_for_conversation(conversation_id, ctx);
+            self.send_follow_up_for_conversation(conversation_id, RecoveryBudget::fresh(), ctx);
         }
     }
 
@@ -1569,15 +1569,32 @@ impl BlocklistAIController {
             .push((suggestion, trigger));
     }
 
+    /// Sends the drained finished action results for `conversation_id` as a follow-up
+    /// request, with `recovery` as that request's retry/resume budget.
+    ///
+    /// Callers pass `RecoveryBudget::fresh()` for a follow-up that isn't itself recovering
+    /// another request. `flush_stranded_follow_up_for_conversation` instead passes through
+    /// whatever budget a resume it is replacing had already charged, so suppressing that
+    /// resume doesn't reset the shared recovery counter back to zero attempts used.
     fn send_follow_up_for_conversation(
         &mut self,
         conversation_id: AIConversationId,
+        recovery: RecoveryBudget,
         ctx: &mut ModelContext<Self>,
     ) {
         if self
             .in_flight_response_streams
             .has_active_stream_for_conversation(conversation_id, ctx)
         {
+            // The triggering stream's own `StreamFinished` hasn't been processed yet (e.g. a
+            // fast-resolving action, such as a `FetchConversation` fetch served from an
+            // already in-memory conversation, can finish before that event is processed).
+            // This defers rather than drops: `flush_stranded_follow_up_for_conversation`
+            // retries once the stream is actually cleaned up.
+            log::info!(
+                "Deferring follow-up for conversation_id={conversation_id:?}: its triggering \
+                 response stream is still considered active."
+            );
             return;
         }
 
@@ -1652,7 +1669,7 @@ impl BlocklistAIController {
         let result = self.send_request_input(
             request_input,
             None,
-            RecoveryBudget::fresh(),
+            recovery,
             /*is_queued_prompt*/ false,
             ctx,
         );
@@ -1664,6 +1681,65 @@ impl BlocklistAIController {
         }
 
         self.pending_passive_follow_ups.remove(&conversation_id);
+    }
+
+    /// Recovers a follow-up that `send_follow_up_for_conversation` deferred because its
+    /// triggering stream still looked active at the time.
+    ///
+    /// Call this only after that stream's own completion has been fully processed (its
+    /// bookkeeping entry removed from `PendingResponseStreams`), i.e. from the
+    /// `AfterStreamFinished` normal-completion path. Without this, a result whose
+    /// `FinishedAction` was processed *before* the triggering stream's `StreamFinished`
+    /// event is processed (a plain scheduling race between two independently spawned
+    /// futures, not anything user-driven) is left in `finished_action_results` with
+    /// nothing left to ever revisit it, stranding it indefinitely.
+    ///
+    /// `recovery` is the budget the flushed follow-up request runs with: callers pass the
+    /// stream's `pending_resume()` budget when there is one, so replacing that scheduled
+    /// resume (see the call site) doesn't also reset its bounded recovery counter back to a
+    /// fresh budget; otherwise `RecoveryBudget::fresh()`.
+    ///
+    /// Returns `true` when it actually sent a follow-up request. The caller must not also
+    /// fire a scheduled resume for the same stream completion in that case (see the call
+    /// site): that request already takes over resuming the conversation, with its budget.
+    fn flush_stranded_follow_up_for_conversation(
+        &mut self,
+        conversation_id: AIConversationId,
+        recovery: RecoveryBudget,
+        ctx: &mut ModelContext<Self>,
+    ) -> bool {
+        if self
+            .in_flight_response_streams
+            .has_active_stream_for_conversation(conversation_id, ctx)
+        {
+            // A new stream already started for this conversation; that request owns
+            // delivering any results now.
+            return false;
+        }
+        if self
+            .action_model
+            .as_ref(ctx)
+            .has_unfinished_actions_for_conversation(conversation_id)
+        {
+            // Still executing (or another action is); its own `FinishedAction` will drive
+            // the follow-up once everything settles.
+            return false;
+        }
+        let has_finished_results = self
+            .action_model
+            .as_ref(ctx)
+            .get_finished_action_results(conversation_id)
+            .is_some_and(|results| !results.is_empty());
+        if !has_finished_results {
+            return false;
+        }
+        log::info!(
+            "Flushing stranded action result(s) for conversation_id={conversation_id:?}: a \
+             follow-up was deferred while its triggering stream still looked active, and \
+             that stream has now finished without anything else redelivering the result."
+        );
+        self.send_follow_up_for_conversation(conversation_id, recovery, ctx);
+        true
     }
 
     fn conversation_ready_for_pending_events(
@@ -3172,21 +3248,52 @@ impl BlocklistAIController {
                     });
                 }
 
+                // Read before flushing (independent of `PendingResponseStreams`/stream
+                // cleanup below): a resume is scheduled precisely when this stream failed
+                // *after* dispatching client actions (so an in-request retry was unsafe),
+                // which is exactly the situation that can strand one of those actions'
+                // results. If the flush below ends up replacing this resume, it must run
+                // with the resume's already-charged budget rather than a fresh one, or
+                // suppressing the resume would silently reset the shared recovery counter.
+                let pending_resume = response_stream.as_ref(ctx).pending_resume();
+                let flush_recovery = pending_resume
+                    .map(PendingResume::recovery)
+                    .unwrap_or_else(RecoveryBudget::fresh);
+
                 // Cancelled streams will handle pending_response_stream updates synchronously.
+                let mut flushed_stranded_follow_up = false;
                 if cancellation.is_none() {
                     self.in_flight_response_streams.cleanup_stream(&stream_id);
 
                     // Now that the stream is cleaned up, re-check for pending
                     // orchestration events that couldn't be drained earlier.
                     self.handle_pending_events_ready(conversation_id, ctx);
+
+                    // Also recover any follow-up that deferred because this stream still
+                    // looked active when its action finished (see the method doc).
+                    flushed_stranded_follow_up = self.flush_stranded_follow_up_for_conversation(
+                        conversation_id,
+                        flush_recovery,
+                        ctx,
+                    );
                 }
 
-                // Before cleaning up the response stream, check if we should attempt to resume.
-                // The resume inherits the failed request's remaining recovery budget, so
-                // retries and resumes stay bounded by one shared counter.
-                let pending_resume = response_stream.as_ref(ctx).pending_resume();
+                // Mutually exclusive with the flush above. If the flush already sent a
+                // request for this conversation (inheriting this resume's budget when there
+                // was one), that request already takes over resuming it; firing the
+                // scheduled resume as well would send a second, redundant request that can
+                // race or collide with the one the flush just sent.
                 if let Some(resume) = pending_resume {
-                    self.schedule_auto_resume_after_error(conversation_id, resume, ctx);
+                    if flushed_stranded_follow_up {
+                        log::info!(
+                            "Skipping scheduled resume for conversation_id={conversation_id:?}: \
+                             a flushed stranded action result already sent a follow-up request \
+                             (inheriting this resume's recovery budget) that takes over \
+                             resuming it."
+                        );
+                    } else {
+                        self.schedule_auto_resume_after_error(conversation_id, resume, ctx);
+                    }
                 }
 
                 // Clean up the response stream tracking entry now that the stream is complete.

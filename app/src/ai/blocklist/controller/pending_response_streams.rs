@@ -34,6 +34,15 @@ impl PendingResponseStreams {
             .any(|stream_id| conversation.is_processing_response_stream(stream_id))
     }
 
+    /// Returns the registered stream handle for `stream_id`, if any.
+    #[cfg(test)]
+    pub(super) fn stream_for_test(
+        &self,
+        stream_id: &ResponseStreamId,
+    ) -> Option<ModelHandle<ResponseStream>> {
+        self.streams.get(stream_id).cloned()
+    }
+
     /// Returns the IDs of all in-flight streams owned by the given conversation.
     pub fn stream_ids_for_conversation(
         &self,

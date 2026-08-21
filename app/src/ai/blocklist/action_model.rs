@@ -524,6 +524,21 @@ impl BlocklistAIActionModel {
         }
     }
 
+    /// Directly enqueues a pending action for a conversation, bypassing the normal
+    /// preprocess/autoexecute pipeline. Lets tests exercise cancellation of a still-pending
+    /// action (e.g. `FetchConversation`) without needing its executor to actually run.
+    #[cfg(test)]
+    pub fn enqueue_pending_action_for_test(
+        &mut self,
+        conversation_id: AIConversationId,
+        action: AIAgentAction,
+    ) {
+        self.pending_actions
+            .entry(conversation_id)
+            .or_default()
+            .push_back(action);
+    }
+
     /// Returns all pending actions for all conversations.
     pub fn get_pending_actions(&self) -> Vec<&AIAgentAction> {
         self.pending_actions

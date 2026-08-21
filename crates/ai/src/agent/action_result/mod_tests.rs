@@ -1,6 +1,6 @@
 use super::{
-    AIAgentActionResultType, RunAgentsAgentOutcome, RunAgentsAgentOutcomeKind,
-    RunAgentsLaunchedExecutionMode, RunAgentsResult,
+    AIAgentActionResultType, FetchConversationResult, RunAgentsAgentOutcome,
+    RunAgentsAgentOutcomeKind, RunAgentsLaunchedExecutionMode, RunAgentsResult,
 };
 
 fn launched_agent(name: &str) -> RunAgentsAgentOutcome {
@@ -53,4 +53,21 @@ fn run_agents_is_failed_when_no_agents_launch() {
 
     assert!(!result.is_successful());
     assert!(result.is_failed());
+}
+
+#[test]
+fn cancelled_fetch_conversation_does_not_unconditionally_trigger_a_follow_up_request() {
+    // `Cancelled` covers both a deliberate terminal cancellation (Stop, pane close,
+    // delete) and collateral same-conversation cleanup, and `AIAgentActionResultType`
+    // alone can't distinguish the two (that context lives in the `CancellationReason`
+    // passed alongside the `FinishedAction` event, not in the result itself). So this
+    // must behave like every other cancelled result here and NOT unconditionally
+    // trigger a follow-up -- doing so would revive a conversation the user genuinely
+    // stopped. The collateral case is instead reported through the request that
+    // already owns it (see `crates/ai/.../convert.rs`'s explicit-error serialization
+    // and the app-level `BlocklistAIController` tests).
+    let result = AIAgentActionResultType::FetchConversation(FetchConversationResult::Cancelled);
+
+    assert!(result.is_cancelled());
+    assert!(!result.should_trigger_request_upon_completion());
 }
