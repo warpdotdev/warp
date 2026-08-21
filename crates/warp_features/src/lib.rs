@@ -430,9 +430,6 @@ pub enum FeatureFlag {
     /// Enables file- and diff set-level comments in the code review header.
     FileAndDiffSetComments,
 
-    /// Enables discarding per-file and discarding all changes
-    DiscardPerFileAndAllChanges,
-
     /// Enables UI zoom support (scaling the entire UI by a given percentage).
     UIZoom,
 

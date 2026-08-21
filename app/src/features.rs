@@ -291,8 +291,6 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::FileBasedMcp,
         #[cfg(feature = "diff_set_as_context")]
         FeatureFlag::DiffSetAsContext,
-        #[cfg(feature = "discard_per_file_and_all_changes")]
-        FeatureFlag::DiscardPerFileAndAllChanges,
         #[cfg(feature = "summarization_cancellation_confirmation")]
         FeatureFlag::SummarizationCancellationConfirmation,
         #[cfg(feature = "code_review_find")]
