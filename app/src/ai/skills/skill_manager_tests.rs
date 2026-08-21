@@ -1625,3 +1625,278 @@ fn best_supported_provider_falls_back_when_no_match() {
         assert_eq!(result, SkillProvider::Agents);
     });
 }
+
+// ============================================================================
+// Tests for tolerating a bare skill `name` passed as `bundled_skill_id`
+// (QUALITY-1682)
+// ============================================================================
+
+#[test]
+fn active_skill_by_reference_with_origin_falls_back_to_path_skill_by_name() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(DirectoryWatcher::new);
+        app.add_singleton_model(AISettings::new_with_defaults);
+        app.add_singleton_model(|_| DetectedRepositories::default());
+        app.add_singleton_model(RepoMetadataModel::new);
+        app.add_singleton_model(HomeDirectoryWatcher::new_for_test);
+        app.add_singleton_model(WarpManagedPathsWatcher::new_for_testing);
+        let handle = app.add_singleton_model(SkillManager::new);
+
+        let project_skill = make_skill("pr-walkthrough", ".agents");
+        let project_skill_path = project_skill.path.clone();
+        handle.update(&mut app, |manager, _| {
+            manager.add_skill_for_testing(project_skill);
+        });
+
+        // An agent that mistakenly retries `read_skill{bundled_skill_id:
+        // "pr-walkthrough"}` for a project skill should still resolve it.
+        let reference = SkillReference::BundledSkillId("pr-walkthrough".to_string());
+        let resolved = handle.read(&app, |manager, ctx| {
+            manager
+                .active_skill_by_reference_with_origin(&reference, &SkillPathOrigin::Local, ctx)
+                .map(|skill| skill.path.clone())
+        });
+        assert_eq!(resolved, Ok(project_skill_path));
+    });
+}
+
+#[test]
+fn active_skill_by_reference_with_origin_prefers_genuine_bundled_hit_over_name_fallback() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(DirectoryWatcher::new);
+        app.add_singleton_model(AISettings::new_with_defaults);
+        app.add_singleton_model(|_| DetectedRepositories::default());
+        app.add_singleton_model(RepoMetadataModel::new);
+        app.add_singleton_model(HomeDirectoryWatcher::new_for_test);
+        app.add_singleton_model(WarpManagedPathsWatcher::new_for_testing);
+        let handle = app.add_singleton_model(SkillManager::new);
+
+        let path_skill = make_skill("shared-name", ".agents");
+        handle.update(&mut app, |manager, _| {
+            manager.add_skill_for_testing(path_skill);
+            manager.add_bundled_skill_for_testing(
+                "shared-name",
+                bundled_test_skill("shared-name", "bundled version"),
+                BundledSkillActivation::Always,
+            );
+        });
+
+        let reference = SkillReference::BundledSkillId("shared-name".to_string());
+        let resolved = handle.read(&app, |manager, ctx| {
+            manager
+                .active_skill_by_reference_with_origin(&reference, &SkillPathOrigin::Local, ctx)
+                .map(|skill| skill.path.clone())
+        });
+        assert_eq!(
+            resolved,
+            Ok(LocalOrRemotePath::Local(
+                "/bundled/skills/shared-name/SKILL.md".into()
+            ))
+        );
+    });
+}
+
+#[test]
+fn active_skill_by_reference_with_origin_name_fallback_is_scoped_to_origin() {
+    let host_id = HostId::new("remote-host".to_string());
+    let remote_skill = make_remote_skill(&host_id, "only-remote");
+    let remote_skill_path = remote_skill.path.clone();
+
+    App::test((), |mut app| async move {
+        app.add_singleton_model(DirectoryWatcher::new);
+        app.add_singleton_model(AISettings::new_with_defaults);
+        app.add_singleton_model(|_| DetectedRepositories::default());
+        app.add_singleton_model(RepoMetadataModel::new);
+        app.add_singleton_model(HomeDirectoryWatcher::new_for_test);
+        app.add_singleton_model(WarpManagedPathsWatcher::new_for_testing);
+        let handle = app.add_singleton_model(SkillManager::new);
+
+        handle.update(&mut app, |manager, _| {
+            manager.add_skill_for_testing(remote_skill);
+        });
+
+        let reference = SkillReference::BundledSkillId("only-remote".to_string());
+
+        // A remote-only project skill must not leak into a local lookup...
+        let local_result = handle.read(&app, |manager, ctx| {
+            manager
+                .active_skill_by_reference_with_origin(&reference, &SkillPathOrigin::Local, ctx)
+                .is_err()
+        });
+        assert!(local_result);
+
+        // ...but is resolved for its own host's origin.
+        let remote_result = handle.read(&app, |manager, ctx| {
+            manager
+                .active_skill_by_reference_with_origin(
+                    &reference,
+                    &SkillPathOrigin::Remote {
+                        host_id: host_id.clone(),
+                    },
+                    ctx,
+                )
+                .map(|skill| skill.path.clone())
+        });
+        assert_eq!(remote_result, Ok(remote_skill_path));
+    });
+}
+
+#[test]
+fn active_skill_by_reference_with_origin_name_fallback_prefers_home_over_project() {
+    let home_dir = LocalOrRemotePath::Local(dirs::home_dir().unwrap());
+    let home_skill_path = home_dir.join(".agents/skills/shared/SKILL.md");
+    let project_dir =
+        LocalOrRemotePath::Local(std::env::temp_dir().join("fallback-precedence-project"));
+    let project_skill_path = project_dir.join(".claude/skills/shared/SKILL.md");
+
+    let home_skill = ParsedSkill {
+        name: "shared".to_string(),
+        description: "home skill".to_string(),
+        path: home_skill_path.clone(),
+        content: "# home".to_string(),
+        line_range: None,
+        provider: SkillProvider::Agents,
+        scope: SkillScope::Home,
+    };
+    let project_skill = ParsedSkill {
+        name: "shared".to_string(),
+        description: "project skill".to_string(),
+        path: project_skill_path.clone(),
+        content: "# project".to_string(),
+        line_range: None,
+        provider: SkillProvider::Claude,
+        scope: SkillScope::Project,
+    };
+
+    App::test((), |mut app| async move {
+        app.add_singleton_model(DirectoryWatcher::new);
+        app.add_singleton_model(AISettings::new_with_defaults);
+        app.add_singleton_model(|_| DetectedRepositories::default());
+        app.add_singleton_model(RepoMetadataModel::new);
+        app.add_singleton_model(HomeDirectoryWatcher::new_for_test);
+        app.add_singleton_model(WarpManagedPathsWatcher::new_for_testing);
+        let handle = app.add_singleton_model(SkillManager::new);
+
+        handle.update(&mut app, |manager, _| {
+            manager
+                .directory_skills
+                .entry(home_dir.clone())
+                .or_default()
+                .insert(home_skill_path.clone());
+            manager.add_skill_for_testing(home_skill);
+            manager.add_skill_for_testing(project_skill);
+        });
+
+        let reference = SkillReference::BundledSkillId("shared".to_string());
+        let resolved = handle.read(&app, |manager, ctx| {
+            manager
+                .active_skill_by_reference_with_origin(&reference, &SkillPathOrigin::Local, ctx)
+                .map(|skill| skill.path.clone())
+        });
+        assert_eq!(resolved, Ok(home_skill_path));
+    });
+}
+
+#[test]
+fn active_skill_by_reference_with_origin_name_fallback_prefers_higher_priority_provider_within_same_scope()
+ {
+    // Two home skills share a name but live under different provider directories.
+    // Canonical unqualified `--skill` name resolution (`resolve_skill_spec.rs`'s
+    // `directory_precedence_rank`) would pick the `.warp` one over the `.claude` one,
+    // since `.warp` ranks ahead of `.claude` in `SKILL_PROVIDER_DEFINITIONS`. The
+    // fallback must agree, or the agent could silently read different instructions
+    // than the skill it was actually listed with.
+    let home_dir = LocalOrRemotePath::Local(dirs::home_dir().unwrap());
+    let warp_skill_path = home_dir.join(".warp/skills/shared/SKILL.md");
+    let claude_skill_path = home_dir.join(".claude/skills/shared/SKILL.md");
+
+    let warp_skill = ParsedSkill {
+        name: "shared".to_string(),
+        description: "warp-provider home skill".to_string(),
+        path: warp_skill_path.clone(),
+        content: "# warp".to_string(),
+        line_range: None,
+        provider: SkillProvider::Warp,
+        scope: SkillScope::Home,
+    };
+    let claude_skill = ParsedSkill {
+        name: "shared".to_string(),
+        description: "claude-provider home skill".to_string(),
+        path: claude_skill_path.clone(),
+        content: "# claude".to_string(),
+        line_range: None,
+        provider: SkillProvider::Claude,
+        scope: SkillScope::Home,
+    };
+
+    App::test((), |mut app| async move {
+        app.add_singleton_model(DirectoryWatcher::new);
+        app.add_singleton_model(AISettings::new_with_defaults);
+        app.add_singleton_model(|_| DetectedRepositories::default());
+        app.add_singleton_model(RepoMetadataModel::new);
+        app.add_singleton_model(HomeDirectoryWatcher::new_for_test);
+        app.add_singleton_model(WarpManagedPathsWatcher::new_for_testing);
+        let handle = app.add_singleton_model(SkillManager::new);
+
+        handle.update(&mut app, |manager, _| {
+            manager
+                .directory_skills
+                .entry(home_dir.clone())
+                .or_default()
+                .extend([warp_skill_path.clone(), claude_skill_path.clone()]);
+            // Insert Claude first so a naive path/insertion-order sort would pick it,
+            // making this test meaningfully verify provider-rank ordering.
+            manager.add_skill_for_testing(claude_skill);
+            manager.add_skill_for_testing(warp_skill);
+        });
+
+        let reference = SkillReference::BundledSkillId("shared".to_string());
+        let resolved = handle.read(&app, |manager, ctx| {
+            manager
+                .active_skill_by_reference_with_origin(&reference, &SkillPathOrigin::Local, ctx)
+                .map(|skill| skill.path.clone())
+        });
+        assert_eq!(resolved, Ok(warp_skill_path));
+    });
+}
+
+#[test]
+fn not_found_error_for_bundled_reference_hints_at_skill_path_argument() {
+    App::test((), |app| async move {
+        app.add_singleton_model(DirectoryWatcher::new);
+        app.add_singleton_model(AISettings::new_with_defaults);
+        app.add_singleton_model(|_| DetectedRepositories::default());
+        app.add_singleton_model(RepoMetadataModel::new);
+        app.add_singleton_model(HomeDirectoryWatcher::new_for_test);
+        app.add_singleton_model(WarpManagedPathsWatcher::new_for_testing);
+        let handle = app.add_singleton_model(SkillManager::new);
+
+        let bundled_message = handle.read(&app, |manager, ctx| {
+            manager
+                .active_skill_by_reference_with_origin(
+                    &SkillReference::BundledSkillId("missing".to_string()),
+                    &SkillPathOrigin::Local,
+                    ctx,
+                )
+                .unwrap_err()
+                .to_string()
+        });
+        assert!(
+            bundled_message.contains("skill_path"),
+            "expected a hint about `skill_path` in: {bundled_message}"
+        );
+
+        // A miss on a path-based reference is already unambiguous; no hint needed.
+        let path_message = handle.read(&app, |manager, ctx| {
+            manager
+                .active_skill_by_reference_with_origin(
+                    &SkillReference::Path(LocalOrRemotePath::Local("/missing/SKILL.md".into())),
+                    &SkillPathOrigin::Local,
+                    ctx,
+                )
+                .unwrap_err()
+                .to_string()
+        });
+        assert!(!path_message.contains("skill_path"));
+    });
+}
