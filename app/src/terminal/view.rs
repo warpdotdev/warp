@@ -2315,6 +2315,7 @@ pub struct TerminalViewRenderContext {
     pub link_tool_tip: Option<GridHighlightedLink>,
     pub is_terminal_focused: bool,
     pub is_terminal_selecting: bool,
+    pub is_extending_text_selection: bool,
     pub is_context_menu_open: bool,
     pub is_waterfall_gap_mode: bool,
     pub pane_state: SplitPaneState,
@@ -2526,6 +2527,12 @@ pub struct TerminalView {
 
     /// Whether there is an active text selection.
     is_selecting: bool,
+
+    /// Whether the current text-selection gesture is a Shift+click extension of an existing
+    /// selection, rather than a plain click-and-drag. Set for the duration of the gesture so
+    /// `LeftMouseDragged` events keep extending text even while Shift remains held; see
+    /// `BlockListElement::mouse_dragged`.
+    is_extending_text_selection: bool,
 
     context_menu: ViewHandle<Menu<TerminalAction>>,
 
@@ -4325,6 +4332,7 @@ impl TerminalView {
             alt_screen_scroll_top: Lines::zero(),
             horizontal_clipped_scroll_state: Default::default(),
             is_selecting: false,
+            is_extending_text_selection: false,
             context_menu_state: None,
             context_menu,
             hovered_secret: None,
@@ -18171,6 +18179,9 @@ impl TerminalView {
             SelectAction::Update {
                 point, side, delta, ..
             } => self.update_alt_selection(*point, *side, delta, ctx),
+            // Shift+click text-selection extension is out of scope for the alt screen in v1;
+            // alt-screen mouse-down never dispatches `Extend`.
+            SelectAction::Extend { .. } => {}
             SelectAction::End => {
                 self.end_alt_selection(ctx);
             }
@@ -18226,6 +18237,7 @@ impl TerminalView {
     fn end_text_selection(&mut self, ctx: &mut ViewContext<Self>) {
         if self.is_selecting {
             self.is_selecting = false;
+            self.is_extending_text_selection = false;
             self.block_text_selection_start_position = None;
 
             let selected_text = {
@@ -18533,6 +18545,11 @@ impl TerminalView {
                 delta,
                 position,
             } => self.update_block_text_selection(*point, *side, *delta, *position, ctx),
+            BlockTextSelectAction::Extend {
+                point,
+                side,
+                position,
+            } => self.extend_block_text_selection(*point, *side, *position, ctx),
             BlockTextSelectAction::End => {
                 self.end_text_selection(ctx);
             }
@@ -18935,6 +18952,7 @@ impl TerminalView {
         }
 
         self.block_text_selection_start_position = Some(position);
+        self.is_extending_text_selection = false;
 
         self.model
             .lock()
@@ -18942,8 +18960,108 @@ impl TerminalView {
             .start_selection(point, selection_type, side);
         self.is_selecting = true;
 
+        self.prime_rich_content_selections_for_cross_block_selection(
+            point,
+            // A drag will continue to emit `LeftMouseDragged` events, which establish a precise
+            // tail for any rich-content block the drag passes through; head-only priming for
+            // every rich-content block (not just intervening ones, since the eventual drag
+            // destination isn't known yet) is enough here, and preserves today's
+            // progressive-highlight-while-dragging behavior.
+            None,
+            selection_type,
+            position,
+            ctx,
+        );
+
+        ctx.notify();
+    }
+
+    /// Extends the current point-based block-list text selection's active endpoint to `point`,
+    /// keeping the fixed endpoint unchanged. Dispatched instead of [`Self::begin_block_text_selection`]
+    /// when a Shift+click is applicable (see `BlockListElement::mouse_down`).
+    fn extend_block_text_selection(
+        &mut self,
+        point: BlockListPoint,
+        side: Side,
+        position: Vector2F,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        // Clear any active text selections in CLI subagent views, since the extension will move
+        // the active endpoint of the selection on the underlying block list.
+        for subagent_view in self.cli_subagent_views.values() {
+            subagent_view.update(ctx, |view, ctx| view.clear_all_selections(ctx));
+        }
+
+        self.block_text_selection_start_position = Some(position);
+
+        let is_inverted_blocklist = self.is_inverted_blocklist(ctx);
+        let semantic_selection = SemanticSelection::as_ref(ctx);
+        let head_point = {
+            let mut model = self.model.lock();
+            let block_list = model.block_list_mut();
+            // Normalize a completed word/line selection to its visible simple endpoints before
+            // moving the tail, so Shift+click always performs simple cell/character extension.
+            block_list.standardize_text_selection(semantic_selection, is_inverted_blocklist);
+            let Some(head_point) = block_list
+                .selection()
+                .map(|selection| selection.head_point())
+            else {
+                return;
+            };
+            block_list.update_selection(point, side);
+            head_point
+        };
+        self.is_selecting = true;
+        self.is_extending_text_selection = true;
+
+        // Applicable text extension always wins over whole-block selection.
+        self.clear_selected_blocks(ctx);
+
+        self.prime_rich_content_selections_for_cross_block_selection(
+            head_point,
+            // A direct Shift+click extension has no guarantee of a subsequent drag event to
+            // establish a rich-content block's tail (unlike `begin_block_text_selection`, whose
+            // caller drags immediately after mouse-down in the common case), so pass the actual
+            // clicked destination: any block strictly between the head and this point is fully
+            // selected (it's passed through entirely), the destination block itself (if any) has
+            // its tail moved to the exact click position, and anything beyond the destination is
+            // cleared rather than swallowed. A later real drag tick (if one occurs) still
+            // overrides this with a precise position, same as today.
+            Some(point),
+            SelectionType::Simple,
+            position,
+            ctx,
+        );
+
+        ctx.notify();
+    }
+
+    /// Loops over each rich-content (AI) block in the block list and coordinates its selection
+    /// state relative to `reference_point` (the fixed head) and, when extending an existing
+    /// selection, `destination_point` (the clicked active endpoint). This is needed to support
+    /// point-based selections that span command blocks and AI blocks, since a `SelectableArea`
+    /// can't start a selection outside of its own bounds on its own.
+    ///
+    /// - When `destination_point` is `None` (starting a fresh drag, whose eventual endpoint isn't
+    ///   known yet), every rich-content block other than the one containing `reference_point` is
+    ///   primed with a head-only bound at whichever extreme corner faces `reference_point`; a
+    ///   later `LeftMouseDragged` tick establishes a precise tail for whichever block the drag
+    ///   actually reaches.
+    /// - When `destination_point` is `Some` (a direct, non-drag Shift+click extension), only
+    ///   blocks strictly between the head and the destination are fully selected (they're passed
+    ///   through entirely); the block containing the destination itself, if any, has its tail
+    ///   moved to the exact clicked position instead of being fully selected; and any
+    ///   rich-content block beyond the destination has its (possibly stale, externally-primed)
+    ///   selection cleared, since it's no longer part of the range.
+    fn prime_rich_content_selections_for_cross_block_selection(
+        &mut self,
+        reference_point: BlockListPoint,
+        destination_point: Option<BlockListPoint>,
+        selection_type: SelectionType,
+        position: Vector2F,
+        ctx: &mut ViewContext<Self>,
+    ) {
         if self.rich_content_views.is_empty() {
-            ctx.notify();
             return;
         }
 
@@ -18955,52 +19073,106 @@ impl TerminalView {
             .cursor::<BlockHeight, BlockHeightSummary>();
         block_cursor.seek(&BlockHeight::from(0.), SeekBias::Right);
 
-        let selection_start_total_index = {
-            let mut click_cursor = block_list
+        let total_index_at_row = |row| {
+            let mut cursor = block_list
                 .block_heights()
                 .cursor::<BlockHeight, BlockHeightSummary>();
-            click_cursor.seek(&BlockHeight::from(point.row), SeekBias::Right);
-            click_cursor.start().total_count
+            cursor.seek(&BlockHeight::from(row), SeekBias::Right);
+            cursor.start().total_count
         };
+        let reference_total_index = total_index_at_row(reference_point.row);
+        let destination_total_index = destination_point.map(|p| total_index_at_row(p.row));
+        let intervening_range = destination_total_index.map(|destination| {
+            reference_total_index.min(destination)..reference_total_index.max(destination)
+        });
 
-        // Loop over each item in the block list. If it's an AI block which doesn't include the point
-        // where the user clicked, begin a selection at either the maximum (bottom right) or minimum
-        // (top left) point in the block. This is needed to support selections across command blocks
-        // and AI blocks since SelectableArea can't start selections outside of its bounds on its own.
+        // Loop over each item in the block list, coordinating each AI block's selection state
+        // relative to the reference (head) and, when extending, the destination point.
         if let Some(active_window_id) = ctx.windows().active_window() {
             while let Some(block_height_item) = block_cursor.item() {
                 if let BlockHeightItem::RichContent(RichContentItem { view_id, .. }) =
                     block_height_item
                     && let Some(ai_block) = ctx.view_with_id::<AIBlock>(active_window_id, *view_id)
                 {
+                    let ai_block_total_index = block_cursor.start().total_count;
+                    // The block containing the head is never primed here: it either already owns
+                    // its own local selection state, or (for a fresh drag) will establish one
+                    // itself once the drag actually reaches it.
+                    if ai_block_total_index == reference_total_index {
+                        block_cursor.next();
+                        continue;
+                    }
+
                     let x_pos = match selection_type {
                         SelectionType::Rect => Some(position.x()),
                         _ => None,
                     };
-
                     let ai_block_view = ctx.view(&ai_block);
-                    let ai_block_total_index = block_cursor.start().total_count;
+                    let is_before_head = (ai_block_total_index < reference_total_index
+                        && !is_inverted_blocklist)
+                        || (ai_block_total_index > reference_total_index && is_inverted_blocklist);
 
-                    if (ai_block_total_index < selection_start_total_index
-                        && !is_inverted_blocklist)
-                        || (ai_block_total_index > selection_start_total_index
-                            && is_inverted_blocklist)
+                    if Some(ai_block_total_index) == destination_total_index {
+                        // The block containing the clicked destination: move its tail to the
+                        // exact click position instead of fully selecting it, so the selection
+                        // ends where the user actually clicked (PRODUCT rule 11).
+                        let relative_tail = ctx
+                            .element_position_by_id_at_last_frame(
+                                active_window_id,
+                                get_rich_content_position_id(view_id),
+                            )
+                            .map(|rect| position - rect.origin());
+                        match relative_tail {
+                            Some(relative_tail) if is_before_head => {
+                                ai_block_view.extend_selection_from_max_point_to(
+                                    selection_type,
+                                    relative_tail,
+                                );
+                            }
+                            Some(relative_tail) => {
+                                ai_block_view.extend_selection_from_min_point_to(
+                                    selection_type,
+                                    relative_tail,
+                                );
+                            }
+                            // Couldn't resolve this block's on-screen position (e.g. not laid out
+                            // yet); fall back to fully selecting it rather than leaving it blank.
+                            None if is_before_head => {
+                                ai_block_view.fully_select_from_max_point(selection_type);
+                            }
+                            None => {
+                                ai_block_view.fully_select_from_min_point(selection_type);
+                            }
+                        }
+                    } else if intervening_range
+                        .as_ref()
+                        .is_some_and(|range| range.contains(&ai_block_total_index))
                     {
-                        ai_block_view.start_selection_at_max_point(selection_type, x_pos);
-                    } else if (ai_block_total_index > selection_start_total_index
-                        && !is_inverted_blocklist)
-                        || (ai_block_total_index < selection_start_total_index
-                            && is_inverted_blocklist)
-                    {
-                        ai_block_view.start_selection_at_min_point(selection_type, x_pos);
+                        // Strictly between the head and the destination: passed through
+                        // entirely, so fully select it.
+                        if is_before_head {
+                            ai_block_view.fully_select_from_max_point(selection_type);
+                        } else {
+                            ai_block_view.fully_select_from_min_point(selection_type);
+                        }
+                    } else if destination_total_index.is_some() {
+                        // Beyond the destination: not part of the range. Clear any stale
+                        // external priming left over from a wider or reversed extension.
+                        ai_block_view.clear_external_selection();
+                    } else {
+                        // No destination yet (fresh drag): prime a head-only bound so whichever
+                        // block the drag eventually reaches already has a fixed anchor.
+                        if is_before_head {
+                            ai_block_view.start_selection_at_max_point(selection_type, x_pos);
+                        } else {
+                            ai_block_view.start_selection_at_min_point(selection_type, x_pos);
+                        }
                     }
                 }
 
                 block_cursor.next();
             }
         };
-
-        ctx.notify();
     }
 
     fn update_block_text_selection(
@@ -20520,6 +20692,7 @@ impl TerminalView {
         // rich content view component (i.e. `CodeEditorView`), setting `is_selecting` to false
         // will prevent the selection from "spilling" into neighbouring blocks.
         self.is_selecting = false;
+        self.is_extending_text_selection = false;
 
         // TODO(Simon): This doesn't work as intended for nested inline SelectableAreas.
         // This includes inline action headers, requested commands, and env var collection blocks.
@@ -23876,6 +24049,7 @@ impl TerminalView {
                 .expect("terminal should upgrade")
                 .is_focused(app),
             is_terminal_selecting: self.is_selecting(),
+            is_extending_text_selection: self.is_extending_text_selection,
             is_context_menu_open: self.is_context_menu_open(),
             is_waterfall_gap_mode: self.is_waterfall_gap_mode(model, app),
             pane_state,

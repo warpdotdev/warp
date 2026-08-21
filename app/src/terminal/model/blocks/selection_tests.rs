@@ -101,6 +101,211 @@ pub fn test_selection_range_cleared_when_block_finishes() {
     );
 }
 
+// Shift+click extension is implemented in `TerminalView::extend_block_text_selection` as the
+// sequence `standardize_text_selection` (normalize a completed selection to visible simple
+// endpoints) followed by `update_selection` (move only the tail, keeping the head fixed). These
+// tests exercise that same sequence directly against `BlockList`, mirroring CORE-762's spec.
+
+#[test]
+fn test_extend_selection_forward_keeps_fixed_endpoint() {
+    let mut blocks = new_bootstrapped_block_list(None, None, ChannelEventListener::new_for_test());
+    let block_index = insert_block(&mut blocks, "before\n", "before\n");
+    let semantic_selection = SemanticSelection::mock(false, "");
+    let command_grid_offset = blocks
+        .block_at(block_index)
+        .expect("block should exist")
+        .command_grid_offset();
+
+    // An initial drag selects "efor" (columns 1-4) on the command line.
+    blocks.start_selection(
+        BlockListPoint::new(command_grid_offset, 0),
+        SelectionType::Simple,
+        Side::Right,
+    );
+    blocks.update_selection(BlockListPoint::new(command_grid_offset, 3), Side::Right);
+
+    // Shift+click extends the tail further right without moving the fixed head.
+    blocks.standardize_text_selection(&semantic_selection, false);
+    let fixed_head = blocks.selection().unwrap().head_point();
+    blocks.update_selection(BlockListPoint::new(command_grid_offset, 5), Side::Right);
+
+    assert_eq!(blocks.selection().unwrap().head_point(), fixed_head);
+    let selection_range = blocks
+        .renderable_selection(&semantic_selection, false)
+        .unwrap();
+    assert_eq!(
+        selection_range.first().start,
+        BlockListPoint::new(command_grid_offset, 1)
+    );
+    assert_eq!(
+        selection_range.first().end,
+        BlockListPoint::new(command_grid_offset, 5)
+    );
+}
+
+#[test]
+fn test_extend_selection_reverses_past_fixed_endpoint() {
+    let mut blocks = new_bootstrapped_block_list(None, None, ChannelEventListener::new_for_test());
+    let block_index = insert_block(&mut blocks, "before\n", "before\n");
+    let semantic_selection = SemanticSelection::mock(false, "");
+    let command_grid_offset = blocks
+        .block_at(block_index)
+        .expect("block should exist")
+        .command_grid_offset();
+
+    // An initial drag selects columns 3-5 (fixed head at column 3).
+    blocks.start_selection(
+        BlockListPoint::new(command_grid_offset, 3),
+        SelectionType::Simple,
+        Side::Right,
+    );
+    blocks.update_selection(BlockListPoint::new(command_grid_offset, 5), Side::Right);
+    blocks.standardize_text_selection(&semantic_selection, false);
+    let fixed_head = blocks.selection().unwrap().head_point();
+
+    // Shift+click extends to the left of the fixed head, reversing the selection.
+    blocks.update_selection(BlockListPoint::new(command_grid_offset, 0), Side::Right);
+
+    assert_eq!(blocks.selection().unwrap().head_point(), fixed_head);
+    let selection_range = blocks
+        .renderable_selection(&semantic_selection, false)
+        .unwrap();
+    assert_eq!(
+        selection_range.first().start,
+        BlockListPoint::new(command_grid_offset, 1)
+    );
+    assert_eq!(
+        selection_range.first().end,
+        BlockListPoint::new(command_grid_offset, 3)
+    );
+
+    // A later Shift+click can move the active endpoint back to the other side of the same
+    // fixed head.
+    blocks.update_selection(BlockListPoint::new(command_grid_offset, 5), Side::Right);
+    assert_eq!(blocks.selection().unwrap().head_point(), fixed_head);
+    let selection_range = blocks
+        .renderable_selection(&semantic_selection, false)
+        .unwrap();
+    assert_eq!(
+        selection_range.first().start,
+        BlockListPoint::new(command_grid_offset, 4)
+    );
+    assert_eq!(
+        selection_range.first().end,
+        BlockListPoint::new(command_grid_offset, 5)
+    );
+}
+
+#[test]
+pub fn test_extend_selection_spans_multiple_command_blocks() {
+    App::test((), |app| async move {
+        app.read(|ctx| {
+            let mut block_list =
+                new_bootstrapped_block_list(None, None, ChannelEventListener::new_for_test());
+
+            let first_block_index = insert_block(&mut block_list, "foo\n", "foo\n");
+            let second_block_index = insert_block(&mut block_list, "bar\n", "bar\n");
+
+            let first_block = block_list
+                .block_at(first_block_index)
+                .expect("block should exist");
+            let first_command_grid_offset = first_block.command_grid_offset();
+            let first_block_height =
+                first_block.height(&crate::terminal::model::block::TranscriptScope::Terminal);
+            let second_command_grid_offset = first_block_height
+                + block_list
+                    .block_at(second_block_index)
+                    .expect("block should exist")
+                    .command_grid_offset();
+
+            let semantic_selection = SemanticSelection::mock(false, "");
+
+            // An initial drag selects just "foo" in the first command block.
+            block_list.start_selection(
+                BlockListPoint::new(first_command_grid_offset, 0),
+                SelectionType::Simple,
+                Side::Left,
+            );
+            block_list.update_selection(
+                BlockListPoint::new(first_command_grid_offset, 2),
+                Side::Right,
+            );
+            block_list.standardize_text_selection(&semantic_selection, false);
+            let fixed_head = block_list.selection().unwrap().head_point();
+
+            // Shift+click extends the tail into the second command block, without moving the
+            // fixed head, crossing the intervening block boundary.
+            block_list.update_selection(
+                BlockListPoint::new(second_command_grid_offset, 2),
+                Side::Right,
+            );
+
+            assert_eq!(block_list.selection().unwrap().head_point(), fixed_head);
+            // The copied text includes the first block's output ("foo") between the two
+            // commands, since the selection spans everything from the fixed head through the
+            // new tail, crossing the intervening block boundary.
+            assert_eq!(
+                block_list.selection_to_string(&semantic_selection, false, ctx),
+                Some("foo\nfoo\nbar".to_string())
+            );
+        })
+    })
+}
+
+#[test]
+pub fn test_extend_normalizes_semantic_selection_to_simple_endpoints() {
+    let mut blocks = new_bootstrapped_block_list(None, None, ChannelEventListener::new_for_test());
+    let block_index = insert_block(&mut blocks, "foo\nbar\n", "foo\nbar\nbazz\n");
+
+    let block = blocks.block_at(block_index).expect("block should exist");
+    let command_grid_offset = block.command_grid_offset();
+
+    let semantic_selection = SemanticSelection::mock(false, "");
+    blocks.start_selection(
+        BlockListPoint::new(command_grid_offset, 1),
+        SelectionType::Semantic,
+        Side::Right,
+    );
+
+    // The completed double-click selection expanded out to the whole word "foo".
+    let selection_range = blocks
+        .renderable_selection(&semantic_selection, false)
+        .unwrap();
+    assert_eq!(
+        selection_range.first().start,
+        BlockListPoint::new(command_grid_offset, 0)
+    );
+    assert_eq!(
+        selection_range.first().end,
+        BlockListPoint::new(command_grid_offset, 2)
+    );
+
+    // Shift+click extends into the middle of "bar" on the next line. Standardizing first
+    // switches the selection to simple cell/character extension, so this must not re-expand to
+    // select the whole of "bar" the way a fresh double-click there would.
+    blocks.standardize_text_selection(&semantic_selection, false);
+    assert_eq!(
+        blocks.selection().unwrap().selection_type,
+        SelectionType::Simple
+    );
+    blocks.update_selection(
+        BlockListPoint::new(command_grid_offset + 1., 1),
+        Side::Right,
+    );
+
+    let selection_range = blocks
+        .renderable_selection(&semantic_selection, false)
+        .unwrap();
+    assert_eq!(
+        selection_range.first().start,
+        BlockListPoint::new(command_grid_offset, 0)
+    );
+    assert_eq!(
+        selection_range.first().end,
+        BlockListPoint::new(command_grid_offset + 1., 1)
+    );
+}
+
 #[test]
 pub fn test_selection_ranges_single_command_grid() {
     let mut blocks = new_bootstrapped_block_list(None, None, ChannelEventListener::new_for_test());

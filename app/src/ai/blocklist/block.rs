@@ -34,7 +34,7 @@ use itertools::Itertools;
 use model::AIBlockOutputStatus;
 use parking_lot::{FairMutex, Mutex, RwLock};
 use pathfinder_color::ColorU;
-use pathfinder_geometry::vector::vec2f;
+use pathfinder_geometry::vector::{Vector2F, vec2f};
 pub use pending_user_query_block::{PendingUserQueryBlock, PendingUserQueryBlockEvent};
 #[cfg(not(target_family = "wasm"))]
 use repo_metadata::repositories::DetectedRepositories;
@@ -5164,6 +5164,81 @@ impl AIBlock {
             },
             selection_type,
         )
+    }
+
+    /// Fully selects this block's `SelectableArea`, from its top-left corner to its bottom-right
+    /// corner. Used instead of [`Self::start_selection_at_min_point`] when priming for a direct
+    /// (non-drag) cross-block Shift+click extension, which won't emit a subsequent drag event to
+    /// establish a precise tail the way a physical drag does.
+    pub fn fully_select_from_min_point(&self, selection_type: SelectionType) {
+        self.state_handles
+            .selection_handle
+            .select_full_bounds_outside(
+                SelectionBound::TopLeft,
+                SelectionBound::BottomRight,
+                selection_type,
+            )
+    }
+
+    /// Fully selects this block's `SelectableArea`, from its bottom-right corner to its top-left
+    /// corner. Used instead of [`Self::start_selection_at_max_point`] when priming for a direct
+    /// (non-drag) cross-block Shift+click extension, which won't emit a subsequent drag event to
+    /// establish a precise tail the way a physical drag does.
+    pub fn fully_select_from_max_point(&self, selection_type: SelectionType) {
+        self.state_handles
+            .selection_handle
+            .select_full_bounds_outside(
+                SelectionBound::BottomRight,
+                SelectionBound::TopLeft,
+                selection_type,
+            )
+    }
+
+    /// Extends this block's `SelectableArea` from its top-left corner to
+    /// `tail_relative_position` (relative to this block's own origin). Used instead of
+    /// [`Self::fully_select_from_min_point`] when a direct (non-drag) cross-block Shift+click
+    /// extension's clicked endpoint lands inside this block, so the selection ends exactly
+    /// where the user clicked instead of swallowing the whole block.
+    pub fn extend_selection_from_min_point_to(
+        &self,
+        selection_type: SelectionType,
+        tail_relative_position: Vector2F,
+    ) {
+        self.state_handles
+            .selection_handle
+            .select_to_relative_tail_outside(
+                SelectionBound::TopLeft,
+                tail_relative_position,
+                selection_type,
+            )
+    }
+
+    /// Extends this block's `SelectableArea` from its bottom-right corner to
+    /// `tail_relative_position` (relative to this block's own origin). Used instead of
+    /// [`Self::fully_select_from_max_point`] when a direct (non-drag) cross-block Shift+click
+    /// extension's clicked endpoint lands inside this block, so the selection ends exactly
+    /// where the user clicked instead of swallowing the whole block.
+    pub fn extend_selection_from_max_point_to(
+        &self,
+        selection_type: SelectionType,
+        tail_relative_position: Vector2F,
+    ) {
+        self.state_handles
+            .selection_handle
+            .select_to_relative_tail_outside(
+                SelectionBound::BottomRight,
+                tail_relative_position,
+                selection_type,
+            )
+    }
+
+    /// Clears any block-level text selection primed by point-based cross-block coordination
+    /// (see [`Self::start_selection_at_min_point`] and friends), without touching nested
+    /// selections (code editors, etc.). Used when this block was previously within a wider
+    /// point-based selection's range but no longer is, e.g. the active endpoint of a direct
+    /// Shift+click extension moved back past it.
+    pub fn clear_external_selection(&self) {
+        self.state_handles.selection_handle.clear();
     }
 
     /// Clears all text selections in all components within this `AIBlock`'s view sub-hierarchy.

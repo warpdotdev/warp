@@ -180,6 +180,8 @@ fn register_tests() -> HashMap<&'static str, BoxedBuilderFn> {
     register_test!(test_clear);
     register_test!(test_waterfall_input);
     register_test!(test_waterfall_input_text_selection);
+    register_test!(test_shift_click_extends_previous_selection_then_plain_click_resets);
+    register_test!(test_shift_click_extend_selection_recording);
     register_test!(test_waterfall_input_scrolling);
     register_test!(test_waterfall_input_after_command_execution);
     register_test!(test_waterfall_input_alt_grid);
@@ -450,6 +452,11 @@ fn register_tests() -> HashMap<&'static str, BoxedBuilderFn> {
     register_test!(test_selection_last_to_ai_simple);
     register_test!(test_selection_last_to_ai_semantic);
     register_test!(test_selection_last_to_ai_lines);
+    register_test!(test_shift_click_extends_through_ai_block_to_last_block);
+    register_test!(test_shift_click_extends_from_first_block_into_ai_block);
+    register_test!(test_shift_click_extends_backward_through_ai_block_to_first_block);
+    register_test!(test_shift_click_reextends_within_a_previously_crossed_ai_block);
+    register_test!(test_shift_click_extends_backward_from_last_block_into_ai_block);
     register_test!(test_restored_ai_block_renders_mermaid_and_local_images);
     register_test!(test_cancelled_run_agents_card_renders_cancelled_state);
 

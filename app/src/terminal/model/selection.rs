@@ -250,6 +250,13 @@ pub enum SelectAction<T> {
         delta: Lines,
         position: Vector2F,
     },
+    /// Extends the existing selection's active endpoint to `point`, keeping the other endpoint
+    /// fixed. Used by Shift+click, mirroring the input editor's `SelectAction::Extend`.
+    Extend {
+        point: T,
+        side: Side,
+        position: Vector2F,
+    },
     End,
 }
 

@@ -107,6 +107,13 @@ impl BlockListSelection {
         }
     }
 
+    /// The point of the fixed head anchor, i.e. where the user first clicked before dragging or
+    /// extending. Unlike [`Self::start_anchor`]/[`Self::end_anchor`], this is not affected by
+    /// whether the selection is reversed.
+    pub fn head_point(&self) -> BlockListPoint {
+        self.head.point
+    }
+
     /// Given a block list position (offset from the top-left corner of the
     /// block list), returns the specific cell (row/column index within a
     /// particular grid within a particular block) closest to the given point.

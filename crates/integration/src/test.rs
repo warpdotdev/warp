@@ -68,7 +68,7 @@ pub use osc8_hyperlinks::*;
 pub use pane_restoration::*;
 use parking_lot::Mutex;
 use pathfinder_geometry::rect::RectF;
-use pathfinder_geometry::vector::Vector2F;
+use pathfinder_geometry::vector::{Vector2F, vec2f};
 #[cfg(target_os = "macos")]
 pub use preview_config_migration::*;
 pub use remote_server::*;
@@ -140,10 +140,11 @@ use warp::integration_testing::terminal::{
     assert_snackbar_is_not_visible, assert_snackbar_is_visible, assert_terminal_bootstrapped,
     assert_terminal_bootstrapping, assert_view_has_text_selection,
     assert_waterfall_gap_empty_background_rendered, clear_blocklist_to_remove_bootstrapped_blocks,
-    execute_command_for_single_terminal_in_tab, execute_echo, execute_long_running_command,
-    execute_long_running_command_for_pane, execute_python_interpreter_in_tab,
-    open_context_menu_for_selected_block, performance_test, run_alt_grid_program, run_completer,
-    validate_git_branch, wait_until_bootstrapped_pane, wait_until_bootstrapped_single_pane_for_tab,
+    execute_command_for_single_terminal_in_tab, execute_echo, execute_echo_str,
+    execute_long_running_command, execute_long_running_command_for_pane,
+    execute_python_interpreter_in_tab, open_context_menu_for_selected_block, performance_test,
+    run_alt_grid_program, run_completer, validate_git_branch, wait_until_bootstrapped_pane,
+    wait_until_bootstrapped_single_pane_for_tab,
 };
 use warp::integration_testing::view_getters::{
     pane_group_view, single_input_suggestions_view_for_tab, single_input_view_for_tab,
@@ -188,15 +189,16 @@ use warp::workspace::{
     NEW_SESSION_MENU_BUTTON_POSITION_ID, NEW_TAB_BUTTON_POSITION_ID, Workspace, WorkspaceAction,
 };
 use warp::{AgentModeEntrypoint, cmd_or_ctrl_shift};
-use warpui_core::event::KeyState;
-use warpui_core::integration::{AssertionOutcome, StepData, TestStep};
+use warpui_core::event::{KeyState, ModifiersState};
+use warpui_core::integration::{AssertionOutcome, StepData, StepDataMap, TestStep};
 use warpui_core::keymap::{Keystroke, PerPlatformKeystroke, Trigger};
 use warpui_core::platform::keyboard::KeyCode;
 use warpui_core::platform::{OperatingSystem, TerminationMode};
 use warpui_core::units::Lines;
 use warpui_core::windowing::WindowManager;
 use warpui_core::{
-    AssetProvider, Event, SingletonEntity, UpdateView, ViewHandle, async_assert, async_assert_eq,
+    App, AssetProvider, Event, SingletonEntity, UpdateView, ViewHandle, WindowId, async_assert,
+    async_assert_eq,
 };
 pub use websockets::*;
 pub use workflows::*;
@@ -1045,6 +1047,700 @@ pub fn test_waterfall_input_text_selection() -> Builder {
                 })
                 .add_assertion(assert_view_has_text_selection(false)),
         )
+}
+
+/// Exercises Shift+click extension end to end through the real mouse-event dispatch path
+/// (`BlockListElement::mouse_down`, `SelectAction::Extend`, `SelectableArea::on_mouse_down`),
+/// rather than calling model/helper primitives directly. Covers PRODUCT rules 1, 2, 3, and 10:
+/// a completed non-empty selection can be extended by a later Shift+click (which keeps its
+/// fixed head), and a subsequent plain click replaces it.
+pub fn test_shift_click_extends_previous_selection_then_plain_click_resets() -> Builder {
+    new_builder()
+        .with_user_defaults(HashMap::from([(
+            INPUT_MODE.to_owned(),
+            serde_json::to_string(&InputMode::Waterfall)
+                .expect("input_mode value should convert to json string"),
+        )]))
+        .with_step(
+            wait_until_bootstrapped_single_pane_for_tab(0)
+                .add_assertion(assert_input_mode(InputMode::Waterfall)),
+        )
+        .with_step(clear_blocklist_to_remove_bootstrapped_blocks())
+        .with_step(execute_echo(0))
+        .with_step(
+            new_step_with_default_assertions("Clear viewport using ctrl-l")
+                .with_keystrokes(&["ctrl-l"])
+                .add_assertion(assert_gap_exists(true))
+                .add_assertion(assert_input_at_top_of_terminal()),
+        )
+        // Run three commands after the clear, matching `test_waterfall_input_text_selection`'s
+        // proven-working fixture and coordinates.
+        .with_step(execute_echo(0))
+        .with_step(execute_echo(0))
+        .with_step(execute_echo(0).add_assertion(|app, window_id| {
+            let terminal_view = single_terminal_view_for_tab(app, window_id, 0);
+            terminal_view.read(app, |view, _ctx| {
+                async_assert!(!view.is_selecting(), "Should not be selecting",)
+            })
+        }))
+        .with_step(
+            // Drag from the top left to the bottom right, matching the proven-working
+            // coordinates from `test_waterfall_input_text_selection`.
+            new_step_with_default_assertions("start selecting")
+                .with_event(Event::LeftMouseDown {
+                    position: Vector2F::new(415., 50.),
+                    modifiers: Default::default(),
+                    click_count: 1,
+                    is_first_mouse: false,
+                })
+                .with_event(Event::LeftMouseDragged {
+                    position: Vector2F::new(400., 300.),
+                    modifiers: Default::default(),
+                })
+                .add_assertion(assert_view_has_text_selection(true)),
+        )
+        .with_step(
+            new_step_with_default_assertions("end selecting")
+                .with_event(Event::LeftMouseUp {
+                    position: Vector2F::new(400., 300.),
+                    modifiers: Default::default(),
+                })
+                .add_assertion(assert_view_has_text_selection(false))
+                .add_named_assertion_with_data_from_prior_step(
+                    "capture the non-empty selected text after the drag",
+                    |app, window_id, step_data| {
+                        let terminal_view = single_terminal_view_for_tab(app, window_id, 0);
+                        let selected_text =
+                            terminal_view.read(app, |view, ctx| view.selected_text(ctx));
+                        let Some(selected_text) = selected_text.filter(|text| !text.is_empty())
+                        else {
+                            return AssertionOutcome::failure(
+                                "Expected non-empty selected text after the initial drag"
+                                    .to_owned(),
+                            );
+                        };
+                        step_data.insert("text_after_drag", selected_text);
+                        AssertionOutcome::Success
+                    },
+                ),
+        )
+        .with_step(
+            // A Shift+click (mouse down and up at the same position, no drag) moves the active
+            // endpoint of the completed selection instead of starting a new one, keeping the
+            // fixed head from the earlier drag in place. The new (shorter) selection should
+            // still start with the same text as before, proving the fixed head did not move,
+            // while its shorter length proves the active endpoint (tail) did move.
+            new_step_with_default_assertions("Shift+click moves the active endpoint")
+                .with_event(Event::LeftMouseDown {
+                    position: Vector2F::new(400., 150.),
+                    modifiers: ModifiersState {
+                        shift: true,
+                        ..Default::default()
+                    },
+                    click_count: 1,
+                    is_first_mouse: false,
+                })
+                .with_event(Event::LeftMouseUp {
+                    position: Vector2F::new(400., 150.),
+                    modifiers: ModifiersState {
+                        shift: true,
+                        ..Default::default()
+                    },
+                })
+                .add_assertion(assert_view_has_text_selection(false))
+                .add_named_assertion_with_data_from_prior_step(
+                    "the fixed head is unchanged and the selection shrank",
+                    |app, window_id, step_data| {
+                        let text_after_drag: String = step_data
+                            .get::<_, String>("text_after_drag")
+                            .expect("text_after_drag should be set by the prior step")
+                            .clone();
+                        let terminal_view = single_terminal_view_for_tab(app, window_id, 0);
+                        let selected_text =
+                            terminal_view.read(app, |view, ctx| view.selected_text(ctx));
+                        async_assert!(
+                            selected_text.as_ref().is_some_and(|text| !text.is_empty()
+                                && text.len() < text_after_drag.len()
+                                && text_after_drag.starts_with(text.as_str())),
+                            "Expected a shorter selection (now {:?}) with the same starting \
+                             text as after the initial drag ({:?}), proving the fixed head did \
+                             not move while the active endpoint did",
+                            selected_text,
+                            text_after_drag
+                        )
+                    },
+                ),
+        )
+        .with_step(
+            // A plain (non-Shift) click replaces the extended selection.
+            new_step_with_default_assertions("plain click replaces the selection")
+                .with_event(Event::LeftMouseDown {
+                    position: Vector2F::new(415., 50.),
+                    modifiers: Default::default(),
+                    click_count: 1,
+                    is_first_mouse: false,
+                })
+                .with_event(Event::LeftMouseUp {
+                    position: Vector2F::new(415., 50.),
+                    modifiers: Default::default(),
+                })
+                .add_assertion(|app, window_id| {
+                    let terminal_view = single_terminal_view_for_tab(app, window_id, 0);
+                    terminal_view.read(app, |view, ctx| {
+                        let selected_text = view.selected_text(ctx);
+                        async_assert!(
+                            selected_text.is_none_or(|text| text.is_empty()),
+                            "A plain click should replace the extended selection with an empty \
+                             one"
+                        )
+                    })
+                }),
+        )
+}
+
+/// Manual test: requires a real display for frame capture (see the
+/// `gui-integration-test-video` skill). Records a single video walking through every
+/// Shift+click extend scenario from `specs/CORE-762/PRODUCT.md`, driving the app's own event
+/// pipeline (so the Shift modifier is exactly what the test says it is, with no OS/X11 input
+/// layer that could drop it) while producing a real rendered-UI recording, plus assertions on
+/// the resulting selection and copied text at each step:
+/// 1. Drag-select text in a command block, release, then Shift+click elsewhere in the same
+///    block: the highlight extends instead of restarting.
+/// 2. Shift+click further away: re-extends from the same fixed head.
+/// 3. Shift+click on the opposite side (same row, before the head): reverses without the fixed
+///    head moving.
+/// 4. Shift+click in a different command block: the extension spans blocks.
+/// 5. Shift+mouse-down (extend) followed by a drag: keeps extending text, without flipping to a
+///    whole-block drag.
+/// 6. A plain click: replaces the selection.
+/// 7. Whole blocks selected (no text highlight), then Shift+click: still range-selects blocks.
+///
+/// Run with:
+/// ```sh
+/// WARPUI_USE_REAL_DISPLAY_IN_INTEGRATION_TESTS=1 \
+///   cargo run -p integration --bin integration -- test_shift_click_extend_selection_recording
+/// ```
+pub fn test_shift_click_extend_selection_recording() -> Builder {
+    /// A point a little inside `bounds`' top-left corner, landing on the block's
+    /// prompt/command line. Used as the fixed head for every extension in this test.
+    fn head_point(bounds: RectF) -> Vector2F {
+        bounds.origin() + vec2f(100., 12.)
+    }
+
+    /// A point on the same row as [`head_point`] but before it in reading order (smaller
+    /// column, same row). Used to exercise reversal past the fixed head.
+    fn before_head_point(bounds: RectF) -> Vector2F {
+        bounds.origin() + vec2f(20., 12.)
+    }
+
+    /// The furthest point within `bounds`, inset slightly so the event lands inside the block.
+    fn far_point(bounds: RectF) -> Vector2F {
+        bounds.lower_right() - vec2f(20., 12.)
+    }
+
+    fn block_bounds(app: &mut App, window_id: WindowId, position_id: &str) -> RectF {
+        let presenter = app.presenter(window_id).expect("presenter");
+        presenter
+            .borrow()
+            .position_cache()
+            .get_position(position_id)
+            .unwrap_or_else(|| panic!("{position_id} position"))
+    }
+
+    /// Captures the current non-empty selected text into `step_data` under `key`, failing the
+    /// step if the selection is empty (a bug would otherwise silently make every later
+    /// length/prefix comparison in this test meaningless).
+    fn capture_selected_text(
+        key: &'static str,
+    ) -> impl FnMut(&mut App, WindowId, &mut StepDataMap) -> AssertionOutcome {
+        move |app, window_id, step_data| {
+            let terminal_view = single_terminal_view_for_tab(app, window_id, 0);
+            let selected_text = terminal_view.read(app, |view, ctx| view.selected_text(ctx));
+            let Some(selected_text) = selected_text.filter(|text| !text.is_empty()) else {
+                return AssertionOutcome::failure(format!(
+                    "Expected a non-empty selection when capturing '{key}'"
+                ));
+            };
+            step_data.insert(key, selected_text);
+            AssertionOutcome::Success
+        }
+    }
+
+    new_builder()
+        .with_real_display()
+        // Real-display frame capture, several screenshots, and MP4 encoding at the end take
+        // noticeably longer than the framework's default test timeout.
+        .with_timeout(Duration::from_secs(5 * 60))
+        .with_step(wait_until_bootstrapped_single_pane_for_tab(0))
+        .with_step(clear_blocklist_to_remove_bootstrapped_blocks())
+        .with_step(execute_echo_str(0, "first block alpha bravo charlie"))
+        .with_step(execute_echo_str(0, "second block delta echo foxtrot"))
+        .with_step(execute_echo_str(0, "third block golf hotel india"))
+        .with_step(
+            TestStep::new("Take screenshot before recording")
+                .with_take_screenshot("01_three_blocks_ready.png"),
+        )
+        .with_step(TestStep::new("Start recording").with_start_recording())
+        .with_step(
+            // Scenario: drag-select text in a command block, establishing the fixed head.
+            new_step_with_default_assertions("Drag-select within the first block")
+                .with_event_fn(|app, window_id| Event::LeftMouseDown {
+                    position: head_point(block_bounds(app, window_id, "block_index:0")),
+                    modifiers: Default::default(),
+                    click_count: 1,
+                    is_first_mouse: false,
+                })
+                .with_event_fn(|app, window_id| Event::LeftMouseDragged {
+                    position: far_point(block_bounds(app, window_id, "block_index:0")),
+                    modifiers: Default::default(),
+                })
+                .with_event_fn(|app, window_id| Event::LeftMouseUp {
+                    position: far_point(block_bounds(app, window_id, "block_index:0")),
+                    modifiers: Default::default(),
+                })
+                .add_assertion(assert_view_has_text_selection(false))
+                .add_named_assertion_with_data_from_prior_step(
+                    "capture the initial drag selection",
+                    capture_selected_text("text_drag"),
+                ),
+        )
+        .with_step(
+            TestStep::new("Screenshot after initial drag")
+                .with_take_screenshot("02_after_initial_drag.png"),
+        )
+        .with_step(
+            // Scenario 1: Shift+click elsewhere in the same block extends rather than restarts.
+            new_step_with_default_assertions("Shift+click extends within the same block")
+                .with_event_fn(|app, window_id| Event::LeftMouseDown {
+                    position: block_bounds(app, window_id, "block_index:0").lower_right(),
+                    modifiers: ModifiersState {
+                        shift: true,
+                        ..Default::default()
+                    },
+                    click_count: 1,
+                    is_first_mouse: false,
+                })
+                .with_event_fn(|app, window_id| Event::LeftMouseUp {
+                    position: block_bounds(app, window_id, "block_index:0").lower_right(),
+                    modifiers: ModifiersState {
+                        shift: true,
+                        ..Default::default()
+                    },
+                })
+                .add_named_assertion_with_data_from_prior_step(
+                    "selection extended forward from the same head",
+                    |app, window_id, step_data| {
+                        let text_drag: String = step_data
+                            .get::<_, String>("text_drag")
+                            .expect("text_drag should be set")
+                            .clone();
+                        let terminal_view = single_terminal_view_for_tab(app, window_id, 0);
+                        let selected_text =
+                            terminal_view.read(app, |view, ctx| view.selected_text(ctx));
+                        let Some(selected_text) = selected_text.filter(|text| !text.is_empty())
+                        else {
+                            return AssertionOutcome::failure(
+                                "Expected a non-empty extended selection".to_owned(),
+                            );
+                        };
+                        if selected_text.len() > text_drag.len()
+                            && selected_text.starts_with(&text_drag)
+                        {
+                            step_data.insert("text_same_block_extend", selected_text);
+                            AssertionOutcome::Success
+                        } else {
+                            AssertionOutcome::failure(format!(
+                                "Expected a longer selection starting with {text_drag:?}, got \
+                                 {selected_text:?}"
+                            ))
+                        }
+                    },
+                ),
+        )
+        .with_step(
+            TestStep::new("Screenshot after same-block extend")
+                .with_take_screenshot("03_after_same_block_extend.png"),
+        )
+        .with_step(
+            // Scenario 2: Shift+click further away re-extends from the same fixed head.
+            new_step_with_default_assertions("Shift+click extends further into the second block")
+                .with_event_fn(|app, window_id| Event::LeftMouseDown {
+                    position: block_bounds(app, window_id, "block_index:1").center(),
+                    modifiers: ModifiersState {
+                        shift: true,
+                        ..Default::default()
+                    },
+                    click_count: 1,
+                    is_first_mouse: false,
+                })
+                .with_event_fn(|app, window_id| Event::LeftMouseUp {
+                    position: block_bounds(app, window_id, "block_index:1").center(),
+                    modifiers: ModifiersState {
+                        shift: true,
+                        ..Default::default()
+                    },
+                })
+                .add_named_assertion_with_data_from_prior_step(
+                    "selection grew further while keeping the same head",
+                    |app, window_id, step_data| {
+                        let text_drag: String = step_data
+                            .get::<_, String>("text_drag")
+                            .expect("text_drag should be set")
+                            .clone();
+                        let text_same_block_extend: String = step_data
+                            .get::<_, String>("text_same_block_extend")
+                            .expect("text_same_block_extend should be set")
+                            .clone();
+                        let terminal_view = single_terminal_view_for_tab(app, window_id, 0);
+                        let selected_text =
+                            terminal_view.read(app, |view, ctx| view.selected_text(ctx));
+                        let Some(selected_text) = selected_text.filter(|text| !text.is_empty())
+                        else {
+                            return AssertionOutcome::failure(
+                                "Expected a non-empty further-extended selection".to_owned(),
+                            );
+                        };
+                        if selected_text.len() > text_same_block_extend.len()
+                            && selected_text.starts_with(&text_drag)
+                        {
+                            step_data.insert("text_further_extend", selected_text);
+                            AssertionOutcome::Success
+                        } else {
+                            AssertionOutcome::failure(format!(
+                                "Expected an even longer selection still starting with \
+                                 {text_drag:?}, got {selected_text:?}"
+                            ))
+                        }
+                    },
+                ),
+        )
+        .with_step(
+            TestStep::new("Screenshot after further extend")
+                .with_take_screenshot("04_after_further_extend.png"),
+        )
+        .with_step(
+            // Scenario 3: Shift+click on the opposite side reverses without moving the head.
+            new_step_with_default_assertions("Shift+click reverses past the fixed head")
+                .with_event_fn(|app, window_id| Event::LeftMouseDown {
+                    position: before_head_point(block_bounds(app, window_id, "block_index:0")),
+                    modifiers: ModifiersState {
+                        shift: true,
+                        ..Default::default()
+                    },
+                    click_count: 1,
+                    is_first_mouse: false,
+                })
+                .with_event_fn(|app, window_id| Event::LeftMouseUp {
+                    position: before_head_point(block_bounds(app, window_id, "block_index:0")),
+                    modifiers: ModifiersState {
+                        shift: true,
+                        ..Default::default()
+                    },
+                })
+                .add_named_assertion_with_data_from_prior_step(
+                    "selection reversed to a short span before the head",
+                    |app, window_id, step_data| {
+                        let text_drag: String = step_data
+                            .get::<_, String>("text_drag")
+                            .expect("text_drag should be set")
+                            .clone();
+                        let terminal_view = single_terminal_view_for_tab(app, window_id, 0);
+                        let selected_text =
+                            terminal_view.read(app, |view, ctx| view.selected_text(ctx));
+                        let Some(selected_text) = selected_text.filter(|text| !text.is_empty())
+                        else {
+                            return AssertionOutcome::failure(
+                                "Expected a non-empty reversed selection".to_owned(),
+                            );
+                        };
+                        if selected_text.len() < text_drag.len() && selected_text != text_drag {
+                            AssertionOutcome::Success
+                        } else {
+                            AssertionOutcome::failure(format!(
+                                "Expected a short selection distinct from the forward extension \
+                                 {text_drag:?}, got {selected_text:?}"
+                            ))
+                        }
+                    },
+                ),
+        )
+        .with_step(
+            TestStep::new("Screenshot after reversal")
+                .with_take_screenshot("05_after_reversal.png"),
+        )
+        .with_step(
+            // Scenario 4: Shift+click in a different (non-adjacent) command block spans blocks.
+            new_step_with_default_assertions("Shift+click extends across into the third block")
+                .with_event_fn(|app, window_id| Event::LeftMouseDown {
+                    position: far_point(block_bounds(app, window_id, "block_index:2")),
+                    modifiers: ModifiersState {
+                        shift: true,
+                        ..Default::default()
+                    },
+                    click_count: 1,
+                    is_first_mouse: false,
+                })
+                .with_event_fn(|app, window_id| Event::LeftMouseUp {
+                    position: far_point(block_bounds(app, window_id, "block_index:2")),
+                    modifiers: ModifiersState {
+                        shift: true,
+                        ..Default::default()
+                    },
+                })
+                .add_named_assertion_with_data_from_prior_step(
+                    "selection now spans from the first block into the third",
+                    |app, window_id, step_data| {
+                        let text_drag: String = step_data
+                            .get::<_, String>("text_drag")
+                            .expect("text_drag should be set")
+                            .clone();
+                        let text_further_extend: String = step_data
+                            .get::<_, String>("text_further_extend")
+                            .expect("text_further_extend should be set")
+                            .clone();
+                        let terminal_view = single_terminal_view_for_tab(app, window_id, 0);
+                        let selected_text =
+                            terminal_view.read(app, |view, ctx| view.selected_text(ctx));
+                        let Some(selected_text) = selected_text.filter(|text| !text.is_empty())
+                        else {
+                            return AssertionOutcome::failure(
+                                "Expected a non-empty cross-block selection".to_owned(),
+                            );
+                        };
+                        if selected_text.len() > text_further_extend.len()
+                            && selected_text.starts_with(&text_drag)
+                        {
+                            step_data.insert("text_cross_block", selected_text);
+                            AssertionOutcome::Success
+                        } else {
+                            AssertionOutcome::failure(format!(
+                                "Expected the largest selection yet, still starting with \
+                                 {text_drag:?}, got {selected_text:?}"
+                            ))
+                        }
+                    },
+                ),
+        )
+        .with_step(
+            new_step_with_default_assertions("Copy the cross-block selection")
+                .with_keystrokes(&[cmd_or_ctrl_shift("c")])
+                .add_named_assertion_with_data_from_prior_step(
+                    "clipboard matches the selection exactly",
+                    |app, _window_id, step_data| {
+                        let text_cross_block: String = step_data
+                            .get::<_, String>("text_cross_block")
+                            .expect("text_cross_block should be set")
+                            .clone();
+                        let clipboard = app.update(|ctx| ctx.clipboard().read());
+                        async_assert_eq!(
+                            clipboard.plain_text,
+                            text_cross_block,
+                            "Copied text should match the selection shown on screen"
+                        )
+                    },
+                ),
+        )
+        .with_step(
+            TestStep::new("Screenshot after cross-block extend and copy")
+                .with_take_screenshot("06_after_cross_block_extend.png"),
+        )
+        .with_step(
+            // Scenario 5: a drag after a Shift+extending mouse-down keeps extending text
+            // instead of flipping to a whole-block drag.
+            new_step_with_default_assertions("Shift+mouse-down then drag keeps extending text")
+                .with_event_fn(|app, window_id| Event::LeftMouseDown {
+                    position: before_head_point(block_bounds(app, window_id, "block_index:1")),
+                    modifiers: ModifiersState {
+                        shift: true,
+                        ..Default::default()
+                    },
+                    click_count: 1,
+                    is_first_mouse: false,
+                })
+                .with_event_fn(|app, window_id| Event::LeftMouseDragged {
+                    position: block_bounds(app, window_id, "block_index:2").center(),
+                    modifiers: ModifiersState {
+                        shift: true,
+                        ..Default::default()
+                    },
+                })
+                .with_event_fn(|app, window_id| Event::LeftMouseDragged {
+                    position: far_point(block_bounds(app, window_id, "block_index:2")),
+                    modifiers: ModifiersState {
+                        shift: true,
+                        ..Default::default()
+                    },
+                })
+                .with_event_fn(|app, window_id| Event::LeftMouseUp {
+                    position: far_point(block_bounds(app, window_id, "block_index:2")),
+                    modifiers: ModifiersState {
+                        shift: true,
+                        ..Default::default()
+                    },
+                })
+                .add_assertion(assert_view_has_text_selection(false))
+                .add_named_assertion_with_data_from_prior_step(
+                    "drag after Shift+mouse-down kept extending text, not whole blocks",
+                    |app, window_id, step_data| {
+                        let text_drag: String = step_data
+                            .get::<_, String>("text_drag")
+                            .expect("text_drag should be set")
+                            .clone();
+                        let text_cross_block: String = step_data
+                            .get::<_, String>("text_cross_block")
+                            .expect("text_cross_block should be set")
+                            .clone();
+                        let terminal_view = single_terminal_view_for_tab(app, window_id, 0);
+                        let (selected_text, has_block_selection) =
+                            terminal_view.read(app, |view, ctx| {
+                                (
+                                    view.selected_text(ctx),
+                                    view.selected_blocks_pivot_index().is_some(),
+                                )
+                            });
+                        let Some(selected_text) = selected_text.filter(|text| !text.is_empty())
+                        else {
+                            return AssertionOutcome::failure(
+                                "Expected a non-empty selection after the shift-drag".to_owned(),
+                            );
+                        };
+                        if has_block_selection {
+                            return AssertionOutcome::failure(
+                                "Shift-drag should not have started a whole-block selection"
+                                    .to_owned(),
+                            );
+                        }
+                        if selected_text.len() >= text_cross_block.len()
+                            && selected_text.starts_with(&text_drag)
+                        {
+                            AssertionOutcome::Success
+                        } else {
+                            AssertionOutcome::failure(format!(
+                                "Expected the shift-drag to extend at least as far as \
+                                 {text_cross_block:?} while still starting with {text_drag:?}, \
+                                 got {selected_text:?}"
+                            ))
+                        }
+                    },
+                ),
+        )
+        .with_step(
+            TestStep::new("Screenshot after shift-drag")
+                .with_take_screenshot("07_after_shift_drag.png"),
+        )
+        .with_step(
+            // Scenario 6: a plain click replaces the selection.
+            new_step_with_default_assertions("Plain click replaces the selection")
+                .with_event_fn(|app, window_id| Event::LeftMouseDown {
+                    position: head_point(block_bounds(app, window_id, "block_index:0")),
+                    modifiers: Default::default(),
+                    click_count: 1,
+                    is_first_mouse: false,
+                })
+                .with_event_fn(|app, window_id| Event::LeftMouseUp {
+                    position: head_point(block_bounds(app, window_id, "block_index:0")),
+                    modifiers: Default::default(),
+                })
+                .add_assertion(|app, window_id| {
+                    let terminal_view = single_terminal_view_for_tab(app, window_id, 0);
+                    terminal_view.read(app, |view, ctx| {
+                        let selected_text = view.selected_text(ctx);
+                        async_assert!(
+                            selected_text.is_none_or(|text| text.is_empty()),
+                            "A plain click should replace the extended selection with an empty \
+                             one"
+                        )
+                    })
+                }),
+        )
+        .with_step(
+            TestStep::new("Screenshot after plain click reset")
+                .with_take_screenshot("08_after_plain_click_reset.png"),
+        )
+        .with_step(
+            // Scenario 7: with whole blocks selected (no text highlight), Shift+click still
+            // range-selects blocks instead of trying to extend text.
+            new_step_with_default_assertions("Select the first block as a whole")
+                .with_event_fn(|app, window_id| Event::LeftMouseDown {
+                    position: block_bounds(app, window_id, "block_index:0").center(),
+                    modifiers: Default::default(),
+                    click_count: 1,
+                    is_first_mouse: false,
+                })
+                .with_event_fn(|app, window_id| Event::LeftMouseUp {
+                    position: block_bounds(app, window_id, "block_index:0").center(),
+                    modifiers: Default::default(),
+                })
+                .add_assertion(|app, window_id| {
+                    let terminal_view = single_terminal_view_for_tab(app, window_id, 0);
+                    terminal_view.read(app, |view, _ctx| {
+                        // Read and drop the model lock before touching `view` again below:
+                        // holding it across the subsequent `selected_blocks_pivot_index()` call
+                        // deadlocks (same reentrant-lock hazard as the block_list_element.rs fix
+                        // in this PR).
+                        let expected = view
+                            .model
+                            .lock()
+                            .block_list()
+                            .first_non_hidden_block_by_index();
+                        async_assert_eq!(
+                            view.selected_blocks_pivot_index(),
+                            expected,
+                            "First block should be selected as a whole"
+                        )
+                    })
+                }),
+        )
+        .with_step(
+            new_step_with_default_assertions("Shift+click range-selects through the third block")
+                .with_event_fn(|app, window_id| Event::LeftMouseDown {
+                    position: block_bounds(app, window_id, "block_index:2").center(),
+                    modifiers: ModifiersState {
+                        shift: true,
+                        ..Default::default()
+                    },
+                    click_count: 1,
+                    is_first_mouse: false,
+                })
+                .with_event_fn(|app, window_id| Event::LeftMouseUp {
+                    position: block_bounds(app, window_id, "block_index:2").center(),
+                    modifiers: ModifiersState {
+                        shift: true,
+                        ..Default::default()
+                    },
+                })
+                .add_assertion(|app, window_id| {
+                    let terminal_view = single_terminal_view_for_tab(app, window_id, 0);
+                    terminal_view.read(app, |view, ctx| {
+                        // Same lock-scoping hazard as above: drop the model lock before the
+                        // `selected_text`/`selected_blocks_*` calls below.
+                        let (expected_pivot, expected_tail) = {
+                            let model = view.model.lock();
+                            (
+                                model.block_list().first_non_hidden_block_by_index(),
+                                model.block_list().last_non_hidden_block_by_index(),
+                            )
+                        };
+                        let selected_text = view.selected_text(ctx);
+                        async_assert!(
+                            view.selected_blocks_pivot_index() == expected_pivot
+                                && view.selected_blocks_tail_index() == expected_tail
+                                && selected_text.is_none_or(|text| text.is_empty()),
+                            "Shift+click should range-select blocks {:?}..={:?} with no text \
+                             highlight, got pivot {:?} tail {:?}",
+                            expected_pivot,
+                            expected_tail,
+                            view.selected_blocks_pivot_index(),
+                            view.selected_blocks_tail_index()
+                        )
+                    })
+                }),
+        )
+        .with_step(
+            TestStep::new("Screenshot after whole-block range select")
+                .with_take_screenshot("09_after_whole_block_range_select.png"),
+        )
+        .with_step(TestStep::new("Stop recording").with_stop_recording())
 }
 
 // TODO(CORE-2721): Block count / index Failed b/c of in-band generators
