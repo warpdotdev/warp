@@ -4,6 +4,29 @@ use warp_util::path::LineAndColumnArg;
 
 use super::generate_editor_command;
 
+#[cfg(any(target_os = "macos", target_os = "linux", target_os = "freebsd"))]
+#[test]
+fn test_is_warp_app_id_recognises_warp_channels() {
+    use super::is_warp_app_id;
+
+    assert!(is_warp_app_id("dev.warp.Warp"));
+    assert!(is_warp_app_id("dev.warp.WarpDev"));
+    assert!(is_warp_app_id("dev.warp.WarpPreview"));
+    assert!(is_warp_app_id("dev.warp.WarpOss"));
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux", target_os = "freebsd"))]
+#[test]
+fn test_is_warp_app_id_rejects_other_apps() {
+    use super::is_warp_app_id;
+
+    assert!(!is_warp_app_id("com.microsoft.VSCode"));
+    assert!(!is_warp_app_id("com.apple.TextEdit"));
+    assert!(!is_warp_app_id("dev.zed.Zed"));
+    assert!(!is_warp_app_id("invalid"));
+    assert!(!is_warp_app_id(""));
+}
+
 #[test]
 fn test_editor_missing_no_line_col() {
     let path = PathBuf::from("/path/to/file.txt");

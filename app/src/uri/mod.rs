@@ -6,7 +6,9 @@ pub mod web_intent_parser;
 pub mod browser_url_handler;
 
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+#[cfg(feature = "local_fs")]
+use std::path::Path;
+use std::path::PathBuf;
 use std::str::FromStr;
 
 use anyhow::{Result, anyhow, ensure};
@@ -40,10 +42,9 @@ use crate::settings_view::{
 };
 use crate::tab_configs::TabConfig;
 use crate::user_config::{load_launch_configs, load_tab_configs, tab_configs_dir};
-use crate::util::openable_file_type::{
-    is_file_openable_in_warp, is_markdown_file, is_runnable_shell_script,
-    renders_in_warp_notebook_viewer, starts_with_shebang,
-};
+#[cfg(feature = "local_fs")]
+use crate::util::openable_file_type::is_file_openable_in_warp;
+use crate::util::openable_file_type::{OpenFileAction, classify_open_file_action};
 use crate::view_components::DismissibleToast;
 use crate::workspace::auto_handoff::trigger_auto_handoff_to_cloud;
 use crate::workspace::util::PaneViewLocator;
@@ -1295,42 +1296,6 @@ fn get_primary_window(
 
     // There's no active window, return first non-quake mode window or None if none exist.
     non_quake_mode_windows.next()
-}
-
-/// What `open_file` should do with an incoming `file://` URL.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum OpenFileAction {
-    /// Open in the notebook viewer pane (Markdown, or Jupyter when enabled).
-    Notebook,
-    /// Open in Warp's code/text editor pane.
-    Editor,
-    /// Open a session at the parent directory and queue the file as the pending command,
-    /// or just open a session at the directory path if `path` is a directory.
-    ExecuteInSession,
-}
-
-/// Pure routing decision for `open_file`. Extracted so it can be unit-tested without
-/// standing up a full `AppContext`.
-///
-/// The Markdown Viewer preference is passed in because macOS can hand Markdown
-/// file URLs to Warp via the file type registration in `Info.plist`. Since Warp
-/// cannot easily update that registration when the user toggles the viewer
-/// preference, the URI handler must check the preference before routing a
-/// Markdown file to the in-Warp notebook viewer. Other notebook viewer formats,
-/// such as Jupyter notebooks, are controlled by their own routing checks.
-fn classify_open_file_action(path: &Path, prefer_markdown_viewer: bool) -> OpenFileAction {
-    if renders_in_warp_notebook_viewer(path) && (!is_markdown_file(path) || prefer_markdown_viewer)
-    {
-        OpenFileAction::Notebook
-    } else if is_runnable_shell_script(path) {
-        OpenFileAction::ExecuteInSession
-    } else if path.is_file()
-        && (is_file_openable_in_warp(path).is_some() || starts_with_shebang(path))
-    {
-        OpenFileAction::Editor
-    } else {
-        OpenFileAction::ExecuteInSession
-    }
 }
 
 #[cfg(feature = "local_fs")]
