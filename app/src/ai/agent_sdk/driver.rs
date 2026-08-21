@@ -63,6 +63,7 @@ use crate::ai::blocklist::local_agent_task_sync_model::LocalAgentTaskSyncModel;
 use crate::ai::blocklist::orchestration_event_streamer::{
     register_agent_event_consumer, unregister_agent_event_consumer,
 };
+use crate::ai::blocklist::orchestration_events::OrchestrationEventService;
 use crate::ai::blocklist::{
     BlocklistAIHistoryEvent, BlocklistAIHistoryModel, BlocklistAIPermissions, FinalizeReason,
     finalize_recording_for_conversation,
@@ -4035,7 +4036,22 @@ impl AgentDriver {
                             {
                                 me.arm_debug_window(run_exit.clone(), output_status, window, ctx);
                             }
-                            _ => run_exit.complete_with_optional_idle(idle_window, output_status),
+                            // No idle window follows, so nothing (e.g. a follow-up query
+                            // cancelling the idle timeout below) can pull the run back to
+                            // `InProgress` before it exits. Block any orchestration events
+                            // still buffered for this conversation from starting a new
+                            // request here: it would only race the teardown that begins
+                            // right after this handler returns and get cancelled, leaving
+                            // the run stuck `InProgress` (QUALITY-1801).
+                            None => {
+                                OrchestrationEventService::handle(ctx).update(ctx, |service, _| {
+                                    service.mark_conversation_exiting(*conversation_id);
+                                });
+                                run_exit.complete_with_optional_idle(None, output_status);
+                            }
+                            Some(_) => {
+                                run_exit.complete_with_optional_idle(idle_window, output_status);
+                            }
                         }
                     }
                 }
