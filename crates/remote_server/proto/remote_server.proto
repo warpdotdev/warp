@@ -639,6 +639,9 @@ message OpenBufferResponse {
 message OpenBufferSuccess {
   string content = 1;
   uint64 server_version = 2;
+  // The path did not exist, so the buffer starts empty and the file is only created when the
+  // client saves. The client uses this to hold back auto-save until that first explicit save.
+  bool opened_as_new_file = 3;
 }
 
 // Client → server: push an incremental edit (fire-and-forget notification).

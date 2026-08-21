@@ -1193,8 +1193,8 @@ impl LocalCodeEditorView {
     ///
     /// Mirrors VS Code's `files.autoSave: afterDelay`: the file is written
     /// *without* running the language-server formatter, so formatting never
-    /// disrupts the user mid-edit. New/untitled files (no `file_id`) and
-    /// disconnected remotes are intentionally skipped.
+    /// disrupts the user mid-edit. Anything [`Self::can_auto_save`] rejects is
+    /// intentionally skipped.
     fn auto_save_after_delay(&mut self, ctx: &mut ViewContext<Self>) {
         if !*CodeSettings::as_ref(ctx).auto_save {
             return;
@@ -1207,7 +1207,7 @@ impl LocalCodeEditorView {
             return;
         }
 
-        if self.is_remote_disconnected(ctx) || !self.has_unsaved_changes(ctx) {
+        if !self.can_auto_save(ctx) || !self.has_unsaved_changes(ctx) {
             return;
         }
 
@@ -1226,15 +1226,16 @@ impl LocalCodeEditorView {
     ///
     /// Mirrors VS Code's `files.autoSave: onFocusChange` / `onWindowChange`,
     /// which *do* honor format-on-save. We route through [`Self::save_local`] so
-    /// the existing format-on-save setting is respected. `NoFileId` (untitled
-    /// files) and `RemoteDisconnected` are expected no-ops; real save failures
-    /// still surface via `FailedToSave` events.
+    /// the existing format-on-save setting is respected. Anything
+    /// [`Self::can_auto_save`] rejects is skipped; real save failures still
+    /// surface via `FailedToSave` events.
     fn auto_save_on_focus_change(&mut self, ctx: &mut ViewContext<Self>) {
         // Never auto-save a pending accept/reject diff (see
         // `auto_save_after_delay`); editable code-review diffs use `diff_type =
         // None` and remain eligible.
         if !*CodeSettings::as_ref(ctx).auto_save
             || self.diff_type.is_some()
+            || !self.can_auto_save(ctx)
             || !self.has_unsaved_changes(ctx)
         {
             return;
@@ -1666,6 +1667,9 @@ impl LocalCodeEditorView {
                         me.base_content_version = Some(*content_version);
                         ctx.notify();
                     } else {
+                        // A path that did not exist opens as an empty buffer, and stays marked as
+                        // a new file until the first save writes it to disk.
+                        me.is_new_file = GlobalBufferModel::as_ref(ctx).opened_as_new_file(file_id);
                         me.base_content_version = Some(*content_version);
                         me.subscribe_to_lsp_manager_updates(ctx);
                         me.try_connect_lsp_server(ctx);
@@ -1697,6 +1701,8 @@ impl LocalCodeEditorView {
                     // Consume the auto-save marker: suppress the toast for
                     // auto-saves, show it for manual (cmd-s) saves.
                     let auto_saved = std::mem::take(&mut me.auto_save_in_flight);
+                    // The file now exists on disk, so it is no longer a new file.
+                    me.is_new_file = false;
                     me.base_content_version = Some(*content_version);
                     me.has_remote_conflict = false;
                     ctx.emit(LocalCodeEditorEvent::FileSaved { auto_saved });
@@ -1750,8 +1756,13 @@ impl LocalCodeEditorView {
     /// Whether auto-save can actually persist this editor's changes: it needs
     /// a backing file and, for remote files, a still-connected host. Untitled
     /// buffers (no `file_id`) and disconnected remotes return `false`.
+    ///
+    /// A file that does not exist on disk yet is also excluded. Creating a file from a debounce
+    /// timer, when the user only opened a path and typed a character, is not something they asked
+    /// for and cannot be undone by closing without saving. The first explicit save creates it;
+    /// auto-save takes over from then on.
     pub fn can_auto_save(&self, app: &AppContext) -> bool {
-        self.file_id().is_some() && !self.is_remote_disconnected(app)
+        self.file_id().is_some() && !self.is_new_file && !self.is_remote_disconnected(app)
     }
 
     /// Save the file to the local file system (or remotely via the remote server).
@@ -2749,3 +2760,7 @@ impl ShowFindReferencesCardProvider for ShowFindReferencesCard {
         upper_right_in || lower_left_in
     }
 }
+
+#[cfg(all(test, feature = "local_fs"))]
+#[path = "local_code_editor_tests.rs"]
+mod tests;

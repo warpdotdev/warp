@@ -1225,22 +1225,22 @@ impl CodeView {
             if summary.should_display_warning(ctx)
                 && ChannelState::channel() != Channel::Integration
             {
-                // With auto-save enabled, closing a file that has a backing path
-                // shouldn't block on the "unsaved changes" dialog just because
-                // the debounce hasn't fired yet — the edits will be persisted
-                // anyway. Flush them and close (mirroring the dialog's "Save
-                // changes" action), marking the saves as auto-saves so they stay
-                // silent. Untitled files (no path) still prompt, since auto-save
-                // can't persist them without a Save As.
-                let tab_has_backing_file = self
+                // With auto-save enabled, closing a file that auto-save can persist shouldn't
+                // block on the "unsaved changes" dialog just because the debounce hasn't fired
+                // yet — the edits will be persisted anyway. Flush them and close (mirroring the
+                // dialog's "Save changes" action), marking the saves as auto-saves so they stay
+                // silent. Anything auto-save can't persist still prompts: untitled files (no
+                // path), disconnected remotes, and files that don't exist on disk yet, whose
+                // first write has to be an explicit save.
+                let tab_can_auto_save = self
                     .tab_at(index)
-                    .is_some_and(|tab| tab.editor_view.as_ref(ctx).file_id().is_some());
-                if *CodeSettings::as_ref(ctx).auto_save && tab_has_backing_file {
+                    .is_some_and(|tab| tab.editor_view.as_ref(ctx).can_auto_save(ctx));
+                if *CodeSettings::as_ref(ctx).auto_save && tab_can_auto_save {
                     if is_clearing_group {
                         let unsaved_indices = self.unsaved_indices(ctx);
                         for &unsaved_index in &unsaved_indices {
                             if let Some(tab) = self.tab_group.get(unsaved_index)
-                                && tab.editor_view.as_ref(ctx).file_id().is_some()
+                                && tab.editor_view.as_ref(ctx).can_auto_save(ctx)
                             {
                                 tab.editor_view
                                     .update(ctx, |editor, _| editor.mark_next_save_as_auto_save());
