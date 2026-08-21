@@ -110,6 +110,14 @@ impl TemplatableMCPServerManager {
         log::warn!("Ephemeral MCP server spawning not supported in WASM");
     }
 
+    /// Shuts down every CLI-spawned ephemeral MCP server.
+    ///
+    /// This is a no-op in WASM, as MCP servers are not supported in WASM.
+    #[allow(dead_code)]
+    pub fn despawn_cli_ephemeral_servers(&mut self, _ctx: &mut ModelContext<Self>) {
+        log::warn!("Ephemeral MCP server despawning not supported in WASM");
+    }
+
     /// Shuts down a running MCP server.
     ///
     /// This is a no-op in WASM, as MCP servers are not supported in WASM.

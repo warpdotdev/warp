@@ -625,6 +625,80 @@ fn builtin_factory_mcp_skipped_on_name_collision() {
     );
 }
 
+/// `AgentDriver::cleanup` runs on every run exit (success, failure, or cancellation - see the
+/// unconditional call at the top of `run()`'s always-executed tail). It must despawn every
+/// CLI-ephemeral MCP server the run started, so a completed run's MCP configuration and
+/// embedded secrets don't survive it in a persistent-worker process serving multiple runs.
+#[test]
+fn cleanup_despawns_cli_ephemeral_mcp_servers() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+
+        let terminal_view = add_window_with_terminal(&mut app, None);
+        let driver_handle = app.add_model(|ctx| {
+            let terminal_driver =
+                super::terminal::TerminalDriver::create_from_existing_view(terminal_view, ctx);
+            AgentDriver::new_for_test(std::env::temp_dir(), terminal_driver, ctx)
+        });
+
+        // Simulate a CLI-ephemeral MCP server started for this run. The command need not
+        // exist: `spawn_cli_ephemeral_server` records the tracking bookkeeping synchronously,
+        // before the (irrelevant, here) connection attempt resolves.
+        let templatable_mcp_server = crate::ai::mcp::TemplatableMCPServer {
+            uuid: uuid::Uuid::new_v4(),
+            name: "test-cli-server".to_string(),
+            description: None,
+            template: crate::ai::mcp::JsonTemplate {
+                json: r#"{"test-cli-server":{"command":"__warp_test_nonexistent_command__","args":[]}}"#
+                    .to_string(),
+                variables: Vec::new(),
+            },
+            version: 0,
+            gallery_data: None,
+        };
+        let installation = crate::ai::mcp::TemplatableMCPServerInstallation::new(
+            uuid::Uuid::new_v4(),
+            templatable_mcp_server,
+            HashMap::new(),
+        );
+        let installation_uuid = installation.uuid();
+
+        crate::ai::mcp::TemplatableMCPServerManager::handle(&app).update(
+            &mut app,
+            |manager, ctx| {
+                manager.spawn_cli_ephemeral_server(installation, ctx);
+            },
+        );
+        crate::ai::mcp::TemplatableMCPServerManager::handle(&app).read(&app, |manager, _| {
+            assert!(
+                manager.is_cli_spawned_server(installation_uuid),
+                "the CLI-ephemeral server should be tracked immediately after spawning"
+            );
+        });
+
+        // Run the driver's post-run cleanup, as happens on every run exit.
+        let (done_tx, done_rx) = oneshot::channel::<()>();
+        driver_handle.update(&mut app, |_, ctx| {
+            let spawner = ctx.spawner();
+            ctx.spawn(
+                async move {
+                    AgentDriver::cleanup(spawner).await;
+                    let _ = done_tx.send(());
+                },
+                |_, _, _| {},
+            );
+        });
+        done_rx.await.expect("cleanup should complete");
+
+        crate::ai::mcp::TemplatableMCPServerManager::handle(&app).read(&app, |manager, _| {
+            assert!(
+                !manager.is_cli_spawned_server(installation_uuid),
+                "AgentDriver::cleanup must despawn CLI-ephemeral MCP servers on every run exit"
+            );
+        });
+    });
+}
+
 #[test]
 fn managed_resolution_failure_includes_uid_and_message() {
     let uuid = uuid::Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();

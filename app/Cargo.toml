@@ -453,6 +453,9 @@ repo_metadata = { workspace = true, features = ["test-util"] }
 
 [target.'cfg(not(target_family = "wasm"))'.dev-dependencies]
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "process", "time"] }
+# Only used by MCP manager tests to run a real in-process streamable-HTTP MCP
+# server; the base `rmcp` dependency above only needs client-side features.
+rmcp = { workspace = true, features = ["transport-streamable-http-server"] }
 
 [build-dependencies]
 anyhow = "1.0"
