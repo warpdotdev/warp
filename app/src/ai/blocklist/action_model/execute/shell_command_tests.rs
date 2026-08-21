@@ -5,13 +5,14 @@ use futures::channel::oneshot;
 use parking_lot::FairMutex;
 use warpui::{App, EntityId};
 
-use super::{BlockSelector, ShellCommandExecutor};
+use super::{decorate_requested_command_for_shell, BlockSelector, ShellCommandExecutor};
 use crate::terminal::event::{BlockMetadataReceivedEvent, BlockWorkingDirectoryUpdatedEvent};
 use crate::terminal::model::block::{BlockId, BlockMetadata};
 use crate::terminal::model::session::Sessions;
 use crate::terminal::model::session::active_session::ActiveSession;
 use crate::terminal::model::terminal_model::{BlockIndex, TerminalModel};
 use crate::terminal::model_events::{ModelEvent, ModelEventDispatcher};
+use crate::terminal::shell::ShellType;
 
 /// Locks in the contract that `ShellCommandExecutor`'s requested-command finish
 /// detector reacts only to `BlockMetadataReceived` (precmd) and not to
@@ -88,4 +89,46 @@ fn block_working_directory_updated_does_not_drain_finish_senders() {
             "BlockMetadataReceived should drain the finish senders"
         );
     });
+}
+
+#[test]
+fn decorate_requested_command_for_shell_prefixes_zsh_commands_with_nocorrect() {
+    assert_eq!(
+        decorate_requested_command_for_shell(Some(ShellType::Zsh), "zef file.md", false, true),
+        "nocorrect :; zef file.md"
+    );
+}
+
+#[test]
+fn decorate_requested_command_for_shell_prefixes_pager_wrapped_zsh_commands_with_nocorrect() {
+    assert_eq!(
+        decorate_requested_command_for_shell(
+            Some(ShellType::Zsh),
+            "git --no-pager diff",
+            true,
+            true,
+        ),
+        "nocorrect :; (git --no-pager diff) | command cat"
+    );
+}
+
+#[test]
+fn decorate_requested_command_for_shell_leaves_bash_commands_unchanged_without_pager() {
+    assert_eq!(
+        decorate_requested_command_for_shell(Some(ShellType::Bash), "zef file.md", false, true),
+        "zef file.md"
+    );
+}
+
+#[test]
+fn decorate_requested_command_for_shell_only_wraps_bash_pager_commands() {
+    assert_eq!(
+        decorate_requested_command_for_shell(
+            Some(ShellType::Bash),
+            "git --no-pager diff",
+            true,
+            true,
+        ),
+        "(git --no-pager diff) | command cat"
+    );
 }
