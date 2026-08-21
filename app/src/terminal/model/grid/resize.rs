@@ -67,9 +67,26 @@ impl GridHandler {
         {
             // We should never finish the alt screen grid.
             debug_assert!(!self.ansi_handler_state.is_alt_screen || !self.finished);
-            // We can delegate to the old grid resizing logic, as there's no
-            // flat storage for the alt screen.
-            self.grid.resize(false, num_rows, num_cols, self.finished);
+
+            // For FullGridClearBehavior::Clear active sessions (CLI-agent TUIs):
+            // allow reflow within GridStorage when columns grow, so soft-wrapped
+            // content already on screen (e.g. shell output present before the TUI
+            // started, or the TUI's own soft-wrapped prose) merges to the wider
+            // column count instead of keeping its stale wrap width. This reflows
+            // content entirely within GridStorage without pushing any rows into
+            // flat_storage, preserving the GH #9838 invariant.
+            //
+            // On column shrink, reflow stays disabled: shrink reflow would split
+            // rows and the excess would exceed GridStorage's max_scroll_limit
+            // (0), causing content loss. Shrinking TUIs are expected to fully
+            // redraw via SIGWINCH instead.
+            //
+            // For alt-screen: always disable reflow (no scrollback; real
+            // terminals don't reflow alt-screen content either).
+            let reflow_on_grow =
+                !self.ansi_handler_state.is_alt_screen && num_cols > self.columns();
+            self.grid
+                .resize(reflow_on_grow, num_rows, num_cols, self.finished);
 
             // Keep flat_storage's column count in sync so that rows
             // scrolled into it later (via scroll_region_up) match the
