@@ -6280,7 +6280,7 @@ impl SettingsWidget for RightClickBehaviorWidget {
                     "Right-click:",
                     selection_settings
                         .right_click_pastes()
-                        .then_some("Shift+right-click still opens the context menu."),
+                        .then_some("Shift+right-click to open the context menu."),
                     None,
                     LocalOnlyIconState::for_setting(
                         RightClickBehaviorSetting::storage_key(),
