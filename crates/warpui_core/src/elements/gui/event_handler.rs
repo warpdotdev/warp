@@ -4,7 +4,7 @@ use pathfinder_geometry::vector::Vector2F;
 
 use super::{
     AfterLayoutContext, AppContext, DispatchEventResult, Element, Event, EventContext,
-    LayoutContext, PaintContext, Point, SizeConstraint, ZIndex,
+    LayoutContext, PaintContext, Point, SelectableElement, SizeConstraint, ZIndex,
 };
 use crate::event::{DispatchedEvent, EventDiscriminants, KeyState, ModifiersState};
 use crate::keymap::Keystroke;
@@ -377,6 +377,15 @@ impl Element for EventHandler {
 
     fn origin(&self) -> Option<Point> {
         self.child.origin()
+    }
+
+    fn as_selectable_element(&self) -> Option<&dyn SelectableElement> {
+        self.child.as_selectable_element()
+    }
+
+    #[cfg(any(test, feature = "test-util"))]
+    fn debug_text_content(&self) -> Option<String> {
+        self.child.debug_text_content()
     }
 }
 
