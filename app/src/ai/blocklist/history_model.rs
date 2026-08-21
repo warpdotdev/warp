@@ -1986,9 +1986,11 @@ impl BlocklistAIHistoryModel {
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn update_conversation_cost_and_usage_for_request(
         &mut self,
         conversation_id: AIConversationId,
+        stream_id: &ResponseStreamId,
         request_cost: Option<RequestCost>,
         token_usage: Vec<TokenUsage>,
         usage_metadata: Option<ConversationUsageMetadata>,
@@ -2004,6 +2006,7 @@ impl BlocklistAIHistoryModel {
             request_cost.is_some() || usage_metadata.is_some() || !token_usage.is_empty();
         if let Some(conversation) = self.conversations_by_id.get_mut(&conversation_id) {
             if let Err(e) = conversation.update_cost_and_usage_for_request(
+                stream_id,
                 request_cost,
                 token_usage,
                 usage_metadata,

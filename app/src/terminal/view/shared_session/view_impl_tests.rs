@@ -760,6 +760,7 @@ fn server_conversation_metadata(
             token_usage: vec![],
             tool_usage_metadata: Default::default(),
             context_window_segments: Vec::new(),
+            exchange_costs: Default::default(),
         },
         metadata: ServerMetadata {
             uid: ServerId::default(),

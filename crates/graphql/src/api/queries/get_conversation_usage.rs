@@ -201,6 +201,10 @@ impl From<&ConversationUsageMetadata> for persistence::model::ConversationUsageM
             token_usage: convert_token_usage(&gql.warp_token_usage, &gql.byok_token_usage),
             tool_usage_metadata: (&gql.tool_usage_metadata).into(),
             context_window_segments: gql.context_window_segments.iter().map(Into::into).collect(),
+            // The server does not (yet) report per-exchange cost snapshots
+            // via this GraphQL query; only the local client-side stamping in
+            // `AIConversation::update_cost_and_usage_for_request` populates this.
+            exchange_costs: Default::default(),
         }
     }
 }

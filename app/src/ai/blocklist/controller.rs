@@ -3250,6 +3250,7 @@ impl BlocklistAIController {
             // persisting the conversation.
             history_model.update_conversation_cost_and_usage_for_request(
                 conversation_id,
+                stream_id,
                 finished_event.request_cost.map(|cost| {
                     // Total credits charged for this request = inference (`exact`) + platform.
                     RequestCost::new(f64::from(cost.exact) + f64::from(cost.platform_credits))

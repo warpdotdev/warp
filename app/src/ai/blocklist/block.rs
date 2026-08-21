@@ -452,6 +452,10 @@ pub(super) struct AIBlockStateHandles {
     /// Mouse state handle for the usage button
     usage_button_handle: MouseStateHandle,
 
+    /// Mouse state handle for the left-gutter inline turn-cost indicator
+    /// shown on the last response of a completed turn (Surface 5).
+    cost_indicator_handle: MouseStateHandle,
+
     /// Mouse state handles per citation.
     /// A given citation should only appear once per block.
     footer_citation_chip_handles: HashMap<AIAgentCitation, MouseStateHandle>,

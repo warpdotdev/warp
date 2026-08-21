@@ -1625,12 +1625,63 @@ pub struct ConversationUsageMetadata {
     pub tool_usage_metadata: ToolUsageMetadata,
     #[serde(default)]
     pub context_window_segments: Vec<ContextWindowSegment>,
+    /// Per-request cost snapshots, keyed by that request's stable
+    /// `server_output_id` (not the client-generated `AIAgentExchangeId`,
+    /// which is reassigned on every restore).
+    ///
+    /// This is new persistence introduced for the left-gutter inline cost
+    /// indicator (Surface 5 of the pricing-transparency effort): previously
+    /// only the *last* block's cost was tracked
+    /// (`credits_spent_for_last_block`), so a historical message earlier in
+    /// the conversation had no way to report its own cost. Populated once
+    /// per completed request in `AIConversation::update_cost_and_usage_for_request`
+    /// and consulted by `AIConversation::exchange_cost` /
+    /// `AIConversation::turn_cost_for_exchange` at render time.
+    #[serde(default)]
+    pub exchange_costs: HashMap<String, ExchangeCostSnapshot>,
 }
 
 impl ConversationUsageMetadata {
     pub fn total_tool_calls(&self) -> i32 {
         self.tool_usage_metadata.total_tool_calls()
     }
+}
+
+/// Per-model token/cost breakdown for a single request. Used by
+/// [`ExchangeCostSnapshot`] to power the left-gutter cost indicator's
+/// hover/click token/model breakdown (Surface 5).
+#[derive(Debug, Serialize, Deserialize, Clone, Default, PartialEq)]
+pub struct ExchangeModelTokenUsage {
+    pub model_id: String,
+    #[serde(default)]
+    pub total_input: u32,
+    #[serde(default)]
+    pub output: u32,
+    #[serde(default)]
+    pub input_cache_read: u32,
+    #[serde(default)]
+    pub input_cache_write: u32,
+    #[serde(default)]
+    pub cost_in_cents: f32,
+}
+
+/// A snapshot of the cost incurred by a single completed request (i.e. one
+/// response stream, corresponding to one exchange). See
+/// [`ConversationUsageMetadata::exchange_costs`] for how this is keyed and
+/// why it exists.
+#[derive(Debug, Serialize, Deserialize, Clone, Default, PartialEq)]
+pub struct ExchangeCostSnapshot {
+    /// Credits charged for this specific request (inference + platform) —
+    /// not the cumulative per-turn or per-conversation total.
+    pub credits: f32,
+    /// Provider dollar cost for this specific request, in US cents. `None`
+    /// when no token usage was reported for this request (e.g. the server
+    /// didn't send per-model usage), which must not be rendered as `$0.00`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cost_in_cents: Option<f32>,
+    /// Per-model token/cost breakdown for this specific request.
+    #[serde(default)]
+    pub token_usage: Vec<ExchangeModelTokenUsage>,
 }
 
 #[derive(Debug, Insertable)]

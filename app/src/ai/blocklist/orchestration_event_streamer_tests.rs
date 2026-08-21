@@ -375,6 +375,7 @@ fn make_server_metadata_with_harness(
             token_usage: vec![],
             tool_usage_metadata: Default::default(),
             context_window_segments: Vec::new(),
+            exchange_costs: Default::default(),
         },
         metadata: ServerMetadata {
             uid: ServerId::default(),

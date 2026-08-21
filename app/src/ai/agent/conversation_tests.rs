@@ -11,11 +11,14 @@ use super::{
     artifact_from_fork_proto, footer_model_token_usage,
 };
 use crate::ai::artifacts::Artifact;
+use crate::ai::blocklist::ResponseStreamId;
 use crate::ai::llms::LLMPreferences;
 use crate::auth::AuthStateProvider;
 use crate::auth::auth_manager::AuthManager;
 use crate::network::NetworkStatus;
-use crate::persistence::model::{AgentConversationData, ConversationUsageMetadata};
+use crate::persistence::model::{
+    AgentConversationData, ConversationUsageMetadata, ExchangeCostSnapshot, ExchangeModelTokenUsage,
+};
 use crate::server::server_api::ServerApiProvider;
 use crate::test_util::settings::initialize_settings_for_tests;
 use crate::workspaces::user_workspaces::UserWorkspaces;
@@ -664,6 +667,7 @@ fn restored_usage_totals_preserve_server_provider_cost_and_add_follow_up() {
             app.read(|ctx| {
                 conversation
                     .update_cost_and_usage_for_request(
+                        &ResponseStreamId::new_for_test(),
                         None,
                         vec![stream_token_usage("model-a", 10, 2, 1.2)],
                         Some(credits_usage_metadata(1.0, 0.0)),
@@ -737,6 +741,7 @@ fn restored_legacy_conversation_keeps_provider_cost_unavailable_after_follow_up(
         app.read(|ctx| {
             conversation
                 .update_cost_and_usage_for_request(
+                    &ResponseStreamId::new_for_test(),
                     None,
                     vec![stream_token_usage("legacy-model", 10, 2, 1.5)],
                     Some(credits_usage_metadata(1.0, 0.0)),
@@ -778,6 +783,7 @@ fn update_cost_and_usage_resolves_custom_endpoint_alias_for_footer_usage() {
         app.read(|ctx| {
             conversation
                 .update_cost_and_usage_for_request(
+                    &ResponseStreamId::new_for_test(),
                     None,
                     vec![],
                     Some(custom_endpoint_usage_metadata("config-key", 6)),
@@ -813,6 +819,7 @@ fn update_cost_and_usage_uses_fallback_label_for_unknown_custom_endpoint() {
         app.read(|ctx| {
             conversation
                 .update_cost_and_usage_for_request(
+                    &ResponseStreamId::new_for_test(),
                     None,
                     vec![],
                     Some(custom_endpoint_usage_metadata("missing-config-key", 9)),
@@ -893,6 +900,7 @@ fn usage_totals_reads_gui_credits_and_accumulates_provider_cost() {
         app.read(|ctx| {
             conversation
                 .update_cost_and_usage_for_request(
+                    &ResponseStreamId::new_for_test(),
                     None,
                     vec![stream_token_usage("model-a", 100, 20, 1.5)],
                     Some(credits_usage_metadata(2.0, 0.5)),
@@ -905,6 +913,7 @@ fn usage_totals_reads_gui_credits_and_accumulates_provider_cost() {
             // summing, while provider cost accumulates per request.
             conversation
                 .update_cost_and_usage_for_request(
+                    &ResponseStreamId::new_for_test(),
                     None,
                     vec![stream_token_usage("model-a", 50, 10, 1.2)],
                     Some(credits_usage_metadata(3.0, 0.5)),
@@ -1409,6 +1418,167 @@ fn fetched_memories_preserves_order_across_and_within_messages() {
         .map(|memory| memory.memory_id)
         .collect();
     assert_eq!(ids, vec!["m1", "m2", "m3"]);
+}
+
+/// Builds a conversation with a single turn spanning three exchanges: the
+/// user query + narration (`req-1`), a tool-call-only exchange with no user
+/// query (`req-2`), and the tool result + final response (`req-3`). Mirrors
+/// the spec's example of a turn that spans a tool round trip before its
+/// final response.
+fn restored_conversation_with_multi_exchange_turn() -> AIConversation {
+    restored_conversation_with_messages(vec![
+        user_query_message("user-1", "req-1", "what repo is this"),
+        agent_output_message("agent-1", "req-1"),
+        tool_call_message(
+            "tool-call-1",
+            "req-2",
+            "call-1",
+            use_computer_tool_call("inspect repo"),
+        ),
+        tool_call_result_message(
+            "tool-result-1",
+            "req-3",
+            "call-1",
+            api::message::tool_call_result::Result::Cancel(()),
+        ),
+        agent_output_message("agent-2", "req-3"),
+    ])
+}
+
+/// A turn with only one exchange (no user query) is excluded from the
+/// completed-turn API, since only exchanges with a resolvable server output
+/// id from a restored conversation are considered.
+#[test]
+fn is_last_response_of_completed_turn_marks_each_turns_final_exchange() {
+    let conversation = restored_conversation_with_queries(&["one", "two"]);
+    let exchanges = conversation.all_exchanges();
+    assert_eq!(exchanges.len(), 2, "one exchange per turn in this fixture");
+
+    for exchange in &exchanges {
+        assert!(
+            conversation.is_last_response_of_completed_turn(exchange.id),
+            "each turn's sole exchange should qualify as its final response"
+        );
+    }
+}
+
+/// Within a turn spanning multiple exchanges (a tool round trip before the
+/// final response), only the last exchange qualifies as the turn's final
+/// response — matching the spec's "last response of each completed turn"
+/// trigger rule.
+#[test]
+fn is_last_response_of_completed_turn_excludes_intermediate_exchanges_within_a_turn() {
+    let conversation = restored_conversation_with_multi_exchange_turn();
+    let exchanges = conversation.all_exchanges();
+    assert_eq!(
+        exchanges.len(),
+        3,
+        "expected user-query, tool-call, and final-response exchanges"
+    );
+
+    assert!(!conversation.is_last_response_of_completed_turn(exchanges[0].id));
+    assert!(!conversation.is_last_response_of_completed_turn(exchanges[1].id));
+    assert!(conversation.is_last_response_of_completed_turn(exchanges[2].id));
+}
+
+/// `exchange_cost` resolves a stamped snapshot via the exchange's stable
+/// `server_output_id`, and returns `None` when no request stamped one (e.g.
+/// a legacy conversation restored before this surface's persistence existed).
+#[test]
+fn exchange_cost_looks_up_snapshot_by_server_output_id() {
+    let mut conversation = restored_conversation_with_queries(&["one", "two"]);
+    let exchanges: Vec<_> = conversation.all_exchanges().iter().map(|e| e.id).collect();
+
+    conversation.set_exchange_cost_for_test(
+        "request-0",
+        ExchangeCostSnapshot {
+            credits: 1.5,
+            cost_in_cents: Some(2.3),
+            token_usage: vec![],
+        },
+    );
+
+    let snapshot = conversation
+        .exchange_cost(exchanges[0])
+        .expect("stamped snapshot should be found by server_output_id");
+    assert_eq!(snapshot.credits, 1.5);
+    assert_eq!(snapshot.cost_in_cents, Some(2.3));
+
+    assert!(
+        conversation.exchange_cost(exchanges[1]).is_none(),
+        "an exchange with no stamped request must have no cost"
+    );
+}
+
+/// `turn_cost_for_exchange` sums every constituent exchange's snapshot
+/// within the completed turn (credits, dollar cost, and per-model token
+/// usage merged by model id) — this is what lets the left-gutter indicator
+/// show a turn's total cost even when it spanned a tool round trip.
+#[test]
+fn turn_cost_for_exchange_aggregates_across_multi_exchange_turn() {
+    let mut conversation = restored_conversation_with_multi_exchange_turn();
+    let exchanges: Vec<_> = conversation.all_exchanges().iter().map(|e| e.id).collect();
+
+    conversation.set_exchange_cost_for_test(
+        "req-1",
+        ExchangeCostSnapshot {
+            credits: 1.0,
+            cost_in_cents: Some(1.0),
+            token_usage: vec![ExchangeModelTokenUsage {
+                model_id: "model-a".to_string(),
+                total_input: 10,
+                output: 5,
+                input_cache_read: 0,
+                input_cache_write: 0,
+                cost_in_cents: 1.0,
+            }],
+        },
+    );
+    conversation.set_exchange_cost_for_test(
+        "req-2",
+        ExchangeCostSnapshot {
+            credits: 0.5,
+            cost_in_cents: None,
+            token_usage: vec![],
+        },
+    );
+    conversation.set_exchange_cost_for_test(
+        "req-3",
+        ExchangeCostSnapshot {
+            credits: 2.0,
+            cost_in_cents: Some(1.3),
+            token_usage: vec![ExchangeModelTokenUsage {
+                model_id: "model-a".to_string(),
+                total_input: 20,
+                output: 8,
+                input_cache_read: 0,
+                input_cache_write: 0,
+                cost_in_cents: 1.3,
+            }],
+        },
+    );
+
+    let turn_cost = conversation
+        .turn_cost_for_exchange(exchanges[2])
+        .expect("turn with stamped snapshots should aggregate");
+
+    assert!((turn_cost.credits - 3.5).abs() < 1e-6);
+    assert!((turn_cost.cost_in_cents.expect("cost known") - 2.3).abs() < 1e-6);
+    assert_eq!(turn_cost.token_usage.len(), 1, "same model_id should merge");
+    let model_usage = &turn_cost.token_usage[0];
+    assert_eq!(model_usage.model_id, "model-a");
+    assert_eq!(model_usage.total_input, 30);
+    assert_eq!(model_usage.output, 13);
+}
+
+/// A conversation with no stamped cost snapshots (e.g. persisted before this
+/// surface's `exchange_costs` field existed) must not fabricate a zero total.
+#[test]
+fn turn_cost_for_exchange_returns_none_when_no_snapshot_recorded() {
+    let conversation = restored_conversation_with_queries(&["one"]);
+    let exchange_id = conversation.all_exchanges()[0].id;
+
+    assert!(conversation.turn_cost_for_exchange(exchange_id).is_none());
 }
 
 #[test]

@@ -66,8 +66,8 @@ use crate::code_review::CodeReviewTelemetryEvent;
 use crate::notebooks::NotebookId;
 use crate::persistence::ModelEvent;
 use crate::persistence::model::{
-    AgentConversationData, ContextWindowSegment, ConversationUsageMetadata, ModelTokenUsage,
-    PersistedAutoexecuteMode, ToolUsageMetadata,
+    AgentConversationData, ContextWindowSegment, ConversationUsageMetadata, ExchangeCostSnapshot,
+    ExchangeModelTokenUsage, ModelTokenUsage, PersistedAutoexecuteMode, ToolUsageMetadata,
 };
 use crate::server::ids::ServerId;
 use crate::terminal::general_settings::GeneralSettings;
@@ -193,6 +193,22 @@ pub struct ConversationUsageTotals {
     /// while a restored legacy conversation with real usage but an unknown
     /// historical cost still shows it.
     pub has_usage: bool,
+}
+
+/// The aggregated cost of a completed turn (a user query and every
+/// exchange that followed it up to, and including, its final response),
+/// computed on demand for the left-gutter inline cost indicator (Surface 5).
+/// See [`AIConversation::turn_cost_for_exchange`].
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct TurnCost {
+    /// Total credits charged across every request in this turn.
+    pub credits: f32,
+    /// Total provider dollar cost across every request in this turn, in US
+    /// cents. `None` when no constituent request reported token usage.
+    pub cost_in_cents: Option<f32>,
+    /// Per-model token/cost breakdown, summed across every request in this
+    /// turn and merged by `model_id`.
+    pub token_usage: Vec<ExchangeModelTokenUsage>,
 }
 
 /// Whether persisted or server usage metadata carries evidence that the
@@ -790,6 +806,20 @@ impl AIConversation {
         self.conversation_usage_metadata.platform_credits_spent = 0.0;
     }
 
+    /// Test-only helper that stamps a cost snapshot for the request
+    /// identified by `server_output_id`, bypassing the full response-stream
+    /// plumbing (`added_exchanges_by_response` / `update_cost_and_usage_for_request`).
+    #[cfg(test)]
+    pub(crate) fn set_exchange_cost_for_test(
+        &mut self,
+        server_output_id: impl Into<String>,
+        snapshot: ExchangeCostSnapshot,
+    ) {
+        self.conversation_usage_metadata
+            .exchange_costs
+            .insert(server_output_id.into(), snapshot);
+    }
+
     /// Test-only helper that simulates the root-task upgrade performed by the
     /// `Action::CreateTask` branch of `apply_client_action` when the server
     /// confirms the root for a newly started conversation. Replaces the
@@ -821,6 +851,94 @@ impl AIConversation {
         self.conversation_usage_metadata
             .credits_spent_for_last_block
             .map(|credits| (credits * 10.0).round() / 10.0)
+    }
+
+    /// Returns the cost snapshot recorded for the single request that
+    /// produced `exchange_id`'s output, if any request stamped one. See
+    /// [`ConversationUsageMetadata::exchange_costs`].
+    pub fn exchange_cost(&self, exchange_id: AIAgentExchangeId) -> Option<&ExchangeCostSnapshot> {
+        let exchange = self.exchange_with_id(exchange_id)?;
+        let server_output_id = exchange.output_status.server_output_id()?;
+        self.conversation_usage_metadata
+            .exchange_costs
+            .get(&server_output_id.to_string())
+    }
+
+    /// Returns `true` if `exchange_id` names the last response of a
+    /// now-completed turn in the root task — the surface condition for the
+    /// left-gutter inline cost indicator (Surface 5). A turn spans an
+    /// exchange with a user query through every subsequent exchange up to
+    /// (but not including) the next user query, mirroring the "block"
+    /// concept `credits_spent_for_last_block` already uses.
+    ///
+    /// An exchange qualifies when: its own output has finished streaming,
+    /// and either the next root-task exchange starts a new turn (has a user
+    /// query), or there is no next exchange and the conversation itself is
+    /// no longer in progress (so a still-streaming final turn is excluded).
+    pub fn is_last_response_of_completed_turn(&self, exchange_id: AIAgentExchangeId) -> bool {
+        let exchanges: Vec<&AIAgentExchange> = self.root_task_exchanges().collect();
+        let Some(index) = exchanges
+            .iter()
+            .position(|exchange| exchange.id == exchange_id)
+        else {
+            return false;
+        };
+        if !exchanges[index].output_status.is_finished() {
+            return false;
+        }
+        match exchanges.get(index + 1) {
+            Some(next) => next.has_user_query(),
+            None => !self.status.is_in_progress(),
+        }
+    }
+
+    /// Aggregates the cost of every request in the completed turn ending at
+    /// `exchange_id` (i.e. every root-task exchange since the most recent
+    /// user query, up to and including this one). Returns `None` when no
+    /// exchange in the turn has a recorded cost snapshot — e.g. a
+    /// conversation persisted before this surface's `exchange_costs`
+    /// persistence existed.
+    pub fn turn_cost_for_exchange(&self, exchange_id: AIAgentExchangeId) -> Option<TurnCost> {
+        let exchanges: Vec<&AIAgentExchange> = self.root_task_exchanges().collect();
+        let index = exchanges
+            .iter()
+            .position(|exchange| exchange.id == exchange_id)?;
+        let turn_start = exchanges[..=index]
+            .iter()
+            .rposition(|exchange| exchange.has_user_query())
+            .unwrap_or(0);
+
+        let mut aggregate: Option<TurnCost> = None;
+        for exchange in &exchanges[turn_start..=index] {
+            let Some(snapshot) = exchange.output_status.server_output_id().and_then(|id| {
+                self.conversation_usage_metadata
+                    .exchange_costs
+                    .get(&id.to_string())
+            }) else {
+                continue;
+            };
+            let turn_cost = aggregate.get_or_insert_with(TurnCost::default);
+            turn_cost.credits += snapshot.credits;
+            if let Some(cost_in_cents) = snapshot.cost_in_cents {
+                *turn_cost.cost_in_cents.get_or_insert(0.0) += cost_in_cents;
+            }
+            for usage in &snapshot.token_usage {
+                if let Some(entry) = turn_cost
+                    .token_usage
+                    .iter_mut()
+                    .find(|entry| entry.model_id == usage.model_id)
+                {
+                    entry.total_input += usage.total_input;
+                    entry.output += usage.output;
+                    entry.input_cache_read += usage.input_cache_read;
+                    entry.input_cache_write += usage.input_cache_write;
+                    entry.cost_in_cents += usage.cost_in_cents;
+                } else {
+                    turn_cost.token_usage.push(usage.clone());
+                }
+            }
+        }
+        aggregate
     }
 
     /// Time to first token for the last completed set of agent responses
@@ -1059,6 +1177,29 @@ impl AIConversation {
                     .iter()
                     .map(|new_exchange| new_exchange.exchange_id)
             })
+    }
+
+    /// Returns the stable `server_output_id` (the request ID assigned by the
+    /// server) of the *last* exchange added by `stream_id`, if known.
+    ///
+    /// A response stream can add more than one exchange (e.g. a subtask
+    /// returning to its parent), but the last one is the exchange that
+    /// renders this request's final response — the one
+    /// [`Self::update_cost_and_usage_for_request`] stamps with this
+    /// request's cost snapshot. Unlike `AIAgentExchangeId` (client-generated,
+    /// reassigned on every restore), `server_output_id` is stable across
+    /// restores, which is why [`ConversationUsageMetadata::exchange_costs`]
+    /// is keyed by it instead.
+    fn server_output_id_for_response(&self, stream_id: &ResponseStreamId) -> Option<String> {
+        let AddedExchange {
+            task_id,
+            exchange_id,
+        } = self.added_exchanges_by_response.get(stream_id)?.last();
+        let exchange = self.task_store.get(task_id)?.exchange(*exchange_id)?;
+        exchange
+            .output_status
+            .server_output_id()
+            .map(|id| id.to_string())
     }
 
     pub fn server_conversation_token(&self) -> Option<&ServerConversationToken> {
@@ -2197,6 +2338,7 @@ impl AIConversation {
 
     pub fn update_cost_and_usage_for_request(
         &mut self,
+        stream_id: &ResponseStreamId,
         request_cost: Option<RequestCost>,
         token_usage: Vec<TokenUsage>,
         usage_metadata: Option<stream_finished::ConversationUsageMetadata>,
@@ -2205,6 +2347,32 @@ impl AIConversation {
     ) -> Result<(), UpdateConversationError> {
         self.has_usage_metadata |=
             request_cost.is_some() || usage_metadata.is_some() || !token_usage.is_empty();
+
+        // Snapshot this request's own (incremental) cost before folding it
+        // into the conversation-wide running totals below, so it can be
+        // stamped against the exchange this request completed (see
+        // `exchange_costs`). This is what lets the left-gutter inline cost
+        // indicator (Surface 5) show a historical message's own cost, not
+        // just the most recently completed one.
+        let request_token_usage: Vec<ExchangeModelTokenUsage> = token_usage
+            .iter()
+            .map(|usage| ExchangeModelTokenUsage {
+                model_id: usage.model_id.clone(),
+                total_input: usage.total_input,
+                output: usage.output,
+                input_cache_read: usage.input_cache_read,
+                input_cache_write: usage.input_cache_write,
+                cost_in_cents: usage.cost_in_cents,
+            })
+            .collect();
+        let request_cost_in_cents = (!request_token_usage.is_empty()).then(|| {
+            request_token_usage
+                .iter()
+                .map(|usage| usage.cost_in_cents)
+                .sum()
+        });
+        let request_credits = request_cost.map(|cost| cost.value() as f32);
+
         for usage in token_usage.into_iter() {
             if let Some(total_provider_cost_in_cents) = self.total_provider_cost_in_cents.as_mut() {
                 *total_provider_cost_in_cents += usage.cost_in_cents;
@@ -2243,6 +2411,23 @@ impl AIConversation {
             // Accumulate response credit usage.
             *credits_spent_for_last_block += request_cost.value() as f32;
             self.total_request_cost += request_cost;
+        }
+
+        // Stamp a per-request cost snapshot on the exchange this request
+        // completed, keyed by its stable `server_output_id`, so this
+        // specific message can later report its own cost even after other
+        // turns have completed (see `exchange_costs`).
+        if (request_credits.is_some() || request_cost_in_cents.is_some())
+            && let Some(server_output_id) = self.server_output_id_for_response(stream_id)
+        {
+            self.conversation_usage_metadata.exchange_costs.insert(
+                server_output_id,
+                ExchangeCostSnapshot {
+                    credits: request_credits.unwrap_or(0.0),
+                    cost_in_cents: request_cost_in_cents,
+                    token_usage: request_token_usage,
+                },
+            );
         }
 
         if let Some(usage_metadata) = usage_metadata {

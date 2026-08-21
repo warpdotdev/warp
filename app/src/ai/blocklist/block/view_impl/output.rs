@@ -55,7 +55,7 @@ use super::{
 };
 use crate::ai::agent::api::ServerConversationToken;
 use crate::ai::agent::comment::ReviewComment;
-use crate::ai::agent::conversation::{RecordingSpanInfo, RecordingSpanStatus};
+use crate::ai::agent::conversation::{RecordingSpanInfo, RecordingSpanStatus, TurnCost};
 use crate::ai::agent::icons::{self, gray_stop_icon, yellow_stop_icon};
 use crate::ai::agent::task::TaskId;
 use crate::ai::agent::{
@@ -104,7 +104,8 @@ use crate::ai::blocklist::keyboard_navigable_buttons::KeyboardNavigableButtons;
 use crate::ai::blocklist::secret_redaction::SecretRedactionState;
 use crate::ai::blocklist::usage::rollup::compute_orchestration_rollup;
 use crate::ai::blocklist::view_util::{
-    FAILED_OUTPUT_USAGE_NOTICE_TEXT, format_credits, should_show_failed_output_usage_notice,
+    FAILED_OUTPUT_USAGE_NOTICE_TEXT, format_cost, format_credits,
+    should_show_failed_output_usage_notice,
 };
 use crate::ai::blocklist::{AIBlockResponseRating, BlocklistAIActionModel, SuggestionChipView};
 use crate::ai::paths::shell_native_absolute_path;
@@ -115,6 +116,7 @@ use crate::ai::skills::{
 use crate::appearance::Appearance;
 use crate::code::diff_viewer::DisplayMode;
 use crate::code::editor_management::CodeSource;
+use crate::settings::{AISettings, TuiUsageDisplayMode};
 use crate::settings_view::SettingsSection;
 use crate::terminal::ShellLaunchData;
 #[cfg(not(target_family = "wasm"))]
@@ -278,6 +280,31 @@ pub(super) fn render(props: Props, app: &AppContext) -> Box<dyn Element> {
                     HashMap::new()
                 };
                 let is_complete = matches!(status, AIBlockOutputStatus::Complete { .. });
+
+                // Left-gutter inline cost indicator (Surface 5): shown once,
+                // on the last response of a completed turn. Computed here
+                // (rather than inside the per-message loop below) since it
+                // renders as its own leading row, independent of which
+                // output message happens to render first.
+                let turn_cost_indicator =
+                    if is_complete && request_type.is_active() && status.error().is_none() {
+                        props
+                            .model
+                            .exchange_id(app)
+                            .zip(props.model.conversation(app))
+                            .filter(|(exchange_id, conversation)| {
+                                conversation.is_last_response_of_completed_turn(*exchange_id)
+                            })
+                            .and_then(|(exchange_id, conversation)| {
+                                conversation.turn_cost_for_exchange(exchange_id)
+                            })
+                    } else {
+                        None
+                    };
+                if let Some(turn_cost) = turn_cost_indicator {
+                    output_items.add_child(render_turn_cost_indicator(turn_cost, &props, app));
+                }
+
                 let is_output_for_static_prompt_suggestions =
                     props.model.contains_static_prompt_suggestion_input(app);
 
@@ -1280,6 +1307,99 @@ pub(super) fn render(props: Props, app: &AppContext) -> Box<dyn Element> {
     }
 
     output_items.finish()
+}
+
+/// Renders the inline per-turn cost indicator (Surface 5): a small,
+/// muted, clickable/hoverable label shown on the last response of a
+/// completed turn, reporting that turn's total cost. Hovering or clicking
+/// reveals a per-model token/cost breakdown. Units follow the user's
+/// existing credits⇌cost display preference
+/// (`AISettings::usage_display_mode`, shared with the TUI footer's usage
+/// entry) rather than hardcoding dollars.
+fn render_turn_cost_indicator(
+    turn_cost: TurnCost,
+    props: &Props,
+    app: &AppContext,
+) -> Box<dyn Element> {
+    let appearance = Appearance::as_ref(app);
+    let ui_builder = appearance.ui_builder().clone();
+    let mode = AISettings::as_ref(app).usage_display_mode;
+    let label = turn_cost_label(&turn_cost, mode);
+    let tooltip_text = turn_cost_breakdown_text(&turn_cost, mode);
+
+    let mouse_state = props.state_handles.cost_indicator_handle.clone();
+    Hoverable::new(mouse_state, move |mouse_state| {
+        let theme = appearance.theme();
+        let font_color = if mouse_state.is_hovered() || mouse_state.is_clicked() {
+            blended_colors::text_main(theme, theme.surface_1())
+        } else {
+            blended_colors::text_sub(theme, theme.surface_1())
+        };
+        let text = Text::new_inline(
+            label.clone(),
+            appearance.ui_font_family(),
+            appearance.ui_font_size() - 1.,
+        )
+        .with_color(font_color)
+        .with_selectable(false)
+        .finish();
+
+        if mouse_state.is_hovered() || mouse_state.is_clicked() {
+            let mut stack = Stack::new().with_child(text);
+            let tooltip = ui_builder.tool_tip(tooltip_text.clone()).build().finish();
+            stack.add_positioned_overlay_child(
+                tooltip,
+                OffsetPositioning::offset_from_parent(
+                    vec2f(0., 4.),
+                    ParentOffsetBounds::WindowByPosition,
+                    ParentAnchor::BottomLeft,
+                    ChildAnchor::TopLeft,
+                ),
+            );
+            stack.finish()
+        } else {
+            text
+        }
+    })
+    .with_cursor(Cursor::PointingHand)
+    .finish()
+}
+
+/// The turn-cost indicator's own label text, in the unit selected by `mode`.
+fn turn_cost_label(turn_cost: &TurnCost, mode: TuiUsageDisplayMode) -> String {
+    match mode {
+        TuiUsageDisplayMode::Credits => format_credits(turn_cost.credits),
+        TuiUsageDisplayMode::Cost => turn_cost
+            .cost_in_cents
+            .map(format_cost)
+            .unwrap_or_else(|| "Cost unavailable".to_string()),
+    }
+}
+
+/// The hover/click tooltip body: a per-model token/cost breakdown for the
+/// turn, or just the total when no per-model breakdown was recorded (e.g. a
+/// conversation persisted before this surface's cost snapshots existed).
+fn turn_cost_breakdown_text(turn_cost: &TurnCost, mode: TuiUsageDisplayMode) -> String {
+    if turn_cost.token_usage.is_empty() {
+        return turn_cost_label(turn_cost, mode);
+    }
+    turn_cost
+        .token_usage
+        .iter()
+        .map(|usage| {
+            let tokens =
+                usage.total_input + usage.output + usage.input_cache_read + usage.input_cache_write;
+            match mode {
+                TuiUsageDisplayMode::Credits => format!("{}: {tokens} tokens", usage.model_id),
+                TuiUsageDisplayMode::Cost => format!(
+                    "{}: {} ({tokens} tokens)",
+                    usage.model_id,
+                    format_cost(usage.cost_in_cents)
+                ),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn should_render_stopped_output(props: Props, app: &AppContext) -> bool {
