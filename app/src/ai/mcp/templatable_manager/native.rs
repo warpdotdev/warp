@@ -921,8 +921,9 @@ impl TemplatableMCPServerManager {
         // PATH.
         if let TransportType::CLIServer(cli_server) = &mut server.transport_type {
             let execution_path = AISettings::as_ref(ctx).mcp_execution_path.value().clone();
-            let can_inherit_process_path = settings::settings_mode() == settings::SettingsMode::Tui;
-            if execution_path.is_none() && !can_inherit_process_path {
+            let can_inherit_process_path =
+                AppExecutionMode::as_ref(ctx).can_inherit_process_path_for_mcp();
+            if !can_spawn_cli_mcp_server(execution_path.as_deref(), can_inherit_process_path) {
                 // This can only happen if the user is trying to launch an MCP server
                 // without ever having had a successfully bootstrapped session, which
                 // should basically never happen.
@@ -952,10 +953,11 @@ impl TemplatableMCPServerManager {
                 return;
             }
 
-            // Prepend our PATH to the static env vars, in case the user has
-            // specified a custom PATH in the MCP server settings. TUI processes
-            // instead inherit their launching environment without converting
-            // an OsString PATH into a persisted GUI setting.
+            // Prepend our PATH to the static env vars, in case the user has specified a
+            // custom PATH in the MCP server settings. Execution modes that can inherit the
+            // process PATH (`AppExecutionMode::can_inherit_process_path_for_mcp`) instead pick
+            // it up from their own launching environment, without converting an OsString PATH
+            // into a persisted setting.
             if let Some(execution_path) = execution_path {
                 cli_server.static_env_vars.insert(
                     0,
@@ -2022,3 +2024,13 @@ impl TemplatableMCPServerManager {
             .contains_key(&installation_hash)
     }
 }
+
+/// Whether a CLI-based MCP server has a PATH to launch its child process with: either an
+/// explicit `mcp_execution_path` setting, or by inheriting this process's own PATH.
+fn can_spawn_cli_mcp_server(execution_path: Option<&str>, can_inherit_process_path: bool) -> bool {
+    execution_path.is_some() || can_inherit_process_path
+}
+
+#[cfg(test)]
+#[path = "native_tests.rs"]
+mod tests;

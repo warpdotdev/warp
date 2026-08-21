@@ -29,6 +29,23 @@ impl ExecutionMode {
             ExecutionMode::RemoteServerDaemon => "warp-remote-server-daemon",
         }
     }
+
+    /// Whether a CLI-based MCP server can fall back to inheriting this process's PATH when
+    /// no explicit `mcp_execution_path` setting is available.
+    ///
+    /// The desktop app keeps requiring a shell-derived path, so a failed MCP spawn surfaces
+    /// as an actionable toast instead of silently launching with the wrong PATH. The SDK
+    /// CLI, the TUI, and the remote server daemon all receive an authoritative PATH from
+    /// their own launcher (an interactive shell, a CLI invocation, or a self-hosted worker's
+    /// entrypoint script) before Warp starts, so inheriting it is safe and is the only PATH
+    /// available to a fresh SDK process before terminal bootstrap populates
+    /// `mcp_execution_path`.
+    pub fn can_inherit_process_path_for_mcp(&self) -> bool {
+        match self {
+            ExecutionMode::App => false,
+            ExecutionMode::Tui | ExecutionMode::Sdk | ExecutionMode::RemoteServerDaemon => true,
+        }
+    }
 }
 
 /// Model tracking the mode that Warp is running in.
@@ -123,6 +140,12 @@ impl AppExecutionMode {
         self.mode.client_id()
     }
 
+    /// Whether a CLI-based MCP server can fall back to inheriting this process's PATH when
+    /// no explicit `mcp_execution_path` setting is available.
+    pub fn can_inherit_process_path_for_mcp(&self) -> bool {
+        self.mode.can_inherit_process_path_for_mcp()
+    }
+
     /// If true, Warp is running in a sandbox like a Docker container or VM, rather than directly
     /// on a user machine.
     pub fn is_sandboxed(&self) -> bool {
@@ -142,3 +165,7 @@ impl SingletonEntity for AppExecutionMode {}
 pub fn current_client_id() -> Option<&'static str> {
     GLOBAL_EXECUTION_MODE.get().map(|mode| mode.client_id())
 }
+
+#[cfg(test)]
+#[path = "execution_mode_tests.rs"]
+mod tests;
