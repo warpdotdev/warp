@@ -3260,7 +3260,12 @@ impl BlocklistAIController {
                 async move { Timer::after(Duration::from_secs(1)).await },
                 |_, _, ctx| {
                     UserWorkspaces::handle(ctx).update(ctx, |user_workspaces, ctx| {
-                        user_workspaces.refresh_ai_overages(ctx);
+                        // This controller has no `ViewContext` on the post-completion path, and
+                        // isn't (yet) bound to the team the underlying request was made under, so
+                        // it cannot mint the `TeamContext` this refresh should really be scoped
+                        // to. Scope to no-team rather than guessing a window; a wrong guess would
+                        // let one window's refresh overwrite another window's team-billed usage.
+                        user_workspaces.refresh_ai_overages(None, ctx);
                     });
                 },
             );
