@@ -384,6 +384,16 @@ pub fn classify_driver_error(error: &AgentDriverError) -> (AgentTaskState, TaskS
             AgentTaskState::Error,
             TaskStatusUpdate::message(error.to_string()),
         ),
+
+        // SIGTERM reaches the client from externally-originating shutdowns —
+        // server-initiated instance teardown, container-runtime stops, self-hosted
+        // worker termination — and the client cannot distinguish which initiated
+        // it. Unlike `SandboxDeadlineReached`, Warp did not necessarily impose the
+        // limit, so report FAILED rather than ERROR.
+        AgentDriverError::TerminatedBySignal => (
+            AgentTaskState::Failed,
+            TaskStatusUpdate::message(error.to_string()),
+        ),
     }
 }
 

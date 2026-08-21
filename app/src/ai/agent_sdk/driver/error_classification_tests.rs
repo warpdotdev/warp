@@ -332,9 +332,19 @@ fn sandbox_deadline_reached_is_error_with_exact_message_and_no_error_code() {
     let (state, update) = classify_driver_error(&AgentDriverError::SandboxDeadlineReached);
     assert_eq!(state, AgentTaskState::Error);
     assert!(update.error_code.is_none());
+    assert_eq!(update.message, "Sandbox maximum runtime limit reached.");
+}
+
+// --- SIGTERM abort ---
+
+#[test]
+fn terminated_by_signal_is_failed_with_no_error_code() {
+    let (state, update) = classify_driver_error(&AgentDriverError::TerminatedBySignal);
+    assert_eq!(state, AgentTaskState::Failed);
+    assert!(update.error_code.is_none());
     assert_eq!(
         update.message,
-        "Sandbox runtime limit reached. WARP_SANDBOX_DEADLINE is set by Warp from your plan's \
-         maximum agent runtime and cannot be configured per run."
+        "The agent process was terminated (SIGTERM) before the run completed, most likely \
+         because the instance or worker hosting the run was shut down."
     );
 }
