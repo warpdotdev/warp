@@ -33,7 +33,7 @@ use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
 use warpui::ui_components::switch::{SwitchStateHandle, TooltipConfig};
 use warpui::{
     Action, AppContext, Entity, ModelHandle, SingletonEntity, TypedActionView, View, ViewContext,
-    ViewHandle, id,
+    ViewHandle, WindowId, id,
 };
 
 use super::settings_page::{
@@ -96,25 +96,41 @@ fn remote_codebase_index_limit_reached(status: &RemoteCodebaseIndexStatus) -> bo
         .as_deref()
         .is_some_and(|message| message.contains(REMOTE_CODEBASE_INDEX_LIMIT_REACHED_FAILURE))
 }
-fn codebase_indexing_tooltip_text(global_ai_enabled: bool, app: &AppContext) -> Option<String> {
+
+fn codebase_indexing_disabled_admin_text(
+    blocking_team_name: Option<&str>,
+    current_team_disables: bool,
+) -> String {
+    if current_team_disables {
+        return INDEXING_DISABLED_ADMIN_TEXT.to_string();
+    }
+
+    blocking_team_name.map_or_else(
+        || INDEXING_DISABLED_ADMIN_TEXT.to_string(),
+        |team_name| {
+            format!("Codebase indexing is unavailable because {team_name} has disabled it.")
+        },
+    )
+}
+
+fn codebase_indexing_tooltip_text(
+    global_ai_enabled: bool,
+    window_id: WindowId,
+    app: &AppContext,
+) -> Option<String> {
     let user_workspaces = UserWorkspaces::as_ref(app);
     match user_workspaces.teams_allow_codebase_context() {
-        AdminEnablementSetting::Enable => {
-            Some(INDEXING_WORKSPACE_ENABLED_ADMIN_TEXT.to_string())
-        }
-        AdminEnablementSetting::Disable => Some(
+        AdminEnablementSetting::Enable => Some(INDEXING_WORKSPACE_ENABLED_ADMIN_TEXT.to_string()),
+        AdminEnablementSetting::Disable => Some(codebase_indexing_disabled_admin_text(
             user_workspaces
                 .team_disabling_codebase_context()
-                .map_or_else(
-                    || INDEXING_DISABLED_ADMIN_TEXT.to_string(),
-                    |team| {
-                        format!(
-                            "{} has disabled codebase indexing, so it is unavailable for all teams.",
-                            team.name
-                        )
-                    },
-                ),
-        ),
+                .map(|team| team.name.as_str()),
+            user_workspaces
+                .team_for_window(window_id)
+                .is_some_and(|team| {
+                    team.settings.codebase_context.value == AdminEnablementSetting::Disable
+                }),
+        )),
         AdminEnablementSetting::RespectUserSetting if !global_ai_enabled => {
             Some(INDEXING_DISABLED_GLOBAL_AI_TEXT.to_string())
         }
@@ -167,6 +183,7 @@ enum IndexingRefreshAction {
 }
 pub struct CodeIndexingPageView {
     page: PageType<Self>,
+    window_id: WindowId,
     codebase_manual_resync_mouse_states: Vec<MouseStateHandle>,
     codebase_delete_mouse_states: Vec<MouseStateHandle>,
     #[cfg(not(target_family = "wasm"))]
@@ -324,6 +341,7 @@ impl CodeIndexingPageView {
 
         Self {
             page: Self::build_page(ctx),
+            window_id: ctx.window_id(),
             codebase_manual_resync_mouse_states: (0..codebase_count)
                 .map(|_| Default::default())
                 .collect(),
@@ -750,6 +768,7 @@ impl SettingsWidget for CodePageWidget {
         content.add_child(self.render_initialization_settings_header(appearance));
         content.add_child(self.render_codebase_indexing_toggle_row(
             global_ai_enabled,
+            view.window_id,
             appearance,
             app,
         ));
@@ -954,6 +973,7 @@ impl CodePageWidget {
     fn render_codebase_indexing_toggle_row(
         &self,
         global_ai_enabled: bool,
+        window_id: WindowId,
         appearance: &Appearance,
         app: &AppContext,
     ) -> Box<dyn Element> {
@@ -975,7 +995,8 @@ impl CodePageWidget {
             .switch(self.switch_state.clone())
             .check(UserWorkspaces::as_ref(app).is_codebase_context_enabled(app));
 
-        let disabled_tooltip_text = codebase_indexing_tooltip_text(global_ai_enabled, app);
+        let disabled_tooltip_text =
+            codebase_indexing_tooltip_text(global_ai_enabled, window_id, app);
 
         let toggle_element = if let Some(tooltip_text) = disabled_tooltip_text {
             switch
@@ -2180,7 +2201,8 @@ impl SettingsWidget for CodeIndexingPageWidget {
         let switch = ui_builder
             .switch(self.inner.switch_state.clone())
             .check(codebase_context_enabled);
-        let disabled_tooltip_text = codebase_indexing_tooltip_text(global_ai_enabled, app);
+        let disabled_tooltip_text =
+            codebase_indexing_tooltip_text(global_ai_enabled, view.window_id, app);
 
         let toggle_element = if let Some(tooltip_text) = disabled_tooltip_text {
             switch
