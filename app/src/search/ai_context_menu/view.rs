@@ -463,10 +463,7 @@ impl AIContextMenu {
                 categories.push(AIContextMenuCategory::Notebooks);
                 categories.push(AIContextMenuCategory::Plans);
             }
-            if FeatureFlag::DiffSetAsContext.is_enabled()
-                && is_active_dir_in_git_repo
-                && !is_shared_session_viewer
-            {
+            if is_active_dir_in_git_repo && !is_shared_session_viewer {
                 categories.push(AIContextMenuCategory::DiffSet);
             }
             if FeatureFlag::ConversationsAsContext.is_enabled() {

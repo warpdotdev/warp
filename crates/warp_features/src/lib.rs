@@ -424,9 +424,6 @@ pub enum FeatureFlag {
     /// Enables OAuth support for MCP.
     McpOauth,
 
-    /// Enables attaching diff sets (multiple hunks from multiple files) as context in Agent Mode.
-    DiffSetAsContext,
-
     /// Enables file- and diff set-level comments in the code review header.
     FileAndDiffSetComments,
 
