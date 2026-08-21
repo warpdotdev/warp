@@ -935,6 +935,24 @@ impl AIAgentActionResultType {
         !self.is_cancelled()
     }
 
+    /// Returns `true` for a cancelled `FetchConversation`: a nested, server-driven
+    /// tool call inside a `ConversationSearch` subagent flow, always converted to
+    /// an error result (see convert.rs) that must reach the server via a
+    /// follow-up, or the subagent is left hanging instead of finishing
+    /// deterministically.
+    ///
+    /// Unlike [`Self::should_trigger_request_upon_completion`], this says nothing
+    /// about whether a follow-up should actually be sent: callers must still
+    /// suppress it when the conversation itself is being terminally cancelled
+    /// (e.g. the user pressed Stop), or a just-stopped conversation would
+    /// auto-resume. See `BlocklistAIController`'s `FinishedAction` handling.
+    pub fn is_cancelled_fetch_conversation(&self) -> bool {
+        matches!(
+            self,
+            Self::FetchConversation(FetchConversationResult::Cancelled)
+        )
+    }
+
     pub fn is_requested_command(&self) -> bool {
         matches!(self, AIAgentActionResultType::RequestCommandOutput(_))
     }

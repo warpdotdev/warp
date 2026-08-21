@@ -494,12 +494,23 @@ impl BlocklistAIController {
             // triggers a follow-up nor counts as a cancellation.
             let treat_as_success =
                 matches!(cancellation_outcome, Some(CancellationOutcome::Succeeded));
-            let should_trigger_follow_up_request = (!is_passive_code_diff
-                && !treat_as_success
-                && finished_action_results
-                    .iter()
-                    .any(|result| result.result.should_trigger_request_upon_completion()))
-                || has_manual_follow_up;
+            // A cancelled FetchConversation's error result must still reach the
+            // server (see `is_cancelled_fetch_conversation`), and a manual/passive
+            // follow-up request (`has_manual_follow_up`) must still fire once its
+            // actions finish -- *unless* the whole conversation is being
+            // terminally cancelled (e.g. the user pressed Stop), in which case no
+            // automatic follow-up of any kind may fire, or a conversation the user
+            // just stopped would restart out from under them.
+            let is_terminal_cancellation =
+                matches!(cancellation_outcome, Some(CancellationOutcome::Cancelled));
+            let should_trigger_follow_up_request = !is_terminal_cancellation
+                && ((!is_passive_code_diff
+                    && !treat_as_success
+                    && finished_action_results.iter().any(|result| {
+                        result.result.should_trigger_request_upon_completion()
+                            || result.result.is_cancelled_fetch_conversation()
+                    }))
+                    || has_manual_follow_up);
             if !should_trigger_follow_up_request {
                 if matches!(
                     cancellation_outcome,
@@ -2705,6 +2716,22 @@ impl BlocklistAIController {
         // Discard any queued passive suggestion results for this conversation.
         self.pending_passive_suggestion_results
             .remove(&conversation_id);
+
+        // Discard a pending manual/passive follow-up request for this
+        // conversation, but only when the conversation is being terminally
+        // cancelled. Otherwise it would linger and fire a spurious follow-up
+        // (restarting the conversation) the next time some unrelated action
+        // for it finishes, even after a real Stop. Every other cancellation
+        // reason (e.g. an optimistic `Succeeded` completion, or a
+        // same-conversation follow-up/takeover that keeps the conversation
+        // going) keeps delivering a follow-up the controller requested on
+        // purpose.
+        if matches!(
+            reason.conversation_outcome(),
+            CancellationOutcome::Cancelled
+        ) {
+            self.pending_passive_follow_ups.remove(&conversation_id);
+        }
 
         // Remove any locked pending-LRC queries so they don't linger after cancellation.
         QueuedQueryModel::handle(ctx).update(ctx, |model, ctx| {

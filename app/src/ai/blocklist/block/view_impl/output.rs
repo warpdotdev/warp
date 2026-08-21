@@ -55,7 +55,9 @@ use super::{
 };
 use crate::ai::agent::api::ServerConversationToken;
 use crate::ai::agent::comment::ReviewComment;
-use crate::ai::agent::conversation::{RecordingSpanInfo, RecordingSpanStatus};
+use crate::ai::agent::conversation::{
+    ConversationStatus, RecordingSpanInfo, RecordingSpanStatus, SubagentTaskOutcome,
+};
 use crate::ai::agent::icons::{self, gray_stop_icon, yellow_stop_icon};
 use crate::ai::agent::task::TaskId;
 use crate::ai::agent::{
@@ -976,26 +978,38 @@ pub(super) fn render(props: Props, app: &AppContext) -> Box<dyn Element> {
                             should_render_footer = false;
                             should_render_suggestions = false;
                             let conversation = props.model.conversation(app);
-                            let is_finished = conversation
-                                .and_then(|c| {
-                                    c.is_subagent_task_finished(&TaskId::new(
-                                        subagent_task_id.clone(),
-                                    ))
+                            // Derived from the actual result recorded on the parent tool
+                            // call (success/error vs. the generic Cancel marker), rather
+                            // than merely whether *any* result exists — a search the user
+                            // genuinely cancelled must never render as finished.
+                            let subagent_outcome = conversation.and_then(|c| {
+                                c.subagent_task_outcome(&TaskId::new(subagent_task_id.clone()))
                                     .ok()
-                                })
-                                .unwrap_or(false);
-                            let is_cancelled = conversation.is_some_and(|c| {
-                                let subagent_task_id = TaskId::new(subagent_task_id.clone());
-                                c.get_task(&subagent_task_id).is_some_and(|task| {
-                                    task.exchanges().any(|e| e.output_status.is_cancelled())
-                                })
                             });
-                            let icon = if is_cancelled {
-                                inline_action_icons::cancelled_icon(appearance)
-                            } else if is_finished {
-                                inline_action_icons::green_check_icon(appearance)
-                            } else {
-                                icons::yellow_running_icon(appearance)
+                            // A Stop never writes a Cancel marker onto the parent tool
+                            // call itself (that only happens when the server tears down
+                            // the subagent's in-flight calls); it just ends the
+                            // conversation, leaving the parent call permanently
+                            // unresolved (`Pending`). The conversation's own terminal
+                            // `Cancelled` status is therefore the only signal that the
+                            // card should settle in that case, since the parent result
+                            // never will.
+                            let conversation_is_terminally_cancelled =
+                                matches!(conversation_status, Some(ConversationStatus::Cancelled));
+                            let search_status = ConversationSearchStatus::from_outcome(
+                                subagent_outcome,
+                                conversation_is_terminally_cancelled,
+                            );
+                            let icon = match search_status {
+                                ConversationSearchStatus::Finished => {
+                                    inline_action_icons::green_check_icon(appearance)
+                                }
+                                ConversationSearchStatus::Cancelled => {
+                                    inline_action_icons::cancelled_icon(appearance)
+                                }
+                                ConversationSearchStatus::Running => {
+                                    icons::yellow_running_icon(appearance)
+                                }
                             };
 
                             // Resolve which conversation is being searched. Conversation IDs use
@@ -1042,7 +1056,7 @@ pub(super) fn render(props: Props, app: &AppContext) -> Box<dyn Element> {
                                     ))
                                 });
 
-                            let done = is_finished || is_cancelled;
+                            let done = search_status.is_done();
                             let verb = if done { "Searched" } else { "Searching" };
 
                             let mut fragments: Vec<FormattedTextFragment> =
@@ -1093,7 +1107,7 @@ pub(super) fn render(props: Props, app: &AppContext) -> Box<dyn Element> {
                                     .with_icon(icon.finish());
 
                             // Add a footer with the current phase status when in progress.
-                            if !is_finished && !is_cancelled {
+                            if !done {
                                 let phase = conversation
                                     .and_then(|c| {
                                         c.get_task(&TaskId::new(subagent_task_id.clone()))
@@ -4247,6 +4261,48 @@ fn render_collapsible_debug_output(
 }
 
 // --- Conversation search phase detection ---
+
+/// The outcome of a `ConversationSearch` subagent, as shown by its inline card.
+///
+/// Derived from the actual result recorded on the subagent's parent tool
+/// call ([`SubagentTaskOutcome`]) so that a search the user genuinely
+/// cancelled (the server's generic `Cancel` marker) is never conflated with
+/// one that finished with a real answer or error.
+///
+/// A conversation the user stops locally (rather than one the server
+/// cancels) never writes any result onto that parent tool call: the client
+/// only ever cancels tracked [`AIAgentAction`]s, and the subagent's own
+/// parent call is not one -- it exists purely as a passive
+/// [`AIAgentOutputMessageType::Subagent`] display item, so there is nothing
+/// for a client-side Stop to resolve. `conversation_is_terminally_cancelled`
+/// is the fallback for that case: it settles the card without depending on
+/// a result that a Stop, on its own, never produces.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ConversationSearchStatus {
+    Running,
+    Finished,
+    Cancelled,
+}
+
+impl ConversationSearchStatus {
+    fn from_outcome(
+        outcome: Option<SubagentTaskOutcome>,
+        conversation_is_terminally_cancelled: bool,
+    ) -> Self {
+        match outcome {
+            Some(SubagentTaskOutcome::Completed) => Self::Finished,
+            Some(SubagentTaskOutcome::Cancelled) => Self::Cancelled,
+            Some(SubagentTaskOutcome::Pending) | None if conversation_is_terminally_cancelled => {
+                Self::Cancelled
+            }
+            Some(SubagentTaskOutcome::Pending) | None => Self::Running,
+        }
+    }
+
+    fn is_done(self) -> bool {
+        !matches!(self, Self::Running)
+    }
+}
 
 enum ConversationSearchPhase {
     ListingMessages,

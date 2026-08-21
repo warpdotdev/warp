@@ -7,9 +7,10 @@ use warpui::{App, SingletonEntity};
 
 use super::{
     AIConversation, AIConversationAutoexecuteMode, AIConversationId, ConversationStatus,
-    ConversationUsageTotals, RecordingSpanStatus, RestoreConversationError,
+    ConversationUsageTotals, RecordingSpanStatus, RestoreConversationError, SubagentTaskOutcome,
     artifact_from_fork_proto, footer_model_token_usage,
 };
+use crate::ai::agent::task::TaskId;
 use crate::ai::artifacts::Artifact;
 use crate::ai::llms::LLMPreferences;
 use crate::auth::AuthStateProvider;
@@ -19,6 +20,9 @@ use crate::persistence::model::{
     AgentConversationData, ChargedUsageTotals, ConversationUsageMetadata,
 };
 use crate::server::server_api::ServerApiProvider;
+use crate::test_util::ai_agent_tasks::{
+    create_api_subtask, create_api_task, create_subagent_tool_call_message,
+};
 use crate::test_util::settings::initialize_settings_for_tests;
 use crate::workspaces::user_workspaces::UserWorkspaces;
 
@@ -517,6 +521,91 @@ fn recording_span_clears_when_stop_errors() {
         conversation
             .recording_span_for_action(&"use".to_string().into(), None)
             .is_none()
+    );
+}
+
+/// Builds a restored conversation whose root task called a `ConversationSearch`
+/// subagent (child task `search-task`), optionally with `result` recorded as
+/// the parent's tool call result for that subagent call.
+fn restored_conversation_with_conversation_search_subagent(
+    result: Option<api::message::tool_call_result::Result>,
+) -> (AIConversation, TaskId) {
+    const SUBAGENT_TASK_ID: &str = "search-task";
+    let mut root_messages = vec![create_subagent_tool_call_message(
+        "subagent-call",
+        "root-task",
+        SUBAGENT_TASK_ID,
+        Some(api::message::tool_call::subagent::Metadata::ConversationSearch(Default::default())),
+    )];
+    if let Some(result) = result {
+        root_messages.push(tool_call_result_message(
+            "subagent-result",
+            "req-1",
+            "subagent-call_tool_call",
+            result,
+        ));
+    }
+    let conversation = AIConversation::new_restored(
+        AIConversationId::new(),
+        vec![
+            create_api_task("root-task", root_messages),
+            create_api_subtask(SUBAGENT_TASK_ID, "root-task", vec![]),
+        ],
+        None,
+    )
+    .unwrap();
+    (conversation, TaskId::new(SUBAGENT_TASK_ID.to_string()))
+}
+
+/// While the subagent has not yet delivered any result to its parent tool
+/// call, the outcome is `Pending` — it is still legitimately running.
+#[test]
+fn subagent_task_outcome_pending_before_any_result_recorded() {
+    let (conversation, subagent_task_id) =
+        restored_conversation_with_conversation_search_subagent(None);
+
+    assert_eq!(
+        conversation
+            .subagent_task_outcome(&subagent_task_id)
+            .unwrap(),
+        SubagentTaskOutcome::Pending
+    );
+}
+
+/// A genuine cancellation is the generic `ToolCallResult.Cancel` marker on
+/// the parent — the subagent never delivered its own answer or error. This
+/// must not be conflated with `Completed`.
+#[test]
+fn subagent_task_outcome_cancelled_for_a_genuine_cancel_marker() {
+    let (conversation, subagent_task_id) = restored_conversation_with_conversation_search_subagent(
+        Some(api::message::tool_call_result::Result::Cancel(())),
+    );
+
+    assert_eq!(
+        conversation
+            .subagent_task_outcome(&subagent_task_id)
+            .unwrap(),
+        SubagentTaskOutcome::Cancelled
+    );
+}
+
+/// A real `SubagentResult` (the subagent's own answer/error, e.g. via
+/// `answer_query`) is `Completed`, distinct from a bare `Cancel`.
+#[test]
+fn subagent_task_outcome_completed_for_a_real_subagent_result() {
+    let (conversation, subagent_task_id) = restored_conversation_with_conversation_search_subagent(
+        Some(api::message::tool_call_result::Result::Subagent(
+            api::message::tool_call_result::SubagentResult {
+                payload: "answer".to_string(),
+            },
+        )),
+    );
+
+    assert_eq!(
+        conversation
+            .subagent_task_outcome(&subagent_task_id)
+            .unwrap(),
+        SubagentTaskOutcome::Completed
     );
 }
 

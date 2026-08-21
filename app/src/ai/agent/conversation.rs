@@ -254,6 +254,20 @@ pub enum RestoreConversationError {
 #[error("Subagent task not found")]
 pub struct SubagentTaskNotFound;
 
+/// The terminal outcome of a subagent's own outer tool call result, as
+/// recorded on the parent task. `Cancelled` is the generic tool-call `Cancel`
+/// marker: the subagent never delivered its own answer or error, so it must
+/// not be conflated with `Completed`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SubagentTaskOutcome {
+    /// No result recorded yet on the parent; the subagent is still running.
+    Pending,
+    /// The subagent produced its own result (an answer or an error).
+    Completed,
+    /// The generic tool-call `Cancel` marker.
+    Cancelled,
+}
+
 /// An Agent Mode conversation.
 #[derive(Debug, Clone)]
 pub struct AIConversation {
@@ -3503,10 +3517,12 @@ impl AIConversation {
             self.task_store.remove(&task_id);
         }
     }
-    pub fn is_subagent_task_finished(
+    /// The terminal outcome of a subagent's own outer tool call, as recorded
+    /// on the parent task, if any result has been recorded at all.
+    pub fn subagent_task_outcome(
         &self,
         subagent_task_id: &TaskId,
-    ) -> Result<bool, SubagentTaskNotFound> {
+    ) -> Result<SubagentTaskOutcome, SubagentTaskNotFound> {
         let subagent_task = self
             .task_store
             .get(subagent_task_id)
@@ -3522,15 +3538,35 @@ impl AIConversation {
             .get(&parent_id)
             .ok_or(SubagentTaskNotFound)?;
 
-        Ok(parent_task
+        let tool_call_result = parent_task
             .source()
             .into_iter()
             .flat_map(|source| source.messages.iter())
-            .any(|message| {
-                message
-                    .tool_call_result()
-                    .is_some_and(|result| result.tool_call_id == subagent_params.tool_call_id)
-            }))
+            .find_map(|message| {
+                let tool_call_result = message.tool_call_result()?;
+                (tool_call_result.tool_call_id == subagent_params.tool_call_id)
+                    .then_some(tool_call_result)
+            });
+
+        Ok(match tool_call_result {
+            None => SubagentTaskOutcome::Pending,
+            Some(tool_call_result) => match tool_call_result.result.as_ref() {
+                Some(api::message::tool_call_result::Result::Cancel(())) => {
+                    SubagentTaskOutcome::Cancelled
+                }
+                _ => SubagentTaskOutcome::Completed,
+            },
+        })
+    }
+
+    pub fn is_subagent_task_finished(
+        &self,
+        subagent_task_id: &TaskId,
+    ) -> Result<bool, SubagentTaskNotFound> {
+        Ok(!matches!(
+            self.subagent_task_outcome(subagent_task_id)?,
+            SubagentTaskOutcome::Pending
+        ))
     }
 
     /// Returns true if any subagent task is currently active (not yet finished).

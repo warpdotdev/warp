@@ -1182,7 +1182,22 @@ impl TryFrom<FetchConversationResult> for api::request::input::tool_call_result:
                     },
                 ),
             ),
-            FetchConversationResult::Cancelled => Err(ConvertToAPITypeError::Ignore),
+            // Unlike most cancellable tool calls, FetchConversation is a nested,
+            // server-driven call inside a ConversationSearch subagent flow with no
+            // user checkpoint in between. Dropping this (via `Ignore`) leaves the
+            // server waiting on a result that will never arrive, so it is always
+            // round-tripped as an error the subagent can act on instead.
+            FetchConversationResult::Cancelled => Ok(
+                api::request::input::tool_call_result::Result::FetchConversation(
+                    api::FetchConversationResult {
+                        result: Some(api::fetch_conversation_result::Result::Error(
+                            api::fetch_conversation_result::Error {
+                                message: "Fetching the conversation was cancelled".to_string(),
+                            },
+                        )),
+                    },
+                ),
+            ),
         }
     }
 }

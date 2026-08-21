@@ -13,9 +13,9 @@ use warpui::App;
 use watcher::HomeDirectoryWatcher;
 
 use super::{
-    RecordingCardText, format_upload_artifact_text, parsed_skill_for_common_locations,
-    read_skill_display_text, should_decorate_recorded_use_computer, start_recording_card_text,
-    stop_recording_card_text,
+    ConversationSearchStatus, RecordingCardText, SubagentTaskOutcome, format_upload_artifact_text,
+    parsed_skill_for_common_locations, read_skill_display_text,
+    should_decorate_recorded_use_computer, start_recording_card_text, stop_recording_card_text,
 };
 use crate::ai::agent::{
     RecordingStarted, RecordingStopped, StartRecordingResult, StopRecordingResult,
@@ -319,4 +319,75 @@ fn parsed_skill_for_common_locations_does_not_mix_remote_hosts() {
             parsed_skill_for_common_locations(locations, ctx).is_none()
         }));
     });
+}
+
+#[test]
+fn conversation_search_status_finished_for_a_completed_outcome() {
+    // A `Completed` outcome (a real answer or a server-reported error) must
+    // render as finished regardless of the conversation's own status. The
+    // transcript-level derivation of this outcome (rejecting a bare
+    // `Cancel` marker) is covered by `subagent_task_outcome_*` in
+    // `conversation_tests.rs`.
+    for conversation_is_terminally_cancelled in [false, true] {
+        assert_eq!(
+            ConversationSearchStatus::from_outcome(
+                Some(SubagentTaskOutcome::Completed),
+                conversation_is_terminally_cancelled
+            ),
+            ConversationSearchStatus::Finished
+        );
+    }
+    assert!(
+        ConversationSearchStatus::from_outcome(Some(SubagentTaskOutcome::Completed), false)
+            .is_done()
+    );
+}
+
+#[test]
+fn conversation_search_status_cancelled_for_a_cancelled_outcome() {
+    // A real server-recorded Cancel on the parent tool call must render as
+    // cancelled regardless of the conversation's own status.
+    for conversation_is_terminally_cancelled in [false, true] {
+        assert_eq!(
+            ConversationSearchStatus::from_outcome(
+                Some(SubagentTaskOutcome::Cancelled),
+                conversation_is_terminally_cancelled
+            ),
+            ConversationSearchStatus::Cancelled
+        );
+    }
+    assert!(
+        ConversationSearchStatus::from_outcome(Some(SubagentTaskOutcome::Cancelled), false)
+            .is_done()
+    );
+}
+
+#[test]
+fn conversation_search_status_running_for_pending_or_missing_outcome() {
+    assert_eq!(
+        ConversationSearchStatus::from_outcome(Some(SubagentTaskOutcome::Pending), false),
+        ConversationSearchStatus::Running
+    );
+    assert_eq!(
+        ConversationSearchStatus::from_outcome(None, false),
+        ConversationSearchStatus::Running
+    );
+    assert!(!ConversationSearchStatus::from_outcome(None, false).is_done());
+}
+
+#[test]
+fn conversation_search_status_cancelled_when_conversation_terminally_cancelled_with_no_result() {
+    // A Stop never writes a result onto the subagent's own parent tool
+    // call, so the parent outcome stays Pending/None forever. The
+    // conversation's own terminal Cancelled status is the only signal that
+    // lets the card settle in that case.
+    assert_eq!(
+        ConversationSearchStatus::from_outcome(Some(SubagentTaskOutcome::Pending), true),
+        ConversationSearchStatus::Cancelled
+    );
+    assert_eq!(
+        ConversationSearchStatus::from_outcome(None, true),
+        ConversationSearchStatus::Cancelled
+    );
+    assert!(ConversationSearchStatus::from_outcome(None, true).is_done());
 }
