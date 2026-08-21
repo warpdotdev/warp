@@ -70,6 +70,7 @@ use crate::render::model::debug::Describe;
 pub mod bounds;
 mod char_cell_display;
 pub(crate) mod debug;
+pub mod diagnostics;
 mod location;
 mod offset_map;
 mod positioned;
@@ -1313,6 +1314,18 @@ impl TableStyle {
     }
 }
 
+/// How much content a render model holds, along the dimensions the memory analysis uses. One item
+/// can span many lines or collapse a whole region into one, so these are not interchangeable.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ContentSize {
+    /// `BlockItem`s, which is what the content tree's nodes hold.
+    pub items: usize,
+    /// Laid-out lines.
+    pub lines: usize,
+    /// Characters of buffer content.
+    pub chars: usize,
+}
+
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct LayoutSummary {
     content_length: CharOffset,
@@ -2468,6 +2481,8 @@ impl RenderState {
         let (layout_tx, layout_rx) = async_channel::unbounded();
         ctx.spawn_stream_local(layout_rx, Self::handle_layout_action, |_, _| {});
 
+        diagnostics::register(ctx.handle());
+
         Self::new_internal(
             ctx.model_id(),
             element_tx,
@@ -2508,6 +2523,8 @@ impl RenderState {
 
         let (layout_tx, layout_rx) = async_channel::unbounded();
         ctx.spawn_stream_local(layout_rx, Self::handle_layout_action, |_, _| {});
+
+        diagnostics::register(ctx.handle());
 
         // In CharCell mode the SumTree<BlockItem> is never queried for layout, so
         // we create an empty tree rather than the usual style-dependent trailing newline.
@@ -2755,6 +2772,17 @@ impl RenderState {
     #[cfg(any(test, feature = "test-util"))]
     pub fn blocks(&self) -> usize {
         self.content().block_items().count()
+    }
+
+    /// The size of the content tree, read from the tree's own summary rather than by walking it.
+    /// All zero in [`LayoutMode::CharCell`], which never populates the tree.
+    pub fn content_size(&self) -> ContentSize {
+        let summary = self.content.borrow().summary();
+        ContentSize {
+            items: summary.item_count,
+            lines: summary.lines.as_usize(),
+            chars: summary.content_length.as_usize(),
+        }
     }
 
     pub fn markdown_table_count(&self) -> usize {
