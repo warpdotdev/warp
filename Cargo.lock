@@ -6454,6 +6454,7 @@ dependencies = [
  "opentelemetry_sdk",
  "prevent_sleep",
  "prost",
+ "prost-types",
  "reqwest",
  "serde",
  "serde_json",
