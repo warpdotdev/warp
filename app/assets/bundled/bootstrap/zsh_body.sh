@@ -1541,7 +1541,7 @@ esac
   }
 
   # Reports the range of the buffer (byte offsets into the line passed to
-  # warp_run_generator_command_foreground_completions) that the matches about to be emitted
+  # warp_run_generator_command_native_completions) that the matches about to be emitted
   # replace, so the client can use it instead of its own whitespace-derived guess -- see
   # native_shell_completions.rs's PowerShell equivalent for why this matters: without it, a
   # completion that only replaces part of the current word (anything after a literal `/`, a
@@ -1669,13 +1669,21 @@ esac
     }
   }
 
-  # Foreground generator command for native shell completions, where the only argument is
-  # the hex-encoded command line to complete (see native_shell_completions.rs on the Rust
-  # side). Emits the same OSC 9280 completions protocol as the compadd shim above.
+  # Native shell completions generator command for zsh, where the only argument is the
+  # hex-encoded command line to complete (see native_shell_completions.rs on the Rust side).
+  # Emits the same OSC 9280 completions protocol as the compadd shim above.
+  #
+  # Shares the `warp_run_generator_command_native_completions` name with bash and fish, but unlike
+  # `warp_run_generator_command` (and unlike what that shared name might suggest) this must run in
+  # the foreground in the main shell -- never backgrounded or wrapped in command substitution --
+  # because only a foreground `select` there can reach a real ZLE completion context. As a
+  # consequence it also cannot be cancelled by PID the way other generators are. See the "Native
+  # shell completions: foreground generator" comment above `_warp_native_completions_zle_line_init`
+  # for the full explanation.
   #
   # Usage:
-  #   warp_run_generator_command_foreground_completions <hex-encoded line>
-  warp_run_generator_command_foreground_completions() {
+  #   warp_run_generator_command_native_completions <hex-encoded line>
+  warp_run_generator_command_native_completions() {
     # Setting this environment variable prevents warp_precmd from emitting the
     # 'Block started' hook to the Rust app, matching warp_run_generator_command.
     _WARP_GENERATOR_COMMAND=1

@@ -19,13 +19,10 @@ fn is_in_band_command_recognizes_the_native_completions_generator_names() {
         " warp_run_generator_command 123 'echo hi'"
     ));
 
-    // The native-shell-completions generator functions, dispatched directly by
-    // `PtyController::run_native_shell_completions` rather than through this executor. These
-    // don't have a space between the shared prefix and the rest of the name, so a naive
-    // `starts_with("warp_run_generator_command ")` (with a trailing space) check misses them.
-    assert!(is_in_band_command(
-        "warp_run_generator_command_foreground_completions 676974206368"
-    ));
+    // The native-shell-completions generator function, dispatched directly by
+    // `PtyController::run_native_shell_completions` rather than through this executor. It
+    // doesn't have a space between the shared prefix and the rest of the name, so a naive
+    // `starts_with("warp_run_generator_command ")` (with a trailing space) check misses it.
     assert!(is_in_band_command(
         "warp_run_generator_command_native_completions 676974206368"
     ));

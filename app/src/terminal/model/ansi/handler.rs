@@ -7,9 +7,7 @@ use warpui::color::ColorU;
 
 use super::ProcessorInput;
 use super::dcs_hooks::*;
-use crate::terminal::model::completions::{
-    ShellCompletion, ShellCompletionUpdate, ShellData as CompletionsShellData,
-};
+use crate::terminal::model::completions::{ShellCompletion, ShellCompletionUpdate};
 use crate::terminal::model::image_map::StoredImageMetadata;
 use crate::terminal::model::index::VisibleRow;
 use crate::terminal::model::iterm_image::{ITermImage, ITermImageMetadata};
@@ -342,9 +340,8 @@ pub trait Handler {
 
     /// Callback to handle the OSC for starting completions.
     ///
-    /// Depending on the output format, subsequent data from the PTY will be
-    /// considered as completions output.
-    fn start_completions_output(&mut self, _format: CompletionsShellData) {}
+    /// Subsequent completion results from the PTY will be considered as completions output.
+    fn start_completions_output(&mut self) {}
 
     /// Callback to handle the OSC for finishing completions.
     ///
@@ -358,12 +355,10 @@ pub trait Handler {
     /// time between `start_completions_output` and `end_completions_output`.
     fn on_completion_replacement_span_received(&mut self, _start: usize, _length: usize) {}
 
-    /// Callback invoked when we've received a _typed_ native completion result from the shell.
-    /// This is a noop if we are in "raw" completions mode.
+    /// Callback invoked when we've received a native completion result from the shell.
     fn on_completion_result_received(&mut self, _completion_result: ShellCompletion) {}
 
     /// Update the last completion result with the metadata in [`ShellCompletionUpdate`].
-    /// This is a noop if we are in "raw" completions mode.
     fn update_last_completion_result(&mut self, _completion_update: ShellCompletionUpdate) {}
 
     /// Callback to handle the OSC to start receiving an iTerm image.

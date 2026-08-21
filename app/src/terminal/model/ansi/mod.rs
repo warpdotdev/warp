@@ -34,9 +34,7 @@ use warpui::color::ColorU;
 
 use super::kitty::parse_kitty_chunk;
 use crate::features::FeatureFlag;
-use crate::terminal::model::completions::{
-    ShellCompletion, ShellCompletionUpdate, ShellData as CompletionsShellData,
-};
+use crate::terminal::model::completions::{ShellCompletion, ShellCompletionUpdate};
 use crate::terminal::model::escape_sequences::C0;
 use crate::terminal::model::index::VisibleRow;
 use crate::terminal::model::iterm_image::parse_iterm_image_metadata;
@@ -85,6 +83,11 @@ const WARP_COMPLETIONS_REPLACEMENT_SPAN_BYTE: &[u8] = b"S";
 /// The sequence begins with `D?` followed by the field that should be updated.
 /// For example: `D?description'{OSC_PAYLOAD}` updates the description of the last match.
 const WARP_COMPLETIONS_MATCH_UPDATE_METADATA: &[u8] = b"D?";
+
+/// The only completions wire format the client accepts, sent as the `9280;A` start OSC's format
+/// parameter. The shell streams typed results one at a time via the follow-up `9280;C`/`9280;D?`
+/// OSCs; any other value (or a missing one) is rejected.
+const INCREMENTALLY_TYPED_COMPLETIONS_FORMAT: &str = "incrementally_typed";
 
 const WARP_KV_START_BYTE: &[u8] = b"A";
 const WARP_KV_ENTRY_BYTE: &[u8] = b"B";
@@ -1192,15 +1195,17 @@ where
             // Received a Warp OSC used for completions.
             WARP_COMPLETIONS_OSC_MARKER => match params.get(1) {
                 Some(&WARP_COMPLETIONS_START_BYTE) => {
-                    let Some(format) = params
+                    let format = params
                         .get(2)
-                        .map(|osc_data| String::from_utf8_lossy(osc_data))
-                        .and_then(|format| CompletionsShellData::from_format_type(&format))
-                    else {
-                        log::warn!("Warp start completions OSC marker contained invalid format.");
+                        .map(|osc_data| String::from_utf8_lossy(osc_data));
+                    if format.as_deref() != Some(INCREMENTALLY_TYPED_COMPLETIONS_FORMAT) {
+                        log::warn!(
+                            "Warp start completions OSC marker contained an unsupported or \
+                             missing format."
+                        );
                         return;
-                    };
-                    self.handler.start_completions_output(format);
+                    }
+                    self.handler.start_completions_output();
                 }
                 Some(&WARP_COMPLETIONS_END_BYTE) => {
                     self.handler.end_completions_output();
