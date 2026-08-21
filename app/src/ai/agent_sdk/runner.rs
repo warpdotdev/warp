@@ -483,6 +483,7 @@ struct RunnerInfo {
     docker_image: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     macos_version: Option<String>,
+    factory_uid: Option<String>,
     scope: String,
     setup_commands: Vec<String>,
     #[serde(skip_serializing)]
@@ -515,6 +516,10 @@ impl RunnerInfo {
                 .as_ref()
                 .and_then(|m| m.version)
                 .map(|v| macos_version_display(v).to_string()),
+            factory_uid: config
+                .factory_uid
+                .as_ref()
+                .map(|uid| uid.inner().to_string()),
             scope: space_display(runner.scope.type_).to_string(),
             setup_commands: config.setup_commands.clone().unwrap_or_default(),
             last_updated_display: format_approx_duration_from_now_utc(last_updated_utc),
