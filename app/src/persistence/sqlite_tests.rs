@@ -6,6 +6,7 @@ use ai::workspace::WorkspaceMetadata;
 use chrono::{Local, Utc};
 use cloud_object_persistence::to_cloud_object_permissions;
 use diesel::connection::SimpleConnection;
+use lsp::supported_servers::LSPServerType;
 use pathfinder_geometry::rect::RectF;
 use pathfinder_geometry::vector::Vector2F;
 use warp_core::features::FeatureFlag;
@@ -16,6 +17,7 @@ use super::{
     decode_path, deduplicate_events, encode_path, get_all_codebase_index_metadata,
     read_sqlite_data, save_app_state, save_codebase_index_metadata, setup_database, start_writer,
 };
+use crate::ai::persisted_workspace::EnablementState;
 use crate::app_state::{
     AppState, CodePaneSnapShot, CodePaneTabSnapshot, LeafContents, LeafSnapshot, PaneNodeSnapshot,
     TabGroupSnapshot, TabSnapshot, TerminalPaneSnapshot, WindowSnapshot,
@@ -281,6 +283,59 @@ fn sqlite_writer_reuses_codebase_index_metadata_events() {
     let restored = get_all_codebase_index_metadata(&mut conn).expect("metadata should load");
     assert!(restored.is_empty());
 }
+
+#[test]
+fn sqlite_writer_deletes_workspace_language_servers_but_preserves_metadata() {
+    let tempdir = tempfile::tempdir().expect("tempdir should be created");
+    let database_path = tempdir.path().join("warp.sqlite");
+    let conn = setup_database(&database_path).expect("database should initialize");
+
+    let writer = start_writer(conn, database_path.clone()).expect("writer should start");
+    let metadata = test_codebase_metadata("/tmp/lsp-only-repo");
+    writer
+        .sender
+        .send(ModelEvent::UpsertCodebaseIndexMetadata {
+            index_metadata: Box::new(metadata.clone()),
+        })
+        .expect("workspace metadata event should send");
+    writer
+        .sender
+        .send(ModelEvent::UpsertWorkspaceLanguageServer {
+            workspace_path: metadata.path.clone(),
+            lsp_type: LSPServerType::RustAnalyzer,
+            enabled: EnablementState::No,
+        })
+        .expect("language server event should send");
+    writer
+        .sender
+        .send(ModelEvent::DeleteWorkspaceLanguageServers {
+            workspace_path: metadata.path.clone(),
+        })
+        .expect("language server deletion event should send");
+    writer
+        .sender
+        .send(ModelEvent::Terminate)
+        .expect("terminate event should send");
+    writer.handle.join().expect("writer should terminate");
+
+    let mut conn = setup_database(&database_path).expect("database should reopen");
+    let restored = read_sqlite_data(&mut conn, None, PersistedDataScope::Full)
+        .expect("persisted data should load");
+    assert_eq!(
+        restored
+            .codebase_indices
+            .iter()
+            .filter(|workspace| workspace.path == metadata.path)
+            .count(),
+        1
+    );
+    assert!(
+        !restored
+            .workspace_language_servers
+            .contains_key(&metadata.path)
+    );
+}
+
 #[test]
 fn test_deduplicate_snapshots() {
     let local_notebook = CloudNotebook::new_local(
