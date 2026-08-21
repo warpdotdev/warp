@@ -1548,6 +1548,66 @@ fn test_agent_settings_byo_reads_default_without_a_team() {
 }
 
 #[test]
+fn test_team_scope_key_distinguishes_teams_and_tracks_membership() {
+    let (team_a, team_b) = two_teams();
+    let mut workspace = workspace_for_test(&team_a);
+    workspace.teams.push(team_b.clone());
+
+    App::test((), |mut app| async move {
+        initialize_window_team_test_app(&mut app, vec![workspace.clone()]);
+
+        let (window_a, view_a) = create_test_window(&mut app);
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.set_team_for_window(window_a, team_a.uid, ctx);
+        });
+
+        let context_a = view_a
+            .update(&mut app, |_, ctx| {
+                UserWorkspaces::as_ref(ctx).team_context_for_view(ctx)
+            })
+            .expect("a window assigned to team A should mint a context");
+        let key_a = UserWorkspaces::cache_key_for_context(Some(&context_a));
+        let key_none = UserWorkspaces::cache_key_for_context(None);
+
+        assert!(
+            key_a != key_none,
+            "a team scope key must differ from the no-team key"
+        );
+        assert!(
+            key_a == UserWorkspaces::cache_key_for_context(Some(&context_a)),
+            "minting a key twice for the same context should be equal, so it can key a map"
+        );
+
+        app.read(|ctx| {
+            let user_workspaces = UserWorkspaces::as_ref(ctx);
+            assert!(
+                user_workspaces.is_team_scope_key_current(key_a),
+                "a team the user still belongs to should be a current scope"
+            );
+            assert!(
+                user_workspaces.is_team_scope_key_current(key_none),
+                "the no-team scope is always current"
+            );
+        });
+
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            let mut updated_workspace = workspace.clone();
+            updated_workspace
+                .teams
+                .retain(|team| team.uid != team_a.uid);
+            user_workspaces.update_workspaces(vec![updated_workspace], ctx);
+        });
+
+        app.read(|ctx| {
+            assert!(
+                !UserWorkspaces::as_ref(ctx).is_team_scope_key_current(key_a),
+                "a team the user has left should no longer be a current scope"
+            );
+        });
+    })
+}
+
+#[test]
 fn test_spaces_for_window_orders_selected_team_shared_and_personal() {
     let _flag = FeatureFlag::SharedWithMe.override_enabled(true);
     let first_team = team_for_test();

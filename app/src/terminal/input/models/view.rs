@@ -534,6 +534,18 @@ impl View for InlineModelSelectorView {
         "InlineModelSelectorView"
     }
 
+    fn on_window_transferred(
+        &mut self,
+        _source_window_id: warpui::WindowId,
+        target_window_id: warpui::WindowId,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        self.model_selector_data_source
+            .update(ctx, |data_source, _| {
+                data_source.set_window_id(target_window_id);
+            });
+    }
+
     fn render(&self, _app: &warpui::AppContext) -> Box<dyn Element> {
         ChildView::new(&self.menu_view).finish()
     }

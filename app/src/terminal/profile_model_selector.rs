@@ -2237,6 +2237,15 @@ impl View for ProfileModelSelector {
         "ProfileModelSelector"
     }
 
+    fn on_window_transferred(
+        &mut self,
+        _source_window_id: WindowId,
+        target_window_id: WindowId,
+        _ctx: &mut ViewContext<Self>,
+    ) {
+        self.window_id = target_window_id;
+    }
+
     fn render(&self, app: &AppContext) -> Box<dyn Element> {
         let appearance = Appearance::as_ref(app);
         let theme = appearance.theme();

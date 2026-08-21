@@ -250,6 +250,16 @@ impl ModelSelectorDataSource {
         ctx.notify();
     }
 
+    /// Updates the window this data source resolves its team from. `InlineModelSelectorView`
+    /// (the sole owner) is a rendered child of `Input`, itself a child of `TerminalView`, so
+    /// cross-window tab drag can transfer it to another window; without this, `run_query` would
+    /// keep resolving `team_uid_for_window` against the source window indefinitely. Called from
+    /// `InlineModelSelectorView::on_window_transferred`, since models don't receive that
+    /// notification directly.
+    pub(crate) fn set_window_id(&mut self, window_id: WindowId) {
+        self.window_id = window_id;
+    }
+
     /// Returns whether a model should appear in the inline picker.
     /// Custom-endpoint models are suppressed in Oz cloud agent panes because
     /// they cannot route through Warp's cloud inference infrastructure.
@@ -351,6 +361,10 @@ impl SyncDataSource for ModelSelectorDataSource {
 impl Entity for ModelSelectorDataSource {
     type Event = ();
 }
+
+#[cfg(test)]
+#[path = "data_source_tests.rs"]
+mod tests;
 
 #[derive(Clone)]
 struct ModelSearchItem {

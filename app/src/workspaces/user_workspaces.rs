@@ -173,6 +173,15 @@ pub(crate) struct TeamContext {
     team_uid: ServerId,
 }
 
+/// An opaque key identifying the team scope a [`TeamContext`] was captured for, or a
+/// resolved no-team operation. Lets an external per-team cache (e.g. a per-team model or
+/// usage-state map) key its entries by team without itself extracting or comparing raw
+/// UIDs; the only operations available on it are equality and hashing. Minted only by
+/// [`UserWorkspaces::cache_key_for_context`], and checked for continued team membership
+/// only by [`UserWorkspaces::is_team_scope_key_current`].
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) struct TeamScopeKey(Option<ServerId>);
+
 /// The team a view renders as, borrowed for the duration of a single render.
 ///
 /// Current-team UI must reflect the window's team as of this frame, so this is resolved
@@ -409,6 +418,21 @@ impl UserWorkspaces {
     /// current workspace, e.g. after the user leaves it.
     pub(crate) fn team_for_context(&self, context: &TeamContext) -> Option<&Team> {
         self.team_from_uid(context.team_uid)
+    }
+
+    /// Mints the opaque cache key for `context`'s scope, or for a resolved no-team
+    /// operation when `context` is `None`. See [`TeamScopeKey`].
+    pub(crate) fn cache_key_for_context(context: Option<&TeamContext>) -> TeamScopeKey {
+        TeamScopeKey(context.map(|context| context.team_uid))
+    }
+
+    /// Whether `key`'s scope is still current: a resolved no-team scope always is; a real
+    /// team scope is current only while that team is still a member of some workspace.
+    /// Used to drop a cache entry (or an in-flight fetch's result) for a team the user has
+    /// left, without the caller ever needing the raw UID `key` was minted from.
+    pub(crate) fn is_team_scope_key_current(&self, key: TeamScopeKey) -> bool {
+        key.0
+            .is_none_or(|uid| self.team_uids_across_all_workspaces().contains(&uid))
     }
 
     /// Returns the windows whose team assignment changed.

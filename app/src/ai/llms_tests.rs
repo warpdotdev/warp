@@ -1279,7 +1279,7 @@ fn explicit_child_model_pin_preserves_gui_behavior_and_only_emits_for_effective_
     });
 }
 
-// -- Team-scoped credential-source UI --
+// -- Per-team model catalog lifecycle (PR 3A: `models_by_team`) --
 
 #[derive(Default)]
 struct TeamScopeTestView;
@@ -1370,6 +1370,83 @@ fn initialize_team_scope_test_app(app: &mut App, workspace: Workspace) {
     });
 }
 
+#[test]
+fn team_scoped_catalogs_stay_independent_for_two_windows_on_different_teams() {
+    let team_a = team_for_llms_test(111, "team-a");
+    let team_b = team_for_llms_test(222, "team-b");
+    let workspace = workspace_for_llms_test(vec![team_a.clone(), team_b.clone()]);
+
+    App::test((), |mut app| async move {
+        initialize_team_scope_test_app(&mut app, workspace);
+        let llm_preferences = app.add_singleton_model(LLMPreferences::new);
+
+        let (window_a, view_a) = create_team_scope_test_window(&mut app);
+        let (window_b, view_b) = create_team_scope_test_window(&mut app);
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.set_team_for_window(window_a, team_a.uid, ctx);
+            user_workspaces.set_team_for_window(window_b, team_b.uid, ctx);
+        });
+
+        // Each window mints its own context through the same production path a real
+        // call site would use (`UserWorkspaces::team_context_for_view`).
+        let context_a = view_a
+            .update(&mut app, |_, ctx| {
+                UserWorkspaces::as_ref(ctx).team_context_for_view(ctx)
+            })
+            .expect("window A has a team");
+        let context_b = view_b
+            .update(&mut app, |_, ctx| {
+                UserWorkspaces::as_ref(ctx).team_context_for_view(ctx)
+            })
+            .expect("window B has a team");
+
+        let models_a = ModelsByFeature {
+            agent_mode: available(
+                "auto",
+                vec![server_llm("auto", None), server_llm("team-a-model", None)],
+            ),
+            ..ModelsByFeature::default()
+        };
+        let models_b = ModelsByFeature {
+            agent_mode: available(
+                "auto",
+                vec![server_llm("auto", None), server_llm("team-b-model", None)],
+            ),
+            ..ModelsByFeature::default()
+        };
+
+        llm_preferences.update(&mut app, |preferences, _| {
+            preferences
+                .update_feature_model_choices_for_context(Some(&context_a), Ok(models_a.clone()));
+            preferences
+                .update_feature_model_choices_for_context(Some(&context_b), Ok(models_b.clone()));
+        });
+
+        llm_preferences.read(&app, |preferences, _| {
+            assert_eq!(
+                preferences.models_by_feature_for_context(Some(&context_a)),
+                &models_a,
+                "window A's context should read window A's catalog"
+            );
+            assert_eq!(
+                preferences.models_by_feature_for_context(Some(&context_b)),
+                &models_b,
+                "window B's context should read window B's catalog, independent of window A's"
+            );
+            assert_eq!(
+                preferences.models_by_feature_for_context(None),
+                &ModelsByFeature::default(),
+                "a resolved no-team scope must stay independent of either team's catalog"
+            );
+            assert_eq!(
+                preferences.models_by_feature(),
+                &ModelsByFeature::default(),
+                "the legacy bucket must not observe either team's update"
+            );
+        });
+    });
+}
+
 // -- Credential-source UI is team-scoped (not blocked on #15359: team_byo policy and
 // team-provided keys are already genuinely team-differentiated on the wire today; only the
 // model catalog itself is not) --
@@ -1435,6 +1512,55 @@ fn credential_source_for_model_differs_by_window_team_policy() {
             assert!(
                 !should_show_key_icon_for_model(&anthropic_llm, team_uid_b, ctx),
                 "window B should not show the key icon"
+            );
+        });
+    });
+}
+
+#[test]
+fn teams_changed_prunes_a_removed_teams_scoped_catalog() {
+    let team = team_for_llms_test(111, "team-a");
+    let workspace = workspace_for_llms_test(vec![team.clone()]);
+
+    App::test((), |mut app| async move {
+        initialize_team_scope_test_app(&mut app, workspace);
+        let llm_preferences = app.add_singleton_model(LLMPreferences::new);
+
+        let (window, view) = create_team_scope_test_window(&mut app);
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.set_team_for_window(window, team.uid, ctx);
+        });
+        let context = view
+            .update(&mut app, |_, ctx| {
+                UserWorkspaces::as_ref(ctx).team_context_for_view(ctx)
+            })
+            .expect("window has a team");
+
+        // Seed a cached entry as if a caller had already fetched this team's catalog.
+        llm_preferences.update(&mut app, |preferences, _| {
+            preferences.update_feature_model_choices_for_context(
+                Some(&context),
+                Ok(ModelsByFeature::default()),
+            );
+        });
+        llm_preferences.read(&app, |preferences, _| {
+            assert_eq!(
+                preferences.models_by_feature_for_context(Some(&context)),
+                &ModelsByFeature::default(),
+                "the entry should be seeded before the team is removed"
+            );
+            assert_eq!(preferences.models_by_team.len(), 1);
+        });
+
+        // The user leaves the team: no workspace has it anymore.
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.update_workspaces(vec![], ctx);
+        });
+
+        llm_preferences.read(&app, |preferences, _| {
+            assert!(
+                preferences.models_by_team.is_empty(),
+                "a team removed from every workspace should be pruned from models_by_team"
             );
         });
     });

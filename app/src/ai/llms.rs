@@ -21,7 +21,9 @@ use crate::network::{NetworkStatus, NetworkStatusEvent, NetworkStatusKind};
 use crate::server::ids::ServerId;
 use crate::server::server_api::ServerApiProvider;
 use crate::user_config::{WarpConfig, WarpConfigUpdateEvent};
-use crate::workspaces::user_workspaces::{UserWorkspaces, UserWorkspacesEvent};
+use crate::workspaces::user_workspaces::{
+    TeamContext, TeamScopeKey, UserWorkspaces, UserWorkspacesEvent,
+};
 
 /// Checks if a user's' API key is being used for the given provider.
 /// Returns `true` if BYO API key is enabled and a key exists for the provider.
@@ -741,12 +743,31 @@ struct AvailableLLMsUpdate {
     popup_visibility_state: Arc<FairMutex<UpdatePopupVisibilityState>>,
 }
 
+/// A model catalog plus its own refresh bookkeeping.
+///
+/// Kept per-team (in [`LLMPreferences::models_by_team`]) rather than as a single instance so
+/// that fetching or marking one team's catalog stale can never leak into another
+/// concurrently open team's state.
+#[derive(Default)]
+struct TeamModelState {
+    models_by_feature: ModelsByFeature,
+    /// Whether the most recent authed fetch failed.
+    agent_mode_models_unavailable: bool,
+}
+
 /// Singleton model holding user/workspace LLM preferences, including the set of LLMs available for
 /// use as well as the user's preferred LLM for Agent Mode.
 pub struct LLMPreferences {
-    models_by_feature: ModelsByFeature,
-    /// Whether the most recent authed agent-mode model-list fetch failed.
-    agent_mode_models_unavailable: bool,
+    /// The catalog read by every accessor that has not adopted an explicit team scope, and
+    /// populated by the account-wide, unscoped model-choice fetch. Deliberately a separate
+    /// field rather than `models_by_team`'s `None` entry: that entry means an operation
+    /// resolved it has no team, which is a different thing that happens to coincide with
+    /// this catalog today. Conflating them would let a genuinely-resolved no-team read
+    /// silently inherit whichever team's data last flowed through this legacy, ambient path.
+    legacy_models: TeamModelState,
+    /// Catalogs resolved for an explicit team-operation scope, keyed opaquely (see
+    /// [`TeamScopeKey`]); the no-team key is distinct from `legacy_models` above.
+    models_by_team: HashMap<TeamScopeKey, TeamModelState>,
     last_update: Option<AvailableLLMsUpdate>,
     // Stores model overrides for a given terminal view. User selections are
     // normalized against the GUI profile default, while explicit child-run
@@ -766,7 +787,10 @@ pub struct LLMPreferences {
 
 impl LLMPreferences {
     pub fn new(ctx: &mut ModelContext<Self>) -> Self {
-        let models_by_feature = get_cached_models(ctx).unwrap_or_default();
+        let legacy_models = TeamModelState {
+            models_by_feature: get_cached_models(ctx).unwrap_or_default(),
+            agent_mode_models_unavailable: false,
+        };
 
         ctx.subscribe_to_model(&NetworkStatus::handle(ctx), |me, _, event, ctx| {
             if let NetworkStatusEvent::NetworkStatusChanged {
@@ -774,6 +798,7 @@ impl LLMPreferences {
             } = event
             {
                 me.refresh_authed_models(ctx);
+                me.refresh_scoped_teams(ctx);
             }
         });
 
@@ -784,6 +809,7 @@ impl LLMPreferences {
         ctx.subscribe_to_model(&AuthManager::handle(ctx), |me, _, event, ctx| {
             if let AuthManagerEvent::AuthComplete = event {
                 me.refresh_authed_models(ctx);
+                me.refresh_scoped_teams(ctx);
             }
         });
 
@@ -791,6 +817,7 @@ impl LLMPreferences {
             if let UserWorkspacesEvent::TeamsChanged = event {
                 me.sanitize_disabled_custom_model_preferences(ctx);
                 me.refresh_authed_models(ctx);
+                me.prune_and_refresh_scoped_teams(ctx);
             }
         });
 
@@ -822,8 +849,8 @@ impl LLMPreferences {
         let custom_llms = build_custom_llm_infos(ApiKeyManager::as_ref(ctx).keys());
 
         let mut me = Self {
-            models_by_feature,
-            agent_mode_models_unavailable: false,
+            legacy_models,
+            models_by_team: HashMap::new(),
             last_update: None,
             base_llm_for_terminal_view,
             custom_llms,
@@ -845,11 +872,65 @@ impl LLMPreferences {
 
         me
     }
+
+    /// The model catalog read by every accessor below that has not yet adopted an explicit
+    /// team scope. See the field doc on `legacy_models` for why it is not `models_by_team`'s
+    /// `None` entry.
+    fn models_by_feature(&self) -> &ModelsByFeature {
+        &self.legacy_models.models_by_feature
+    }
+
+    /// Mutable counterpart to [`Self::models_by_feature`]. Only used by
+    /// [`Self::add_agent_mode_model_for_test`] today.
+    #[cfg(any(test, feature = "test-util"))]
+    fn models_by_feature_mut(&mut self) -> &mut ModelsByFeature {
+        &mut self.legacy_models.models_by_feature
+    }
+
+    /// Entry of `models_by_team` for `key`, or a shared empty default when nothing has been
+    /// fetched for that scope yet. Never allocates an entry, so reading a scope no caller
+    /// has resolved does not spuriously grow `models_by_team` or imply a fetch is in flight.
+    fn team_state(&self, key: TeamScopeKey) -> &TeamModelState {
+        static DEFAULT: OnceLock<TeamModelState> = OnceLock::new();
+        self.models_by_team
+            .get(&key)
+            .unwrap_or_else(|| DEFAULT.get_or_init(TeamModelState::default))
+    }
+
+    /// The model catalog for a captured team-operation scope, or the resolved no-team scope
+    /// when `context` is `None`. Returns a shared empty default when nothing has been
+    /// fetched for that scope yet.
+    #[allow(dead_code)]
+    pub(crate) fn models_by_feature_for_context(
+        &self,
+        context: Option<&TeamContext>,
+    ) -> &ModelsByFeature {
+        &self
+            .team_state(UserWorkspaces::cache_key_for_context(context))
+            .models_by_feature
+    }
+
+    /// Whether the most recent authed fetch for `context`'s scope failed. See
+    /// [`Self::models_by_feature_for_context`].
+    #[allow(dead_code)]
+    pub(crate) fn agent_mode_models_unavailable_for_context(
+        &self,
+        context: Option<&TeamContext>,
+    ) -> bool {
+        self.team_state(UserWorkspaces::cache_key_for_context(context))
+            .agent_mode_models_unavailable
+    }
+
+    /// Builds an `LLMPreferences` for unit tests that only need to set `legacy_models` and
+    /// `custom_llms` directly, without the singleton machinery `new()` requires.
     #[cfg(test)]
     fn for_test(models_by_feature: ModelsByFeature, custom_llms: Vec<LLMInfo>) -> Self {
         Self {
-            models_by_feature,
-            agent_mode_models_unavailable: false,
+            legacy_models: TeamModelState {
+                models_by_feature,
+                agent_mode_models_unavailable: false,
+            },
+            models_by_team: HashMap::new(),
             last_update: None,
             base_llm_for_terminal_view: HashMap::new(),
             custom_llms,
@@ -876,7 +957,7 @@ impl LLMPreferences {
             let raw_override = self.base_llm_for_terminal_view.get(&terminal_view_id);
             if let Some(llm_id) = raw_override
                 && let Some(llm_info) =
-                    self.model_info_for_id(&self.models_by_feature.agent_mode, llm_id, app)
+                    self.model_info_for_id(&self.models_by_feature().agent_mode, llm_id, app)
             {
                 return llm_info;
             }
@@ -898,8 +979,8 @@ impl LLMPreferences {
             .data()
             .base_model
             .clone()
-            .and_then(|id| self.model_info_for_id(&self.models_by_feature.agent_mode, &id, app))
-            .unwrap_or_else(|| self.fallback_llm_info(&self.models_by_feature.agent_mode, app))
+            .and_then(|id| self.model_info_for_id(&self.models_by_feature().agent_mode, &id, app))
+            .unwrap_or_else(|| self.fallback_llm_info(&self.models_by_feature().agent_mode, app))
     }
 
     /// Disable-aware fallback for when the user has no explicit (usable)
@@ -955,8 +1036,8 @@ impl LLMPreferences {
             .data()
             .coding_model
             .clone()
-            .and_then(|id| self.model_info_for_id(&self.models_by_feature.coding, &id, app))
-            .unwrap_or_else(|| self.fallback_llm_info(&self.models_by_feature.coding, app))
+            .and_then(|id| self.model_info_for_id(&self.models_by_feature().coding, &id, app))
+            .unwrap_or_else(|| self.fallback_llm_info(&self.models_by_feature().coding, app))
     }
 
     /// Resolves `id` against a server-provided model list, but hides cloud/team
@@ -984,7 +1065,7 @@ impl LLMPreferences {
     ) -> impl Iterator<Item = &LLMInfo> + use<'_> {
         // Don't show admin-disabled models in the dropdown
         let routers_enabled = FeatureFlag::CustomModelRouters.is_enabled();
-        self.models_by_feature
+        self.models_by_feature()
             .agent_mode
             .choices
             .iter()
@@ -1000,7 +1081,7 @@ impl LLMPreferences {
 
     #[cfg(any(test, feature = "test-util"))]
     pub fn add_agent_mode_model_for_test(&mut self, llm: LLMInfo) {
-        self.models_by_feature.agent_mode.choices.push(llm);
+        self.models_by_feature_mut().agent_mode.choices.push(llm);
     }
 
     /// Returns the set of LLMs available for coding.
@@ -1010,7 +1091,7 @@ impl LLMPreferences {
     ) -> impl Iterator<Item = &LLMInfo> + use<'_> {
         // Don't show admin-disabled models in the dropdown
         let routers_enabled = FeatureFlag::CustomModelRouters.is_enabled();
-        self.models_by_feature
+        self.models_by_feature()
             .coding
             .choices
             .iter()
@@ -1065,10 +1146,11 @@ impl LLMPreferences {
 
     /// Helper to get the AvailableLLMs for cli_agent, falling back to agent_mode.
     fn get_cli_agent_available(&self) -> &AvailableLLMs {
-        self.models_by_feature
+        let models_by_feature = self.models_by_feature();
+        models_by_feature
             .cli_agent
             .as_ref()
-            .unwrap_or(&self.models_by_feature.agent_mode)
+            .unwrap_or(&models_by_feature.agent_mode)
     }
 
     /// Returns the set of LLMs available for computer use agent.
@@ -1108,7 +1190,7 @@ impl LLMPreferences {
     /// Falls back to a computer-use-specific default if None.
     fn get_computer_use_available(&self) -> &AvailableLLMs {
         static DEFAULT: OnceLock<AvailableLLMs> = OnceLock::new();
-        self.models_by_feature
+        self.models_by_feature()
             .computer_use
             .as_ref()
             .unwrap_or_else(|| DEFAULT.get_or_init(default_computer_use_llms))
@@ -1118,7 +1200,7 @@ impl LLMPreferences {
     /// Falls back to the user's custom-endpoint LLMs when the id isn't a server-known model
     /// id (e.g. when it's a `config_key` UUID).
     pub fn get_llm_info(&self, id: &LLMId) -> Option<&LLMInfo> {
-        self.models_by_feature
+        self.models_by_feature()
             .info_for_id(id)
             .or_else(|| self.custom_llm_info_for_id(id))
             .or_else(|| self.custom_router_llm_info_for_id(id))
@@ -1445,28 +1527,28 @@ impl LLMPreferences {
     /// Returns the effective default base model as a fallback
     /// (disable-aware, see [`Self::fallback_llm_info`]).
     pub fn get_default_base_model(&self, app: &AppContext) -> &LLMInfo {
-        self.fallback_llm_info(&self.models_by_feature.agent_mode, app)
+        self.fallback_llm_info(&self.models_by_feature().agent_mode, app)
     }
 
     /// Returns the effective default coding model as a fallback
     /// (disable-aware, see [`Self::fallback_llm_info`]).
     pub fn get_default_coding_model(&self, app: &AppContext) -> &LLMInfo {
-        self.fallback_llm_info(&self.models_by_feature.coding, app)
+        self.fallback_llm_info(&self.models_by_feature().coding, app)
     }
 
     /// Returns the preferred Codex model, if set by the server.
     pub fn get_preferred_codex_model(&self) -> Option<&LLMInfo> {
-        self.models_by_feature
-            .agent_mode
+        let agent_mode = &self.models_by_feature().agent_mode;
+        agent_mode
             .preferred_codex_model_id
             .as_ref()
-            .and_then(|id| self.models_by_feature.agent_mode.info_for_id(id))
+            .and_then(|id| agent_mode.info_for_id(id))
     }
 
     /// Returns `true` when the most recent authed agent-mode model-list fetch
     /// failed, so the server-provided model list is currently unavailable.
     pub fn agent_mode_models_unavailable(&self) -> bool {
-        self.agent_mode_models_unavailable
+        self.legacy_models.agent_mode_models_unavailable
     }
 
     /// Sets whether the authed agent-mode model list is currently unavailable.
@@ -1474,12 +1556,15 @@ impl LLMPreferences {
     /// [`Self::on_server_update`] on any successful model-list update, and
     /// from tests.
     pub(crate) fn set_agent_mode_models_unavailable(&mut self, unavailable: bool) {
-        self.agent_mode_models_unavailable = unavailable;
+        self.legacy_models.agent_mode_models_unavailable = unavailable;
     }
 
     #[cfg(feature = "integration_tests")]
     pub fn is_available_agent_mode_llm(&self, id: &LLMId) -> bool {
-        self.models_by_feature.agent_mode.info_for_id(id).is_some()
+        self.models_by_feature()
+            .agent_mode
+            .info_for_id(id)
+            .is_some()
     }
 
     /// Creates a pane-level override for the Agent Mode LLM.
@@ -1622,7 +1707,7 @@ impl LLMPreferences {
         terminal_view_id: Option<EntityId>,
         ctx: &mut ModelContext<Self>,
     ) {
-        let new_value = if preferred_llm_id == &self.models_by_feature.coding.default_id {
+        let new_value = if preferred_llm_id == &self.models_by_feature().coding.default_id {
             None
         } else {
             Some(preferred_llm_id.clone())
@@ -1700,7 +1785,7 @@ impl LLMPreferences {
             async move { ai_api_client.get_feature_model_choices().await },
             |me, result, ctx| match result {
                 Ok(update) => {
-                    if update != me.models_by_feature {
+                    if update != *me.models_by_feature() {
                         me.on_server_update(update, ctx);
                     }
                     // Clear the flag; on_server_update also clears it but may be skipped when the list is unchanged.
@@ -1716,6 +1801,70 @@ impl LLMPreferences {
         );
     }
 
+    /// Fetches the latest model catalog for `key`'s scope and stores it under that scope's
+    /// own entry in `models_by_team`, leaving every other entry untouched. The completion is
+    /// dropped if `key`'s team is no longer a current team membership by the time the
+    /// response arrives, so a slow response cannot resurrect an entry that
+    /// [`Self::prune_and_refresh_scoped_teams`] just removed.
+    ///
+    /// The transport call below does not yet accept a team scope, so every scope's fetch
+    /// currently retrieves the same account-wide response; this establishes the per-scope
+    /// cache/invalidation shape ahead of that.
+    fn refresh_models_for_team(&self, key: TeamScopeKey, ctx: &mut ModelContext<Self>) {
+        if !AuthStateProvider::as_ref(ctx).get().is_logged_in() {
+            return;
+        }
+
+        let ai_api_client = ServerApiProvider::as_ref(ctx).get_ai_client();
+        ctx.spawn(
+            async move { ai_api_client.get_feature_model_choices().await },
+            move |me, result, ctx| {
+                if !UserWorkspaces::as_ref(ctx).is_team_scope_key_current(key) {
+                    return;
+                }
+                match result {
+                    Ok(update) => me.on_server_update_for_team(key, update),
+                    Err(e) => {
+                        report_error!(e.context("Failed to fetch LLMs from server"));
+                        me.models_by_team
+                            .entry(key)
+                            .or_default()
+                            .agent_mode_models_unavailable = true;
+                    }
+                }
+            },
+        );
+    }
+
+    /// The context-bearing counterpart to [`Self::refresh_models_for_team`], for a caller
+    /// holding a captured team-operation scope rather than an opaque key.
+    #[allow(dead_code)]
+    pub(crate) fn refresh_models_for_context(
+        &self,
+        context: Option<&TeamContext>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        self.refresh_models_for_team(UserWorkspaces::cache_key_for_context(context), ctx);
+    }
+
+    /// Re-fetches every team scope already cached in `models_by_team`, without pruning.
+    fn refresh_scoped_teams(&self, ctx: &mut ModelContext<Self>) {
+        let keys: Vec<TeamScopeKey> = self.models_by_team.keys().copied().collect();
+        for key in keys {
+            self.refresh_models_for_team(key, ctx);
+        }
+    }
+
+    /// Drops `models_by_team` entries for a team no longer present in any workspace, then
+    /// refreshes every entry that remains. Keeps a stale team's catalog from surviving
+    /// indefinitely and from being refetched forever after the user leaves it.
+    fn prune_and_refresh_scoped_teams(&mut self, ctx: &mut ModelContext<Self>) {
+        let user_workspaces = UserWorkspaces::as_ref(ctx);
+        self.models_by_team
+            .retain(|key, _| user_workspaces.is_team_scope_key_current(*key));
+        self.refresh_scoped_teams(ctx);
+    }
+
     /// No auth required (i.e. to populate the pre-login onboarding picker).
     fn refresh_public_models(&self, ctx: &mut ModelContext<Self>) {
         let ai_api_client = ServerApiProvider::as_ref(ctx).get_ai_client();
@@ -1723,7 +1872,7 @@ impl LLMPreferences {
             async move { ai_api_client.get_free_available_models(None).await },
             |me, result, ctx| match result {
                 Ok(update) => {
-                    if update != me.models_by_feature {
+                    if update != *me.models_by_feature() {
                         me.on_server_update(update, ctx);
                     }
                 }
@@ -1752,15 +1901,28 @@ impl LLMPreferences {
         }
     }
 
+    /// Test-only counterpart to [`Self::update_feature_model_choices`] for a captured
+    /// team-operation scope. See [`Self::on_server_update_for_team`].
+    #[cfg(test)]
+    pub(crate) fn update_feature_model_choices_for_context(
+        &mut self,
+        context: Option<&TeamContext>,
+        choices_result: Result<ModelsByFeature, anyhow::Error>,
+    ) {
+        if let Ok(choices) = choices_result {
+            self.on_server_update_for_team(UserWorkspaces::cache_key_for_context(context), choices);
+        }
+    }
+
     fn on_server_update(&mut self, update: ModelsByFeature, ctx: &mut ModelContext<Self>) {
         // Clear the unavailable flag on every successful model-list update.
         self.set_agent_mode_models_unavailable(false);
 
         let has_existing_persisted_config = get_cached_models(ctx).is_some();
 
-        let old = std::mem::replace(&mut self.models_by_feature, update);
+        let old = std::mem::replace(&mut self.legacy_models.models_by_feature, update);
 
-        match serde_json::to_string(&self.models_by_feature)
+        match serde_json::to_string(self.models_by_feature())
             .context("Failed to serialize LLMs for cache")
         {
             Ok(serialized_update) => {
@@ -1788,7 +1950,7 @@ impl LLMPreferences {
         }
 
         let new_choices =
-            get_new_agent_mode_choices(&old.agent_mode, &self.models_by_feature.agent_mode);
+            get_new_agent_mode_choices(&old.agent_mode, &self.models_by_feature().agent_mode);
         if !new_choices.is_empty() {
             self.last_update = Some(AvailableLLMsUpdate {
                 new_choices,
@@ -1806,6 +1968,17 @@ impl LLMPreferences {
         ctx.emit(LLMPreferencesEvent::UpdatedAvailableLLMs);
     }
 
+    /// Applies a model-list update for a real team scope. Unlike [`Self::on_server_update`]
+    /// (the legacy, account-wide path), this does not persist to the on-disk cache,
+    /// reconcile execution-profile preferences, rebuild custom routers, or track "new
+    /// choices" popup state: those side effects all belong to the single legacy catalog
+    /// surfaced by `models_by_feature()`, which a per-team entry has no bearing on.
+    fn on_server_update_for_team(&mut self, key: TeamScopeKey, update: ModelsByFeature) {
+        let state = self.models_by_team.entry(key).or_default();
+        state.agent_mode_models_unavailable = false;
+        state.models_by_feature = update;
+    }
+
     /// Clear any model selections where the model is no longer supported
     /// or effectively disabled, and clear orphaned context window limits
     /// for non-configurable or unusable models.
@@ -1820,6 +1993,7 @@ impl LLMPreferences {
     /// are not erroneously reset and synced back to cloud, which would destroy the
     /// user's settings on their primary device.
     fn reconcile_disabled_model_preferences(&self, ctx: &mut ModelContext<Self>) {
+        let models_by_feature = self.models_by_feature();
         let profiles_model = AIExecutionProfilesModel::handle(ctx);
         profiles_model.update(ctx, |profiles, ctx| {
             for profile_id in profiles.get_all_profile_ids() {
@@ -1828,7 +2002,7 @@ impl LLMPreferences {
                     let preferred_base_model = profile_data.base_model.clone();
                     let effective_base_model_id = preferred_base_model
                         .as_ref()
-                        .unwrap_or(&self.models_by_feature.agent_mode.default_id);
+                        .unwrap_or(&models_by_feature.agent_mode.default_id);
 
                     // Only reconcile a preferred model when this device recognizes its ID.
                     // If neither the server catalog nor local custom endpoints know it, the ID
@@ -1836,8 +2010,7 @@ impl LLMPreferences {
                     // it here would sync the removal back to cloud and erase the user's setting
                     // on every other device.
                     let preferred_base_model_is_recognized = preferred_base_model.is_none()
-                        || self
-                            .models_by_feature
+                        || models_by_feature
                             .agent_mode
                             .info_for_id(effective_base_model_id)
                             .is_some()
@@ -1845,8 +2018,7 @@ impl LLMPreferences {
                             .custom_llm_info_for_id(effective_base_model_id)
                             .is_some();
 
-                    let effective_base_model_usable = self
-                        .models_by_feature
+                    let effective_base_model_usable = models_by_feature
                         .agent_mode
                         .usable_info_for_id(effective_base_model_id, ctx)
                         .or_else(|| {
@@ -1871,15 +2043,13 @@ impl LLMPreferences {
                     }
                     if let Some(preferred_llm_id) = &profile.data().coding_model {
                         // Same guard: only clear recognized IDs.
-                        let is_recognized = self
-                            .models_by_feature
+                        let is_recognized = models_by_feature
                             .coding
                             .info_for_id(preferred_llm_id)
                             .is_some()
                             || self.custom_llm_info_for_id(preferred_llm_id).is_some();
                         if is_recognized
-                            && self
-                                .models_by_feature
+                            && models_by_feature
                                 .coding
                                 .usable_info_for_id(preferred_llm_id, ctx)
                                 .or_else(|| {

@@ -28670,6 +28670,16 @@ impl View for TerminalView {
             final_element
         }
     }
+
+    fn on_window_transferred(
+        &mut self,
+        _source_window_id: WindowId,
+        target_window_id: WindowId,
+        _: &mut ViewContext<Self>,
+    ) {
+        self.window_id = target_window_id;
+    }
+
     fn on_focus(&mut self, focus_ctx: &FocusContext, ctx: &mut ViewContext<Self>) {
         if focus_ctx.is_self_focused() {
             self.maybe_report_focus_in(ctx);
