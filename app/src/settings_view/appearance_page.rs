@@ -1419,9 +1419,7 @@ impl AppearanceSettingsPageView {
             window_settings_widgets.push(Box::new(WindowBlurTextureWidget::default()));
         }
 
-        if FeatureFlag::UIZoom.is_enabled() {
-            window_settings_widgets.push(Box::new(ZoomLevelWidget));
-        }
+        window_settings_widgets.push(Box::new(ZoomLevelWidget));
 
         if window_settings
             .left_panel_visibility_across_tabs

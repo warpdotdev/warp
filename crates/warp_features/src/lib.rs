@@ -433,9 +433,6 @@ pub enum FeatureFlag {
     /// Enables discarding per-file and discarding all changes
     DiscardPerFileAndAllChanges,
 
-    /// Enables UI zoom support (scaling the entire UI by a given percentage).
-    UIZoom,
-
     /// Shows a confirmation dialog when cancelling an active summarization via Ctrl-C or stop.
     SummarizationCancellationConfirmation,
 
