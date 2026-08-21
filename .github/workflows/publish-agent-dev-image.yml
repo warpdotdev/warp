@@ -55,7 +55,7 @@ jobs:
           expires-in: 3600
 
       - name: Log in to Docker Hub
-        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        uses: docker/login-action@371161bbe7024a29a25c5e19bfcbc0804fe9ad2c # v4.5.2
         with:
           # The exchanged token authenticates as the Docker organization, so the
           # username is the org name rather than an individual account.
