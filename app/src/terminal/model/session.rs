@@ -1843,6 +1843,11 @@ pub mod testing {
             self
         }
 
+        pub fn with_host_info(mut self, host_info: HostInfo) -> Self {
+            self.host_info = host_info;
+            self
+        }
+
         pub fn with_environment_variable_names(
             mut self,
             environment_variable_names: HashSet<SmolStr>,
