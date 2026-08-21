@@ -150,8 +150,12 @@ pub trait TeamClient: 'static + Send + Sync {
         discoverable: bool,
     ) -> Result<WorkspacesMetadataWithPricing>;
 
+    /// Transfers ownership of `team_uid` to `new_owner_email`. `team_uid` is sent in
+    /// `X-Warp-Team-Uid` so the server can authenticate membership for the explicitly
+    /// targeted team; it is not inferred from the current window.
     async fn transfer_team_ownership(
         &self,
+        team_uid: ServerId,
         new_owner_email: String,
     ) -> Result<WorkspacesMetadataWithPricing>;
 
@@ -660,6 +664,7 @@ impl TeamClient for ServerApi {
 
     async fn transfer_team_ownership(
         &self,
+        team_uid: ServerId,
         new_owner_email: String,
     ) -> Result<WorkspacesMetadataWithPricing> {
         let variables = TransferTeamOwnershipVariables {
@@ -668,7 +673,7 @@ impl TeamClient for ServerApi {
         };
         let operation = TransferTeamOwnership::build(variables);
         let result = self
-            .send_graphql_request(operation, None)
+            .send_graphql_request_with_team_uid(operation, None, team_uid)
             .await?
             .transfer_team_ownership;
 
@@ -726,3 +731,7 @@ impl TeamClient for ServerApi {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "team_tests.rs"]
+mod tests;

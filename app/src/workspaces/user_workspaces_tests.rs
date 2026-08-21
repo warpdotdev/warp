@@ -1893,6 +1893,367 @@ fn test_purchase_addon_credits_forwards_team_uid_when_present() {
     })
 }
 
+fn empty_workspaces_metadata_with_pricing() -> WorkspacesMetadataWithPricing {
+    WorkspacesMetadataWithPricing {
+        metadata: WorkspacesMetadataResponse {
+            workspaces: vec![],
+            joinable_teams: vec![],
+            experiments: None,
+            feature_model_choices: None,
+            ai_credit_availability: None,
+            user_purchase_policy: None,
+        },
+        pricing_info: None,
+    }
+}
+
+/// Bucket 1 explicitly names its target team, so a current-window caller must never be able to
+/// swap it for a `TeamContext`. These lock in that the raw UID a caller supplies is exactly
+/// what reaches the client, for one representative `TeamClient` and one `WorkspaceClient` op.
+#[test]
+fn set_team_discoverability_forwards_the_explicit_team_uid() {
+    App::test((), |mut app| async move {
+        let mut team_client = MockTeamClient::new();
+        let expected_team_uid: ServerId = 456.into();
+        team_client
+            .expect_set_team_discoverability()
+            .withf(move |team_uid, discoverable| *team_uid == expected_team_uid && *discoverable)
+            .times(1)
+            .returning(|_, _| Ok(empty_workspaces_metadata_with_pricing()));
+
+        app.add_singleton_model(|ctx| {
+            UserWorkspaces::mock(
+                Arc::new(team_client),
+                Arc::new(MockWorkspaceClient::new()),
+                vec![],
+                ctx,
+            )
+        });
+
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.set_team_discoverability(456.into(), true, ctx);
+        });
+
+        warpui::r#async::Timer::after(Duration::from_millis(100)).await;
+    })
+}
+
+#[test]
+fn generate_stripe_billing_portal_link_forwards_the_explicit_team_uid() {
+    App::test((), |mut app| async move {
+        let mut workspace_client = MockWorkspaceClient::new();
+        let expected_team_uid: ServerId = 456.into();
+        workspace_client
+            .expect_generate_stripe_billing_portal_link()
+            .withf(move |team_uid| *team_uid == expected_team_uid)
+            .times(1)
+            .returning(|_| Ok("https://example.com/billing".to_string()));
+
+        app.add_singleton_model(|ctx| {
+            UserWorkspaces::mock(
+                Arc::new(MockTeamClient::new()),
+                Arc::new(workspace_client),
+                vec![],
+                ctx,
+            )
+        });
+
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.generate_stripe_billing_portal_link(456.into(), ctx);
+        });
+
+        warpui::r#async::Timer::after(Duration::from_millis(100)).await;
+    })
+}
+
+#[test]
+fn update_addon_credits_settings_forwards_the_explicit_team_uid() {
+    App::test((), |mut app| async move {
+        let mut workspace_client = MockWorkspaceClient::new();
+        let expected_team_uid: ServerId = 456.into();
+        workspace_client
+            .expect_update_addon_credits_settings()
+            .withf(
+                move |team_uid, auto_reload_enabled, max_monthly_spend_cents, denomination| {
+                    *team_uid == expected_team_uid
+                        && *auto_reload_enabled == Some(true)
+                        && *max_monthly_spend_cents == Some(5_000)
+                        && *denomination == Some(1_000)
+                },
+            )
+            .times(1)
+            .returning(|_, _, _, _| {
+                Ok(WorkspacesMetadataResponse {
+                    workspaces: vec![],
+                    joinable_teams: vec![],
+                    experiments: None,
+                    feature_model_choices: None,
+                    ai_credit_availability: None,
+                    user_purchase_policy: None,
+                })
+            });
+
+        app.add_singleton_model(|ctx| {
+            UserWorkspaces::mock(
+                Arc::new(MockTeamClient::new()),
+                Arc::new(workspace_client),
+                vec![],
+                ctx,
+            )
+        });
+
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.update_addon_credits_settings(
+                456.into(),
+                Some(true),
+                Some(5_000),
+                Some(1_000),
+                ctx,
+            );
+        });
+
+        warpui::r#async::Timer::after(Duration::from_millis(100)).await;
+    })
+}
+
+/// `TransferTeamOwnership` explicitly names its target team, so the raw UID a caller supplies
+/// must reach the client unchanged, alongside the new owner's email.
+#[test]
+fn transfer_team_ownership_forwards_the_explicit_team_uid_and_email() {
+    App::test((), |mut app| async move {
+        let mut team_client = MockTeamClient::new();
+        let expected_team_uid: ServerId = 456.into();
+        team_client
+            .expect_transfer_team_ownership()
+            .withf(move |team_uid, new_owner_email| {
+                *team_uid == expected_team_uid && new_owner_email == "new-owner@example.com"
+            })
+            .times(1)
+            .returning(|_, _| Ok(empty_workspaces_metadata_with_pricing()));
+
+        app.add_singleton_model(|ctx| {
+            UserWorkspaces::mock(
+                Arc::new(team_client),
+                Arc::new(MockWorkspaceClient::new()),
+                vec![],
+                ctx,
+            )
+        });
+
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.transfer_team_ownership(
+                456.into(),
+                "new-owner@example.com".to_string(),
+                ctx,
+            );
+        });
+
+        warpui::r#async::Timer::after(Duration::from_millis(100)).await;
+    })
+}
+
+/// Without a `TeamContext` (no window to infer a team from, e.g. an automatic background
+/// refresh) and more than one team, `refresh_ai_overages` cannot know which team the fetched
+/// value belongs to. It must skip the write rather than stamp it onto every team — the cross-
+/// team bug this PR exists to fix — leaving existing billing metadata untouched.
+#[test]
+fn refresh_ai_overages_without_context_skips_the_update_when_multiple_teams_exist() {
+    let (team_a, team_b) = two_teams();
+    let mut workspace = workspace_for_test(&team_a);
+    workspace.teams.push(team_b.clone());
+    let fresh_overages = AiOverages {
+        current_monthly_request_cost_cents: 500,
+        current_monthly_requests_used: 10,
+        current_period_end: chrono::Utc::now(),
+    };
+
+    App::test((), |mut app| async move {
+        let mut workspace_client = MockWorkspaceClient::new();
+        let fresh_overages = fresh_overages.clone();
+        workspace_client
+            .expect_refresh_ai_overages()
+            .withf(|team_uid: &Option<ServerId>| team_uid.is_none())
+            .times(1)
+            .returning(move |_| Ok(fresh_overages.clone()));
+
+        app.add_singleton_model(|ctx| {
+            UserWorkspaces::mock(
+                Arc::new(MockTeamClient::new()),
+                Arc::new(workspace_client),
+                vec![workspace],
+                ctx,
+            )
+        });
+
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.refresh_ai_overages(None, ctx);
+        });
+
+        warpui::r#async::Timer::after(Duration::from_millis(100)).await;
+
+        app.read(|ctx| {
+            let workspace = UserWorkspaces::as_ref(ctx)
+                .current_workspace()
+                .expect("workspace should exist");
+            assert!(
+                workspace.billing_metadata.ai_overages.is_none(),
+                "an unscoped refresh with multiple teams must not write workspace-level overages"
+            );
+            for team in &workspace.teams {
+                assert!(
+                    team.billing_metadata.ai_overages.is_none(),
+                    "an unscoped refresh with multiple teams must not stamp overages onto any team"
+                );
+            }
+        });
+    })
+}
+
+/// A single-team workspace has no ambiguity about which team an unscoped refresh belongs to,
+/// so it keeps updating exactly as it did before this PR.
+#[test]
+fn refresh_ai_overages_without_context_updates_the_sole_team() {
+    let team = team_for_test();
+    let workspace = workspace_for_test(&team);
+    let fresh_overages = AiOverages {
+        current_monthly_request_cost_cents: 500,
+        current_monthly_requests_used: 10,
+        current_period_end: chrono::Utc::now(),
+    };
+
+    App::test((), |mut app| async move {
+        let mut workspace_client = MockWorkspaceClient::new();
+        let fresh_overages = fresh_overages.clone();
+        workspace_client
+            .expect_refresh_ai_overages()
+            .withf(|team_uid: &Option<ServerId>| team_uid.is_none())
+            .times(1)
+            .returning(move |_| Ok(fresh_overages.clone()));
+
+        app.add_singleton_model(|ctx| {
+            UserWorkspaces::mock(
+                Arc::new(MockTeamClient::new()),
+                Arc::new(workspace_client),
+                vec![workspace],
+                ctx,
+            )
+        });
+
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.refresh_ai_overages(None, ctx);
+        });
+
+        warpui::r#async::Timer::after(Duration::from_millis(100)).await;
+
+        app.read(|ctx| {
+            let workspace = UserWorkspaces::as_ref(ctx)
+                .current_workspace()
+                .expect("workspace should exist");
+            assert_eq!(
+                workspace
+                    .billing_metadata
+                    .ai_overages
+                    .as_ref()
+                    .map(|overages| overages.current_monthly_requests_used),
+                Some(10),
+                "an unscoped refresh with a single team should still update workspace-level overages"
+            );
+            assert_eq!(
+                workspace
+                    .teams
+                    .first()
+                    .and_then(|team| team.billing_metadata.ai_overages.as_ref())
+                    .map(|overages| overages.current_monthly_requests_used),
+                Some(10),
+                "an unscoped refresh with a single team should still update that team's overages"
+            );
+        });
+    })
+}
+
+/// With a `TeamContext` captured from the current window, `refresh_ai_overages` must send that
+/// team's UID and update only that team's billing metadata, not the workspace or other teams.
+#[test]
+fn refresh_ai_overages_with_context_forwards_team_uid_and_scopes_the_update() {
+    let (team_a, team_b) = two_teams();
+    let mut workspace = workspace_for_test(&team_a);
+    workspace.teams.push(team_b.clone());
+    let team_a_uid = team_a.uid;
+    let fresh_overages = AiOverages {
+        current_monthly_request_cost_cents: 700,
+        current_monthly_requests_used: 42,
+        current_period_end: chrono::Utc::now(),
+    };
+
+    App::test((), |mut app| async move {
+        let mut workspace_client = MockWorkspaceClient::new();
+        let fresh_overages = fresh_overages.clone();
+        workspace_client
+            .expect_refresh_ai_overages()
+            .withf(move |team_uid: &Option<ServerId>| *team_uid == Some(team_a_uid))
+            .times(1)
+            .returning(move |_| Ok(fresh_overages.clone()));
+
+        app.add_singleton_model(|ctx| {
+            UserWorkspaces::mock(
+                Arc::new(MockTeamClient::new()),
+                Arc::new(workspace_client),
+                vec![workspace],
+                ctx,
+            )
+        });
+
+        let (window_id, view) = create_test_window(&mut app);
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.set_team_for_window(window_id, team_a_uid, ctx);
+        });
+        let context = view
+            .update(&mut app, |_, ctx| {
+                UserWorkspaces::as_ref(ctx).team_context_for_view(ctx)
+            })
+            .expect("a window assigned to team A should mint a context");
+
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.refresh_ai_overages(Some(context), ctx);
+        });
+
+        warpui::r#async::Timer::after(Duration::from_millis(100)).await;
+
+        app.read(|ctx| {
+            let workspace = UserWorkspaces::as_ref(ctx)
+                .current_workspace()
+                .expect("workspace should exist");
+            let updated_team_a = workspace
+                .teams
+                .iter()
+                .find(|team| team.uid == team_a_uid)
+                .expect("team A should still exist");
+            assert_eq!(
+                updated_team_a
+                    .billing_metadata
+                    .ai_overages
+                    .as_ref()
+                    .map(|overages| overages.current_monthly_requests_used),
+                Some(42),
+                "the scoped refresh should update only the targeted team"
+            );
+            let untouched_team_b = workspace
+                .teams
+                .iter()
+                .find(|team| team.uid != team_a_uid)
+                .expect("team B should still exist");
+            assert!(
+                untouched_team_b.billing_metadata.ai_overages.is_none(),
+                "the scoped refresh must not blast overages onto other teams"
+            );
+            assert!(
+                workspace.billing_metadata.ai_overages.is_none(),
+                "the scoped refresh must not touch workspace-level overages"
+            );
+        });
+    })
+}
+
 #[test]
 fn test_remove_user_from_team_rejected_emits_error_event_without_updating_workspaces() {
     let team = team_for_test();

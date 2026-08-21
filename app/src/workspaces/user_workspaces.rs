@@ -191,6 +191,16 @@ pub(crate) struct TeamRenderContext<'a> {
     team: &'a Team,
 }
 
+impl TeamContext {
+    /// Returns the captured team UID for building a trusted transport request header or
+    /// body value. Only request construction for this same selected team may read this;
+    /// it is not evidence of current membership, since the server still authorizes every
+    /// request.
+    pub(crate) fn team_uid_for_transport(&self) -> ServerId {
+        self.team_uid
+    }
+}
+
 impl UserWorkspaces {
     #[cfg(any(test, all(feature = "tui", feature = "test-util")))]
     pub fn mock(
@@ -1524,12 +1534,17 @@ impl UserWorkspaces {
 
     pub fn transfer_team_ownership(
         &mut self,
+        team_uid: ServerId,
         new_owner_email: String,
         ctx: &mut ModelContext<Self>,
     ) {
         let team_client = self.team_client.clone();
         let _ = ctx.spawn(
-            async move { team_client.transfer_team_ownership(new_owner_email).await },
+            async move {
+                team_client
+                    .transfer_team_ownership(team_uid, new_owner_email)
+                    .await
+            },
             Self::on_team_ownership_transferred,
         );
     }
@@ -1745,11 +1760,23 @@ impl UserWorkspaces {
         ctx.notify();
     }
 
-    pub fn refresh_ai_overages(&mut self, ctx: &mut ModelContext<Self>) {
+    /// Refreshes AI overages. `context` scopes the request to the team inferred from the
+    /// window that started it; pass `None` when there is no window to infer a team from
+    /// (e.g. an automatic refresh triggered by background AI activity), which preserves the
+    /// legacy, unscoped behavior.
+    pub(crate) fn refresh_ai_overages(
+        &mut self,
+        context: Option<TeamContext>,
+        ctx: &mut ModelContext<Self>,
+    ) {
         let workspace_client = self.workspace_client.clone();
+        let team_uid = context.as_ref().map(TeamContext::team_uid_for_transport);
         let _ = ctx.spawn(
-            async move { workspace_client.refresh_ai_overages().await },
-            Self::on_refresh_ai_overages,
+            async move {
+                let result = workspace_client.refresh_ai_overages(team_uid).await;
+                (context, result)
+            },
+            |me, (context, result), ctx| me.on_refresh_ai_overages(context, result, ctx),
         );
     }
 
@@ -1777,19 +1804,63 @@ impl UserWorkspaces {
         );
     }
 
-    fn on_refresh_ai_overages(&mut self, result: Result<AiOverages>, ctx: &mut ModelContext<Self>) {
+    fn on_refresh_ai_overages(
+        &mut self,
+        context: Option<TeamContext>,
+        result: Result<AiOverages>,
+        ctx: &mut ModelContext<Self>,
+    ) {
         match result {
             Ok(fresh_ai_overages) => {
                 // TODO: We really need to stop having duplicate billing metadata...
-                if let Some(workspace) = self.current_workspace_mut() {
-                    workspace.billing_metadata.ai_overages = Some(fresh_ai_overages.clone());
-                    for team in &mut workspace.teams {
-                        team.billing_metadata.ai_overages = Some(fresh_ai_overages.clone());
+                let updated = match context
+                    .as_ref()
+                    .and_then(|context| self.team_for_context(context))
+                {
+                    Some(team) => {
+                        let team_uid = team.uid;
+                        self.current_workspace_mut()
+                            .and_then(|workspace| {
+                                workspace.teams.iter_mut().find(|team| team.uid == team_uid)
+                            })
+                            .is_some_and(|team| {
+                                team.billing_metadata.ai_overages = Some(fresh_ai_overages);
+                                true
+                            })
                     }
-                }
+                    // No team to attribute this value to. With more than one team, broadcasting
+                    // it to every team would put one team's overages onto another's — the exact
+                    // bug this migration exists to fix — so leave existing state alone instead.
+                    // A stale display beats a confidently wrong one. A single-team workspace has
+                    // no such ambiguity, so it keeps updating as before.
+                    None => {
+                        let team_count = self
+                            .current_workspace()
+                            .map(|workspace| workspace.teams.len())
+                            .unwrap_or(0);
+                        if team_count > 1 {
+                            log::warn!(
+                                "Skipping unscoped AI overages refresh: the current workspace has \
+                                 {team_count} teams and no team was given to scope it to"
+                            );
+                            false
+                        } else if let Some(workspace) = self.current_workspace_mut() {
+                            workspace.billing_metadata.ai_overages =
+                                Some(fresh_ai_overages.clone());
+                            for team in &mut workspace.teams {
+                                team.billing_metadata.ai_overages = Some(fresh_ai_overages.clone());
+                            }
+                            true
+                        } else {
+                            false
+                        }
+                    }
+                };
 
-                ctx.emit(UserWorkspacesEvent::AiOveragesUpdated);
-                ctx.notify();
+                if updated {
+                    ctx.emit(UserWorkspacesEvent::AiOveragesUpdated);
+                    ctx.notify();
+                }
             }
             Err(e) => {
                 log::warn!("Failed to refresh AI overages for workspace: {e:?}");

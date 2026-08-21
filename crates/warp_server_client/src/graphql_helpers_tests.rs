@@ -1,16 +1,16 @@
 use std::borrow::Cow;
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 
 use cynic::{GraphQlError, GraphQlResponse};
 use futures::executor::block_on;
 use http::StatusCode;
-use warp_graphql::client::{GraphQLError, RequestOptions};
+use warp_graphql::client::{GraphQLError, Operation, RequestOptions};
 use warp_server_auth::auth_state::AuthState;
 
-use super::send_graphql_request;
+use super::{send_graphql_request, send_graphql_request_with_headers};
 use crate::auth::AuthEvent;
 use crate::base_client::{AuthenticatedGraphqlConfig, BaseClient, GraphqlRoutingConfig};
 
@@ -273,4 +273,61 @@ fn external_user_not_in_context_returns_credentials_rejected_without_account_eve
     ));
     assert_eq!(send_count.load(Ordering::SeqCst), 1);
     assert_no_events(&event_receiver);
+}
+
+/// Captures the [`RequestOptions`] a request was sent with, so a test can inspect merged
+/// headers without a real HTTP round trip.
+struct HeaderCapturingOperation {
+    captured_headers: Arc<Mutex<Option<std::collections::HashMap<String, String>>>>,
+}
+
+impl Operation<()> for HeaderCapturingOperation {
+    fn operation_name(&self) -> Option<Cow<'_, str>> {
+        Some(Cow::Borrowed("HeaderCapturingOperation"))
+    }
+
+    fn send_request(
+        self,
+        _client: Arc<http_client::Client>,
+        options: RequestOptions,
+    ) -> Pin<
+        Box<
+            dyn Future<Output = std::result::Result<GraphQlResponse<()>, GraphQLError>>
+                + Send
+                + 'static,
+        >,
+    >
+    where
+        Self: Sized,
+    {
+        Box::pin(async move {
+            *self.captured_headers.lock().unwrap() = Some(options.headers);
+            Ok(GraphQlResponse {
+                data: Some(()),
+                errors: None,
+            })
+        })
+    }
+}
+
+#[test]
+fn send_graphql_request_with_headers_merges_extra_headers_into_request_options() {
+    let (base_client, _event_receiver) = refreshable_base_client();
+    let captured_headers = Arc::new(Mutex::new(None));
+
+    block_on(send_graphql_request_with_headers(
+        &base_client,
+        HeaderCapturingOperation {
+            captured_headers: captured_headers.clone(),
+        },
+        None,
+        vec![("X-Warp-Team-Uid".to_string(), "team-uid-123".to_string())],
+    ))
+    .unwrap();
+
+    let headers = captured_headers.lock().unwrap().take().unwrap();
+    assert_eq!(
+        headers.get("X-Warp-Team-Uid").map(String::as_str),
+        Some("team-uid-123")
+    );
 }

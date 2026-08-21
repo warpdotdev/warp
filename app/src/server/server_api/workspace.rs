@@ -53,7 +53,11 @@ pub trait WorkspaceClient: 'static + Send + Sync {
         max_monthly_spend_cents: Option<u32>,
     ) -> Result<WorkspacesMetadataResponse>;
 
-    async fn refresh_ai_overages(&self) -> Result<AiOverages>;
+    /// Refreshes AI overages. `team_uid` scopes the request to a team inferred from the
+    /// current window, sent in `X-Warp-Team-Uid` so the server returns that team's overages
+    /// instead of an arbitrary one. `None` is the legacy, unscoped call used by callers that
+    /// have no window to infer a team from.
+    async fn refresh_ai_overages(&self, team_uid: Option<ServerId>) -> Result<AiOverages>;
 
     async fn purchase_addon_credits(
         &self,
@@ -134,12 +138,18 @@ impl WorkspaceClient for ServerApi {
         }
     }
 
-    async fn refresh_ai_overages(&self) -> Result<AiOverages> {
+    async fn refresh_ai_overages(&self, team_uid: Option<ServerId>) -> Result<AiOverages> {
         let variables = GetAiOveragesForWorkspaceVariables {
             request_context: get_request_context(),
         };
         let operation = GetAiOveragesForWorkspace::build(variables);
-        let response = self.send_graphql_request(operation, None).await?;
+        let response = match team_uid {
+            Some(team_uid) => {
+                self.send_graphql_request_with_team_uid(operation, None, team_uid)
+                    .await?
+            }
+            None => self.send_graphql_request(operation, None).await?,
+        };
 
         match response.user {
             UserResult::UserOutput(user_output) => user_output
@@ -238,3 +248,7 @@ impl WorkspaceClient for ServerApi {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "workspace_tests.rs"]
+mod tests;

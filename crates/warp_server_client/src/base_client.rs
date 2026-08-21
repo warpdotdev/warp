@@ -22,6 +22,11 @@ pub const CLOUD_AGENT_ID_HEADER: &str = "X-Warp-Cloud-Agent-ID";
 /// Header used to communicate the source of an agent run.
 pub const AGENT_SOURCE_HEADER: &str = "X-Oz-Api-Source";
 
+/// Header carrying the team a request is scoped to: an explicitly targeted team UID, or one
+/// captured from the current window as `TeamContext`. Request-local only; never sourced from
+/// ambient state stored on a client.
+pub const TEAM_UID_HEADER: &str = "X-Warp-Team-Uid";
+
 /// IDs in the staging database that were created specifically for evals.
 ///
 /// Keep this list in sync with `script/populate_agent_mode_eval_user.sql` in warp-server.

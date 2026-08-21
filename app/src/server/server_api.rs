@@ -65,6 +65,7 @@ use crate::ai::predict::{generate_ai_input_suggestions, generate_am_query_sugges
 use crate::ai::voice::transcribe::{TranscribeRequest, TranscribeResponse};
 use crate::auth::auth_manager::AuthManager;
 use crate::auth::auth_state::AuthState;
+use crate::server::ids::ServerId;
 use crate::server::telemetry::TelemetryApi;
 use crate::settings::PrivacySettingsSnapshot;
 use crate::{ChannelState, settings_view};
@@ -562,6 +563,35 @@ impl ServerApi {
             &self.base_client,
             operation,
             timeout,
+        )
+    }
+
+    /// Sends a GraphQL operation with `team_uid` attached in `X-Warp-Team-Uid`, for an
+    /// operation whose explicit target team the server must authenticate against.
+    ///
+    /// This is a minimal, local helper rather than a general request-scope abstraction;
+    /// a broader shared mechanism for request-local team headers may replace it later.
+    pub fn send_graphql_request_with_team_uid<
+        'a,
+        QF,
+        O: warp_graphql::client::Operation<QF> + Send + 'a,
+    >(
+        &'a self,
+        operation: O,
+        timeout: Option<Duration>,
+        team_uid: ServerId,
+    ) -> BoxFuture<'a, Result<QF>>
+    where
+        QF: 'a,
+    {
+        warp_server_client::graphql_helpers::send_graphql_request_with_headers(
+            &self.base_client,
+            operation,
+            timeout,
+            vec![(
+                warp_server_client::base_client::TEAM_UID_HEADER.to_string(),
+                team_uid.to_string(),
+            )],
         )
     }
 

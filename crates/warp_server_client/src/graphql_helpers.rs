@@ -22,9 +22,28 @@ pub fn send_graphql_request<'a, QF: 'a, O>(
 where
     O: Operation<QF> + Send + 'a,
 {
+    send_graphql_request_with_headers(base_client, operation, timeout, Vec::new())
+}
+
+/// Sends a GraphQL operation with additional request-local headers layered on top of the
+/// base client's authenticated options, e.g. a team-scope header for a call whose target
+/// team is not already implied by ambient client state.
+///
+/// This is a minimal, local extension point. It is not a general transport abstraction: a
+/// broader shared mechanism for request-local scope headers may replace it later.
+pub fn send_graphql_request_with_headers<'a, QF: 'a, O>(
+    base_client: &'a BaseClient,
+    operation: O,
+    timeout: Option<Duration>,
+    extra_headers: Vec<(String, String)>,
+) -> BoxFuture<'a, Result<QF>>
+where
+    O: Operation<QF> + Send + 'a,
+{
     Box::pin(async move {
         let operation_name = operation.operation_name().map(Cow::into_owned);
-        let options = base_client.graphql_request_options(timeout).await?;
+        let mut options = base_client.graphql_request_options(timeout).await?;
+        options.headers.extend(extra_headers);
         let response = match operation
             .send_request(base_client.owned_http_client(), options)
             .await

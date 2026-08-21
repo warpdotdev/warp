@@ -3260,7 +3260,10 @@ impl BlocklistAIController {
                 async move { Timer::after(Duration::from_secs(1)).await },
                 |_, _, ctx| {
                     UserWorkspaces::handle(ctx).update(ctx, |user_workspaces, ctx| {
-                        user_workspaces.refresh_ai_overages(ctx);
+                        // No window is available from this background completion trigger,
+                        // so this cannot infer a `TeamContext`; it keeps the legacy,
+                        // unscoped refresh rather than guessing a team.
+                        user_workspaces.refresh_ai_overages(None, ctx);
                     });
                 },
             );
