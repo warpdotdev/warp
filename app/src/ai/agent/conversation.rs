@@ -202,8 +202,8 @@ pub struct ConversationUsageTotals {
 }
 
 impl ConversationUsageTotals {
-    /// Returns the charged-usage total when available, otherwise the
-    /// provider-cost baseline.
+    /// Returns the summed total of the tracked usage
+    /// if not available, falls back to the legacy provider total
     pub fn total_cost_in_cents(&self) -> Option<f32> {
         self.charged_usage
             .map(|usage| usage.total_cost_in_cents())

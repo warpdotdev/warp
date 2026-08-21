@@ -3692,9 +3692,7 @@ fn render_usage_button(props: Props, app: &AppContext) -> Box<dyn Element> {
         .unwrap_or_else(|| conversation.credits_spent());
     // Only the rollup path (summed across sub-agents) has a matching
     // aggregated cost figure; a non-orchestrator conversation's own dollar
-    // total comes from its usage totals directly, preferring the charged-
-    // usage total (same accounting family as the last-block figure below)
-    // over the provider-only baseline.
+    // cost comes from its usage totals directly.
     let headline_cost_in_cents = rollup
         .as_ref()
         .map(|r| r.total_cost_in_cents)
