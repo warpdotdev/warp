@@ -159,6 +159,16 @@ impl WebIntent {
             WebIntent::Action(url) => url,
         }
     }
+
+    /// True when `url` resolves to a `ConversationView` or `SessionView` —
+    /// the two routes that anchor the web session viewer.
+    #[cfg(any(target_family = "wasm", test))]
+    pub fn is_conversation_or_session_view(url: &Url) -> bool {
+        matches!(
+            Self::try_from_url(url),
+            Ok(WebIntent::ConversationView(_) | WebIntent::SessionView(_))
+        )
+    }
 }
 
 /// Attempts to rewrite a Warp web URL into a native desktop intent URL (warp://...).
