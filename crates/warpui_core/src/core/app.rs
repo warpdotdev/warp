@@ -97,7 +97,7 @@ impl App {
         log::info!("Starting test app...");
         let platform = Box::new(platform::test::AppDelegate::new().unwrap());
         let window_manager = Box::new(platform::test::WindowManager::new());
-        let font_cache = Box::new(platform::test::FontDB);
+        let font_cache = Box::new(platform::test::FontDB::new());
         let executor = Rc::new(executor::Foreground::test());
         let app = Self(Rc::new(RefCell::new(AppContext::with_foreground_executor(
             executor.clone(),

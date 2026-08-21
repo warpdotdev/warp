@@ -1412,20 +1412,27 @@ impl Line {
 
         let ellipsis_glyph: Option<(GlyphId, FontId, f32)> =
             if clip_style == ClipStyle::Ellipsis && overflow > MIN_OVERFLOW_FOR_CLIPPING {
-                let ellipsis_run = match clip_direction {
-                    ClipDirection::Start => self.runs.last(),
-                    ClipDirection::End => self.runs.first(),
+                // Start at the run painting starts from — the same run the ellipsis was
+                // previously taken from — and keep walking, because a line whose leading edge is
+                // a single symbol often has that symbol in its own fallback run whose font
+                // carries no '…'. A CLI agent tab title starting with `✳` is one: Hack has no
+                // U+2733, so Core Text splits it into a Zapf Dingbats run, and stopping there
+                // would leave the line unclipped entirely. Keep this starting point: it decides
+                // which font's '…' — and so which advance — a mixed-font line reserves room for.
+                let mut runs = match clip_direction {
+                    ClipDirection::Start => itertools::Either::Left(self.runs.iter().rev()),
+                    ClipDirection::End => itertools::Either::Right(self.runs.iter()),
                 };
 
-                ellipsis_run.and_then(|run| {
-                    font_cache.glyph_for_char(run.font_id, '…', false).and_then(
-                        |(glyph_id, font_id)| {
-                            font_cache
-                                .glyph_advance(font_id, self.font_size, glyph_id)
-                                .ok()
-                                .map(|advance| (glyph_id, font_id, advance.x()))
-                        },
-                    )
+                runs.find_map(|run| {
+                    let (glyph_id, font_id) = font_cache.glyph_for_char(run.font_id, '…', false)?;
+                    let advance = font_cache
+                        .glyph_advance(font_id, self.font_size, glyph_id)
+                        .ok()?
+                        .x();
+                    // A zero-advance ellipsis reserves no room, so the truncation branch below
+                    // would skip it; keep looking for a run that can actually draw one.
+                    (advance > 0.).then_some((glyph_id, font_id, advance))
                 })
             } else {
                 None
@@ -1437,8 +1444,11 @@ impl Line {
 
         // Set the length of the fade based on how much text is overflowing.
         let fade_width = LINE_FADE_MAX_PIXELS.min(overflow * LINE_FADE_SCALE_FACTOR);
+        // An ellipsis replaces the fade, but only once one is actually available: no font on the
+        // line is required to carry '…', and without a fade the glyph loop below paints the glyph
+        // straddling the boundary in full, overhanging whatever the layout placed after the line.
         let fade = if overflow < MIN_OVERFLOW_FOR_CLIPPING
-            || clip_style == ClipStyle::Ellipsis
+            || ellipsis_glyph.is_some()
             || self.clip_config.is_none()
         {
             None
