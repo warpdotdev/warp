@@ -249,6 +249,16 @@ fn build_request_omits_the_auth_secret_when_the_picker_is_not_applicable() {
 struct TestController {
     executed_requests: RefCell<Vec<RunAgentsRequest>>,
     accept_error: RefCell<Option<String>>,
+    /// Overrides the default `Blocked` status once set. `Some(None)`
+    /// simulates a call that never reached the action queue (e.g. it was
+    /// still streaming when the conversation was cancelled).
+    action_status_override: RefCell<Option<Option<AIActionStatus>>>,
+}
+
+impl TestController {
+    fn set_action_status(&self, status: Option<AIActionStatus>) {
+        *self.action_status_override.borrow_mut() = Some(status);
+    }
 }
 
 impl OrchestrationBlockController for TestController {
@@ -257,7 +267,10 @@ impl OrchestrationBlockController for TestController {
         _action_id: &AIAgentActionId,
         _ctx: &warpui::AppContext,
     ) -> Option<AIActionStatus> {
-        Some(AIActionStatus::Blocked)
+        self.action_status_override
+            .borrow()
+            .clone()
+            .unwrap_or(Some(AIActionStatus::Blocked))
     }
 
     fn snapshot_for_page(
@@ -440,6 +453,48 @@ fn rendered_block_lines(block: &ViewHandle<TuiOrchestrationBlock>, app: &App) ->
             .buffer
             .to_lines()
     })
+}
+
+/// Constructs a restored block (dispatch state lost from history) with the
+/// local fake controller.
+fn test_restored_block(
+    app: &mut App,
+    request: &RunAgentsRequest,
+) -> (ViewHandle<TuiOrchestrationBlock>, Rc<TestController>) {
+    app.add_singleton_model(|_| Appearance::mock());
+    app.update(warp_core::telemetry::testing::MockTelemetryContextProvider::register);
+    let action = AIAgentAction {
+        id: AIAgentActionId::from("run-agents-1".to_string()),
+        task_id: TaskId::new("task-1".to_string()),
+        action: AIAgentActionType::RunAgents(request.clone()),
+        requires_result: true,
+    };
+    let controller = Rc::new(TestController::default());
+    let controller_for_view: Rc<dyn OrchestrationBlockController> = controller.clone();
+    let request = request.clone();
+    let view = app.update(|ctx| {
+        let (window_id, _) = ctx.add_tui_window(
+            AddWindowOptions {
+                window_style: WindowStyle::NotStealFocus,
+                ..Default::default()
+            },
+            |_| TestHostView,
+        );
+        ctx.add_typed_action_tui_view(window_id, move |ctx| {
+            TuiOrchestrationBlock::from_parts(
+                AIConversationId::new(),
+                action,
+                &request,
+                None,
+                controller_for_view,
+                Some("auto".to_string()),
+                true, // is_restored
+                Vec::new(),
+                ctx,
+            )
+        })
+    });
+    (view, controller)
 }
 
 #[test]
@@ -794,4 +849,155 @@ fn accepting_dispatches_once_and_releases_focus() {
         assert_eq!(controller.executed_requests.borrow().as_slice(), &[request]);
         assert!(app.read(|ctx| !block.as_ref(ctx).is_awaiting_confirmation(ctx)));
     });
+}
+
+mod orphaned_by_finished_output_tests {
+    use super::*;
+
+    /// A call that never reached the action queue (no status of its own)
+    /// only counts as orphaned once the owning block has observed its
+    /// exchange resolve terminally; before that it must not preempt the
+    /// streaming placeholder.
+    #[test]
+    fn only_true_once_marked_and_still_statusless() {
+        App::test((), |mut app| async move {
+            let (block, _) = test_block(&mut app, &request("oz", RunAgentsExecutionMode::Local));
+
+            assert!(!block.read(&app, |block, _| block.is_orphaned_by_finished_output(None)));
+
+            block.update(&mut app, |block, ctx| {
+                block.mark_output_finished_without_result(ctx);
+            });
+            assert!(block.read(&app, |block, _| block.is_orphaned_by_finished_output(None)));
+        });
+    }
+
+    /// A call that *did* reach the queue gets a real status of its own, so
+    /// the marker must never override it — mirrors the GUI
+    /// `is_orphaned_by_finished_output` guarding on every real
+    /// `AIActionStatus` variant.
+    #[test]
+    fn a_real_status_is_never_overridden_by_the_marker() {
+        App::test((), |mut app| async move {
+            let (block, _) = test_block(&mut app, &request("oz", RunAgentsExecutionMode::Local));
+            block.update(&mut app, |block, ctx| {
+                block.mark_output_finished_without_result(ctx);
+            });
+            for status in [
+                AIActionStatus::Preprocessing,
+                AIActionStatus::Queued,
+                AIActionStatus::Blocked,
+                AIActionStatus::RunningAsync,
+            ] {
+                assert!(
+                    !block.read(&app, |block, _| block
+                        .is_orphaned_by_finished_output(Some(&status))),
+                    "{status:?} should not be orphaned"
+                );
+            }
+        });
+    }
+
+    /// End-to-end repro: a `run_agents` call still streaming when the
+    /// conversation is cancelled must leave the "Configuring agents…"
+    /// placeholder for a terminal cancelled state once the exchange
+    /// resolves, instead of rendering the placeholder forever.
+    #[test]
+    fn cancelled_mid_stream_leaves_the_placeholder_for_a_cancelled_state() {
+        App::test((), |mut app| async move {
+            let (block, controller) =
+                test_block(&mut app, &request("oz", RunAgentsExecutionMode::Local));
+            // The tool call never reached the action queue.
+            controller.set_action_status(None);
+
+            let lines = rendered_block_lines(&block, &app);
+            assert!(
+                lines.iter().any(|line| line.contains("Configuring agents")),
+                "expected the streaming placeholder before the exchange resolves: {lines:?}"
+            );
+
+            block.update(&mut app, |block, ctx| {
+                block.mark_output_finished_without_result(ctx);
+            });
+
+            let lines = rendered_block_lines(&block, &app);
+            assert!(
+                lines
+                    .iter()
+                    .any(|line| line.contains("Spawn agents cancelled")),
+                "expected the cancelled state once the exchange resolves: {lines:?}"
+            );
+        });
+    }
+
+    /// A call that reached the queue (and so has a real status) must not be
+    /// rendered as cancelled just because the block was later marked, even
+    /// though sub-case B (cancel while children are actively spawning)
+    /// resolves this through the action model instead of this marker.
+    #[test]
+    fn a_call_with_a_real_status_never_renders_the_orphaned_cancelled_state() {
+        App::test((), |mut app| async move {
+            // Rendering the interactive acceptance card body needs the full
+            // session-view singleton set (harness/model labels), unlike the
+            // fallback rows in the other tests here.
+            let block = renderable_test_block(&mut app);
+            block.update(&mut app, |block, ctx| {
+                block.mark_output_finished_without_result(ctx);
+            });
+
+            let lines = rendered_block_lines(&block, &app);
+            assert!(
+                !lines
+                    .iter()
+                    .any(|line| line.contains("Spawn agents cancelled")),
+                "a call with a real status must not be treated as orphaned: {lines:?}"
+            );
+        });
+    }
+}
+
+mod restored_call_tests {
+    use super::*;
+
+    /// Restored-from-history: dispatch state is lost, so a restored call
+    /// with no status of its own must render cancelled instead of the
+    /// streaming placeholder forever. Mirrors the GUI `RunAgentsCardView`'s
+    /// `is_restored()` branch.
+    #[test]
+    fn restored_call_with_no_status_renders_cancelled() {
+        App::test((), |mut app| async move {
+            let (block, controller) =
+                test_restored_block(&mut app, &request("oz", RunAgentsExecutionMode::Local));
+            controller.set_action_status(None);
+
+            let lines = rendered_block_lines(&block, &app);
+            assert!(
+                lines
+                    .iter()
+                    .any(|line| line.contains("Spawn agents cancelled")),
+                "a restored call with no status must render cancelled: {lines:?}"
+            );
+        });
+    }
+
+    /// A restored call that has a real status (e.g. it did produce a
+    /// result before restoration) must still render it, not the
+    /// restored-cancelled fallback — mirrors the GUI checking `is_restored()`
+    /// only after the `Finished` branch, so a real terminal result wins.
+    #[test]
+    fn restored_call_with_a_real_status_is_not_overridden() {
+        App::test((), |mut app| async move {
+            // The default `TestController` status is `Blocked`.
+            let (block, _controller) =
+                test_restored_block(&mut app, &request("oz", RunAgentsExecutionMode::Local));
+
+            let lines = rendered_block_lines(&block, &app);
+            assert!(
+                !lines
+                    .iter()
+                    .any(|line| line.contains("Spawn agents cancelled")),
+                "a restored call with a real status must not render as cancelled: {lines:?}"
+            );
+        });
+    }
 }

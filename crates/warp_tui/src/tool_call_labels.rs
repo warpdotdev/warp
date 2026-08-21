@@ -196,6 +196,15 @@ pub(crate) fn tool_call_label_with_server(
     }
 }
 
+/// Label for a tool call that never reached the action queue (its
+/// arguments were still streaming when the conversation was cancelled) but
+/// whose enclosing exchange has already resolved terminally, so it will
+/// never produce a real result of its own. Reuses the same per-action
+/// `State::Cancelled` copy a queued-and-cancelled call would show.
+pub(crate) fn orphaned_cancelled_label(action: &AIAgentAction) -> String {
+    label_for_action(&action.action, State::Cancelled, None, None, None)
+}
+
 /// Resolves the user-facing name of the originating MCP server for an MCP
 /// tool-call action, for use in transcript labels. Returns `None` for non-
 /// MCP-tool actions, legacy/flat calls with no server id, or unknown servers.

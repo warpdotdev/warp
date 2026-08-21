@@ -883,6 +883,19 @@ impl TuiAIBlock {
             {
                 let request = request.clone();
                 view.update(ctx, |view, ctx| view.update_request(&request, ctx));
+                // A call that never reached the action queue produces no
+                // event of its own; nudge the card to re-render once the
+                // exchange's output resolves as cancelled or failed so it
+                // can leave the streaming placeholder (mirrors the GUI
+                // `AIBlock`'s `notify_run_agents_card_views`).
+                if matches!(
+                    &status,
+                    AIBlockOutputStatus::Cancelled { .. } | AIBlockOutputStatus::Failed { .. }
+                ) {
+                    view.update(ctx, |view, ctx| {
+                        view.mark_output_finished_without_result(ctx);
+                    });
+                }
                 continue;
             }
             // Read the active orchestration config for plan-inherited
@@ -933,6 +946,19 @@ impl TuiAIBlock {
                 TuiOrchestrationBlockEvent::LayoutInvalidated => me.invalidate_layout(ctx),
             });
             materialized_active_blocker |= view.as_ref(ctx).is_awaiting_confirmation(ctx);
+            // The exchange can already be resolved as cancelled or failed by
+            // the time this view is first synced (e.g. a restored or
+            // fast-cancelled transcript); mark it immediately so it never
+            // shows the streaming placeholder for a call that will never
+            // reach the action queue.
+            if matches!(
+                &status,
+                AIBlockOutputStatus::Cancelled { .. } | AIBlockOutputStatus::Failed { .. }
+            ) {
+                view.update(ctx, |view, ctx| {
+                    view.mark_output_finished_without_result(ctx);
+                });
+            }
             self.action_views
                 .insert(action_id, TuiToolCallView::OrchestrationBlock(view));
             ctx.notify();

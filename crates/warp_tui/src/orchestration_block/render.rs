@@ -15,7 +15,9 @@ use warpui_core::elements::tui::{
 };
 
 use super::{CardMode, ORCHESTRATION_BLOCK_TITLE, TuiOrchestrationBlock};
-use crate::agent_block_sections::render_fallback_tool_call_section;
+use crate::agent_block_sections::{
+    render_fallback_tool_call_section, render_orphaned_cancelled_tool_call_section,
+};
 use crate::orchestrated_agent_identity_styling::{AgentIdentity, assign_agent_identity_indices};
 use crate::tui_builder::TuiUiBuilder;
 
@@ -245,6 +247,21 @@ impl TuiOrchestrationBlock {
 /// Renders the orchestration block in interactive or fallback form.
 pub(super) fn render(block: &TuiOrchestrationBlock, app: &AppContext) -> Box<dyn TuiElement> {
     let status = block.controller.action_status(&block.action_id, app);
+    // Restored-from-history: dispatch state is lost, so a restored call
+    // never has a pending action status. Gating on `status.is_none()`
+    // (rather than checking `is_restored` unconditionally) still lets a
+    // real terminal result win, mirroring the GUI `RunAgentsCardView`'s
+    // `is_restored()` branch, which sits above the orphaned check for the
+    // same reason.
+    if block.is_restored && status.is_none() {
+        return render_orphaned_cancelled_tool_call_section(&block.action, app);
+    }
+    // Without this check the card would keep rendering the streaming
+    // placeholder forever for a call that never entered the action queue
+    // and never will now that the exchange has resolved terminally.
+    if block.is_orphaned_by_finished_output(status.as_ref()) {
+        return render_orphaned_cancelled_tool_call_section(&block.action, app);
+    }
     let interactive = !block.is_restored
         && block.spawning.is_none()
         && matches!(status, Some(AIActionStatus::Blocked));

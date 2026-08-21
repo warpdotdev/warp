@@ -19,8 +19,9 @@ use warpui_core::elements::tui::{
 
 use crate::agent_block::{CollapsibleSectionStates, TuiAIBlockAction};
 use crate::tool_call_labels::{
-    ResolvedCommandBlock, mcp_server_name_for_action, styled_tool_call_label_spans,
-    tool_call_display_state, tool_call_label_with_server,
+    ResolvedCommandBlock, ToolCallDisplayState, mcp_server_name_for_action,
+    orphaned_cancelled_label, styled_tool_call_label_spans, tool_call_display_state,
+    tool_call_label_with_server,
 };
 use crate::tui_builder::TuiUiBuilder;
 
@@ -94,7 +95,6 @@ pub(crate) fn render_fallback_tool_call_section(
 ) -> Box<dyn TuiElement> {
     let builder = TuiUiBuilder::from_app(app);
     let state = tool_call_display_state(status, output_streaming, block.map(|block| block.state));
-    let glyph_style = state.glyph_style(&builder);
     let server_name = mcp_server_name_for_action(&action.action, app);
     let label = tool_call_label_with_server(
         action,
@@ -103,13 +103,40 @@ pub(crate) fn render_fallback_tool_call_section(
         block,
         server_name.as_deref(),
     );
+    render_tool_call_row(state, &label, &builder)
+}
+
+/// Renders the fallback row for a tool call that never reached the action
+/// queue (its arguments were still streaming when the conversation was
+/// cancelled) but whose enclosing exchange has already resolved as
+/// cancelled or failed, so it will never produce a real result of its own.
+/// Uses the same glyph and per-action copy a queued-and-cancelled call
+/// would get from a real `Cancelled` result.
+pub(crate) fn render_orphaned_cancelled_tool_call_section(
+    action: &AIAgentAction,
+    app: &AppContext,
+) -> Box<dyn TuiElement> {
+    let builder = TuiUiBuilder::from_app(app);
+    render_tool_call_row(
+        ToolCallDisplayState::Cancelled,
+        &orphaned_cancelled_label(action),
+        &builder,
+    )
+}
+
+/// Shared glyph-plus-label row for a tool-call status line.
+fn render_tool_call_row(
+    state: ToolCallDisplayState,
+    label: &str,
+    builder: &TuiUiBuilder,
+) -> Box<dyn TuiElement> {
     TuiFlex::row()
         .child(
             TuiText::new(format!("{} ", state.glyph()))
-                .with_style(glyph_style)
+                .with_style(state.glyph_style(builder))
                 .finish(),
         )
-        .child(TuiText::from_spans(styled_tool_call_label_spans(&label, &builder)).finish())
+        .child(TuiText::from_spans(styled_tool_call_label_spans(label, builder)).finish())
         .finish()
 }
 

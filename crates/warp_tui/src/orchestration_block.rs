@@ -164,6 +164,13 @@ pub(crate) struct TuiOrchestrationBlock {
     decided: bool,
     entered_event_emitted: bool,
     decision_event_emitted: bool,
+    /// Set once the exchange's output has finished as cancelled or failed
+    /// while this action was still streaming, i.e. before it ever reached
+    /// the action queue. Such a call never gets a status or result of its
+    /// own, so this is checked at render time to leave the streaming
+    /// placeholder for a terminal cancelled state. Mirrors the GUI
+    /// `RunAgentsCardView`'s `is_orphaned_by_finished_output`.
+    output_finished_without_result: bool,
     /// Identity palette pinned at construction so identities stay stable
     /// across re-renders, edits, and theme switches.
     identity_palette: Vec<AgentIdentity>,
@@ -333,6 +340,7 @@ impl TuiOrchestrationBlock {
             decided: false,
             entered_event_emitted: false,
             decision_event_emitted: false,
+            output_finished_without_result: false,
             identity_palette,
         }
     }
@@ -425,6 +433,33 @@ impl TuiOrchestrationBlock {
         self.refresh_active_page(ctx);
         ctx.emit(TuiOrchestrationBlockEvent::LayoutInvalidated);
         ctx.notify();
+    }
+
+    /// Marks that the exchange's output has resolved as cancelled or failed
+    /// while this action was still streaming, so it will never reach the
+    /// action queue and produce a real result of its own. Called by the
+    /// owning `TuiAIBlock` when it observes that transition; a call that
+    /// never reached the queue has no event of its own to react to, so the
+    /// re-render must be nudged explicitly (mirrors the GUI `AIBlock`'s
+    /// `notify_run_agents_card_views`).
+    pub(crate) fn mark_output_finished_without_result(&mut self, ctx: &mut ViewContext<Self>) {
+        if self.output_finished_without_result {
+            return;
+        }
+        self.output_finished_without_result = true;
+        ctx.notify();
+    }
+
+    /// Whether this card can no longer reach a real outcome and must render
+    /// as cancelled: the call never entered the action queue (so it has no
+    /// status and will never produce one), and the exchange's output has
+    /// already resolved as cancelled or failed. Mirrors the GUI
+    /// `RunAgentsCardView`'s `is_orphaned_by_finished_output`.
+    pub(super) fn is_orphaned_by_finished_output(
+        &self,
+        action_status: Option<&AIActionStatus>,
+    ) -> bool {
+        action_status.is_none() && self.output_finished_without_result
     }
 
     fn emit_orchestration_entered_once(&mut self, ctx: &mut ViewContext<Self>) {
