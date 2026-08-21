@@ -4,13 +4,14 @@ use anyhow::{Result, anyhow};
 use http::StatusCode;
 use instant::Duration;
 use warp_errors::report_error;
-use warp_graphql::client::{GraphQLError, Operation};
+use warp_graphql::client::{GraphQLError, Operation, RequestOptions};
 use warpui_core::r#async::BoxFuture;
 
 use crate::auth::AuthEvent;
 use crate::base_client::BaseClient;
 
-/// Sends a GraphQL operation through a base client supplied by the application.
+/// Sends a GraphQL operation through a base client supplied by the application,
+/// using the base client's session-managed access token.
 ///
 /// This function is deliberately generic so concrete endpoint operation
 /// instantiations occur in server client crates rather than in the app crate.
@@ -23,8 +24,27 @@ where
     O: Operation<QF> + Send + 'a,
 {
     Box::pin(async move {
-        let operation_name = operation.operation_name().map(Cow::into_owned);
         let options = base_client.graphql_request_options(timeout).await?;
+        send_graphql_request_with_options(base_client, operation, options).await
+    })
+}
+
+/// Sends a GraphQL operation using caller-supplied request options, e.g. an
+/// explicit bootstrap token rather than the session-managed access token used
+/// by [`send_graphql_request`]. Routes IAP challenges and staging-access
+/// rejections through the same `AuthEvent` handling either way, so a bootstrap
+/// request's IAP challenge reaches `IapManager` just like a session-
+/// authenticated request's does.
+pub fn send_graphql_request_with_options<'a, QF: 'a, O>(
+    base_client: &'a BaseClient,
+    operation: O,
+    options: RequestOptions,
+) -> BoxFuture<'a, Result<QF>>
+where
+    O: Operation<QF> + Send + 'a,
+{
+    Box::pin(async move {
+        let operation_name = operation.operation_name().map(Cow::into_owned);
         let response = match operation
             .send_request(base_client.owned_http_client(), options)
             .await

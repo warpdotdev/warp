@@ -178,6 +178,19 @@ impl IapState {
             previous: state.previous_token(),
         };
     }
+
+    /// Test-only: forces a valid cached token directly, bypassing the real
+    /// gcloud/WIF refresh machinery entirely. Lets wiring tests drive
+    /// `IapManager` through a real "IAP became ready" transition (state
+    /// change plus a subsequently-valid token) without gcloud, network
+    /// access, or real credentials.
+    #[cfg(any(test, feature = "test-util"))]
+    pub fn set_valid_token_for_test(&self, token: impl Into<String>) {
+        self.set_loaded(CachedToken {
+            token: token.into(),
+            expires_at: Instant::now() + Duration::from_secs(3600),
+        });
+    }
 }
 
 impl http_client::iap::IapTokenProvider for IapState {

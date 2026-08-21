@@ -41,7 +41,7 @@ use warp_server_auth::credentials::{AuthToken, Credentials, FirebaseToken, Login
 pub use warp_server_auth::user_uid;
 
 use crate::base_client::BaseClient;
-use crate::graphql_helpers::send_graphql_request;
+use crate::graphql_helpers::{send_graphql_request, send_graphql_request_with_options};
 use crate::ids::ApiKeyUid;
 
 /// Header key used to associate unauthenticated requests with an experiment identity.
@@ -309,11 +309,13 @@ impl AuthClient for AuthClientImpl {
             EXPERIMENT_ID_HEADER.to_string(),
             self.base_client.anonymous_id(),
         );
-        let response = operation
-            .send_request(self.base_client.owned_http_client(), options)
-            .await?
-            .data
-            .ok_or_else(|| anyhow!("Expected valid response.data"))?;
+        // Route through the shared helper (rather than calling
+        // `operation.send_request` directly) so an IAP challenge on this
+        // bootstrap request - the first request a cold cloud sandbox makes -
+        // reaches `IapManager` the same way every other GraphQL request's
+        // challenge does.
+        let response =
+            send_graphql_request_with_options(&self.base_client, operation, options).await?;
         match response.user {
             warp_graphql::queries::get_user::UserResult::UserOutput(user_output) => Ok(user_output),
             warp_graphql::queries::get_user::UserResult::Unknown => {

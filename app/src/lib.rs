@@ -155,7 +155,7 @@ use ai::execution_profiles::editor::ExecutionProfileEditorManager;
 use ai::execution_profiles::profiles::AIExecutionProfilesModel;
 use ai::metadata_project_rules::read_project_rule_contents;
 use ai::persisted_workspace::PersistedWorkspace;
-use auth::auth_manager::AuthManager;
+use auth::auth_manager::{AuthManager, AuthManagerEvent};
 use auth::auth_state::{AuthState, AuthStateProvider};
 use code::editor_management::CodeManager;
 use code::opened_files::OpenedFilesModel;
@@ -195,10 +195,12 @@ pub mod workflows;
 pub mod workspace;
 
 use std::borrow::Cow;
+use std::cell::RefCell;
 use std::collections::HashSet;
 use std::ops::Deref;
 #[cfg(feature = "local_fs")]
 use std::path::PathBuf;
+use std::rc::Rc;
 use std::sync::Arc;
 
 use ::settings::{Setting, ToggleableSetting};
@@ -1379,13 +1381,32 @@ impl StartupUserAuthentication {
 
 /// Whether startup user authentication should proceed without blocking on IAP.
 ///
-/// The TUI front-end must not stall its startup waiting for a staging IAP token
-/// the server may not even require, so it authenticates immediately and lets IAP
-/// resolve out of band (see [`authenticate_user_after_iap_access`]). Every other
-/// front-end keeps the blocking behavior. IAP config only exists on staging
-/// builds, so this never affects production.
+/// The GUI and TUI front-ends must not stall startup waiting for a staging IAP
+/// token the server may not even require, so they authenticate immediately and
+/// let IAP resolve out of band (see [`authenticate_user_after_iap_access`]).
+/// Blocking here is what deadlocks a cloud sandbox once its bootstrap JWT
+/// expires: the self-mint that would refresh it needs IAP access itself, so a
+/// missing token would otherwise mean no login, indefinitely. `CommandLine`
+/// never reaches this function at all - it establishes IAP access synchronously
+/// in its own dispatch path instead (see the call site), so a one-shot
+/// invocation still fails closed with a reported error rather than
+/// authenticating optimistically. `Test`, `RemoteServerProxy`, and
+/// `RemoteServerDaemon` keep the blocking behavior: nothing observed so far
+/// shows they hit the same deadlock, and widening them without evidence risks
+/// masking a real auth failure in a headless/test context. IAP config only
+/// exists on staging builds, so this never affects production.
 fn startup_auth_is_non_blocking(launch_mode: &LaunchMode) -> bool {
-    matches!(launch_mode, LaunchMode::Tui { .. })
+    matches!(launch_mode, LaunchMode::App { .. } | LaunchMode::Tui { .. })
+}
+
+/// Starts the pending startup authentication if it hasn't already fired.
+fn fire_pending_retry(
+    pending_authentication: &Rc<RefCell<Option<StartupUserAuthentication>>>,
+    ctx: &mut AppContext,
+) {
+    if let Some(authentication) = pending_authentication.borrow_mut().take() {
+        authentication.start(ctx);
+    }
 }
 
 fn authenticate_user_after_iap_access(
@@ -1406,22 +1427,67 @@ fn authenticate_user_after_iap_access(
         // a token (`observe_iap_challenge` -> `handle_challenge`). Once a valid
         // token lands we retry auth so login still recovers — unless the
         // optimistic attempt already established a session.
+        //
+        // The optimistic attempt and the IAP-ready signal race independently of
+        // each other, so `retry_gate` defers the retry until the optimistic
+        // attempt has *settled* (not merely started) and fires it at most once,
+        // regardless of which signal arrives first. Without this, IAP could
+        // become ready while the optimistic attempt is still in flight, firing a
+        // second, concurrent authentication attempt that later double-runs
+        // `AuthManager::on_user_fetched`'s completion side effects (cloud sync,
+        // session rejoin, telemetry, the login notification) alongside the
+        // first.
         authentication.clone().start(ctx);
-        let mut pending_authentication = Some(authentication);
+        let retry_gate = Rc::new(RefCell::new(StartupAuthRetryGate::default()));
+        let pending_authentication = Rc::new(RefCell::new(Some(authentication)));
+
+        let auth_manager = AuthManager::handle(ctx);
+        {
+            let retry_gate = retry_gate.clone();
+            let pending_authentication = pending_authentication.clone();
+            ctx.subscribe_to_model(&auth_manager, move |_auth_manager, event, ctx| {
+                let authenticated = match event {
+                    AuthManagerEvent::AuthComplete => true,
+                    AuthManagerEvent::AuthFailed(_) => false,
+                    AuthManagerEvent::CreateAnonymousUserFailed
+                    | AuthManagerEvent::SkippedLogin
+                    | AuthManagerEvent::NeedsReauth
+                    | AuthManagerEvent::AttemptedLoginGatedFeature { .. }
+                    | AuthManagerEvent::LoginOverrideDetected(_)
+                    | AuthManagerEvent::MintCustomTokenFailed(_)
+                    | AuthManagerEvent::ReceivedDeviceAuthorizationCode { .. } => return,
+                };
+                if retry_gate
+                    .borrow_mut()
+                    .on_first_attempt_settled(authenticated)
+                {
+                    fire_pending_retry(&pending_authentication, ctx);
+                }
+            });
+        }
+
         ctx.subscribe_to_model(&iap_manager, move |iap_manager, event, ctx| match event {
             IapManagerEvent::StateChanged => {
                 if !iap_manager.as_ref(ctx).has_valid_token() {
                     return;
                 }
-                if AuthStateProvider::as_ref(ctx).get().user_id().is_some() {
-                    pending_authentication = None;
-                    return;
-                }
-                if let Some(authentication) = pending_authentication.take() {
-                    authentication.start(ctx);
+                if retry_gate.borrow_mut().on_iap_token_ready() {
+                    fire_pending_retry(&pending_authentication, ctx);
                 }
             }
-            IapManagerEvent::AccessUnavailable | IapManagerEvent::RefreshFailed { .. } => {}
+            // `RefreshFailed` is already logged by `IapManager` itself for every
+            // attempt; this handler only needs to react to the terminal outcome.
+            IapManagerEvent::AccessUnavailable => {
+                log::warn!(
+                    "Staging IAP access unavailable within the startup grace period; the \
+                     optimistic auth attempt already ran. IAP refresh keeps retrying in the \
+                     background with backoff, but gives up after a bounded number of failed \
+                     attempts if it can't recover; if the app still looks logged out after \
+                     several minutes, this - not an invalid key - is why, and a manual \
+                     restart or re-authentication may be needed."
+                );
+            }
+            IapManagerEvent::RefreshFailed { .. } => {}
         });
         iap_manager.update(ctx, |manager, ctx| manager.ensure_access(ctx));
         return;
@@ -1446,6 +1512,53 @@ fn authenticate_user_after_iap_access(
         } => {}
     });
     iap_manager.update(ctx, |manager, ctx| manager.ensure_access(ctx));
+}
+
+/// Guards the deferred retry in [`authenticate_user_after_iap_access`]'s
+/// non-blocking path so it fires at most once, and only once the optimistic
+/// auth attempt has *settled* (not merely started) without itself
+/// authenticating, and IAP has a valid token. The two inputs arrive from
+/// independent subscriptions and can race in either order; gating on both
+/// avoids retrying while the optimistic attempt is still in flight, which
+/// would otherwise let two concurrent auth attempts both complete and
+/// double-run [`auth::auth_manager::AuthManager::on_user_fetched`]'s side
+/// effects.
+#[derive(Default)]
+struct StartupAuthRetryGate {
+    first_attempt_settled: bool,
+    first_attempt_authenticated: bool,
+    iap_token_ready: bool,
+    retried: bool,
+}
+
+impl StartupAuthRetryGate {
+    /// Records that the optimistic auth attempt has settled. Returns `true`
+    /// exactly once: if IAP is already known to have a valid token and the
+    /// attempt did not itself authenticate.
+    fn on_first_attempt_settled(&mut self, authenticated: bool) -> bool {
+        self.first_attempt_settled = true;
+        self.first_attempt_authenticated = authenticated;
+        self.maybe_fire_retry()
+    }
+
+    /// Records that IAP now has a valid token. Returns `true` exactly once:
+    /// if the optimistic attempt has already settled without authenticating.
+    fn on_iap_token_ready(&mut self) -> bool {
+        self.iap_token_ready = true;
+        self.maybe_fire_retry()
+    }
+
+    fn maybe_fire_retry(&mut self) -> bool {
+        if self.retried
+            || !self.first_attempt_settled
+            || self.first_attempt_authenticated
+            || !self.iap_token_ready
+        {
+            return false;
+        }
+        self.retried = true;
+        true
+    }
 }
 
 #[::tracing::instrument(skip_all, fields(tags.cloud_agent = true))]

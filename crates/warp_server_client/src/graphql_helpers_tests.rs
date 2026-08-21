@@ -10,7 +10,7 @@ use http::StatusCode;
 use warp_graphql::client::{GraphQLError, RequestOptions};
 use warp_server_auth::auth_state::AuthState;
 
-use super::send_graphql_request;
+use super::{send_graphql_request, send_graphql_request_with_options};
 use crate::auth::AuthEvent;
 use crate::base_client::{AuthenticatedGraphqlConfig, BaseClient, GraphqlRoutingConfig};
 
@@ -78,6 +78,13 @@ fn assert_user_disabled_event(event_receiver: &async_channel::Receiver<AuthEvent
     }
 }
 
+fn assert_iap_challenge_event(event_receiver: &async_channel::Receiver<AuthEvent>) {
+    match event_receiver.try_recv().unwrap() {
+        AuthEvent::IapChallengeReceived => {}
+        event => panic!("Expected IapChallengeReceived event, got {event:?}"),
+    }
+}
+
 struct FakeGraphqlOperation {
     expected_auth_token: Option<String>,
     send_count: Arc<AtomicUsize>,
@@ -88,6 +95,7 @@ enum FakeGraphqlResult {
     Success,
     Rejected(StatusCode),
     ResponseErrors(Vec<String>),
+    IapChallengeBlocked,
 }
 
 impl FakeGraphqlOperation {
@@ -120,6 +128,17 @@ impl FakeGraphqlOperation {
             expected_auth_token: expected_auth_token.map(ToOwned::to_owned),
             send_count,
             result: FakeGraphqlResult::ResponseErrors(messages),
+        }
+    }
+
+    fn iap_challenge_blocked(
+        expected_auth_token: Option<&str>,
+        send_count: Arc<AtomicUsize>,
+    ) -> Self {
+        Self {
+            expected_auth_token: expected_auth_token.map(ToOwned::to_owned),
+            send_count,
+            result: FakeGraphqlResult::IapChallengeBlocked,
         }
     }
 }
@@ -164,6 +183,7 @@ impl warp_graphql::client::Operation<()> for FakeGraphqlOperation {
                             .collect(),
                     ),
                 }),
+                FakeGraphqlResult::IapChallengeBlocked => Err(GraphQLError::IapChallengeBlocked),
             }
         })
     }
@@ -273,4 +293,47 @@ fn external_user_not_in_context_returns_credentials_rejected_without_account_eve
     ));
     assert_eq!(send_count.load(Ordering::SeqCst), 1);
     assert_no_events(&event_receiver);
+}
+
+#[test]
+fn iap_challenge_on_session_authenticated_request_notifies_iap_manager() {
+    let (base_client, event_receiver) = refreshable_base_client();
+    let send_count = Arc::new(AtomicUsize::new(0));
+
+    let error = block_on(send_graphql_request(
+        &base_client,
+        FakeGraphqlOperation::iap_challenge_blocked(None, send_count.clone()),
+        None,
+    ))
+    .unwrap_err();
+
+    assert!(has_error_message(&error, "blocked by IAP challenge"));
+    assert_eq!(send_count.load(Ordering::SeqCst), 1);
+    assert_iap_challenge_event(&event_receiver);
+}
+
+/// Regression test for the bootstrap-fetch path: `AuthClientImpl::fetch_user_properties`
+/// builds its own `RequestOptions` (an explicit token, not the session-managed
+/// one) and calls `send_graphql_request_with_options` directly rather than
+/// going through `operation.send_request`. Before this was routed through the
+/// shared helper, an IAP challenge on this first, bootstrap request never
+/// reached `IapManager`, so a cold cloud sandbox's IAP refresh was never
+/// triggered.
+#[test]
+fn iap_challenge_on_explicit_bootstrap_token_request_notifies_iap_manager() {
+    let (base_client, event_receiver) = refreshable_base_client();
+    let send_count = Arc::new(AtomicUsize::new(0));
+    let options =
+        base_client.graphql_request_options_with_token(Some("bootstrap-token".to_string()));
+
+    let error = block_on(send_graphql_request_with_options(
+        &base_client,
+        FakeGraphqlOperation::iap_challenge_blocked(Some("bootstrap-token"), send_count.clone()),
+        options,
+    ))
+    .unwrap_err();
+
+    assert!(has_error_message(&error, "blocked by IAP challenge"));
+    assert_eq!(send_count.load(Ordering::SeqCst), 1);
+    assert_iap_challenge_event(&event_receiver);
 }
