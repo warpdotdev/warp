@@ -12,6 +12,7 @@ use rand::SeedableRng;
 use rand::rngs::StdRng;
 use serde_yaml::{Mapping, Value};
 use string_offset::{ByteOffset, CharOffset};
+use sum_tree::MAX_LEAF_ITEMS;
 use vec1::{Vec1, vec1};
 use warp_util::content_version::ContentVersion;
 use warpui_core::elements::ListIndentLevel;
@@ -11283,6 +11284,89 @@ fn test_color_code_block() {
                     content_length: CharOffset::from(6)
                 })]
             );
+        });
+    });
+}
+
+/// Builds a code block of `lines` lines and a contiguous set of `token_bytes`-sized color
+/// ranges covering it, mimicking what syntax highlighting hands to the buffer.
+fn code_block_with_colors(
+    lines: usize,
+    token_bytes: usize,
+) -> (String, Vec<(Range<ByteOffset>, ColorU)>) {
+    let code = (0..lines)
+        .map(|i| format!("let value_{i:02} = compute({i:02});"))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    let colors = (0..code.len().div_ceil(token_bytes))
+        .map(|i| {
+            let start = i * token_bytes;
+            let end = (start + token_bytes).min(code.len());
+            let color = if i % 2 == 0 {
+                ColorU::white()
+            } else {
+                ColorU::black()
+            };
+            (ByteOffset::from(start)..ByteOffset::from(end), color)
+        })
+        .collect();
+
+    (code, colors)
+}
+
+/// Regression test for APP-5567. Coloring a code block used to append the rebuilt block's
+/// items one at a time, which gave each item a tree node of its own and amplified a
+/// highlighted notebook into gigabytes of live heap; see `BufferTextBatch` for the mechanism.
+/// The items must be packed into shared leaves, and re-highlighting the same block must not
+/// grow the tree.
+#[test]
+fn test_color_code_block_packs_tree_leaves() {
+    App::test((), |mut app| async move {
+        let buffer = app.add_model(|_| Buffer::new(Box::new(|_, _| IndentBehavior::Ignore)));
+        let selection = app.add_model(|_| BufferSelectionModel::new(buffer.clone()));
+
+        let (code, colors) = code_block_with_colors(40, 4);
+
+        buffer.update(&mut app, |buffer, ctx| {
+            buffer.edit_internal_first_selection(
+                CharOffset::from(1)..CharOffset::from(1),
+                &code,
+                Default::default(),
+                selection.clone(),
+                ctx,
+            );
+
+            let block = CharOffset::from(1)..CharOffset::from(1 + code.chars().count());
+            buffer.block_style_range(
+                block.clone(),
+                BufferBlockStyle::CodeBlock {
+                    code_block_type: CodeBlockType::Shell,
+                },
+                selection.clone(),
+                ctx,
+            );
+
+            buffer.color_code_block_ranges_internal(block.start, &colors);
+
+            let colored = buffer.content.debug();
+            let stats = buffer.content.node_stats();
+
+            // Items are packed into leaves rather than each getting its own: all but the last
+            // leaf of a batched append is full, so the average sits just under the cap.
+            assert!(
+                stats.leaves * (MAX_LEAF_ITEMS - 1) <= stats.items,
+                "expected items to be packed into shared leaves, got {stats:?}"
+            );
+
+            // Re-highlighting rebuilds the block from scratch, so the tree must come out the
+            // same size every time rather than accumulating across passes.
+            for _ in 0..4 {
+                buffer.color_code_block_ranges_internal(block.start, &colors);
+            }
+
+            assert_eq!(buffer.content.debug(), colored);
+            assert_eq!(buffer.content.node_stats(), stats);
         });
     });
 }
