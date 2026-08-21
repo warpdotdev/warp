@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::io;
 use std::path::PathBuf;
 
@@ -18,6 +18,12 @@ const UNENCODED_JSON_DCS_START: &[u8] = &[0x1b, 0x50, 0x24, 0x66];
 const DCS_END: &[u8] = &[0x9c];
 const DCS_END_7BIT: &[u8] = &[0x1b, 0x5c];
 
+/// The color a query reply reports for a palette index that was never set via `set_color`,
+/// so query-only tests have a deterministic, distinctive expected value.
+fn mock_default_color() -> ColorU {
+    ColorU::new(0x11, 0x22, 0x33, 0xff)
+}
+
 struct MockHandler {
     index: CharsetIndex,
     charset: StandardCharset,
@@ -29,6 +35,10 @@ struct MockHandler {
     cwd_updates: Vec<String>,
     registered_session_ids: HashSet<SessionId>,
     should_validate_dcs_hook_session_id: bool,
+    /// Colors set via `set_color`, keyed by palette/dynamic-color index.
+    colors: HashMap<usize, ColorU>,
+    /// Every `(index, color)` pair passed to `set_color`, in call order.
+    color_writes: Vec<(usize, ColorU)>,
 }
 
 impl Handler for MockHandler {
@@ -164,9 +174,31 @@ impl Handler for MockHandler {
 
     fn unset_keypad_application_mode(&mut self) {}
 
-    fn set_color(&mut self, _: usize, _: ColorU) {}
+    fn set_color(&mut self, index: usize, color: ColorU) {
+        self.colors.insert(index, color);
+        self.color_writes.push((index, color));
+    }
 
-    fn dynamic_color_sequence<W: io::Write>(&mut self, _: &mut W, _: u8, _: usize, _: &str) {}
+    // Mirrors the `rgb:` reply format `TerminalModel::dynamic_color_sequence` writes to the
+    // pty, so tests can assert on the exact bytes a real terminal would send back.
+    fn dynamic_color_sequence<W: io::Write>(
+        &mut self,
+        writer: &mut W,
+        reply_prefix: &str,
+        index: usize,
+        terminator: &str,
+    ) {
+        let color = self
+            .colors
+            .get(&index)
+            .copied()
+            .unwrap_or_else(mock_default_color);
+        let response = format!(
+            "\x1b]{};rgb:{1:02x}{1:02x}/{2:02x}{2:02x}/{3:02x}{3:02x}{4}",
+            reply_prefix, color.r, color.g, color.b, terminator
+        );
+        let _ = writer.write_all(response.as_bytes());
+    }
 
     fn reset_color(&mut self, _: usize) {}
 
@@ -283,6 +315,8 @@ impl Default for MockHandler {
             cwd_updates: Vec::new(),
             registered_session_ids: HashSet::new(),
             should_validate_dcs_hook_session_id: true,
+            colors: HashMap::new(),
+            color_writes: Vec::new(),
         }
     }
 }
@@ -318,6 +352,21 @@ fn parse_bytes_with_registered_sessions_and_validation(
     parser.parse_bytes(&mut handler, bytes, &mut io::sink());
 
     (parser, handler)
+}
+
+/// Like [`parse_bytes`], but also returns every byte the parser wrote back to the pty
+/// (e.g. color query replies), for tests that need to assert on the exact reply bytes.
+fn parse_bytes_capturing_replies(bytes: &[u8]) -> (MockHandler, Vec<u8>) {
+    let mut parser = Processor::new();
+    let mut handler = MockHandler {
+        registered_session_ids: [SessionId::from(167303092612201)].into_iter().collect(),
+        ..Default::default()
+    };
+    let mut written = Vec::new();
+
+    parser.parse_bytes(&mut handler, bytes, &mut written);
+
+    (handler, written)
 }
 
 #[test]
@@ -1424,4 +1473,113 @@ fn parse_osc7_non_drive_slash_letter_untouched() {
     let payload = format!("\x1b]7;file://{local}/E:extra\x07");
     let (_, handler) = parse_bytes(payload.as_bytes());
     assert_eq!(handler.cwd_updates, vec!["/E:extra".to_string()]);
+}
+
+#[test]
+fn parse_osc10_query_reports_set_foreground_color_bel_terminated() {
+    // Set the foreground color, then query it back; the reply must echo the
+    // exact color that was set, in xterm's `rgb:` format.
+    let bytes: &[u8] = b"\x1b]10;#aabbcc\x07\x1b]10;?\x07";
+    let (_, written) = parse_bytes_capturing_replies(bytes);
+
+    assert_eq!(written, b"\x1b]10;rgb:aaaa/bbbb/cccc\x07");
+}
+
+#[test]
+fn parse_osc11_query_reports_set_background_color_st_terminated() {
+    let bytes: &[u8] = b"\x1b]11;#112233\x1b\\\x1b]11;?\x1b\\";
+    let (_, written) = parse_bytes_capturing_replies(bytes);
+
+    assert_eq!(written, b"\x1b]11;rgb:1111/2222/3333\x1b\\");
+}
+
+#[test]
+fn parse_osc12_query_reports_set_cursor_color() {
+    let bytes: &[u8] = b"\x1b]12;#445566\x07\x1b]12;?\x07";
+    let (_, written) = parse_bytes_capturing_replies(bytes);
+
+    assert_eq!(written, b"\x1b]12;rgb:4444/5555/6666\x07");
+}
+
+#[test]
+fn parse_osc10_query_without_prior_set_reports_default_color() {
+    // Querying a color that was never set must still answer (rather than being silently
+    // dropped), using whatever the handler considers the current value.
+    let bytes: &[u8] = b"\x1b]10;?\x07";
+    let (_, written) = parse_bytes_capturing_replies(bytes);
+
+    assert_eq!(written, b"\x1b]10;rgb:1111/2222/3333\x07");
+}
+
+#[test]
+fn parse_osc4_query_reports_set_palette_color() {
+    // Regression for the missing OSC 4 query support: `OSC 4 ; c ; ?` must reply with the
+    // palette color at index `c`, reusing the same `rgb:` reply machinery as OSC 10/11/12.
+    let bytes: &[u8] = b"\x1b]4;5;#112233\x07\x1b]4;5;?\x07";
+    let (_, written) = parse_bytes_capturing_replies(bytes);
+
+    assert_eq!(written, b"\x1b]4;5;rgb:1111/2222/3333\x07");
+}
+
+#[test]
+fn parse_osc4_query_with_st_terminator() {
+    let bytes: &[u8] = b"\x1b]4;5;#112233\x1b\\\x1b]4;5;?\x1b\\";
+    let (_, written) = parse_bytes_capturing_replies(bytes);
+
+    assert_eq!(written, b"\x1b]4;5;rgb:1111/2222/3333\x1b\\");
+}
+
+#[test]
+fn parse_osc4_multi_pair_query_reports_each_index() {
+    // A single OSC 4 sequence can query multiple indices; each must get its own reply.
+    let bytes: &[u8] = b"\x1b]4;1;#ff0000;2;#00ff00\x07\x1b]4;1;?;2;?\x07";
+    let (_, written) = parse_bytes_capturing_replies(bytes);
+
+    assert_eq!(
+        written,
+        b"\x1b]4;1;rgb:ffff/0000/0000\x07\x1b]4;2;rgb:0000/ffff/0000\x07"
+    );
+}
+
+#[test]
+fn parse_osc4_set_applies_every_pair_not_just_the_first() {
+    // Regression: a single OSC 4 sequence with multiple `index ; color` pairs used to
+    // `return` after applying only the first pair, silently dropping the rest.
+    let bytes: &[u8] = b"\x1b]4;1;#ff0000;2;#00ff00;3;#0000ff\x07";
+    let (_, handler) = parse_bytes(bytes);
+
+    assert_eq!(
+        handler.color_writes,
+        vec![
+            (1, ColorU::new(0xff, 0x00, 0x00, 0xff)),
+            (2, ColorU::new(0x00, 0xff, 0x00, 0xff)),
+            (3, ColorU::new(0x00, 0x00, 0xff, 0xff)),
+        ]
+    );
+}
+
+#[test]
+fn parse_osc4_malformed_index_is_skipped_other_pairs_still_applied() {
+    // A pair with a non-numeric index is malformed and skipped, but it must not abort
+    // processing of the remaining, well-formed pairs in the same sequence.
+    let bytes: &[u8] = b"\x1b]4;notanumber;#ff0000;2;#00ff00\x07";
+    let (_, handler) = parse_bytes(bytes);
+
+    assert_eq!(
+        handler.color_writes,
+        vec![(2, ColorU::new(0x00, 0xff, 0x00, 0xff))]
+    );
+}
+
+#[test]
+fn parse_osc4_malformed_color_is_skipped_other_pairs_still_applied() {
+    // A pair with a valid index but an unparsable color spec is malformed and skipped,
+    // but subsequent pairs must still be applied.
+    let bytes: &[u8] = b"\x1b]4;1;notacolor;2;#00ff00\x07";
+    let (_, handler) = parse_bytes(bytes);
+
+    assert_eq!(
+        handler.color_writes,
+        vec![(2, ColorU::new(0x00, 0xff, 0x00, 0xff))]
+    );
 }

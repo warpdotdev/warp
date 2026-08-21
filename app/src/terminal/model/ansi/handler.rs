@@ -209,8 +209,18 @@ pub trait Handler {
     /// Set an indexed color value.
     fn set_color(&mut self, _: usize, _: ColorU);
 
-    /// Write a foreground/background color escape sequence with the current color.
-    fn dynamic_color_sequence<W: io::Write>(&mut self, _: &mut W, _: u8, _: usize, _: &str);
+    /// Write a color escape sequence reporting the current color at `index` (see
+    /// [`crate::terminal::color::List`] for how the palette is laid out).
+    ///
+    /// `reply_prefix` is the OSC identifier(s) written before `;rgb:...`, e.g. `"10"` for an
+    /// OSC 10 (foreground) query or `"4;5"` for an OSC 4 (palette) query of index 5.
+    fn dynamic_color_sequence<W: io::Write>(
+        &mut self,
+        _: &mut W,
+        _reply_prefix: &str,
+        _index: usize,
+        _terminator: &str,
+    );
 
     /// Reset an indexed color to original value.
     fn reset_color(&mut self, _: usize);
