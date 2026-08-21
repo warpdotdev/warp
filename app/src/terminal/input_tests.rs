@@ -3062,9 +3062,14 @@ fn native_completions_as_you_type_snapshot_survives_bundled_specs_winning() {
 
         // The user keeps typing a command with no bundled spec while the previous request's
         // snapshot is the only thing that lets the retry notice the buffer moved on. Replaces
-        // the buffer as a single edit (rather than a separate clear then insert) so this only
-        // raises one completions request -- matching a real keystroke -- instead of racing two
-        // requests against each other's abort handles.
+        // the buffer as a single edit rather than a separate clear then insert: the latter fires
+        // two `Edited` events while a completions menu is open, and each spawns its own request:
+        // whichever one starts second aborts the first, but that abort can lose the race against
+        // an already-fast-resolving spec pass and let the stale request's dispatch through too,
+        // producing two dispatches instead of one. That race is pre-existing in the shared
+        // input-dispatch/cancellation machinery (also reproducible via master's Ctrl-Y path) and
+        // is unrelated to the snapshot invariant this test targets, so it's sidestepped here with
+        // a single edit rather than exercised.
         input.update(&mut app, |input, ctx| {
             input.user_replace_editor_text("definitelynotarealcommand ", ctx);
         });
