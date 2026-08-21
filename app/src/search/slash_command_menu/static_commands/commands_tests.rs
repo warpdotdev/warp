@@ -520,6 +520,45 @@ fn clear_command_is_active_only_outside_cloud_mode() {
 }
 
 #[test]
+fn resume_command_is_registered_only_for_tui_mode() {
+    assert!(
+        all_commands(settings::SettingsMode::Tui)
+            .iter()
+            .any(|command| command.kind == SlashCommandKind::Resume),
+        "/resume should be registered in TUI mode"
+    );
+    assert!(
+        all_commands(settings::SettingsMode::Gui)
+            .iter()
+            .all(|command| command.kind != SlashCommandKind::Resume),
+        "/resume should not be registered in GUI mode"
+    );
+}
+
+#[test]
+fn resume_command_mirrors_conversations_registry_metadata() {
+    let command = all_commands(settings::SettingsMode::Tui)
+        .into_iter()
+        .find(|command| command.kind == SlashCommandKind::Resume)
+        .expect("expected /resume to be registered in TUI mode");
+
+    assert_eq!(command, RESUME);
+    assert_eq!(command.name, "/resume");
+    assert_eq!(command.supported_surfaces, SlashCommandSurfaces::TuiOnly);
+    assert_eq!(command.supported_surfaces.gui_icon_path(), None);
+    assert_eq!(
+        command.description,
+        "Resume a previous conversation (alias for /conversations)"
+    );
+    assert!(command.argument.is_none());
+
+    // The alias must gate and behave exactly like the command it aliases.
+    assert_eq!(command.availability, CONVERSATIONS.availability);
+    assert_eq!(command.auto_enter_ai_mode, CONVERSATIONS.auto_enter_ai_mode);
+    assert_eq!(command.argument, CONVERSATIONS.argument);
+}
+
+#[test]
 fn natural_language_detection_command_is_registered_only_for_tui_mode() {
     let tui_commands = all_commands(settings::SettingsMode::Tui);
     assert!(
