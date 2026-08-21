@@ -28,7 +28,7 @@ use crate::cloud_object::model::persistence::CloudModel;
 use crate::editor::InteractionState;
 use crate::features::FeatureFlag;
 use crate::notebooks::editor::keys::NotebookKeybindings;
-use crate::notebooks::editor::link_editor::LinkEditorAction;
+use crate::notebooks::editor::link_editor::{LinkEditor, LinkEditorAction};
 use crate::notebooks::editor::model::NotebooksEditorModel;
 use crate::notebooks::editor::rich_text_styles;
 use crate::notebooks::file::MarkdownDisplayMode;
@@ -160,6 +160,14 @@ fn link_offset(
                 == Some(link_url)
         })
         .expect("Expected link URL to exist in editor")
+}
+
+/// Returns the lazily-constructed link editor, panicking if it hasn't been built yet.
+fn link_editor(editor: &RichTextEditorView) -> &ViewHandle<LinkEditor> {
+    editor
+        .link_editor
+        .as_ref()
+        .expect("Expected the link editor to have been constructed")
 }
 
 fn rendered_mermaid_block_range(
@@ -600,21 +608,21 @@ fn test_link_editing() {
         // Populate the link editor to create a hyperlink.
         editor_view.update(&mut app, |editor, ctx| {
             assert!(editor.link_editor_open);
-            let link_editor = editor.link_editor.as_ref(ctx);
-            assert!(link_editor.url_editor().is_focused(ctx));
+            let editor_link_editor = link_editor(editor).as_ref(ctx);
+            assert!(editor_link_editor.url_editor().is_focused(ctx));
             assert_eq!(
-                link_editor.tag_editor().as_ref(ctx).buffer_text(ctx),
+                editor_link_editor.tag_editor().as_ref(ctx).buffer_text(ctx),
                 "text"
             );
 
-            link_editor
+            editor_link_editor
                 .url_editor()
                 .clone()
                 .update(ctx, |url_editor, ctx| {
                     url_editor.user_insert("https://warp.dev", ctx);
                 });
 
-            editor.link_editor.update(ctx, |link_editor, ctx| {
+            link_editor(editor).update(ctx, |link_editor, ctx| {
                 link_editor.handle_action(&LinkEditorAction::ApplyLink, ctx)
             });
         });
@@ -636,8 +644,8 @@ fn test_link_editing() {
         });
         editor_view.update(&mut app, |editor, ctx| {
             assert!(editor.link_editor_open);
-            let tag_editor = editor.link_editor.as_ref(ctx).tag_editor().clone();
-            let url_editor = editor.link_editor.as_ref(ctx).url_editor().clone();
+            let tag_editor = link_editor(editor).as_ref(ctx).tag_editor().clone();
+            let url_editor = link_editor(editor).as_ref(ctx).url_editor().clone();
 
             url_editor.update(ctx, |url_editor, ctx| {
                 url_editor.user_insert("https://example.com", ctx);
@@ -647,7 +655,7 @@ fn test_link_editing() {
                 tag_editor.user_insert("new link", ctx)
             });
 
-            editor.link_editor.update(ctx, |link_editor, ctx| {
+            link_editor(editor).update(ctx, |link_editor, ctx| {
                 link_editor.handle_action(&LinkEditorAction::ApplyLink, ctx)
             });
         });
@@ -879,21 +887,21 @@ fn test_link_editing_disabled_for_multiselect() {
         // Populate the link editor to create a hyperlink.
         editor_view.update(&mut app, |editor, ctx| {
             assert!(editor.link_editor_open);
-            let link_editor = editor.link_editor.as_ref(ctx);
-            assert!(link_editor.url_editor().is_focused(ctx));
+            let editor_link_editor = link_editor(editor).as_ref(ctx);
+            assert!(editor_link_editor.url_editor().is_focused(ctx));
             assert_eq!(
-                link_editor.tag_editor().as_ref(ctx).buffer_text(ctx),
+                editor_link_editor.tag_editor().as_ref(ctx).buffer_text(ctx),
                 "text"
             );
 
-            link_editor
+            editor_link_editor
                 .url_editor()
                 .clone()
                 .update(ctx, |url_editor, ctx| {
                     url_editor.user_insert("https://warp.dev", ctx);
                 });
 
-            editor.link_editor.update(ctx, |link_editor, ctx| {
+            link_editor(editor).update(ctx, |link_editor, ctx| {
                 link_editor.handle_action(&LinkEditorAction::ApplyLink, ctx)
             });
         });
@@ -917,6 +925,134 @@ fn test_link_editing_disabled_for_multiselect() {
         // Ensure that the link editor was not opened.
         editor_view.read(&app, |editor, _ctx| {
             assert!(!editor.link_editor_open);
+        });
+    });
+}
+
+#[test]
+fn test_default_editor_constructs_block_insertion_menu_but_not_other_chrome() {
+    // The block insertion menu is reachable purely by configuration (not disabled here), so it
+    // is constructed up front. The omnibar, link editor, and find bar are all reachable only via
+    // runtime selection/focus state and must not be built until actually needed. See APP-4843.
+    App::test((), |mut app| async move {
+        let (_, editor_view, _) = initialize_editor(&mut app);
+        editor_view.read(&app, |editor, _ctx| {
+            assert_eq!(
+                editor.constructed_chrome_count(),
+                1,
+                "Only the block insertion menu should be constructed eagerly"
+            );
+        });
+    });
+}
+
+#[test]
+fn test_selecting_text_while_editable_lazily_constructs_omnibar() {
+    // The omnibar can only ever be shown while editable (see `should_show_omnibar`), so it's
+    // built lazily the first time the selection/style changes while editable, and never for an
+    // editor that's never editable (e.g. a read-only comment card).
+    App::test((), |mut app| async move {
+        let (_, editor_view, _) = initialize_editor(&mut app);
+        editor_view.update(&mut app, |_, ctx| ctx.focus_self());
+        editor_view.update(&mut app, |editor, ctx| {
+            editor.user_typed("Some text", ctx);
+            editor.handle_action(&EditorViewAction::SelectBackwardsByWord, ctx);
+        });
+        editor_view.read(&app, |editor, ctx| {
+            assert_eq!(editor.model().as_ref(ctx).selected_text(ctx), "text");
+            assert_eq!(
+                editor.constructed_chrome_count(),
+                2,
+                "Selecting text while editable should lazily construct the omnibar"
+            );
+        });
+    });
+}
+
+#[test]
+fn test_show_find_bar_action_lazily_constructs_find_bar() {
+    App::test((), |mut app| async move {
+        let (_, editor_view, _) = initialize_editor(&mut app);
+        editor_view.read(&app, |editor, _ctx| {
+            assert_eq!(editor.constructed_chrome_count(), 1);
+        });
+
+        editor_view.update(&mut app, |editor, ctx| {
+            editor.handle_action(&EditorViewAction::ShowFindBar, ctx);
+        });
+
+        editor_view.read(&app, |editor, _ctx| {
+            assert_eq!(
+                editor.constructed_chrome_count(),
+                2,
+                "Showing the find bar should lazily construct it"
+            );
+        });
+    });
+}
+
+#[test]
+fn test_switching_to_editable_with_existing_selection_lazily_constructs_omnibar() {
+    // Regression test: a text selection made while `Selectable` (`selection_start`/`selection_end`
+    // aren't edit-gated) survives a transition to `Editable`, and the model only emits
+    // `InteractionStateChanged` for that transition, never `ActiveStylesChanged`. The omnibar
+    // must therefore also be constructed from `set_interaction_state` itself, not only from
+    // selection-change events, or `should_show_omnibar` can become true while `omnibar` is still
+    // `None`.
+    App::test((), |mut app| async move {
+        let (_, editor_view, _) = initialize_editor(&mut app);
+
+        // The model defaults to `Editable`; switch to `Selectable` before making any content or
+        // selection changes, so none of them can construct the omnibar via the (still valid)
+        // selection-change hook.
+        editor_view.update(&mut app, |editor, ctx| {
+            editor.set_interaction_state(InteractionState::Selectable, ctx);
+            editor.reset_with_markdown("Some text", ctx);
+        });
+        let render_state = editor_view.read(&app, |editor, ctx| {
+            editor.model.as_ref(ctx).render_state().clone()
+        });
+        app.read(|ctx| render_state.as_ref(ctx).layout_complete())
+            .await;
+
+        // Select a text range while still `Selectable`. This does not construct the omnibar,
+        // since it can't be shown while the editor isn't editable.
+        editor_view.update(&mut app, |editor, ctx| {
+            editor.selection_start(CharOffset::from(0), false, ctx);
+            editor.selection_update(CharOffset::from(4), ctx);
+            editor.selection_end(ctx);
+        });
+        app.read(|ctx| render_state.as_ref(ctx).layout_complete())
+            .await;
+
+        editor_view.read(&app, |editor, _ctx| {
+            assert_eq!(
+                editor.constructed_chrome_count(),
+                1,
+                "Selecting text while not editable should not construct the omnibar"
+            );
+        });
+
+        editor_view.read(&app, |editor, ctx| {
+            assert!(!editor.selection_is_single_cursor(ctx));
+            assert!(!editor.should_show_omnibar(ctx));
+        });
+
+        // Switch to `Editable` without touching the selection.
+        editor_view.update(&mut app, |editor, ctx| {
+            editor.set_interaction_state(InteractionState::Editable, ctx);
+        });
+
+        editor_view.read(&app, |editor, ctx| {
+            assert!(
+                editor.should_show_omnibar(ctx),
+                "Omnibar should be shown once editable with a pre-existing non-cursor selection"
+            );
+            assert_eq!(
+                editor.constructed_chrome_count(),
+                2,
+                "Becoming editable with a pre-existing selection should construct the omnibar"
+            );
         });
     });
 }

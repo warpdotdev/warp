@@ -1039,15 +1039,24 @@ pub struct RichTextEditorView {
 
     debug_mode: bool,
 
-    omnibar: ViewHandle<Omnibar>,
-    link_editor: ViewHandle<LinkEditor>,
+    // `omnibar`, `link_editor` and `find_bar` are lazily constructed, since most
+    // `RichTextEditorView` instances (e.g. read-only code review comment cards) can never show
+    // them. Constructing them eagerly for every instance was the dominant source of the memory
+    // blowup tracked by APP-4843: each one drags in a `Buffer`, a `DisplayMap`/`FoldMap` and
+    // other editor chrome even when unreachable.
+    omnibar: Option<ViewHandle<Omnibar>>,
+    link_editor: Option<ViewHandle<LinkEditor>>,
     requested_link_editor_open: AtomicBool,
     requested_block_insertion_menu_open: bool,
     link_editor_open: bool,
-    pub(super) insertion_menu_state: BlockInsertionMenuState,
+    /// `None` when the block insertion menu is disabled by configuration (see
+    /// `disable_block_insertion_menu`), since it can then never be shown.
+    pub(super) insertion_menu_state: Option<BlockInsertionMenuState>,
     pending_layout_affecting_asset_loads: HashSet<AssetHandle>,
 
-    pub(super) find_bar: FindBarState,
+    pub(super) find_bar: Option<FindBarState>,
+    /// Saved position ID passed to `FindBarState::new` when the find bar is first shown.
+    find_bar_parent_position: String,
     max_width: Option<Pixels>,
 
     hovered_file_path: Option<SelectedFilePath>,
@@ -1135,21 +1144,21 @@ impl RichTextEditorView {
             ctx.notify();
         });
 
-        let omnibar = ctx.add_typed_action_view(|ctx| Omnibar::new(model.clone(), ctx));
-        ctx.subscribe_to_view(&omnibar, Self::handle_omnibar_event);
-
-        let link_editor = ctx.add_typed_action_view(|ctx| LinkEditor::new(model.clone(), ctx));
-        ctx.subscribe_to_view(&link_editor, Self::handle_link_editor_event);
-
-        let find_bar = FindBarState::new(parent_position_id, model.clone(), ctx);
-        ctx.subscribe_to_view(find_bar.view(), Self::handle_find_bar_event);
-
-        let insertion_menu_state =
-            BlockInsertionMenuState::new(ctx, config.embedded_objects_enabled.unwrap_or(true));
+        // The block insertion menu is entirely unreachable when disabled (the "/" shortcut and
+        // the insertion button are both gated on `disable_block_insertion_menu`), so it's not
+        // constructed at all in that case, rather than lazily like the chrome below.
+        let insertion_menu_state = if config.disable_block_insertion_menu {
+            None
+        } else {
+            Some(BlockInsertionMenuState::new(
+                ctx,
+                config.embedded_objects_enabled.unwrap_or(true),
+            ))
+        };
 
         Self {
-            omnibar,
-            link_editor,
+            omnibar: None,
+            link_editor: None,
             model,
             display_state: Default::default(),
             scroll_state: Default::default(),
@@ -1168,7 +1177,8 @@ impl RichTextEditorView {
             hovered_file_path: None,
             open_file_path: None,
             file_path_mouse_states: Default::default(),
-            find_bar,
+            find_bar: None,
+            find_bar_parent_position: parent_position_id,
             max_width: config.max_width,
             has_focus_within: false,
             gutter_width: config.gutter_width.unwrap_or(GUTTER_WIDTH),
@@ -1177,10 +1187,6 @@ impl RichTextEditorView {
             disable_scrolling: config.disable_scrolling,
             disable_block_insertion_menu: config.disable_block_insertion_menu,
         }
-    }
-
-    pub(super) fn disable_block_insertion_menu(&self) -> bool {
-        self.disable_block_insertion_menu
     }
 
     fn handle_omnibar_event(
@@ -1205,11 +1211,38 @@ impl RichTextEditorView {
         }
     }
 
+    /// Builds the omnibar the first time it's needed, since most editors (e.g. read-only
+    /// comment cards, which are never editable) never show it.
+    fn ensure_omnibar(&mut self, ctx: &mut ViewContext<Self>) {
+        if self.omnibar.is_some() {
+            return;
+        }
+        let model = self.model.clone();
+        let omnibar = ctx.add_typed_action_view(|ctx| Omnibar::new(model, ctx));
+        ctx.subscribe_to_view(&omnibar, Self::handle_omnibar_event);
+        self.omnibar = Some(omnibar);
+    }
+
+    /// Builds the link editor the first time it's needed, since most editors (e.g. read-only
+    /// comment cards) never open it.
+    fn ensure_link_editor(&mut self, ctx: &mut ViewContext<Self>) {
+        if self.link_editor.is_some() {
+            return;
+        }
+        let model = self.model.clone();
+        let link_editor = ctx.add_typed_action_view(|ctx| LinkEditor::new(model, ctx));
+        ctx.subscribe_to_view(&link_editor, Self::handle_link_editor_event);
+        self.link_editor = Some(link_editor);
+    }
+
     fn open_link_editor(&mut self, ctx: &mut ViewContext<Self>) {
-        self.link_editor.update(ctx, |link_editor, ctx| {
-            link_editor.focus_url_editor(ctx);
-            link_editor.populate(ctx)
-        });
+        self.ensure_link_editor(ctx);
+        if let Some(link_editor) = &self.link_editor {
+            link_editor.update(ctx, |link_editor, ctx| {
+                link_editor.focus_url_editor(ctx);
+                link_editor.populate(ctx)
+            });
+        }
         self.link_editor_open = true;
         ctx.notify();
     }
@@ -1258,6 +1291,12 @@ impl RichTextEditorView {
                 self.reset_for_editing_change(ctx);
             }
             RichTextEditorModelEvent::ActiveStylesChanged { .. } => {
+                // The omnibar can only ever be shown while editable (see `should_show_omnibar`);
+                // avoid building it for editors, like read-only comment cards, where it can
+                // never appear.
+                if self.is_editable(ctx) {
+                    self.ensure_omnibar(ctx);
+                }
                 self.reset_for_editing_change(ctx);
                 ctx.emit(EditorViewEvent::TextSelectionChanged);
             }
@@ -1445,6 +1484,25 @@ impl RichTextEditorView {
         &self.model
     }
 
+    /// Test-only introspection: the number of lazily-constructed chrome sub-views (omnibar,
+    /// link editor, find bar, and the block insertion menu) that have actually been built.
+    ///
+    /// This is a cheap proxy for the memory these sub-views retain (each one pulls in at least
+    /// one `Buffer`/`DisplayMap`), used to prove that unreachable chrome is never constructed
+    /// (see APP-4843).
+    #[cfg(test)]
+    pub(crate) fn constructed_chrome_count(&self) -> usize {
+        [
+            self.omnibar.is_some(),
+            self.link_editor.is_some(),
+            self.insertion_menu_state.is_some(),
+            self.find_bar.is_some(),
+        ]
+        .into_iter()
+        .filter(|constructed| *constructed)
+        .count()
+    }
+
     pub fn markdown(&self, ctx: &AppContext) -> String {
         self.model.as_ref(ctx).markdown(ctx)
     }
@@ -1464,6 +1522,19 @@ impl RichTextEditorView {
         }
         self.model
             .update(ctx, |model, ctx| model.set_interaction_state(state, ctx));
+
+        // `should_show_omnibar` requires `is_editable`, so becoming editable is itself a
+        // false->true transition of that predicate, independent of any selection change. A
+        // selection made while `Selectable` (selection isn't edit-gated) survives a transition
+        // to `Editable` here without the model ever emitting `ActiveStylesChanged`, so relying
+        // on that event alone would leave the omnibar unconstructed even though the omnibar
+        // should now be shown. This is the only setter for interaction state on this view, so
+        // hooking construction here (in addition to the selection-change hook in
+        // `handle_model_event`) covers every path into `Editable`, rather than enumerating the
+        // model events that can also flip the predicate.
+        if matches!(state, InteractionState::Editable) {
+            self.ensure_omnibar(ctx);
+        }
     }
 
     /// Whether an edit operation (insert, backspace, change style, etc.) should be allowed. Edits are allowed if:
@@ -1502,10 +1573,19 @@ impl RichTextEditorView {
     /// This is normally true, unless an overlay editor like the link editor or find bar is
     /// focused, or if there's a command selection.
     fn should_handle_user_input(&self, app: &AppContext) -> bool {
-        !(self.link_editor.as_ref(app).editors_focused(app)
-            || self.find_bar.is_focused(app)
+        !(self
+            .link_editor
+            .as_ref()
+            .is_some_and(|link_editor| link_editor.as_ref(app).editors_focused(app))
+            || self
+                .find_bar
+                .as_ref()
+                .is_some_and(|find_bar| find_bar.is_focused(app))
             || self.model.as_ref(app).has_command_selection(app)
-            || self.insertion_menu_state.embedded_object_search_open)
+            || self
+                .insertion_menu_state
+                .as_ref()
+                .is_some_and(|state| state.embedded_object_search_open))
     }
 
     /// Whether or not the view is currently editable.
@@ -2091,7 +2171,11 @@ impl RichTextEditorView {
             DeleteSlashAndInsertAfter(CharOffset),
         }
         if self.can_edit(ctx) {
-            let insertion_mode = match self.insertion_menu_state.open_at_source {
+            let open_at_source = self
+                .insertion_menu_state
+                .as_ref()
+                .and_then(|state| state.open_at_source);
+            let insertion_mode = match open_at_source {
                 Some(BlockInsertionSource::AtCursor) if self.selection_is_single_cursor(ctx) => {
                     let cursor_position = self.model.as_ref(ctx).selection_head(ctx);
                     let logical_line_start = self
@@ -2163,7 +2247,9 @@ impl RichTextEditorView {
         ctx: &mut ViewContext<Self>,
     ) {
         if matches!(
-            self.insertion_menu_state.open_at_source,
+            self.insertion_menu_state
+                .as_ref()
+                .and_then(|state| state.open_at_source),
             Some(BlockInsertionSource::BlockInsertionButton)
         ) {
             // While the block insertion menu is open, we keep the hovered block fixed to its last
@@ -2576,12 +2662,31 @@ impl RichTextEditorView {
     /// Currently, we only decorate search results, but there may be more in the future (like
     /// highlights from command palette search).
     fn update_decorations(&self, ctx: &mut ViewContext<Self>) {
-        let search_decorations = self.find_bar.decorations(ctx);
+        let search_decorations = self
+            .find_bar
+            .as_ref()
+            .map(|find_bar| find_bar.decorations(ctx))
+            .unwrap_or_default();
         self.model.update(ctx, |model, ctx| {
             model.render_state().update(ctx, |render, ctx| {
                 render.set_text_decorations(search_decorations, ctx);
             });
         });
+    }
+
+    /// Builds the find bar the first time it's shown (Cmd/Ctrl+Shift+F), since most editors
+    /// never open it.
+    fn ensure_find_bar(&mut self, ctx: &mut ViewContext<Self>) {
+        if self.find_bar.is_some() {
+            return;
+        }
+        let find_bar = FindBarState::new(
+            self.find_bar_parent_position.clone(),
+            self.model.clone(),
+            ctx,
+        );
+        ctx.subscribe_to_view(find_bar.view(), Self::handle_find_bar_event);
+        self.find_bar = Some(find_bar);
     }
 
     fn handle_find_bar_event(
@@ -2591,7 +2696,12 @@ impl RichTextEditorView {
         ctx: &mut ViewContext<Self>,
     ) {
         match event {
-            FindBarEvent::Close => self.find_bar.hide(ctx),
+            FindBarEvent::Close => {
+                // This handler is only ever subscribed once the find bar exists.
+                if let Some(find_bar) = &mut self.find_bar {
+                    find_bar.hide(ctx);
+                }
+            }
             FindBarEvent::SearchDecorationsChanged => (),
         }
         self.update_decorations(ctx);
@@ -2624,7 +2734,11 @@ impl RichTextEditorView {
         link: String,
         ctx: &mut ViewContext<Self>,
     ) {
-        match self.insertion_menu_state.open_at_source {
+        let open_at_source = self
+            .insertion_menu_state
+            .as_ref()
+            .and_then(|state| state.open_at_source);
+        match open_at_source {
             Some(BlockInsertionSource::AtCursor) if self.selection_is_single_cursor(ctx) => {
                 self.model.update(ctx, |model, ctx| {
                     // Remove slash
@@ -2720,9 +2834,9 @@ impl View for RichTextEditorView {
         // the editor is in a editable state, user
         // is not actively updating the selection and the block insertion menu isn't already open.
         let show_omnibar = self.should_show_omnibar(app);
-        if show_omnibar {
+        if let Some(omnibar) = self.omnibar.as_ref().filter(|_| show_omnibar) {
             stack.add_positioned_overlay_child(
-                ChildView::new(&self.omnibar).finish(),
+                ChildView::new(omnibar).finish(),
                 Omnibar::positioning(render_state.as_ref(app)),
             );
         } else if let Some(selected_file_path) = &self.open_file_path {
@@ -2738,15 +2852,15 @@ impl View for RichTextEditorView {
         }
 
         let show_link_editor = editable && self.link_editor_open;
-        if show_link_editor {
+        if let Some(link_editor) = self.link_editor.as_ref().filter(|_| show_link_editor) {
             stack.add_positioned_overlay_child(
-                ChildView::new(&self.link_editor).finish(),
+                ChildView::new(link_editor).finish(),
                 LinkEditor::positioning(render_state.as_ref(app)),
             )
         }
 
-        if focused {
-            self.find_bar.render(&mut stack);
+        if focused && let Some(find_bar) = &self.find_bar {
+            find_bar.render(&mut stack);
         }
 
         stack.finish()
@@ -2770,7 +2884,11 @@ impl View for RichTextEditorView {
             context.set.insert("EditorIsEditable");
         }
 
-        if self.insertion_menu_state.open_at_source.is_some() {
+        if self
+            .insertion_menu_state
+            .as_ref()
+            .is_some_and(|state| state.open_at_source.is_some())
+        {
             context.set.insert("BlockInsertionMenu");
         }
 
@@ -3005,7 +3123,12 @@ impl TypedActionView for RichTextEditorView {
                 char_offset,
             } => self.block_hovered(*block_start, *char_offset, ctx),
             ShowCharacterPalette => ctx.open_character_palette(),
-            ShowFindBar => self.find_bar.show(ctx),
+            ShowFindBar => {
+                self.ensure_find_bar(ctx);
+                if let Some(find_bar) = &mut self.find_bar {
+                    find_bar.show(ctx);
+                }
+            }
             Focus => self.focus(ctx),
             DebugCopyBuffer => {
                 let content = self.model.as_ref(ctx).debug_buffer(ctx);
