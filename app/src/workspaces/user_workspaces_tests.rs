@@ -845,6 +845,43 @@ fn test_window_team_assignment_inherits_from_source_or_default_team() {
 }
 
 #[test]
+fn test_team_for_window_omits_unmapped_and_stale_window_assignments() {
+    let team = team_for_test();
+    let workspace = workspace_for_test(&team);
+
+    App::test((), |mut app| async move {
+        initialize_window_team_test_app(&mut app, vec![workspace]);
+
+        let unmapped_window_id = WindowId::new();
+        let stale_window_id = WindowId::new();
+        let departed_team_uid = 456.into();
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.register_window(stale_window_id, Some(departed_team_uid), ctx);
+        });
+
+        app.read(|ctx| {
+            let user_workspaces = UserWorkspaces::as_ref(ctx);
+
+            assert!(
+                user_workspaces
+                    .team_for_window(unmapped_window_id)
+                    .is_none()
+            );
+            assert_eq!(
+                user_workspaces.inherited_or_default_team_uid(Some(unmapped_window_id)),
+                Some(team.uid)
+            );
+
+            assert_eq!(
+                user_workspaces.team_uid_for_window(stale_window_id),
+                Some(departed_team_uid)
+            );
+            assert!(user_workspaces.team_for_window(stale_window_id).is_none());
+        });
+    })
+}
+
+#[test]
 fn warp_agent_cli_upgrade_link_is_channel_aware_and_user_bound() {
     let user_uid = UserUid::new("user-123");
 

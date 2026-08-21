@@ -765,6 +765,10 @@ impl AppContext {
         self.windows.contains_key(&window_id)
     }
 
+    pub fn window_id_for_view(&self, view_id: EntityId) -> Option<WindowId> {
+        self.view_to_window.get(&view_id).copied()
+    }
+
     /// Sets or clears the window for which focus changes should be suppressed.
     /// When set, all `ctx.focus()` calls targeting this window will be ignored.
     pub fn set_suppress_focus_for_window(&mut self, window_id: Option<WindowId>) {

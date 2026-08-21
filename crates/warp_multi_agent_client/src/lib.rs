@@ -44,6 +44,7 @@ cfg_if::cfg_if! {
 pub async fn generate_multi_agent_output(
     client: &BaseClient,
     request: &warp_multi_agent_api::Request,
+    team_uid: Option<&str>,
 ) -> Result<OutputStream, Error> {
     let auth_token = client
         .get_or_refresh_access_token()
@@ -59,6 +60,10 @@ pub async fn generate_multi_agent_output(
         .prevent_sleep("Agent Mode request in-progress");
     if let Some(token) = auth_token.as_bearer_token() {
         request_builder = request_builder.bearer_auth(token);
+    }
+    if let Some(team_uid) = team_uid {
+        request_builder =
+            request_builder.header(http_client::headers::WARP_ACTIVE_TEAM_UID, team_uid);
     }
 
     for (name, value) in client
