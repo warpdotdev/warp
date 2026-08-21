@@ -170,15 +170,10 @@ fn dispatch_command(
         }
         #[cfg(not(target_family = "wasm"))]
         CliCommand::Integration(integration_cmd) => {
-            if !FeatureFlag::IntegrationCommand.is_enabled() {
-                return Err(anyhow::anyhow!("invalid value 'integration'"));
-            }
             integration::run(ctx, global_options, integration_cmd)
         }
         #[cfg(target_family = "wasm")]
-        CliCommand::Integration(_) => {
-            return Err(anyhow::anyhow!("invalid value 'integration'"));
-        }
+        CliCommand::Integration(_) => Err(anyhow::anyhow!("invalid value 'integration'")),
         CliCommand::Schedule(schedule_cmd) => {
             if !FeatureFlag::ScheduledAmbientAgents.is_enabled() {
                 return Err(anyhow::anyhow!("invalid value 'schedule'"));

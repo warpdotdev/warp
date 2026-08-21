@@ -476,9 +476,6 @@ pub enum FeatureFlag {
     /// Enables the provider command for linking third-party services.
     ProviderCommand,
 
-    /// Enables the integration command for managing agent integrations.
-    IntegrationCommand,
-
     /// Enables the artifact command for uploading and downloading CLI artifacts.
     ArtifactCommand,
 
