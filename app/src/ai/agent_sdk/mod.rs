@@ -101,6 +101,7 @@ mod oauth_flow;
 pub mod output;
 mod profiles;
 mod provider;
+mod repository_revisions;
 pub(crate) mod retry;
 mod runner;
 mod schedule;

@@ -2874,6 +2874,10 @@ impl AgentDriver {
                         .await?;
                 }
             }
+        } else {
+            setup_events
+                .repository_revision_reporter()
+                .report_empty();
         }
 
         // Skill loading is Oz-only; third-party harnesses have their own skill systems.

@@ -446,6 +446,25 @@ impl AgentRunClientEventRequest {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct RepositoryRevisionSnapshotRequest {
+    pub snapshot_uuid: String,
+    pub captured_at: DateTime<Utc>,
+    pub unresolved_repository_count: usize,
+    pub repositories: Vec<RepositoryRevisionRequest>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct RepositoryRevisionRequest {
+    pub code_forge: cloud_object_models::CodeForge,
+    pub owner: String,
+    pub repo: String,
+    pub checkout_path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub checkout_ref: Option<String>,
+    pub head_sha: String,
+}
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ReadAgentMessageResponse {
     pub message_id: String,
@@ -1497,6 +1516,11 @@ pub trait AIClient: 'static + Send + Sync {
         &self,
         run_id: &AmbientAgentTaskId,
         request: AgentRunClientEventRequest,
+    ) -> anyhow::Result<(), anyhow::Error>;
+    async fn post_repository_revision_snapshot(
+        &self,
+        run_id: &AmbientAgentTaskId,
+        request: RepositoryRevisionSnapshotRequest,
     ) -> anyhow::Result<(), anyhow::Error>;
 
     async fn mark_message_delivered(&self, message_id: &str) -> anyhow::Result<(), anyhow::Error>;
@@ -2942,6 +2966,20 @@ impl AIClient for ServerApi {
         self.post_public_api_response_for_task(
             run_id,
             &format!("agent/runs/{run_id}/client-events"),
+            &request,
+        )
+        .await?;
+        Ok(())
+    }
+
+    async fn post_repository_revision_snapshot(
+        &self,
+        run_id: &AmbientAgentTaskId,
+        request: RepositoryRevisionSnapshotRequest,
+    ) -> anyhow::Result<(), anyhow::Error> {
+        self.post_public_api_response_for_task(
+            run_id,
+            &format!("agent/runs/{run_id}/repository-revisions"),
             &request,
         )
         .await?;

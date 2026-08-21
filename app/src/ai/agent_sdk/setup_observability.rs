@@ -6,6 +6,7 @@ use futures::FutureExt as _;
 use tracing::Instrument as _;
 use warpui::r#async::executor::Background;
 
+use crate::ai::agent_sdk::repository_revisions::RepositoryRevisionReporter;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::server::server_api::ai::{AIClient, AgentRunClientEventRequest};
 
@@ -36,6 +37,19 @@ impl SetupClientEventReporter {
             run_id: None,
             ai_client,
             background,
+        }
+    }
+
+    pub(crate) fn repository_revision_reporter(&self) -> RepositoryRevisionReporter {
+        match self.run_id {
+            Some(run_id) => RepositoryRevisionReporter::new(
+                run_id,
+                self.ai_client.clone(),
+                self.background.clone(),
+            ),
+            None => {
+                RepositoryRevisionReporter::noop(self.ai_client.clone(), self.background.clone())
+            }
         }
     }
 
