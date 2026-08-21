@@ -196,6 +196,20 @@ pub(crate) fn tool_call_label_with_server(
     }
 }
 
+/// Returns the transcript label for a tool call that will never receive a
+/// result: it finished streaming but never reached the action queue, and the
+/// block that was streaming it has already reached a terminal state
+/// (cancelled, failed, or restored from history without one). Resolves
+/// straight to [`ToolCallDisplayState::Cancelled`], since every tool type's
+/// cancelled-state copy needs neither a stored status nor a result to render
+/// (mirrors the GUI orchestration card's `is_orphaned_by_finished_output`).
+pub(crate) fn orphaned_cancelled_tool_call_label(
+    action: &AIAgentAction,
+    server_name: Option<&str>,
+) -> String {
+    label_for_action(&action.action, State::Cancelled, None, None, server_name)
+}
+
 /// Resolves the user-facing name of the originating MCP server for an MCP
 /// tool-call action, for use in transcript labels. Returns `None` for non-
 /// MCP-tool actions, legacy/flat calls with no server id, or unknown servers.

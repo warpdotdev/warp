@@ -1,14 +1,16 @@
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
+use std::sync::Arc;
 
 use ai::agent::orchestration_config::{
     OrchestrationConfig, OrchestrationConfigStatus, OrchestrationExecutionMode,
 };
 use warp::tui_export::{
-    AIActionStatus, AIAgentAction, AIAgentActionId, AIAgentActionType, AIConversationId,
-    Appearance, AuthSecretSelection, OptionRow, OptionSnapshot, OptionSourceStatus,
-    OrchestrationConfigState, OrchestrationEditState, RunAgentsAgentRunConfig,
-    RunAgentsExecutionMode, RunAgentsRequest, TaskId, register_tui_session_view_test_singletons,
+    AIActionStatus, AIAgentAction, AIAgentActionId, AIAgentActionResult, AIAgentActionResultType,
+    AIAgentActionType, AIConversationId, Appearance, AuthSecretSelection, OptionRow,
+    OptionSnapshot, OptionSourceStatus, OrchestrationConfigState, OrchestrationEditState,
+    RunAgentsAgentRunConfig, RunAgentsExecutionMode, RunAgentsRequest, RunAgentsResult, TaskId,
+    register_tui_session_view_test_singletons,
 };
 use warp_core::features::FeatureFlag;
 use warpui::platform::WindowStyle;
@@ -245,10 +247,20 @@ fn build_request_omits_the_auth_secret_when_the_picker_is_not_applicable() {
     );
 }
 
-#[derive(Default)]
 struct TestController {
     executed_requests: RefCell<Vec<RunAgentsRequest>>,
     accept_error: RefCell<Option<String>>,
+    status: RefCell<Option<AIActionStatus>>,
+}
+
+impl Default for TestController {
+    fn default() -> Self {
+        Self {
+            executed_requests: RefCell::new(Vec::new()),
+            accept_error: RefCell::new(None),
+            status: RefCell::new(Some(AIActionStatus::Blocked)),
+        }
+    }
 }
 
 impl OrchestrationBlockController for TestController {
@@ -257,7 +269,7 @@ impl OrchestrationBlockController for TestController {
         _action_id: &AIAgentActionId,
         _ctx: &warpui::AppContext,
     ) -> Option<AIActionStatus> {
-        Some(AIActionStatus::Blocked)
+        self.status.borrow().clone()
     }
 
     fn snapshot_for_page(
@@ -376,6 +388,54 @@ fn test_block(
                 controller_for_view,
                 Some("auto".to_string()),
                 false,
+                false,
+                Vec::new(),
+                ctx,
+            )
+        })
+    });
+    (view, controller)
+}
+
+/// Constructs a block with the given `is_restored` and
+/// `output_terminal_without_result` flags, otherwise like `test_block`.
+/// Returns the controller too, so a test can drop the action's status to
+/// `None` to exercise the orphaned-cancelled fallback.
+fn test_block_with_terminal_flags(
+    app: &mut App,
+    request: &RunAgentsRequest,
+    is_restored: bool,
+    output_terminal_without_result: bool,
+) -> (ViewHandle<TuiOrchestrationBlock>, Rc<TestController>) {
+    app.add_singleton_model(|_| Appearance::mock());
+    app.update(warp_core::telemetry::testing::MockTelemetryContextProvider::register);
+    let action = AIAgentAction {
+        id: AIAgentActionId::from("run-agents-1".to_string()),
+        task_id: TaskId::new("task-1".to_string()),
+        action: AIAgentActionType::RunAgents(request.clone()),
+        requires_result: true,
+    };
+    let controller = Rc::new(TestController::default());
+    let controller_for_view: Rc<dyn OrchestrationBlockController> = controller.clone();
+    let request = request.clone();
+    let view = app.update(|ctx| {
+        let (window_id, _) = ctx.add_tui_window(
+            AddWindowOptions {
+                window_style: WindowStyle::NotStealFocus,
+                ..Default::default()
+            },
+            |_| TestHostView,
+        );
+        ctx.add_typed_action_tui_view(window_id, move |ctx| {
+            TuiOrchestrationBlock::from_parts(
+                AIConversationId::new(),
+                action,
+                &request,
+                None,
+                controller_for_view,
+                Some("auto".to_string()),
+                is_restored,
+                output_terminal_without_result,
                 Vec::new(),
                 ctx,
             )
@@ -421,6 +481,7 @@ fn renderable_test_block(app: &mut App) -> ViewHandle<TuiOrchestrationBlock> {
                 None,
                 controller,
                 Some("auto".to_string()),
+                false,
                 false,
                 Vec::new(),
                 ctx,
@@ -793,5 +854,165 @@ fn accepting_dispatches_once_and_releases_focus() {
 
         assert_eq!(controller.executed_requests.borrow().as_slice(), &[request]);
         assert!(app.read(|ctx| !block.as_ref(ctx).is_awaiting_confirmation(ctx)));
+    });
+}
+
+/// A `RunAgents` call that never reached the action queue (no status of its
+/// own) but whose containing block already finished its output as cancelled
+/// must render as cancelled, not sit on the "Configuring agents…" pending
+/// placeholder forever.
+#[test]
+fn orphaned_by_cancelled_output_renders_cancelled_state() {
+    App::test((), |mut app| async move {
+        let (block, controller) = test_block_with_terminal_flags(
+            &mut app,
+            &request("oz", RunAgentsExecutionMode::Local),
+            false,
+            true,
+        );
+        controller.status.replace(None);
+
+        let lines = rendered_block_lines(&block, &app);
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("Spawn agents cancelled")),
+            "expected the cancelled label, got: {lines:?}"
+        );
+        assert!(
+            !lines.iter().any(|line| line.contains("Configuring agents")),
+            "must not still show the pending placeholder: {lines:?}"
+        );
+        assert!(
+            lines.iter().any(|line| line.contains('■')),
+            "expected the cancelled glyph, got: {lines:?}"
+        );
+    });
+}
+
+/// The same statusless call must still render as "Configuring agents…" while
+/// the containing block's output has not yet reached a terminal state, so
+/// the cancelled fallback only kicks in once the block is actually done.
+#[test]
+fn statusless_call_with_streaming_output_stays_pending() {
+    App::test((), |mut app| async move {
+        let (block, controller) = test_block_with_terminal_flags(
+            &mut app,
+            &request("oz", RunAgentsExecutionMode::Local),
+            false,
+            false,
+        );
+        controller.status.replace(None);
+
+        let lines = rendered_block_lines(&block, &app);
+        assert!(
+            lines.iter().any(|line| line.contains("Configuring agents")),
+            "expected the pending placeholder while streaming, got: {lines:?}"
+        );
+        assert!(!lines.iter().any(|line| line.contains("cancelled")));
+    });
+}
+
+/// A block restored from history with no stored result for this action can
+/// never resume its dispatch decision, so it renders as cancelled
+/// unconditionally, mirroring the GUI card's restored-from-history branch.
+#[test]
+fn restored_without_a_result_renders_cancelled_state() {
+    App::test((), |mut app| async move {
+        let (block, controller) = test_block_with_terminal_flags(
+            &mut app,
+            &request("oz", RunAgentsExecutionMode::Local),
+            true,
+            false,
+        );
+        controller.status.replace(None);
+
+        let lines = rendered_block_lines(&block, &app);
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("Spawn agents cancelled")),
+            "expected the cancelled label, got: {lines:?}"
+        );
+    });
+}
+
+/// Builds a `Finished` status wrapping `result` for the `run-agents-1` action
+/// used by [`test_block_with_terminal_flags`].
+fn finished_run_agents_status(result: RunAgentsResult) -> AIActionStatus {
+    AIActionStatus::Finished(Arc::new(AIAgentActionResult {
+        id: AIAgentActionId::from("run-agents-1".to_string()),
+        task_id: TaskId::new("task-1".to_string()),
+        result: AIAgentActionResultType::RunAgents(result),
+    }))
+}
+
+/// The highest-risk precedence contract: a statusful terminal result must
+/// never be overridden by the orphaned-cancelled fallback, even when the
+/// containing block's output has *also* reached a terminal state (a real
+/// result can still arrive on the same tick the block finishes). A `Denied`
+/// result keeps its own disabled-orchestration copy, distinct from the
+/// generic cancelled label.
+#[test]
+fn denied_result_is_not_overridden_by_a_terminal_block() {
+    App::test((), |mut app| async move {
+        let (block, controller) = test_block_with_terminal_flags(
+            &mut app,
+            &request("oz", RunAgentsExecutionMode::Local),
+            false,
+            true, // output_terminal_without_result: the block also looks orphaned-cancelled.
+        );
+        controller
+            .status
+            .replace(Some(finished_run_agents_status(RunAgentsResult::Denied {
+                reason: "orchestration disabled".to_string(),
+            })));
+
+        let lines = rendered_block_lines(&block, &app);
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("Orchestration disabled")),
+            "expected the Denied copy to survive, got: {lines:?}"
+        );
+        assert!(
+            !lines
+                .iter()
+                .any(|line| line.contains("Spawn agents cancelled")),
+            "a statusful Denied result must not be overridden by the terminal-block fallback: {lines:?}"
+        );
+    });
+}
+
+/// A real `Finished(RunAgentsResult::Cancelled)` result — the action actually
+/// reached the queue and was cancelled there — must render through its own
+/// result path rather than the orphaned-cancelled fallback, even though both
+/// produce the same copy. Exercising it with `output_terminal_without_result`
+/// unset confirms the ordinary statusful branch alone is sufficient; no
+/// orphaned-fallback plumbing is needed for a call that actually resolved.
+#[test]
+fn real_finished_cancelled_result_renders_through_its_own_path() {
+    App::test((), |mut app| async move {
+        let (block, controller) = test_block_with_terminal_flags(
+            &mut app,
+            &request("oz", RunAgentsExecutionMode::Local),
+            false,
+            false,
+        );
+        controller
+            .status
+            .replace(Some(finished_run_agents_status(RunAgentsResult::Cancelled)));
+
+        let lines = rendered_block_lines(&block, &app);
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("Spawn agents cancelled")),
+            "expected the cancelled label from the real result, got: {lines:?}"
+        );
+        assert!(
+            lines.iter().any(|line| line.contains('■')),
+            "expected the cancelled glyph, got: {lines:?}"
+        );
     });
 }

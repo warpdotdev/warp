@@ -14,8 +14,8 @@ use warpui_core::elements::tui::Modifier;
 
 use super::{
     CommandBlockState, ResolvedCommandBlock, ToolCallDisplayState, launched_agents_label,
-    styled_tool_call_label_spans, tool_call_display_state, tool_call_label,
-    tool_call_label_with_server,
+    orphaned_cancelled_tool_call_label, styled_tool_call_label_spans, tool_call_display_state,
+    tool_call_label, tool_call_label_with_server,
 };
 use crate::tui_builder::TuiUiBuilder;
 
@@ -64,6 +64,34 @@ fn command_action(command: &str) -> AIAgentAction {
     }
 }
 
+/// Builds a `RunAgents` tool-call action requesting `agent_count` agents.
+fn run_agents_action(agent_count: usize) -> AIAgentAction {
+    AIAgentAction {
+        id: AIAgentActionId::from("action-1".to_owned()),
+        task_id: TaskId::new("task-1".to_owned()),
+        action: AIAgentActionType::RunAgents(ai::agent::action::RunAgentsRequest {
+            summary: "Parallelize the task.".to_owned(),
+            base_prompt: "base".to_owned(),
+            skills: Vec::new(),
+            model_id: "auto".to_owned(),
+            harness_type: "oz".to_owned(),
+            execution_mode: ai::agent::action::RunAgentsExecutionMode::Local,
+            agent_run_configs: (0..agent_count)
+                .map(|index| ai::agent::action::RunAgentsAgentRunConfig {
+                    name: format!("agent-{index}"),
+                    prompt: "work".to_owned(),
+                    title: String::new(),
+                    agent_identity_uid: String::new(),
+                    model_id: String::new(),
+                })
+                .collect(),
+            plan_id: String::new(),
+            harness_auth_secret_name: None,
+        }),
+        requires_result: true,
+    }
+}
+
 /// Builds a `CallMCPTool` action for `tool`. The `server_id` is left `None`
 /// because `tool_call_label_with_server` takes the resolved server name as a
 /// direct argument, bypassing the action's server-id -> name lookup.
@@ -98,6 +126,25 @@ fn tool_call_statuses_map_to_tool_call_display_states() {
         tool_call_display_state(Some(&AIActionStatus::RunningAsync), false, None),
         ToolCallDisplayState::Running
     );
+}
+
+/// A `RunAgents` call that never reached the action queue must render as
+/// cancelled once the surrounding block's output has already terminated
+/// (see `crate::orchestration_block::render`, which calls this to avoid
+/// leaving the call stuck on "Configuring agents…" forever).
+#[test]
+fn orphaned_cancelled_label_matches_the_normal_cancelled_label() {
+    let action = run_agents_action(2);
+    assert_eq!(
+        orphaned_cancelled_tool_call_label(&action, None),
+        "Spawn agents cancelled"
+    );
+
+    let state = tool_call_display_state(None, false, None);
+    assert_eq!(state, ToolCallDisplayState::Pending);
+    assert_eq!(state.glyph(), "○");
+
+    assert_eq!(ToolCallDisplayState::Cancelled.glyph(), "■");
 }
 
 #[test]

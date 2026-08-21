@@ -654,6 +654,15 @@ impl TuiAIBlock {
         let mut materialized_active_blocker = false;
         let status = self.block_model.status(ctx);
         let output_streaming = status.is_streaming();
+        // Whether this exchange's output already reached a terminal state
+        // without producing a result for an action still streaming in it —
+        // that action never reaches the queue and needs to render as
+        // cancelled instead of sitting on its constructing/pending fallback
+        // forever (see `TuiOrchestrationBlock::output_terminal_without_result`).
+        let output_terminal_without_result = matches!(
+            status,
+            AIBlockOutputStatus::Cancelled { .. } | AIBlockOutputStatus::Failed { .. }
+        );
         let mut ask_question_actions = Vec::new();
         let mut file_edit_actions = Vec::new();
         let mut generic_actions = Vec::new();
@@ -882,7 +891,9 @@ impl TuiAIBlock {
                 self.action_views.get(&action.id)
             {
                 let request = request.clone();
-                view.update(ctx, |view, ctx| view.update_request(&request, ctx));
+                view.update(ctx, |view, ctx| {
+                    view.update_request(&request, output_terminal_without_result, ctx)
+                });
                 continue;
             }
             // Read the active orchestration config for plan-inherited
@@ -917,6 +928,7 @@ impl TuiAIBlock {
                     run_agents_executor,
                     fallback_base_model_id,
                     is_restored,
+                    output_terminal_without_result,
                     ctx,
                 )
             });

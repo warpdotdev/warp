@@ -15,12 +15,14 @@ use warp::tui_export::{
     AIAgentOutputMessageType, AIAgentText, AIAgentTextSection, AIAgentTodo, AIAgentTodoList,
     AIBlockModel, AIBlockOutputStatus, AIConversationId, AIRequestType, ActiveSession,
     AgentOutputImage, AgentOutputImageLayout, AgentOutputMermaidDiagram, AgentOutputTable,
-    Appearance, AuthStateProvider, BlocklistAIActionModel, FailedOutputPresentation,
-    GetRelevantFilesController, LLMId, MessageId, ModelEventDispatcher, OutputStatusUpdateCallback,
-    ReceivedMessageDisplay, RenderableAIError, RequestCommandOutputResult, ServerOutputId,
-    Sessions, Shared, SummarizationType, TaskId, TerminalModel, TodoOperation, TodoStatus,
-    TuiOnboardingMarker, TuiOnboardingMarkers, UserQueryMode, queue_tui_permission_action,
-    register_tui_session_view_test_singletons, should_show_failed_output_usage_notice,
+    Appearance, AuthStateProvider, BlocklistAIActionModel, CancellationReason,
+    FailedOutputPresentation, GetRelevantFilesController, LLMId, MessageId, ModelEventDispatcher,
+    OutputStatusUpdateCallback, ReceivedMessageDisplay, RenderableAIError,
+    RequestCommandOutputResult, RunAgentsAgentRunConfig, RunAgentsExecutionMode, RunAgentsRequest,
+    ServerOutputId, Sessions, Shared, SummarizationType, TaskId, TerminalModel, TodoOperation,
+    TodoStatus, TuiOnboardingMarker, TuiOnboardingMarkers, UserQueryMode,
+    queue_tui_permission_action, register_tui_session_view_test_singletons,
+    should_show_failed_output_usage_notice,
 };
 use warp_core::ui::color::blend::Blend;
 use warp_core::ui::theme::Fill as ThemeFill;
@@ -784,6 +786,85 @@ fn agent_block_renders_multiple_tool_calls_in_order() {
                     .map(|line| line.trim_end().to_owned())
                     .collect::<Vec<_>>(),
                 vec!["", "○ Init project", "", "○ Init project"],
+            );
+        });
+    });
+}
+
+/// The real regression path: a `RunAgents` action that is still streaming
+/// (so `sync_action_views` has already created its orchestration child card,
+/// but the action has never reached the real `BlocklistAIActionModel` queue)
+/// must flip from the streaming placeholder to the cancelled fallback purely
+/// through a real block-model transition and the production
+/// `sync_action_views`/`update_request` plumbing — not a hand-built card.
+#[test]
+fn run_agents_action_flips_to_cancelled_through_a_real_block_transition() {
+    App::test((), |mut app| async move {
+        // The real `TuiOrchestrationBlock::new` path (unlike `from_parts`)
+        // subscribes to harness/model/self-hosted-worker catalogs, so it
+        // needs the full TUI session-view singleton set, not just `Appearance`.
+        register_tui_session_view_test_singletons(&mut app);
+        let action = run_agents_action("run-agents-1");
+        let action_id = action.id.clone();
+        let block = test_agent_block(
+            &mut app,
+            FakeAgentBlockModel {
+                inputs: Vec::new(),
+                status: partially_received_output(vec![action_message(
+                    "message-1",
+                    action.clone(),
+                )]),
+            },
+        );
+
+        // The real action model never queues this action (nothing in this
+        // test calls `queue_tui_permission_action` for it), reproducing the
+        // production case: the call is still streaming and has no status.
+        // A stateful tool call renders through its own child view rather than
+        // the parent block's plain element tree (see the Plan/AskQuestion
+        // tests above), so fetch and render the orchestration card directly.
+        let orchestration_view = app.read(|ctx| {
+            let Some(TuiToolCallView::OrchestrationBlock(view)) =
+                block.as_ref(ctx).action_views.get(&action_id)
+            else {
+                panic!("run_agents action has an orchestration child view");
+            };
+            view.clone()
+        });
+        app.read(|ctx| {
+            let lines = render_tui_view_lines(orchestration_view.as_ref(ctx), 80, 12, ctx);
+            assert!(
+                lines.iter().any(|line| line.contains("Configuring agents")),
+                "expected the still-streaming placeholder, got: {lines:?}"
+            );
+        });
+
+        // Drive a real block-output transition to Cancelled and re-run the
+        // production sync path, exactly as `TuiAIBlock::on_updated_output`
+        // would on a live conversation.
+        block.update(&mut app, |block, ctx| {
+            block.replace_model(
+                block.conversation_id,
+                Rc::new(FakeAgentBlockModel {
+                    inputs: Vec::new(),
+                    status: cancelled_output(vec![action_message("message-1", action.clone())]),
+                }),
+            );
+            let action_model = block.action_model.clone();
+            block.sync_action_views(&action_model, ctx);
+        });
+
+        app.read(|ctx| {
+            let lines = render_tui_view_lines(orchestration_view.as_ref(ctx), 80, 12, ctx);
+            assert!(
+                lines
+                    .iter()
+                    .any(|line| line.contains("Spawn agents cancelled")),
+                "expected the cancelled fallback after a real block transition, got: {lines:?}"
+            );
+            assert!(
+                !lines.iter().any(|line| line.contains("Configuring agents")),
+                "must not still show the pending placeholder: {lines:?}"
             );
         });
     });
@@ -2525,6 +2606,28 @@ fn failed_output(
         error,
     }
 }
+
+/// Builds a still-streaming output status carrying the given messages so far.
+fn partially_received_output(messages: Vec<AIAgentOutputMessage>) -> AIBlockOutputStatus {
+    AIBlockOutputStatus::PartiallyReceived {
+        output: Shared::new(AIAgentOutput {
+            messages,
+            ..Default::default()
+        }),
+    }
+}
+
+/// Builds a cancelled output status retaining the given messages as its
+/// partial output, mirroring a stream that was cancelled mid-response.
+fn cancelled_output(messages: Vec<AIAgentOutputMessage>) -> AIBlockOutputStatus {
+    AIBlockOutputStatus::Cancelled {
+        partial_output: Some(Shared::new(AIAgentOutput {
+            messages,
+            ..Default::default()
+        })),
+        reason: CancellationReason::ManuallyCancelled,
+    }
+}
 /// Builds a text output message from plain-text sections.
 fn text_message(id: &str, sections: Vec<AIAgentTextSection>) -> AIAgentOutputMessage {
     AIAgentOutputMessage {
@@ -2596,6 +2699,32 @@ fn test_action(id: &str) -> AIAgentAction {
         id: AIAgentActionId::from(id.to_owned()),
         task_id: TaskId::new("task-1".to_owned()),
         action: AIAgentActionType::InitProject,
+        requires_result: true,
+    }
+}
+
+/// Builds a `RunAgents` tool-call action requesting one agent.
+fn run_agents_action(id: &str) -> AIAgentAction {
+    AIAgentAction {
+        id: AIAgentActionId::from(id.to_owned()),
+        task_id: TaskId::new("task-1".to_owned()),
+        action: AIAgentActionType::RunAgents(RunAgentsRequest {
+            summary: "Parallelize the task.".to_owned(),
+            base_prompt: "base".to_owned(),
+            skills: Vec::new(),
+            model_id: "auto".to_owned(),
+            harness_type: "oz".to_owned(),
+            execution_mode: RunAgentsExecutionMode::Local,
+            agent_run_configs: vec![RunAgentsAgentRunConfig {
+                name: "researcher".to_owned(),
+                prompt: "research".to_owned(),
+                title: "Researcher".to_owned(),
+                agent_identity_uid: String::new(),
+                model_id: String::new(),
+            }],
+            plan_id: String::new(),
+            harness_auth_secret_name: None,
+        }),
         requires_result: true,
     }
 }

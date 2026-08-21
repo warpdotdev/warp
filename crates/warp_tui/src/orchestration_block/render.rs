@@ -15,7 +15,9 @@ use warpui_core::elements::tui::{
 };
 
 use super::{CardMode, ORCHESTRATION_BLOCK_TITLE, TuiOrchestrationBlock};
-use crate::agent_block_sections::render_fallback_tool_call_section;
+use crate::agent_block_sections::{
+    render_fallback_tool_call_section, render_orphaned_cancelled_tool_call_section,
+};
 use crate::orchestrated_agent_identity_styling::{AgentIdentity, assign_agent_identity_indices};
 use crate::tui_builder::TuiUiBuilder;
 
@@ -249,6 +251,17 @@ pub(super) fn render(block: &TuiOrchestrationBlock, app: &AppContext) -> Box<dyn
         && block.spawning.is_none()
         && matches!(status, Some(AIActionStatus::Blocked));
     if !interactive {
+        // The call never reached the action queue (no status of its own) and
+        // can never resolve one now: either the containing block's output
+        // already finished as cancelled or failed while this call was still
+        // streaming, or the whole block was restored from history without a
+        // stored result. Left alone this falls through to the fallback
+        // renderer's `Pending` state below and sits on "Configuring agents…"
+        // forever, since that renderer has neither a status nor a result to
+        // derive `Cancelled` from.
+        if status.is_none() && (block.is_restored || block.output_terminal_without_result) {
+            return render_orphaned_cancelled_tool_call_section(&block.action, app);
+        }
         return render_fallback_tool_call_section(&block.action, status.as_ref(), false, None, app);
     }
 

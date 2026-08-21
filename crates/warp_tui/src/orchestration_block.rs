@@ -147,6 +147,12 @@ pub(crate) struct TuiOrchestrationBlock {
     fallback_base_model_id: Option<String>,
     /// Whether the block was restored from history (non-interactive).
     is_restored: bool,
+    /// Whether the block containing this action has already reached a
+    /// terminal output state (cancelled or failed) while this action was
+    /// still streaming, so it never reached the action queue and will never
+    /// receive a result. Mirrors the GUI card's
+    /// `is_orphaned_by_finished_output`.
+    output_terminal_without_result: bool,
 
     // Interactive card state.
     orchestration_edit_state: OrchestrationEditState,
@@ -182,6 +188,7 @@ impl TuiOrchestrationBlock {
         run_agents_executor: ModelHandle<RunAgentsExecutor>,
         fallback_base_model_id: Option<String>,
         is_restored: bool,
+        output_terminal_without_result: bool,
         ctx: &mut ViewContext<Self>,
     ) -> Self {
         let action_id = action.id.clone();
@@ -288,6 +295,7 @@ impl TuiOrchestrationBlock {
             controller,
             fallback_base_model_id,
             is_restored,
+            output_terminal_without_result,
             identity_palette,
             ctx,
         );
@@ -305,6 +313,7 @@ impl TuiOrchestrationBlock {
         controller: Rc<dyn OrchestrationBlockController>,
         fallback_base_model_id: Option<String>,
         is_restored: bool,
+        output_terminal_without_result: bool,
         identity_palette: Vec<AgentIdentity>,
         ctx: &mut ViewContext<Self>,
     ) -> Self {
@@ -323,6 +332,7 @@ impl TuiOrchestrationBlock {
             active_config,
             fallback_base_model_id,
             is_restored,
+            output_terminal_without_result,
             orchestration_edit_state,
             mode: CardMode::Acceptance,
             selector,
@@ -403,28 +413,38 @@ impl TuiOrchestrationBlock {
     }
 
     /// Re-syncs edit state from the latest streaming request chunk
-    /// (mirroring the GUI card's `update_request`).
+    /// (mirroring the GUI card's `update_request`), and refreshes whether the
+    /// containing block's output has reached a terminal state without this
+    /// action ever receiving a result (see `output_terminal_without_result`).
+    /// The latter must update even when the request itself is unchanged, so
+    /// a stream that gets cancelled with no further streamed content still
+    /// notifies the card to leave its pending placeholder.
     pub(crate) fn update_request(
         &mut self,
         request: &RunAgentsRequest,
+        output_terminal_without_result: bool,
         ctx: &mut ViewContext<Self>,
     ) {
+        let terminal_state_changed =
+            self.output_terminal_without_result != output_terminal_without_result;
+        self.output_terminal_without_result = output_terminal_without_result;
         if self.spawning.is_some() || self.decided {
             return;
         }
         self.action.action = AIAgentActionType::RunAgents(request.clone());
         let new_state = Self::config_state_from_request(request, self.active_config.as_ref());
-        let changed = self.request_fields != *request
+        let request_changed = self.request_fields != *request
             || self.orchestration_edit_state.orchestration_config_state != new_state;
-        if !changed {
-            return;
+        if request_changed {
+            self.request_fields = request.clone();
+            self.orchestration_edit_state = OrchestrationEditState::new(new_state);
+            self.resolve_interactive_defaults(ctx);
+            self.refresh_active_page(ctx);
+            ctx.emit(TuiOrchestrationBlockEvent::LayoutInvalidated);
         }
-        self.request_fields = request.clone();
-        self.orchestration_edit_state = OrchestrationEditState::new(new_state);
-        self.resolve_interactive_defaults(ctx);
-        self.refresh_active_page(ctx);
-        ctx.emit(TuiOrchestrationBlockEvent::LayoutInvalidated);
-        ctx.notify();
+        if request_changed || terminal_state_changed {
+            ctx.notify();
+        }
     }
 
     fn emit_orchestration_entered_once(&mut self, ctx: &mut ViewContext<Self>) {
