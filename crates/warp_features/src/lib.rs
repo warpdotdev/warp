@@ -967,6 +967,12 @@ pub enum FeatureFlag {
     /// `--no-snapshot` is set. Off by default while the coordinator rolls out.
     PeriodicHandoffCheckpoints,
 
+    /// Rollout gate for animating discrete (non-precise) mouse-wheel scroll input with a short
+    /// ease-out tween instead of applying it immediately. Not a user preference; see
+    /// `specs/CSAT-6046/PRODUCT.md` for the full behavior. Phase 1 covers generic WarpUI
+    /// scrollables only.
+    SmoothScrolling,
+
     /// Observes Ctrl-C (`0x03`) written on the shared-session viewer input
     /// path to a terminal with a working, rich-status-capable CLI agent
     /// session (e.g. Claude Code). Arms a short grace window; if no further
@@ -1073,7 +1079,10 @@ pub const RELEASE_FLAGS: &[FeatureFlag] = &[
 ];
 
 /// Flags that we want to allow to switch at runtime (assuming RuntimeFeatureFlags is set)
-pub const RUNTIME_FEATURE_FLAGS: &[FeatureFlag] = &[FeatureFlag::LocalClaudeCodexChildHarnesses];
+pub const RUNTIME_FEATURE_FLAGS: &[FeatureFlag] = &[
+    FeatureFlag::LocalClaudeCodexChildHarnesses,
+    FeatureFlag::SmoothScrolling,
+];
 
 impl FeatureFlag {
     pub fn is_enabled(&self) -> bool {

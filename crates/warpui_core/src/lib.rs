@@ -25,6 +25,7 @@ pub mod rendering;
 #[cfg(feature = "tui")]
 pub mod runtime;
 pub mod scene;
+pub mod smooth_scroll;
 pub mod telemetry;
 #[cfg(test)]
 mod test;

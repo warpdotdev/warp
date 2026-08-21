@@ -86,6 +86,7 @@ tracing.workspace = true
 trait-set = "0.3.0"
 unicode-segmentation.workspace = true
 vec1.workspace = true
+warp_features.workspace = true
 warp_util.workspace = true
 
 [dev-dependencies]
@@ -95,6 +96,7 @@ tempfile = "3.2.0"
 ctor = "0.1.19"
 rust-embed.workspace = true
 simplelog.workspace = true
+warp_features = { workspace = true, features = ["test-util"] }
 # Enable the `test-util` feature for our own package when running tests.
 warpui_core = { path = ".", features = ["test-util"] }
 

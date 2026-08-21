@@ -125,7 +125,7 @@ fn test_scroll_to_position() {
             // An element that is partially above the viewport should be scrolled fully within the viewport.
             // First, make the scroll top 1.0 pixels. We need to call build scene after this so the
             // position cache is updated appropriately.
-            scroll_state.clipped_scroll_data.lock().scroll_start_px = (1_f32).into_pixels();
+            scroll_state.scroll_to((1_f32).into_pixels());
             presenter.invalidate(invalidation.clone(), ctx);
             presenter.build_scene(window_size, scale_factor, None, ctx);
 
@@ -141,7 +141,7 @@ fn test_scroll_to_position() {
             // An element that is partially below the viewport should be scrolled fully within the viewport.
             // First, make the scroll top 1.0 pixels. We need to call build scene after this so the
             // position cache is updated appropriately.
-            scroll_state.clipped_scroll_data.lock().scroll_start_px = (1_f32).into_pixels();
+            scroll_state.scroll_to((1_f32).into_pixels());
             presenter.invalidate(invalidation.clone(), ctx);
             presenter.build_scene(window_size, scale_factor, None, ctx);
 

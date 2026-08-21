@@ -16291,6 +16291,7 @@ dependencies = [
  "unicode-segmentation",
  "vec1",
  "warp_errors",
+ "warp_features",
  "warp_util",
  "warpui_core",
  "wasm-bindgen-futures",

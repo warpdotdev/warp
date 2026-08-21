@@ -1,4 +1,3 @@
-use std::mem;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
@@ -65,6 +64,15 @@ pub struct Hoverable {
     defer_events_to_children: bool,
 }
 
+/// The window within which two synthetic-caused hover-state changes on the same element are
+/// considered "back-to-back" (see [`MouseState::should_suppress_synthetic_hover_change`]).
+/// Chosen to comfortably cover a same-instant relayout-and-replay cascade (all synchronous, no
+/// awaits) while staying well under the shortest realistic gap between two separate repaint
+/// frames -- including consecutive frames of a smooth-scroll animation, which is only ever
+/// requested no sooner than every 8ms (`SMOOTH_SCROLL_FRAME_INTERVAL`) and is further bounded
+/// below by the display's actual vsync cadence.
+const BACK_TO_BACK_SYNTHETIC_WINDOW: Duration = Duration::from_millis(4);
+
 #[derive(Clone, Debug, Default)]
 pub struct MouseState {
     click_count: Option<u32>,
@@ -86,8 +94,20 @@ pub struct MouseState {
     /// events that both want to alter the hover state, we stop the
     /// invocation to prevent the potential infinite loop. Note that
     /// any non-synthetic event should reset this state to false.
-    /// Shared with the TUI `TuiHoverable`, which applies the same guard.
+    ///
+    /// Used only by the TUI `TuiHoverable`, which applies the same guard but, unlike the GUI
+    /// `Hoverable` (see [`Self::last_synthetic_hover_change_at`]), has no continuous, time-based
+    /// animation and so has no need for a time-windowed version of it. Gated behind the `tui`
+    /// feature (rather than left always-compiled): `elements::gui` is always compiled, so
+    /// without this gate the field is genuinely dead code whenever `tui` is off, which
+    /// `-D warnings` turns into a hard build failure.
+    #[cfg(feature = "tui")]
     pub(crate) last_event_is_synthetic_hover: bool,
+
+    /// The instant of the most recent hover-state change caused by a *synthetic* MouseMoved
+    /// event, used by the GUI `Hoverable` in place of [`Self::last_event_is_synthetic_hover`].
+    /// See [`Self::should_suppress_synthetic_hover_change`].
+    last_synthetic_hover_change_at: Option<Instant>,
 
     /// A timer that starts when the mouse begins hovering the element.
     ///
@@ -151,11 +171,33 @@ impl MouseState {
         // Clear hover states so hover styles/tooltips don't persist
         self.is_hovered = false;
         self.is_mouse_over_element = false;
-        // Treat the next synthetic hover as a no-op (avoids instant re-hover during layout)
-        self.last_event_is_synthetic_hover = true;
+        // Treat the next synthetic hover as a no-op (avoids instant re-hover during layout).
+        self.last_synthetic_hover_change_at = Some(Instant::now());
         // Cancel any pending hover timers
         self.hover_in_timer = None;
         self.hover_out_timer = None;
+    }
+
+    /// Whether a hover-state change caused by a synthetic MouseMoved event should be suppressed
+    /// because another synthetic-caused change on this element happened within
+    /// [`BACK_TO_BACK_SYNTHETIC_WINDOW`]. Guards against a feedback loop where handling a
+    /// synthetic hover change causes a relayout that replays another synthetic MouseMoved
+    /// within the same repaint, flipping the hover state right back -- without suppressing the
+    /// legitimate update a smooth-scroll (or any other content) animation needs on every one of
+    /// its repaint frames, even though each of those frames also carries a synthetic MouseMoved
+    /// (since the physical mouse hasn't moved but content has). A non-synthetic event clears
+    /// the recorded instant so a later synthetic change is never suppressed by an unrelated,
+    /// long-past one.
+    fn should_suppress_synthetic_hover_change(&mut self, is_synthetic: bool, now: Instant) -> bool {
+        if !is_synthetic {
+            self.last_synthetic_hover_change_at = None;
+            return false;
+        }
+        let suppress = self
+            .last_synthetic_hover_change_at
+            .is_some_and(|at| now.saturating_duration_since(at) < BACK_TO_BACK_SYNTHETIC_WINDOW);
+        self.last_synthetic_hover_change_at = Some(now);
+        suppress
     }
 
     fn set_hover_timer(&mut self, timer_type: HoverTimerType, hover_timer: HoverTimer) {
@@ -549,16 +591,13 @@ impl Hoverable {
         }
         self.state().is_hovered = is_hovered;
 
-        // We should only handle this event if not both the previous and current instance of the state change
-        // is triggered by a synthetic mouse event. This is to prevent infinite loops when a child element
-        // conditional on the state of the hoverable might in return trigger the state change of the hoverable.
-        //
-        // TODO: we should re-consider this approach. It can lead to missed `on_hover` dispatches.
-        let was_synthetic = mem::replace(
-            &mut self.state().last_event_is_synthetic_hover,
-            is_synthetic,
-        );
-        if was_synthetic && is_synthetic {
+        // We should only handle this event if it isn't part of a back-to-back synthetic-event
+        // cascade (see `should_suppress_synthetic_hover_change`); a genuinely separate later
+        // repaint frame -- e.g. one driven by a content animation -- is not suppressed.
+        if self
+            .state()
+            .should_suppress_synthetic_hover_change(is_synthetic, Instant::now())
+        {
             log::warn!(
                 "Not handling MouseMoved event in Hoverable due to back-to-back synthetic events."
             );
@@ -625,7 +664,8 @@ impl Element for Hoverable {
         }
 
         if !matches!(event.raw_event(), Event::MouseMoved { .. }) {
-            self.state().last_event_is_synthetic_hover = false;
+            self.state()
+                .should_suppress_synthetic_hover_change(false, Instant::now());
         }
 
         // If there's a mouse-down event outside of the element,
