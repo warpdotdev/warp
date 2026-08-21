@@ -173,6 +173,20 @@ pub struct ModelIconFlags {
     pub is_using_gemini_enterprise: bool,
 }
 
+/// Returns `true` when `id` identifies a Kimi (Moonshot AI) model.
+///
+/// The server's `LlmProvider` enum has no Kimi variant, so Kimi models are
+/// reported with `LLMProvider::Unknown` — there is no provider signal to
+/// switch on. Match the id instead, anchored on a bare `kimi` id or a
+/// `kimi-` prefix rather than a substring, so an unrelated model whose id
+/// happens to contain "kimi" elsewhere is not swept in.
+fn is_kimi_model_id(id: &str) -> bool {
+    id.eq_ignore_ascii_case("kimi")
+        || id
+            .get(..5)
+            .is_some_and(|prefix| prefix.eq_ignore_ascii_case("kimi-"))
+}
+
 /// The leading icon shown next to a model in the model picker and model menus.
 ///
 /// Auto models deliberately get the generic agent glyph rather than a host or
@@ -186,6 +200,8 @@ pub fn model_leading_icon(llm: &LLMInfo, flags: ModelIconFlags) -> Icon {
         Icon::Aws
     } else if flags.is_using_gemini_enterprise {
         Icon::GeminiEnterpriseAgentPlatform
+    } else if is_kimi_model_id(llm.id.as_str()) {
+        Icon::KimiLogo
     } else {
         llm.provider.icon().unwrap_or(Icon::Agent)
     }
