@@ -1,6 +1,9 @@
 use futures::future;
 use warp_cli::GlobalOptions;
-use warp_cli::integration::{CreateIntegrationArgs, IntegrationCommand, UpdateIntegrationArgs};
+use warp_cli::integration::{
+    CreateIntegrationArgs, IntegrationCommand, IntegrationTeamArgs, ListIntegrationArgs,
+    UpdateIntegrationArgs,
+};
 use warp_cli::provider::ProviderType;
 use warp_graphql::mutations::create_simple_integration::CreateSimpleIntegrationOutput;
 use warp_graphql::queries::get_oauth_connect_tx_status::OauthConnectTxStatus;
@@ -11,7 +14,10 @@ use warpui::{AppContext, ModelContext, SingletonEntity};
 use super::common::{EnvironmentChoice, ResolveConfigurationError};
 use super::integration_output;
 use super::oauth_flow::poll_oauth_until_terminal;
+use crate::server::ids::ServerId;
 use crate::server::server_api::ServerApiProvider;
+use crate::workspaces::team::Team;
+use crate::workspaces::user_workspaces::UserWorkspaces;
 
 pub fn run(
     ctx: &mut AppContext,
@@ -26,17 +32,73 @@ pub fn run(
         IntegrationCommand::Update(args) => {
             runner.update(ctx, |runner, ctx| runner.update(args, ctx));
         }
-        IntegrationCommand::List => {
-            runner.update(ctx, |runner, ctx| runner.list(global_options, ctx));
+        IntegrationCommand::List(args) => {
+            runner.update(ctx, |runner, ctx| runner.list(global_options, args, ctx));
         }
     }
     Ok(())
 }
 
+/// Resolves which of the caller's teams owns a Slack/Linear simple integration operation.
+/// Simple integrations are always team-owned:
+/// - No teams: the command is unavailable.
+/// - One team: used automatically, though an explicit `--team` must still name it.
+/// - Several teams: `--team <team-uid>` is required and must name a current membership.
+///
+/// The resolved UID is re-validated by the server, which remains responsible for authorization.
+fn resolve_integration_team_uid(
+    team_args: &IntegrationTeamArgs,
+    ctx: &AppContext,
+) -> anyhow::Result<ServerId> {
+    let teams = UserWorkspaces::as_ref(ctx)
+        .current_workspace()
+        .map(|workspace| workspace.teams.as_slice())
+        .unwrap_or_default();
+    select_integration_team(team_args.team.as_deref(), teams)
+}
+
+/// Pure team-selection logic behind [`resolve_integration_team_uid`], split out so it can be
+/// tested without constructing an `AppContext`.
+fn select_integration_team(team_arg: Option<&str>, teams: &[Team]) -> anyhow::Result<ServerId> {
+    if teams.is_empty() {
+        anyhow::bail!("Integrations require a team, and you are not currently a member of one.");
+    }
+
+    let selected = match team_arg {
+        Some(team_uid) => ServerId::try_from(team_uid)
+            .map_err(|_| anyhow::anyhow!("'{team_uid}' is not a valid team UID."))?,
+        None => match teams {
+            [team] => team.uid,
+            _ => anyhow::bail!(
+                "You belong to multiple teams; specify which one with --team <team-uid>."
+            ),
+        },
+    };
+
+    if teams.iter().any(|team| team.uid == selected) {
+        Ok(selected)
+    } else {
+        anyhow::bail!("You are not a member of team '{selected}'.");
+    }
+}
+
 struct IntegrationCommandRunner;
 
 impl IntegrationCommandRunner {
-    fn list(&self, global_options: GlobalOptions, ctx: &mut ModelContext<Self>) {
+    fn list(
+        &self,
+        global_options: GlobalOptions,
+        args: ListIntegrationArgs,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let team_uid = match resolve_integration_team_uid(&args.team, ctx) {
+            Ok(team_uid) => team_uid,
+            Err(err) => {
+                ctx.terminate_app(TerminationMode::ForceTerminate, Some(Err(err)));
+                return;
+            }
+        };
+
         // Hardcoded set of providers that this client knows how to render.
         let providers = vec![ProviderType::Linear, ProviderType::Slack];
         let provider_slugs: Vec<String> = providers.into_iter().map(|p| p.slug()).collect();
@@ -45,7 +107,7 @@ impl IntegrationCommandRunner {
 
         let list_future = async move {
             integrations_client
-                .list_simple_integrations(provider_slugs)
+                .list_simple_integrations(team_uid, provider_slugs)
                 .await
         };
 
@@ -73,6 +135,14 @@ impl IntegrationCommandRunner {
                 ctx.terminate_app(TerminationMode::ForceTerminate, Some(Err(err)));
                 return;
             }
+
+            let team_uid = match resolve_integration_team_uid(&args.team, ctx) {
+                Ok(team_uid) => team_uid,
+                Err(err) => {
+                    ctx.terminate_app(TerminationMode::ForceTerminate, Some(Err(err)));
+                    return;
+                }
+            };
 
             let loaded_file = match args.config_file.file.as_deref() {
                 Some(path) => match super::config_file::load_config_file(path) {
@@ -177,6 +247,7 @@ impl IntegrationCommandRunner {
 
             runner.start_create_or_update_flow(
                 ctx,
+                team_uid,
                 integration_type,
                 environment_uid,
                 base_prompt,
@@ -195,6 +266,7 @@ impl IntegrationCommandRunner {
     fn start_create_or_update_flow(
         &self,
         ctx: &mut ModelContext<Self>,
+        team_uid: ServerId,
         integration_type: String,
         environment_uid: Option<String>,
         base_prompt: Option<String>,
@@ -234,6 +306,7 @@ impl IntegrationCommandRunner {
         let create_future = async move {
             integrations_client
                 .create_or_update_simple_integration(
+                    team_uid,
                     future_integration_type,
                     future_is_update,
                     future_environment_uid,
@@ -290,6 +363,7 @@ impl IntegrationCommandRunner {
                                                 // This may happen multiple times if the user needs to authorize multiple services.
                                                 runner.start_create_or_update_flow(
                                                     ctx,
+                                                    team_uid,
                                                     next_integration_type,
                                                     next_environment_uid,
                                                     next_base_prompt,
@@ -386,6 +460,14 @@ impl IntegrationCommandRunner {
                 ctx.terminate_app(TerminationMode::ForceTerminate, Some(Err(err)));
                 return;
             }
+
+            let team_uid = match resolve_integration_team_uid(&args.team, ctx) {
+                Ok(team_uid) => team_uid,
+                Err(err) => {
+                    ctx.terminate_app(TerminationMode::ForceTerminate, Some(Err(err)));
+                    return;
+                }
+            };
 
             let loaded_file = match args.config_file.file.as_deref() {
                 Some(path) => match super::config_file::load_config_file(path) {
@@ -490,6 +572,7 @@ impl IntegrationCommandRunner {
                 // Explicitly requested to update without an environment.
                 runner.start_create_or_update_flow(
                     ctx,
+                    team_uid,
                     integration_type,
                     Some(String::new()),
                     base_prompt,
@@ -508,6 +591,7 @@ impl IntegrationCommandRunner {
 
             runner.start_create_or_update_flow(
                 ctx,
+                team_uid,
                 integration_type,
                 environment_uid,
                 base_prompt,
@@ -527,3 +611,7 @@ impl warpui::Entity for IntegrationCommandRunner {
     type Event = ();
 }
 impl SingletonEntity for IntegrationCommandRunner {}
+
+#[cfg(test)]
+#[path = "integration_tests.rs"]
+mod tests;
