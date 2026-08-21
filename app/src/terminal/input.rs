@@ -1532,12 +1532,10 @@ fn should_show_completions_in_ai_input(buffer_text: &str) -> bool {
 /// completion.
 fn should_use_native_shell_completions(
     is_feature_enabled_or_forced: bool,
-    shell_supports_native_shell_completions: bool,
     buffer_text_is_multiline: bool,
     is_ai_input: bool,
 ) -> bool {
     is_feature_enabled_or_forced
-        && shell_supports_native_shell_completions
         // For now, don't use native shell completions for multi-line commands.
         && !buffer_text_is_multiline
         && !is_ai_input
@@ -1704,39 +1702,24 @@ mod native_shell_completions_eligibility_tests {
 
     #[test]
     fn disabled_in_ai_input_mode_even_when_otherwise_eligible() {
-        // Every other condition says "use native shell completions" -- feature on, shell
-        // supports it, single-line buffer -- but AI input mode alone must still disable it.
-        assert!(!should_use_native_shell_completions(
-            true, true, false, true
-        ));
+        // Every other condition says "use native shell completions" -- feature on,
+        // single-line buffer -- but AI input mode alone must still disable it.
+        assert!(!should_use_native_shell_completions(true, false, true));
     }
 
     #[test]
     fn enabled_outside_ai_input_mode_when_otherwise_eligible() {
-        assert!(should_use_native_shell_completions(
-            true, true, false, false
-        ));
+        assert!(should_use_native_shell_completions(true, false, false));
     }
 
     #[test]
     fn disabled_when_feature_is_off_regardless_of_ai_mode() {
-        assert!(!should_use_native_shell_completions(
-            false, true, false, false
-        ));
-    }
-
-    #[test]
-    fn disabled_when_shell_does_not_support_it() {
-        assert!(!should_use_native_shell_completions(
-            true, false, false, false
-        ));
+        assert!(!should_use_native_shell_completions(false, false, false));
     }
 
     #[test]
     fn disabled_for_multiline_buffers() {
-        assert!(!should_use_native_shell_completions(
-            true, true, true, false
-        ));
+        assert!(!should_use_native_shell_completions(true, true, false));
     }
 
     #[test]
@@ -1745,8 +1728,7 @@ mod native_shell_completions_eligibility_tests {
         // respect, AI input mode must still resolve to the same fallback it always did for an
         // explicit Tab press -- file-path completions -- rather than losing its fallback because
         // native shell completions would otherwise take priority.
-        let use_native_shell_completions =
-            should_use_native_shell_completions(true, true, false, true);
+        let use_native_shell_completions = should_use_native_shell_completions(true, false, true);
         assert!(matches!(
             completions_fallback_strategy_for_trigger(
                 CompletionsTrigger::Keybinding,
@@ -1761,8 +1743,7 @@ mod native_shell_completions_eligibility_tests {
         // Contrast with the AI-mode case above: outside AI input mode, once native shell
         // completions is eligible, the file-path fallback is deliberately not used for an
         // explicit Tab press, since native shell completions themselves are the fallback there.
-        let use_native_shell_completions =
-            should_use_native_shell_completions(true, true, false, false);
+        let use_native_shell_completions = should_use_native_shell_completions(true, false, false);
         assert!(matches!(
             completions_fallback_strategy_for_trigger(
                 CompletionsTrigger::Keybinding,
@@ -12791,13 +12772,8 @@ impl Input {
 
         let native_shell_completions_feature_enabled =
             FeatureFlag::NativeShellCompletions.is_enabled() || force_native_shell_completions;
-        let shell_supports_native_shell_completions = completion_context
-            .session
-            .shell()
-            .supports_native_shell_completions();
         let use_native_shell_completions = should_use_native_shell_completions(
             native_shell_completions_feature_enabled,
-            shell_supports_native_shell_completions,
             buffer_text.contains('\n'),
             input_type.is_ai(),
         );
@@ -12814,7 +12790,6 @@ impl Input {
         if !use_native_shell_completions
             && input_type.is_ai()
             && native_shell_completions_feature_enabled
-            && shell_supports_native_shell_completions
             && !buffer_text.contains('\n')
         {
             log::debug!(
