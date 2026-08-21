@@ -7,7 +7,9 @@ use pathfinder_geometry::vector::vec2f;
 use warpui_core::Event;
 use warpui_core::event::{KeyEventDetails, ModifiersState};
 use warpui_core::keymap::Keystroke;
-use warpui_core::platform::keyboard::{KeyCode, PhysicalKey};
+use warpui_core::platform::keyboard::{
+    KeyCode, PhysicalKey, ctrl_chord_physical_letter, resolve_ctrl_chord_key_and_chars,
+};
 
 use super::keycode::{Keycode, scancode_to_physicalkey};
 use super::utils::unicode_char_to_key;
@@ -61,6 +63,9 @@ pub unsafe fn from_native(
         match event_type {
             NSEventType::KeyDown => {
                 let native_modifiers = native_event.modifierFlags();
+                let ctrl_held = native_modifiers.contains(NSEventModifierFlags::Control);
+                let alt_held = native_modifiers.contains(NSEventModifierFlags::Option);
+                let cmd_held = native_modifiers.contains(NSEventModifierFlags::Command);
 
                 // Get the base character for this key without any modifiers (including Shift)
                 // using UCKeyTranslate via the platform's keyCodeToChar function.
@@ -73,28 +78,35 @@ pub unsafe fn from_native(
                     right_alt: (native_modifiers.bits() & RIGHT_ALT_MASK) != 0,
                     key_without_modifiers,
                 };
-                let unmodified_chars = native_event.charactersIgnoringModifiers()?;
-                let unmodified_chars = CStr::from_ptr(unmodified_chars.UTF8String())
-                    .to_str()
-                    .ok()?;
 
-                let unmodified_chars = if let Some(first_char) = unmodified_chars.chars().next() {
+                // A Ctrl-modified key press is never IME composition input, so recover the
+                // physical key (layout-independent) as a fallback for when the active input
+                // source doesn't produce a usable ASCII character for it -- e.g. an empty
+                // string, or a Hangul jamo while a Korean input source is active. Mirrors the
+                // Windows physical-key chord fallback for non-Latin layouts (see
+                // `ctrl_chord_physical_letter`, and `us_qwerty_fallback_for_chord` in
+                // `windowing/winit/event_loop/key_events.rs`, GH#9036). See GH#15196 /
+                // CSAT-10277.
+                let ctrl_physical_letter = native_key_code_to_key_code(native_event.keyCode())
+                    .and_then(ctrl_chord_physical_letter);
+
+                let unmodified_chars = match native_event.charactersIgnoringModifiers() {
+                    Some(unmodified_chars) => Some(
+                        CStr::from_ptr(unmodified_chars.UTF8String())
+                            .to_str()
+                            .ok()?
+                            .to_owned(),
+                    ),
+                    None => None,
+                };
+                let ime_first_char = unmodified_chars.as_deref().and_then(|s| s.chars().next());
+                let ime_key_candidate = ime_first_char.map(|first_char| {
+                    let unmodified_chars = unmodified_chars.as_deref().unwrap();
                     unicode_char_to_key(first_char as u16).unwrap_or(unmodified_chars)
-                } else {
-                    return None;
-                };
-
-                let keystroke = Keystroke {
-                    ctrl: native_modifiers.contains(NSEventModifierFlags::Control),
-                    alt: native_modifiers.contains(NSEventModifierFlags::Option),
-                    shift: native_modifiers.contains(NSEventModifierFlags::Shift),
-                    cmd: native_modifiers.contains(NSEventModifierFlags::Command),
-                    meta: false, /* handled separately */
-                    key: unmodified_chars.into(),
-                };
+                });
 
                 let characters = native_event.characters();
-                let chars = match characters.as_deref() {
+                let os_chars = match characters.as_deref() {
                     None => String::new(),
                     Some(characters) => {
                         let chars = characters.UTF8String();
@@ -111,9 +123,35 @@ pub unsafe fn from_native(
                     }
                 };
 
+                // The full key/chars resolution -- including the Ctrl-modified physical-key
+                // fallback and its modifier guards -- lives in `warpui_core::platform::keyboard`
+                // so it can be unit tested on any platform; this AppKit-only conversion just
+                // extracts the raw inputs. See GH#15196 / CSAT-10277.
+                let resolution = resolve_ctrl_chord_key_and_chars(
+                    ctrl_held,
+                    alt_held,
+                    cmd_held,
+                    ime_first_char,
+                    ime_key_candidate,
+                    ctrl_physical_letter,
+                    &os_chars,
+                );
+                let Some(key) = resolution.key else {
+                    return None;
+                };
+
+                let keystroke = Keystroke {
+                    ctrl: ctrl_held,
+                    alt: alt_held,
+                    shift: native_modifiers.contains(NSEventModifierFlags::Shift),
+                    cmd: cmd_held,
+                    meta: false, /* handled separately */
+                    key,
+                };
+
                 Some(Event::KeyDown {
                     keystroke,
-                    chars,
+                    chars: resolution.chars,
                     details,
                     is_composing: false,
                 })
