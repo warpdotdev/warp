@@ -51,6 +51,7 @@ use crate::ai::agent_sdk::driver::harness::{
     HarnessCleanupDisposition, HarnessKind, HarnessRunner, ResumePayload, SavePoint,
     ThirdPartyHarness, ThirdPartyHarnessTelemetryEvent, harness_model_env_vars, task_env_vars,
 };
+use crate::ai::agent_sdk::retry::{is_transient_graphql_or_http_error, with_bounded_retry_using};
 use crate::ai::agent_sdk::setup_observability::{SetupClientEventReporter, SetupStep};
 use crate::ai::ambient_agents::task::HarnessModelConfig;
 use crate::ai::ambient_agents::{
@@ -167,6 +168,20 @@ where
 
 const MCP_SERVER_STARTUP_TIMEOUT: Duration = Duration::from_secs(20);
 const HARNESS_SAVE_INTERVAL: Duration = Duration::from_secs(30);
+/// Attempt budget for resolving one managed MCP server's client config
+/// (`ManagedMcpClient::create_managed_mcp_client_config`) in
+/// [`AgentDriver::resolve_mcp_specs_with_local_uuids`].
+///
+/// A transient warp-server 5xx during this call otherwise fails the whole run (see
+/// `AgentDriverError::ManagedMcpResolutionFailed`), so this needs a larger budget than the
+/// shared [`crate::server::retry_strategies::MAX_ATTEMPTS`] default (~2s), which is too short
+/// to ride out even a brief backend blip. Against the shared exponential backoff schedule
+/// (500ms, 1s, 2s, 4s, 8s), 6 attempts sum to ~15.5s nominal (~20s with jitter): more than
+/// double the shortest fully-failed window observed in a real incident (a 503 storm from
+/// dying Cloud Run instances, ~6s with zero successful responses inside a ~30s degraded-
+/// capacity period), while staying well under the ~35s a run had before it was marked
+/// FAILED in that incident.
+const MANAGED_MCP_RESOLVE_MAX_ATTEMPTS: usize = 6;
 /// Timeout for individual harness auth preflight commands.
 const PREFLIGHT_CHECK_TIMEOUT: Duration = Duration::from_secs(30);
 pub(crate) const WARP_DRIVE_SYNC_TIMEOUT: Duration = Duration::from_secs(60);
@@ -1467,13 +1482,19 @@ impl AgentDriver {
                     resolved.local_uuids.push(*uuid);
                 }
                 MCPSpec::Uuid(uuid) => {
-                    let client_config = managed_mcp_client
-                        .create_managed_mcp_client_config(uuid.to_string())
-                        .await
-                        .map_err(|err| AgentDriverError::ManagedMcpResolutionFailed {
+                    let client_config = with_bounded_retry_using(
+                        &format!("resolve managed MCP server '{uuid}'"),
+                        MANAGED_MCP_RESOLVE_MAX_ATTEMPTS,
+                        is_transient_graphql_or_http_error,
+                        || managed_mcp_client.create_managed_mcp_client_config(uuid.to_string()),
+                    )
+                    .await
+                    .map_err(|err| {
+                        AgentDriverError::ManagedMcpResolutionFailed {
                             uid: *uuid,
                             message: format!("{err:#}"),
-                        })?;
+                        }
+                    })?;
                     let installations = Self::installations_from_managed_client_config_json(
                         &client_config.mcp_config_json,
                         task_id,
@@ -1500,10 +1521,17 @@ impl AgentDriver {
                     // the server owns the set of recognized ids, and the
                     // backing integration may be disconnected or the feature
                     // disabled between dispatch and run setup — so resolution
-                    // failures skip the server instead of failing the run.
-                    let client_config = match managed_mcp_client
-                        .create_managed_mcp_client_config(id.clone())
-                        .await
+                    // failures skip the server instead of failing the run. A
+                    // transient failure still gets the same retry budget as the
+                    // UUID case first, so a brief backend blip doesn't silently
+                    // drop the server from an otherwise-healthy run.
+                    let client_config = match with_bounded_retry_using(
+                        &format!("resolve well-known MCP server '{id}'"),
+                        MANAGED_MCP_RESOLVE_MAX_ATTEMPTS,
+                        is_transient_graphql_or_http_error,
+                        || managed_mcp_client.create_managed_mcp_client_config(id.clone()),
+                    )
+                    .await
                     {
                         Ok(client_config) => client_config,
                         Err(err) => {
