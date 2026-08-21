@@ -286,6 +286,97 @@ fn models_without_a_host_fall_back_to_the_provider_icon() {
     );
 }
 
+#[test]
+fn kimi_models_show_the_kimi_logo() {
+    // Kimi models arrive with `LLMProvider::Unknown` (the server has no
+    // dedicated provider for them), so they are matched by id instead.
+    for id in [
+        "kimi-k26-fireworks",
+        "kimi-k27-code-fireworks",
+        "kimi-k3-fireworks",
+        // Future kimi ids should also match, since the check isn't an
+        // allowlist of known ids.
+        "kimi-k4-fireworks",
+    ] {
+        let llm = server_llm(id, None);
+        assert_eq!(
+            model_leading_icon(&llm, ModelIconFlags::default()),
+            Icon::KimiLogo
+        );
+    }
+}
+
+#[test]
+fn kimi_matching_ignores_base_model_name_to_avoid_custom_endpoint_false_positives() {
+    // `base_model_name` is a user-controlled alias/display label for custom
+    // endpoint models (see `custom_llm_info_from`), while `id` is an opaque
+    // config-key UUID. A user naming their own custom endpoint model "Kimi ..."
+    // must not get branded with the Moonshot logo — only the canonical `id`
+    // is trusted.
+    let mut llm = server_llm("52941f14-1b74-4afa-8f02-cdd5243b5aa9", None);
+    llm.base_model_name = "Kimi K3 (my custom endpoint)".to_string();
+    assert_eq!(
+        model_leading_icon(&llm, ModelIconFlags::default()),
+        Icon::Agent
+    );
+}
+
+#[test]
+fn non_kimi_models_do_not_get_the_kimi_logo() {
+    let llm = server_llm("gpt-test", None);
+    assert_eq!(
+        model_leading_icon(&llm, ModelIconFlags::default()),
+        Icon::Agent
+    );
+}
+
+#[test]
+fn kimi_models_defer_to_host_and_auto_and_custom_router_icons() {
+    // A kimi id shouldn't override the earlier-checked branches.
+    let llm = server_llm("kimi-k3-fireworks", None);
+
+    assert_eq!(
+        model_leading_icon(
+            &llm,
+            ModelIconFlags {
+                is_auto: true,
+                ..Default::default()
+            }
+        ),
+        Icon::Agent
+    );
+    assert_eq!(
+        model_leading_icon(
+            &llm,
+            ModelIconFlags {
+                is_custom_router: true,
+                ..Default::default()
+            }
+        ),
+        Icon::Dataflow
+    );
+    assert_eq!(
+        model_leading_icon(
+            &llm,
+            ModelIconFlags {
+                is_using_bedrock: true,
+                ..Default::default()
+            }
+        ),
+        Icon::Aws
+    );
+    assert_eq!(
+        model_leading_icon(
+            &llm,
+            ModelIconFlags {
+                is_using_gemini_enterprise: true,
+                ..Default::default()
+            }
+        ),
+        Icon::GeminiEnterpriseAgentPlatform
+    );
+}
+
 // -- build_custom_llm_infos / display label tests --
 
 fn endpoint(

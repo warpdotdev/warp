@@ -3,10 +3,9 @@
 use ai::LLMId;
 use onboarding::slides::OnboardingModelInfo;
 use onboarding::{CreditPackOption, OnboardingAuthState};
-use warp_core::ui::icons::Icon;
 use warpui::{AppContext, SingletonEntity};
 
-use super::llms::{LLMInfo, LLMPreferences};
+use super::llms::{LLMInfo, LLMPreferences, ModelIconFlags, model_leading_icon};
 use crate::auth::AuthStateProvider;
 use crate::pricing::{PricingInfoModel, onboarding_credit_pack_options};
 use crate::workspaces::user_workspaces::UserWorkspaces;
@@ -16,7 +15,7 @@ impl From<&LLMInfo> for OnboardingModelInfo {
         Self {
             id: llm.id.clone(),
             title: llm.display_name.clone(),
-            icon: llm.provider.icon().unwrap_or(Icon::Agent),
+            icon: model_leading_icon(llm, ModelIconFlags::default()),
             is_default: false,
         }
     }
@@ -76,3 +75,7 @@ pub fn onboarding_pricing_promotion_message(ctx: &AppContext) -> Option<String> 
         .promotion_message()
         .map(str::to_owned)
 }
+
+#[cfg(test)]
+#[path = "onboarding_tests.rs"]
+mod tests;
