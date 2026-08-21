@@ -1310,7 +1310,7 @@ fn test_codebase_context_enabled_when_all_teams_enable_it() {
         app.read(|ctx| {
             let user_workspaces = UserWorkspaces::as_ref(ctx);
             assert_eq!(
-                user_workspaces.codebase_context_admin_setting(),
+                user_workspaces.teams_allow_codebase_context(),
                 AdminEnablementSetting::Enable
             );
             assert!(user_workspaces.is_codebase_context_enabled(ctx));
@@ -1323,6 +1323,7 @@ fn test_codebase_context_disabled_when_any_team_disables_it() {
     let (mut team_a, mut team_b) = two_teams();
     team_a.settings.codebase_context.value = AdminEnablementSetting::Enable;
     team_b.settings.codebase_context.value = AdminEnablementSetting::Disable;
+    let disabled_team_uid = team_b.uid;
     let mut workspace = workspace_for_test(&team_a);
     workspace.teams.push(team_b);
 
@@ -1339,8 +1340,14 @@ fn test_codebase_context_disabled_when_any_team_disables_it() {
         app.read(|ctx| {
             let user_workspaces = UserWorkspaces::as_ref(ctx);
             assert_eq!(
-                user_workspaces.codebase_context_admin_setting(),
+                user_workspaces.teams_allow_codebase_context(),
                 AdminEnablementSetting::Disable
+            );
+            assert_eq!(
+                user_workspaces
+                    .team_disabling_codebase_context()
+                    .map(|team| team.uid),
+                Some(disabled_team_uid)
             );
             assert!(!user_workspaces.is_codebase_context_enabled(ctx));
         });
@@ -1368,7 +1375,7 @@ fn test_codebase_context_respects_user_setting_when_any_team_does() {
         app.read(|ctx| {
             let user_workspaces = UserWorkspaces::as_ref(ctx);
             assert_eq!(
-                user_workspaces.codebase_context_admin_setting(),
+                user_workspaces.teams_allow_codebase_context(),
                 AdminEnablementSetting::RespectUserSetting
             );
             assert!(user_workspaces.is_codebase_context_enabled(ctx));
@@ -1396,7 +1403,7 @@ fn test_codebase_context_uses_workspace_setting_without_teams() {
         app.read(|ctx| {
             let user_workspaces = UserWorkspaces::as_ref(ctx);
             assert_eq!(
-                user_workspaces.codebase_context_admin_setting(),
+                user_workspaces.teams_allow_codebase_context(),
                 AdminEnablementSetting::Disable
             );
             assert!(!user_workspaces.is_codebase_context_enabled(ctx));

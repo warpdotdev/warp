@@ -1905,7 +1905,7 @@ impl UserWorkspaces {
     /// Returns whether codebase context is enabled across all of the user's teams.
     pub fn is_codebase_context_enabled(&self, app: &AppContext) -> bool {
         let ai_globally_enabled = AISettings::as_ref(app).is_any_ai_enabled(app);
-        match self.codebase_context_admin_setting() {
+        match self.teams_allow_codebase_context() {
             AdminEnablementSetting::Enable => ai_globally_enabled,
             AdminEnablementSetting::Disable => false,
             AdminEnablementSetting::RespectUserSetting => {
@@ -1929,7 +1929,7 @@ impl UserWorkspaces {
             .unwrap_or_default()
     }
 
-    pub fn codebase_context_admin_setting(&self) -> AdminEnablementSetting {
+    pub fn teams_allow_codebase_context(&self) -> AdminEnablementSetting {
         let mut team_settings = self
             .workspaces
             .iter()
@@ -1959,6 +1959,13 @@ impl UserWorkspaces {
         } else {
             AdminEnablementSetting::Enable
         }
+    }
+
+    pub fn team_disabling_codebase_context(&self) -> Option<&Team> {
+        self.workspaces
+            .iter()
+            .flat_map(|workspace| workspace.teams.iter())
+            .find(|team| team.settings.codebase_context.value == AdminEnablementSetting::Disable)
     }
 
     /// Updates whether or not session sharing is enabled based on the current team's tier policy.

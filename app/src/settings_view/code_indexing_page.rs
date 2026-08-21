@@ -62,7 +62,7 @@ use crate::view_components::DismissibleToast;
 use crate::view_components::action_button::{ActionButton, SecondaryTheme};
 use crate::workspace::ToastStack;
 use crate::workspaces::update_manager::TeamUpdateManager;
-use crate::workspaces::user_workspaces::{UserWorkspaces, UserWorkspacesEvent};
+use crate::workspaces::user_workspaces::UserWorkspaces;
 use crate::workspaces::workspace::AdminEnablementSetting;
 use crate::{TelemetryEvent, send_telemetry_from_ctx};
 
@@ -95,6 +95,31 @@ fn remote_codebase_index_limit_reached(status: &RemoteCodebaseIndexStatus) -> bo
         .failure_message
         .as_deref()
         .is_some_and(|message| message.contains(REMOTE_CODEBASE_INDEX_LIMIT_REACHED_FAILURE))
+}
+fn codebase_indexing_tooltip_text(global_ai_enabled: bool, app: &AppContext) -> Option<String> {
+    let user_workspaces = UserWorkspaces::as_ref(app);
+    match user_workspaces.teams_allow_codebase_context() {
+        AdminEnablementSetting::Enable => {
+            Some(INDEXING_WORKSPACE_ENABLED_ADMIN_TEXT.to_string())
+        }
+        AdminEnablementSetting::Disable => Some(
+            user_workspaces
+                .team_disabling_codebase_context()
+                .map_or_else(
+                    || INDEXING_DISABLED_ADMIN_TEXT.to_string(),
+                    |team| {
+                        format!(
+                            "{} has disabled codebase indexing, so it is unavailable for all teams.",
+                            team.name
+                        )
+                    },
+                ),
+        ),
+        AdminEnablementSetting::RespectUserSetting if !global_ai_enabled => {
+            Some(INDEXING_DISABLED_GLOBAL_AI_TEXT.to_string())
+        }
+        AdminEnablementSetting::RespectUserSetting => None,
+    }
 }
 
 #[cfg(all(test, not(target_family = "wasm")))]
@@ -163,17 +188,6 @@ pub struct CodeIndexingPageView {
 
 impl CodeIndexingPageView {
     pub fn new(ctx: &mut ViewContext<CodeIndexingPageView>) -> Self {
-        ctx.subscribe_to_model(&UserWorkspaces::handle(ctx), |_, _, event, ctx| {
-            if matches!(
-                event,
-                UserWorkspacesEvent::TeamsChanged
-                    | UserWorkspacesEvent::CurrentWorkspaceChanged
-                    | UserWorkspacesEvent::CodebaseContextEnablementChanged
-            ) {
-                ctx.notify();
-            }
-        });
-
         let index_manager = CodebaseIndexManager::handle(ctx);
         let codebase_count = index_manager
             .as_ref(ctx)
@@ -365,14 +379,6 @@ impl CodeIndexingPageView {
             move |result, ctx| match result {
                 Ok(paths) => {
                     if let Some(directory_path) = paths.first() {
-                        if !UserWorkspaces::as_ref(ctx).is_codebase_context_enabled(ctx) {
-                            log::warn!(
-                                "Ignoring manual add-directory request: codebase indexing is \
-                                 disabled"
-                            );
-                            return;
-                        }
-
                         let path = PathBuf::from(directory_path);
 
                         CodebaseIndexManager::handle(ctx).update(ctx, |manager, ctx| {
@@ -392,10 +398,6 @@ impl CodeIndexingPageView {
             },
             file_picker_config,
         );
-    }
-
-    fn code_indexing_action_allowed(ctx: &ViewContext<Self>) -> bool {
-        UserWorkspaces::as_ref(ctx).is_codebase_context_enabled(ctx)
     }
 }
 
@@ -469,7 +471,7 @@ impl TypedActionView for CodeIndexingPageView {
         match action {
             CodeIndexingPageAction::ToggleCodebaseContext => {
                 // If the organization has an explicit setting (on or off), ignore user toggles.
-                let setting = UserWorkspaces::as_ref(ctx).codebase_context_admin_setting();
+                let setting = UserWorkspaces::as_ref(ctx).teams_allow_codebase_context();
                 match setting {
                     AdminEnablementSetting::Enable | AdminEnablementSetting::Disable => {
                         return;
@@ -498,11 +500,6 @@ impl TypedActionView for CodeIndexingPageView {
                 ctx.notify();
             }
             CodeIndexingPageAction::ToggleAutoIndexing => {
-                if !Self::code_indexing_action_allowed(ctx) {
-                    log::warn!("Ignoring auto-indexing toggle: codebase indexing is disabled");
-                    return;
-                }
-
                 CodeSettings::handle(ctx).update(ctx, |settings, ctx| {
                     match settings.auto_indexing_enabled.toggle_and_save_value(ctx) {
                         Ok(new_value) => {
@@ -522,51 +519,29 @@ impl TypedActionView for CodeIndexingPageView {
                 ctx.notify();
             }
             CodeIndexingPageAction::ManualResync(repo_path) => {
-                if !Self::code_indexing_action_allowed(ctx) {
-                    log::warn!("Ignoring manual resync request: codebase indexing is disabled");
-                    return;
-                }
                 CodebaseIndexManager::handle(ctx).update(ctx, |manager, ctx| {
                     manager.try_manual_resync_codebase(repo_path, ctx);
                 });
             }
             CodeIndexingPageAction::DeleteIndex(repo_path) => {
-                if !Self::code_indexing_action_allowed(ctx) {
-                    log::warn!("Ignoring delete-index request: codebase indexing is disabled");
-                    return;
-                }
                 CodebaseIndexManager::handle(ctx).update(ctx, |manager, ctx| {
                     manager.drop_index(repo_path.clone(), ctx);
                 });
             }
             #[cfg(not(target_family = "wasm"))]
             CodeIndexingPageAction::RequestRemoteIndex(remote_path) => {
-                if !Self::code_indexing_action_allowed(ctx) {
-                    log::warn!("Ignoring remote index request: codebase indexing is disabled");
-                    return;
-                }
                 RemoteCodebaseIndexModel::handle(ctx).update(ctx, |model, ctx| {
                     model.request_index(remote_path.clone(), ctx);
                 });
             }
             #[cfg(not(target_family = "wasm"))]
             CodeIndexingPageAction::ManualResyncRemote(remote_path) => {
-                if !Self::code_indexing_action_allowed(ctx) {
-                    log::warn!("Ignoring remote resync request: codebase indexing is disabled");
-                    return;
-                }
                 RemoteCodebaseIndexModel::handle(ctx).update(ctx, |model, ctx| {
                     model.resync_index(remote_path.clone(), ctx);
                 });
             }
             #[cfg(not(target_family = "wasm"))]
             CodeIndexingPageAction::DeleteRemoteIndex(remote_path) => {
-                if !Self::code_indexing_action_allowed(ctx) {
-                    log::warn!(
-                        "Ignoring remote delete-index request: codebase indexing is disabled"
-                    );
-                    return;
-                }
                 RemoteCodebaseIndexModel::handle(ctx).update(ctx, |model, ctx| {
                     model.drop_index(remote_path.clone(), ctx);
                 });
@@ -810,7 +785,6 @@ impl SettingsWidget for CodePageWidget {
         content.add_child(self.render_initialized_folders(
             mouse_states,
             &view.suggested_server_statuses,
-            codebase_context_enabled,
             appearance,
             app,
         ));
@@ -985,7 +959,6 @@ impl CodePageWidget {
     ) -> Box<dyn Element> {
         let ui_builder = appearance.ui_builder();
         let theme = appearance.theme();
-        let admin_setting = UserWorkspaces::as_ref(app).codebase_context_admin_setting();
 
         let label = ui_builder
             .span(CODEBASE_INDEXING_LABEL)
@@ -1002,19 +975,12 @@ impl CodePageWidget {
             .switch(self.switch_state.clone())
             .check(UserWorkspaces::as_ref(app).is_codebase_context_enabled(app));
 
-        let disabled_tooltip_text = match admin_setting {
-            AdminEnablementSetting::Enable => Some(INDEXING_WORKSPACE_ENABLED_ADMIN_TEXT),
-            AdminEnablementSetting::Disable => Some(INDEXING_DISABLED_ADMIN_TEXT),
-            AdminEnablementSetting::RespectUserSetting if !global_ai_enabled => {
-                Some(INDEXING_DISABLED_GLOBAL_AI_TEXT)
-            }
-            AdminEnablementSetting::RespectUserSetting => None,
-        };
+        let disabled_tooltip_text = codebase_indexing_tooltip_text(global_ai_enabled, app);
 
         let toggle_element = if let Some(tooltip_text) = disabled_tooltip_text {
             switch
                 .with_tooltip(TooltipConfig {
-                    text: tooltip_text.to_string(),
+                    text: tooltip_text,
                     styles: ui_builder.default_tool_tip_styles(),
                 })
                 .disable()
@@ -1047,12 +1013,10 @@ impl CodePageWidget {
     }
 
     /// Renders the "Initialized / indexed folders" section.
-    #[allow(clippy::too_many_arguments)]
     fn render_initialized_folders(
         &self,
         mouse_states: InitializedFoldersMouseStates,
         suggested_server_statuses: &HashMap<(PathBuf, LSPServerType), LspRepoStatus>,
-        indexing_available: bool,
         appearance: &Appearance,
         app: &AppContext,
     ) -> Box<dyn Element> {
@@ -1072,43 +1036,42 @@ impl CodePageWidget {
 
         let mut content = Flex::column();
 
-        // Section header
-        let mut header_row = Flex::row()
-            .with_main_axis_size(MainAxisSize::Max)
-            .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
-            .with_cross_axis_alignment(CrossAxisAlignment::Center);
-        header_row.add_child(
-            ui_builder
-                .span("Initialized / indexed folders")
-                .with_style(UiComponentStyles {
-                    font_size: Some(16.0),
-                    font_weight: Some(Weight::Semibold),
-                    font_color: Some(theme.active_ui_text_color().into()),
-                    ..Default::default()
-                })
-                .build()
-                .finish(),
-        );
-        if indexing_available {
-            header_row.add_child(ChildView::new(&self.manual_add_directory_button).finish());
-        }
+        // Section header with "Index folder" button
         content.add_child(
-            Container::new(header_row.finish())
-                .with_margin_top(8.)
-                .with_margin_bottom(12.)
-                .finish(),
+            Container::new(
+                Flex::row()
+                    .with_main_axis_size(MainAxisSize::Max)
+                    .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
+                    .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                    .with_child(
+                        ui_builder
+                            .span("Initialized / indexed folders")
+                            .with_style(UiComponentStyles {
+                                font_size: Some(16.0),
+                                font_weight: Some(Weight::Semibold),
+                                font_color: Some(theme.active_ui_text_color().into()),
+                                ..Default::default()
+                            })
+                            .build()
+                            .finish(),
+                    )
+                    .with_child(ChildView::new(&self.manual_add_directory_button).finish())
+                    .finish(),
+            )
+            .with_margin_top(8.)
+            .with_margin_bottom(12.)
+            .finish(),
         );
 
         // Get workspaces from PersistedWorkspace
         let workspaces: Vec<WorkspaceMetadata> =
             PersistedWorkspace::as_ref(app).workspaces().collect();
         #[cfg(not(target_family = "wasm"))]
-        let remote_entries =
-            if indexing_available && FeatureFlag::RemoteCodebaseIndexing.is_enabled() {
-                RemoteCodebaseIndexModel::as_ref(app).entries_for_settings()
-            } else {
-                Vec::new()
-            };
+        let remote_entries = if FeatureFlag::RemoteCodebaseIndexing.is_enabled() {
+            RemoteCodebaseIndexModel::as_ref(app).entries_for_settings()
+        } else {
+            Vec::new()
+        };
 
         let codebase_manager = CodebaseIndexManager::as_ref(app);
         let lsp_manager = LspManagerModel::as_ref(app);
@@ -1120,10 +1083,9 @@ impl CodePageWidget {
         for (workspace_idx, workspace) in workspaces.iter().enumerate() {
             let workspace_path = &workspace.path;
 
-            // Get codebase index status if it exists and indexing is available.
-            let index_status = indexing_available
-                .then(|| codebase_manager.get_codebase_index_status_for_path(workspace_path, app))
-                .flatten();
+            // Get codebase index status if it exists
+            let index_status =
+                codebase_manager.get_codebase_index_status_for_path(workspace_path, app);
 
             // Get all LSP servers (enabled + disabled + suggested) for this workspace
             let all_servers: Vec<(LSPServerType, EnablementState)> = persisted_workspace
@@ -1178,7 +1140,6 @@ impl CodePageWidget {
                 lsp_mouse_states,
                 open_rules_mouse,
                 suggested_server_statuses,
-                indexing_available,
                 appearance,
                 app,
             ));
@@ -1220,9 +1181,7 @@ impl CodePageWidget {
         content.finish()
     }
 
-    /// Renders a single workspace row with its indexing status and LSP servers. The
-    /// indexing subsection is omitted entirely when `indexing_available` is `false`; see
-    /// [`Self::render_initialized_folders`].
+    /// Renders a single workspace row with its indexing status and LSP servers.
     #[allow(clippy::too_many_arguments)]
     fn render_workspace_row(
         &self,
@@ -1235,7 +1194,6 @@ impl CodePageWidget {
         lsp_mouse_states: Vec<LspServerRowMouseStates>,
         open_rules_mouse: MouseStateHandle,
         suggested_server_statuses: &HashMap<(PathBuf, LSPServerType), LspRepoStatus>,
-        indexing_available: bool,
         appearance: &Appearance,
         app: &AppContext,
     ) -> Box<dyn Element> {
@@ -1308,15 +1266,14 @@ impl CodePageWidget {
             appearance,
         ));
 
-        if indexing_available {
-            workspace_content.add_child(self.render_indexing_subsection(
-                workspace_path,
-                index_status,
-                resync_mouse,
-                delete_mouse,
-                appearance,
-            ));
-        }
+        // Indexing section (always rendered per design)
+        workspace_content.add_child(self.render_indexing_subsection(
+            workspace_path,
+            index_status,
+            resync_mouse,
+            delete_mouse,
+            appearance,
+        ));
 
         // LSP Servers section (if any servers known)
         if !all_servers.is_empty() {
@@ -2215,30 +2172,20 @@ impl SettingsWidget for CodeIndexingPageWidget {
     ) -> Box<dyn Element> {
         let ui_builder = appearance.ui_builder();
         let global_ai_enabled = AISettings::as_ref(app).is_any_ai_enabled(app);
-        let user_workspaces = UserWorkspaces::as_ref(app);
-        let codebase_context_enabled = user_workspaces.is_codebase_context_enabled(app);
+        let codebase_context_enabled = UserWorkspaces::as_ref(app).is_codebase_context_enabled(app);
 
         let mut content = Flex::column();
 
         // Codebase indexing toggle using render_body_item for consistent styling
-        let admin_setting = user_workspaces.codebase_context_admin_setting();
         let switch = ui_builder
             .switch(self.inner.switch_state.clone())
             .check(codebase_context_enabled);
-
-        let disabled_tooltip_text = match admin_setting {
-            AdminEnablementSetting::Enable => Some(INDEXING_WORKSPACE_ENABLED_ADMIN_TEXT),
-            AdminEnablementSetting::Disable => Some(INDEXING_DISABLED_ADMIN_TEXT),
-            AdminEnablementSetting::RespectUserSetting if !global_ai_enabled => {
-                Some(INDEXING_DISABLED_GLOBAL_AI_TEXT)
-            }
-            AdminEnablementSetting::RespectUserSetting => None,
-        };
+        let disabled_tooltip_text = codebase_indexing_tooltip_text(global_ai_enabled, app);
 
         let toggle_element = if let Some(tooltip_text) = disabled_tooltip_text {
             switch
                 .with_tooltip(TooltipConfig {
-                    text: tooltip_text.to_string(),
+                    text: tooltip_text,
                     styles: ui_builder.default_tool_tip_styles(),
                 })
                 .disable()
@@ -2313,7 +2260,6 @@ impl SettingsWidget for CodeIndexingPageWidget {
         content.add_child(self.inner.render_initialized_folders(
             mouse_states,
             &view.suggested_server_statuses,
-            codebase_context_enabled,
             appearance,
             app,
         ));
