@@ -139,6 +139,43 @@ fn authenticated_graphql_options_include_configured_and_ambient_headers() {
 }
 
 #[test]
+fn authenticated_graphql_options_can_override_task_id_for_one_request() {
+    let client = client();
+    client.set_ambient_agent_task_id(Some("ambient-task".to_string()));
+
+    let task_scoped = block_on(client.graphql_request_options_with_ambient_policy(
+        None,
+        AmbientHeaderPolicy {
+            workload_token: HeaderOverride::Set("workload-token".to_string()),
+            ..AmbientHeaderPolicy::for_task("child-task")
+        },
+    ))
+    .unwrap();
+    let inherited = block_on(client.graphql_request_options_with_ambient_policy(
+        None,
+        AmbientHeaderPolicy {
+            workload_token: HeaderOverride::Set("workload-token".to_string()),
+            ..AmbientHeaderPolicy::inherit_all()
+        },
+    ))
+    .unwrap();
+
+    assert_eq!(
+        task_scoped
+            .headers
+            .get(CLOUD_AGENT_ID_HEADER)
+            .map(String::as_str),
+        Some("child-task")
+    );
+    assert_eq!(
+        inherited
+            .headers
+            .get(CLOUD_AGENT_ID_HEADER)
+            .map(String::as_str),
+        Some("ambient-task")
+    );
+}
+#[test]
 fn authenticated_graphql_configuration_cannot_override_base_client_owned_headers() {
     let (event_sender, _) = async_channel::unbounded();
     let mut headers = HashMap::new();

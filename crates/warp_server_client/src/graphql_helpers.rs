@@ -8,7 +8,7 @@ use warp_graphql::client::{GraphQLError, Operation};
 use warpui_core::r#async::BoxFuture;
 
 use crate::auth::AuthEvent;
-use crate::base_client::BaseClient;
+use crate::base_client::{AmbientHeaderPolicy, BaseClient};
 
 /// Sends a GraphQL operation through a base client supplied by the application.
 ///
@@ -22,9 +22,29 @@ pub fn send_graphql_request<'a, QF: 'a, O>(
 where
     O: Operation<QF> + Send + 'a,
 {
+    send_graphql_request_with_ambient_policy(
+        base_client,
+        operation,
+        timeout,
+        AmbientHeaderPolicy::inherit_all(),
+    )
+}
+
+/// Sends a GraphQL operation with request-local ambient agent headers.
+pub fn send_graphql_request_with_ambient_policy<'a, QF: 'a, O>(
+    base_client: &'a BaseClient,
+    operation: O,
+    timeout: Option<Duration>,
+    ambient_header_policy: AmbientHeaderPolicy,
+) -> BoxFuture<'a, Result<QF>>
+where
+    O: Operation<QF> + Send + 'a,
+{
     Box::pin(async move {
         let operation_name = operation.operation_name().map(Cow::into_owned);
-        let options = base_client.graphql_request_options(timeout).await?;
+        let options = base_client
+            .graphql_request_options_with_ambient_policy(timeout, ambient_header_policy)
+            .await?;
         let response = match operation
             .send_request(base_client.owned_http_client(), options)
             .await
