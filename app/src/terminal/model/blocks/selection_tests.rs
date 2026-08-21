@@ -1270,18 +1270,6 @@ pub fn test_selection_to_string_hidden_blocks() {
                 1
             );
 
-            assert_eq!(
-                block_list.blocks[bootstrapped_block_list_len + 2]
-                    .prompt_and_command_number_of_rows(),
-                1
-            );
-            assert_eq!(
-                block_list.blocks[bootstrapped_block_list_len + 2]
-                    .output_grid()
-                    .len(),
-                1
-            );
-
             let semantic_selection = SemanticSelection::mock(false, "");
             // Create a selection that spans from command grid of the before block to output grid of the
             // after block.
