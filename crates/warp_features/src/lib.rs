@@ -458,9 +458,6 @@ pub enum FeatureFlag {
     BuildPlanAutoReloadBannerToggle,
     BuildPlanAutoReloadPostPurchaseModal,
 
-    /// Enables inline code review functionality
-    InlineCodeReview,
-
     /// Enables cloud environments management via CLI.
     CloudEnvironments,
 
