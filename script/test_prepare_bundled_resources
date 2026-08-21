@@ -42,3 +42,14 @@ if NO_LICENSES=1 \
   echo "Expected conflicting schema inputs to fail." >&2
   exit 1
 fi
+
+# Local TUI runs (script/run-tui) skip schema generation entirely, since the TUI
+# binaries don't implement dump-settings-schema.
+SKIPPED_DESTINATION="$TEMP_DIR/skipped-schema"
+NO_LICENSES=1 \
+  SKIP_SETTINGS_SCHEMA=1 \
+  "$WORKSPACE_ROOT/script/prepare_bundled_resources" "$SKIPPED_DESTINATION" dev
+if [ -e "$SKIPPED_DESTINATION/settings_schema.json" ]; then
+  echo "Expected no settings schema to be written when SKIP_SETTINGS_SCHEMA=1." >&2
+  exit 1
+fi

@@ -110,17 +110,17 @@ if [ -n "${TARGET_TRIPLE}" ]; then
 fi
 BUILD_DIR="${BUILD_DIR}/${PROFILE_DIR}"
 
-# Stage bundled skills and the settings schema next to the binary so the
-# standalone TUI can resolve them at runtime. License generation remains skipped
-# for local runs. Reuse the selected Cargo profile for schema generation so its
-# dependencies do not need to be rebuilt in a separate profile.
+# Stage bundled skills next to the binary so the standalone TUI can resolve them at runtime.
+# License generation remains skipped for local runs, and so is settings schema generation: the
+# TUI binaries don't implement `dump-settings-schema` (only the full app binary does), and
+# packaged TUI builds consume a schema generated from that binary during release instead.
 prepare_tui_bundled_resources() {
   echo "Preparing bundled resources at ${BUILD_DIR}/resources (channel: ${CHANNEL})..."
   if [ "${PROFILE_DIR}" = "debug" ]; then
-    NO_LICENSES=1 "${REPO_ROOT}/script/prepare_bundled_resources" \
+    NO_LICENSES=1 SKIP_SETTINGS_SCHEMA=1 "${REPO_ROOT}/script/prepare_bundled_resources" \
       "${BUILD_DIR}/resources" "${CHANNEL}"
   else
-    NO_LICENSES=1 "${REPO_ROOT}/script/prepare_bundled_resources" \
+    NO_LICENSES=1 SKIP_SETTINGS_SCHEMA=1 "${REPO_ROOT}/script/prepare_bundled_resources" \
       "${BUILD_DIR}/resources" "${CHANNEL}" "${PROFILE_DIR}"
   fi
 }
