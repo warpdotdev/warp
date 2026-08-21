@@ -844,7 +844,7 @@ $null = New-Module -Name Warp-Module -ScriptBlock {
         # user command.
         $script:generatorCommand = $true
 
-        Write-Host -NoNewline "$([char]0x1b)]9280;A;incrementally_typed$oscEnd"
+        Write-Host -NoNewline "$([char]0x1b)]9280;A$oscEnd"
         try {
             $line = Warp-Decode-HexString $hexEncodedLine
 

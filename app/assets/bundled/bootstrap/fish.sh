@@ -203,7 +203,7 @@ end
 
 # Computes native shell completions for the given (hex-encoded) command line and emits
 # them via the completions OSC protocol (see zsh_body.sh's compadd shim for the wire
-# format: "\e]9280;A;incrementally_typed\a", then "\e]9280;C;<match>\a" and optionally
+# format: "\e]9280;A\a", then "\e]9280;C;<match>\a" and optionally
 # "\e]9280;D?description;<description>\a" per match, then "\e]9280;B\a"). Runs
 # synchronously in the foreground -- like native completions in the other shells, there
 # is no async cancel-by-PID for this request.
@@ -217,7 +217,7 @@ function warp_run_generator_command_native_completions
         set line (warp_hex_decode_string $argv[1] 2>/dev/null)
     end
 
-    printf '\e]9280;A;incrementally_typed\a'
+    printf '\e]9280;A\a'
     # An empty or whitespace-only line (the input editor was empty, or held only spaces, when
     # the request fired) has no useful completions, and `complete -C "<whitespace>"` would
     # otherwise list every command on $PATH synchronously in the user's own shell -- trim

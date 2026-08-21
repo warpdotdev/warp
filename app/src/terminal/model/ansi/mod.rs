@@ -84,11 +84,6 @@ const WARP_COMPLETIONS_REPLACEMENT_SPAN_BYTE: &[u8] = b"S";
 /// For example: `D?description'{OSC_PAYLOAD}` updates the description of the last match.
 const WARP_COMPLETIONS_MATCH_UPDATE_METADATA: &[u8] = b"D?";
 
-/// The only completions wire format the client accepts, sent as the `9280;A` start OSC's format
-/// parameter. The shell streams typed results one at a time via the follow-up `9280;C`/`9280;D?`
-/// OSCs; any other value (or a missing one) is rejected.
-const INCREMENTALLY_TYPED_COMPLETIONS_FORMAT: &str = "incrementally_typed";
-
 const WARP_KV_START_BYTE: &[u8] = b"A";
 const WARP_KV_ENTRY_BYTE: &[u8] = b"B";
 const WARP_KV_END_BYTE: &[u8] = b"C";
@@ -1195,16 +1190,10 @@ where
             // Received a Warp OSC used for completions.
             WARP_COMPLETIONS_OSC_MARKER => match params.get(1) {
                 Some(&WARP_COMPLETIONS_START_BYTE) => {
-                    let format = params
-                        .get(2)
-                        .map(|osc_data| String::from_utf8_lossy(osc_data));
-                    if format.as_deref() != Some(INCREMENTALLY_TYPED_COMPLETIONS_FORMAT) {
-                        log::warn!(
-                            "Warp start completions OSC marker contained an unsupported or \
-                             missing format."
-                        );
-                        return;
-                    }
+                    // A bare `9280;A` -- the format parameter was removed once only one value was
+                    // ever legal. The client injects both the bootstrap that emits this and this
+                    // parser, so there is no version skew that would require tolerating an old
+                    // parameter.
                     self.handler.start_completions_output();
                 }
                 Some(&WARP_COMPLETIONS_END_BYTE) => {
