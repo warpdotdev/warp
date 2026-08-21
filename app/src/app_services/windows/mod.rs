@@ -31,6 +31,17 @@ pub enum StartupArgsForwardingError {
 }
 
 #[cfg(feature = "release_bundle")]
+impl StartupArgsForwardingError {
+    /// Returns `true` when the existing Warp instance's named pipe rejected this connection due
+    /// to a permission mismatch, most commonly because this process and the existing instance
+    /// are running at different Windows elevation levels (e.g. one was launched by the elevated
+    /// installer post-install step). See REV-1546.
+    pub fn is_named_pipe_permission_denied(&self) -> bool {
+        matches!(self, Self::IpcError(err) if err.is_permission_denied())
+    }
+}
+
+#[cfg(feature = "release_bundle")]
 pub fn pass_startup_args_to_existing_instance(
     args: &warp_cli::AppArgs,
 ) -> Result<(), StartupArgsForwardingError> {
