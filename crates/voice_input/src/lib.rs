@@ -5,7 +5,7 @@ use std::time::Duration;
 use anyhow::Context as _;
 use base64::Engine;
 use cpal::traits::{DeviceTrait, HostTrait};
-use cpal::{Sample, StreamConfig};
+use cpal::{FromSample, I24, Sample, SampleFormat, SizedSample, StreamConfig, U24};
 use futures::channel::oneshot;
 use parking_lot::Mutex;
 use rubato::{
@@ -181,6 +181,125 @@ pub enum StartListeningError {
     Other(#[from] anyhow::Error),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum InputSampleFormat {
+    I8,
+    I16,
+    I24,
+    I32,
+    I64,
+    U8,
+    U16,
+    U24,
+    U32,
+    U64,
+    F32,
+    F64,
+}
+
+impl TryFrom<SampleFormat> for InputSampleFormat {
+    type Error = StartListeningError;
+
+    fn try_from(sample_format: SampleFormat) -> Result<Self, Self::Error> {
+        match sample_format {
+            SampleFormat::I8 => Ok(Self::I8),
+            SampleFormat::I16 => Ok(Self::I16),
+            SampleFormat::I24 => Ok(Self::I24),
+            SampleFormat::I32 => Ok(Self::I32),
+            SampleFormat::I64 => Ok(Self::I64),
+            SampleFormat::U8 => Ok(Self::U8),
+            SampleFormat::U16 => Ok(Self::U16),
+            SampleFormat::U24 => Ok(Self::U24),
+            SampleFormat::U32 => Ok(Self::U32),
+            SampleFormat::U64 => Ok(Self::U64),
+            SampleFormat::F32 => Ok(Self::F32),
+            SampleFormat::F64 => Ok(Self::F64),
+            sample_format => Err(StartListeningError::Other(anyhow::anyhow!(
+                "Unsupported input sample format: {sample_format}"
+            ))),
+        }
+    }
+}
+
+fn normalize_audio_frame<T>(data: &[T], num_channels: u16) -> Result<Vec<f32>, anyhow::Error>
+where
+    T: Sample,
+    f32: FromSample<T>,
+{
+    if num_channels == 0 {
+        return Err(anyhow::anyhow!("Input stream reported zero channels"));
+    }
+
+    Ok(data
+        .chunks_exact(num_channels as usize)
+        .map(|frame| {
+            frame
+                .iter()
+                .map(|sample| sample.to_sample::<f32>())
+                .sum::<f32>()
+                / num_channels as f32
+        })
+        .collect())
+}
+
+fn send_audio_frame<T>(
+    data: &[T],
+    num_channels: u16,
+    audio_frame_tx: &async_channel::Sender<Vec<f32>>,
+) where
+    T: Sample,
+    f32: FromSample<T>,
+{
+    let mono_samples = match normalize_audio_frame(data, num_channels) {
+        Ok(samples) => samples,
+        Err(error) => {
+            report_error!(error.context("Failed to normalize voice input frame"));
+            return;
+        }
+    };
+
+    let is_empty = mono_samples.iter().all(|&sample| sample == 0.0);
+    log::debug!("Sending audio frame to resampling thread. is_empty: {is_empty}");
+
+    // This is blocking, but we aren't on the main thread.
+    let _ = warpui_core::r#async::block_on(audio_frame_tx.send(mono_samples));
+}
+
+fn build_input_stream<T>(
+    input_device: &cpal::Device,
+    stream_config: &StreamConfig,
+    num_channels: u16,
+    audio_frame_tx: async_channel::Sender<Vec<f32>>,
+) -> Result<cpal::Stream, StartListeningError>
+where
+    T: SizedSample,
+    f32: FromSample<T>,
+{
+    // Some audio backends (notably ALSA on Linux) fire this error callback repeatedly in a tight
+    // loop when the input device wedges. Reporting only the first error prevents flooding Sentry
+    // with millions of identical events.
+    let mut has_logged_stream_error = false;
+    input_device
+        .build_input_stream(
+            stream_config,
+            move |data: &[T], _: &cpal::InputCallbackInfo| {
+                send_audio_frame(data, num_channels, &audio_frame_tx);
+            },
+            move |err| {
+                if has_logged_stream_error {
+                    log::debug!("Error in voice input stream (suppressed repeat): {err}");
+                } else {
+                    has_logged_stream_error = true;
+                    report_error!(anyhow::Error::new(err).context("Error in voice input stream"));
+                }
+            },
+            Some(STREAM_TIMEOUT),
+        )
+        .map_err(|e| {
+            StartListeningError::Other(anyhow::anyhow!("Failed to build input stream: {e}"))
+        })
+}
+
 impl VoiceInput {
     pub fn new(_ctx: &mut ModelContext<Self>) -> Self {
         Self {
@@ -255,8 +374,14 @@ impl VoiceInput {
             cpal::SupportedBufferSize::Range { min, max } => DEFAULT_CHUNK_SIZE.clamp(*min, *max),
             cpal::SupportedBufferSize::Unknown => DEFAULT_CHUNK_SIZE,
         };
+        let sample_format = InputSampleFormat::try_from(config.sample_format())?;
         let sample_rate = config.sample_rate() as f64;
         let num_channels = config.channels();
+        if num_channels == 0 {
+            return Err(StartListeningError::Other(anyhow::anyhow!(
+                "Input stream reported zero channels"
+            )));
+        }
         let stream_config: StreamConfig = config.into();
 
         // Set the buffer size to a fixed size so it's easier to resample.
@@ -285,44 +410,80 @@ impl VoiceInput {
             StartListeningError::Other(anyhow::anyhow!("Resampler construction failed: {e}"))
         })?;
 
-        // Some audio backends (notably ALSA on Linux) fire this error callback
-        // repeatedly in a tight loop when the input device wedges - e.g.
-        // `alsa::poll()` returning POLLERR after a device disconnect. Logging at
-        // error level on every invocation floods Sentry with millions of
-        // identical events, so only report the first error per session at error
-        // level and downgrade the rest to debug.
-        let mut has_logged_stream_error = false;
-        let stream = input_device
-            .build_input_stream(
+        let stream = match sample_format {
+            InputSampleFormat::I8 => build_input_stream::<i8>(
+                &input_device,
                 &stream_config,
-                move |data: &[f32], _: &cpal::InputCallbackInfo| {
-                    let is_empty = data.iter().all(|&x| x == 0.0);
-                    log::debug!("Sending audio frame to resampling thread. is_empty: {is_empty}");
-
-                    // Average the channels into mono at this point.
-                    let mono_samples: Vec<f32> = data
-                        .chunks_exact(num_channels as usize)
-                        .map(|frame| frame.iter().sum::<f32>() / num_channels as f32)
-                        .collect();
-
-                    // This is blocking, but we aren't on the main thread.
-                    let _ = warpui_core::r#async::block_on(audio_frame_tx.send(mono_samples));
-                },
-                move |err| {
-                    if has_logged_stream_error {
-                        log::debug!("Error in voice input stream (suppressed repeat): {err}");
-                    } else {
-                        has_logged_stream_error = true;
-                        report_error!(
-                            anyhow::Error::new(err).context("Error in voice input stream")
-                        );
-                    }
-                },
-                Some(STREAM_TIMEOUT),
-            )
-            .map_err(|e| {
-                StartListeningError::Other(anyhow::anyhow!("Failed to build input stream: {e}"))
-            })?;
+                num_channels,
+                audio_frame_tx,
+            ),
+            InputSampleFormat::I16 => build_input_stream::<i16>(
+                &input_device,
+                &stream_config,
+                num_channels,
+                audio_frame_tx,
+            ),
+            InputSampleFormat::I24 => build_input_stream::<I24>(
+                &input_device,
+                &stream_config,
+                num_channels,
+                audio_frame_tx,
+            ),
+            InputSampleFormat::I32 => build_input_stream::<i32>(
+                &input_device,
+                &stream_config,
+                num_channels,
+                audio_frame_tx,
+            ),
+            InputSampleFormat::I64 => build_input_stream::<i64>(
+                &input_device,
+                &stream_config,
+                num_channels,
+                audio_frame_tx,
+            ),
+            InputSampleFormat::U8 => build_input_stream::<u8>(
+                &input_device,
+                &stream_config,
+                num_channels,
+                audio_frame_tx,
+            ),
+            InputSampleFormat::U16 => build_input_stream::<u16>(
+                &input_device,
+                &stream_config,
+                num_channels,
+                audio_frame_tx,
+            ),
+            InputSampleFormat::U24 => build_input_stream::<U24>(
+                &input_device,
+                &stream_config,
+                num_channels,
+                audio_frame_tx,
+            ),
+            InputSampleFormat::U32 => build_input_stream::<u32>(
+                &input_device,
+                &stream_config,
+                num_channels,
+                audio_frame_tx,
+            ),
+            InputSampleFormat::U64 => build_input_stream::<u64>(
+                &input_device,
+                &stream_config,
+                num_channels,
+                audio_frame_tx,
+            ),
+            InputSampleFormat::F32 => build_input_stream::<f32>(
+                &input_device,
+                &stream_config,
+                num_channels,
+                audio_frame_tx,
+            ),
+            InputSampleFormat::F64 => build_input_stream::<f64>(
+                &input_device,
+                &stream_config,
+                num_channels,
+                audio_frame_tx,
+            ),
+        }?;
         cpal::traits::StreamTrait::play(&stream).map_err(|e| {
             StartListeningError::Other(anyhow::anyhow!("Failed to play stream: {e}"))
         })?;
