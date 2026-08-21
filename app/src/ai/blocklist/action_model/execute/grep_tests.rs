@@ -93,8 +93,22 @@ fn build_grep_command_escapes_single_quotes() {
 
     assert_eq!(
         command,
-        r#"grep --color=never -nrIHEZ --devices=skip -e 'owner'"'"'s code' '/tmp/repo'"#
+        r#"grep --color=never -nrIHE --devices=skip --null -e 'owner'"'"'s code' '/tmp/repo'"#
     );
+}
+
+#[test]
+fn build_grep_command_uses_long_null_option_not_short_z() {
+    // `-Z` means `--decompress` (run as zgrep) on BSD/macOS grep, not NUL
+    // delimiting -- and is accepted silently there, with ordinary
+    // colon-delimited output. The long `--null` option is the only
+    // portable spelling; never "simplify" this back to `-Z`.
+    let queries = vec!["needle".to_string()];
+
+    let command = build_grep_command(&queries, "/tmp/repo", ShellType::Bash);
+
+    assert!(command.contains("--null"));
+    assert!(!command.split_whitespace().any(|arg| arg == "-Z"));
 }
 
 #[test]
@@ -154,8 +168,8 @@ fn parse_null_delimited_grep_output_handles_colon_in_windows_path() {
 }
 
 #[test]
-fn parse_null_delimited_grep_output_handles_gnu_grep_capital_z_style() {
-    // GNU/BSD `grep -Z` only replaces the path separator with NUL; the
+fn parse_null_delimited_grep_output_handles_gnu_grep_null_style() {
+    // GNU/BSD `grep --null` only replaces the path separator with NUL; the
     // line-number separator stays `:`.
     let output = "path/with:colon/file.go\x007:content\n";
 
@@ -332,7 +346,7 @@ fn parse_grep_list_files_output_returns_empty_for_empty_output() {
 fn parse_grep_list_files_output_splits_a_newline_bearing_path_into_two_entries() {
     // Pins a known, deliberate limitation (see run_grep_per_file_fallback's
     // doc comment): `grep -l` has no NUL-delimited form on a `grep` that
-    // lacks `-Z`/`--null` in the first place, so a path containing a raw
+    // lacks `--null` in the first place, so a path containing a raw
     // newline byte can't be told apart from two separate matched files
     // here. `run_grep_per_file_fallback`'s second phase then fails to find
     // either bogus path and skips it -- a missed match, not the

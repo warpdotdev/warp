@@ -543,7 +543,7 @@ async fn run_grep_command(
                 .with_command(grep_command)
                 .with_output(output)
         }),
-        // Not every `grep` on a remote session supports `-Z`/`--null` (e.g.
+        // Not every `grep` on a remote session supports `--null` (e.g.
         // BusyBox). Fall back to a form that's unambiguous without it: list
         // the matching files first (a bare filename has no adjacent field to
         // confuse it with, so `-l` needs no NUL delimiting), then grep each
@@ -566,9 +566,9 @@ async fn run_grep_command(
 
 /// Falls back to listing matching files (`grep -l`) and then re-running the
 /// queries against each one individually, for a remote `grep` that doesn't
-/// support `-Z`/`--null`. Returns `original_error` if listing the files
-/// itself also fails, since that indicates `grep` is unusable here for a
-/// reason unrelated to `-Z`.
+/// support `--null`. Returns `original_error` if listing the files itself
+/// also fails, since that indicates `grep` is unusable here for a reason
+/// unrelated to `--null`.
 ///
 /// This resolves a colon anywhere in a path, but not a raw newline byte in
 /// one: see `parse_grep_list_files_output`. That's a silent, missing match
@@ -622,7 +622,7 @@ async fn run_grep_per_file_fallback(
                 // One file failing to re-grep (e.g. removed since listing)
                 // shouldn't sink the results for the rest of them.
                 log::warn!(
-                    "Skipping a file that could not be re-grepped in the -Z-less Grep fallback"
+                    "Skipping a file that could not be re-grepped in the --null-less Grep fallback"
                 );
             }
         }
@@ -634,7 +634,7 @@ async fn run_grep_per_file_fallback(
 /// path per matched file.
 ///
 /// Splits on `\n`, since `-l` has no NUL-delimited form on a `grep` that
-/// doesn't support `-Z`/`--null` in the first place -- that's exactly why
+/// doesn't support `--null` in the first place -- that's exactly why
 /// `run_grep_per_file_fallback` is only reached without it. A path
 /// containing a raw newline byte therefore splits into more than one entry
 /// here, rather than being safely delimited the way `parse_null_delimited_grep_output`
@@ -710,12 +710,17 @@ fn build_grep_command(queries: &[String], target_path: &str, shell_type: ShellTy
     // * "-I" ignores binary files
     // * "-H" prints file name headers
     // * "-E" uses extended regex expressions
-    // * "-Z" delimits the file path with a NUL byte instead of `:`, like
-    //   `git grep`'s `-z` above. Not every `grep` supports this (e.g.
-    //   BusyBox); `run_grep_command` falls back to
-    //   `run_grep_per_file_fallback` when this flag itself makes the
+    // * "--null" delimits the file path with a NUL byte instead of `:`,
+    //   like `git grep`'s `-z` above. This MUST be the long option: on
+    //   BSD/macOS grep, the short `-Z` means `--decompress` (run as
+    //   zgrep) instead, and is accepted silently with ordinary
+    //   colon-delimited output, which `parse_null_delimited_grep_output`
+    //   would then reject as unparseable instead of falling back, since
+    //   the command itself would not have failed. Not every `grep`
+    //   supports `--null` (e.g. BusyBox); `run_grep_command` falls back
+    //   to `run_grep_per_file_fallback` when this flag itself makes the
     //   command fail.
-    let mut grep_command = "grep --color=never -nrIHEZ --devices=skip".to_string();
+    let mut grep_command = "grep --color=never -nrIHE --devices=skip --null".to_string();
     for query in queries {
         // Queries can originate from model output and project instructions. Keep
         // them as grep arguments so shell substitutions like $() are inert.
@@ -788,7 +793,7 @@ fn build_select_string_command(queries: &[String], target_path: &str) -> String 
 /// Expects each record to have the shape `{path}\0{line_number}{sep}...\n`,
 /// where `sep` is either a second NUL (as emitted by `git grep -z`, and by
 /// `build_select_string_command`'s formatter) or a `:` (as emitted by
-/// GNU/BSD `grep`'s `-Z`/`--null`, which only replaces the path separator).
+/// GNU/BSD `grep`'s `--null`, which only replaces the path separator).
 /// Everything from `sep` to the next `\n` is the matched line's content and
 /// is discarded, since callers only need the file path and line number.
 ///
