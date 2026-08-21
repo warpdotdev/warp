@@ -37,7 +37,7 @@ use super::settings_page::{
     AdditionalInfo, CONTENT_FONT_SIZE, Category, HEADER_PADDING, LocalOnlyIconState, MatchData,
     PageType, SettingsPageEvent, SettingsPageMeta, SettingsPageViewHandle, SettingsWidget,
     ToggleState, build_reset_button, render_body_item, render_body_item_label,
-    render_dropdown_item,
+    render_dropdown_item, render_filterable_dropdown_item,
 };
 use super::{
     SettingActionPairContexts, SettingActionPairDescriptions, SettingsAction, SettingsSection,
@@ -96,10 +96,12 @@ use crate::workspace::tab_settings::{
     DirectoryTabColor, HideTitleBarSearchBarInVerticalTabs, PreserveActiveTabColor,
     ShowCodeReviewButton, ShowIndicatorsButton, ShowVerticalTabPanelInRestoredWindows,
     TabCloseButtonPosition, TabSettings, TabSettingsChangedEvent,
-    UseLatestUserPromptAsConversationTitleInTabNames, UseVerticalTabs,
-    WorkspaceDecorationVisibility, canonical_directory_key,
+    UseLatestUserPromptAsConversationTitleInTabNames, UseVerticalTabs, VerticalTabsFontFamily,
+    VerticalTabsFontSize, WorkspaceDecorationVisibility, canonical_directory_key,
 };
 use crate::{send_telemetry_from_ctx, themes};
+
+const VERTICAL_TABS_FONT_SIZE_VALUES: [f32; 6] = [10.0, 12.0, 14.0, 16.0, 18.0, 20.0];
 
 const FONT_SIZE_INPUT_BOX_WIDTH: f32 = 80.;
 const NOTEBOOK_FONT_SIZE_INPUT_BOX_WIDTH: f32 = 50.;
@@ -546,6 +548,8 @@ pub enum AppearancePageAction {
     SetTabCloseButtonPosition(TabCloseButtonPosition),
     SetZoomLevel(u16),
     ResetZoomLevel,
+    SetVerticalTabsFontSize(f32),
+    SetVerticalTabsFontFamily(Option<String>),
     SetDefaultDirectoryTabColor {
         path: PathBuf,
         color: DirectoryTabColor,
@@ -580,6 +584,8 @@ pub struct AppearanceSettingsPageView {
     workspace_decorations_dropdown: ViewHandle<Dropdown<AppearancePageAction>>,
     tab_close_button_position_dropdown: ViewHandle<Dropdown<AppearancePageAction>>,
     zoom_level_dropdown: ViewHandle<Dropdown<AppearancePageAction>>,
+    vertical_tabs_font_size_dropdown: ViewHandle<Dropdown<AppearancePageAction>>,
+    vertical_tabs_font_family_dropdown: ViewHandle<FilterableDropdown<AppearancePageAction>>,
     zoom_reset_button_mouse_state: MouseStateHandle,
     available_families: HashMap<String, (Option<FamilyId>, FontType)>,
     view_font_type: FontType,
@@ -784,6 +790,22 @@ impl TypedActionView for AppearanceSettingsPageView {
             ResetZoomLevel => {
                 WindowSettings::handle(ctx).update(ctx, |window_settings, ctx| {
                     report_if_error!(window_settings.zoom_level.clear_value(ctx));
+                });
+                ctx.notify();
+            }
+            SetVerticalTabsFontSize(size) => {
+                TabSettings::handle(ctx).update(ctx, |tab_settings, ctx| {
+                    report_if_error!(tab_settings.vertical_tabs_font_size.set_value(*size, ctx));
+                });
+                ctx.notify();
+            }
+            SetVerticalTabsFontFamily(family) => {
+                TabSettings::handle(ctx).update(ctx, |tab_settings, ctx| {
+                    report_if_error!(
+                        tab_settings
+                            .vertical_tabs_font_family
+                            .set_value(family.clone(), ctx)
+                    );
                 });
                 ctx.notify();
             }
@@ -1358,6 +1380,8 @@ impl AppearanceSettingsPageView {
             ),
             tab_close_button_position_dropdown: Self::build_tab_close_button_position_dropdown(ctx),
             zoom_level_dropdown: Self::build_zoom_level_dropdown(ctx),
+            vertical_tabs_font_size_dropdown: Self::build_vertical_tabs_font_size_dropdown(ctx),
+            vertical_tabs_font_family_dropdown: Self::build_vertical_tabs_font_family_dropdown(ctx),
             zoom_reset_button_mouse_state: MouseStateHandle::default(),
             available_families: Default::default(),
             view_font_type: Default::default(),
@@ -1552,6 +1576,8 @@ impl AppearanceSettingsPageView {
             tab_settings_widgets.push(Box::new(
                 UseLatestUserPromptAsConversationTitleInTabNamesWidget::default(),
             ));
+            tab_settings_widgets.push(Box::new(VerticalTabsFontSizeWidget));
+            tab_settings_widgets.push(Box::new(VerticalTabsFontFamilyWidget));
             if FeatureFlag::ConfigurableToolbar.is_enabled() {
                 tab_settings_widgets.push(Box::new(EditToolbarWidget));
             }
@@ -2186,6 +2212,46 @@ impl AppearanceSettingsPageView {
         ctx.notify();
     }
 
+    fn update_vertical_tabs_font_family_dropdown(&mut self, ctx: &mut ViewContext<Self>) {
+        let current = TabSettings::as_ref(ctx)
+            .vertical_tabs_font_family
+            .value()
+            .clone();
+
+        self.vertical_tabs_font_family_dropdown
+            .update(ctx, |dropdown, ctx| {
+                let mut items = self
+                    .available_families
+                    .iter()
+                    .filter(|(name, _)| name.as_str() != "Hack")
+                    .map(|(name, (family, _font_type))| {
+                        let name_move = name.clone();
+                        let mut item = DropdownItem::new(
+                            name.clone(),
+                            AppearancePageAction::SetVerticalTabsFontFamily(Some(name_move)),
+                        );
+
+                        if cfg!(not(any(target_os = "linux", target_os = "freebsd")))
+                            && let Some(family_id) = family
+                        {
+                            item = item.with_font_override(*family_id)
+                        }
+
+                        item
+                    })
+                    .collect::<Vec<_>>();
+
+                items.sort_by(|a, b| a.display_text.cmp(&b.display_text));
+                items.insert(0, Self::vertical_tabs_font_family_no_override_item(ctx));
+                dropdown.set_items(items, ctx);
+
+                match current {
+                    Some(ref name) => dropdown.set_selected_by_name(name, ctx),
+                    None => dropdown.set_selected_by_index(0, ctx),
+                }
+            });
+    }
+
     #[cfg_attr(target_family = "wasm", allow(dead_code))]
     pub fn set_system_fonts(
         &mut self,
@@ -2216,6 +2282,7 @@ impl AppearanceSettingsPageView {
         }
 
         self.update_font_dropdown(ctx);
+        self.update_vertical_tabs_font_family_dropdown(ctx);
     }
 
     pub fn set_font_family(&mut self, name: &str, ctx: &mut ViewContext<Self>) {
@@ -2686,6 +2753,72 @@ impl AppearanceSettingsPageView {
         })
     }
 
+    fn build_vertical_tabs_font_size_dropdown(
+        ctx: &mut ViewContext<Self>,
+    ) -> ViewHandle<Dropdown<AppearancePageAction>> {
+        ctx.add_typed_action_view(|ctx| {
+            let mut dropdown = Dropdown::new(ctx);
+
+            dropdown.set_items(
+                VERTICAL_TABS_FONT_SIZE_VALUES
+                    .iter()
+                    .map(|&value| {
+                        DropdownItem::new(
+                            format!("{value:.0}px"),
+                            AppearancePageAction::SetVerticalTabsFontSize(value),
+                        )
+                    })
+                    .collect(),
+                ctx,
+            );
+
+            let current_size = *TabSettings::as_ref(ctx).vertical_tabs_font_size.value();
+            dropdown.set_selected_by_action(
+                AppearancePageAction::SetVerticalTabsFontSize(current_size),
+                ctx,
+            );
+
+            dropdown
+        })
+    }
+
+    fn build_vertical_tabs_font_family_dropdown(
+        ctx: &mut ViewContext<Self>,
+    ) -> ViewHandle<FilterableDropdown<AppearancePageAction>> {
+        ctx.add_typed_action_view(|ctx| {
+            let mut dropdown = FilterableDropdown::new(ctx);
+            dropdown.set_top_bar_max_width(FONT_FAMILY_DROPDOWN_WIDTH);
+            dropdown.set_menu_width(FONT_FAMILY_DROPDOWN_WIDTH, ctx);
+
+            dropdown.add_items(
+                vec![Self::vertical_tabs_font_family_no_override_item(ctx)],
+                ctx,
+            );
+            dropdown.set_selected_by_index(0, ctx);
+            dropdown
+        })
+    }
+
+    fn vertical_tabs_font_family_no_override_item<V>(
+        ctx: &mut ViewContext<V>,
+    ) -> DropdownItem<AppearancePageAction>
+    where
+        V: View,
+    {
+        let mut initial_dropdown_item = DropdownItem::new(
+            "System default".to_string(),
+            AppearancePageAction::SetVerticalTabsFontFamily(None),
+        );
+
+        if cfg!(not(any(target_os = "linux", target_os = "freebsd")))
+            && let Some(family_id) = ctx.font_cache().family_id_for_name("Hack")
+        {
+            initial_dropdown_item = initial_dropdown_item.with_font_override(family_id)
+        }
+
+        initial_dropdown_item
+    }
+
     fn handle_directory_color_add_picker_event(
         &mut self,
         event: &DirectoryColorAddPickerEvent,
@@ -2722,6 +2855,19 @@ impl AppearanceSettingsPageView {
                     .collect()
             });
             self.directory_tab_color_delete_buttons = build_directory_delete_buttons(ctx);
+        }
+        if let TabSettingsChangedEvent::VerticalTabsFontSize { .. } = event {
+            let size = *TabSettings::as_ref(ctx).vertical_tabs_font_size.value();
+            self.vertical_tabs_font_size_dropdown
+                .update(ctx, |dropdown, ctx| {
+                    dropdown.set_selected_by_action(
+                        AppearancePageAction::SetVerticalTabsFontSize(size),
+                        ctx,
+                    );
+                });
+        }
+        if let TabSettingsChangedEvent::VerticalTabsFontFamily { .. } = event {
+            self.update_vertical_tabs_font_family_dropdown(ctx);
         }
         ctx.notify();
     }
@@ -5126,6 +5272,74 @@ impl SettingsWidget for HideTitleBarSearchBarInVerticalTabsWidget {
                 "When using the vertical tab layout, hide the search bar in the title bar. Search stays available via the command palette and keyboard shortcuts."
                     .to_string(),
             ),
+        )
+    }
+}
+
+#[derive(Default)]
+struct VerticalTabsFontSizeWidget;
+
+impl SettingsWidget for VerticalTabsFontSizeWidget {
+    type View = AppearanceSettingsPageView;
+
+    fn search_terms(&self) -> &str {
+        "vertical tabs font size sidebar readability"
+    }
+
+    fn render(
+        &self,
+        view: &Self::View,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
+        render_dropdown_item(
+            appearance,
+            "Vertical tabs font size",
+            Some("Font size (in px) used for the vertical tabs sidebar"),
+            None,
+            LocalOnlyIconState::for_setting(
+                VerticalTabsFontSize::storage_key(),
+                VerticalTabsFontSize::sync_to_cloud(),
+                &mut view.local_only_icon_tooltip_states.borrow_mut(),
+                app,
+            ),
+            None,
+            &view.vertical_tabs_font_size_dropdown,
+        )
+    }
+}
+
+#[derive(Default)]
+struct VerticalTabsFontFamilyWidget;
+
+impl SettingsWidget for VerticalTabsFontFamilyWidget {
+    type View = AppearanceSettingsPageView;
+
+    fn search_terms(&self) -> &str {
+        "vertical tabs font family sidebar"
+    }
+
+    fn render(
+        &self,
+        view: &Self::View,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
+        render_filterable_dropdown_item(
+            appearance,
+            "Vertical tabs font family",
+            Some(
+                "Optional font family used for the vertical tabs sidebar; defaults to the system UI font",
+            ),
+            None,
+            LocalOnlyIconState::for_setting(
+                VerticalTabsFontFamily::storage_key(),
+                VerticalTabsFontFamily::sync_to_cloud(),
+                &mut view.local_only_icon_tooltip_states.borrow_mut(),
+                app,
+            ),
+            None,
+            &view.vertical_tabs_font_family_dropdown,
         )
     }
 }

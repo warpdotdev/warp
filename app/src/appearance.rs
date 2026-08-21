@@ -23,6 +23,7 @@ use crate::settings::{
     active_theme_kind,
 };
 use crate::themes::theme::{ThemeKind, WarpTheme};
+use crate::workspace::tab_settings::{TabSettings, TabSettingsChangedEvent};
 
 /// Manages the state of the app-wide Appearance settings, it is responsible
 /// for 1) listening to settings changes and update the underlying Appearance
@@ -119,6 +120,32 @@ impl AppearanceManager {
                             });
                         }
                     }
+                }
+                _ => {}
+            },
+        );
+
+        ctx.subscribe_to_model(
+            &TabSettings::handle(ctx),
+            move |_, _, event, ctx| match event {
+                TabSettingsChangedEvent::VerticalTabsFontSize { .. } => {
+                    let new_size = *TabSettings::as_ref(ctx).vertical_tabs_font_size.value();
+                    Appearance::handle(ctx).update(ctx, |appearance, ctx| {
+                        appearance.set_vertical_tabs_font_size(new_size, ctx);
+                    });
+                }
+                TabSettingsChangedEvent::VerticalTabsFontFamily { .. } => {
+                    let font_family_name = TabSettings::as_ref(ctx)
+                        .vertical_tabs_font_family
+                        .value()
+                        .clone();
+                    let new_family = match font_family_name {
+                        Some(name) => get_or_load_font_family(&name, ctx),
+                        None => None,
+                    };
+                    Appearance::handle(ctx).update(ctx, |appearance, ctx| {
+                        appearance.set_vertical_tabs_font_family(new_family, ctx);
+                    });
                 }
                 _ => {}
             },
@@ -418,6 +445,13 @@ fn build_appearance(ctx: &mut AppContext) -> Appearance {
 
     let line_height_ratio = *FontSettings::as_ref(ctx).line_height_ratio.value();
 
+    let vertical_tabs_font_size = *TabSettings::as_ref(ctx).vertical_tabs_font_size.value();
+    let vertical_tabs_font_family = TabSettings::as_ref(ctx)
+        .vertical_tabs_font_family
+        .value()
+        .clone()
+        .and_then(|name| get_or_load_font_family(&name, ctx));
+
     let theme_kind = active_theme_kind(ThemeSettings::as_ref(ctx), ctx);
     let theme = Settings::theme_for_theme_kind(&theme_kind, ctx);
     #[cfg(target_family = "wasm")]
@@ -432,6 +466,8 @@ fn build_appearance(ctx: &mut AppContext) -> Appearance {
         line_height_ratio,
         am_font_family_from_settings.unwrap_or(default_monospace_font_family),
         password_font_family,
+        vertical_tabs_font_size,
+        vertical_tabs_font_family,
     )
 }
 

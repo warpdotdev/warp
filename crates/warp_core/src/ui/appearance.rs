@@ -22,6 +22,13 @@ pub struct Appearance {
     monospace_font_weight: Weight,
     line_height_ratio: f32,
     ui_builder: UiBuilder,
+    /// Font size (in px) used for the vertical tabs sidebar, applied to
+    /// titles (set via `[appearance.vertical_tabs] font_size`).
+    vertical_tabs_font_size: f32,
+    /// Optional font family override for the vertical tabs sidebar
+    /// (set via `[appearance.vertical_tabs] font_family`). When `None`, the
+    /// regular UI font family is used.
+    vertical_tabs_font_family: Option<FamilyId>,
 
     // We cache the family id for the ui font - note that this
     // isn't actually a changeable setting right now.
@@ -65,6 +72,14 @@ pub enum AppearanceEvent {
         previous_line_height_ratio: f32,
         current_line_height_ratio: f32,
     },
+    VerticalTabsFontSizeChanged {
+        previous_font_size: f32,
+        current_font_size: f32,
+    },
+    VerticalTabsFontFamilyChanged {
+        previous_font_family: Option<FamilyId>,
+        current_font_family: Option<FamilyId>,
+    },
 }
 
 impl Appearance {
@@ -78,6 +93,8 @@ impl Appearance {
         line_height_ratio: f32,
         ai_font_family: FamilyId,
         password_font_family: FamilyId,
+        vertical_tabs_font_size: f32,
+        vertical_tabs_font_family: Option<FamilyId>,
     ) -> Self {
         Self {
             theme: theme.clone(),
@@ -95,6 +112,8 @@ impl Appearance {
             ),
             ai_font_family,
             password_font_family,
+            vertical_tabs_font_size,
+            vertical_tabs_font_family,
         }
     }
 
@@ -133,6 +152,8 @@ impl Appearance {
             ui_font_family,
             ai_font_family: FamilyId(0),
             password_font_family: FamilyId(0),
+            vertical_tabs_font_size: DEFAULT_UI_FONT_SIZE,
+            vertical_tabs_font_family: None,
         }
     }
 
@@ -323,6 +344,48 @@ impl Appearance {
 
     pub fn line_height_ratio(&self) -> f32 {
         self.line_height_ratio
+    }
+
+    pub fn vertical_tabs_font_size(&self) -> f32 {
+        self.vertical_tabs_font_size
+    }
+
+    pub fn vertical_tabs_font_family(&self) -> Option<FamilyId> {
+        self.vertical_tabs_font_family
+    }
+
+    pub fn set_vertical_tabs_font_size(
+        &mut self,
+        new_font_size: f32,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let previous_font_size = self.vertical_tabs_font_size;
+        self.vertical_tabs_font_size = new_font_size;
+
+        // Request a redraw of all windows.
+        ctx.invalidate_all_views();
+
+        ctx.emit(AppearanceEvent::VerticalTabsFontSizeChanged {
+            current_font_size: self.vertical_tabs_font_size,
+            previous_font_size,
+        });
+    }
+
+    pub fn set_vertical_tabs_font_family(
+        &mut self,
+        new_font_family: Option<FamilyId>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let previous_font_family = self.vertical_tabs_font_family;
+        self.vertical_tabs_font_family = new_font_family;
+
+        // Request a redraw of all windows.
+        ctx.invalidate_all_views();
+
+        ctx.emit(AppearanceEvent::VerticalTabsFontFamilyChanged {
+            current_font_family: new_font_family,
+            previous_font_family,
+        });
     }
 
     pub fn password_font_family(&self) -> FamilyId {
