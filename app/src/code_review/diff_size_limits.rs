@@ -2,7 +2,7 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
-use super::diff_state::{DiffHunk, DiffLineType};
+use super::diff_state::{DiffHunk, DiffLine, DiffLineType};
 
 /**
  * Maximum diff size that we will attempt to render. Diffs larger than this
@@ -12,6 +12,63 @@ use super::diff_state::{DiffHunk, DiffLineType};
  * Files larger than this should not be sent over the wire and should not be rendered.
  */
 pub const MAX_DIFF_SIZE: usize = 4_375_000; // 4.375MB in decimal
+
+/**
+ * Maximum number of changed files whose diffs are fully fetched and parsed
+ * (hunks plus base content) in a single load. `MAX_DIFF_SIZE` bounds any one
+ * file, but nothing previously bounded how many under-cap files a single
+ * load (e.g. `git diff` against a long-diverged branch, or a repo-wide
+ * reformat) could materialize — with enough changed files that aggregate is
+ * unbounded even though every individual file is small (see APP-5462).
+ * Beyond this count, remaining files are presented the same way a single
+ * oversized file already is (`DiffSize::Unrenderable(DiffTooLarge)`)
+ * instead of being fetched and parsed.
+ */
+pub const MAX_TOTAL_DIFF_FILES: usize = 2_000;
+
+/**
+ * Maximum aggregate bytes retained across all materialized file diffs (hunks
+ * plus base content) in a single load — the other half of the aggregate
+ * bound described on `MAX_TOTAL_DIFF_FILES`. Measured by
+ * [`approx_file_diff_bytes`], a *lower bound* on real retained memory (see
+ * its own doc comment for what it omits), not a full accounting of it.
+ */
+pub const MAX_TOTAL_DIFF_BYTES: usize = 256 * 1024 * 1024; // 256MB in decimal
+
+/**
+ * A lower bound on the memory a single file's materialized diff retains:
+ * every `DiffHunk` line contributes its own struct size
+ * (`size_of::<DiffLine>()`, not a hardcoded guess, so this stays correct if
+ * the struct's fields change) plus its text's byte length floored at 8 (a
+ * typical minimum allocator size class, so a 1-byte line isn't counted as
+ * costing only 1 byte of heap), and the loaded base content (if any)
+ * contributes its own length.
+ *
+ * This deliberately still undercounts real retained memory: each line's
+ * `String` has its own heap allocation and allocator size-class rounding
+ * beyond the floor applied here, `Vec` growth leaves capacity slack, and
+ * `DiffHunk` itself has header fields not counted per line. Those add a
+ * roughly constant-factor fudge on top of this number, not an
+ * order-of-magnitude one — unlike counting only `line.text.len()` (an
+ * earlier version of this budget), which undercounts badly: `DiffLine`
+ * itself is tens of bytes of fixed overhead per line regardless of text
+ * length, and diffs are typically dense with short lines, so the struct
+ * overhead — not the text — dominates real retained memory. Undercounting
+ * that badly let a budget meant to cap memory in the hundreds of megabytes
+ * actually admit many times that.
+ */
+pub fn approx_file_diff_bytes(hunks: &[DiffHunk], content_at_head: Option<&str>) -> usize {
+    // A common minimum allocator size class; see the doc comment above.
+    const MIN_LINE_TEXT_ALLOCATION: usize = 8;
+
+    let line_struct_size = std::mem::size_of::<DiffLine>();
+    let hunks_bytes: usize = hunks
+        .iter()
+        .flat_map(|hunk| &hunk.lines)
+        .map(|line| line_struct_size + line.text.len().max(MIN_LINE_TEXT_ALLOCATION))
+        .sum();
+    hunks_bytes + content_at_head.map_or(0, str::len)
+}
 
 /**
  * Reasonable limit for diff size. Diffs bigger than this _could_ be displayed
@@ -118,3 +175,7 @@ pub fn compute_diff_size(diffs: &[DiffHunk], diff_size: usize) -> DiffSize {
 
     DiffSize::Normal
 }
+
+#[cfg(test)]
+#[path = "diff_size_limits_tests.rs"]
+mod tests;
