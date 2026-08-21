@@ -564,17 +564,28 @@ async fn run_grep_command(
     }
 }
 
-/// Falls back to listing matching files (`grep -l`) and then re-running the
-/// queries against each one individually, for a remote `grep` that doesn't
-/// support `--null`. Returns `original_error` if listing the files itself
+/// Falls back, for a remote `grep` that doesn't support `--null`, to listing
+/// matching files (`grep -l`, unchanged) and then running a single
+/// follow-up command that re-greps every one of them, instead of one
+/// command per file. Returns `original_error` if listing the files itself
 /// also fails, since that indicates `grep` is unusable here for a reason
 /// unrelated to `--null`.
 ///
-/// This resolves a colon anywhere in a path, but not a raw newline byte in
-/// one: see `parse_grep_list_files_output`. That's a silent, missing match
-/// rather than the wrong-file/wrong-line defect this fallback exists to
-/// avoid, since the second phase below simply fails to find the resulting
-/// bogus path and skips it.
+/// The follow-up command (see `build_grep_content_scan_command`) re-lists
+/// the matching files itself, piping them into a loop rather than passing
+/// them as arguments, to avoid an unbounded command line for a large match
+/// set. That loop still enumerates files by reading `-l`'s newline-
+/// terminated output one line at a time, so a path containing a raw
+/// newline byte still isn't resolved correctly there -- the same caveat
+/// as before, now on this command instead of a separate listing step. The
+/// resulting fragments simply fail to be found and are skipped (see
+/// `parse_grep_content_scan_output`), not misattributed to the wrong file.
+///
+/// This re-reads every matching file once more than the (already run,
+/// separate) listing step did, since `-l` only needs to confirm a match
+/// per file while the follow-up needs its content; that overhead scales
+/// with the number of matches, not the size of the tree being searched,
+/// since `-l` already narrowed the follow-up to just the matching files.
 async fn run_grep_per_file_fallback(
     queries: &[String],
     target_path: &str,
@@ -585,67 +596,135 @@ async fn run_grep_per_file_fallback(
     original_error: GrepError,
 ) -> Result<GrepResult, GrepError> {
     let list_command = build_grep_list_files_command(queries, target_path, shell_type);
-    let matched_relative_paths =
-        match execute_grep_command(&list_command, session, execute_directory).await {
-            Ok(GrepCommandOutcome::NoMatches) => {
-                return Ok(GrepResult::Success {
+    match execute_grep_command(&list_command, session, execute_directory).await {
+        Ok(GrepCommandOutcome::NoMatches) => Ok(GrepResult::Success {
+            matched_files: vec![],
+        }),
+        Ok(GrepCommandOutcome::Matches(_)) => {
+            let scan_command = build_grep_content_scan_command(queries, target_path, shell_type);
+            match execute_grep_command(&scan_command, session, execute_directory).await {
+                Ok(GrepCommandOutcome::NoMatches) => Ok(GrepResult::Success {
                     matched_files: vec![],
-                });
-            }
-            Ok(GrepCommandOutcome::Matches(output)) => parse_grep_list_files_output(&output),
-            Err(_) => return Err(original_error),
-        };
-
-    let mut matched_files = Vec::with_capacity(matched_relative_paths.len());
-    for relative_path in matched_relative_paths {
-        let single_file_command =
-            build_grep_single_file_command(queries, &relative_path, shell_type);
-        match execute_grep_command(&single_file_command, session, execute_directory).await {
-            // The file may have changed between listing it and re-grepping
-            // it; that's a race, not a parsing failure, so just skip it.
-            Ok(GrepCommandOutcome::NoMatches) => {}
-            Ok(GrepCommandOutcome::Matches(output)) => {
-                let matched_lines = parse_single_file_grep_output(&output)
-                    .into_iter()
-                    .map(|line_number| GrepLineMatch { line_number })
-                    .collect();
-                matched_files.push(GrepFileMatch {
-                    file_path: host_native_absolute_path(
-                        &relative_path,
+                }),
+                Ok(GrepCommandOutcome::Matches(output)) => Ok(GrepResult::Success {
+                    matched_files: parse_grep_content_scan_output(
+                        &output,
                         &shell_launch_data,
                         &Some(execute_directory.to_string()),
                     ),
-                    matched_lines,
-                });
-            }
-            Err(_) => {
-                // One file failing to re-grep (e.g. removed since listing)
-                // shouldn't sink the results for the rest of them.
-                log::warn!(
-                    "Skipping a file that could not be re-grepped in the --null-less Grep fallback"
-                );
+                }),
+                Err(e) => Err(e),
             }
         }
+        Err(_) => Err(original_error),
     }
-    Ok(GrepResult::Success { matched_files })
 }
 
-/// Parses `grep -l`'s output (see `build_grep_list_files_command`) into one
-/// path per matched file.
+/// Builds the single follow-up command for `run_grep_per_file_fallback`:
+/// re-lists the matching files (see `build_grep_list_files_command`) and,
+/// for each one, emits a `\0{path}\0` marker followed by that file's own
+/// `grep -n` output -- one command in total, rather than one per file.
 ///
-/// Splits on `\n`, since `-l` has no NUL-delimited form on a `grep` that
-/// doesn't support `--null` in the first place -- that's exactly why
-/// `run_grep_per_file_fallback` is only reached without it. A path
-/// containing a raw newline byte therefore splits into more than one entry
-/// here, rather than being safely delimited the way `parse_null_delimited_grep_output`
-/// handles that case.
-fn parse_grep_list_files_output(output: &str) -> Vec<String> {
-    output
-        .trim()
-        .split('\n')
-        .filter(|line| !line.is_empty())
-        .map(str::to_string)
-        .collect()
+/// Runs via `sh -c` so the loop syntax is fixed regardless of the session's
+/// interactive shell (e.g. fish's loop syntax differs); any host reaching
+/// this fallback has `sh`. Because of that, the queries and target path
+/// embedded in the script are quoted for `sh` (`ShellType::Bash` covers
+/// POSIX-style single-quote escaping), not for `shell_type` -- the *whole*
+/// script is then quoted for `shell_type` as the single argument to `sh
+/// -c`, so a query containing a single quote is escaped correctly through
+/// both layers (see the tests for this function).
+///
+/// The file list is piped into the loop rather than interpolated as
+/// arguments, to avoid an unbounded command line for a large match set;
+/// `-I` already excludes binary files, so a matched file's content can't
+/// itself contain a NUL byte to collide with the `\0{path}\0` framing.
+/// The `\0{path}\0` markers are exactly as unambiguous as the primary
+/// NUL-delimited path's records, but only for whatever byte string each
+/// loop iteration's `$f` actually holds -- see the newline caveat on
+/// `run_grep_per_file_fallback` for where that value itself can still be a
+/// truncated fragment of the real path.
+fn build_grep_content_scan_command(
+    queries: &[String],
+    target_path: &str,
+    shell_type: ShellType,
+) -> String {
+    let list_command = build_grep_list_files_command(queries, target_path, ShellType::Bash);
+
+    let mut single_file_grep = "grep --color=never -nIE --devices=skip".to_string();
+    for query in queries {
+        single_file_grep
+            .push_str(format!(" -e {}", shell_quote_arg(query, ShellType::Bash)).as_str());
+    }
+    single_file_grep.push_str(" -- \"$f\"");
+
+    // The trailing `true` keeps the script's own exit code from reflecting
+    // just the last loop iteration's grep (e.g. a file with no matches by
+    // the time it's re-read, or one that failed to be found at all --
+    // see the module-level note on the listing step's newline caveat).
+    // Whether the follow-up as a whole found anything is judged from its
+    // output instead, by `parse_grep_content_scan_output`.
+    let script = format!(
+        "{list_command} | while IFS= read -r f; do printf '\\000%s\\000' \"$f\"; {single_file_grep}; done; true"
+    );
+    format!("sh -c {}", shell_quote_arg(&script, shell_type))
+}
+
+/// Parses the aggregated output of `build_grep_content_scan_command`'s
+/// single follow-up command into the format that we pass back to the
+/// agent.
+///
+/// Splitting the whole output on `\0` recovers alternating `(path,
+/// content)` pairs: since a matched file's content can never contain a NUL
+/// byte (`-I` excludes binary files) and neither can a path, the `\0{path}\0`
+/// marker preceding each file's content is unambiguous regardless of what
+/// the path itself looks like -- including a colon. (A path containing a
+/// raw newline byte is a separate, known limitation of the shell loop that
+/// produces this output, not of this parser; see
+/// `build_grep_content_scan_command`.) A path whose content comes back
+/// empty -- including a fragment of a newline-bearing path that the loop
+/// failed to find, or a file genuinely removed in the narrow window
+/// between the listing and this command -- is skipped rather than
+/// reported with zero matches; that's aggregated into a single warning
+/// instead of sinking the rest of the results.
+fn parse_grep_content_scan_output(
+    output: &str,
+    shell_launch_data: &Option<ShellLaunchData>,
+    current_working_directory: &Option<String>,
+) -> Vec<GrepFileMatch> {
+    let mut segments = output.split('\0');
+    // Text before the first marker; empty in well-formed output.
+    segments.next();
+
+    let mut matched_files = Vec::new();
+    let mut skipped_count = 0usize;
+    while let (Some(path), Some(content)) = (segments.next(), segments.next()) {
+        if path.is_empty() {
+            continue;
+        }
+        let matched_lines: Vec<GrepLineMatch> = parse_single_file_grep_output(content)
+            .into_iter()
+            .map(|line_number| GrepLineMatch { line_number })
+            .collect();
+        if matched_lines.is_empty() {
+            skipped_count += 1;
+            continue;
+        }
+        matched_files.push(GrepFileMatch {
+            file_path: host_native_absolute_path(
+                path,
+                shell_launch_data,
+                current_working_directory,
+            ),
+            matched_lines,
+        });
+    }
+
+    if skipped_count > 0 {
+        log::warn!(
+            "Skipped {skipped_count} file(s) that came back empty in the --null-less Grep fallback"
+        );
+    }
+    matched_files
 }
 
 /// Runs a PowerShell `Select-String` command.
@@ -744,24 +823,6 @@ fn build_grep_list_files_command(
         grep_command.push_str(format!(" -e {}", shell_quote_arg(query, shell_type)).as_str());
     }
     grep_command.push_str(format!(" {}", shell_quote_arg(target_path, shell_type)).as_str());
-    grep_command
-}
-
-/// Runs the queries against a single, already-known file, used as the second
-/// step of `run_grep_per_file_fallback`. Grep only prefixes output lines
-/// with the file name when more than one file is given, so passing exactly
-/// one omits it, leaving output that only needs to carry
-/// `{line_number}:{content}`.
-fn build_grep_single_file_command(
-    queries: &[String],
-    file_path: &str,
-    shell_type: ShellType,
-) -> String {
-    let mut grep_command = "grep --color=never -nIE --devices=skip".to_string();
-    for query in queries {
-        grep_command.push_str(format!(" -e {}", shell_quote_arg(query, shell_type)).as_str());
-    }
-    grep_command.push_str(format!(" {}", shell_quote_arg(file_path, shell_type)).as_str());
     grep_command
 }
 
@@ -890,7 +951,7 @@ fn take_null_delimited_record(input: &str) -> Option<(&str, usize, &str)> {
 }
 
 /// Parses `grep -n`'s output for a single, already-known file (see
-/// `build_grep_single_file_command`) into the matched line numbers. Since
+/// `build_grep_content_scan_command`) into the matched line numbers. Since
 /// the file wasn't given a header, each line has the shape
 /// `{line_number}:{content}`; a line that doesn't start with a digit run
 /// followed by `:` is skipped.

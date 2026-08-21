@@ -124,18 +124,72 @@ fn build_grep_list_files_command_lists_recursively() {
 }
 
 #[test]
-fn build_grep_single_file_command_targets_one_file() {
+fn build_grep_content_scan_command_wraps_script_in_sh_c() {
     let queries = vec!["needle".to_string()];
 
-    // The path here is deliberately one that would be ambiguous in a
-    // `{path}:{line}:{content}` record; that's fine, since this command
-    // takes the path as an argument rather than parsing it back out of
-    // the output.
-    let command = build_grep_single_file_command(&queries, "src/a:123:part.rs", ShellType::Bash);
+    let command = build_grep_content_scan_command(&queries, "/tmp/repo", ShellType::Bash);
 
+    let expected_script = r#"grep --color=never -rlIE --devices=skip -e 'needle' '/tmp/repo' | while IFS= read -r f; do printf '\000%s\000' "$f"; grep --color=never -nIE --devices=skip -e 'needle' -- "$f"; done; true"#;
     assert_eq!(
         command,
-        "grep --color=never -nIE --devices=skip -e 'needle' 'src/a:123:part.rs'"
+        format!(
+            "sh -c {}",
+            shell_quote_arg(expected_script, ShellType::Bash)
+        )
+    );
+}
+
+#[test]
+fn build_grep_content_scan_command_escapes_single_quote_through_both_quoting_layers() {
+    let queries = vec!["owner's code".to_string()];
+
+    let command = build_grep_content_scan_command(&queries, "/tmp/repo", ShellType::Bash);
+
+    let expected_script = r#"grep --color=never -rlIE --devices=skip -e 'owner'"'"'s code' '/tmp/repo' | while IFS= read -r f; do printf '\000%s\000' "$f"; grep --color=never -nIE --devices=skip -e 'owner'"'"'s code' -- "$f"; done; true"#;
+    assert_eq!(
+        command,
+        format!(
+            "sh -c {}",
+            shell_quote_arg(expected_script, ShellType::Bash)
+        )
+    );
+}
+
+#[test]
+fn build_grep_content_scan_command_keeps_adversarial_query_inert_through_both_quoting_layers() {
+    let queries = vec!["$(touch /tmp/warp-poc); `id`".to_string()];
+
+    let command = build_grep_content_scan_command(&queries, "/tmp/repo path", ShellType::Bash);
+
+    let expected_script = r#"grep --color=never -rlIE --devices=skip -e '$(touch /tmp/warp-poc); `id`' '/tmp/repo path' | while IFS= read -r f; do printf '\000%s\000' "$f"; grep --color=never -nIE --devices=skip -e '$(touch /tmp/warp-poc); `id`' -- "$f"; done; true"#;
+    assert_eq!(
+        command,
+        format!(
+            "sh -c {}",
+            shell_quote_arg(expected_script, ShellType::Bash)
+        )
+    );
+}
+
+#[test]
+fn build_grep_content_scan_command_uses_bash_style_quoting_inside_the_script_even_for_fish_sessions()
+ {
+    // The inner script is parsed by `sh`, not by the session's own shell,
+    // so it must always use POSIX/bash-style single-quote escaping
+    // internally even when the session itself is fish (which escapes `'`
+    // differently). Only the outer wrapping (the argument to `sh -c`) uses
+    // the session's actual shell_type.
+    let queries = vec!["owner's code".to_string()];
+
+    let command = build_grep_content_scan_command(&queries, "/tmp/repo", ShellType::Fish);
+
+    let expected_script = r#"grep --color=never -rlIE --devices=skip -e 'owner'"'"'s code' '/tmp/repo' | while IFS= read -r f; do printf '\000%s\000' "$f"; grep --color=never -nIE --devices=skip -e 'owner'"'"'s code' -- "$f"; done; true"#;
+    assert_eq!(
+        command,
+        format!(
+            "sh -c {}",
+            shell_quote_arg(expected_script, ShellType::Fish)
+        )
     );
 }
 
@@ -302,7 +356,7 @@ fn take_null_delimited_record_rejects_missing_line_number() {
 
 #[test]
 fn parse_single_file_grep_output_handles_line_with_colon_in_content() {
-    // The caller already knows the path (see build_grep_single_file_command),
+    // The caller already knows the path (see build_grep_content_scan_command),
     // so a colon-bearing path like `src/a:123:part.rs` never has to appear
     // in this output at all -- there's nothing here for it to be confused
     // with.
@@ -328,37 +382,104 @@ fn parse_single_file_grep_output_returns_empty_for_empty_output() {
 }
 
 #[test]
-fn parse_grep_list_files_output_splits_one_path_per_line() {
-    let output = "src/main.rs\nsrc/lib.rs\n";
+fn parse_grep_content_scan_output_handles_multiple_files() {
+    let output = "\x00src/main.rs\x0010:foo\n\x00src/lib.rs\x0020:bar\n25:baz\n";
+
+    let matched_files = parse_grep_content_scan_output(output, &None, &None);
 
     assert_eq!(
-        parse_grep_list_files_output(output),
-        vec!["src/main.rs".to_string(), "src/lib.rs".to_string()]
+        matched_files,
+        vec![
+            GrepFileMatch {
+                file_path: "src/main.rs".to_string(),
+                matched_lines: vec![GrepLineMatch { line_number: 10 }],
+            },
+            GrepFileMatch {
+                file_path: "src/lib.rs".to_string(),
+                matched_lines: vec![
+                    GrepLineMatch { line_number: 20 },
+                    GrepLineMatch { line_number: 25 },
+                ],
+            },
+        ]
     );
 }
 
 #[test]
-fn parse_grep_list_files_output_returns_empty_for_empty_output() {
-    assert_eq!(parse_grep_list_files_output(""), Vec::<String>::new());
+fn parse_grep_content_scan_output_handles_colon_in_path() {
+    let output = "\x00src/a:123:part.rs\x007:needle\n";
+
+    let matched_files = parse_grep_content_scan_output(output, &None, &None);
+
+    assert_eq!(
+        matched_files,
+        vec![GrepFileMatch {
+            file_path: "src/a:123:part.rs".to_string(),
+            matched_lines: vec![GrepLineMatch { line_number: 7 }],
+        }]
+    );
 }
 
 #[test]
-fn parse_grep_list_files_output_splits_a_newline_bearing_path_into_two_entries() {
-    // Pins a known, deliberate limitation (see run_grep_per_file_fallback's
-    // doc comment): `grep -l` has no NUL-delimited form on a `grep` that
-    // lacks `--null` in the first place, so a path containing a raw
-    // newline byte can't be told apart from two separate matched files
-    // here. `run_grep_per_file_fallback`'s second phase then fails to find
-    // either bogus path and skips it -- a missed match, not the
-    // wrong-file/wrong-line defect this fallback exists to avoid.
-    let output = "weird\nname.rs\nnormal.rs\n";
+fn parse_grep_content_scan_output_handles_a_marker_containing_a_raw_newline() {
+    // The parser itself is unambiguous no matter what bytes a `(path,
+    // content)` pair holds, including a raw newline in the path -- markers
+    // are found by their NUL bytes, never by splitting on newlines. This
+    // does not mean the fallback as a whole is newline-safe: see
+    // `parse_grep_content_scan_output_skips_fragments_of_a_newline_bearing_path`
+    // for what `build_grep_content_scan_command`'s listing loop actually
+    // produces for a path like this in practice.
+    let output = "\x00weird\nname.rs\x0042:content\n";
+
+    let matched_files = parse_grep_content_scan_output(output, &None, &None);
 
     assert_eq!(
-        parse_grep_list_files_output(output),
-        vec![
-            "weird".to_string(),
-            "name.rs".to_string(),
-            "normal.rs".to_string(),
-        ]
+        matched_files,
+        vec![GrepFileMatch {
+            file_path: "weird\nname.rs".to_string(),
+            matched_lines: vec![GrepLineMatch { line_number: 42 }],
+        }]
+    );
+}
+
+#[test]
+fn parse_grep_content_scan_output_skips_fragments_of_a_newline_bearing_path() {
+    // Pins the real, verified behavior for a path containing a raw newline
+    // byte (e.g. "weird\nname.rs"): `build_grep_content_scan_command`'s
+    // `while read -r f` loop still enumerates `grep -l`'s newline-terminated
+    // output one line at a time, so it reads that single file as two
+    // fragments ("weird" and "name.rs"). Neither fragment names a real
+    // file, so both come back with empty content and are skipped here --
+    // a missed match, not a misattribution to some other file.
+    let output = "\x00weird\x00\x00name.rs\x00";
+
+    let matched_files = parse_grep_content_scan_output(output, &None, &None);
+
+    assert_eq!(matched_files, Vec::<GrepFileMatch>::new());
+}
+
+#[test]
+fn parse_grep_content_scan_output_skips_a_file_whose_content_came_back_empty() {
+    // Pins the skip-not-fail policy: a listed file whose re-grep came back
+    // empty (e.g. removed between listing and this command) is dropped
+    // rather than reported with zero matches.
+    let output = "\x00src/main.rs\x00\x00src/lib.rs\x0010:foo\n";
+
+    let matched_files = parse_grep_content_scan_output(output, &None, &None);
+
+    assert_eq!(
+        matched_files,
+        vec![GrepFileMatch {
+            file_path: "src/lib.rs".to_string(),
+            matched_lines: vec![GrepLineMatch { line_number: 10 }],
+        }]
+    );
+}
+
+#[test]
+fn parse_grep_content_scan_output_returns_empty_for_empty_output() {
+    assert_eq!(
+        parse_grep_content_scan_output("", &None, &None),
+        Vec::<GrepFileMatch>::new()
     );
 }
