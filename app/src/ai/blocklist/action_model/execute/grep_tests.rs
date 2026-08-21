@@ -129,7 +129,7 @@ fn build_grep_content_scan_command_wraps_script_in_sh_c() {
 
     let command = build_grep_content_scan_command(&queries, "/tmp/repo", ShellType::Bash);
 
-    let expected_script = r#"grep --color=never -rlIE --devices=skip -e 'needle' '/tmp/repo' | while IFS= read -r f; do printf '\000%s\000' "$f"; grep --color=never -nIE --devices=skip -e 'needle' -- "$f"; done; true"#;
+    let expected_script = r#"files=$(grep --color=never -rlIE --devices=skip -e 'needle' '/tmp/repo'); status=$?; if [ "$status" -gt 1 ]; then exit "$status"; fi; if [ -n "$files" ]; then printf '%s\n' "$files" | while IFS= read -r f; do printf '\000%s\000' "$f"; grep --color=never -nIE --devices=skip -e 'needle' -- "$f"; done; exit 0; fi; exit 1"#;
     assert_eq!(
         command,
         format!(
@@ -145,7 +145,7 @@ fn build_grep_content_scan_command_escapes_single_quote_through_both_quoting_lay
 
     let command = build_grep_content_scan_command(&queries, "/tmp/repo", ShellType::Bash);
 
-    let expected_script = r#"grep --color=never -rlIE --devices=skip -e 'owner'"'"'s code' '/tmp/repo' | while IFS= read -r f; do printf '\000%s\000' "$f"; grep --color=never -nIE --devices=skip -e 'owner'"'"'s code' -- "$f"; done; true"#;
+    let expected_script = r#"files=$(grep --color=never -rlIE --devices=skip -e 'owner'"'"'s code' '/tmp/repo'); status=$?; if [ "$status" -gt 1 ]; then exit "$status"; fi; if [ -n "$files" ]; then printf '%s\n' "$files" | while IFS= read -r f; do printf '\000%s\000' "$f"; grep --color=never -nIE --devices=skip -e 'owner'"'"'s code' -- "$f"; done; exit 0; fi; exit 1"#;
     assert_eq!(
         command,
         format!(
@@ -161,7 +161,7 @@ fn build_grep_content_scan_command_keeps_adversarial_query_inert_through_both_qu
 
     let command = build_grep_content_scan_command(&queries, "/tmp/repo path", ShellType::Bash);
 
-    let expected_script = r#"grep --color=never -rlIE --devices=skip -e '$(touch /tmp/warp-poc); `id`' '/tmp/repo path' | while IFS= read -r f; do printf '\000%s\000' "$f"; grep --color=never -nIE --devices=skip -e '$(touch /tmp/warp-poc); `id`' -- "$f"; done; true"#;
+    let expected_script = r#"files=$(grep --color=never -rlIE --devices=skip -e '$(touch /tmp/warp-poc); `id`' '/tmp/repo path'); status=$?; if [ "$status" -gt 1 ]; then exit "$status"; fi; if [ -n "$files" ]; then printf '%s\n' "$files" | while IFS= read -r f; do printf '\000%s\000' "$f"; grep --color=never -nIE --devices=skip -e '$(touch /tmp/warp-poc); `id`' -- "$f"; done; exit 0; fi; exit 1"#;
     assert_eq!(
         command,
         format!(
@@ -183,7 +183,7 @@ fn build_grep_content_scan_command_uses_bash_style_quoting_inside_the_script_eve
 
     let command = build_grep_content_scan_command(&queries, "/tmp/repo", ShellType::Fish);
 
-    let expected_script = r#"grep --color=never -rlIE --devices=skip -e 'owner'"'"'s code' '/tmp/repo' | while IFS= read -r f; do printf '\000%s\000' "$f"; grep --color=never -nIE --devices=skip -e 'owner'"'"'s code' -- "$f"; done; true"#;
+    let expected_script = r#"files=$(grep --color=never -rlIE --devices=skip -e 'owner'"'"'s code' '/tmp/repo'); status=$?; if [ "$status" -gt 1 ]; then exit "$status"; fi; if [ -n "$files" ]; then printf '%s\n' "$files" | while IFS= read -r f; do printf '\000%s\000' "$f"; grep --color=never -nIE --devices=skip -e 'owner'"'"'s code' -- "$f"; done; exit 0; fi; exit 1"#;
     assert_eq!(
         command,
         format!(

@@ -544,10 +544,10 @@ async fn run_grep_command(
                 .with_output(output)
         }),
         // Not every `grep` on a remote session supports `--null` (e.g.
-        // BusyBox). Fall back to a form that's unambiguous without it: list
-        // the matching files first (a bare filename has no adjacent field to
-        // confuse it with, so `-l` needs no NUL delimiting), then grep each
-        // one individually, so the per-match output only ever needs to carry
+        // BusyBox). Fall back to a single command (see
+        // run_grep_per_file_fallback) that's unambiguous without it: list
+        // the matching files, then grep each one individually within the
+        // same script, so the per-match output only ever needs to carry
         // `{line_number}:{content}` for a path we already know.
         Err(null_delimited_error) => {
             run_grep_per_file_fallback(
@@ -564,28 +564,20 @@ async fn run_grep_command(
     }
 }
 
-/// Falls back, for a remote `grep` that doesn't support `--null`, to listing
-/// matching files (`grep -l`, unchanged) and then running a single
-/// follow-up command that re-greps every one of them, instead of one
-/// command per file. Returns `original_error` if listing the files itself
-/// also fails, since that indicates `grep` is unusable here for a reason
+/// Falls back, for a remote `grep` that doesn't support `--null`, to a
+/// single command (see `build_grep_content_scan_command`) that lists
+/// matching files and re-greps every one of them, instead of the ambiguous
+/// single-command heuristic this replaced or one command per file. Returns
+/// `original_error` if that command fails for a reason other than finding
+/// no matches, since that indicates `grep` is unusable here for a reason
 /// unrelated to `--null`.
 ///
-/// The follow-up command (see `build_grep_content_scan_command`) re-lists
-/// the matching files itself, piping them into a loop rather than passing
-/// them as arguments, to avoid an unbounded command line for a large match
-/// set. That loop still enumerates files by reading `-l`'s newline-
-/// terminated output one line at a time, so a path containing a raw
-/// newline byte still isn't resolved correctly there -- the same caveat
-/// as before, now on this command instead of a separate listing step. The
-/// resulting fragments simply fail to be found and are skipped (see
+/// The command's own listing still enumerates files by reading `-l`'s
+/// newline-terminated output one line at a time, so a path containing a
+/// raw newline byte still isn't resolved correctly there -- the same
+/// caveat that existed on this fallback before. The resulting fragments
+/// simply fail to be found and are skipped (see
 /// `parse_grep_content_scan_output`), not misattributed to the wrong file.
-///
-/// This re-reads every matching file once more than the (already run,
-/// separate) listing step did, since `-l` only needs to confirm a match
-/// per file while the follow-up needs its content; that overhead scales
-/// with the number of matches, not the size of the tree being searched,
-/// since `-l` already narrowed the follow-up to just the matching files.
 async fn run_grep_per_file_fallback(
     queries: &[String],
     target_path: &str,
@@ -595,35 +587,44 @@ async fn run_grep_per_file_fallback(
     execute_directory: &str,
     original_error: GrepError,
 ) -> Result<GrepResult, GrepError> {
-    let list_command = build_grep_list_files_command(queries, target_path, shell_type);
-    match execute_grep_command(&list_command, session, execute_directory).await {
+    let scan_command = build_grep_content_scan_command(queries, target_path, shell_type);
+    match execute_grep_command(&scan_command, session, execute_directory).await {
         Ok(GrepCommandOutcome::NoMatches) => Ok(GrepResult::Success {
             matched_files: vec![],
         }),
-        Ok(GrepCommandOutcome::Matches(_)) => {
-            let scan_command = build_grep_content_scan_command(queries, target_path, shell_type);
-            match execute_grep_command(&scan_command, session, execute_directory).await {
-                Ok(GrepCommandOutcome::NoMatches) => Ok(GrepResult::Success {
-                    matched_files: vec![],
-                }),
-                Ok(GrepCommandOutcome::Matches(output)) => Ok(GrepResult::Success {
-                    matched_files: parse_grep_content_scan_output(
-                        &output,
-                        &shell_launch_data,
-                        &Some(execute_directory.to_string()),
-                    ),
-                }),
-                Err(e) => Err(e),
-            }
-        }
+        Ok(GrepCommandOutcome::Matches(output)) => Ok(GrepResult::Success {
+            matched_files: parse_grep_content_scan_output(
+                &output,
+                &shell_launch_data,
+                &Some(execute_directory.to_string()),
+            ),
+        }),
         Err(_) => Err(original_error),
     }
 }
 
-/// Builds the single follow-up command for `run_grep_per_file_fallback`:
-/// re-lists the matching files (see `build_grep_list_files_command`) and,
-/// for each one, emits a `\0{path}\0` marker followed by that file's own
-/// `grep -n` output -- one command in total, rather than one per file.
+/// Builds the single command for `run_grep_per_file_fallback`: lists
+/// matching files (see `build_grep_list_files_command`) exactly once, then
+/// re-greps every one of them, emitting a `\0{path}\0` marker before each
+/// file's own `grep -n` output -- one command, one traversal of the tree,
+/// rather than a separate listing command followed by one command per
+/// file (or a second, duplicate traversal to re-list inside the
+/// follow-up).
+///
+/// The listing's own exit status is captured into `$status` (rather than
+/// losing it by piping straight into the loop) so it can still
+/// distinguish "no matches" (1, matching the POSIX `grep` convention --
+/// `execute_grep_command` maps that to `GrepCommandOutcome::NoMatches`)
+/// from a real failure (anything else non-zero, propagated by `exit
+/// "$status"` so `run_grep_per_file_fallback` sees it as an error rather
+/// than silently returning no results). The file list itself is captured
+/// into `$files` (a shell variable, not `argv`) and only fed into the read
+/// loop when non-empty, to avoid an unbounded command line for a large
+/// match set without spuriously re-grepping an empty path when there were
+/// no matches. The loop's own exit status is irrelevant by construction:
+/// the script always explicitly exits 0 after it (or 1 if there was
+/// nothing to loop over) rather than let it fall out to whatever the last
+/// file's `grep` happened to return.
 ///
 /// Runs via `sh -c` so the loop syntax is fixed regardless of the session's
 /// interactive shell (e.g. fish's loop syntax differs); any host reaching
@@ -634,15 +635,8 @@ async fn run_grep_per_file_fallback(
 /// -c`, so a query containing a single quote is escaped correctly through
 /// both layers (see the tests for this function).
 ///
-/// The file list is piped into the loop rather than interpolated as
-/// arguments, to avoid an unbounded command line for a large match set;
 /// `-I` already excludes binary files, so a matched file's content can't
 /// itself contain a NUL byte to collide with the `\0{path}\0` framing.
-/// The `\0{path}\0` markers are exactly as unambiguous as the primary
-/// NUL-delimited path's records, but only for whatever byte string each
-/// loop iteration's `$f` actually holds -- see the newline caveat on
-/// `run_grep_per_file_fallback` for where that value itself can still be a
-/// truncated fragment of the real path.
 fn build_grep_content_scan_command(
     queries: &[String],
     target_path: &str,
@@ -657,15 +651,18 @@ fn build_grep_content_scan_command(
     }
     single_file_grep.push_str(" -- \"$f\"");
 
-    // The trailing `true` keeps the script's own exit code from reflecting
-    // just the last loop iteration's grep (e.g. a file with no matches by
-    // the time it's re-read, or one that failed to be found at all --
-    // see the module-level note on the listing step's newline caveat).
-    // Whether the follow-up as a whole found anything is judged from its
-    // output instead, by `parse_grep_content_scan_output`.
-    let script = format!(
-        "{list_command} | while IFS= read -r f; do printf '\\000%s\\000' \"$f\"; {single_file_grep}; done; true"
-    );
+    let mut script = format!("files=$({list_command}); status=$?; ");
+    script.push_str("if [ \"$status\" -gt 1 ]; then exit \"$status\"; fi; ");
+    script.push_str("if [ -n \"$files\" ]; then ");
+    // `\000` here is deliberately one shell backslash followed by three
+    // octal digits -- Rust has no octal escapes, so this is four literal
+    // characters in the generated script, not a Rust-level escape -- which
+    // `printf` interprets as a single NUL byte.
+    script.push_str(&format!(
+        "printf '%s\\n' \"$files\" | while IFS= read -r f; do printf '\\000%s\\000' \"$f\"; {single_file_grep}; done; "
+    ));
+    script.push_str("exit 0; fi; exit 1");
+
     format!("sh -c {}", shell_quote_arg(&script, shell_type))
 }
 
