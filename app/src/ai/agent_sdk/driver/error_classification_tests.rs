@@ -4,6 +4,10 @@ use super::classify_driver_error;
 use crate::ai::agent_sdk::driver::AgentDriverError;
 use crate::ai::agent_sdk::driver::terminal::{BootstrapError, ShareSessionError};
 
+fn managed_uuid() -> uuid::Uuid {
+    uuid::Uuid::parse_str("019f0016-9e6a-762e-9034-dcb7aec284b0").unwrap()
+}
+
 fn assert_state_and_code(
     error: AgentDriverError,
     expected_state: AgentTaskState,
@@ -110,9 +114,28 @@ fn warp_drive_sync_failed_is_error() {
 #[test]
 fn mcp_server_not_found_is_failed_with_env_setup() {
     assert_state_and_code(
-        AgentDriverError::MCPServerNotFound(uuid::Uuid::nil()),
+        AgentDriverError::MCPServerNotFound {
+            uuid: uuid::Uuid::nil(),
+            name: None,
+        },
         AgentTaskState::Failed,
         Some(PlatformErrorCode::EnvironmentSetupFailed),
+    );
+}
+
+#[test]
+fn mcp_server_not_found_names_the_configured_server() {
+    let uuid = managed_uuid();
+    let (_, update) = classify_driver_error(&AgentDriverError::MCPServerNotFound {
+        uuid,
+        name: Some("sentry".to_string()),
+    });
+
+    assert_eq!(
+        update.message,
+        format!(
+            "MCP server 'sentry' ({uuid}) was not found. Verify the server exists in your Warp Drive and the UUID is correct."
+        )
     );
 }
 
@@ -120,11 +143,77 @@ fn mcp_server_not_found_is_failed_with_env_setup() {
 fn managed_mcp_resolution_failed_is_failed_with_env_setup() {
     assert_state_and_code(
         AgentDriverError::ManagedMcpResolutionFailed {
-            uid: uuid::Uuid::nil(),
+            uuid: uuid::Uuid::nil(),
+            name: None,
             message: "not active".into(),
         },
         AgentTaskState::Failed,
         Some(PlatformErrorCode::EnvironmentSetupFailed),
+    );
+}
+
+#[test]
+fn managed_mcp_resolution_failed_names_the_configured_server() {
+    let uuid = managed_uuid();
+    let (_, update) = classify_driver_error(&AgentDriverError::ManagedMcpResolutionFailed {
+        uuid,
+        name: Some("sentry".to_string()),
+        message: "received non-OK response code 429 Too Many Requests".to_string(),
+    });
+
+    assert_eq!(
+        update.message,
+        format!(
+            "Managed MCP server 'sentry' ({uuid}) could not be resolved: received non-OK response code 429 Too Many Requests"
+        )
+    );
+}
+
+/// Every reference that carries no usable name must fall back to today's
+/// UID-only wording instead of rendering an empty or doubled identifier.
+#[test]
+fn managed_mcp_resolution_failed_falls_back_to_the_uid_alone() {
+    let uuid = managed_uuid();
+    let unnamed = [
+        // `oz agent run --mcp <uuid>` configures no name at all.
+        None,
+        // That reference also makes the UUID its own `mcp_servers` key.
+        Some(uuid.to_string()),
+        // Non-canonical spellings of the same UUID are accepted as a `warp_id`.
+        Some(uuid.to_string().to_uppercase()),
+        Some(uuid.simple().to_string()),
+        // Nothing rejects a blank `mcp_servers` key.
+        Some(String::new()),
+        Some("   ".to_string()),
+    ];
+
+    for name in unnamed {
+        let (_, update) = classify_driver_error(&AgentDriverError::ManagedMcpResolutionFailed {
+            uuid,
+            name: name.clone(),
+            message: "not active".to_string(),
+        });
+
+        assert_eq!(
+            update.message,
+            format!("Managed MCP server {uuid} could not be resolved: not active"),
+            "name {name:?} must not be rendered"
+        );
+    }
+}
+
+#[test]
+fn managed_mcp_resolution_failed_trims_a_padded_name() {
+    let uuid = managed_uuid();
+    let (_, update) = classify_driver_error(&AgentDriverError::ManagedMcpResolutionFailed {
+        uuid,
+        name: Some("  sentry ".to_string()),
+        message: "not active".to_string(),
+    });
+
+    assert_eq!(
+        update.message,
+        format!("Managed MCP server 'sentry' ({uuid}) could not be resolved: not active")
     );
 }
 

@@ -15,7 +15,11 @@ fn test_parse_uuid() {
     let uuid_str = "550e8400-e29b-41d4-a716-446655440000";
     let result = parse_mcp_spec(uuid_str).unwrap();
     match result {
-        MCPSpec::Uuid(uuid) => assert_eq!(uuid.to_string(), uuid_str),
+        // A bare `--mcp <uuid>` carries no configured name.
+        MCPSpec::Uuid { uuid, name } => {
+            assert_eq!(uuid.to_string(), uuid_str);
+            assert_eq!(name, None);
+        }
         other => panic!("Expected Uuid variant, got {other:?}"),
     }
 }
@@ -82,7 +86,7 @@ fn test_uuid_takes_precedence_over_json() {
     // A valid UUID should be parsed as UUID, not as JSON
     let uuid_str = "550e8400-e29b-41d4-a716-446655440000";
     let result = parse_mcp_spec(uuid_str).unwrap();
-    assert!(matches!(result, MCPSpec::Uuid(_)));
+    assert!(matches!(result, MCPSpec::Uuid { .. }));
 }
 
 #[test]

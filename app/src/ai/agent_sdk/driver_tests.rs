@@ -30,7 +30,7 @@ use warpui::{App, SingletonEntity as _};
 use super::{
     AgentDriver, AgentDriverError, CLIAgentSessionStatus, IdleTimeoutSender,
     LEGACY_OZ_PARENT_LISTENER_MANAGED_EXTERNALLY_ENV, LEGACY_OZ_PARENT_STATE_ROOT_ENV,
-    OZ_MESSAGE_LISTENER_MANAGED_EXTERNALLY_ENV, OZ_MESSAGE_LISTENER_STATE_ROOT_ENV,
+    McpServerRef, OZ_MESSAGE_LISTENER_MANAGED_EXTERNALLY_ENV, OZ_MESSAGE_LISTENER_STATE_ROOT_ENV,
     PlatformErrorCode, SDKConversationOutputStatus, build_secret_env_vars,
     idle_window_for_cli_session_status, idle_window_for_terminal_status,
     setup_failure_status_update, terminal_status_log_outcome,
@@ -176,14 +176,24 @@ fn managed_resolver_local_uuid_does_not_call_managed_client() {
     let local_installed_uuids = HashSet::from([uuid]);
 
     let resolved = block_on(AgentDriver::resolve_mcp_specs_with_local_uuids(
-        &[MCPSpec::Uuid(uuid)],
+        &[MCPSpec::Uuid {
+            uuid,
+            name: Some("sentry".to_string()),
+        }],
         &local_installed_uuids,
         Arc::new(mock),
         None,
     ))
     .unwrap();
 
-    assert_eq!(resolved.local_uuids, vec![uuid]);
+    // The configured name rides along so a startup failure can name the server.
+    assert_eq!(
+        resolved.local_servers,
+        vec![McpServerRef {
+            uuid,
+            name: Some("sentry".to_string()),
+        }]
+    );
     assert!(resolved.ephemeral_installations.is_empty());
 }
 
@@ -201,14 +211,14 @@ fn managed_resolver_non_local_uuid_calls_managed_client() {
         });
 
     let resolved = block_on(AgentDriver::resolve_mcp_specs_with_local_uuids(
-        &[MCPSpec::Uuid(uuid)],
+        &[MCPSpec::Uuid { uuid, name: None }],
         &HashSet::new(),
         Arc::new(mock),
         None,
     ))
     .unwrap();
 
-    assert!(resolved.local_uuids.is_empty());
+    assert!(resolved.local_servers.is_empty());
     assert_eq!(resolved.ephemeral_installations.len(), 1);
 }
 
@@ -232,7 +242,7 @@ fn well_known_spec_resolves_via_managed_client() {
     ))
     .unwrap();
 
-    assert!(resolved.local_uuids.is_empty());
+    assert!(resolved.local_servers.is_empty());
     assert_eq!(resolved.ephemeral_installations.len(), 1);
 }
 
@@ -254,7 +264,7 @@ fn well_known_resolution_failure_skips_server() {
     ))
     .unwrap();
 
-    assert!(resolved.local_uuids.is_empty());
+    assert!(resolved.local_servers.is_empty());
     assert!(resolved.ephemeral_installations.is_empty());
 }
 
@@ -279,7 +289,7 @@ fn well_known_resolution_failure_does_not_drop_other_specs() {
     let resolved = block_on(AgentDriver::resolve_mcp_specs_with_local_uuids(
         &[
             MCPSpec::WellKnown("linear".to_string()),
-            MCPSpec::Uuid(uuid),
+            MCPSpec::Uuid { uuid, name: None },
         ],
         &HashSet::new(),
         Arc::new(mock),
@@ -305,7 +315,7 @@ fn well_known_spec_is_skipped_when_flag_disabled() {
     ))
     .unwrap();
 
-    assert!(resolved.local_uuids.is_empty());
+    assert!(resolved.local_servers.is_empty());
     assert!(resolved.ephemeral_installations.is_empty());
 }
 
@@ -622,7 +632,7 @@ fn builtin_factory_mcp_skipped_on_name_collision() {
 }
 
 #[test]
-fn managed_resolution_failure_includes_uid_and_message() {
+fn managed_resolution_failure_includes_uid_name_and_message() {
     let uuid = uuid::Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
     let mut mock = MockManagedMcpClient::new();
     mock.expect_create_managed_mcp_client_config()
@@ -630,7 +640,10 @@ fn managed_resolution_failure_includes_uid_and_message() {
         .returning(|_| Err(anyhow::anyhow!("not active")));
 
     let err = block_on(AgentDriver::resolve_mcp_specs_with_local_uuids(
-        &[MCPSpec::Uuid(uuid)],
+        &[MCPSpec::Uuid {
+            uuid,
+            name: Some("sentry".to_string()),
+        }],
         &HashSet::new(),
         Arc::new(mock),
         None,
@@ -638,8 +651,13 @@ fn managed_resolution_failure_includes_uid_and_message() {
     .unwrap_err();
 
     match err {
-        AgentDriverError::ManagedMcpResolutionFailed { uid, message } => {
-            assert_eq!(uid, uuid);
+        AgentDriverError::ManagedMcpResolutionFailed {
+            uuid: failed_uuid,
+            name,
+            message,
+        } => {
+            assert_eq!(failed_uuid, uuid);
+            assert_eq!(name.as_deref(), Some("sentry"));
             assert!(message.contains("not active"));
         }
         other => panic!("expected managed MCP resolution failure, got {other:?}"),

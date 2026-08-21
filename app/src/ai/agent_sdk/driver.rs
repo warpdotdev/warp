@@ -660,10 +660,22 @@ pub enum AgentDriverError {
     TerminalUnavailable,
     #[error("Invalid runtime state - please file a bug report.")]
     InvalidRuntimeState,
-    #[error("Requested MCP server not found: {0}")]
-    MCPServerNotFound(uuid::Uuid),
-    #[error("Failed to resolve managed MCP server {uid}: {message}")]
-    ManagedMcpResolutionFailed { uid: Uuid, message: String },
+    #[error("Requested MCP server not found: {}", describe_mcp_server(uuid, name.as_deref()))]
+    MCPServerNotFound {
+        uuid: Uuid,
+        /// Name the run configured for this server, when one is known.
+        name: Option<String>,
+    },
+    #[error(
+        "Failed to resolve managed MCP server {}: {message}",
+        describe_mcp_server(uuid, name.as_deref())
+    )]
+    ManagedMcpResolutionFailed {
+        uuid: Uuid,
+        /// Name the run configured for this server, when one is known.
+        name: Option<String>,
+        message: String,
+    },
     #[error("Failed to start MCP servers: {}", .details.join("; "))]
     MCPStartupFailed {
         /// One line per unavailable server (e.g. "'datadog' failed to start:
@@ -796,9 +808,53 @@ impl ErrorExt for AgentDriverError {
 }
 register_error!(AgentDriverError);
 
+/// Identify an MCP server in a user-facing message: `'sentry' (019f0016-…)` when
+/// the run configured a name for it, and the bare UID otherwise.
+///
+/// The UID always stays in the message so support and debugging can still
+/// identify the server. A name that is blank, or that is just the UID again, is
+/// dropped rather than rendered alongside it: `--mcp <uuid>` makes the UUID its
+/// own `mcp_servers` key, and nothing rejects an empty key. The UID case is
+/// matched by parsing rather than by bytes, so a non-canonical spelling of the
+/// same UUID (uppercase, or without hyphens - both accepted as a `warp_id`)
+/// is caught too.
+fn describe_mcp_server(uuid: &Uuid, name: Option<&str>) -> String {
+    match name.map(str::trim).filter(|name| !name.is_empty()) {
+        Some(name) if !Uuid::parse_str(name).is_ok_and(|parsed| parsed == *uuid) => {
+            format!("'{name}' ({uuid})")
+        }
+        _ => uuid.to_string(),
+    }
+}
+
+/// A managed MCP server the run references by UUID.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct McpServerRef {
+    uuid: Uuid,
+    /// Name the run configured for this server (its `mcp_servers` map key).
+    /// `None` when the reference carried no name, as with a profile allowlist
+    /// entry or `--mcp <uuid>`.
+    name: Option<String>,
+}
+
+impl McpServerRef {
+    fn unnamed(uuid: Uuid) -> Self {
+        Self { uuid, name: None }
+    }
+
+    fn not_found_error(&self) -> AgentDriverError {
+        AgentDriverError::MCPServerNotFound {
+            uuid: self.uuid,
+            name: self.name.clone(),
+        }
+    }
+}
+
 #[derive(Debug, Default)]
 struct ResolvedMcpSpecs {
-    local_uuids: Vec<Uuid>,
+    /// Servers already installed locally, so they start without a managed MCP
+    /// round trip.
+    local_servers: Vec<McpServerRef>,
     ephemeral_installations: Vec<TemplatableMCPServerInstallation>,
 }
 
@@ -1384,17 +1440,17 @@ impl AgentDriver {
     ) -> Result<HashMap<String, JSONMCPServer>, AgentDriverError> {
         let resolved_specs = Self::resolve_mcp_specs(specs, managed_mcp_client, foreground).await?;
 
-        let local_uuids = resolved_specs.local_uuids;
+        let local_servers = resolved_specs.local_servers;
         let mut installations = foreground
             .spawn(move |_, ctx| -> Result<Vec<_>, AgentDriverError> {
                 let manager = TemplatableMCPServerManager::as_ref(ctx);
-                local_uuids
+                local_servers
                     .iter()
-                    .map(|uuid| {
+                    .map(|server| {
                         manager
-                            .get_installed_server(uuid)
+                            .get_installed_server(&server.uuid)
                             .cloned()
-                            .ok_or(AgentDriverError::MCPServerNotFound(*uuid))
+                            .ok_or_else(|| server.not_found_error())
                     })
                     .collect()
             })
@@ -1458,15 +1514,19 @@ impl AgentDriver {
 
         for spec in specs {
             match spec {
-                MCPSpec::Uuid(uuid) if local_installed_uuids.contains(uuid) => {
-                    resolved.local_uuids.push(*uuid);
+                MCPSpec::Uuid { uuid, name } if local_installed_uuids.contains(uuid) => {
+                    resolved.local_servers.push(McpServerRef {
+                        uuid: *uuid,
+                        name: name.clone(),
+                    });
                 }
-                MCPSpec::Uuid(uuid) => {
+                MCPSpec::Uuid { uuid, name } => {
                     let client_config = managed_mcp_client
                         .create_managed_mcp_client_config(uuid.to_string())
                         .await
                         .map_err(|err| AgentDriverError::ManagedMcpResolutionFailed {
-                            uid: *uuid,
+                            uuid: *uuid,
+                            name: name.clone(),
                             message: format!("{err:#}"),
                         })?;
                     let installations = Self::installations_from_managed_client_config_json(
@@ -1476,7 +1536,8 @@ impl AgentDriver {
                     )
                     .map_err(|err| {
                         AgentDriverError::ManagedMcpResolutionFailed {
-                            uid: *uuid,
+                            uuid: *uuid,
+                            name: name.clone(),
                             message: err.to_string(),
                         }
                     })?;
@@ -1657,33 +1718,40 @@ impl AgentDriver {
                 profile_allowlist.len()
             );
         }
-        self.start_mcp_servers(&profile_allowlist, ctx)
+        // A profile allowlist references servers by UUID only, so these carry no
+        // configured name.
+        let servers: Vec<McpServerRef> = profile_allowlist
+            .into_iter()
+            .map(McpServerRef::unnamed)
+            .collect();
+        self.start_mcp_servers(&servers, ctx)
     }
 
     fn get_mcp_servers_to_start(
         &self,
-        uuids: &[uuid::Uuid],
+        servers: &[McpServerRef],
         ctx: &mut ModelContext<Self>,
     ) -> Result<HashSet<Uuid>, AgentDriverError> {
         let templatable_mcp_manager = TemplatableMCPServerManager::handle(ctx);
 
         let mut servers_to_start: HashSet<Uuid> = HashSet::new();
 
-        for uuid in uuids.iter() {
+        for server in servers.iter() {
+            let uuid = server.uuid;
             if templatable_mcp_manager
                 .as_ref(ctx)
-                .is_server_active_or_pending(*uuid)
+                .is_server_active_or_pending(uuid)
             {
                 log::debug!("MCP server {uuid} is already active or pending; skipping");
                 continue;
             } else if templatable_mcp_manager
                 .as_ref(ctx)
-                .get_installed_server(uuid)
+                .get_installed_server(&uuid)
                 .is_some()
             {
-                servers_to_start.insert(*uuid);
+                servers_to_start.insert(uuid);
             } else {
-                return Err(AgentDriverError::MCPServerNotFound(*uuid));
+                return Err(server.not_found_error());
             }
         }
 
@@ -1907,10 +1975,10 @@ impl AgentDriver {
 
     fn start_mcp_servers(
         &self,
-        uuids: &[uuid::Uuid],
+        servers: &[McpServerRef],
         ctx: &mut ModelContext<Self>,
     ) -> impl Future<Output = Result<(), AgentDriverError>> + use<> {
-        let servers_to_start = match self.get_mcp_servers_to_start(uuids, ctx) {
+        let servers_to_start = match self.get_mcp_servers_to_start(servers, ctx) {
             Ok(val) => val,
             Err(e) => {
                 return Either::Right(future::ready(Err(e)));
@@ -2557,7 +2625,7 @@ impl AgentDriver {
                     let resolved_mcp_specs =
                         Self::resolve_mcp_specs(&mcp_specs, managed_mcp_client, &foreground)
                             .await?;
-                    let existing_uuids = resolved_mcp_specs.local_uuids;
+                    let existing_servers = resolved_mcp_specs.local_servers;
                     let mut ephemeral_installations = resolved_mcp_specs.ephemeral_installations;
 
                     // Attach the built-in Factory MCP server. Interactive
@@ -2565,7 +2633,7 @@ impl AgentDriver {
                     // `TemplatableMCPServerManager::sync_builtin_servers`,
                     // which skips CLI agent runs, so the driver injects the
                     // same code-owned installation here, scoped to this run.
-                    let local_uuids = existing_uuids.clone();
+                    let local_servers = existing_servers.clone();
                     let mut taken_server_names: HashSet<String> = ephemeral_installations
                         .iter()
                         .map(|installation| installation.templatable_mcp_server().name.clone())
@@ -2574,12 +2642,14 @@ impl AgentDriver {
                         .spawn(move |_, ctx| {
                             let (local_names, builtin_already_active) = {
                                 let manager = TemplatableMCPServerManager::as_ref(ctx);
-                                let local_names = local_uuids
+                                let local_names = local_servers
                                     .iter()
-                                    .filter_map(|uuid| {
-                                        manager.get_installed_server(uuid).map(|installation| {
-                                            installation.templatable_mcp_server().name.clone()
-                                        })
+                                    .filter_map(|server| {
+                                        manager.get_installed_server(&server.uuid).map(
+                                            |installation| {
+                                                installation.templatable_mcp_server().name.clone()
+                                            },
+                                        )
                                     })
                                     .collect::<Vec<_>>();
                                 let builtin_already_active = manager.is_server_active_or_pending(
@@ -2616,7 +2686,7 @@ impl AgentDriver {
 
                     log::info!(
                         "Starting {} existing and {} ephemeral MCP servers",
-                        existing_uuids.len(),
+                        existing_servers.len(),
                         ephemeral_installations.len()
                     );
 
@@ -2624,9 +2694,9 @@ impl AgentDriver {
                     // degradation details so non-strict runs can continue with
                     // whichever servers did start.
                     let mut degraded = Vec::new();
-                    if !existing_uuids.is_empty() {
+                    if !existing_servers.is_empty() {
                         let result = foreground
-                            .spawn(move |me, ctx| me.start_mcp_servers(&existing_uuids, ctx))
+                            .spawn(move |me, ctx| me.start_mcp_servers(&existing_servers, ctx))
                             .await?
                             .await;
                         Self::collect_mcp_degradation(result, &mut degraded)?;

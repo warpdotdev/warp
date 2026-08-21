@@ -1211,7 +1211,7 @@ fn agent_run_cloud_accepts_mcp() {
 
     assert!(matches!(
         run_args.mcp_specs.as_slice(),
-        [crate::mcp::MCPSpec::Uuid(parsed_uuid)] if *parsed_uuid == uuid
+        [crate::mcp::MCPSpec::Uuid { uuid: parsed_uuid, .. }] if *parsed_uuid == uuid
     ));
 }
 

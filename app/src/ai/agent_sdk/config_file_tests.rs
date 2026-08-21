@@ -152,8 +152,31 @@ fn mcp_servers_map_converts_to_runtime_specs() {
     let map = loaded.file.mcp_servers.as_ref().unwrap();
     let specs = super::mcp_specs_from_mcp_servers(map).unwrap();
 
-    assert!(specs.iter().any(|s| matches!(s, MCPSpec::Uuid(_))));
+    // The map key travels with the spec so run-setup failures can name the server.
+    assert!(specs.iter().any(|s| matches!(
+        s,
+        MCPSpec::Uuid { uuid, name }
+            if uuid.to_string() == "550e8400-e29b-41d4-a716-446655440000"
+                && name.as_deref() == Some("existing")
+    )));
     assert!(specs.iter().any(|s| matches!(s, MCPSpec::Json(_))));
+}
+
+#[test]
+fn duplicate_uuid_warp_ids_dedupe_to_one_named_spec() {
+    let uuid = "550e8400-e29b-41d4-a716-446655440000";
+    let map = serde_json::Map::from_iter([
+        ("alias".to_string(), json!({ "warp_id": uuid })),
+        ("duplicate".to_string(), json!({ "warp_id": uuid })),
+    ]);
+
+    let specs = super::mcp_specs_from_mcp_servers(&map).unwrap();
+
+    assert_eq!(specs.len(), 1);
+    assert!(
+        matches!(&specs[0], MCPSpec::Uuid { name, .. } if name.as_deref() == Some("alias")),
+        "one server referenced twice must dedupe to a single named spec, got {specs:?}"
+    );
 }
 
 #[test]

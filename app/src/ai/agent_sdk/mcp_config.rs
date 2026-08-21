@@ -24,7 +24,7 @@ pub(super) fn build_mcp_servers_from_specs(
 
     for spec in specs {
         match spec {
-            MCPSpec::Uuid(uuid) => {
+            MCPSpec::Uuid { uuid, .. } => {
                 // TODO: Look up and use the real MCP server name from MCP managers instead of using the UUID.
                 let name = uuid.to_string();
                 insert_unique(

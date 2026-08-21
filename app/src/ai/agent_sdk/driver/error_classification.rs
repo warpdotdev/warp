@@ -1,7 +1,7 @@
 use warp_graphql::ai::{AgentTaskState, PlatformErrorCode};
 
-use super::AgentDriverError;
 use super::terminal::ShareSessionError;
+use super::{AgentDriverError, describe_mcp_server};
 use crate::ai::blocklist::local_agent_task_sync_model::classify_renderable_error;
 use crate::server::server_api::ai::TaskStatusUpdate;
 
@@ -91,19 +91,27 @@ pub fn classify_driver_error(error: &AgentDriverError) -> (AgentTaskState, TaskS
         ),
 
         // --- User-side errors (task → FAILED) ---
-        AgentDriverError::MCPServerNotFound(uuid) => (
+        AgentDriverError::MCPServerNotFound { uuid, name } => (
             AgentTaskState::Failed,
             TaskStatusUpdate::with_error_code(
                 format!(
-                    "MCP server {uuid} was not found. Verify the server exists in your Warp Drive and the UUID is correct."
+                    "MCP server {} was not found. Verify the server exists in your Warp Drive and the UUID is correct.",
+                    describe_mcp_server(uuid, name.as_deref())
                 ),
                 PlatformErrorCode::EnvironmentSetupFailed,
             ),
         ),
-        AgentDriverError::ManagedMcpResolutionFailed { uid, message } => (
+        AgentDriverError::ManagedMcpResolutionFailed {
+            uuid,
+            name,
+            message,
+        } => (
             AgentTaskState::Failed,
             TaskStatusUpdate::with_error_code(
-                format!("Managed MCP server {uid} could not be resolved: {message}"),
+                format!(
+                    "Managed MCP server {} could not be resolved: {message}",
+                    describe_mcp_server(uuid, name.as_deref())
+                ),
                 PlatformErrorCode::EnvironmentSetupFailed,
             ),
         ),

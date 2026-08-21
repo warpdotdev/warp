@@ -102,7 +102,8 @@ fn supported_keys_context() -> String {
 /// Convert an unwrapped `mcp_servers` map into runtime MCP specs for AgentDriver.
 ///
 /// Behavior:
-/// - Entries with a UUID `warp_id` become `MCPSpec::Uuid`.
+/// - Entries with a UUID `warp_id` become `MCPSpec::Uuid`, carrying the map key as
+///   the server's configured name so user-facing errors can identify it by name.
 /// - Entries with any other non-empty `warp_id` (e.g. `"linear"`) become `MCPSpec::WellKnown`
 ///   when `FeatureFlag::WellKnownMcpIds` is enabled (and are rejected otherwise);
 ///   the server owns the set of recognized ids and unknown ids are skipped at resolution.
@@ -110,7 +111,7 @@ fn supported_keys_context() -> String {
 pub fn mcp_specs_from_mcp_servers(
     mcp_servers: &Map<String, Value>,
 ) -> anyhow::Result<Vec<MCPSpec>> {
-    let mut uuids: Vec<uuid::Uuid> = Vec::new();
+    let mut uuids: Vec<(uuid::Uuid, String)> = Vec::new();
     let mut well_known: Vec<String> = Vec::new();
     let mut json_map: Map<String, Value> = Map::new();
 
@@ -121,7 +122,7 @@ pub fn mcp_specs_from_mcp_servers(
 
         if let Some(warp_id) = obj.get("warp_id").and_then(Value::as_str) {
             if let Ok(uuid) = uuid::Uuid::parse_str(warp_id) {
-                uuids.push(uuid);
+                uuids.push((uuid, name.clone()));
             } else if !FeatureFlag::WellKnownMcpIds.is_enabled() {
                 return Err(anyhow::anyhow!(
                     "MCP server '{name}' field 'warp_id' must be a UUID"
@@ -138,12 +139,22 @@ pub fn mcp_specs_from_mcp_servers(
         }
     }
 
-    uuids.sort();
-    uuids.dedup();
+    // A server referenced under two names is still one server: dedupe by UUID,
+    // keeping the name that sorts first. `mcp_servers` is key-ordered rather than
+    // insertion-ordered, so that is the lexicographically smallest of its aliases,
+    // not the one the user wrote first.
+    uuids.sort_by(|(left, _), (right, _)| left.cmp(right));
+    uuids.dedup_by_key(|(uuid, _)| *uuid);
     well_known.sort();
     well_known.dedup();
 
-    let mut specs: Vec<MCPSpec> = uuids.into_iter().map(MCPSpec::Uuid).collect();
+    let mut specs: Vec<MCPSpec> = uuids
+        .into_iter()
+        .map(|(uuid, name)| MCPSpec::Uuid {
+            uuid,
+            name: Some(name),
+        })
+        .collect();
     specs.extend(well_known.into_iter().map(MCPSpec::WellKnown));
 
     if !json_map.is_empty() {

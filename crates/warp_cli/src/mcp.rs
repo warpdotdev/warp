@@ -27,7 +27,13 @@ impl MCPCommand {
 #[derive(Debug, Clone)]
 pub enum MCPSpec {
     /// Existing server by UUID.
-    Uuid(uuid::Uuid),
+    Uuid {
+        uuid: uuid::Uuid,
+        /// Name the run configured for this server (the `mcp_servers` map key),
+        /// used to identify it in user-facing messages. `None` when the
+        /// reference carried no name, as with `--mcp <uuid>`.
+        name: Option<String>,
+    },
     /// Well-known non-UUID managed MCP id (e.g. "linear"), resolved by the
     /// server. The server owns the set of recognized ids — ids it does not
     /// recognize fail resolution and are skipped at run setup, so new ids can
@@ -73,7 +79,7 @@ impl clap::builder::TypedValueParser for MCPSpecParser {
 
         // Try UUID first
         if let Ok(uuid) = uuid::Uuid::parse_str(s) {
-            return Ok(MCPSpec::Uuid(uuid));
+            return Ok(MCPSpec::Uuid { uuid, name: None });
         }
 
         // Check if it's a file path

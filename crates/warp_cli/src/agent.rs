@@ -600,7 +600,12 @@ impl RunAgentArgs {
     /// Combine `mcp_specs` with legacy `mcp_servers` (UUIDs) into a single list.
     pub fn all_mcp_specs(&self) -> Vec<MCPSpec> {
         let mut specs = self.mcp_specs.clone();
-        specs.extend(self.mcp_servers.iter().cloned().map(MCPSpec::Uuid));
+        specs.extend(
+            self.mcp_servers
+                .iter()
+                .copied()
+                .map(|uuid| MCPSpec::Uuid { uuid, name: None }),
+        );
         specs
     }
 }
