@@ -8,10 +8,9 @@ use inquire::{Confirm, InquireError, Password};
 use serde::Serialize;
 use warp_cli::GlobalOptions;
 use warp_cli::agent::OutputFormat;
-use warp_cli::scope::ObjectScope;
 use warp_cli::secret::{
     AnthropicMethod, CodexMethod, CreateProvider, CreateSecretArgs, DeleteSecretArgs,
-    ListSecretsArgs, SecretCommand, SecretType, UpdateSecretArgs, ValueArgs,
+    ListSecretsArgs, SecretCommand, SecretScope, SecretType, UpdateSecretArgs, ValueArgs,
 };
 use warp_core::features::FeatureFlag;
 use warp_graphql::managed_secrets::{ManagedSecret, ManagedSecretType};
@@ -23,9 +22,25 @@ use warpui::{AppContext, SingletonEntity as _};
 
 use super::output::{self, TableFormat};
 use crate::auth::UserUid;
+use crate::auth::auth_state::AuthStateProvider;
 use crate::cloud_object::Owner;
 use crate::server::ids::ServerId;
 use crate::util::time_format::format_approx_duration_from_now_utc;
+
+/// Resolves an `oz secret` scope flag pair into an [`Owner`], following the headless
+/// zero-/one-/multi-team selection rules (see [`super::common::resolve_headless_team_scope`]).
+fn resolve_secret_owner(scope: &SecretScope, ctx: &AppContext) -> Result<Owner> {
+    match super::common::resolve_headless_team_scope(scope.team.as_deref(), scope.personal, ctx)? {
+        Some(team_uid) => Ok(Owner::Team { team_uid }),
+        None => {
+            let user_uid = AuthStateProvider::as_ref(ctx)
+                .get()
+                .user_id()
+                .ok_or_else(|| anyhow::anyhow!("User should be logged in"))?;
+            Ok(Owner::User { user_uid })
+        }
+    }
+}
 
 #[derive(Serialize)]
 struct SecretInfo {
@@ -217,7 +232,7 @@ fn create_secret_with_input(
     name: String,
     input: SecretInput,
     description: Option<String>,
-    scope: ObjectScope,
+    scope: SecretScope,
 ) -> Result<()> {
     ManagedSecretManager::handle(ctx).update(ctx, move |_manager, ctx| {
         // Perform as much validation as possible up-front, before prompting the user for a secret.
@@ -230,7 +245,7 @@ fn create_secret_with_input(
                 return;
             }
 
-            let owner = match super::common::resolve_owner(scope.team, scope.personal, ctx) {
+            let owner = match resolve_secret_owner(&scope, ctx) {
                 Ok(owner) => owner,
                 Err(err) => {
                     super::report_fatal_error(err, ctx);
@@ -283,8 +298,7 @@ fn create_secret_with_input(
 fn delete_secret(ctx: &mut AppContext, args: DeleteSecretArgs) -> Result<()> {
     let name = args.name;
     let force = args.force;
-    let team = args.scope.team;
-    let personal = args.scope.personal;
+    let scope = args.scope;
 
     ManagedSecretManager::handle(ctx).update(ctx, move |_manager, ctx| {
         let refresh_future = super::common::refresh_workspace_metadata(ctx);
@@ -295,7 +309,7 @@ fn delete_secret(ctx: &mut AppContext, args: DeleteSecretArgs) -> Result<()> {
                 return;
             }
 
-            let owner = match super::common::resolve_owner(team, personal, ctx) {
+            let owner = match resolve_secret_owner(&scope, ctx) {
                 Ok(owner) => owner,
                 Err(err) => {
                     super::report_fatal_error(err, ctx);
@@ -379,14 +393,13 @@ fn update_secret(ctx: &mut AppContext, args: UpdateSecretArgs) -> Result<()> {
                 return;
             }
 
-            let owner =
-                match super::common::resolve_owner(args.scope.team, args.scope.personal, ctx) {
-                    Ok(owner) => owner,
-                    Err(err) => {
-                        super::report_fatal_error(err, ctx);
-                        return;
-                    }
-                };
+            let owner = match resolve_secret_owner(&args.scope, ctx) {
+                Ok(owner) => owner,
+                Err(err) => {
+                    super::report_fatal_error(err, ctx);
+                    return;
+                }
+            };
 
             // Read the secret value if either --value or --value-file is provided.
             let secret_value = if args.value || args.value_args.value_file.is_some() {
@@ -416,7 +429,11 @@ fn update_secret(ctx: &mut AppContext, args: UpdateSecretArgs) -> Result<()> {
 
             if let Some(secret_value) = secret_value {
                 // Look up the existing secret's type so we use the correct ManagedSecretValue variant.
-                let list_future = manager.list_secrets();
+                let list_team_uid = match &secret_owner {
+                    SecretOwner::CurrentUser => None,
+                    SecretOwner::Team { team_uid } => Some(team_uid.clone()),
+                };
+                let list_future = manager.list_secrets(list_team_uid);
                 ctx.spawn(list_future, move |manager, list_result, ctx| {
                     let secrets = match list_result {
                         Ok(secrets) => secrets,
@@ -489,37 +506,58 @@ fn update_secret(ctx: &mut AppContext, args: UpdateSecretArgs) -> Result<()> {
 fn list_secrets(
     ctx: &mut AppContext,
     output_format: OutputFormat,
-    _args: ListSecretsArgs,
+    args: ListSecretsArgs,
 ) -> Result<()> {
-    ManagedSecretManager::handle(ctx).update(ctx, |manager, ctx| {
-        ctx.spawn(manager.list_secrets(), move |_, result, ctx| match result {
-            Ok(secrets) => {
-                let secret_infos = secrets.into_iter().map(|secret| {
-                    let owner = match secret.owner.type_ {
-                        SpaceType::User => Owner::User {
-                            user_uid: UserUid::new(secret.owner.uid.inner()),
-                        },
-                        SpaceType::Team => Owner::Team {
-                            team_uid: ServerId::from_string_lossy(secret.owner.uid.inner()),
-                        },
-                    };
-
-                    SecretInfo {
-                        name: secret.name,
-                        scope: super::common::format_owner(&owner).to_string(),
-                        secret_type: secret.type_,
-                        created_at: secret.created_at.utc(),
-                        updated_at: secret.updated_at.utc(),
-                    }
-                });
-
-                output::print_list(secret_infos, output_format);
-
-                ctx.terminate_app(TerminationMode::ForceTerminate, None);
-            }
-            Err(err) => {
+    ManagedSecretManager::handle(ctx).update(ctx, move |_manager, ctx| {
+        let refresh_future = super::common::refresh_workspace_metadata(ctx);
+        ctx.spawn(refresh_future, move |manager, refresh_result, ctx| {
+            if let Err(err) = refresh_result {
                 super::report_fatal_error(err, ctx);
+                return;
             }
+
+            let team_uid = match super::common::resolve_headless_team_scope(
+                args.scope.team.as_deref(),
+                args.scope.personal,
+                ctx,
+            ) {
+                Ok(team_uid) => team_uid.map(|uid| uid.to_string()),
+                Err(err) => {
+                    super::report_fatal_error(err, ctx);
+                    return;
+                }
+            };
+
+            let list_future = manager.list_secrets(team_uid);
+            ctx.spawn(list_future, move |_, result, ctx| match result {
+                Ok(secrets) => {
+                    let secret_infos = secrets.into_iter().map(|secret| {
+                        let owner = match secret.owner.type_ {
+                            SpaceType::User => Owner::User {
+                                user_uid: UserUid::new(secret.owner.uid.inner()),
+                            },
+                            SpaceType::Team => Owner::Team {
+                                team_uid: ServerId::from_string_lossy(secret.owner.uid.inner()),
+                            },
+                        };
+
+                        SecretInfo {
+                            name: secret.name,
+                            scope: super::common::format_owner(&owner).to_string(),
+                            secret_type: secret.type_,
+                            created_at: secret.created_at.utc(),
+                            updated_at: secret.updated_at.utc(),
+                        }
+                    });
+
+                    output::print_list(secret_infos, output_format);
+
+                    ctx.terminate_app(TerminationMode::ForceTerminate, None);
+                }
+                Err(err) => {
+                    super::report_fatal_error(err, ctx);
+                }
+            });
         });
     });
     Ok(())

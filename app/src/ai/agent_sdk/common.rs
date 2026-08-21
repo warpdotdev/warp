@@ -199,6 +199,41 @@ pub(super) async fn fetch_and_validate_conversation_harness(
     Ok(metadata)
 }
 
+/// Resolves the CLI's headless team/personal scope for team-inclusive collection queries and
+/// mutations: `--personal` (or having no teams at all) selects personal scope with no team
+/// header; a sole team is used implicitly; with several teams, `team` must explicitly name a
+/// current membership. Mirrors the `oz secret` selection rules so other headless commands (e.g.
+/// `oz api-key list`) behave consistently.
+pub fn resolve_headless_team_scope(
+    team: Option<&str>,
+    personal: bool,
+    ctx: &AppContext,
+) -> anyhow::Result<Option<ServerId>> {
+    if personal {
+        return Ok(None);
+    }
+    let teams = UserWorkspaces::as_ref(ctx)
+        .current_workspace()
+        .map(|workspace| workspace.teams.as_slice())
+        .unwrap_or(&[]);
+    if let Some(team_uid_str) = team {
+        let team_uid = ServerId::try_from(team_uid_str)
+            .map_err(|_| anyhow::anyhow!("Invalid team UID: {team_uid_str}"))?;
+        return if teams.iter().any(|t| t.uid == team_uid) {
+            Ok(Some(team_uid))
+        } else {
+            Err(anyhow::anyhow!("Not a member of team {team_uid_str}"))
+        };
+    }
+    match teams {
+        [] => Ok(None),
+        [team] => Ok(Some(team.uid)),
+        _ => Err(anyhow::anyhow!(
+            "Multiple teams found; specify --team <team-uid>"
+        )),
+    }
+}
+
 /// Format an object owner for display in the CLI.
 pub fn format_owner(owner: &Owner) -> &'static str {
     // TODO: For potentially-shared objects, consider looking up the particular user/team name.

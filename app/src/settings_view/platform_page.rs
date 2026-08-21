@@ -124,12 +124,15 @@ impl PlatformPageView {
             ctx.notify();
         }
 
-        // Build and send the GraphQL query
+        // Build and send the GraphQL query, scoped to the window's current team (if any).
         let auth_client =
             crate::server::server_api::ServerApiProvider::as_ref(ctx).get_auth_client();
+        let team_uid = crate::workspaces::user_workspaces::UserWorkspaces::as_ref(ctx)
+            .team_for_view(ctx)
+            .map(|team| team.uid.to_string());
 
         ctx.spawn(
-            async move { auth_client.list_api_keys().await },
+            async move { auth_client.list_api_keys(team_uid.as_deref()).await },
             |me, res, ctx| {
                 me.is_loading = false;
                 match res {

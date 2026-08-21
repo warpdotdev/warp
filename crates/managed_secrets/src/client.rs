@@ -30,15 +30,6 @@ pub struct IdentityTokenOptions {
     pub subject_template: Vec1<String>,
 }
 
-/// Configuration for all managed secret stores accessible to the current user.
-#[derive(Debug)]
-pub struct ManagedSecretConfigs {
-    /// Configuration for the user's personal secrets.
-    pub user_secrets: Option<ManagedSecretConfig>,
-    /// Configuration for all team secret stores that the user can access.
-    pub team_secrets: HashMap<String, ManagedSecretConfig>,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum SecretOwner {
     CurrentUser,
@@ -48,7 +39,15 @@ pub enum SecretOwner {
 #[cfg_attr(not(target_family = "wasm"), async_trait)]
 #[cfg_attr(target_family = "wasm", async_trait(?Send))]
 pub trait ManagedSecretsClient: 'static + Send + Sync {
-    async fn get_managed_secret_configs(&self) -> Result<ManagedSecretConfigs>;
+    /// Encryption configuration for the current user's personal secrets. Sends no team header.
+    async fn get_personal_managed_secret_config(&self) -> Result<Option<ManagedSecretConfig>>;
+
+    /// Encryption configuration for one explicitly named team's secrets. Sends `team_uid` in
+    /// the team-scope header.
+    async fn get_team_managed_secret_config(
+        &self,
+        team_uid: &str,
+    ) -> Result<Option<ManagedSecretConfig>>;
 
     async fn create_managed_secret(
         &self,
@@ -69,13 +68,17 @@ pub trait ManagedSecretsClient: 'static + Send + Sync {
         description: Option<String>,
     ) -> Result<ManagedSecret>;
 
-    async fn list_secrets(&self) -> Result<Vec<ManagedSecret>>;
+    /// Lists secrets visible to the caller, scoped to personal secrets plus `team_uid`'s when
+    /// given. Sends `team_uid` (if any) in the team-scope header alongside the request.
+    async fn list_secrets(&self, team_uid: Option<&str>) -> Result<Vec<ManagedSecret>>;
 
-    /// List managed secrets that authenticate the given harness.
+    /// List managed secrets that authenticate the given harness, scoped to personal secrets
+    /// plus `team_uid`'s when given.
     /// Returns an empty list for harnesses that do not use auth secrets (e.g. Oz).
     async fn list_harness_auth_secrets(
         &self,
         harness: warp_graphql::ai::AgentHarness,
+        team_uid: Option<&str>,
     ) -> Result<Vec<ManagedSecret>>;
 
     async fn get_task_secrets(

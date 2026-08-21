@@ -4,6 +4,7 @@ use clap::{Args, Subcommand, ValueEnum};
 use crate::SortOrderArg;
 use crate::date_time::parse_rfc3339;
 use crate::json_filter::JsonOutput;
+use crate::scope::TeamScopeArgs;
 
 /// API key-related subcommands.
 #[derive(Debug, Clone, Subcommand)]
@@ -40,6 +41,11 @@ pub struct ListApiKeysArgs {
     /// JSON formatting configuration.
     #[command(flatten)]
     pub json_output: JsonOutput,
+
+    /// Team/personal scope, following the same zero-, one-, and multi-team selection rules as
+    /// `oz secret`.
+    #[clap(flatten)]
+    pub scope: TeamScopeArgs,
 }
 
 #[derive(Debug, Clone, Args)]
@@ -89,6 +95,11 @@ pub struct ExpireApiKeyArgs {
     /// JSON formatting configuration.
     #[command(flatten)]
     pub json_output: JsonOutput,
+
+    /// Team/personal scope used to resolve a key named by `key_uid`, following the same
+    /// selection rules as `oz secret`. Not needed when `key_uid` is already a UID.
+    #[clap(flatten)]
+    pub scope: TeamScopeArgs,
 }
 
 /// Sort-by values accepted by `--sort-by`.
