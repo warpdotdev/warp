@@ -87,7 +87,7 @@ use crate::terminal::model::terminal_model::BlockIndex;
 use crate::terminal::safe_mode_settings::get_secret_obfuscation_mode;
 use crate::terminal::view::TerminalAction;
 use crate::terminal::warpify::SubshellSource;
-use crate::terminal::{SizeInfo, grid_renderer};
+use crate::terminal::{SizeInfo, grid_renderer, should_right_click_paste};
 use crate::themes::theme::{Fill, WarpTheme};
 use crate::ui_components::{self, icons as UIIcon};
 use crate::util::color::Opacity;
@@ -1410,63 +1410,104 @@ impl BlockListElement {
         )
     }
 
-    fn right_mouse_down(&self, position: Vector2F, ctx: &mut EventContext) -> bool {
-        if self.is_mouse_position_within_bounds(position) {
-            let position_in_terminal_view = self.position_in_terminal_view(position);
+    fn right_mouse_down(
+        &self,
+        position: Vector2F,
+        modifiers: &ModifiersState,
+        ctx: &mut EventContext,
+        app: &AppContext,
+    ) -> bool {
+        if !self.is_mouse_position_within_bounds(position) {
+            return false;
+        }
 
-            if self.is_mouse_position_within_selection(position) {
-                ctx.dispatch_typed_action(TerminalAction::BlockListContextMenu(
-                    BlockListMenuSource::RegularTextRightClick {
-                        position_in_terminal_view,
-                    },
+        let shift = modifiers.shift;
+        let position_in_terminal_view = self.position_in_terminal_view(position);
+
+        let blocklist_point = self.coord_to_point(
+            SnackbarPoint::within_snackbar(position),
+            ClampingMode::ClampToGridIfWithinBlock,
+        );
+
+        let (block_index, mouse_owned_by_running_app) = {
+            let model = self.model.lock();
+            let viewport = self.viewport_state_after_layout(model.block_list());
+            let block_index =
+                blocklist_point.and_then(|point| viewport.block_index_from_point(point));
+            let on_long_running_block = block_index
+                .and_then(|index| model.block_list().block_at(index))
+                .is_some_and(|block| block.is_active_and_long_running());
+            let mouse_owned_by_running_app =
+                on_long_running_block && !should_intercept_mouse(&model, shift, app);
+            (block_index, mouse_owned_by_running_app)
+        };
+
+        // When a long-running app underneath owns the mouse (mouse reporting enabled), forward
+        // the raw right-click to it instead of pasting or showing our own context menu, the same
+        // way left mouse down/up/drag/scroll do for this block under the same condition.
+        if mouse_owned_by_running_app {
+            let model = self.model.lock();
+            let viewport = self.viewport_state_after_layout(model.block_list());
+            let within_block = blocklist_point.and_then(|point| {
+                viewport
+                    .block_list_point_to_grid_point(point)
+                    .map(|within_block| point_from_first_visible_row(&viewport, within_block))
+            });
+            drop(model);
+
+            if let Some(grid_point) = within_block {
+                let mouse_state =
+                    MouseState::new(MouseButton::Right, MouseAction::Pressed, *modifiers);
+                ctx.dispatch_typed_action(TerminalAction::AltMouseAction(
+                    mouse_state.set_point(grid_point),
                 ));
                 return true;
             }
+        }
 
-            let blocklist_point = self.coord_to_point(
-                SnackbarPoint::within_snackbar(position),
-                ClampingMode::ClampToGridIfWithinBlock,
-            );
+        // A bare right-click pastes when the setting is enabled.
+        if should_right_click_paste(shift, app) {
+            ctx.dispatch_typed_action(TerminalAction::Paste);
+            return true;
+        }
 
-            let block_index = blocklist_point.and_then(|point| {
-                let model = self.model.lock();
-                let viewport = self.viewport_state_after_layout(model.block_list());
-                viewport.block_index_from_point(point)
-            });
-
-            let source = match block_index {
-                Some(index) => BlockListMenuSource::RegularBlockRightClick {
-                    block_index: index,
+        if self.is_mouse_position_within_selection(position) {
+            ctx.dispatch_typed_action(TerminalAction::BlockListContextMenu(
+                BlockListMenuSource::RegularTextRightClick {
                     position_in_terminal_view,
                 },
-                None => {
-                    let rich_content_view_id = blocklist_point.and_then(|point| {
-                        let model = self.model.lock();
-                        let viewport = self.viewport_state_after_layout(model.block_list());
-                        match viewport.block_height_item_from_point(point) {
-                            Some(BlockHeightItem::RichContent(item)) => Some(item.view_id),
-                            _ => None,
-                        }
-                    });
-                    match rich_content_view_id {
-                        Some(rich_content_view_id) => {
-                            BlockListMenuSource::RichContentBlockRightClick {
-                                rich_content_view_id,
-                                position_in_terminal_view,
-                            }
-                        }
-                        None => BlockListMenuSource::OutsideBlockRightClick {
-                            position_in_terminal_view,
-                        },
-                    }
-                }
-            };
-
-            ctx.dispatch_typed_action(TerminalAction::BlockListContextMenu(source));
-            true
-        } else {
-            false
+            ));
+            return true;
         }
+
+        let source = match block_index {
+            Some(index) => BlockListMenuSource::RegularBlockRightClick {
+                block_index: index,
+                position_in_terminal_view,
+            },
+            None => {
+                let rich_content_view_id = blocklist_point.and_then(|point| {
+                    let model = self.model.lock();
+                    let viewport = self.viewport_state_after_layout(model.block_list());
+                    match viewport.block_height_item_from_point(point) {
+                        Some(BlockHeightItem::RichContent(item)) => Some(item.view_id),
+                        _ => None,
+                    }
+                });
+                match rich_content_view_id {
+                    Some(rich_content_view_id) => BlockListMenuSource::RichContentBlockRightClick {
+                        rich_content_view_id,
+                        position_in_terminal_view,
+                    },
+                    None => BlockListMenuSource::OutsideBlockRightClick {
+                        position_in_terminal_view,
+                    },
+                }
+            }
+        };
+
+        ctx.dispatch_typed_action(TerminalAction::BlockListContextMenu(source));
+        true
     }
 
     fn middle_mouse_down(&self, position: Vector2F, ctx: &mut EventContext) -> bool {
@@ -4620,9 +4661,23 @@ impl Element for BlockListElement {
                 ctx,
                 app,
             ),
-            Event::RightMouseDown { position, .. } if !handled => {
-                self.right_mouse_down(*position, ctx)
-            }
+            Event::RightMouseDown {
+                position,
+                cmd,
+                shift,
+                ..
+            } if !handled => self.right_mouse_down(
+                *position,
+                &ModifiersState {
+                    alt: false,
+                    cmd: *cmd,
+                    shift: *shift,
+                    ctrl: false,
+                    func: false,
+                },
+                ctx,
+                app,
+            ),
             Event::LeftMouseUp {
                 position,
                 modifiers,

@@ -20960,7 +20960,7 @@ impl Workspace {
                     .with_padding_right(TAB_BAR_PADDING_RIGHT)
                     .finish(),
             )
-            .on_right_mouse_down(|ctx, _, position| {
+            .on_right_mouse_down(|ctx, _, position, _| {
                 ctx.dispatch_typed_action(WorkspaceAction::ShowHeaderToolbarContextMenu {
                     position,
                 });
@@ -21108,7 +21108,7 @@ impl Workspace {
                 .with_padding_right(TAB_BAR_PADDING_RIGHT)
                 .finish(),
         )
-        .on_right_mouse_down(|ctx, _, position| {
+        .on_right_mouse_down(|ctx, _, position, _| {
             ctx.dispatch_typed_action(WorkspaceAction::ShowHeaderToolbarContextMenu { position });
             DispatchEventResult::StopPropagation
         })
@@ -21153,7 +21153,7 @@ impl Workspace {
         Some(
             Container::new(
                 EventHandler::new(inner)
-                    .on_right_mouse_down(|ctx, _, position| {
+                    .on_right_mouse_down(|ctx, _, position, _| {
                         ctx.dispatch_typed_action(WorkspaceAction::ShowHeaderToolbarContextMenu {
                             position,
                         });
@@ -23491,6 +23491,11 @@ impl Workspace {
         }
         if *input_settings.at_context_menu_in_terminal_mode.value() {
             context.set.insert(flags::AT_CONTEXT_MENU_IN_TERMINAL_FLAG);
+        }
+        if *input_settings.enable_ai_command_search_hash_trigger.value() {
+            context
+                .set
+                .insert(flags::AI_COMMAND_SEARCH_HASH_TRIGGER_FLAG);
         }
 
         if *input_settings

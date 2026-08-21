@@ -1902,18 +1902,10 @@ impl UserWorkspaces {
             .unwrap_or(false)
     }
 
-    /// Returns the codebase context settings, taking into account the organization,
-    /// global AI settings, and codebase-specific settings.
-    /// Prefer this function to determine whether to show indexing-related functionality.
+    /// Returns whether codebase context is enabled across all of the user's teams.
     pub fn is_codebase_context_enabled(&self, app: &AppContext) -> bool {
-        // If the organization has an explicit setting, respect it and make user toggle irrelevant.
-        // - Enable: forced ON by org, regardless of user preference.
-        // - Disable: forced OFF by org.
-        // - RespectUserSetting: respect the user setting.
-        let org_setting = self.team_allows_codebase_context();
         let ai_globally_enabled = AISettings::as_ref(app).is_any_ai_enabled(app);
-
-        match org_setting {
+        match self.teams_allow_codebase_context() {
             AdminEnablementSetting::Enable => ai_globally_enabled,
             AdminEnablementSetting::Disable => false,
             AdminEnablementSetting::RespectUserSetting => {
@@ -1937,13 +1929,43 @@ impl UserWorkspaces {
             .unwrap_or_default()
     }
 
-    /// Returns only the organization-specific codebase context enablement setting.
-    /// Do not use this function to determine whether codebase context is generally enabled --
-    /// use `is_codebase_context_enabled` instead.
-    pub fn team_allows_codebase_context(&self) -> AdminEnablementSetting {
-        self.current_workspace()
-            .map(|workspace| workspace.settings.codebase_context_settings.setting.clone())
-            .unwrap_or_default()
+    pub fn teams_allow_codebase_context(&self) -> AdminEnablementSetting {
+        let mut team_settings = self
+            .workspaces
+            .iter()
+            .flat_map(|workspace| workspace.teams.iter())
+            .map(|team| &team.settings.codebase_context.value)
+            .peekable();
+
+        if team_settings.peek().is_none() {
+            return self
+                .current_workspace()
+                .map(|workspace| workspace.settings.codebase_context_settings.setting.clone())
+                .unwrap_or_default();
+        }
+
+        // TODO(isaiah): Enforce codebase-indexing policy per team and window.
+        let mut respects_user_setting = false;
+        for setting in team_settings {
+            match setting {
+                AdminEnablementSetting::Enable => {}
+                AdminEnablementSetting::Disable => return AdminEnablementSetting::Disable,
+                AdminEnablementSetting::RespectUserSetting => respects_user_setting = true,
+            }
+        }
+
+        if respects_user_setting {
+            AdminEnablementSetting::RespectUserSetting
+        } else {
+            AdminEnablementSetting::Enable
+        }
+    }
+
+    pub fn team_disabling_codebase_context(&self) -> Option<&Team> {
+        self.workspaces
+            .iter()
+            .flat_map(|workspace| workspace.teams.iter())
+            .find(|team| team.settings.codebase_context.value == AdminEnablementSetting::Disable)
     }
 
     /// Updates whether or not session sharing is enabled based on the current team's tier policy.

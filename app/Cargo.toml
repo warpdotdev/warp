@@ -715,6 +715,7 @@ default = [
     "factory_mcp",
     "wait_for_events_parent_registration",
     "orchestration_unified_stack",
+    "ime_marked_text",
 ]
 # Enable this feature to automatically perform heap profiling.  NOTE: This will
 # substantially slow down program execution.
