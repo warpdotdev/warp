@@ -286,6 +286,93 @@ fn models_without_a_host_fall_back_to_the_provider_icon() {
     );
 }
 
+#[test]
+fn kimi_models_get_the_kimi_logo() {
+    for id in [
+        "kimi-k26-fireworks",
+        "kimi-k27-code-fireworks",
+        "kimi-k3-fireworks",
+    ] {
+        let llm = server_llm(id, None);
+        assert_eq!(
+            model_leading_icon(&llm, ModelIconFlags::default()),
+            Icon::KimiLogo,
+            "expected {id} to map to Icon::KimiLogo"
+        );
+    }
+
+    // Matching is case-insensitive.
+    let uppercase = server_llm("KIMI-K3-FIREWORKS", None);
+    assert_eq!(
+        model_leading_icon(&uppercase, ModelIconFlags::default()),
+        Icon::KimiLogo
+    );
+}
+
+#[test]
+fn non_kimi_models_are_unaffected_by_the_kimi_check() {
+    let mut llm = server_llm("gpt-4o", None);
+    llm.provider = LLMProvider::OpenAI;
+    assert_eq!(
+        model_leading_icon(&llm, ModelIconFlags::default()),
+        Icon::OpenAILogo
+    );
+
+    // An unrelated id that merely contains "kimi" as a substring (not a
+    // "kimi-" prefix or exact match) must not false-positive.
+    let unrelated = server_llm("anti-kimist", None);
+    assert_eq!(
+        model_leading_icon(&unrelated, ModelIconFlags::default()),
+        Icon::Agent
+    );
+}
+
+#[test]
+fn auto_router_and_bedrock_flags_win_over_the_kimi_branch() {
+    let llm = server_llm("kimi-k3-fireworks", None);
+
+    assert_eq!(
+        model_leading_icon(
+            &llm,
+            ModelIconFlags {
+                is_custom_router: true,
+                ..Default::default()
+            }
+        ),
+        Icon::Dataflow
+    );
+    assert_eq!(
+        model_leading_icon(
+            &llm,
+            ModelIconFlags {
+                is_auto: true,
+                ..Default::default()
+            }
+        ),
+        Icon::Agent
+    );
+    assert_eq!(
+        model_leading_icon(
+            &llm,
+            ModelIconFlags {
+                is_using_bedrock: true,
+                ..Default::default()
+            }
+        ),
+        Icon::Aws
+    );
+    assert_eq!(
+        model_leading_icon(
+            &llm,
+            ModelIconFlags {
+                is_using_gemini_enterprise: true,
+                ..Default::default()
+            }
+        ),
+        Icon::GeminiEnterpriseAgentPlatform
+    );
+}
+
 // -- build_custom_llm_infos / display label tests --
 
 fn endpoint(

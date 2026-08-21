@@ -22,7 +22,11 @@ use crate::ai::custom_model_routers::is_custom_router_id;
 use crate::ai::execution_profiles::model_menu_items::is_auto;
 use crate::ai::harness_availability::{HarnessAvailabilityEvent, HarnessAvailabilityModel};
 use crate::ai::harness_display::icon_for as harness_icon_for;
-use crate::ai::llms::{LLMId, LLMPreferences, LLMPreferencesEvent};
+use crate::ai::llms::{
+    LLMId, LLMInfo, LLMPreferences, LLMPreferencesEvent, ModelIconFlags, model_leading_icon,
+    should_show_bedrock_icon_for_model,
+    should_show_gemini_enterprise_agent_platform_icon_for_model,
+};
 use crate::editor::{
     EditorView, Event as EditorEvent, PropagateAndNoOpEscapeKey, PropagateAndNoOpNavigationKeys,
     SingleLineEditorOptions, TextOptions,
@@ -30,7 +34,6 @@ use crate::editor::{
 use crate::menu::{Event as MenuEvent, Menu, MenuItem, MenuItemFields, MenuVariant};
 use crate::terminal::input::{MenuPositioning, MenuPositioningProvider};
 use crate::terminal::view::ambient_agent::{AmbientAgentViewModel, AmbientAgentViewModelEvent};
-use crate::ui_components::icons::Icon;
 use crate::view_components::action_button::{ActionButton, ButtonSize};
 
 const ITEM_FONT_SIZE: f32 = 14.;
@@ -505,23 +508,7 @@ impl ModelSelector {
         let items: Vec<MenuItem<ModelSelectorAction>> = auto_choices
             .into_iter()
             .chain(other_choices)
-            .map(|llm| {
-                let display_name = llm.menu_display_name();
-                let leading_icon = if is_custom_router_id(llm.id.as_str()) {
-                    Icon::Dataflow
-                } else {
-                    llm.provider.icon().unwrap_or(Icon::Agent)
-                };
-                let fields = MenuItemFields::new(display_name)
-                    .with_icon(leading_icon)
-                    .with_icon_size_override(ITEM_ICON_SIZE)
-                    .with_font_size_override(ITEM_FONT_SIZE)
-                    .with_padding_override(ITEM_VERTICAL_PADDING, MENU_HORIZONTAL_PADDING)
-                    .with_override_hover_background_color(hover_background)
-                    .with_on_select_action(ModelSelectorAction::SelectModel(llm.id.clone()))
-                    .with_disabled(llm.disable_reason.is_some());
-                MenuItem::Item(fields)
-            })
+            .map(|llm| oz_menu_item_for_llm(llm, hover_background, ctx))
             .collect();
 
         (items, ModelSelectorAction::SelectModel(active_llm_id))
@@ -637,6 +624,40 @@ fn render_search_footer(
         .finish()
 }
 
+/// Builds a single Oz Agent Mode model's menu item, including its leading
+/// icon. Routed through the shared [`model_leading_icon`] helper (the same
+/// one used by the inline `/model` selector and the Settings model menus) so
+/// this menu can't drift out of sync with provider-logo/auto/host-icon
+/// handling — including provider logos with no dedicated `LLMProvider`
+/// variant, like Kimi (Moonshot AI), which are detected by id instead.
+fn oz_menu_item_for_llm(
+    llm: &LLMInfo,
+    hover_background: Fill,
+    ctx: &AppContext,
+) -> MenuItem<ModelSelectorAction> {
+    let display_name = llm.menu_display_name();
+    let leading_icon = model_leading_icon(
+        llm,
+        ModelIconFlags {
+            is_custom_router: is_custom_router_id(llm.id.as_str()),
+            is_auto: is_auto(llm),
+            is_using_bedrock: should_show_bedrock_icon_for_model(llm, ctx),
+            is_using_gemini_enterprise: should_show_gemini_enterprise_agent_platform_icon_for_model(
+                llm, ctx,
+            ),
+        },
+    );
+    let fields = MenuItemFields::new(display_name)
+        .with_icon(leading_icon)
+        .with_icon_size_override(ITEM_ICON_SIZE)
+        .with_font_size_override(ITEM_FONT_SIZE)
+        .with_padding_override(ITEM_VERTICAL_PADDING, MENU_HORIZONTAL_PADDING)
+        .with_override_hover_background_color(hover_background)
+        .with_on_select_action(ModelSelectorAction::SelectModel(llm.id.clone()))
+        .with_disabled(llm.disable_reason.is_some());
+    MenuItem::Item(fields)
+}
+
 impl Entity for ModelSelector {
     type Event = ModelSelectorEvent;
 }
@@ -715,3 +736,7 @@ impl View for ModelSelector {
         stack.finish()
     }
 }
+
+#[cfg(test)]
+#[path = "model_selector_tests.rs"]
+mod tests;

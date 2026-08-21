@@ -173,6 +173,21 @@ pub struct ModelIconFlags {
     pub is_using_gemini_enterprise: bool,
 }
 
+/// Returns `true` when `llm` is a Kimi (Moonshot AI) model.
+///
+/// `LLMProvider` has no Moonshot/Kimi variant — it's populated from a
+/// server-defined GraphQL enum that doesn't include one, so Kimi models
+/// arrive with `LLMProvider::Unknown`. Detect them by id instead, since the
+/// catalog's Kimi ids consistently start with "kimi-" (e.g.
+/// `kimi-k26-fireworks`). Matching is case-insensitive; the display name is
+/// checked as a secondary signal in case a future id doesn't follow the
+/// convention.
+fn is_kimi_model(llm: &LLMInfo) -> bool {
+    let id = llm.id.as_str().to_ascii_lowercase();
+    let display_name = llm.display_name.to_ascii_lowercase();
+    id.starts_with("kimi-") || id == "kimi" || display_name.starts_with("kimi")
+}
+
 /// The leading icon shown next to a model in the model picker and model menus.
 ///
 /// Auto models deliberately get the generic agent glyph rather than a host or
@@ -186,6 +201,8 @@ pub fn model_leading_icon(llm: &LLMInfo, flags: ModelIconFlags) -> Icon {
         Icon::Aws
     } else if flags.is_using_gemini_enterprise {
         Icon::GeminiEnterpriseAgentPlatform
+    } else if is_kimi_model(llm) {
+        Icon::KimiLogo
     } else {
         llm.provider.icon().unwrap_or(Icon::Agent)
     }
