@@ -47,6 +47,14 @@ pub(crate) const OPENAI_COLOR: ColorU = ColorU {
     a: 255,
 };
 
+/// Grok brand color (xAI black)
+const GROK_COLOR: ColorU = ColorU {
+    r: 0,
+    g: 0,
+    b: 0,
+    a: 255,
+};
+
 /// Amp brand color (#F34E3F)
 const AMP_COLOR: ColorU = ColorU {
     r: 243,
@@ -141,6 +149,7 @@ pub enum CLIAgent {
     Claude,
     Gemini,
     Codex,
+    Grok,
     Amp,
     Droid,
     OpenCode,
@@ -166,6 +175,7 @@ impl CLIAgent {
             CLIAgent::Claude => &["claude"],
             CLIAgent::Gemini => &["gemini"],
             CLIAgent::Codex => &["codex"],
+            CLIAgent::Grok => &["grok"],
             CLIAgent::Amp => &["amp"],
             CLIAgent::Droid => &["droid"],
             CLIAgent::OpenCode => &["opencode"],
@@ -229,6 +239,7 @@ impl CLIAgent {
             CLIAgent::Claude => "Claude Code",
             CLIAgent::Gemini => "Gemini",
             CLIAgent::Codex => "Codex",
+            CLIAgent::Grok => "Grok",
             CLIAgent::Amp => "Amp",
             CLIAgent::Droid => "Droid",
             CLIAgent::OpenCode => "OpenCode",
@@ -252,6 +263,7 @@ impl CLIAgent {
             CLIAgent::Claude => Some(Icon::ClaudeLogo),
             CLIAgent::Gemini => Some(Icon::GeminiLogo),
             CLIAgent::Codex => Some(Icon::OpenAILogo),
+            CLIAgent::Grok => Some(Icon::GrokLogo),
             CLIAgent::Amp => Some(Icon::AmpLogo),
             CLIAgent::Droid => Some(Icon::DroidLogo),
             CLIAgent::OpenCode => Some(Icon::OpenCodeLogo),
@@ -289,6 +301,7 @@ impl CLIAgent {
                 SkillProvider::Claude,
             ],
             CLIAgent::Gemini => &[SkillProvider::Agents, SkillProvider::Gemini],
+            CLIAgent::Grok => &[SkillProvider::Agents],
             CLIAgent::Amp => &[SkillProvider::Agents],
             CLIAgent::Copilot => &[SkillProvider::Agents, SkillProvider::Copilot],
             CLIAgent::Droid => &[SkillProvider::Droid, SkillProvider::Agents],
@@ -338,6 +351,7 @@ impl CLIAgent {
             CLIAgent::Claude => Some(CLAUDE_ORANGE),
             CLIAgent::Gemini => Some(GEMINI_BLUE),
             CLIAgent::Codex => Some(OPENAI_COLOR),
+            CLIAgent::Grok => Some(GROK_COLOR),
             CLIAgent::Amp => Some(AMP_COLOR),
             CLIAgent::Droid => Some(DROID_COLOR),
             CLIAgent::OpenCode => Some(OPENCODE_COLOR),
@@ -614,6 +628,7 @@ impl From<CLIAgent> for CLIAgentType {
             CLIAgent::Claude => CLIAgentType::Claude,
             CLIAgent::Gemini => CLIAgentType::Gemini,
             CLIAgent::Codex => CLIAgentType::Codex,
+            CLIAgent::Grok => CLIAgentType::Grok,
             CLIAgent::Amp => CLIAgentType::Amp,
             CLIAgent::Droid => CLIAgentType::Droid,
             CLIAgent::OpenCode => CLIAgentType::OpenCode,
