@@ -7835,9 +7835,12 @@ fn submit_cli_agent_rich_input_opencode_defers_enter_and_close() {
         assert_eq!(pty_writes.borrow().len(), 1);
         assert_eq!(pty_writes.borrow()[0], b"hello");
 
-        // Wait for the delayed \r to arrive.
+        // Wait for the delayed \r to arrive. Widened to 100 ticks (500ms, 10x
+        // CLI_AGENT_PTY_WRITE_DELAY) because the default 20-tick window (100ms)
+        // left too little slack under nextest parallelism on macOS CI, causing
+        // a flaky failure even though production behavior was correct.
         assert_eventually!(
-            pty_writes.borrow().len() == 2,
+            100 => pty_writes.borrow().len() == 2,
             "carriage return should be written after delay"
         );
         assert_eq!(pty_writes.borrow()[1], b"\r");
@@ -8211,9 +8214,11 @@ fn submit_with_plugin_but_auto_toggle_off_respects_auto_dismiss() {
         });
 
         // auto_toggle is off, so auto_dismiss closes rich input.
-        // Claude uses DelayedEnter, so the close happens after a timer.
+        // Claude uses DelayedEnter, so the close happens after a timer. Widened
+        // to 100 ticks (500ms, 10x CLI_AGENT_PTY_WRITE_DELAY) for the same
+        // flakiness reason as submit_cli_agent_rich_input_opencode_defers_enter_and_close.
         assert_eventually!(
-            terminal.read(&app, |view, ctx| !view
+            100 => terminal.read(&app, |view, ctx| !view
                 .has_active_cli_agent_input_session(ctx)),
             "Rich input should be closed after submit with auto_dismiss"
         );
