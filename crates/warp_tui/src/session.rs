@@ -6,12 +6,13 @@
 //! allowing authentication to complete in the background.
 
 use std::io::{self, IsTerminal as _, Read as _};
+use std::path::PathBuf;
 
 use ai::LLMProvider;
 use ai::api_keys::ApiKeyManager;
 use anyhow::{Context, Result, anyhow};
-use clap::Parser;
 use clap::error::ErrorKind;
+use clap::{Parser, Subcommand};
 use inquire::{InquireError, Password, PasswordDisplayMode};
 use warp::settings::{TuiThemeSettings, TuiZeroStateSettings, TuiZeroStateSettingsChangedEvent};
 #[cfg(feature = "voice_input")]
@@ -50,6 +51,9 @@ const CLI_VERSION: &str = match option_env!("GIT_RELEASE_TAG") {
 #[derive(Debug, Parser)]
 #[command(name = "warp", version = CLI_VERSION)]
 struct TuiArgs {
+    #[command(subcommand)]
+    command: Option<TuiCommand>,
+
     /// Resume an Oz/Warp conversation by server token.
     #[arg(long)]
     resume: Option<String>,
@@ -88,6 +92,20 @@ enum ProviderApiKeyCommand {
     },
     Clear {
         provider: LLMProvider,
+    },
+}
+
+/// One-shot commands available on the standalone TUI binaries. The full app
+/// binary implements the same `dump-settings-schema` contract (see
+/// `warp_cli::Command::DumpSettingsSchema`); this local copy lets
+/// `script/run-tui` seed a real settings schema from whichever TUI binary is
+/// about to run, without building the full GUI app binary just for that.
+#[derive(Debug, Subcommand)]
+enum TuiCommand {
+    /// Print the JSON schema for the current Warp channel's settings and exit.
+    DumpSettingsSchema {
+        /// Write the schema to this path instead of standard output.
+        output_path: Option<PathBuf>,
     },
 }
 
@@ -144,6 +162,10 @@ pub fn run() -> Result<()> {
         }
         Err(error) => return Err(anyhow::Error::new(error)),
     };
+    if let Some(TuiCommand::DumpSettingsSchema { output_path }) = args.command {
+        warp::features::init_feature_flags();
+        return warp::settings::dump_settings_schema(output_path.as_deref());
+    }
     let provider_api_key_command = if let Some(provider) = args.set_provider_api_key {
         if !provider.supports_pasted_api_key() {
             return Err(anyhow!(

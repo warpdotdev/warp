@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+#
+# Regression test for the `script/run-tui` settings-schema fix.
+#
+# Builds the real `warp-tui-oss` binary, confirms it implements
+# `dump-settings-schema` directly (the standalone TUI binaries used to have no
+# such command, which is what caused script/run-tui to fail closed), and then
+# runs it through the exact `prepare_bundled_resources` invocation
+# script/run-tui uses to confirm the local TUI's `modify-settings` bundled
+# skill actually activates: `activation_for_bundled_skill` in
+# `app/src/ai/skills/bundled.rs` gates that skill on `settings_schema.json`
+# existing in the prepared resources directory, so checking for that file is
+# equivalent to checking the skill is active.
+
+set -e
+
+WORKSPACE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+TEMP_DIR="$(mktemp -d)"
+trap 'rm -rf "$TEMP_DIR"' EXIT
+
+echo "Building warp-tui-oss..."
+cargo build --manifest-path "$WORKSPACE_ROOT/Cargo.toml" -p warp_tui --bin warp-tui-oss \
+  --features standalone
+TUI_BIN="$(cargo metadata --manifest-path "$WORKSPACE_ROOT/Cargo.toml" --no-deps \
+  --format-version 1 | jq -r .target_directory)/debug/warp-tui-oss"
+
+echo "Checking warp-tui-oss implements dump-settings-schema directly..."
+DIRECT_SCHEMA="$TEMP_DIR/direct-settings-schema.json"
+"$TUI_BIN" dump-settings-schema "$DIRECT_SCHEMA"
+test -s "$DIRECT_SCHEMA"
+python3 -c "import json; json.load(open('$DIRECT_SCHEMA'))"
+
+echo "Checking the local TUI resources activate the modify-settings skill..."
+RESOURCES_DIR="$TEMP_DIR/resources"
+NO_LICENSES=1 \
+  SETTINGS_SCHEMA_EXECUTABLE="$TUI_BIN" \
+  "$WORKSPACE_ROOT/script/prepare_bundled_resources" "$RESOURCES_DIR" oss
+
+# This is the exact file `activation_for_bundled_skill` checks for to decide
+# whether the "modify-settings" bundled skill is active; see
+# `app/src/ai/skills/bundled.rs`.
+test -s "$RESOURCES_DIR/settings_schema.json"
+python3 -c "import json; json.load(open('$RESOURCES_DIR/settings_schema.json'))"
+test -f "$RESOURCES_DIR/bundled/skills/modify-settings/SKILL.md"
+
+echo "OK: local TUI resources contain a real settings schema and the modify-settings skill is active."
