@@ -31,7 +31,7 @@ use super::{
     AgentDriver, AgentDriverError, CLIAgentSessionStatus, IdleTimeoutSender,
     LEGACY_OZ_PARENT_LISTENER_MANAGED_EXTERNALLY_ENV, LEGACY_OZ_PARENT_STATE_ROOT_ENV,
     OZ_MESSAGE_LISTENER_MANAGED_EXTERNALLY_ENV, OZ_MESSAGE_LISTENER_STATE_ROOT_ENV,
-    PlatformErrorCode, SDKConversationOutputStatus, build_secret_env_vars,
+    PlatformErrorCode, SDKConversationOutputStatus, absolute_skill_dirs, build_secret_env_vars,
     idle_window_for_cli_session_status, idle_window_for_terminal_status,
     setup_failure_status_update, terminal_status_log_outcome,
 };
@@ -1100,6 +1100,79 @@ fn task_env_vars_propagate_message_listener_state_root_with_legacy_alias() {
     assert_eq!(
         env_vars.get(&OsString::from(LEGACY_OZ_PARENT_STATE_ROOT_ENV)),
         Some(&OsString::from("/tmp/message-listener-root"))
+    );
+}
+
+#[test]
+fn absolute_skill_dirs_makes_relative_entries_absolute() {
+    // Regression for the factory skill-resolution bug: WARP_SKILL_DIRS arrives
+    // relative to the environment working directory, so a skill snippet that
+    // reads it from the shell resolves to nothing once the agent cd's into a
+    // product repo. The driver must hand the agent an absolute value instead.
+    let dirs = vec![
+        std::path::PathBuf::from("factory-dev/frank/agents/implementation/skills"),
+        std::path::PathBuf::from("factory-dev/frank/skills"),
+    ];
+    let resolved = absolute_skill_dirs(Path::new("/workspace"), dirs);
+    assert_eq!(
+        resolved,
+        Some(OsString::from(
+            "/workspace/factory-dev/frank/agents/implementation/skills,/workspace/factory-dev/frank/skills"
+        ))
+    );
+}
+
+#[test]
+fn absolute_skill_dirs_passes_absolute_entries_through() {
+    let dirs = vec![
+        std::path::PathBuf::from("/abs/agents/impl/skills"),
+        std::path::PathBuf::from("relative/skills"),
+    ];
+    let resolved = absolute_skill_dirs(Path::new("/workspace"), dirs);
+    // Absolute entries are untouched; only the relative one is joined onto the base.
+    assert_eq!(
+        resolved,
+        Some(OsString::from(
+            "/abs/agents/impl/skills,/workspace/relative/skills"
+        ))
+    );
+}
+
+#[test]
+fn absolute_skill_dirs_empty_is_none() {
+    assert_eq!(absolute_skill_dirs(Path::new("/workspace"), vec![]), None);
+}
+
+#[cfg(unix)]
+#[test]
+fn absolute_skill_dirs_preserves_non_utf8_working_dir() {
+    use std::os::unix::ffi::{OsStrExt, OsStringExt};
+
+    // A working directory whose bytes are not valid UTF-8 (the 0xff byte is
+    // never valid UTF-8). Assembling via `to_string_lossy` would replace it
+    // with U+FFFD, exporting a path that no longer names the real directory.
+    let working_dir = std::path::PathBuf::from(OsString::from_vec(vec![
+        b'/', b'w', b'o', b'r', b'k', 0xff, b'd',
+    ]));
+    let resolved = absolute_skill_dirs(&working_dir, vec![std::path::PathBuf::from("skills")])
+        .expect("a non-empty dir list yields Some");
+
+    // The raw 0xff byte must survive verbatim, and no U+FFFD (0xEF 0xBF 0xBD)
+    // replacement sequence may appear.
+    let bytes = resolved.as_bytes();
+    assert!(
+        bytes.contains(&0xff),
+        "expected the raw 0xff byte to be preserved, got {bytes:?}"
+    );
+    assert!(
+        !bytes.windows(3).any(|w| w == [0xEF, 0xBF, 0xBD]),
+        "expected no U+FFFD replacement sequence, got {bytes:?}"
+    );
+    assert_eq!(
+        resolved,
+        OsString::from_vec(vec![
+            b'/', b'w', b'o', b'r', b'k', 0xff, b'd', b'/', b's', b'k', b'i', b'l', b'l', b's',
+        ])
     );
 }
 

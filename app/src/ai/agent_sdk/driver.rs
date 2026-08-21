@@ -3,7 +3,7 @@ use std::collections::{HashMap, HashSet};
 use std::ffi::OsString;
 use std::future::Future;
 use std::io::{self, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -11,8 +11,8 @@ use std::time::{Duration, SystemTime};
 
 use ai::api_keys::{ApiKeyManager, AwsCredentialsRefreshStrategy};
 use ai::skills::{
-    ParsedSkill, SKILL_PROVIDER_DEFINITIONS, parse_skills_dirs_env, read_skills_for_skills_dirs,
-    resolve_skills_dirs,
+    ParsedSkill, SKILL_PROVIDER_DEFINITIONS, WARP_SKILL_DIRS_ENV, parse_skills_dirs_env,
+    read_skills_for_skills_dirs, resolve_skills_dirs,
 };
 use anyhow::{Context as _, anyhow};
 use chrono::Utc;
@@ -911,6 +911,17 @@ impl AgentDriver {
         if warp_isolation_platform::detect().is_some() {
             env_vars.insert(OsString::from("IS_SANDBOX"), OsString::from("1"));
             tracing::Span::current().record("is_sandbox", true);
+        }
+
+        // `WARP_SKILL_DIRS` arrives holding paths relative to the environment
+        // working directory. The driver's own loader resolves those against
+        // `working_dir`, but skills also read the raw variable from the agent's
+        // shell (e.g. the github skill's `sed`/`cd` snippet), where a relative
+        // value silently resolves to nothing once the agent has cd'd into a
+        // product repo. Re-export an absolute value in the agent's environment
+        // so it resolves from any working directory.
+        if let Some(absolute_skill_dirs) = absolute_skill_dirs_env(&working_dir) {
+            env_vars.insert(OsString::from(WARP_SKILL_DIRS_ENV), absolute_skill_dirs);
         }
 
         let resolved_env_vars = Arc::new(env_vars);
@@ -4561,6 +4572,50 @@ fn build_secret_env_vars(
     }
 
     env_vars
+}
+
+/// Build an absolute-path `WARP_SKILL_DIRS` value from the variable currently
+/// set in the process environment, resolved against `working_dir`.
+///
+/// The environment injects `WARP_SKILL_DIRS` as paths relative to the
+/// environment working directory. Those resolve correctly for the driver's own
+/// skill loader (see [`AgentDriver::load_skills_dirs`]), but a relative value
+/// also leaks into the agent's shell, where skills read it directly — the
+/// github skill, for instance, parses it to locate the factory's `factory.yaml`.
+/// A relative value there silently resolves to nothing once the agent cd's into
+/// a product repo, so we hand the shell an absolute value instead.
+///
+/// Thin env-reading wrapper around [`absolute_skill_dirs`]; see it for the
+/// resolution and encoding rules.
+fn absolute_skill_dirs_env(working_dir: &Path) -> Option<OsString> {
+    absolute_skill_dirs(working_dir, parse_skills_dirs_env())
+}
+
+/// Resolve `dirs` (as parsed from `WARP_SKILL_DIRS`) against `working_dir` and
+/// re-encode them as a single comma-separated value for the agent's shell.
+///
+/// Returns `None` when `dirs` is empty (an unset, empty, or all-blank
+/// variable), leaving the variable untouched. Absolute entries pass through
+/// unchanged; relative entries are joined onto `working_dir`.
+///
+/// The value is assembled directly as an [`OsString`] from each path's raw
+/// [`OsStr`] bytes rather than via `to_string_lossy`: a `working_dir` that
+/// contains non-UTF-8 bytes (possible on Unix) would otherwise be corrupted
+/// with `U+FFFD` replacement characters, exporting paths that no longer name
+/// the real skill directories.
+fn absolute_skill_dirs(working_dir: &Path, dirs: Vec<PathBuf>) -> Option<OsString> {
+    if dirs.is_empty() {
+        return None;
+    }
+    let resolved = resolve_skills_dirs(working_dir, dirs);
+    let mut joined = OsString::new();
+    for (i, dir) in resolved.iter().enumerate() {
+        if i > 0 {
+            joined.push(",");
+        }
+        joined.push(dir.as_os_str());
+    }
+    Some(joined)
 }
 
 /// The env-var names that any typed auth secret in `secrets` will populate.
