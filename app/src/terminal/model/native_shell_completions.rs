@@ -3,28 +3,25 @@ use crate::terminal::shell::ShellType;
 /// Returns the text to write to the PTY to request native shell completions for `buffer_text`
 /// (the portion of the input editor's buffer up to the cursor).
 ///
-/// For zsh, bash, and fish, this is a full generator-command line; the caller runs it as a
-/// foreground command (see `PtyController::send_write_to_event_loop`). For PowerShell, this is
-/// just the hex-encoded buffer text on its own: the caller instead types it as ordinary
-/// characters and immediately triggers a dedicated PSReadLine key handler that reads it back and
-/// computes completions directly, never treating it as a command at all -- see
-/// `POWERSHELL_NATIVE_COMPLETIONS_TRIGGER`'s doc comment in `pty_controller.rs`.
+/// For all four shells this is a full generator-command line; the caller runs it as a foreground
+/// in-band command (see `PtyController::send_write_to_event_loop`).
 ///
 /// In every case the buffer text is hex-encoded so it can be embedded directly without any
 /// shell-specific quoting -- a hex string only ever contains `[0-9a-f]` characters, none of which
-/// are special to any of the supported shells. Each shell's bootstrap script (or, for PowerShell,
-/// the key handler itself) decodes it back to the original bytes before use.
+/// are special to any of the supported shells. Each shell's bootstrap script decodes it back to
+/// the original bytes before use.
 ///
-/// For the three shells that run this as a command, the invoked function name is chosen so each
-/// shell's own bookkeeping recognizes it as a generator command (hidden from history, not treated
-/// as a normal foreground command, etc.), matching the naming convention already used by
-/// `warp_run_generator_command`:
+/// The invoked function name is chosen so each shell's own bookkeeping recognizes it as a
+/// generator command (hidden from history, not treated as a normal foreground command, etc.),
+/// matching the naming convention already used by `warp_run_generator_command`:
 /// - zsh's `_is_warp_generator_command` and `_warp_zshaddhistory` do a substring match on
 ///   `warp_run_generator_command`.
 /// - bash's `warp_preexec` prefix-matches `warp_run_generator_command*`, as does its
 ///   `HISTIGNORE` entry (`*warp_run_generator_command*`).
 /// - fish's `warp_preexec` prefix-matches `warp_run_generator_command*` (to kill stale generator
 ///   jobs); the leading space added below is what actually omits it from fish's history file.
+/// - PowerShell's `Warp-Preexec`, `AddToHistoryHandler` and `Clear-History` all recognize the
+///   `Warp-Run-GeneratorCommand` prefix (see `pwsh.ps1`).
 pub fn generator_command_for(shell_type: ShellType, buffer_text: &str) -> String {
     let hex_encoded_buffer_text = hex::encode(buffer_text.as_bytes());
     match shell_type {
@@ -48,10 +45,13 @@ pub fn generator_command_for(shell_type: ShellType, buffer_text: &str) -> String
             // existing `warp_run_generator_command` mechanism -- match that convention here.
             format!(" warp_run_generator_command_native_completions {hex_encoded_buffer_text}")
         }
-        // No function call at all: this is typed as ordinary characters and read back by a
-        // PSReadLine key handler, never submitted or executed, so there's nothing for any
-        // history- or command-exclusion mechanism to need to recognize.
-        ShellType::PowerShell => hex_encoded_buffer_text,
+        // Runs the `Warp-Run-GeneratorCommand-NativeCompletions` function defined in pwsh.ps1 as
+        // an ordinary in-band command, like the other three shells; the `Warp-Run-GeneratorCommand`
+        // prefix is what gets it recognized as a generator command. PowerShell's history exclusion
+        // is name-based (`AddToHistoryHandler`/`Clear-History`), so no leading space is needed.
+        ShellType::PowerShell => {
+            format!("Warp-Run-GeneratorCommand-NativeCompletions {hex_encoded_buffer_text}")
+        }
     }
 }
 

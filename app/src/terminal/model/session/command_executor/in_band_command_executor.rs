@@ -441,10 +441,9 @@ impl CommandExecutor for InBandCommandExecutor {
 /// native-shell-completions generator function declared in zsh/bash/fish's bootstrap scripts
 /// (`warp_run_generator_command_native_completions`), which is dispatched directly by
 /// `PtyController::run_native_shell_completions` rather than through this executor. PowerShell's
-/// native completions never reach this function at all: they are driven by a PSReadLine key
-/// handler that never treats anything as a command to execute (see
-/// `POWERSHELL_NATIVE_COMPLETIONS_TRIGGER`'s doc comment in `pty_controller.rs`), so there's no
-/// command string here for anything to recognize.
+/// native completions now go through the same path as the other three shells (the
+/// `Warp-Run-GeneratorCommand-NativeCompletions` function in pwsh.ps1), so its command string is
+/// recognized here by the `Warp-Run-GeneratorCommand` prefix below just like any other.
 ///
 /// In-band commands are prefixed with a leading space for Fish, which is done to omit them from
 /// fish's command history.  Thus we strip leading whitespace before matching the `command`.

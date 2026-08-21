@@ -1,4 +1,4 @@
-use std::collections::{BTreeSet, HashMap, VecDeque};
+use std::collections::{HashMap, VecDeque};
 use std::mem;
 
 use pathfinder_color::ColorU;
@@ -60,77 +60,6 @@ pub struct EarlyOutput {
 
     /// User input that may be typeahead, which is matched against echoed text.
     unmatched_input: VecDeque<char>,
-    /// Characters registered via `push_expected_echo`, matched (possibly more than once, see
-    /// `expected_echo_positions`) against echoed text. Unlike `unmatched_input`, a match here is
-    /// dropped entirely rather than surfaced as typeahead -- see `push_expected_echo`.
-    expected_echo: Vec<char>,
-    /// Every position in `expected_echo` that could currently be "next" to match, given
-    /// everything matched so far. Matched characters are never removed from `expected_echo`
-    /// itself: a line editor's redraw can re-echo the same restored buffer an arbitrary number
-    /// of times per restore, using more than one way of moving the cursor to do it. Which way a
-    /// given session uses is not incidental: with Warp drawing the prompt, the restored line
-    /// starts at column 0, so ZLE can rewind with a plain carriage return; with
-    /// `terminal.input.honor_ps1 = true` (the shell draws its own prompt), the line no longer
-    /// starts at column 0, so ZLE switches its rewind onto *relative* motion -- a backspace or
-    /// CUB -- instead; PSReadLine's own redraw uses *absolute* cursor addressing (CUP, e.g.
-    /// `\x1b[1;1H`) regardless. So `honor_ps1` and which line editor is driving are what select
-    /// among the rewind mechanisms below, not just a detail of one particular measured session.
-    /// Five motions are handled, all measured against real sessions:
-    /// - A carriage return -- measured as either a restart of the whole line from the
-    ///   beginning, or a brief mid-line return-to-column-0 that continues the same line from
-    ///   wherever it left off, rather than restarting. Since it isn't known in advance which of
-    ///   those a given carriage return means, `rearm_at_column(0)` adds position 0 as a new
-    ///   candidate without discarding whatever was already live, so both possibilities stay
-    ///   open until the characters that follow resolve it.
-    /// - Absolute cursor addressing (CUP/CHA, `goto`/`goto_col`), measured from PSReadLine's own
-    ///   redraw -- rearmed at position 0 regardless of the column addressed. Measured directly
-    ///   with a nonempty prompt: PSReadLine's own redraw always re-renders the *entire* buffer
-    ///   from its own start, so a CUP always means "the buffer's own position 0" no matter what
-    ///   column that lands on -- column 1 with a zero-width prompt and column 30 with a 29-wide
-    ///   one were both measured to be the buffer's start, and even an "empty" prompt isn't
-    ///   column 0 (PowerShell substitutes its own `PS>` fallback, measured at column 8), so the
-    ///   column itself carries no information worth gating on for this line editor. An earlier,
-    ///   more conservative version of this trusted only column 0, reasoning that a redraw could
-    ///   re-render an addressed column that reflects the prompt's own width rather than the
-    ///   buffer's start -- that concern doesn't apply to PSReadLine specifically (confirmed
-    ///   above), and zsh (the other line editor this matters for) was separately measured to
-    ///   never emit absolute cursor addressing at all for this restore, so widening this rule
-    ///   has no effect on it. The echo this rearms for is also *cumulative*, not one-shot: a
-    ///   restored buffer is measured to re-echo as an increasingly long prefix across many
-    ///   redraws (e.g. a 12-character buffer as "1", "12", "123", ... across 12 rewinds, not
-    ///   once), so every CUP needs its own rearm call -- already true here, since `goto`/
-    ///   `goto_col` call `rearm_at_column` on every occurrence, not just the first.
-    /// - A backspace or CUB (`move_backward`), whose distance *is* known from the input itself
-    ///   (always 1 for a backspace; the escape sequence's own parameter for CUB) --
-    ///   `rearm_after_rewind` shifts every existing candidate back by that exact distance and
-    ///   adds the result, again without discarding the originals, since whether a redraw
-    ///   actually follows is also not known in advance.
-    /// - CUF (`move_forward`), the forward counterpart, also with a known distance from the
-    ///   escape sequence -- `advance_after_forward_move` shifts every existing candidate
-    ///   forward by that distance and adds the result. Unlike a rewind, a forward move isn't
-    ///   ambiguous about whether a redraw follows: the terminal is asserting the columns it
-    ///   just skipped over already hold the correct content, so every live candidate's
-    ///   position genuinely advances. Without this, a candidate left stranded at its pre-move
-    ///   position after a CUF would still correctly match nothing further until something
-    ///   arrives, but would mismatch (and leak) if that something turns out to be a
-    ///   continuation of the pattern past what the CUF skipped over.
-    /// A trailing-fragment-only redraw (e.g. re-echoing just the line's last character after a
-    /// full match) turned out, in every measured case, to be a full match leaving a candidate
-    /// at the pattern's length, followed by a backspace or CUB shifting it back by the rewind
-    /// distance, not an ambiguous carriage return. A wider rule that seeded every position on a
-    /// carriage return to cover this same shape was tried and reverted once the measured cause
-    /// turned out to be a rewind with a known distance -- keep the rearm rules scoped to what's
-    /// actually been measured rather than to what would also happen to work.
-    /// Every rearm/advance method here follows the same shape: each subsequent character
-    /// advances every candidate whose next expected character matches it (dropping the rest) --
-    /// so a character counts as expected echo if *any* live candidate predicts it, however many
-    /// candidates that turns out to be. This is meant to be scoped to a single restore's own
-    /// redraw window (nothing populates `expected_echo` outside of `push_expected_echo`, each
-    /// restore replaces it outright rather than accumulating across restores, and
-    /// `reset_expected_echo` is what closes the window -- see its own doc comment for when).
-    /// Cursor motions other than these five are not handled; a redraw shape using one would
-    /// need the same treatment as those above.
-    expected_echo_positions: BTreeSet<usize>,
     /// Whether the last potential typeahead character received on the PTY was a
     /// carriage return. We can't rely on the last character of `typeahead` for
     /// this, because it only stores _matched_ typeahead.
@@ -152,8 +81,6 @@ impl EarlyOutput {
             typeahead: String::new(),
             typeahead_chars_inserted: 0.into(),
             unmatched_input: VecDeque::new(),
-            expected_echo: Vec::new(),
-            expected_echo_positions: BTreeSet::new(),
             just_matched_carriage_return: false,
             event_proxy,
             pending_background_block: None,
@@ -187,59 +114,11 @@ impl EarlyOutput {
         }
     }
 
-    /// Registers `input` as characters expected to be echoed back on the pty, regardless of the
-    /// active `TypeaheadMode`.
-    ///
-    /// Used when something other than normal user typing deliberately writes bytes to the pty
-    /// outside of a command submission, where the caller already has an accurate copy of that
-    /// text elsewhere (e.g. an input editor's own buffer) and just wants the resulting echo not
-    /// to be treated as unexpected background output (which would otherwise start a background
-    /// block). This is deliberately *not* the same as `push_user_input`/typeahead: a matched
-    /// typeahead character is surfaced via `TerminalEvent::Typeahead` so it can be *inserted*
-    /// into the input editor, which is correct when the editor doesn't already have it, but
-    /// would duplicate it here, since the editor's copy was never cleared in the first place --
-    /// only the real shell's buffer was. A match here is instead dropped entirely: neither
-    /// rendered as background output nor surfaced as typeahead.
-    ///
-    /// Example: `PtyController` restoring the input buffer after an in-band/generator command
-    /// that necessarily cleared the shell's real buffer to run it as a foreground command.
-    ///
-    /// Replaces any previously-registered content outright, rather than appending to it: each
-    /// restore is a fresh, independent echo to expect, not a continuation of the last one.
-    pub fn push_expected_echo(&mut self, input: &str) {
-        self.expected_echo = input
-            .chars()
-            .filter(|ch| {
-                // Only keep control characters that we expect to match in the echoed text.
-                !ch.is_ascii_control() || *ch == '\r'
-            })
-            .collect();
-        self.expected_echo_positions = BTreeSet::from([0]);
-    }
-
     /// Reset the unmatched user input. This is called between blocks so that
     /// unmatched potential typeahead from one command doesn't throw off input
     /// matching for the rest of the session.
     pub fn reset_user_input(&mut self) {
         self.unmatched_input.clear();
-    }
-
-    /// Clears any registration made via `push_expected_echo`. Called from two places:
-    /// `BlockList::start_active_block` (never `start_active_block_for_in_band_command`, which
-    /// is what a generator/completions request's own command uses), so a pattern left over from
-    /// the last restore can't outlive into a real, unrelated command's own output; and
-    /// `EarlyOutputHandler::input()`, on the first *real* character the pattern can't explain
-    /// (see that method for why control-byte probes must not trigger this). Two prior attempts
-    /// at bounding this window were tried and found wrong before landing here:
-    /// `LineEditorStatusEvent::Active` fires *before* the restore write is even flushed, so
-    /// clearing there discarded the whole restored buffer rather than protecting it; and
-    /// clearing inside `consume_expected_echo` itself on *any* mismatch broke every
-    /// carriage-return-driven redraw, since `carriage_return()`/`linefeed()` probe it with
-    /// `'\r'`/`'\n'`, which a restored buffer's text never contains, guaranteeing a mismatch on
-    /// every single redraw regardless of whether the real echo matched.
-    pub fn reset_expected_echo(&mut self) {
-        self.expected_echo.clear();
-        self.expected_echo_positions.clear();
     }
 
     /// Returns whether the next user input character matches `ch`. If it does
@@ -250,55 +129,6 @@ impl EarlyOutput {
             self.unmatched_input.pop_front();
         }
         is_match
-    }
-
-    /// Returns whether `ch` matches the next expected character for *any* currently-live
-    /// candidate position (see `expected_echo_positions`). If at least one does, every matching
-    /// candidate advances by one and every non-matching one is dropped (a character can only be
-    /// consumed once, so a candidate that guessed wrong here can't be right going forward
-    /// either). A match should be dropped entirely by the caller rather than surfaced as
-    /// typeahead.
-    ///
-    /// Deliberately has no side effect on a mismatch: this is also probed with `'\r'`/`'\n'`
-    /// from `carriage_return()`/`linefeed()` to decide whether those bytes are part of the
-    /// registered pattern (they never are -- a restored buffer's text contains neither), and a
-    /// mismatch there is not evidence the echo is over. See `EarlyOutputHandler::input()` for
-    /// where a mismatch instead ends the window.
-    fn consume_expected_echo(&mut self, ch: char) -> bool {
-        let next_positions: BTreeSet<usize> = self
-            .expected_echo_positions
-            .iter()
-            .filter_map(|&position| {
-                (self.expected_echo.get(position) == Some(&ch)).then_some(position + 1)
-            })
-            .collect();
-        let is_match = !next_positions.is_empty();
-        if is_match {
-            self.expected_echo_positions = next_positions;
-        }
-        is_match
-    }
-
-    /// If anything is registered via `push_expected_echo`, adds `column` to the set of live
-    /// candidates (see `expected_echo_positions`) without discarding whatever was already
-    /// there. Called regardless of how much of the current pass matched -- see
-    /// `expected_echo_positions`'s doc comment for the two shapes a carriage return in
-    /// particular covers.
-    ///
-    /// This assumes `column` is itself a valid absolute position in the pattern -- i.e. that
-    /// the pattern's echo starts at that same column. That is unconditionally true for a
-    /// carriage return, whose `column` argument is always 0 by definition. It is *not*
-    /// unconditionally true for absolute cursor addressing (see the call sites in `goto`/
-    /// `goto_col`): when a prompt occupies columns before the buffer starts, a redraw that
-    /// re-renders the prompt and buffer together would address a column reflecting the prompt's
-    /// width, not 0, and only the caller can know whether that is the case here. Column 0
-    /// itself is always safe to trust regardless -- it is either genuinely the buffer's start,
-    /// in which case this is correct, or it is mid-prompt, in which case no candidate the
-    /// pattern's own characters could confuse with prompt text lives there anyway.
-    fn rearm_at_column(&mut self, column: usize) {
-        if !self.expected_echo.is_empty() {
-            self.expected_echo_positions.insert(column);
-        }
     }
 
     /// Check a character received on the PTY, which may be typeahead or
@@ -367,13 +197,6 @@ impl EarlyOutput {
         );
         self.typeahead.clear();
         self.typeahead_chars_inserted = 0.into();
-
-        // Deliberately not clearing `expected_echo` here: `CompletionsFinished` (and the
-        // `push_expected_echo` call it triggers) fires when `9280;B` is parsed, which precedes
-        // the shell's own in-band-command precmd DCS -- so precmd normally lands *inside* the
-        // restore window, not after it, and clearing here would wipe a registration before its
-        // own echo has even arrived (measured: roughly five in six restores). Staleness is
-        // already bounded by `push_expected_echo` replacing its content outright on every call.
     }
 
     /// Update early output state once the next command has started running. After
@@ -483,21 +306,6 @@ macro_rules! delegate {
 
 impl ansi::Handler for EarlyOutputHandler<'_> {
     fn input(&mut self, c: char) {
-        if self.inner().consume_expected_echo(c) {
-            return;
-        }
-        // The first *real* character the pattern can't explain ends its window (see
-        // `reset_expected_echo`'s doc comment for why this lives here and not inside
-        // `consume_expected_echo` itself): no external signal reliably lands only after a
-        // restore's own echo has fully arrived, so this is treated as proof the echo is over,
-        // real or not. This bounds the damage from ending the window too early or too late to
-        // a single leaked character rather than a registration surviving to corrupt arbitrary
-        // later, unrelated output -- measured, unbounded: a carriage-return-driven progress
-        // message (`\rloading 10%\rloading 20%...`) from an unrelated background job lost
-        // several characters to a pattern left over from an earlier completions request.
-        if !self.inner().expected_echo.is_empty() {
-            self.inner().reset_expected_echo();
-        }
         let session_id = self.block_list.active_block().session_id();
         if !self.inner().handle_potential_typeahead(c) {
             self.with_background_output(|block| {
@@ -556,9 +364,6 @@ impl ansi::Handler for EarlyOutputHandler<'_> {
     }
 
     fn carriage_return(&mut self) {
-        if self.inner().consume_expected_echo('\r') {
-            return;
-        }
         if !self.inner().handle_potential_typeahead('\r') {
             delegate!(self.carriage_return());
         }
@@ -577,9 +382,6 @@ impl ansi::Handler for EarlyOutputHandler<'_> {
     }
 
     fn linefeed(&mut self) -> ScrollDelta {
-        if self.inner().consume_expected_echo('\n') {
-            return ScrollDelta::zero();
-        }
         if self.inner().handle_potential_typeahead('\n') {
             // If we match a newline as typeahead, this means the shell will
             // execute the accumulated typeahead as a new command. In that case,
@@ -664,15 +466,6 @@ impl ansi::Handler for EarlyOutputHandler<'_> {
     }
 
     fn goto(&mut self, row: super::index::VisibleRow, col: usize) {
-        // Absolute cursor addressing (CUP) is a rewind like carriage return, backspace and CUB,
-        // just to an absolute rather than relative column -- see `rearm_at_column`. The row is
-        // irrelevant to matching, which only tracks a linear character stream. Rearmed at
-        // position 0 regardless of `col`: PSReadLine (the only line editor observed using CUP
-        // for this) always redraws the whole buffer from its own start, so any CUP means "the
-        // buffer's own position 0" no matter which screen column that happens to land on --
-        // see the doc comment on `expected_echo_positions` for the measurements ruling out the
-        // narrower, column-0-only version of this rule.
-        self.inner().rearm_at_column(0);
         delegate!(self.goto(row, col));
     }
 
@@ -681,8 +474,6 @@ impl ansi::Handler for EarlyOutputHandler<'_> {
     }
 
     fn goto_col(&mut self, col: usize) {
-        // CHA: the same absolute rewind as `goto`, just without a row component. See `goto`.
-        self.inner().rearm_at_column(0);
         delegate!(self.goto_col(col));
     }
 

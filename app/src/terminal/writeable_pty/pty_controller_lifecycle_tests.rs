@@ -171,68 +171,6 @@ fn native_shell_completions_queues_the_generator_command_for_the_active_sessions
 }
 
 #[test]
-fn native_shell_completions_for_powershell_types_hex_then_chord_without_command_semantics() {
-    App::test((), |mut app| async move {
-        let model = terminal_model();
-        let (model_events_tx, model_events_rx) = async_channel::unbounded();
-        let (_executor_command_tx, executor_command_rx) = async_channel::unbounded();
-        let sessions = app.add_model(|_| Sessions::new_for_test());
-        let model_events =
-            app.add_model(|ctx| ModelEventDispatcher::new(model_events_rx, sessions.clone(), ctx));
-        let line_editor_status =
-            app.add_model(|ctx| LineEditorStatus::new(model_events.clone(), sessions.clone(), ctx));
-        let sender = TestEventLoopSender::default();
-        let controller = app.add_model(|ctx| {
-            PtyController::new(
-                sender.clone(),
-                model_events,
-                line_editor_status.clone(),
-                sessions,
-                executor_command_rx,
-                model,
-                ctx,
-            )
-        });
-
-        let (results_tx, _results_rx) = async_channel::unbounded();
-        let did_write = controller.update(&mut app, |controller, ctx| {
-            controller.send_write_to_event_loop(
-                PtyWrite::RunNativeShellCompletions {
-                    command: "676974206368".to_owned(),
-                    shell_type: ShellType::PowerShell,
-                    results_tx,
-                },
-                ctx,
-            )
-        });
-        assert!(did_write);
-
-        // Unlike the other three shells, this must never be treated as command execution: it
-        // should leave the line editor's status exactly as it started (nothing here ever
-        // submits/executes anything for PSReadLine to run a precmd for).
-        line_editor_status.read(&app, |line_editor_status, _| {
-            assert!(!line_editor_status.is_line_editor_active());
-        });
-
-        let messages = sender.messages.lock();
-        assert_eq!(
-            messages.len(),
-            1,
-            "expected the hex text and the trigger chord to go out in a single write, unlike \
-             the split kill-buffer chord PowerShell's regular command execution needs"
-        );
-        let Message::Input(bytes) = &messages[0] else {
-            panic!("expected a Message::Input");
-        };
-        // Hex text typed as ordinary characters, immediately followed by the Alt+3 trigger --
-        // no kill-buffer, no Enter, nothing that looks like command execution at all.
-        assert_eq!(&bytes[..], b"676974206368\x1b3");
-
-        drop(model_events_tx);
-    });
-}
-
-#[test]
 fn native_shell_completions_reports_no_matches_without_an_active_session() {
     App::test((), |mut app| async move {
         let model = terminal_model();

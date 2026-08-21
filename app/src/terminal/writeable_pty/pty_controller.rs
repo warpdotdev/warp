@@ -38,16 +38,6 @@ const SWITCH_TO_PS1_ESCAPE_SEQUENCE: &[u8] = &[escape_sequences::C0::ESC, b'p'];
 /// Used to let the shell know we are switching to the Warp prompt via a bindkey \ew. This will
 /// unset the PS1 to ensure we don't have a double prompt (PS1 and Warp prompt).
 const SWITCH_TO_WARP_PROMPT_ESCAPE_SEQUENCE: &[u8] = &[escape_sequences::C0::ESC, b'w'];
-/// Triggers PowerShell's native-completions PSReadLine key handler (`Warp-Configure-PSReadLine`
-/// in pwsh.ps1), which reads back whatever was just typed via `GetBufferState`, computes
-/// completions, and reverts the buffer -- never treating anything as a command to execute. Alt+3,
-/// following the same "Alt+<digit>" convention as PowerShell's other bindings (kill-buffer is
-/// Alt+2, input reporting is Alt+1), to avoid the virtual-key-code/layout issue letter-based
-/// bindings have on Windows (see `ShellType::input_reporting_sequence`'s doc comment). Only
-/// PowerShell uses this; the other three shells drive native completions through the ordinary
-/// in-band command path instead (see `send_write_to_event_loop`'s `RunNativeShellCompletions`
-/// handling).
-const POWERSHELL_NATIVE_COMPLETIONS_TRIGGER: &[u8] = &[escape_sequences::C0::ESC, b'3'];
 
 /// Represents a single call to write bytes to the PTY asynchronously.
 enum PtyWrite {
@@ -71,10 +61,9 @@ enum PtyWrite {
         mode: AIAgentPtyWriteMode,
     },
     RunNativeShellCompletions {
-        /// The text to write to the PTY, computed by
-        /// `native_shell_completions::generator_command_for`. For PowerShell this is just the
-        /// hex-encoded buffer text (see the `POWERSHELL_NATIVE_COMPLETIONS_TRIGGER` doc comment);
-        /// for the other three shells it's a full generator-command line.
+        /// The generator-command line to write to the PTY, computed by
+        /// `native_shell_completions::generator_command_for`. Run as an in-band foreground command
+        /// for all four shells.
         command: String,
         shell_type: ShellType,
         results_tx: async_channel::Sender<(Vec<ShellCompletion>, Option<Span>)>,
@@ -324,21 +313,15 @@ impl<T: EventLoopSender> PtyController<T> {
         }
 
         if let Some(write) = self.pending_writes.pop_front() {
-            // `RunNativeShellCompletions` must be treated like `Command` here for the three
-            // shells that put the shell into a synchronous foreground read (e.g. zsh's
-            // `select`): draining the next queued write immediately would deliver it into that
-            // read instead of a normal prompt, where it can be consumed and lost. PowerShell is
-            // the exception -- its `RunNativeShellCompletions` write never puts the shell into
-            // any such state (see `send_write_to_event_loop`'s handling of it), and nothing ever
-            // transitions the line editor back to active for it the way a real command's precmd
-            // hook would, so gating draining on it here would stall the queue forever.
-            let is_command = match &write {
-                PtyWrite::Command { .. } => true,
-                PtyWrite::RunNativeShellCompletions { shell_type, .. } => {
-                    *shell_type != ShellType::PowerShell
-                }
-                _ => false,
-            };
+            // `RunNativeShellCompletions` must be treated like `Command` here: it runs the
+            // generator command as a foreground in-band command (for all four shells, PowerShell
+            // included), which puts the shell into a state -- e.g. zsh's `select`, or simply a
+            // running command -- where draining the next queued write immediately would deliver it
+            // before the shell is back at a prompt, where it can be consumed and lost.
+            let is_command = matches!(
+                &write,
+                PtyWrite::Command { .. } | PtyWrite::RunNativeShellCompletions { .. }
+            );
             let did_write = self.send_write_to_event_loop(write, ctx);
             if !is_command || !did_write {
                 self.execute_next_queued_write(ctx);
@@ -668,40 +651,23 @@ impl<T: EventLoopSender> PtyController<T> {
             } => {
                 self.in_flight_native_completions_results_tx = Some(results_tx);
 
-                if shell_type == ShellType::PowerShell {
-                    // PowerShell can reach its completion engine directly from a PSReadLine key
-                    // handler (see POWERSHELL_NATIVE_COMPLETIONS_TRIGGER's doc comment) without
-                    // ever treating anything as a command to execute -- structurally the same
-                    // trick zsh's `select` uses to reach a real completion context without
-                    // faking a command. `command` here is just the hex-encoded buffer text (see
-                    // `generator_command_for`'s `ShellType::PowerShell` case), typed as ordinary
-                    // characters immediately followed by the trigger chord. Because nothing ever
-                    // executes -- no kill-buffer, no Enter, no preexec/precmd -- there is nothing
-                    // to restore afterward.
-                    self.terminal_model.lock().push_expected_echo(&command);
-                    let mut bytes_to_write = command.into_bytes();
-                    bytes_to_write.extend_from_slice(POWERSHELL_NATIVE_COMPLETIONS_TRIGGER);
-                    (Cow::Owned(bytes_to_write), false, None, None)
-                } else {
-                    // Write the generator command exactly as any other in-band command: the
-                    // shell's own bootstrap logic (matched by name, see
-                    // `native_shell_completions`) hides it from history and treats its output as
-                    // in-band rather than a new block.
-                    let terminal_model = self.terminal_model.clone();
-                    (
-                        Cow::Owned(bytes_to_execute_command(
-                            command.as_str(),
-                            shell_type,
-                            self.is_bracketed_paste_enabled,
-                        )),
-                        true,
-                        Some(Box::new(move || {
-                            terminal_model.lock().start_in_band_command_execution()
-                        })
-                            as Box<dyn Fn() -> StartCommandOutcome + Send + 'static>),
-                        Some(shell_type),
-                    )
-                }
+                // Write the generator command exactly as any other in-band command: the shell's
+                // own bootstrap logic (matched by name, see `native_shell_completions`) hides it
+                // from history and treats its output as in-band rather than a new block.
+                let terminal_model = self.terminal_model.clone();
+                (
+                    Cow::Owned(bytes_to_execute_command(
+                        command.as_str(),
+                        shell_type,
+                        self.is_bracketed_paste_enabled,
+                    )),
+                    true,
+                    Some(
+                        Box::new(move || terminal_model.lock().start_in_band_command_execution())
+                            as Box<dyn Fn() -> StartCommandOutcome + Send + 'static>,
+                    ),
+                    Some(shell_type),
+                )
             }
         };
 

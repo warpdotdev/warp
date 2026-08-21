@@ -2305,15 +2305,6 @@ impl TerminalModel {
         }
     }
 
-    /// Registers `input` as characters expected to be echoed back on the pty, so the echo is
-    /// dropped entirely rather than rendered as unexpected background output, regardless of the
-    /// session's `TypeaheadMode`. See `EarlyOutput::push_expected_echo`.
-    pub fn push_expected_echo(&mut self, input: &str) {
-        if !self.alt_screen_active {
-            self.block_list.early_output_mut().push_expected_echo(input);
-        }
-    }
-
     /// Takes accumulated typeahead that should be inserted into a front-end input editor.
     pub fn take_typeahead_for_input(&mut self) -> Option<(String, CharOffset)> {
         let completed_block_index = self.block_list.prev_matching_block_from_index(

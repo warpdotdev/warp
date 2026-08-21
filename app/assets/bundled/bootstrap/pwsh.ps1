@@ -399,97 +399,6 @@ $null = New-Module -Name Warp-Module -ScriptBlock {
             Write-Host -NoNewline "$([char]0x1b)[2K"
         }
 
-        # Computes native shell completions for an arbitrary command line, without ever treating
-        # anything as a command to execute -- unlike Warp-Run-GeneratorCommand(-NativeCompletions),
-        # which this replaces for PowerShell, this never kills/retypes/submits the real buffer, so
-        # there is no buffer-clearing chord to race, no command text to type, no Enter, and nothing
-        # to restore afterward. The client writes the hex-encoded line to complete as ordinary
-        # typed characters (which PSReadLine echoes into its buffer exactly like any other typing,
-        # and which the client separately recognizes as expected echo so it isn't rendered as a
-        # block), immediately followed by this chord. The handler reads that text straight back out
-        # of the buffer via GetBufferState, decodes it, computes completions, emits them via the
-        # same OSC 9280 protocol the other three shells use, and reverts the buffer to empty --
-        # never AcceptLine, so this never reaches preexec/precmd, the real command-execution cycle,
-        # or the AddToHistoryHandler exclusion below, since it's never submitted at all.
-        Set-PSReadLineKeyHandler -Chord 'Alt+3' -ScriptBlock {
-            $hexEncodedLine = $null
-            $cursor = $null
-            [Microsoft.PowerShell.PSConsoleReadLine]::GetBufferState([ref]$hexEncodedLine, [ref]$cursor)
-            # Revert immediately, before computing completions, so the buffer is never left
-            # holding the hex text if anything below throws.
-            [Microsoft.PowerShell.PSConsoleReadLine]::RevertLine()
-
-            Write-Host -NoNewline "$([char]0x1b)]9280;A;incrementally_typed$oscEnd"
-            try {
-                $line = Warp-Decode-HexString $hexEncodedLine
-
-                # An empty line (the input editor was empty when the request fired) has no
-                # useful completions, and CompleteInput('') would otherwise enumerate every
-                # command on $PATH synchronously in the user's own shell.
-                if (-not [string]::IsNullOrEmpty($line)) {
-                    $completion = [System.Management.Automation.CommandCompletion]::CompleteInput(
-                        $line, $line.Length, $null)
-                    # PowerShell already knows the exact range of $line these matches replace --
-                    # e.g. a zero-length span right after the `.` in `$_.`, or just the `Na` in
-                    # `$_.Na` -- which is narrower than (and can disagree with) the client's own
-                    # whitespace-derived guess. Report it so the client uses it instead: without
-                    # this, filtering the shell's own already-correct candidates against the
-                    # client's wrong guess discards them.
-                    #
-                    # ReplacementIndex/ReplacementLength are .NET string (UTF-16 code unit)
-                    # offsets, but the client's buffer is UTF-8 bytes and slices it directly at
-                    # these offsets -- sending them as-is panicked the app whenever a multi-byte
-                    # character (an accented letter, a CJK character, an emoji) appeared to the
-                    # left of the completed token, since the index then lands inside that
-                    # character's UTF-8 encoding rather than on a boundary (measured with a
-                    # literal CJK character before "Get-Ch"). Convert to UTF-8 byte offsets here,
-                    # where the exact string is known, using .NET's own encoder rather than
-                    # hand-rolled surrogate-pair math: substring on UTF-16 code-unit boundaries
-                    # (which ReplacementIndex/Length already are, so this never splits a
-                    # surrogate pair) and count the UTF-8 bytes that substring encodes to.
-                    #
-                    # A whitespace-only line (measured: e.g. "   ") reports a negative
-                    # ReplacementIndex/ReplacementLength -- CompleteInput has nothing to anchor a
-                    # replacement to there, and there are no matches either. Skip the OSC rather
-                    # than send a negative pair the client would just reject and warn about on
-                    # trivially reachable input; the client's whitespace-derived fallback span is
-                    # exactly as good as anything a negative index could have conveyed anyway.
-                    if ($completion.ReplacementIndex -ge 0) {
-                        $utf8 = [System.Text.Encoding]::UTF8
-                        $replacementStartBytes = $utf8.GetByteCount($line.Substring(0, $completion.ReplacementIndex))
-                        # Clamp to $line.Length: ReplacementIndex + ReplacementLength is expected to stay
-                        # within the line, but a `Substring` call past the end throws, which would otherwise
-                        # turn an unexpected shell-reported span into a silent, warning-free empty response
-                        # (swallowed by the surrounding try/catch) instead of a clearly wrong but visible one.
-                        $replacementEnd = [Math]::Min($completion.ReplacementIndex + $completion.ReplacementLength, $line.Length)
-                        $replacementEndBytes = $utf8.GetByteCount($line.Substring(0, $replacementEnd))
-                        Write-Host -NoNewline "$([char]0x1b)]9280;S;$replacementStartBytes,$($replacementEndBytes - $replacementStartBytes)$oscEnd"
-                    }
-                    foreach ($match in $completion.CompletionMatches) {
-                        # Hex-encode both fields: OSC params are semicolon-delimited and only the
-                        # third one is read (see decode_hex_completions_payload in ansi/mod.rs), so
-                        # a literal `;` in a match or description (e.g. a .NET tooltip like
-                        # "int Count { get; }", or a filename) would otherwise truncate everything
-                        # after it; a BEL or ESC byte would end the OSC itself.
-                        Write-Host -NoNewline "$([char]0x1b)]9280;C;$(Warp-Encode-HexString $match.CompletionText)$oscEnd"
-                        if (-not [string]::IsNullOrEmpty($match.ToolTip) -and $match.ToolTip -ne $match.CompletionText) {
-                            # Cmdlet/parameter tooltips can span multiple lines (e.g. one syntax
-                            # set per parameter combination); collapse to a single line for
-                            # display.
-                            $description = ($match.ToolTip -split '\r?\n' | Where-Object { $_.Trim() -ne '' }) -join ' '
-                            Write-Host -NoNewline "$([char]0x1b)]9280;D?description;$(Warp-Encode-HexString $description)$oscEnd"
-                        }
-                    }
-                }
-            } catch {
-                Write-Verbose "Native completions failed: $($_.Exception.Message)"
-            } finally {
-                # Always emit the terminator, even if decoding or completion above threw, so the
-                # client never blocks waiting on a response that will never arrive.
-                Write-Host -NoNewline "$([char]0x1b)]9280;B$oscEnd"
-            }
-        }
-
         # Sets the prompt mode to custom prompt (PS1)
         # Is the equivalent of warp_change_prompt_modes_to_ps1 in other shells
         Set-PSReadLineKeyHandler -Chord 'Alt+p' -ScriptBlock {
@@ -910,6 +819,100 @@ $null = New-Module -Name Warp-Module -ScriptBlock {
             }
         }
 
+    }
+
+    # Computes native shell completions for an arbitrary command line and emits them over the OSC
+    # 9280 wire protocol, exactly like the other three shells' generator functions. Run as an
+    # ordinary in-band foreground command (the client types the
+    # `Warp-Run-GeneratorCommand-NativeCompletions <hex>` line and submits it, same as
+    # zsh/bash/fish) rather than a PSReadLine key handler: `CompleteInput` takes the line as a
+    # plain string and never needed the interactive buffer, and
+    # the shared `Warp-Run-GeneratorCommand` prefix is what gets this recognized as a generator
+    # command (excluded from history via `AddToHistoryHandler`/`Clear-History`, unpopulated precmd
+    # via `$script:generatorCommand`). The line to complete arrives hex-encoded so it needs no
+    # PowerShell quoting; nothing is ever typed into the real buffer, so there is no kill-buffer
+    # chord to race, no fused/self-executing command text, and nothing to restore afterward.
+    function Warp-Run-GeneratorCommand-NativeCompletions {
+        [CmdletBinding()]
+        param([string]$hexEncodedLine)
+
+        $status = $?
+        $code = $global:LASTEXITCODE
+
+        # Prevents Warp-Precmd from emitting the 'Block started' hook / re-rendering the prompt,
+        # the same way Warp-Run-GeneratorCommand does -- this is a generator command, not a real
+        # user command.
+        $script:generatorCommand = $true
+
+        Write-Host -NoNewline "$([char]0x1b)]9280;A;incrementally_typed$oscEnd"
+        try {
+            $line = Warp-Decode-HexString $hexEncodedLine
+
+            # An empty line (the input editor was empty when the request fired) has no useful
+            # completions, and CompleteInput('') would otherwise enumerate every command on $PATH
+            # synchronously in the user's own shell.
+            if (-not [string]::IsNullOrEmpty($line)) {
+                $completion = [System.Management.Automation.CommandCompletion]::CompleteInput(
+                    $line, $line.Length, $null)
+                # PowerShell already knows the exact range of $line these matches replace -- e.g. a
+                # zero-length span right after the `.` in `$_.`, or just the `Na` in `$_.Na` --
+                # which is narrower than (and can disagree with) the client's own whitespace-derived
+                # guess. Report it so the client uses it instead: without this, filtering the
+                # shell's own already-correct candidates against the client's wrong guess discards
+                # them.
+                #
+                # ReplacementIndex/ReplacementLength are .NET string (UTF-16 code unit) offsets, but
+                # the client's buffer is UTF-8 bytes and slices it directly at these offsets --
+                # sending them as-is panicked the app whenever a multi-byte character (an accented
+                # letter, a CJK character, an emoji) appeared to the left of the completed token,
+                # since the index then lands inside that character's UTF-8 encoding rather than on a
+                # boundary. Convert to UTF-8 byte offsets here, where the exact string is known,
+                # using .NET's own encoder rather than hand-rolled surrogate-pair math.
+                #
+                # A whitespace-only line (measured: e.g. "   ") reports a negative
+                # ReplacementIndex/ReplacementLength -- skip the OSC rather than send a negative pair
+                # the client would just reject and warn about; its whitespace-derived fallback span
+                # is exactly as good as anything a negative index could have conveyed anyway.
+                if ($completion.ReplacementIndex -ge 0) {
+                    $utf8 = [System.Text.Encoding]::UTF8
+                    $replacementStartBytes = $utf8.GetByteCount($line.Substring(0, $completion.ReplacementIndex))
+                    # Clamp to $line.Length: a `Substring` past the end throws, which the surrounding
+                    # try/catch would otherwise turn into a silent, warning-free empty response.
+                    $replacementEnd = [Math]::Min($completion.ReplacementIndex + $completion.ReplacementLength, $line.Length)
+                    $replacementEndBytes = $utf8.GetByteCount($line.Substring(0, $replacementEnd))
+                    Write-Host -NoNewline "$([char]0x1b)]9280;S;$replacementStartBytes,$($replacementEndBytes - $replacementStartBytes)$oscEnd"
+                }
+                foreach ($match in $completion.CompletionMatches) {
+                    # Hex-encode both fields: OSC params are semicolon-delimited and only the third
+                    # is read, so a literal `;` in a match or description (e.g. a .NET tooltip like
+                    # "int Count { get; }") would truncate everything after it; a BEL or ESC would
+                    # end the OSC itself.
+                    Write-Host -NoNewline "$([char]0x1b)]9280;C;$(Warp-Encode-HexString $match.CompletionText)$oscEnd"
+                    if (-not [string]::IsNullOrEmpty($match.ToolTip) -and $match.ToolTip -ne $match.CompletionText) {
+                        # Cmdlet/parameter tooltips can span multiple lines; collapse to one line.
+                        $description = ($match.ToolTip -split '\r?\n' | Where-Object { $_.Trim() -ne '' }) -join ' '
+                        Write-Host -NoNewline "$([char]0x1b)]9280;D?description;$(Warp-Encode-HexString $description)$oscEnd"
+                    }
+                }
+            }
+        } catch {
+            Write-Verbose "Native completions failed: $($_.Exception.Message)"
+        } finally {
+            # Always emit the terminator, even if decoding or completion above threw, so the client
+            # never blocks waiting on a response that will never arrive.
+            Write-Host -NoNewline "$([char]0x1b)]9280;B$oscEnd"
+            # Restore the user's error status, like Warp-Run-GeneratorCommand -- computing a
+            # completion must not clobber the $?/$LASTEXITCODE the user's own last command left.
+            $global:LASTEXITCODE = $code
+            if ($status -eq $false) {
+                $PSCmdlet.WriteError([System.Management.Automation.ErrorRecord]::new(
+                        [Exception]::new("$([char]0x00)"),
+                        'warp-reset-error',
+                        [System.Management.Automation.ErrorCategory]::NotSpecified,
+                        $null
+                    ))
+            }
+        }
     }
 
     function Warp-Render-Prompt {

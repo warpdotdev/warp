@@ -104,11 +104,14 @@ fn each_shell_uses_a_generator_command_recognized_name() {
 }
 
 #[test]
-fn powershell_command_is_just_the_hex_text_with_no_function_call() {
-    // PowerShell never calls a named function at all: the caller types this directly as
-    // ordinary characters and reads it back via a PSReadLine key handler (see
-    // `POWERSHELL_NATIVE_COMPLETIONS_TRIGGER`'s doc comment in `pty_controller.rs`), so unlike
-    // the other three shells there's no generator-command name for anything to recognize.
+fn powershell_uses_a_generator_command_recognized_name() {
+    // PowerShell now runs `Warp-Run-GeneratorCommand-NativeCompletions <hex>` as an ordinary
+    // in-band command like the other three shells; the `Warp-Run-GeneratorCommand` prefix is what
+    // gets it recognized as a generator command. History exclusion is name-based
+    // (`AddToHistoryHandler`/`Clear-History`), so no leading space is needed.
     let command = generator_command_for(ShellType::PowerShell, "git ch");
-    assert_eq!(command, "676974206368");
+    assert_eq!(
+        command,
+        "Warp-Run-GeneratorCommand-NativeCompletions 676974206368"
+    );
 }
