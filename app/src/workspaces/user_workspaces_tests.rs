@@ -71,8 +71,9 @@ use crate::workspaces::team_tester::TeamTesterStatus;
 use crate::workspaces::update_manager::TeamUpdateManager;
 use crate::workspaces::user_workspaces::UserWorkspaces;
 use crate::workspaces::workspace::{
-    AdminEnablementSetting, CodebaseContextSettings, HostEnablementSetting, LlmHostSettings,
-    MultiAdminPolicy, PurchaseAddOnCreditsPolicy, Workspace,
+    AdminEnablementSetting, CodebaseContextSettings, EnforceableSetting, EnterpriseSecretRegex,
+    HostEnablementSetting, LlmHostSettings, MultiAdminPolicy, PurchaseAddOnCreditsPolicy,
+    SplitListSetting, TeamSecretRedactionSettings, TelemetrySettings, Workspace,
 };
 
 #[derive(Default)]
@@ -1188,6 +1189,106 @@ fn test_team_context_and_render_context_return_none_without_a_team() {
                     .team_render_context_for_view_handle(&weak_view, ctx)
                     .is_none(),
                 "a window with no team should not resolve a TeamRenderContext"
+            );
+        });
+    })
+}
+
+/// Every PR 3D `_for_team` accessor must be keyed by the team it's asked about, not by
+/// whichever team happens to be "current" for the process -- this is the acceptance
+/// criterion the multi-team-context spec calls out for Group 3 PRs: two windows on
+/// different teams must see independent, correct values concurrently.
+#[test]
+fn test_privacy_policy_for_team_reflects_each_windows_own_team_concurrently() {
+    let (mut team_a, team_b) = two_teams();
+    // team_b is left at its neutral default: telemetry not force-enabled, redaction disabled.
+    team_a.settings.telemetry_settings = TelemetrySettings {
+        force_enabled: true,
+    };
+    team_a.settings.secret_redaction = TeamSecretRedactionSettings {
+        enabled: EnforceableSetting {
+            value: true,
+            is_enforced_by_workspace: false,
+        },
+        regexes: SplitListSetting {
+            values: vec![EnterpriseSecretRegex {
+                pattern: "team-a-secret".to_string(),
+                name: None,
+            }],
+            ..Default::default()
+        },
+    };
+
+    let mut workspace = workspace_for_test(&team_a);
+    workspace.teams.push(team_b.clone());
+
+    App::test((), |mut app| async move {
+        initialize_window_team_test_app(&mut app, vec![workspace]);
+
+        let (window_a, _view_a) = create_test_window(&mut app);
+        let (window_b, _view_b) = create_test_window(&mut app);
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.set_team_for_window(window_a, team_a.uid, ctx);
+            user_workspaces.set_team_for_window(window_b, team_b.uid, ctx);
+        });
+
+        app.read(|ctx| {
+            let user_workspaces = UserWorkspaces::as_ref(ctx);
+            let resolved_team_a = user_workspaces.team_for_window(window_a);
+            let resolved_team_b = user_workspaces.team_for_window(window_b);
+
+            assert!(
+                user_workspaces.is_telemetry_force_enabled_for_team(resolved_team_a),
+                "window A's own team force-enables telemetry"
+            );
+            assert!(
+                !user_workspaces.is_telemetry_force_enabled_for_team(resolved_team_b),
+                "window B's team does not force-enable telemetry, even though window A's does concurrently"
+            );
+
+            assert!(
+                user_workspaces.is_enterprise_secret_redaction_enabled_for_team(resolved_team_a),
+                "window A's own team enables enterprise secret redaction"
+            );
+            assert!(
+                !user_workspaces.is_enterprise_secret_redaction_enabled_for_team(resolved_team_b),
+                "window B's team does not enable enterprise secret redaction, even though window A's does concurrently"
+            );
+
+            assert_eq!(
+                user_workspaces
+                    .enterprise_secret_redaction_regex_list_for_team(resolved_team_a)
+                    .iter()
+                    .map(|regex| regex.pattern.as_str())
+                    .collect::<Vec<_>>(),
+                vec!["team-a-secret"],
+                "window A's own regex list should be returned"
+            );
+            assert!(
+                user_workspaces
+                    .enterprise_secret_redaction_regex_list_for_team(resolved_team_b)
+                    .is_empty(),
+                "window B has no enterprise regexes of its own"
+            );
+        });
+    })
+}
+
+/// A window with no team must not silently fall back to any other team's policy, per the
+/// no-default-team rule in the multi-team-context spec.
+#[test]
+fn test_privacy_policy_for_team_returns_safe_defaults_without_a_team() {
+    App::test((), |mut app| async move {
+        initialize_window_team_test_app(&mut app, vec![]);
+
+        app.read(|ctx| {
+            let user_workspaces = UserWorkspaces::as_ref(ctx);
+            assert!(!user_workspaces.is_telemetry_force_enabled_for_team(None));
+            assert!(!user_workspaces.is_enterprise_secret_redaction_enabled_for_team(None));
+            assert!(
+                user_workspaces
+                    .enterprise_secret_redaction_regex_list_for_team(None)
+                    .is_empty()
             );
         });
     })
