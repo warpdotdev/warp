@@ -659,9 +659,6 @@ pub enum FeatureFlag {
     /// Enables image attachment support for cloud mode conversations.
     CloudModeImageContext,
 
-    /// Enables loading and returning bundled skills in the SkillManager.
-    BundledSkills,
-
     /// Enables the Oz launch modal for introducing cloud agent features.
     OzLaunchModal,
 

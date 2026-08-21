@@ -473,7 +473,6 @@ tui = ["warpui_core/tui"]
 ai_resume_button = []
 autoupdate = []
 figma_detection = []
-bundled_skills = []
 supergrok = []
 gemini_enterprise = []
 agent_mode = []
@@ -623,7 +622,6 @@ default = [
     "cloud_conversations",
     "list_skills",
     "ask_user_question",
-    "bundled_skills",
     "ambient_agents_rtc",
     "cloud_mode",
     "cloud_mode_from_local_session",

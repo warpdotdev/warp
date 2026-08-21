@@ -6,7 +6,6 @@ use remote_server::manager::{RemoteServerManager, RemoteServerManagerEvent};
 use remote_server::proto::{
     RemoteAgentContextSnapshot, RemoteContextFileProto, RemoteSkillProto, remote_skill_proto,
 };
-use warp_core::features::FeatureFlag;
 use warp_core::safe_warn;
 use warp_util::host_id::HostId;
 use warp_util::local_or_remote_path::LocalOrRemotePath;
@@ -86,9 +85,7 @@ fn parse_snapshot(
     host_id: &HostId,
     snapshot: RemoteAgentContextSnapshot,
 ) -> RemoteAgentContextState {
-    let bundled_skills = FeatureFlag::BundledSkills
-        .is_enabled()
-        .then(|| bundled_skill_from_protos(host_id, &snapshot.skills));
+    let bundled_skills = Some(bundled_skill_from_protos(host_id, &snapshot.skills));
     let Some(home_dir) = remote_path(host_id, &snapshot.home_dir) else {
         safe_warn!(
             safe: ("Ignoring remote home context with an invalid home directory"),
