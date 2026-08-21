@@ -101,6 +101,7 @@ use crate::terminal::resizable_data::ResizableData;
 use crate::terminal::shared_session::permissions_manager::SessionPermissionsManager;
 use crate::terminal::shell::ShellType;
 use crate::terminal::universal_developer_input::UniversalDeveloperInputButtonBarEvent;
+use crate::terminal::view::Event as TerminalViewEvent;
 use crate::terminal::view::inline_banner::ByoLlmAuthBannerSessionState;
 use crate::terminal::writeable_pty::command_history::update_command_history;
 use crate::test_util::settings::initialize_settings_for_tests;
@@ -2921,20 +2922,10 @@ fn build_suggestion_results<S: Into<Span>>(
     })
 }
 
-/// The flag-only native-completions path is a two-phase spawn: the bundled spec pass runs first,
-/// and only when it comes back empty does the foreground callback ask the shell, via
-/// `dispatch_native_shell_completions_after_empty_specs`. That phase-two method is where the parts
-/// that can silently regress live -- the as-you-type dispatch snapshot (whose
-/// `555ef0d`/`8c2858c` invariant keeps the shell-idle retry from looping) and the staleness guard
-/// that keeps a superseded request from asking the shell or clobbering a newer request's abort
-/// handle. Drive it directly and assert its observable effects on `Input`:
-/// - a real dispatch records the snapshot equal to the buffer the generator ran for, so the next
-///   `Precmd` retry sees no change and does not re-fire; and
-/// - if the buffer moved on while the spec pass was running, it bails without recording a snapshot
-///   and without arming/clobbering `completions_abort_handle` (the early return before the snapshot
-///   and the generator dispatch is what keeps the shell from being asked).
+/// Phase two of the flag-only path (`dispatch_native_shell_completions_after_empty_specs`) must
+/// bail on a stale request without asking the shell or clobbering a newer request's abort handle.
 #[test]
-fn native_completions_after_empty_specs_records_snapshot_and_bails_when_stale() {
+fn native_completions_after_empty_specs_bails_when_stale() {
     App::test((), |mut app| async move {
         initialize_app(&mut app);
         let terminal = add_window_with_bootstrapped_terminal(
@@ -2958,17 +2949,6 @@ fn native_completions_after_empty_specs_records_snapshot_and_bails_when_stale() 
                 snapshot_git.clone(),
                 ctx,
             );
-            let recorded = input
-                .native_completions_as_you_type_dispatch_snapshot
-                .clone()
-                .expect("a real empty-specs dispatch records the as-you-type snapshot");
-            // The recorded snapshot equals the current buffer, so the shell-idle retry sees no
-            // change and won't re-fire (the loop guard `555ef0d`/`8c2858c` established).
-            let current = AsYouTypeCompletionsBufferState::from_editor_snapshot(&snapshot_git);
-            assert!(
-                !should_retry_as_you_type_completions(Some(&recorded), &current),
-                "snapshot must equal the dispatch buffer so the next Precmd doesn't loop"
-            );
             assert!(
                 input.completions_abort_handle.is_some(),
                 "a real dispatch arms the completions abort handle"
@@ -2978,8 +2958,6 @@ fn native_completions_after_empty_specs_records_snapshot_and_bails_when_stale() 
         // Stale dispatch: the buffer moved on while the (async) spec pass was running, so this
         // phase-two callback -- computed from the older snapshot -- must not ask the shell.
         input.update(&mut app, |input, ctx| {
-            // Clear the fields first so a bail is observable as "still unset".
-            input.native_completions_as_you_type_dispatch_snapshot = None;
             input.completions_abort_handle = None;
             input.clear_buffer_and_reset_undo_stack(ctx);
             input.user_insert("git checkout", ctx);
@@ -2991,16 +2969,196 @@ fn native_completions_after_empty_specs_records_snapshot_and_bails_when_stale() 
                 ctx,
             );
             assert!(
-                input
-                    .native_completions_as_you_type_dispatch_snapshot
-                    .is_none(),
-                "a stale request (buffer moved on) must not record a dispatch snapshot"
-            );
-            assert!(
                 input.completions_abort_handle.is_none(),
                 "a stale request must not arm or clobber the abort handle"
             );
         });
+    });
+}
+
+/// Counts `TerminalAction::RunNativeShellCompletions` dispatches -- the only call site that ever
+/// asks the shell for native completions -- observed via the `TerminalView`'s own emitted event,
+/// so tests can assert dispatch counts through the real production paths (`run_completions_async`
+/// via `input_tab`/`open_completion_suggestions`) instead of calling a private phase-two method
+/// directly.
+fn count_native_shell_completions_dispatches(
+    app: &mut App,
+    terminal: &ViewHandle<TerminalView>,
+) -> Rc<RefCell<u32>> {
+    let count = Rc::new(RefCell::new(0));
+    let count_clone = count.clone();
+    app.update(|ctx| {
+        ctx.subscribe_to_view(terminal, move |_, event: &TerminalViewEvent, _| {
+            if let TerminalViewEvent::RunNativeShellCompletions { .. } = event {
+                *count_clone.borrow_mut() += 1;
+            }
+        });
+    });
+    count
+}
+
+/// Regression test for the two-phase restructure: the as-you-type dispatch snapshot must be
+/// recorded before the bundled spec pass runs, not only if it later asks the shell. A bundled
+/// spec's own generator can block the foreground the same way a native-completions generator
+/// does, so if a bundled spec wins (phase two never runs) and the snapshot were left unset, the
+/// buffer the user kept typing during that block would never get caught up by the next `Precmd`
+/// retry. Drives the real `open_completion_suggestions` path (not the phase-two method directly)
+/// for a command with a real bundled spec, then asserts the `Precmd` retry dispatches to the
+/// shell for the buffer typed afterward.
+#[test]
+fn native_completions_as_you_type_snapshot_survives_bundled_specs_winning() {
+    let _native_completions_flag = FeatureFlag::NativeShellCompletions.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        InputSettings::handle(&app).update(&mut app, |settings, ctx| {
+            settings
+                .completions_open_while_typing
+                .set_value(true, ctx)
+                .expect("set value must succeed");
+        });
+
+        let session_info = SessionInfo::new_for_test();
+        let session_id = session_info.session_id;
+        let terminal = add_window_with_bootstrapped_terminal(
+            &mut app,
+            None, /* history_file_commands */
+            Some(session_info),
+        )
+        .await;
+        simulate_directory_for_completion(session_id, &terminal, &mut app, "/usr/bin");
+        let input = terminal.read(&app, |terminal, _| terminal.input().clone());
+        let dispatch_count = count_native_shell_completions_dispatches(&mut app, &terminal);
+
+        // "git " has a real bundled spec with many subcommands, so the flag-only path's bundled
+        // spec pass wins outright and the shell is never asked for this request.
+        input.update(&mut app, |input, ctx| {
+            input.clear_buffer_and_reset_undo_stack(ctx);
+            input.user_insert("git ", ctx);
+            input.open_completion_suggestions(CompletionsTrigger::AsYouType, ctx);
+        });
+        warpui::r#async::Timer::after(Duration::from_millis(300)).await;
+
+        assert_eq!(
+            *dispatch_count.borrow(),
+            0,
+            "a bundled spec winning must not ask the shell"
+        );
+        input.update(&mut app, |input, ctx| {
+            let recorded = input
+                .native_completions_as_you_type_dispatch_snapshot
+                .clone()
+                .expect(
+                    "the as-you-type snapshot must be recorded even when the bundled spec pass \
+                     wins, so a later Precmd retry has something to compare the buffer against",
+                );
+            let current_snapshot = editor_model_snapshot(input, ctx);
+            let current = AsYouTypeCompletionsBufferState::from_editor_snapshot(&current_snapshot);
+            assert!(
+                !should_retry_as_you_type_completions(Some(&recorded), &current),
+                "the recorded snapshot must equal the buffer this request covered"
+            );
+        });
+
+        // The user keeps typing a command with no bundled spec while the previous request's
+        // snapshot is the only thing that lets the retry notice the buffer moved on. Replaces
+        // the buffer as a single edit (rather than a separate clear then insert) so this only
+        // raises one completions request -- matching a real keystroke -- instead of racing two
+        // requests against each other's abort handles.
+        input.update(&mut app, |input, ctx| {
+            input.user_replace_editor_text("definitelynotarealcommand ", ctx);
+        });
+        assert_eq!(
+            *dispatch_count.borrow(),
+            0,
+            "the shell must not be asked for the new buffer until the Precmd retry runs"
+        );
+
+        input.update(&mut app, |input, ctx| {
+            input.retry_as_you_type_completions_if_buffer_changed(ctx);
+        });
+        warpui::r#async::Timer::after(Duration::from_millis(300)).await;
+
+        assert_eq!(
+            *dispatch_count.borrow(),
+            1,
+            "the Precmd retry must dispatch to the shell for the buffer typed after the bundled \
+             spec won -- this fails if the as-you-type snapshot was left unset when specs won"
+        );
+    });
+}
+
+/// End-to-end coverage for the flag-only dispatch decision through the real production path
+/// (`input_tab` -> `open_completion_suggestions` -> `run_completions_async`), rather than calling
+/// a private phase-two method directly: a command with a real bundled spec must never reach the
+/// shell.
+#[test]
+fn input_tab_does_not_ask_the_shell_when_bundled_specs_are_non_empty() {
+    let _native_completions_flag = FeatureFlag::NativeShellCompletions.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let session_info = SessionInfo::new_for_test();
+        let session_id = session_info.session_id;
+        let terminal = add_window_with_bootstrapped_terminal(
+            &mut app,
+            None, /* history_file_commands */
+            Some(session_info),
+        )
+        .await;
+        simulate_directory_for_completion(session_id, &terminal, &mut app, "/usr/bin");
+        let input = terminal.read(&app, |terminal, _| terminal.input().clone());
+        let dispatch_count = count_native_shell_completions_dispatches(&mut app, &terminal);
+
+        input.update(&mut app, |input, ctx| {
+            input.clear_buffer_and_reset_undo_stack(ctx);
+            input.user_insert("git ", ctx);
+            input.input_tab(ctx);
+        });
+        warpui::r#async::Timer::after(Duration::from_millis(300)).await;
+
+        assert_eq!(
+            *dispatch_count.borrow(),
+            0,
+            "a command with a real bundled spec must never ask the shell"
+        );
+    });
+}
+
+/// The other half of the same decision: a command with no bundled spec, and no file-path fallback
+/// either (Tab with native completions in use turns off the usual keybinding file-path fallback --
+/// see `completions_fallback_strategy_for_trigger`), must still reach the shell exactly once.
+#[test]
+fn input_tab_asks_the_shell_once_when_bundled_specs_are_empty() {
+    let _native_completions_flag = FeatureFlag::NativeShellCompletions.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let session_info = SessionInfo::new_for_test();
+        let session_id = session_info.session_id;
+        let terminal = add_window_with_bootstrapped_terminal(
+            &mut app,
+            None, /* history_file_commands */
+            Some(session_info),
+        )
+        .await;
+        simulate_directory_for_completion(session_id, &terminal, &mut app, "/usr/bin");
+        let input = terminal.read(&app, |terminal, _| terminal.input().clone());
+        let dispatch_count = count_native_shell_completions_dispatches(&mut app, &terminal);
+
+        input.update(&mut app, |input, ctx| {
+            input.clear_buffer_and_reset_undo_stack(ctx);
+            input.user_insert("definitelynotarealcommand ", ctx);
+            input.input_tab(ctx);
+        });
+        warpui::r#async::Timer::after(Duration::from_millis(300)).await;
+
+        assert_eq!(
+            *dispatch_count.borrow(),
+            1,
+            "an unrecognized command must reach the shell exactly once, not fall back to \
+             file-path completions"
+        );
     });
 }
 

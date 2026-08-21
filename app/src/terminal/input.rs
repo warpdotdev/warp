@@ -2088,13 +2088,15 @@ pub struct Input {
     autosuggestions_abort_handle: Option<AbortHandle>,
 
     /// The buffer state (text + selections; see `AsYouTypeCompletionsBufferState`) the most
-    /// recently dispatched as-you-type native-shell-completions request was computed from, if
-    /// any. `open_completion_suggestions`'s `is_command_grid_active` gate blocks any new dispatch
-    /// for as long as a previous native-completions request's own generator command is still
-    /// running as a foreground command on the shell, and that gate is only ever rechecked by a
-    /// *new* keystroke -- so if the user keeps typing faster than a request's round trip, no
-    /// request ever gets dispatched for the buffer state they're left looking at, even once the
-    /// shell goes idle again. Compared against the current editor state on every
+    /// recent as-you-type native-shell-completions request was computed from, if any. Recorded
+    /// once a request reaches the point where either it or the bundled spec pass ahead of it
+    /// could occupy the shell's foreground -- not only once the shell is actually asked -- since a
+    /// bundled spec's own generator can occupy the foreground the same way a native-completions
+    /// generator does. `open_completion_suggestions`'s `is_command_grid_active` gate blocks any
+    /// new dispatch for as long as that foreground command is still running, and that gate is only
+    /// ever rechecked by a *new* keystroke -- so if the user keeps typing faster than a request's
+    /// round trip, no request ever gets dispatched for the buffer state they're left looking at,
+    /// even once the shell goes idle again. Compared against the current editor state on every
     /// `AnsiHandlerEvent::Precmd` (i.e. every time the shell returns to idle) so a request can be
     /// re-dispatched once for the current buffer if it moved on. See
     /// `retry_as_you_type_completions_if_buffer_changed`.
@@ -12864,6 +12866,20 @@ impl Input {
         // `ViewContext`, which the background spec-pass future doesn't have), so it's handled
         // separately from the up-front/no-native cases that follow.
         if dispatch == NativeCompletionsDispatch::OnlyIfSpecsEmpty {
+            // Record the buffer this request covers *before* running the bundled spec pass, not
+            // only if it later dispatches to the shell: a spec's own generator can itself run a
+            // foreground in-band command (see `SessionContext::execute_command_at_pwd`), which
+            // blocks further as-you-type dispatches the same way a native-completions generator
+            // does (see `native_completions_as_you_type_dispatch_snapshot`'s doc comment). If a
+            // bundled spec then wins, phase two below never runs, so recording only there would
+            // leave the shell-idle retry with nothing to compare against for the buffer the user
+            // kept typing while that command was in the foreground.
+            if completions_trigger == CompletionsTrigger::AsYouType {
+                self.native_completions_as_you_type_dispatch_snapshot = Some(
+                    AsYouTypeCompletionsBufferState::from_editor_snapshot(&editor_snapshot),
+                );
+            }
+
             let completion_session = completion_context.session.clone();
             let abort_handle = ctx
                 .spawn_abortable(
@@ -13026,18 +13042,9 @@ impl Input {
             return;
         }
 
-        // Record the buffer this generator is dispatched for so a later `Precmd` (the shell
-        // returning to idle) can tell whether the buffer has moved on since. Set here, at the
-        // actual dispatch -- unlike the up-front paths -- because in this path a generator only
-        // runs when the specs were empty, and the snapshot must track a buffer a generator was
-        // really dispatched for: the block only goes busy (and only fires the `Precmd` that drives
-        // the retry) when a generator actually runs. See
-        // `native_completions_as_you_type_dispatch_snapshot`.
-        if completions_trigger == CompletionsTrigger::AsYouType {
-            self.native_completions_as_you_type_dispatch_snapshot = Some(
-                AsYouTypeCompletionsBufferState::from_editor_snapshot(&editor_snapshot),
-            );
-        }
+        // The as-you-type dispatch snapshot for this request was already recorded before the
+        // bundled spec pass launched (see `run_completions_async`'s `OnlyIfSpecsEmpty` handling),
+        // since that pass can itself block the foreground the same way this dispatch does.
 
         let (results_tx, results_rx) = async_channel::unbounded();
         ctx.dispatch_typed_action(&TerminalAction::RunNativeShellCompletions {
