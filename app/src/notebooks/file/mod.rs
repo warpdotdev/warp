@@ -33,7 +33,9 @@ use warpui::{
 };
 
 use super::context_menu::{ContextMenuAction, ContextMenuState, show_rich_editor_context_menu};
-use super::editor::view::{EditorViewEvent, RichTextEditorConfig, RichTextEditorView};
+use super::editor::view::{
+    EditorViewAction, EditorViewEvent, RichTextEditorConfig, RichTextEditorView,
+};
 use super::link::{NotebookLinks, SessionSource};
 use super::telemetry::NotebookTelemetryAction;
 use super::{NotebookLocation, styles};
@@ -55,6 +57,7 @@ use crate::server::telemetry::{NotebookActionEvent, NotebookTelemetryMetadata, T
 use crate::settings::FontSettings;
 use crate::terminal::model::session::Session;
 use crate::ui_components::icons::Icon;
+use crate::util::bindings::keybinding_name_to_display_string;
 #[cfg(feature = "local_fs")]
 use crate::util::openable_file_type::FileTarget;
 // `renders_in_warp_notebook_viewer` is only consumed by non-wasm views
@@ -132,6 +135,7 @@ pub enum FileNotebookAction {
     Focus,
     Close,
     FocusTerminalInput,
+    ShowFindBar,
     ReloadFile,
     #[cfg(feature = "local_fs")]
     CopyFilePath,
@@ -1069,6 +1073,11 @@ impl TypedActionView for FileNotebookView {
             FileNotebookAction::FocusTerminalInput => {
                 ctx.emit(FileNotebookEvent::Pane(PaneEvent::FocusActiveSession))
             }
+            FileNotebookAction::ShowFindBar => {
+                self.editor.update(ctx, |editor, ctx| {
+                    editor.handle_action(&EditorViewAction::ShowFindBar, ctx);
+                });
+            }
             FileNotebookAction::ReloadFile => self.reload_file(ctx),
             #[cfg(feature = "local_fs")]
             FileNotebookAction::CopyFilePath => {
@@ -1174,6 +1183,10 @@ impl BackingView for FileNotebookView {
             .as_ref()
             .is_some_and(|h| h.is_maximized(ctx));
         let mut actions = vec![
+            MenuItemFields::new("Find")
+                .with_on_select_action(FileNotebookAction::ShowFindBar)
+                .with_key_shortcut_label(keybinding_name_to_display_string("editor:find", ctx))
+                .into_item(),
             MenuItemFields::toggle_pane_action(is_maximized)
                 .with_on_select_action(FileNotebookAction::ToggleMaximized)
                 .into_item(),
