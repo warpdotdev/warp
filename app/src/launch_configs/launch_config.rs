@@ -106,6 +106,11 @@ pub enum PaneTemplateType {
         /// Sourced from the `shell` field of a tab config pane node.
         #[serde(skip_serializing_if = "Option::is_none", default)]
         shell: Option<String>,
+        /// The pane's custom name, as shown in the vertical tabs panel.
+        /// Mirrors `LeafSnapshot::custom_vertical_tabs_title`; `None` means the
+        /// pane was never renamed and falls back to its generated label.
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        title: Option<String>,
     },
     PaneBranchTemplate {
         split_direction: SplitDirection,
@@ -144,6 +149,7 @@ impl TryFrom<PaneNodeSnapshot> for PaneTemplateType {
                     is_focused: Some(leaf.is_focused),
                     pane_mode: PaneMode::Terminal,
                     shell: None,
+                    title: leaf.custom_vertical_tabs_title,
                 }),
                 // Currently, notebook panes cannot be saved in launch configurations.
                 LeafContents::Notebook(_)
@@ -287,6 +293,7 @@ pub fn make_mock_single_window_launch_config() -> LaunchConfig {
                         commands: vec!["echo test_command".into()],
                         pane_mode: PaneMode::Terminal,
                         shell: None,
+                        title: None,
                     },
                     commands: Vec::new(),
                     color: None,
@@ -299,6 +306,7 @@ pub fn make_mock_single_window_launch_config() -> LaunchConfig {
                         commands: vec!["echo test_command_on_another_tab".into()],
                         pane_mode: PaneMode::Terminal,
                         shell: None,
+                        title: None,
                     },
                     commands: Vec::new(),
                     color: None,

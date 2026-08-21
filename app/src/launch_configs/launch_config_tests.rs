@@ -119,6 +119,7 @@ fn test_config_from_snapshot_flattens_single_pane() {
             commands: vec![],
             pane_mode: PaneMode::Terminal,
             shell: None,
+            title: None,
         },
     )
 }
@@ -192,6 +193,7 @@ fn test_config_from_snapshot_filters_panes() {
                     commands: vec![],
                     pane_mode: PaneMode::Terminal,
                     shell: None,
+                    title: None,
                 },
                 PaneTemplateType::PaneTemplate {
                     is_focused: Some(false),
@@ -199,6 +201,7 @@ fn test_config_from_snapshot_filters_panes() {
                     commands: vec![],
                     pane_mode: PaneMode::Terminal,
                     shell: None,
+                    title: None,
                 },
             ]
         }
@@ -255,6 +258,7 @@ windows:
             is_focused: None,
             pane_mode: PaneMode::Terminal,
             shell: None,
+            title: None,
         }
     );
 }
@@ -292,6 +296,7 @@ windows:
                     is_focused: Some(false),
                     pane_mode: PaneMode::Terminal,
                     shell: None,
+                    title: None,
                 },
                 PaneTemplateType::PaneTemplate {
                     cwd: PathBuf::from("/tmp/right"),
@@ -301,6 +306,7 @@ windows:
                     is_focused: Some(true),
                     pane_mode: PaneMode::Terminal,
                     shell: None,
+                    title: None,
                 },
             ],
         }
@@ -340,6 +346,7 @@ windows:
                     is_focused: None,
                     pane_mode: PaneMode::Terminal,
                     shell: None,
+                    title: None,
                 },
                 PaneTemplateType::PaneTemplate {
                     cwd: PathBuf::from("/tmp/right"),
@@ -347,6 +354,7 @@ windows:
                     is_focused: None,
                     pane_mode: PaneMode::Terminal,
                     shell: None,
+                    title: None,
                 },
             ],
         }
@@ -527,4 +535,104 @@ fn test_config_with_active_tab_being_filtered() {
 
     let template = LaunchConfig::from_snapshot("Test".into(), &state);
     assert_eq!(template.windows[0].active_tab_index, None)
+}
+
+fn named_terminal_leaf(title: Option<&str>, cwd: &str) -> PaneNodeSnapshot {
+    PaneNodeSnapshot::Leaf(LeafSnapshot {
+        is_focused: false,
+        custom_vertical_tabs_title: title.map(str::to_string),
+        contents: LeafContents::Terminal(TerminalPaneSnapshot {
+            uuid: vec![],
+            cwd: Some(cwd.into()),
+            is_active: false,
+            is_read_only: false,
+            shell_launch_data: None,
+            input_config: None,
+            llm_model_override: None,
+            active_profile_id: None,
+            conversation_ids_to_restore: vec![],
+            active_conversation_id: None,
+        }),
+    })
+}
+
+fn pane_title(pane: &PaneTemplateType) -> Option<&str> {
+    match pane {
+        PaneTemplateType::PaneTemplate { title, .. } => title.as_deref(),
+        PaneTemplateType::PaneBranchTemplate { .. } => panic!("expected a leaf pane"),
+    }
+}
+
+#[test]
+fn test_config_from_snapshot_preserves_pane_names() {
+    // Renaming a pane sets `LeafSnapshot::custom_vertical_tabs_title`. Saving a
+    // launch configuration must carry that name across, per-pane, so relaunching
+    // does not reset every pane to its generated label.
+
+    let state = single_tab_snapshot(PaneNodeSnapshot::Branch(BranchSnapshot {
+        direction: SplitDirection::Vertical,
+        children: vec![
+            (PaneFlex(1.), named_terminal_leaf(Some("Build"), "/build")),
+            (PaneFlex(1.), named_terminal_leaf(None, "/unnamed")),
+            (PaneFlex(1.), named_terminal_leaf(Some("Logs"), "/logs")),
+        ],
+    }));
+
+    let template = LaunchConfig::from_snapshot("Test".into(), &state);
+    let PaneTemplateType::PaneBranchTemplate { panes, .. } = &template.windows[0].tabs[0].layout
+    else {
+        panic!("expected a branch layout");
+    };
+
+    assert_eq!(
+        panes.iter().map(pane_title).collect::<Vec<_>>(),
+        vec![Some("Build"), None, Some("Logs")],
+        "each pane must keep its own name, and an unnamed pane must stay unnamed",
+    );
+}
+
+#[test]
+fn test_pane_name_round_trips_through_yaml() {
+    let state = single_tab_snapshot(named_terminal_leaf(Some("Server"), "/srv"));
+    let config = LaunchConfig::from_snapshot("Test".into(), &state);
+
+    let yaml = serde_yaml::to_string(&config).expect("config should serialize");
+    let parsed: LaunchConfig = serde_yaml::from_str(&yaml).expect("config should parse");
+
+    assert_eq!(
+        pane_title(&parsed.windows[0].tabs[0].layout),
+        Some("Server")
+    );
+}
+
+#[test]
+fn test_unnamed_pane_omits_title_key() {
+    // The new field must not appear in configs saved from unnamed panes, so
+    // existing launch configurations keep serializing byte-for-byte as before.
+
+    let state = single_tab_snapshot(named_terminal_leaf(None, "/srv"));
+    let config = LaunchConfig::from_snapshot("Test".into(), &state);
+
+    let yaml = serde_yaml::to_string(&config).expect("config should serialize");
+
+    assert!(
+        !yaml.contains("title"),
+        "unnamed panes must not emit a title key, got:\n{yaml}",
+    );
+}
+
+#[test]
+fn test_legacy_config_without_pane_name_still_parses() {
+    let config: LaunchConfig = serde_yaml::from_str(
+        r#"
+name: Legacy
+windows:
+  - tabs:
+      - layout:
+          cwd: /tmp
+"#,
+    )
+    .expect("a config predating pane names should still parse");
+
+    assert_eq!(pane_title(&config.windows[0].tabs[0].layout), None);
 }
