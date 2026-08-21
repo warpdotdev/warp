@@ -272,6 +272,7 @@ impl<'a, T: Entity> ModelContext<'a, T> {
     }
 
     // Only public in crate::core so it can be used by ui/src/core/mod_test.rs.
+    #[track_caller]
     pub(in crate::core) fn spawn_local<S, F, U>(
         &mut self,
         future: S,
@@ -311,6 +312,7 @@ impl<'a, T: Entity> ModelContext<'a, T> {
     /// If the future fails and we still have remaining retry counts, call the set callback
     /// with RequestState::RequestFailedRetryPending and retry based on the RetryOption.
     /// Otherwise, call the set callback with RequestState::RequestFailed.
+    #[track_caller]
     pub fn spawn_with_retry_on_error<P, S, F, M>(
         &mut self,
         future_closure: P,
@@ -332,6 +334,7 @@ impl<'a, T: Entity> ModelContext<'a, T> {
     /// remain on the [`RetryOption`]. Use this for errors that are known to be permanent so
     /// they don't issue redundant requests — e.g. classify a 403/404 with
     /// `is_transient_http_error` and skip retries.
+    #[track_caller]
     pub fn spawn_with_retry_on_error_when<P, S, R, F, M>(
         &mut self,
         mut future_closure: P,
@@ -391,6 +394,7 @@ impl<'a, T: Entity> ModelContext<'a, T> {
     ///
     /// See [`Self::spawn_abortable`] for an alternative version of this function that accepts an
     /// `on_abort` function that is called when the future is aborted.
+    #[track_caller]
     pub fn spawn<S, F, U>(&mut self, future: S, callback: F) -> SpawnedFutureHandle
     where
         S: crate::r#async::Spawnable,
@@ -425,6 +429,7 @@ impl<'a, T: Entity> ModelContext<'a, T> {
     ///
     /// See [`Self::spawn`] for an alternative version of this function that doesn't
     /// require a callback if/when the future is aborted.
+    #[track_caller]
     pub fn spawn_abortable<S, F, A>(
         &mut self,
         future: S,
@@ -480,6 +485,7 @@ impl<'a, T: Entity> ModelContext<'a, T> {
     ///
     /// Note that the spawner *does not* keep a strong reference to the model. If the model is
     /// dropped, any pending or future tasks will be discarded.
+    #[track_caller]
     pub fn spawner(&mut self) -> ModelSpawner<T> {
         let (task_tx, task_rx) = async_channel::unbounded();
         let (completion_tx, _completion_rx) = futures::channel::oneshot::channel();
@@ -506,6 +512,7 @@ impl<'a, T: Entity> ModelContext<'a, T> {
         }
     }
 
+    #[track_caller]
     pub fn spawn_stream_local<S, F, G>(
         &mut self,
         stream: S,

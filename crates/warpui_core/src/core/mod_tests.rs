@@ -1206,6 +1206,115 @@ fn test_spawn_stream_local_from_view() {
     });
 }
 
+/// Collects the distinct foreground-task spawn sites the census attributes
+/// to this test file, so a test can assert that its own call sites were
+/// recorded separately rather than collapsing onto a framework wrapper.
+fn spawn_sites_in_this_file(app: &mut App) -> Vec<String> {
+    let snapshot = app.update(|ctx| ctx.foreground_executor().task_census_snapshot(50));
+    let mut sites: Vec<String> = snapshot
+        .top_spawn_sites
+        .into_iter()
+        .map(|site| site.location)
+        .filter(|location| location.contains("mod_tests.rs"))
+        .collect();
+    sites.sort();
+    sites.dedup();
+    sites
+}
+
+#[test]
+fn test_spawn_stream_local_from_model_is_attributed_to_its_caller() {
+    // A stream task's spawn site has to survive the `ModelContext` ->
+    // `AppContext` -> `Foreground` hop, which only works while every wrapper
+    // along the way is `#[track_caller]`. Drop the attribute anywhere on that
+    // chain and every stream in the app collapses onto that one wrapper line,
+    // leaving the heap-profile census unable to name a pile-up.
+    struct Model;
+
+    impl Entity for Model {
+        type Event = ();
+    }
+
+    fn spawn_stream_from_one_site(ctx: &mut ModelContext<Model>) {
+        ctx.spawn_stream_local(stream::pending::<usize>(), |_, _, _| {}, |_, _| {});
+    }
+
+    fn spawn_stream_from_another_site(ctx: &mut ModelContext<Model>) {
+        ctx.spawn_stream_local(stream::pending::<usize>(), |_, _, _| {}, |_, _| {});
+    }
+
+    fn spawner_from_a_third_site(ctx: &mut ModelContext<Model>) -> ModelSpawner<Model> {
+        ctx.spawner()
+    }
+
+    App::test((), |mut app| async move {
+        let app = &mut app;
+        let handle = app.add_model(|_| Model);
+
+        let _spawner = handle.update(app, |_, ctx| {
+            spawn_stream_from_one_site(ctx);
+            spawn_stream_from_another_site(ctx);
+            spawner_from_a_third_site(ctx)
+        });
+
+        let sites = spawn_sites_in_this_file(app);
+        assert_eq!(
+            sites.len(),
+            3,
+            "expected the three spawn sites in this file to be attributed separately, got {sites:?}"
+        );
+    });
+}
+
+#[test]
+fn test_spawn_stream_local_from_view_is_attributed_to_its_caller() {
+    #[derive(Default)]
+    struct View {}
+
+    impl Entity for View {
+        type Event = ();
+    }
+
+    impl super::View for View {
+        fn render(&self, _: &AppContext) -> Box<dyn Element> {
+            Empty::new().finish()
+        }
+
+        fn ui_name() -> &'static str {
+            "View"
+        }
+    }
+
+    impl TypedActionView for View {
+        type Action = ();
+    }
+
+    fn spawn_stream_from_one_site(ctx: &mut ViewContext<View>) {
+        ctx.spawn_stream_local(stream::pending::<usize>(), |_, _, _| {}, |_, _| {});
+    }
+
+    fn spawner_from_another_site(ctx: &mut ViewContext<View>) -> ViewSpawner<View> {
+        ctx.spawner()
+    }
+
+    App::test((), |mut app| async move {
+        let app = &mut app;
+        let (_, handle) = app.add_window(WindowStyle::NotStealFocus, |_| View::default());
+
+        let _spawner = handle.update(app, |_, ctx| {
+            spawn_stream_from_one_site(ctx);
+            spawner_from_another_site(ctx)
+        });
+
+        let sites = spawn_sites_in_this_file(app);
+        assert_eq!(
+            sites.len(),
+            2,
+            "expected the two spawn sites in this file to be attributed separately, got {sites:?}"
+        );
+    });
+}
+
 #[test]
 #[ignore]
 fn test_spawn_stream_local_from_view_await_after_closing_window() {

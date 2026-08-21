@@ -1,4 +1,5 @@
 use std::marker::PhantomData;
+use std::panic::Location;
 use std::pin::Pin;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -14,6 +15,11 @@ use warp_errors::report_error;
 
 use crate::r#async::executor::Error;
 use crate::platform;
+
+mod foreground_task_census;
+
+use foreground_task_census::ForegroundTaskCensus;
+pub use foreground_task_census::{ForegroundTaskCensusSnapshot, SpawnSiteSnapshot};
 
 pub type ForegroundTask = async_task::Task<()>;
 
@@ -49,9 +55,11 @@ pub enum Foreground {
     Platform {
         not_send_or_sync: PhantomData<Rc<()>>, // Make sure the type is `!Send` and `!Sync`.
         delegate: Arc<dyn platform::DispatchDelegate>,
+        census: Rc<ForegroundTaskCensus>,
     },
     Test {
         executor: LocalExecutor<'static>,
+        census: Rc<ForegroundTaskCensus>,
     },
 }
 
@@ -61,6 +69,7 @@ impl Foreground {
             Ok(Self::Platform {
                 not_send_or_sync: PhantomData,
                 delegate,
+                census: Rc::default(),
             })
         } else {
             Err(Error::NotOnMainThread)
@@ -70,12 +79,34 @@ impl Foreground {
     pub fn test() -> Self {
         Self::Test {
             executor: LocalExecutor::new(),
+            census: Rc::default(),
         }
+    }
+
+    fn census(&self) -> &Rc<ForegroundTaskCensus> {
+        match self {
+            Foreground::Platform { census, .. } => census,
+            Foreground::Test { census, .. } => census,
+        }
+    }
+
+    /// Returns a snapshot of in-flight foreground tasks, grouped by the
+    /// call site that spawned them, along with the total number of live
+    /// tasks across every site.
+    ///
+    /// This is meant for attaching to a heap profile or diagnostic report:
+    /// when the main thread's memory is dominated by boxed foreground-task
+    /// futures (which all look identical in a stack trace), this names the
+    /// call sites actually responsible, instead of leaving the profile to
+    /// dead-end in `Future::poll`.
+    pub fn task_census_snapshot(&self, top_n_spawn_sites: usize) -> ForegroundTaskCensusSnapshot {
+        self.census().snapshot(top_n_spawn_sites)
     }
 
     /// Schedule an asynchronous task to run on the main thread.
     ///
     /// If you have a boxed future, use `spawn_boxed` instead.
+    #[track_caller]
     pub fn spawn(&self, future: impl Future<Output = ()> + 'static) -> ForegroundTask {
         self.spawn_boxed(future.boxed_local())
     }
@@ -86,12 +117,20 @@ impl Foreground {
     /// underlying task implementation.  `spawn_boxed` generates significantly
     /// less code than a generic implementation, with no noticeable performance
     /// impact.
+    #[track_caller]
     pub fn spawn_boxed(&self, future: LocalBoxFuture<'static, ()>) -> ForegroundTask {
+        // Captured here (rather than deeper in the call chain) so that, as
+        // long as every function between the application's call site and
+        // here is itself `#[track_caller]`, this names the code that
+        // actually queued the work instead of this executor's own file.
+        let location = Location::caller();
+        let future = foreground_task_census::track(self.census().clone(), location, future);
         let future = future.instrument(tracing::Span::current());
         match self {
             Foreground::Platform {
                 not_send_or_sync: _,
                 delegate: platform,
+                census: _,
             } => {
                 let platform = platform.clone();
                 let schedule = move |task: async_task::Runnable| platform.run_on_main_thread(task);
@@ -99,7 +138,10 @@ impl Foreground {
                 runnable.schedule();
                 handle
             }
-            Foreground::Test { executor } => executor.spawn(future),
+            Foreground::Test {
+                executor,
+                census: _,
+            } => executor.spawn(future),
         }
     }
 
@@ -107,6 +149,7 @@ impl Foreground {
     ///
     /// This is the same as `spawn()` except the task may be aborted using the returned
     /// [`AbortHandle`].
+    #[track_caller]
     pub fn spawn_abortable(
         &self,
         future: impl Future<Output = ()> + 'static,
@@ -121,11 +164,19 @@ impl Foreground {
             Foreground::Platform {
                 not_send_or_sync: _,
                 delegate: _,
+                census: _,
             } => unimplemented!("only the test executor can be run"),
-            Foreground::Test { executor } => executor.run(future).await,
+            Foreground::Test {
+                executor,
+                census: _,
+            } => executor.run(future).await,
         }
     }
 }
+
+#[cfg(test)]
+#[path = "executor_tests.rs"]
+mod tests;
 
 pub struct Background {
     runtime: Option<tokio::runtime::Runtime>,
