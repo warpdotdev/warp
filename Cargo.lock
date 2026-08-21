@@ -672,6 +672,7 @@ dependencies = [
  "arborium-ruby",
  "arborium-rust",
  "arborium-scala",
+ "arborium-solidity",
  "arborium-sql",
  "arborium-starlark",
  "arborium-swift",
@@ -986,6 +987,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a44ec43c8cbb9326eda4c63d190084379742bc9c6e167adc46c1bee1c7a1f4e4"
 dependencies = [
  "arborium-css",
+ "arborium-sysroot",
+ "cc",
+ "tree-sitter-language",
+]
+
+[[package]]
+name = "arborium-solidity"
+version = "2.13.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "65e88751dbe3aa51a31902643c8ebb483f391dff62ce1fbc059940ff2aabb09f"
+dependencies = [
  "arborium-sysroot",
  "cc",
  "tree-sitter-language",
