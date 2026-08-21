@@ -122,6 +122,30 @@ use environment::PrepareEnvironmentError;
 pub(crate) use snapshot::upload_snapshot_for_handoff;
 use terminal::TerminalDriverEvent;
 
+struct CredentialRefreshWrapperLifecycle {
+    run_completed: bool,
+}
+
+impl CredentialRefreshWrapperLifecycle {
+    fn started() -> Self {
+        log::info!("Git credential refresh lifecycle: event=wrapper_started");
+        Self {
+            run_completed: false,
+        }
+    }
+}
+
+impl Drop for CredentialRefreshWrapperLifecycle {
+    fn drop(&mut self) {
+        let reason = if self.run_completed {
+            "run_future_completed"
+        } else {
+            "wrapper_future_dropped"
+        };
+        log::info!("Git credential refresh lifecycle: event=wrapper_exit reason={reason}");
+    }
+}
+
 /// Races `run_future` against optional background credential refresh loops,
 /// dropping the loops automatically when `run_future` resolves.
 ///
@@ -139,9 +163,23 @@ async fn with_credential_refreshes<F, T>(
 where
     F: Future<Output = T>,
 {
-    let git_refresh = async move {
+    let git_refresh_enabled = git_task_id.is_some();
+
+    let mut wrapper_lifecycle = CredentialRefreshWrapperLifecycle::started();
+    let git_lifecycle = git_refresh_enabled.then(git_credentials::RefreshLoopLifecycle::new);
+
+    let git_refresh = async {
         match git_task_id {
-            Some(task_id) => git_credentials::refresh_loop(task_id, ai_client).await,
+            Some(task_id) => {
+                git_credentials::refresh_loop(
+                    task_id,
+                    ai_client,
+                    git_lifecycle
+                        .clone()
+                        .expect("lifecycle exists when git refresh is enabled"),
+                )
+                .await
+            }
             None => future::pending::<()>().await,
         }
     }
@@ -157,13 +195,23 @@ where
     }
     .fuse();
 
-    let run_future = run_future.fuse();
+    let run_future = async {
+        let result = run_future.await;
+        if let Some(lifecycle) = &git_lifecycle {
+            lifecycle.mark_run_future_completed();
+        }
+        result
+    }
+    .fuse();
+
     futures::pin_mut!(run_future, git_refresh, bedrock_refresh);
-    futures::select! {
+    let result = futures::select! {
         result = run_future => result,
         _ = git_refresh => unreachable!("git credentials refresh loop resolved unexpectedly"),
         _ = bedrock_refresh => unreachable!("Bedrock credentials refresh loop resolved unexpectedly"),
-    }
+    };
+    wrapper_lifecycle.run_completed = true;
+    result
 }
 
 const MCP_SERVER_STARTUP_TIMEOUT: Duration = Duration::from_secs(20);
@@ -2906,11 +2954,17 @@ impl AgentDriver {
 
         let (task_id_for_refresh, ai_client_for_refresh, oidc_strategy_for_refresh) = foreground
             .spawn(|me, ctx| {
-                let task_id = if FeatureFlag::GitCredentialRefresh.is_enabled() {
+                let git_refresh_enabled = FeatureFlag::GitCredentialRefresh.is_enabled();
+                let task_id = if git_refresh_enabled {
                     me.task_id.map(|id| id.to_string())
                 } else {
                     None
                 };
+                log::info!(
+                    "Git credential refresh lifecycle: event=configuration_captured \
+                     feature_enabled={git_refresh_enabled} task_id_present={}",
+                    task_id.is_some()
+                );
                 let ai_client = ServerApiProvider::as_ref(ctx).get_ai_client().clone();
                 // Capture OidcManaged strategy parameters for the proactive Bedrock credential
                 // refresh loop. Only populated when Bedrock OIDC inference is configured.
@@ -2950,6 +3004,12 @@ impl AgentDriver {
                 let status_rx = foreground
                     .spawn(move |me, ctx| me.execute_run(task.prompt, ctx))
                     .await?;
+                log::info!(
+                    "Git credential refresh lifecycle: event=wrapper_created \
+                     git_refresh_enabled={} bedrock_refresh_enabled={}",
+                    task_id_for_refresh.is_some(),
+                    oidc_strategy_for_refresh.is_some()
+                );
 
                 let conversation_status = with_credential_refreshes(
                     async move {
@@ -3002,6 +3062,12 @@ impl AgentDriver {
                     })
                     .await?;
                 let runtime_error_patterns = harness.runtime_error_patterns();
+                log::info!(
+                    "Git credential refresh lifecycle: event=wrapper_created \
+                     git_refresh_enabled={} bedrock_refresh_enabled={}",
+                    task_id_for_refresh.is_some(),
+                    oidc_strategy_for_refresh.is_some()
+                );
 
                 with_credential_refreshes(
                     Self::run_harness(
