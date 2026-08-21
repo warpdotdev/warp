@@ -30,10 +30,10 @@ pub fn generator_command_for(shell_type: ShellType, buffer_text: &str) -> String
     match shell_type {
         // zsh cannot run this through the ordinary (backgrounded) generator command path: it
         // must run in the foreground, in the main shell, with no command substitution around the
-        // `select` loop that activates ZLE. See `warp_run_generator_command_foreground_completions`
+        // `select` loop that activates ZLE. See `warp_run_generator_command_native_completions`
         // in zsh_body.sh for the full explanation.
         ShellType::Zsh => {
-            format!("warp_run_generator_command_foreground_completions {hex_encoded_buffer_text}")
+            format!("warp_run_generator_command_native_completions {hex_encoded_buffer_text}")
         }
         ShellType::Bash => {
             format!("warp_run_generator_command_native_completions {hex_encoded_buffer_text}")

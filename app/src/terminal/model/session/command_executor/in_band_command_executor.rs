@@ -437,12 +437,12 @@ impl CommandExecutor for InBandCommandExecutor {
 }
 
 /// Returns `true` if `command` is an in-band command string -- either one executed via
-/// `InBandCommandExecutor` (`warp_run_generator_command`/`Warp-Run-GeneratorCommand`), or one of
-/// the native-shell-completions generator functions declared in zsh/bash/fish's bootstrap scripts
-/// (`warp_run_generator_command_foreground_completions`, `warp_run_generator_command_native_completions`),
-/// which are dispatched directly by `PtyController::run_native_shell_completions` rather than
-/// through this executor. PowerShell's native completions never reach this function at all: they
-/// are driven by a PSReadLine key handler that never treats anything as a command to execute (see
+/// `InBandCommandExecutor` (`warp_run_generator_command`/`Warp-Run-GeneratorCommand`), or the
+/// native-shell-completions generator function declared in zsh/bash/fish's bootstrap scripts
+/// (`warp_run_generator_command_native_completions`), which is dispatched directly by
+/// `PtyController::run_native_shell_completions` rather than through this executor. PowerShell's
+/// native completions never reach this function at all: they are driven by a PSReadLine key
+/// handler that never treats anything as a command to execute (see
 /// `POWERSHELL_NATIVE_COMPLETIONS_TRIGGER`'s doc comment in `pty_controller.rs`), so there's no
 /// command string here for anything to recognize.
 ///

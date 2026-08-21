@@ -82,7 +82,7 @@ fn each_shell_uses_a_generator_command_recognized_name() {
     for (shell_type, expected_prefix) in [
         (
             ShellType::Zsh,
-            "warp_run_generator_command_foreground_completions ",
+            "warp_run_generator_command_native_completions ",
         ),
         (
             ShellType::Bash,
