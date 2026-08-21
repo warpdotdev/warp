@@ -768,7 +768,7 @@ impl CLISubagentView {
                         CodeEditorRenderOptions::new(VerticalExpansionBehavior::InfiniteHeight),
                         ctx,
                     )
-                    .with_can_show_diff_ui(false)
+                    .with_can_show_diff_ui(false, ctx)
                 });
                 view.update(ctx, |view, ctx| {
                     view.set_starting_line_number({
