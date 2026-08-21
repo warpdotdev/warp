@@ -72,6 +72,23 @@ $null = New-Module -Name Warp-Module -ScriptBlock {
             [BitConverter]::ToString([System.Text.Encoding]::UTF8.GetBytes($str)).Replace('-', '')
         }
 
+        # Reverses Warp-Encode-HexString: decodes a hex-encoded string back to its original
+        # UTF-8 text. Lets the Rust app pass arbitrary argument text (e.g. the in-progress
+        # command line) as a plain, unquoted hex string, without needing any shell quoting.
+        function Warp-Decode-HexString([string]$hex) {
+            # An empty (or missing, which binds to an empty string for an unmandated [string]
+            # parameter) argument decodes to nothing. Guard explicitly: the `for` loop below
+            # never executing leaves $bytes as $null rather than an empty array, and
+            # GetString($null) throws.
+            if ([string]::IsNullOrEmpty($hex)) {
+                return ''
+            }
+            $bytes = for ($i = 0; $i -lt $hex.Length; $i += 2) {
+                [Convert]::ToByte($hex.Substring($i, 2), 16)
+            }
+            [System.Text.Encoding]::UTF8.GetString($bytes)
+        }
+
         # Hex-encodes the given argument and writes it to the PTY, wrapped in the OSC
         # sequences for generator output.
         #
@@ -380,6 +397,56 @@ $null = New-Module -Name Warp-Module -ScriptBlock {
             # However, PowerShell doesn't do this correctly due to cursor position mismatch. So,
             # we do it manually here instead.
             Write-Host -NoNewline "$([char]0x1b)[2K"
+        }
+
+        # Computes native shell completions for an arbitrary command line, without ever treating
+        # anything as a command to execute -- unlike Warp-Run-GeneratorCommand(-NativeCompletions),
+        # which this replaces for PowerShell, this never kills/retypes/submits the real buffer, so
+        # there is no buffer-clearing chord to race, no command text to type, no Enter, and nothing
+        # to restore afterward. The client writes the hex-encoded line to complete as ordinary
+        # typed characters (which PSReadLine echoes into its buffer exactly like any other typing,
+        # and which the client separately recognizes as expected echo so it isn't rendered as a
+        # block), immediately followed by this chord. The handler reads that text straight back out
+        # of the buffer via GetBufferState, decodes it, computes completions, emits them via the
+        # same OSC 9280 protocol the other three shells use, and reverts the buffer to empty --
+        # never AcceptLine, so this never reaches preexec/precmd, the real command-execution cycle,
+        # or the AddToHistoryHandler exclusion below, since it's never submitted at all.
+        Set-PSReadLineKeyHandler -Chord 'Alt+3' -ScriptBlock {
+            $hexEncodedLine = $null
+            $cursor = $null
+            [Microsoft.PowerShell.PSConsoleReadLine]::GetBufferState([ref]$hexEncodedLine, [ref]$cursor)
+            # Revert immediately, before computing completions, so the buffer is never left
+            # holding the hex text if anything below throws.
+            [Microsoft.PowerShell.PSConsoleReadLine]::RevertLine()
+
+            Write-Host -NoNewline "$([char]0x1b)]9280;A;incrementally_typed$oscEnd"
+            try {
+                $line = Warp-Decode-HexString $hexEncodedLine
+
+                # An empty line (the input editor was empty when the request fired) has no
+                # useful completions, and CompleteInput('') would otherwise enumerate every
+                # command on $PATH synchronously in the user's own shell.
+                if (-not [string]::IsNullOrEmpty($line)) {
+                    $completion = [System.Management.Automation.CommandCompletion]::CompleteInput(
+                        $line, $line.Length, $null)
+                    foreach ($match in $completion.CompletionMatches) {
+                        Write-Host -NoNewline "$([char]0x1b)]9280;C;$($match.CompletionText)$oscEnd"
+                        if (-not [string]::IsNullOrEmpty($match.ToolTip) -and $match.ToolTip -ne $match.CompletionText) {
+                            # Cmdlet/parameter tooltips can span multiple lines (e.g. one syntax
+                            # set per parameter combination); collapse to a single line for
+                            # display.
+                            $description = ($match.ToolTip -split '\r?\n' | Where-Object { $_.Trim() -ne '' }) -join ' '
+                            Write-Host -NoNewline "$([char]0x1b)]9280;D?description;$description$oscEnd"
+                        }
+                    }
+                }
+            } catch {
+                Write-Verbose "Native completions failed: $($_.Exception.Message)"
+            } finally {
+                # Always emit the terminator, even if decoding or completion above threw, so the
+                # client never blocks waiting on a response that will never arrive.
+                Write-Host -NoNewline "$([char]0x1b)]9280;B$oscEnd"
+            }
         }
 
         # Sets the prompt mode to custom prompt (PS1)

@@ -340,10 +340,6 @@ pub trait Handler {
     /// Hook that gets called upon receiving a "Reset Grid" OSC from ConPTY.
     fn on_reset_grid(&mut self) {}
 
-    /// Callback that tells the terminal that the shell is ready to receive
-    /// the string to run completions for.
-    fn send_completions_prompt(&mut self) {}
-
     /// Callback to handle the OSC for starting completions.
     ///
     /// Depending on the output format, subsequent data from the PTY will be

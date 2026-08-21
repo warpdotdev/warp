@@ -6,6 +6,7 @@ use warpui::{AppContext, ModelHandle, SingletonEntity};
 
 use crate::persistence::{ModelEvent, StartedCommandMetadata};
 use crate::terminal::model::session::Sessions;
+use crate::terminal::model::session::command_executor::is_in_band_command;
 use crate::terminal::view::ExecuteCommandEvent;
 use crate::terminal::{History, HistoryEntry, TerminalModel};
 
@@ -16,6 +17,13 @@ pub fn update_command_history(
     sessions: &ModelHandle<Sessions>,
     ctx: &mut AppContext,
 ) {
+    // Defensive: in-band/generator commands are always written directly to the pty rather than
+    // through `ExecuteCommandEvent`, so this should never actually see one. If it ever does,
+    // don't let it leak into the client-side history overlay.
+    if is_in_band_command(&event.command) {
+        return;
+    }
+
     let model = model.lock();
     let active_block = model.block_list().active_block();
     let session_id = event.session_id;

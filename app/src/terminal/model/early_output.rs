@@ -1,4 +1,4 @@
-use std::collections::{HashMap, VecDeque};
+use std::collections::{BTreeSet, HashMap, VecDeque};
 use std::mem;
 
 use pathfinder_color::ColorU;
@@ -60,6 +60,25 @@ pub struct EarlyOutput {
 
     /// User input that may be typeahead, which is matched against echoed text.
     unmatched_input: VecDeque<char>,
+    /// Characters registered via `push_expected_echo`, matched (possibly more than once, see
+    /// `expected_echo_positions`) against echoed text. Unlike `unmatched_input`, a match here is
+    /// dropped entirely rather than surfaced as typeahead -- see `push_expected_echo`.
+    expected_echo: Vec<char>,
+    /// Every position in `expected_echo` that could currently be "next" to match, given
+    /// everything matched so far. Matched characters are never removed from `expected_echo`
+    /// itself: a line editor's redraw can re-echo the same restored buffer an arbitrary number
+    /// of times per restore (measured: zsh echoes one character, returns to column 0, then
+    /// reprints the whole line; fish sometimes reprints the whole line after returning to
+    /// column 0, and sometimes returns to column 0 *mid-line* and continues the same line from
+    /// where it left off), so matching needs to tolerate both a restart from the beginning and
+    /// a continuation from wherever it stopped, without knowing in advance which one a given
+    /// carriage return means. More than one position is tracked at once for exactly that
+    /// reason: `maybe_rearm_expected_echo` adds a candidate at position 0 on every carriage
+    /// return without discarding whatever position(s) were already live, and each subsequent
+    /// character advances every candidate whose next expected character matches it (dropping
+    /// the rest) -- so a character counts as expected echo if *any* live candidate predicts it,
+    /// however many candidates that turns out to be.
+    expected_echo_positions: BTreeSet<usize>,
     /// Whether the last potential typeahead character received on the PTY was a
     /// carriage return. We can't rely on the last character of `typeahead` for
     /// this, because it only stores _matched_ typeahead.
@@ -81,6 +100,8 @@ impl EarlyOutput {
             typeahead: String::new(),
             typeahead_chars_inserted: 0.into(),
             unmatched_input: VecDeque::new(),
+            expected_echo: Vec::new(),
+            expected_echo_positions: BTreeSet::new(),
             just_matched_carriage_return: false,
             event_proxy,
             pending_background_block: None,
@@ -114,6 +135,46 @@ impl EarlyOutput {
         }
     }
 
+    /// Registers `input` as characters expected to be echoed back on the pty, regardless of the
+    /// active `TypeaheadMode`.
+    ///
+    /// Used when something other than normal user typing deliberately writes bytes to the pty
+    /// outside of a command submission, where the caller already has an accurate copy of that
+    /// text elsewhere (e.g. an input editor's own buffer) and just wants the resulting echo not
+    /// to be treated as unexpected background output (which would otherwise start a background
+    /// block). This is deliberately *not* the same as `push_user_input`/typeahead: a matched
+    /// typeahead character is surfaced via `TerminalEvent::Typeahead` so it can be *inserted*
+    /// into the input editor, which is correct when the editor doesn't already have it, but
+    /// would duplicate it here, since the editor's copy was never cleared in the first place --
+    /// only the real shell's buffer was. A match here is instead dropped entirely: neither
+    /// rendered as background output nor surfaced as typeahead.
+    ///
+    /// Example: `PtyController` restoring the input buffer after an in-band/generator command
+    /// that necessarily cleared the shell's real buffer to run it as a foreground command.
+    ///
+    /// Replaces any previously-registered content outright, rather than appending to it: each
+    /// restore is a fresh, independent echo to expect, not a continuation of the last one.
+    pub fn push_expected_echo(&mut self, input: &str) {
+        log::debug!(
+            "PHANTOM_DIAG push_expected_echo({input:?}): before expected_echo={:?} positions={:?}",
+            self.expected_echo,
+            self.expected_echo_positions
+        );
+        self.expected_echo = input
+            .chars()
+            .filter(|ch| {
+                // Only keep control characters that we expect to match in the echoed text.
+                !ch.is_ascii_control() || *ch == '\r'
+            })
+            .collect();
+        self.expected_echo_positions = BTreeSet::from([0]);
+        log::debug!(
+            "PHANTOM_DIAG push_expected_echo({input:?}): after expected_echo={:?} positions={:?}",
+            self.expected_echo,
+            self.expected_echo_positions
+        );
+    }
+
     /// Reset the unmatched user input. This is called between blocks so that
     /// unmatched potential typeahead from one command doesn't throw off input
     /// matching for the rest of the session.
@@ -129,6 +190,54 @@ impl EarlyOutput {
             self.unmatched_input.pop_front();
         }
         is_match
+    }
+
+    /// Returns whether `ch` matches the next expected character for *any* currently-live
+    /// candidate position (see `expected_echo_positions`). If at least one does, every matching
+    /// candidate advances by one and every non-matching one is dropped (a character can only be
+    /// consumed once, so a candidate that guessed wrong here can't be right going forward
+    /// either). A match should be dropped entirely by the caller rather than surfaced as
+    /// typeahead.
+    fn consume_expected_echo(&mut self, ch: char) -> bool {
+        let next_positions: BTreeSet<usize> = self
+            .expected_echo_positions
+            .iter()
+            .filter_map(|&position| {
+                (self.expected_echo.get(position) == Some(&ch)).then_some(position + 1)
+            })
+            .collect();
+        let is_match = !next_positions.is_empty();
+        log::debug!(
+            "PHANTOM_DIAG consume_expected_echo({ch:?}): match={is_match} positions_before={:?} positions_after={:?} expected_echo={:?}",
+            self.expected_echo_positions,
+            next_positions,
+            self.expected_echo
+        );
+        if is_match {
+            self.expected_echo_positions = next_positions;
+        }
+        is_match
+    }
+
+    /// If anything is registered via `push_expected_echo`, adds position 0 to the set of live
+    /// candidates (see `expected_echo_positions`) without discarding whatever was already
+    /// there. Called on every carriage return, regardless of how much of the current pass
+    /// matched: a carriage return returns the cursor to the start of the line, which happens
+    /// both when a line editor is about to redraw (and therefore re-echo) the whole line from
+    /// the beginning, and -- observed separately -- when it briefly returns to column 0 mid-line
+    /// and then continues echoing the same line from wherever it left off. Since it isn't known
+    /// in advance which of those a given carriage return means, both possibilities stay live
+    /// until the following characters resolve it.
+    fn maybe_rearm_expected_echo(&mut self) {
+        if !self.expected_echo.is_empty() {
+            self.expected_echo_positions.insert(0);
+            log::debug!(
+                "PHANTOM_DIAG maybe_rearm_expected_echo: added candidate 0, positions now={:?}",
+                self.expected_echo_positions
+            );
+        } else {
+            log::debug!("PHANTOM_DIAG maybe_rearm_expected_echo: nothing registered, no-op");
+        }
     }
 
     /// Check a character received on the PTY, which may be typeahead or
@@ -190,6 +299,12 @@ impl EarlyOutput {
     /// blocklist's precmd hook, but doesn't implement the [`ansi::Handler`]
     /// interface because it doesn't need precmd data.
     pub fn precmd(&mut self) {
+        log::debug!(
+            "PHANTOM_DIAG precmd: fresh prompt cycle starting (expected_echo={:?}, positions={:?}, unmatched_input={:?})",
+            self.expected_echo,
+            self.expected_echo_positions,
+            self.unmatched_input
+        );
         // On precmd, clear accumulated typeahead for the previous command.
         safe_debug!(
             safe: ("Clearing accumulated typeahead"),
@@ -197,6 +312,13 @@ impl EarlyOutput {
         );
         self.typeahead.clear();
         self.typeahead_chars_inserted = 0.into();
+
+        // Deliberately not clearing `expected_echo` here: `CompletionsFinished` (and the
+        // `push_expected_echo` call it triggers) fires when `9280;B` is parsed, which precedes
+        // the shell's own in-band-command precmd DCS -- so precmd normally lands *inside* the
+        // restore window, not after it, and clearing here would wipe a registration before its
+        // own echo has even arrived (measured: roughly five in six restores). Staleness is
+        // already bounded by `push_expected_echo` replacing its content outright on every call.
     }
 
     /// Update early output state once the next command has started running. After
@@ -306,18 +428,33 @@ macro_rules! delegate {
 
 impl ansi::Handler for EarlyOutputHandler<'_> {
     fn input(&mut self, c: char) {
+        if self.inner().consume_expected_echo(c) {
+            log::debug!("PHANTOM_DIAG input({c:?}): consumed as expected_echo");
+            return;
+        }
         let session_id = self.block_list.active_block().session_id();
         if !self.inner().handle_potential_typeahead(c) {
+            let expected_echo = format!("{:?}", self.inner().expected_echo);
+            let positions = format!("{:?}", self.inner().expected_echo_positions);
+            let unmatched_input = format!("{:?}", self.inner().unmatched_input);
+            let mode = format!("{:?}", self.inner().mode);
+            let active_block_started = self.block_list.active_block().started();
+            log::debug!(
+                "PHANTOM_DIAG input({c:?}): FELL THROUGH to background output (expected_echo={expected_echo}, positions={positions}, unmatched_input={unmatched_input}, mode={mode}, active_block_started={active_block_started})"
+            );
             self.with_background_output(|block| {
                 // We don't start background blocks until they have content because
                 // the shell often prints control characters in between commands
                 // to reset terminal state. If we eagerly added background blocks,
                 // there would be an empty one before almost every command.
                 if !block.started() {
+                    log::debug!("PHANTOM_DIAG input({c:?}): starting a NEW background block");
                     block.start_background(session_id);
                 }
                 block.input(c);
             })
+        } else {
+            log::debug!("PHANTOM_DIAG input({c:?}): consumed as typeahead");
         }
     }
 
@@ -364,12 +501,28 @@ impl ansi::Handler for EarlyOutputHandler<'_> {
     }
 
     fn carriage_return(&mut self) {
+        if self.inner().consume_expected_echo('\r') {
+            log::debug!("PHANTOM_DIAG carriage_return: consumed as expected_echo");
+            return;
+        }
+        // A carriage return means the cursor just returned to the start of the line -- if a
+        // line editor is about to redraw (and therefore re-echo) the buffer this expected a
+        // single echo of, the redraw's characters start arriving right after this. See
+        // `maybe_rearm_expected_echo`.
+        self.inner().maybe_rearm_expected_echo();
         if !self.inner().handle_potential_typeahead('\r') {
+            log::debug!("PHANTOM_DIAG carriage_return: fell through to background output");
             delegate!(self.carriage_return());
+        } else {
+            log::debug!("PHANTOM_DIAG carriage_return: consumed as typeahead");
         }
     }
 
     fn linefeed(&mut self) -> ScrollDelta {
+        if self.inner().consume_expected_echo('\n') {
+            log::debug!("PHANTOM_DIAG linefeed: consumed as expected_echo");
+            return ScrollDelta::zero();
+        }
         if self.inner().handle_potential_typeahead('\n') {
             // If we match a newline as typeahead, this means the shell will
             // execute the accumulated typeahead as a new command. In that case,
@@ -510,6 +663,11 @@ impl ansi::Handler for EarlyOutputHandler<'_> {
     }
 
     fn backspace(&mut self) {
+        let expected_echo = format!("{:?}", self.inner().expected_echo);
+        let positions = format!("{:?}", self.inner().expected_echo_positions);
+        log::debug!(
+            "PHANTOM_DIAG backspace: delegating straight to background block (expected_echo={expected_echo}, positions={positions})"
+        );
         delegate!(self.backspace());
     }
 

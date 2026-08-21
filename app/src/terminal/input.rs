@@ -1524,6 +1524,138 @@ fn should_show_completions_in_ai_input(buffer_text: &str) -> bool {
     }
 }
 
+/// Whether a completions request should be answered by asking the user's shell to compute
+/// native completions for the current buffer, rather than through Warp's own completion specs.
+///
+/// Always `false` for AI input mode, regardless of the other conditions: AI input is prose, not
+/// a shell command line, so there's no command spec to match against there in the first place
+/// (completions in that mode are file paths only, see `suggest_file_path_completions_only` at
+/// the call site) -- there is never anything in that mode that should be handed to the shell for
+/// completion.
+fn should_use_native_shell_completions(
+    is_feature_enabled_or_forced: bool,
+    shell_supports_native_shell_completions: bool,
+    buffer_text_is_multiline: bool,
+    is_ai_input: bool,
+) -> bool {
+    is_feature_enabled_or_forced
+        && shell_supports_native_shell_completions
+        // For now, don't use native shell completions for multi-line commands.
+        && !buffer_text_is_multiline
+        && !is_ai_input
+}
+
+/// The completions fallback strategy to use for a given trigger, given whether this request will
+/// use native shell completions (see `should_use_native_shell_completions`).
+fn completions_fallback_strategy_for_trigger(
+    trigger: CompletionsTrigger,
+    use_native_shell_completions: bool,
+) -> CompletionsFallbackStrategy {
+    match trigger {
+        CompletionsTrigger::Keybinding | CompletionsTrigger::SlashCommandAutoOpen
+            if !use_native_shell_completions =>
+        {
+            CompletionsFallbackStrategy::FilePaths
+        }
+        _ => CompletionsFallbackStrategy::None,
+    }
+}
+
+#[cfg(test)]
+mod native_shell_completions_eligibility_tests {
+    use warp_completer::completer::CompletionsFallbackStrategy;
+
+    use super::{
+        CompletionsTrigger, completions_fallback_strategy_for_trigger,
+        should_use_native_shell_completions,
+    };
+
+    #[test]
+    fn disabled_in_ai_input_mode_even_when_otherwise_eligible() {
+        // Every other condition says "use native shell completions" -- feature on, shell
+        // supports it, single-line buffer -- but AI input mode alone must still disable it.
+        assert!(!should_use_native_shell_completions(
+            true, true, false, true
+        ));
+    }
+
+    #[test]
+    fn enabled_outside_ai_input_mode_when_otherwise_eligible() {
+        assert!(should_use_native_shell_completions(
+            true, true, false, false
+        ));
+    }
+
+    #[test]
+    fn disabled_when_feature_is_off_regardless_of_ai_mode() {
+        assert!(!should_use_native_shell_completions(
+            false, true, false, false
+        ));
+    }
+
+    #[test]
+    fn disabled_when_shell_does_not_support_it() {
+        assert!(!should_use_native_shell_completions(
+            true, false, false, false
+        ));
+    }
+
+    #[test]
+    fn disabled_for_multiline_buffers() {
+        assert!(!should_use_native_shell_completions(
+            true, true, true, false
+        ));
+    }
+
+    #[test]
+    fn ai_input_mode_keeps_the_file_path_fallback_for_keybinding_regardless_of_the_feature() {
+        // This is the exact regression: with native shell completions eligible in every other
+        // respect, AI input mode must still resolve to the same fallback it always did for an
+        // explicit Tab press -- file-path completions -- rather than losing its fallback because
+        // native shell completions would otherwise take priority.
+        let use_native_shell_completions =
+            should_use_native_shell_completions(true, true, false, true);
+        assert!(matches!(
+            completions_fallback_strategy_for_trigger(
+                CompletionsTrigger::Keybinding,
+                use_native_shell_completions
+            ),
+            CompletionsFallbackStrategy::FilePaths
+        ));
+    }
+
+    #[test]
+    fn non_ai_keybinding_loses_the_file_path_fallback_once_native_shell_completions_is_eligible() {
+        // Contrast with the AI-mode case above: outside AI input mode, once native shell
+        // completions is eligible, the file-path fallback is deliberately not used for an
+        // explicit Tab press, since native shell completions themselves are the fallback there.
+        let use_native_shell_completions =
+            should_use_native_shell_completions(true, true, false, false);
+        assert!(matches!(
+            completions_fallback_strategy_for_trigger(
+                CompletionsTrigger::Keybinding,
+                use_native_shell_completions
+            ),
+            CompletionsFallbackStrategy::None
+        ));
+    }
+
+    #[test]
+    fn as_you_type_fallback_is_unaffected_by_native_shell_completions_either_way() {
+        // AsYouType's fallback strategy was already None regardless of native shell completions
+        // before this function existed; confirm this refactor didn't change that.
+        for use_native_shell_completions in [true, false] {
+            assert!(matches!(
+                completions_fallback_strategy_for_trigger(
+                    CompletionsTrigger::AsYouType,
+                    use_native_shell_completions
+                ),
+                CompletionsFallbackStrategy::None
+            ));
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum DenyExecutionReason {
     /// Can't execute command because shell bootstrapping is still underway; shell isn't ready to
@@ -12298,6 +12430,7 @@ impl Input {
         ctx: &mut ViewContext<'_, Input>,
     ) {
         let buffer_text = self.buffer_text(ctx);
+        let input_type = self.ai_input_model.as_ref(ctx).input_type();
 
         // The 'ForceNativeShellCompletions' user pref can be used to unconditionally
         // generate and show native shell completion results (i.e. regardless of whether or
@@ -12310,30 +12443,26 @@ impl Input {
             .and_then(|s| s.parse().ok())
             .unwrap_or(false);
 
-        let use_native_shell_completions = (FeatureFlag::NativeShellCompletions.is_enabled() || force_native_shell_completions)
-            && completion_context
+        let use_native_shell_completions = should_use_native_shell_completions(
+            FeatureFlag::NativeShellCompletions.is_enabled() || force_native_shell_completions,
+            completion_context
                 .session
                 .shell()
-                .supports_native_shell_completions()
-            // For now, don't use native shell completions for multi-line commands.
-            && !buffer_text.contains('\n');
+                .supports_native_shell_completions(),
+            buffer_text.contains('\n'),
+            input_type.is_ai(),
+        );
 
-        let fallback_strategy = match completions_trigger {
-            CompletionsTrigger::Keybinding | CompletionsTrigger::SlashCommandAutoOpen
-                if !use_native_shell_completions =>
-            {
-                CompletionsFallbackStrategy::FilePaths
-            }
-            _ => CompletionsFallbackStrategy::None,
-        };
+        let fallback_strategy = completions_fallback_strategy_for_trigger(
+            completions_trigger,
+            use_native_shell_completions,
+        );
 
         if self.is_completions_while_typing_turned_on(ctx)
             && let Some(last_abort_handle) = self.completions_abort_handle.take()
         {
             last_abort_handle.abort();
         }
-
-        let input_type = self.ai_input_model.as_ref(ctx).input_type();
 
         // Don't trigger completions if the last character typed is whitespace, in AI input mode.
         // The user is likely typing in a natural language word at this point, not a filepath.

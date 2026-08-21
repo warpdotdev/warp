@@ -12927,7 +12927,6 @@ impl TerminalView {
                 ctx.notify();
             }
             ModelEvent::CompletionsFinished(_data) => {}
-            ModelEvent::SendCompletionsPrompt => {}
             ModelEvent::ImageReceived {
                 image_id,
                 image_data,

@@ -2236,6 +2236,7 @@ impl TerminalModel {
         for block in self.block_list.blocks() {
             if block.is_restored()
                 && !block.is_background()
+                && !block.is_in_band_command_block()
                 && block.state() != BlockState::DoneWithNoExecution
             {
                 let entry = HistoryEntry::for_restored_block(block.command_to_string(), block);
@@ -2293,6 +2294,15 @@ impl TerminalModel {
     pub fn push_user_input(&mut self, input: &str) {
         if !self.alt_screen_active {
             self.block_list.early_output_mut().push_user_input(input);
+        }
+    }
+
+    /// Registers `input` as characters expected to be echoed back on the pty, so the echo is
+    /// recognized as typeahead rather than unexpected background output regardless of the
+    /// session's `TypeaheadMode`. See `EarlyOutput::push_expected_echo`.
+    pub fn push_expected_echo(&mut self, input: &str) {
+        if !self.alt_screen_active {
+            self.block_list.early_output_mut().push_expected_echo(input);
         }
     }
 
@@ -3291,6 +3301,12 @@ impl ansi::Handler for TerminalModel {
 
         let bytes = input.bytes();
 
+        log::debug!(
+            "PHANTOM_DIAG raw_pty_bytes({}): {}",
+            bytes.len(),
+            bytes.escape_ascii()
+        );
+
         // Send a copy of the bytes to subscribers.
         self.event_proxy.send_pty_read_event(bytes);
 
@@ -3384,11 +3400,6 @@ impl ansi::Handler for TerminalModel {
                 log::warn!("Unexpectedly received completion result");
             }
         }
-    }
-
-    fn send_completions_prompt(&mut self) {
-        self.event_proxy
-            .send_terminal_event(Event::SendCompletionsPrompt);
     }
 
     fn start_iterm_image_receiving(&mut self, metadata: ITermImageMetadata) {

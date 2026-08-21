@@ -263,7 +263,6 @@ impl ModelEventDispatcher {
             Event::FinishUpdate(data) => ModelEvent::FinishUpdate(data),
             Event::TextSelectionChanged => ModelEvent::SelectedTextChanged,
             Event::ShellSpawned(shell_type) => ModelEvent::ShellSpawned(shell_type),
-            Event::SendCompletionsPrompt => ModelEvent::SendCompletionsPrompt,
             Event::ImageReceived {
                 image_id,
                 image_data,
@@ -449,7 +448,6 @@ pub enum ModelEvent {
     SelectedTextChanged,
     ShellSpawned(ShellType),
     CompletionsFinished(Vec<ShellCompletion>),
-    SendCompletionsPrompt,
     ImageReceived {
         image_id: u32,
         image_data: Vec<u8>,

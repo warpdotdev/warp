@@ -4,6 +4,39 @@ use warpui::App;
 use super::*;
 use crate::terminal::model::session::ExecuteCommandOptions;
 
+#[test]
+fn is_in_band_command_recognizes_the_native_completions_generator_names() {
+    // The plain `warp_run_generator_command`/`Warp-Run-GeneratorCommand` invocations issued by
+    // this executor.
+    assert!(is_in_band_command(
+        "warp_run_generator_command 123 'echo hi'"
+    ));
+    assert!(is_in_band_command(
+        "Warp-Run-GeneratorCommand 123 'echo hi'"
+    ));
+    // Fish in-band commands carry a leading space to keep them out of history.
+    assert!(is_in_band_command(
+        " warp_run_generator_command 123 'echo hi'"
+    ));
+
+    // The native-shell-completions generator functions, dispatched directly by
+    // `PtyController::run_native_shell_completions` rather than through this executor. These
+    // don't have a space between the shared prefix and the rest of the name, so a naive
+    // `starts_with("warp_run_generator_command ")` (with a trailing space) check misses them.
+    assert!(is_in_band_command(
+        "warp_run_generator_command_foreground_completions 676974206368"
+    ));
+    assert!(is_in_band_command(
+        "warp_run_generator_command_native_completions 676974206368"
+    ));
+    assert!(is_in_band_command(
+        "Warp-Run-GeneratorCommand-NativeCompletions 676974206368"
+    ));
+
+    // An ordinary user command is not an in-band command.
+    assert!(!is_in_band_command("git checkout --detach"));
+}
+
 impl InBandCommandExecutor {
     /// Returns an `Option` containing the ID of the actively running command.
     pub fn running_command_id(&self) -> Option<String> {

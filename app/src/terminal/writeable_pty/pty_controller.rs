@@ -1,5 +1,6 @@
 use std::borrow::Cow;
 use std::collections::VecDeque;
+use std::mem;
 use std::sync::Arc;
 
 use async_channel::{Receiver, Sender};
@@ -21,7 +22,7 @@ use crate::terminal::model::completions::ShellCompletion;
 use crate::terminal::model::session::{
     ExecutorCommandEvent, InBandCommandCancelledEvent, SessionInfo, Sessions,
 };
-use crate::terminal::model::{StartCommandOutcome, escape_sequences};
+use crate::terminal::model::{StartCommandOutcome, escape_sequences, native_shell_completions};
 use crate::terminal::model_events::{AnsiHandlerEvent, ModelEvent, ModelEventDispatcher};
 use crate::terminal::shell::ShellType;
 use crate::terminal::view::LINEFEED_REGEX;
@@ -37,6 +38,16 @@ const SWITCH_TO_PS1_ESCAPE_SEQUENCE: &[u8] = &[escape_sequences::C0::ESC, b'p'];
 /// Used to let the shell know we are switching to the Warp prompt via a bindkey \ew. This will
 /// unset the PS1 to ensure we don't have a double prompt (PS1 and Warp prompt).
 const SWITCH_TO_WARP_PROMPT_ESCAPE_SEQUENCE: &[u8] = &[escape_sequences::C0::ESC, b'w'];
+/// Triggers PowerShell's native-completions PSReadLine key handler (`Warp-Configure-PSReadLine`
+/// in pwsh.ps1), which reads back whatever was just typed via `GetBufferState`, computes
+/// completions, and reverts the buffer -- never treating anything as a command to execute. Alt+3,
+/// following the same "Alt+<digit>" convention as PowerShell's other bindings (kill-buffer is
+/// Alt+2, input reporting is Alt+1), to avoid the virtual-key-code/layout issue letter-based
+/// bindings have on Windows (see `ShellType::input_reporting_sequence`'s doc comment). Only
+/// PowerShell uses this; the other three shells drive native completions through the ordinary
+/// in-band command path instead (see `send_write_to_event_loop`'s `RunNativeShellCompletions`
+/// handling).
+const POWERSHELL_NATIVE_COMPLETIONS_TRIGGER: &[u8] = &[escape_sequences::C0::ESC, b'3'];
 
 /// Represents a single call to write bytes to the PTY asynchronously.
 enum PtyWrite {
@@ -59,23 +70,23 @@ enum PtyWrite {
         /// The `mode` for the agent's write.
         mode: AIAgentPtyWriteMode,
     },
-    RunNativeShellCompletions(NativeShellCompletionsState),
-}
-
-enum NativeShellCompletionsState {
-    AwaitingPrompt {
+    RunNativeShellCompletions {
+        /// The text to write to the PTY, computed by
+        /// `native_shell_completions::generator_command_for`. For PowerShell this is just the
+        /// hex-encoded buffer text (see the `POWERSHELL_NATIVE_COMPLETIONS_TRIGGER` doc comment);
+        /// for the other three shells it's a full generator-command line.
+        command: String,
+        shell_type: ShellType,
+        results_tx: async_channel::Sender<Vec<ShellCompletion>>,
+        /// The input editor's buffer text this request was computed from. For the three shells
+        /// that run this as a foreground command, the generator command necessarily clears the
+        /// shell's real input buffer to run (see `bytes_to_execute_command`), so once results
+        /// come back this is written back to the pty verbatim -- see
+        /// `in_flight_native_completions_buffer_text`. PowerShell never touches the real buffer
+        /// in the first place (see `send_write_to_event_loop`'s handling of this variant), so
+        /// this field goes unused for it.
         buffer_text: String,
-        results_tx: async_channel::Sender<Vec<ShellCompletion>>,
     },
-    AwaitingResults {
-        results_tx: async_channel::Sender<Vec<ShellCompletion>>,
-    },
-}
-
-impl NativeShellCompletionsState {
-    fn is_awaiting_prompt(&self) -> bool {
-        matches!(self, Self::AwaitingPrompt { .. })
-    }
 }
 
 /// Controller for writes to the PTY.
@@ -97,7 +108,23 @@ pub struct PtyController<T: EventLoopSender> {
     /// complete, it will be dropped to clean up the temporary file.
     #[cfg(not(target_family = "wasm"))]
     bootstrap_file: Option<TempBootstrapFile>,
-    in_flight_native_completions_state: Option<NativeShellCompletionsState>,
+    in_flight_native_completions_results_tx: Option<async_channel::Sender<Vec<ShellCompletion>>>,
+    /// The buffer text of the currently in-flight native-completions request, if any. Written
+    /// back to the pty verbatim once results come back (see `ModelEvent::CompletionsFinished`
+    /// handling below), to undo the buffer-clearing that `bytes_to_execute_command` necessarily
+    /// performs to run the request as a foreground command. Left `None` for PowerShell requests,
+    /// which never touch the real buffer in the first place (see `send_write_to_event_loop`'s
+    /// handling of `PtyWrite::RunNativeShellCompletions`), so nothing needs restoring.
+    in_flight_native_completions_buffer_text: Option<String>,
+    /// Set right when a native-completions buffer restore write is queued (see
+    /// `ModelEvent::CompletionsFinished` handling below) and cleared the next time the line
+    /// editor becomes active. While set, the `LineEditorStatusEvent::Active` subscription skips
+    /// queueing the input-reporting sequence -- both fire from the same underlying trigger (the
+    /// shell returning to a fresh prompt after the generator command completes), in an order
+    /// that isn't guaranteed, and re-running input reporting right after the restore would
+    /// report and clear the text this just wrote back, producing PTY output `push_expected_echo`
+    /// never registered and so isn't recognized, rendering as a phantom background block.
+    just_restored_native_completions_buffer: bool,
 }
 
 impl<T: EventLoopSender> PtyController<T> {
@@ -139,45 +166,97 @@ impl<T: EventLoopSender> PtyController<T> {
                 }
             }
             ModelEvent::CompletionsFinished(data) => {
-                let Some(NativeShellCompletionsState::AwaitingResults { results_tx }) = me.in_flight_native_completions_state.take() else {
+                log::debug!(
+                    "PHANTOM_DIAG CompletionsFinished fired, {} results, in_flight_buffer_text={:?}, pending_writes_len={}",
+                    data.len(),
+                    me.in_flight_native_completions_buffer_text,
+                    me.pending_writes.len()
+                );
+                let Some(results_tx) = me.in_flight_native_completions_results_tx.take() else {
                     log::warn!("Received CompletionsFinished event but didn't have a channel to send results over!");
                     return;
                 };
                 let _ = block_on(results_tx.send(data.clone()));
-            }
-            ModelEvent::SendCompletionsPrompt => {
-                let Some(NativeShellCompletionsState::AwaitingPrompt {
-                    buffer_text,
-                    results_tx,
-                }) = me.in_flight_native_completions_state.take() else {
-                    log::warn!("Received SendCompletionsPrompt event but didn't have a prompt to send!");
-                    return;
-                };
-                me.in_flight_native_completions_state = Some(NativeShellCompletionsState::AwaitingResults { results_tx });
 
-                let mut bytes = buffer_text.into_bytes();
-                // We use the EOT character to signal the end of the prompt.
-                bytes.push(escape_sequences::C0::EOT);
-
-                // We send the write directly to the event loop without
-                // queueing, as we currently have exclusive control over pty
-                // writes.
-                me.send_write_to_event_loop(
-                    PtyWrite::Bytes {
-                        bytes: bytes.into(),
-                    },
-                    ctx,
-                );
-
-                // Now that we've provided the prompt, we can start executing
-                // other queued writes.
-                me.execute_next_queued_write(ctx);
+                // The generator command necessarily cleared the shell's real input buffer to
+                // run in the foreground (see `bytes_to_execute_command`); write back what the
+                // user had actually typed so it isn't lost. This is queued to the front so it
+                // goes out as soon as the line editor is active again (i.e. once the shell has
+                // returned to a fresh prompt after the generator command completes), ahead of
+                // anything else queued in the meantime -- *unless* what's queued behind it is a
+                // newer completions request: that request's own kill-buffer is about to clear
+                // whatever's on the line again anyway, making this restore pointless to send at
+                // all, and (unlike an ordinary write) sending it regardless would race the newer
+                // request's kill-buffer/generator-command write, which drains immediately behind
+                // it since it isn't gated by `execute_next_queued_write`'s `is_command` check
+                // the way a `Command` is. Skipping a redundant restore sidesteps that race
+                // without needing to gate draining on this write at all -- the newer request
+                // will produce its own, current restore once it completes.
+                //
+                // Skipping is safe rather than a new way to lose the buffer: either the newer
+                // request's write never reaches the pty at all (its `before_write_fn` rejects
+                // it, or it gets retain-filtered by a still-newer request while still queued --
+                // see `run_native_shell_completions`), in which case the real buffer was never
+                // touched and there's nothing to restore; or its kill-buffer does go out, at
+                // which point it can no longer be retain-filtered away, so it will run to
+                // completion and fire its own `CompletionsFinished`, where this same check
+                // repeats. That recursion is bounded by real keystrokes -- each further
+                // supersession needs another character typed -- so the first request in the
+                // chain that finishes with nothing newer queued behind it has its restore sent,
+                // and submitting a command requires the user to stop typing regardless, which
+                // is exactly what lets the chain resolve before Enter is reachable.
+                //
+                // The one case this doesn't cover, and it's pre-existing rather than introduced
+                // here: if a request's kill-buffer goes out but its generator command then
+                // hangs, crashes, or is interrupted before emitting `9280;B`, `CompletionsFinished`
+                // never fires for it and the buffer is never restored -- true before this change
+                // and after it, since the original code also only ever restored on that event.
+                if let Some(buffer_text) = me.in_flight_native_completions_buffer_text.take()
+                    && !buffer_text.is_empty()
+                    && !me
+                        .pending_writes
+                        .iter()
+                        .any(|write| matches!(write, PtyWrite::RunNativeShellCompletions { .. }))
+                {
+                    // Register the restored text as expected echo *before* writing it, so the
+                    // shell echoing it back is recognized as typeahead -- feeding it back into
+                    // the input editor the same way any other typeahead would be -- rather than
+                    // unexpected background output, which would otherwise render as a phantom
+                    // block mirroring the restored text.
+                    log::debug!(
+                        "PHANTOM_DIAG CompletionsFinished: queueing restore write {buffer_text:?}, pending_writes_len_before={}",
+                        me.pending_writes.len()
+                    );
+                    me.terminal_model.lock().push_expected_echo(&buffer_text);
+                    me.just_restored_native_completions_buffer = true;
+                    me.pending_writes.push_front(PtyWrite::Bytes {
+                        bytes: Cow::Owned(buffer_text.into_bytes()),
+                    });
+                    me.execute_next_queued_write(ctx);
+                } else {
+                    log::debug!(
+                        "PHANTOM_DIAG CompletionsFinished: NOT restoring (empty, already consumed, or newer request queued)"
+                    );
+                }
             }
             _ => (),
         });
 
         ctx.subscribe_to_model(&line_editor_status, |me, _, event, ctx| {
             if let LineEditorStatusEvent::Active = event {
+                log::debug!(
+                    "PHANTOM_DIAG LineEditorStatusEvent::Active fired, just_restored_native_completions_buffer={}, pending_writes_len={}",
+                    me.just_restored_native_completions_buffer,
+                    me.pending_writes.len()
+                );
+                if mem::replace(&mut me.just_restored_native_completions_buffer, false) {
+                    // Skip input reporting this one time -- see the field's doc comment.
+                    log::debug!(
+                        "PHANTOM_DIAG LineEditorStatusEvent::Active: skipping input reporting (just restored)"
+                    );
+                    me.execute_next_queued_write(ctx);
+                    return;
+                }
                 let input_reporting_seq = me
                     .model_event_dispatcher
                     .as_ref(ctx)
@@ -185,6 +264,10 @@ impl<T: EventLoopSender> PtyController<T> {
                     .and_then(|id| me.sessions.as_ref(ctx).get(id))
                     .and_then(|session| session.shell().input_reporting_sequence());
                 if let Some(bytes) = input_reporting_seq {
+                    log::debug!(
+                        "PHANTOM_DIAG LineEditorStatusEvent::Active: queueing input-reporting sequence ({} bytes)",
+                        bytes.len()
+                    );
                     me.pending_writes.push_front(PtyWrite::Bytes {
                         bytes: Cow::Owned(bytes.to_vec()),
                     });
@@ -223,7 +306,9 @@ impl<T: EventLoopSender> PtyController<T> {
             is_bracketed_paste_enabled: false,
             #[cfg(not(target_family = "wasm"))]
             bootstrap_file: None,
-            in_flight_native_completions_state: None,
+            in_flight_native_completions_results_tx: None,
+            in_flight_native_completions_buffer_text: None,
+            just_restored_native_completions_buffer: false,
         }
     }
 
@@ -335,9 +420,6 @@ impl<T: EventLoopSender> PtyController<T> {
     /// enqueue writes for later.
     fn can_write_to_pty(&self, ctx: &mut ModelContext<Self>) -> bool {
         self.line_editor_status.as_ref(ctx).is_line_editor_active()
-            // If we're in the middle of a native completions request, we should not send any more
-            // writes to the shell until we've sent the string to complete.
-            && !self.in_flight_native_completions_state.as_ref().is_some_and(|state| state.is_awaiting_prompt())
     }
 
     /// Executes the next queued `PtyWrite`, if able.
@@ -351,7 +433,21 @@ impl<T: EventLoopSender> PtyController<T> {
         }
 
         if let Some(write) = self.pending_writes.pop_front() {
-            let is_command = matches!(write, PtyWrite::Command { .. });
+            // `RunNativeShellCompletions` must be treated like `Command` here for the three
+            // shells that put the shell into a synchronous foreground read (e.g. zsh's
+            // `select`): draining the next queued write immediately would deliver it into that
+            // read instead of a normal prompt, where it can be consumed and lost. PowerShell is
+            // the exception -- its `RunNativeShellCompletions` write never puts the shell into
+            // any such state (see `send_write_to_event_loop`'s handling of it), and nothing ever
+            // transitions the line editor back to active for it the way a real command's precmd
+            // hook would, so gating draining on it here would stall the queue forever.
+            let is_command = match &write {
+                PtyWrite::Command { .. } => true,
+                PtyWrite::RunNativeShellCompletions { shell_type, .. } => {
+                    *shell_type != ShellType::PowerShell
+                }
+                _ => false,
+            };
             let did_write = self.send_write_to_event_loop(write, ctx);
             if !is_command || !did_write {
                 self.execute_next_queued_write(ctx);
@@ -652,7 +748,7 @@ impl<T: EventLoopSender> PtyController<T> {
     /// If the write corresponds to a command, this also calls
     /// [`LineEditorStatus::did_execute_command()`].
     fn send_write_to_event_loop(&mut self, write: PtyWrite, ctx: &mut ModelContext<Self>) -> bool {
-        let (bytes_to_write, is_for_command, on_write_fn) = match write {
+        let (bytes_to_write, is_for_command, on_write_fn, shell_type_for_split) = match write {
             PtyWrite::Command {
                 command,
                 shell_type,
@@ -666,21 +762,59 @@ impl<T: EventLoopSender> PtyController<T> {
                 )),
                 true,
                 on_write_fn,
+                Some(shell_type),
             ),
             PtyWrite::AgentInput { bytes, mode } => {
                 let decorated_bytes =
                     mode.decorate_bytes(bytes.into_owned(), self.is_bracketed_paste_enabled);
-                (decorated_bytes.into(), false, None)
+                (decorated_bytes.into(), false, None, None)
             }
-            PtyWrite::Bytes { bytes } => (bytes, false, None),
-            PtyWrite::RunNativeShellCompletions(state) => {
-                self.in_flight_native_completions_state = Some(state);
+            PtyWrite::Bytes { bytes } => (bytes, false, None, None),
+            PtyWrite::RunNativeShellCompletions {
+                command,
+                shell_type,
+                results_tx,
+                buffer_text,
+            } => {
+                self.in_flight_native_completions_results_tx = Some(results_tx);
 
-                // Send a ^Y control code to trigger the right bindkey.  We
-                // then wait for an OSC-based signal from the shell before we
-                // send the text that needs to be completed.
-                let bytes = vec![0x19_u8];
-                (bytes.into(), false, None)
+                if shell_type == ShellType::PowerShell {
+                    // PowerShell can reach its completion engine directly from a PSReadLine key
+                    // handler (see POWERSHELL_NATIVE_COMPLETIONS_TRIGGER's doc comment) without
+                    // ever treating anything as a command to execute -- structurally the same
+                    // trick zsh's `select` uses to reach a real completion context without
+                    // faking a command. `command` here is just the hex-encoded buffer text (see
+                    // `generator_command_for`'s `ShellType::PowerShell` case), typed as ordinary
+                    // characters immediately followed by the trigger chord. Because nothing ever
+                    // executes -- no kill-buffer, no Enter, no preexec/precmd -- there is nothing
+                    // to restore afterward, unlike the other three shells: deliberately leave
+                    // `in_flight_native_completions_buffer_text` unset.
+                    self.terminal_model.lock().push_expected_echo(&command);
+                    let mut bytes_to_write = command.into_bytes();
+                    bytes_to_write.extend_from_slice(POWERSHELL_NATIVE_COMPLETIONS_TRIGGER);
+                    (Cow::Owned(bytes_to_write), false, None, None)
+                } else {
+                    self.in_flight_native_completions_buffer_text = Some(buffer_text);
+
+                    // Write the generator command exactly as any other in-band command: the
+                    // shell's own bootstrap logic (matched by name, see
+                    // `native_shell_completions`) hides it from history and treats its output as
+                    // in-band rather than a new block.
+                    let terminal_model = self.terminal_model.clone();
+                    (
+                        Cow::Owned(bytes_to_execute_command(
+                            command.as_str(),
+                            shell_type,
+                            self.is_bracketed_paste_enabled,
+                        )),
+                        true,
+                        Some(Box::new(move || {
+                            terminal_model.lock().start_in_band_command_execution()
+                        })
+                            as Box<dyn Fn() -> StartCommandOutcome + Send + 'static>),
+                        Some(shell_type),
+                    )
+                }
             }
         };
 
@@ -700,6 +834,23 @@ impl<T: EventLoopSender> PtyController<T> {
                 .update(ctx, |line_editor_status, ctx| {
                     line_editor_status.did_execute_command(ctx)
                 });
+        }
+
+        // PowerShell's kill-buffer chord (`Alt+2`, an ESC-prefixed two-byte sequence -- see
+        // `ShellType::kill_buffer_bytes`) is not reliably disambiguated by PSReadLine when it
+        // arrives concatenated with the command text that follows it in a single write/read:
+        // empirically, PSReadLine sometimes fails to recognize the chord at all in that case,
+        // leaving the existing buffer untouched and the command text typed literally on top of
+        // it. Splitting the chord into its own pty write -- even with no explicit delay before
+        // the second write -- reliably avoids this. The other three shells use a single,
+        // unambiguous control byte for this (no escape-sequence parsing involved), so no split
+        // is needed for them.
+        if let Some(shell_type) = shell_type_for_split
+            && let Some((kill_buffer, rest)) = split_kill_buffer_write(&bytes_to_write, shell_type)
+        {
+            self.send_message_to_event_loop(Message::Input(Cow::Owned(kill_buffer.to_vec())), ctx);
+            self.send_message_to_event_loop(Message::Input(Cow::Owned(rest.to_vec())), ctx);
+            return true;
         }
 
         self.send_message_to_event_loop(Message::Input(bytes_to_write), ctx);
@@ -726,18 +877,37 @@ impl<T: EventLoopSender> PtyController<T> {
         results_tx: async_channel::Sender<Vec<ShellCompletion>>,
         ctx: &mut ModelContext<Self>,
     ) {
+        let Some(shell_type) = self
+            .model_event_dispatcher
+            .as_ref(ctx)
+            .active_session_id()
+            .and_then(|id| self.sessions.as_ref(ctx).get(id))
+            .map(|session| session.shell().shell_type())
+        else {
+            let _ = results_tx.try_send(Vec::new());
+            return;
+        };
+        let command = native_shell_completions::generator_command_for(shell_type, &buffer_text);
+
         // Make sure we only have a single pending native shell completions
         // request at a time by dropping any existing ones from the queue.
+        let len_before = self.pending_writes.len();
         self.pending_writes
-            .retain(|write| !matches!(write, PtyWrite::RunNativeShellCompletions(_)));
+            .retain(|write| !matches!(write, PtyWrite::RunNativeShellCompletions { .. }));
+        let dropped = len_before - self.pending_writes.len();
+        log::debug!(
+            "PHANTOM_DIAG run_native_shell_completions({buffer_text:?}): in_flight_buffer_text_already_set={:?}, in_flight_results_tx_already_set={}, dropped_stale_queued_requests={dropped}",
+            self.in_flight_native_completions_buffer_text,
+            self.in_flight_native_completions_results_tx.is_some()
+        );
 
         self.pending_writes
-            .push_back(PtyWrite::RunNativeShellCompletions(
-                NativeShellCompletionsState::AwaitingPrompt {
-                    buffer_text,
-                    results_tx,
-                },
-            ));
+            .push_back(PtyWrite::RunNativeShellCompletions {
+                command,
+                shell_type,
+                results_tx,
+                buffer_text,
+            });
         self.execute_next_queued_write(ctx);
     }
 }
@@ -749,6 +919,22 @@ pub enum PtyControllerEvent {
 
 impl<T: EventLoopSender> Entity for PtyController<T> {
     type Event = PtyControllerEvent;
+}
+
+/// If `shell_type`'s kill-buffer bytes need to be written to the pty as their own write, separate
+/// from the rest of `bytes` (the full output of `bytes_to_execute_command`), returns
+/// `Some((kill_buffer_bytes, rest))`. Returns `None` if no split is needed, in which case `bytes`
+/// should be sent as a single write. See the call site in `send_write_to_event_loop` for why this
+/// is currently only needed for PowerShell.
+fn split_kill_buffer_write(bytes: &[u8], shell_type: ShellType) -> Option<(&[u8], &[u8])> {
+    if shell_type != ShellType::PowerShell {
+        return None;
+    }
+    let kill_buffer_len = shell_type.kill_buffer_bytes().len();
+    if bytes.len() <= kill_buffer_len {
+        return None;
+    }
+    Some(bytes.split_at(kill_buffer_len))
 }
 
 /// Returns the shell-dependent array of bytes to be written to the PTY to execute `command`.

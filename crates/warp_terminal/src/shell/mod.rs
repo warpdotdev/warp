@@ -389,7 +389,9 @@ impl ShellType {
 
     /// Returns whether the current shell supports native shell completions.
     fn supports_native_shell_completions(&self) -> bool {
-        matches!(self, ShellType::Zsh)
+        match self {
+            ShellType::Zsh | ShellType::Bash | ShellType::Fish | ShellType::PowerShell => true,
+        }
     }
 
     /// Returns the syntax to run a second command regardless if the first one succeeds.

@@ -80,10 +80,6 @@ const WARP_COMPLETIONS_MATCH_RESULT_BYTE: &[u8] = b"C";
 /// For example: `D?description'{OSC_PAYLOAD}` updates the description of the last match.
 const WARP_COMPLETIONS_MATCH_UPDATE_METADATA: &[u8] = b"D?";
 
-/// Marks an OSC that tells the terminal that the shell is ready to receive
-/// the the string to run completions for.
-const WARP_COMPLETIONS_PROMPT_BYTE: &[u8] = b"P";
-
 const WARP_KV_START_BYTE: &[u8] = b"A";
 const WARP_KV_ENTRY_BYTE: &[u8] = b"B";
 const WARP_KV_END_BYTE: &[u8] = b"C";
@@ -1237,9 +1233,6 @@ where
                             );
                         }
                     }
-                }
-                Some(&WARP_COMPLETIONS_PROMPT_BYTE) => {
-                    self.handler.send_completions_prompt();
                 }
                 _ => {
                     log::warn!("Received a Warp OSC completions marker missing required param.");

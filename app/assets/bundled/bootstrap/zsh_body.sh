@@ -571,6 +571,20 @@ if [[ -z $WARP_BOOTSTRAPPED ]]; then
     printf '%s' "$1" | command -p od -An -v -tx1 | command -p tr -d ' \n'
   }
 
+  # Reverses warp_hex_encode_string: decodes a hex-encoded string back to its original bytes.
+  # Lets the Rust app pass arbitrary argument text (e.g. the in-progress command line) as a
+  # plain, unquoted hex string, without needing any shell quoting.
+  warp_hex_decode_string () {
+    if command -pv xxd >/dev/null 2>&1; then
+      printf '%s' "$1" | command -p xxd -p -r
+    else
+      local hex="$1" i
+      for ((i = 0; i < ${#hex}; i += 2)); do
+        builtin printf "\x${hex:$i:2}"
+      done
+    fi
+  }
+
   # We set precmd and preexec hooks in order to set the title for the idle
   # terminal and the terminal running a command respectively. This is so we
   # provide a reasonable default behavior in the case where the user doesn't
@@ -617,6 +631,15 @@ if [[ -z $WARP_BOOTSTRAPPED ]]; then
     # If the user wants to set the title using oh-my-zsh, they can
     # set the WARP_DISABLE_AUTO_TITLE flag.
     [[ "${WARP_DISABLE_AUTO_TITLE:-}" != true ]] || return
+
+    # This hook is registered before the user's RC files are sourced (so it runs before
+    # `warp_preexec`, which is registered after them), so it fires for every command
+    # including generator commands -- `_WARP_GENERATOR_COMMAND` isn't set yet at this point
+    # (that happens inside the generator function itself, which hasn't started running),
+    # so check the command text directly, the same way `warp_preexec`/`_warp_zshaddhistory`
+    # already do via `_is_warp_generator_command`. Without this, a native-completions
+    # request briefly sets the tab title to "warp_run_generator_comma...".
+    _is_warp_generator_command "$1" || return
 
     emulate -L zsh
     setopt extended_glob
@@ -1447,10 +1470,6 @@ esac
     printf '\e]9280;A;%s\a' $1
   }
 
-  function warp_mark_start_of_completions_for_list_choices () {
-    warp_mark_start_of_completions 'raw'
-  }
-
   function warp_mark_start_of_completions_for_compadd_override () {
     warp_mark_start_of_completions 'incrementally_typed'
   }
@@ -1472,82 +1491,8 @@ esac
     COLUMNS=500 _generic
   }
 
-  # Lists completion matches via the builtin list-choices widget.
-  function warp_complete_via_list_choices () {
-    # Start by reading in the completion buffer.
-    zle warp_read_completion_buffer
-
-    # Adding a post-hook here is not helpful because
-    # it doesn't tell us when the completions have all been _listed_.
-    # So instead, we unset ALWAYS_LAST_PROMPT so that the prompt
-    # is always returned and then use prompt markers to determine
-    # when completions output is finished.
-    unsetopt ALWAYS_LAST_PROMPT
-    compprefuncs=( warp_mark_start_of_completions_for_list_choices )
-    zle warp_complete_via_list_choices_internal
-    BUFFER=""
-  }
-
-  # Gathers completion matches by overriding compadd
-  # and emitting the completions directly there.
-  function warp_complete_via_compadd_override () {
-    # Start by reading in the completion buffer.
-    zle warp_read_completion_buffer
-
-    compprefuncs=( warp_mark_start_of_completions_for_compadd_override )
-    comppostfuncs=( warp_mark_end_of_completions )
-    COMPADD_OVERRIDE=true
-    zle warp_complete_via_compadd_override_internal
-    BUFFER=""
-    unset COMPADD_OVERRIDE
-  }
-
-  function warp_read_completion_buffer() {
-    # Read data from the terminal into a temporary variable and set it as the
-    # current zle buffer.  We want to prevent anything visible from being sent
-    # to the terminal (it would be treated as background output), so we use -s
-    # to suppress echoing and send an OSC as the synchronization signal (so the
-    # terminal knows when to send the input buffer that needs completions).
-    local TEMP
-    IFS= read -d $'\4' -s "$(echo -e "TEMP?\e]9280;P\a")" < /dev/tty
-    BUFFER="$TEMP"
-
-    # We push and pop the buffer stack to get zle to properly treat the buffer
-    # as the data for the completer run.  Without this, the completer will
-    # attempt to complete on an empty string.
-    #
-    # We use DCS start and end markers to swallow the line editor redraw that
-    # occurs when we call `get-line`; we want to make sure it doesn't get
-    # shown in a background block.  The "a" after the DCS start sequence
-    # ensures we don't try to parse this as a JSON-encoded hook.
-    echo -n "${DCS_START}a"
-    zle push-line
-    zle get-line
-    echo -n "$DCS_END"
-  }
-  zle -N warp_read_completion_buffer
-
-  # Registers the custom completion widgets and hooks them up to
-  # the main logic for completing.
-  zle -C warp_complete_via_list_choices_internal list-choices warp_main_completer
+  # Registers the custom completion widget and hooks it up to the main logic for completing.
   zle -C warp_complete_via_compadd_override_internal list-choices warp_main_completer
-
-  # Registers widgets for generating native-shell completions 
-  # and sets up bindkeys to trigger them.
-  #
-  # We use intermediate widgets rather than binding
-  # directly to the completion widgets so that we can
-  # access normal widget features (e.g. BUFFER).
-  zle -N warp_complete_via_list_choices
-  zle -N warp_complete_via_compadd_override
-  bindkey '^X' warp_complete_via_list_choices
-  bindkey '^Y' warp_complete_via_compadd_override
-
-  # Set style for the list-choices approach
-  zstyle ':completion:warp_complete_via_list_choices:*' verbose no
-  zstyle ':completion:warp_complete_via_list_choices:*' list-packed yes
-  zstyle ':completion:warp_complete_via_list_choices:*' list-rows-first yes
-  zstyle ':completion:warp_complete_via_list_choices:*' list-prompt ''
 
   # Avoid grouping. Under certain conditions, grouping can cause options to be printed
   # after the compostfunc hook is called.
@@ -1558,6 +1503,128 @@ esac
   # between the hit and the description.
   zstyle ':completion:warp_complete_via_compadd_override:*' list-separator ''
 
+  # Native shell completions: foreground generator.
+  #
+  # `select` is the only builtin that lets an ordinary (non-ZLE) command reach a real
+  # ZLE completion context: entering a subshell, `$( )`, `( )`, a pipeline segment, or a
+  # backgrounded job all clear `USEZLE` and null `shout` (Src/exec.c), so `zleread` (and
+  # therefore the completion widgets, which are only reachable from inside it) never runs.
+  # This means the request has to be a foreground command in the main shell with no command
+  # substitution around the `select` -- it cannot go through `warp_run_generator_command`,
+  # and unlike other generator commands it cannot be cancelled by PID.
+  #
+  # `zle-line-init` fires once per `select` iteration, exactly as it would for a real prompt
+  # read. p10k, zsh-syntax-highlighting, and zsh-autosuggestions all install their own
+  # `zle-line-init` via `add-zle-hook-widget`, which binds the *widget* named `zle-line-init`
+  # to a differently-named function; only the widget binding (not `functions[zle-line-init]`,
+  # which stays empty for such a binding) reflects what actually runs. So the capture below
+  # goes entirely through widget names (`zle -A`/`zle -N`/`$widgets`), not `functions[...]`.
+  #
+  # Once captured, our widget stays permanently bound to `zle-line-init` for the rest of the
+  # session rather than being restored/deleted after each `select` -- doing that per-request
+  # has proven fragile in both directions: deleting it can race a chained hook that itself
+  # rebinds `zle-line-init` during the chain call ("No such widget `zle-line-init'"), and
+  # simply leaving it bound without a self-check aliases the saved-widget name to itself on
+  # the *next* request (see the self-check below), which recurses into itself indefinitely
+  # (measured: "maximum nested function level reached"). A permanently-installed capture
+  # widget avoids both: it always chains to whatever was bound before we ever took over (see
+  # below), so it is functionally transparent to that original binding on every ordinary
+  # prompt read, and it is only ever captured/rebound once. `zle-line-finish` needs no such
+  # capture: nothing in the completion path uses it.
+  function _warp_native_completions_zle_line_init () {
+    # zle-line-init can fire more than once while we own the widget (e.g. `select`
+    # re-reads on some inputs), so guard the actual capture behind the armed flag; once
+    # it has run, later firings just chain to whatever we took the widget over from.
+    if (( ! _WARP_NATIVE_COMPLETIONS_ARMED )); then
+      (( ${+widgets[_warp_saved_zle_line_init]} )) && zle _warp_saved_zle_line_init
+      return 0
+    fi
+    _WARP_NATIVE_COMPLETIONS_ARMED=0
+
+    BUFFER=$_WARP_NATIVE_COMPLETIONS_LINE
+    CURSOR=${#BUFFER}
+
+    # Chain to whatever was bound to zle-line-init before we took it over, if anything.
+    (( ${+widgets[_warp_saved_zle_line_init]} )) && zle _warp_saved_zle_line_init
+
+    compprefuncs=( warp_mark_start_of_completions_for_compadd_override )
+    comppostfuncs=( warp_mark_end_of_completions )
+    COMPADD_OVERRIDE=true
+    zle warp_complete_via_compadd_override_internal
+    unset COMPADD_OVERRIDE
+
+    # A single-space throwaway buffer (rather than an empty one) is what `select`
+    # reliably accepts as ending its one read iteration without re-prompting.
+    BUFFER=' '
+    CURSOR=1
+    zle accept-line
+  }
+
+  # Foreground generator command for native shell completions, where the only argument is
+  # the hex-encoded command line to complete (see native_shell_completions.rs on the Rust
+  # side). Emits the same OSC 9280 completions protocol as the compadd shim above.
+  #
+  # Usage:
+  #   warp_run_generator_command_foreground_completions <hex-encoded line>
+  warp_run_generator_command_foreground_completions() {
+    # Setting this environment variable prevents warp_precmd from emitting the
+    # 'Block started' hook to the Rust app, matching warp_run_generator_command.
+    _WARP_GENERATOR_COMMAND=1
+    _USER_PRECMD_FUNCTIONS=($precmd_functions)
+    precmd_functions=(${(M)precmd_functions:#*(warp|p9k)*})
+
+    local line=$(warp_hex_decode_string "$1")
+
+    # Probe ZLE capability before use: a non-interactive shell, `unsetopt zle`, or
+    # `TERM=emacs` all mean there's no ZLE and therefore no zsh native completions here.
+    # An empty line (the input editor was empty when the request fired) has no useful
+    # completions either. Report zero matches in both cases so the client falls back to
+    # the bundled completer instead of hanging or erroring, and so we never pay the cost
+    # of listing every top-level command/file synchronously in the user's own shell.
+    if [[ -z $line ]] || ! { [[ -o zle ]] && [[ -o interactive ]] && [[ "$TERM" != emacs ]] }; then
+      printf '\e]9280;A;incrementally_typed\a'
+      printf '\e]9280;B\a'
+      return
+    fi
+
+    _WARP_NATIVE_COMPLETIONS_LINE=$line
+    _WARP_NATIVE_COMPLETIONS_ARMED=1
+
+    # Take over zle-line-init for this select, saving whatever was bound to it (if anything
+    # genuinely different) under a private widget name so it can be chained. Skip the
+    # takeover entirely when zle-line-init is already our own capture widget -- left over
+    # from a prior request in this same session, since it is deliberately never torn down
+    # (see the comment above this function) -- there is nothing new to save, and aliasing
+    # _warp_saved_zle_line_init to our own widget here would alias the saved name to itself.
+    if [[ "${widgets[zle-line-init]:-}" != user:_warp_native_completions_zle_line_init ]]; then
+      if (( ${+widgets[zle-line-init]} )); then
+        zle -A zle-line-init _warp_saved_zle_line_init
+      fi
+      zle -N zle-line-init _warp_native_completions_zle_line_init
+    fi
+
+    local PS3='' REPLY
+    # Swallow the line editor redraw the `select` causes (measured at ~31 bytes with a
+    # single-space throwaway buffer and stderr dropped) with the same DCS bracketing
+    # `warp_read_completion_buffer` uses above, though a byte sequence starting with ESC
+    # ends DCS passthrough, so this only swallows what precedes the first one.
+    echo -n "${DCS_START}a"
+    { select _ in 1; do break; done } 2>/dev/null
+    echo -n "$DCS_END"
+
+    # zle-line-init is deliberately left bound to our capture widget -- see the comment
+    # above this function for why restoring/deleting it per-request is not done here.
+
+    # Fail safe independently of the above: if the capture widget never ran (e.g. some
+    # other zle-line-init fired instead, or `select` returned without entering ZLE at all),
+    # the flag would otherwise stay armed and hijack the next real prompt read. Clear it
+    # and answer with zero matches so the client always gets a response either way.
+    if (( _WARP_NATIVE_COMPLETIONS_ARMED )); then
+      _WARP_NATIVE_COMPLETIONS_ARMED=0
+      printf '\e]9280;A;incrementally_typed\a'
+      printf '\e]9280;B\a'
+    fi
+  }
 
   function warp_bootstrapped () {
     # Note that for now we don't support dynamically changing HISTFILE within a session.

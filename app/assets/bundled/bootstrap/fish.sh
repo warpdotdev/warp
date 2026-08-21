@@ -68,6 +68,33 @@ function warp_hex_encode_string
   echo "$argv" | od -An -v -tx1 | command tr -d ' \n'
 end
 
+# Reverses warp_hex_encode_string: decodes a hex-encoded string back to its original bytes.
+# Lets the Rust app pass arbitrary argument text (e.g. the in-progress command line) as a
+# plain, unquoted hex string, without needing any shell quoting.
+function warp_hex_decode_string
+    # No argument, or an empty one, decodes to nothing -- guard explicitly rather than
+    # letting `string length -- $hex` expand to nothing and leave the loop condition below
+    # with a missing operand.
+    if test (count $argv) -eq 0 -o -z "$argv[1]"
+        return
+    end
+    set -l hex $argv[1]
+    set -l escaped ''
+    set -l i 1
+    while test $i -le (string length -- $hex)
+        set -l pair (string sub -s $i -l 2 -- $hex)
+        set escaped "$escaped\\x$pair"
+        set i (math $i + 2)
+    end
+    # Use fish's own builtin printf, not `command printf`: BSD/macOS's external printf(1)
+    # only documents octal \nnn escapes for %b, not \xNN, so `command printf` would decode
+    # every native fish completion to literal "\x67..." text on macOS. Fish's builtin printf
+    # doesn't treat a leading "--" as an end-of-options marker the way external printf(1)
+    # does -- it prints the two literal characters instead -- so it's omitted here; the
+    # format string is our own fixed literal, never user input, so it's safe to skip.
+    printf '%b' $escaped
+end
+
 # A list of PIDs for running in-band command(s). This is used to kill running
 # in-band commands in preexec for a user command, so they do not interfere with
 # user command output.
@@ -156,6 +183,72 @@ function warp_run_generator_command
     _warp_run_generator_command_internal $argv
 end
 
+# Computes native shell completions for the given (hex-encoded) command line and emits
+# them via the completions OSC protocol (see zsh_body.sh's compadd shim for the wire
+# format: "\e]9280;A;incrementally_typed\a", then "\e]9280;C;<match>\a" and optionally
+# "\e]9280;D?description;<description>\a" per match, then "\e]9280;B\a"). Runs
+# synchronously in the foreground -- like native completions in the other shells, there
+# is no async cancel-by-PID for this request.
+#
+# Usage:
+#   warp_run_generator_command_native_completions <hex-encoded line>
+function warp_run_generator_command_native_completions
+    set -g _WARP_GENERATOR_COMMAND 1
+    set -l line
+    if test (count $argv) -gt 0
+        set line (warp_hex_decode_string $argv[1] 2>/dev/null)
+    end
+
+    printf '\e]9280;A;incrementally_typed\a'
+    # An empty line (the input editor was empty when the request fired) has no useful
+    # completions, and `complete -C ""` would otherwise list every command on $PATH
+    # synchronously in the user's own shell.
+    if test -n "$line"
+        # `complete -C "<line>"` computes completions for an arbitrary line -- the same
+        # entry point already used elsewhere in Warp's bootstrap for executable discovery --
+        # returning one "match\tdescription" pair per line.
+        for entry in (complete -C "$line")
+            set -l parts (string split -m 1 \t -- $entry)
+            printf '\e]9280;C;%s\a' $parts[1]
+            if test (count $parts) -gt 1 -a -n "$parts[2]"
+                printf '\e]9280;D?description;%s\a' $parts[2]
+            end
+        end
+    end
+    printf '\e]9280;B\a'
+end
+
+# Fish's own builtin `fish_title` sets the window title to the currently-running command
+# (truncated) by default, going through the normal OSC 0/2 title-setting mechanism rather
+# than Warp's own hooks -- so it has no way to know a command is an in-band/generator command
+# the way `warp_preexec`'s JSON hook does. Override it to fall back to the same "just show the
+# pwd" behavior it already uses for its own "fish" builtin case, matching upstream's exact
+# format otherwise.
+function fish_title
+    if not set -q INSIDE_EMACS; or string match -vq '*,term:*' -- $INSIDE_EMACS
+        set -l command $argv[1]
+        if not set -q command[1]
+            set command (status current-command)
+        end
+        if test "$command" = fish
+            set command ""
+        end
+        # Generator commands (including native-completions requests) have a leading space
+        # added to omit them from fish's history file (fish's only, non-configurable,
+        # history-exclusion mechanism -- see generator_command_for's ShellType::Fish case),
+        # so trim before matching or this never fires and the tab title briefly shows the
+        # generator command instead of falling back to the pwd like the "fish" case above.
+        if string match -q "warp_run_generator_command*" -- (string trim -- "$command")
+            set command ""
+        end
+
+        set -l ssh
+        set -q SSH_TTY
+        and set ssh "["(prompt_hostname | string sub -l 10 | string collect)"]"
+        echo -- $ssh (string sub -l 20 -- $command) (prompt_pwd -d 1 -D 1)
+    end
+end
+
 # Run before a command is executed.
 function warp_preexec --on-event fish_preexec
     set -l command (warp_escape_json "$argv")
@@ -163,7 +256,14 @@ function warp_preexec --on-event fish_preexec
     warp_maybe_send_reset_grid_osc
 
     # If this preexec is called for user command, kill ongoing generator command jobs.
-    if test (! string match -q "warp_run_generator_command*" $argv[1])
+    # Trim before matching for the same reason fish_title above does: generator commands
+    # carry a leading space for fish's history exclusion, which would otherwise defeat this
+    # match and leave stale generator jobs running (and un-killed) during a real user command.
+    # Also: `test (! cmd)` always evaluates false regardless of cmd's exit status here, since
+    # `string match -q` prints nothing for `!`'s command substitution to capture and `test`
+    # with no arguments is false -- this branch never ran for any command before this fix.
+    # Use fish's own `not`, which negates a command's exit status directly.
+    if not string match -q "warp_run_generator_command*" -- (string trim -- $argv[1])
         for pid in $_warp_generator_pids
             # Suppress stderr output; kill writes to stderr if any of the given
             # PIDS are not running (which might rarely be the case due to race
