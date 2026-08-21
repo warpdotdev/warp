@@ -1,7 +1,9 @@
 use std::cell::Cell;
 use std::rc::Rc;
 
-use warpui::App;
+use warpui::elements::Empty;
+use warpui::platform::WindowStyle;
+use warpui::{App, Element, TypedActionView, View, ViewHandle, WindowId};
 
 use super::*;
 use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
@@ -12,11 +14,16 @@ use crate::cloud_object::model::persistence::CloudModel;
 use crate::network::NetworkStatus;
 use crate::server::cloud_objects::update_manager::UpdateManager;
 use crate::server::server_api::ServerApiProvider;
+use crate::server::server_api::team::MockTeamClient;
+use crate::server::server_api::workspace::MockWorkspaceClient;
 use crate::server::sync_queue::SyncQueue;
+use crate::settings::PrivacySettings;
 use crate::terminal::input::models::query_model_picker_choices;
 use crate::test_util::settings::initialize_settings_for_tests;
+use crate::workspaces::team::{Team, TeamVisibility};
 use crate::workspaces::team_tester::TeamTesterStatus;
 use crate::workspaces::user_workspaces::UserWorkspaces;
+use crate::workspaces::workspace::Workspace;
 use crate::{LaunchMode, TuiEntryPoint};
 
 // -- DisableReason::should_clear_preference tests --
@@ -389,14 +396,8 @@ fn custom_endpoint_usage_display_label_resolves_alias_name_and_generic_fallback(
         )],
         ..Default::default()
     };
-    let preferences = LLMPreferences {
-        models_by_feature: ModelsByFeature::default(),
-        agent_mode_models_unavailable: false,
-        last_update: None,
-        base_llm_for_terminal_view: HashMap::new(),
-        custom_llms: build_custom_llm_infos(&keys),
-        custom_model_routers: Vec::new(),
-    };
+    let preferences =
+        LLMPreferences::for_test(ModelsByFeature::default(), build_custom_llm_infos(&keys));
 
     assert_eq!(
         preferences.custom_endpoint_usage_display_label("uuid-alias"),
@@ -532,14 +533,8 @@ fn is_cloud_runnable_oz_model_id_classifies_ids() {
         )],
         ..Default::default()
     };
-    let preferences = LLMPreferences {
-        models_by_feature: ModelsByFeature::default(),
-        agent_mode_models_unavailable: false,
-        last_update: None,
-        base_llm_for_terminal_view: HashMap::new(),
-        custom_llms: build_custom_llm_infos(&keys),
-        custom_model_routers: Vec::new(),
-    };
+    let preferences =
+        LLMPreferences::for_test(ModelsByFeature::default(), build_custom_llm_infos(&keys));
 
     // Custom-endpoint (BYOK) UUID id — not cloud-runnable.
     assert!(
@@ -716,17 +711,13 @@ fn with_model_picker_query_test_context(f: impl FnOnce(&LLMPreferences, &AppCont
                 None,
             )
             .expect("choices are non-empty");
-            let preferences = LLMPreferences {
-                models_by_feature: ModelsByFeature {
+            let preferences = LLMPreferences::for_test(
+                ModelsByFeature {
                     agent_mode,
                     ..Default::default()
                 },
-                agent_mode_models_unavailable: false,
-                last_update: None,
-                base_llm_for_terminal_view: HashMap::new(),
-                custom_llms: Vec::new(),
-                custom_model_routers: Vec::new(),
-            };
+                Vec::new(),
+            );
             f(&preferences, app_ctx);
         });
     });
@@ -1047,17 +1038,13 @@ fn preferences_for_profile_model_tests() -> LLMPreferences {
         None,
     )
     .expect("choices are non-empty");
-    LLMPreferences {
-        models_by_feature: ModelsByFeature {
+    LLMPreferences::for_test(
+        ModelsByFeature {
             agent_mode,
             ..Default::default()
         },
-        agent_mode_models_unavailable: false,
-        last_update: None,
-        base_llm_for_terminal_view: HashMap::new(),
-        custom_llms: Vec::new(),
-        custom_model_routers: Vec::new(),
-    }
+        Vec::new(),
+    )
 }
 
 #[test]
@@ -1287,5 +1274,222 @@ fn explicit_child_model_pin_preserves_gui_behavior_and_only_emits_for_effective_
             preferences.set_agent_mode_llm_override(surface_id, LLMId::from("claude-opus"), ctx);
         });
         assert_eq!(active_model_events.get(), 1);
+    });
+}
+
+// -- Per-team model catalog lifecycle (PR 3A: `models_by_team`) --
+
+#[derive(Default)]
+struct TeamScopeTestView;
+
+impl Entity for TeamScopeTestView {
+    type Event = ();
+}
+
+impl View for TeamScopeTestView {
+    fn ui_name() -> &'static str {
+        "TeamScopeTestView"
+    }
+
+    fn render(&self, _: &AppContext) -> Box<dyn Element> {
+        Empty::new().finish()
+    }
+}
+
+impl TypedActionView for TeamScopeTestView {
+    type Action = ();
+}
+
+fn create_team_scope_test_window(app: &mut App) -> (WindowId, ViewHandle<TeamScopeTestView>) {
+    app.add_window(WindowStyle::NotStealFocus, |_| TeamScopeTestView)
+}
+
+fn team_for_llms_test(uid: i64, name: &str) -> Team {
+    Team {
+        uid: uid.into(),
+        name: name.to_string(),
+        color: None,
+        invite_link: None,
+        members: vec![],
+        pending_email_invites: vec![],
+        invite_link_domain_restrictions: vec![],
+        billing_metadata: Default::default(),
+        stripe_customer_id: None,
+        settings: Default::default(),
+        is_eligible_for_discovery: false,
+        has_billing_history: false,
+        visibility: TeamVisibility::Open,
+    }
+}
+
+fn workspace_for_llms_test(teams: Vec<Team>) -> Workspace {
+    Workspace {
+        uid: "workspace_uid123456789".to_string().into(),
+        name: "test".to_string(),
+        stripe_customer_id: None,
+        teams,
+        billing_metadata: Default::default(),
+        bonus_grants_purchased_this_month: Default::default(),
+        billing_cycle_usage: None,
+        has_billing_history: false,
+        settings: Default::default(),
+        invite_link_domain_restrictions: vec![],
+        pending_email_invites: vec![],
+        is_eligible_for_discovery: false,
+        members: vec![],
+        total_requests_used_since_last_refresh: 0,
+    }
+}
+
+/// Registers the singletons `LLMPreferences::new` and `UserWorkspaces` team-context minting
+/// depend on, backed by `workspace`.
+fn initialize_team_scope_test_app(app: &mut App, workspace: Workspace) {
+    initialize_settings_for_tests(app);
+    app.add_singleton_model(|_| ServerApiProvider::new_for_test());
+    app.add_singleton_model(|_| AuthStateProvider::new_for_test());
+    app.add_singleton_model(AuthManager::new_for_test);
+    app.add_singleton_model(|_| NetworkStatus::new());
+    app.add_singleton_model(PrivacySettings::mock);
+    app.add_singleton_model(|ctx| {
+        UserWorkspaces::mock(
+            Arc::new(MockTeamClient::new()),
+            Arc::new(MockWorkspaceClient::new()),
+            vec![workspace],
+            ctx,
+        )
+    });
+    app.add_singleton_model(CloudModel::mock);
+    app.add_singleton_model(TeamTesterStatus::mock);
+    app.add_singleton_model(SyncQueue::mock);
+    app.add_singleton_model(UpdateManager::mock);
+    app.add_singleton_model(|_| TemplatableMCPServerManager::default());
+    app.add_singleton_model(|ctx| {
+        AIExecutionProfilesModel::new(&LaunchMode::new_for_unit_test(), ctx)
+    });
+}
+
+#[test]
+fn team_scoped_catalogs_stay_independent_for_two_windows_on_different_teams() {
+    let team_a = team_for_llms_test(111, "team-a");
+    let team_b = team_for_llms_test(222, "team-b");
+    let workspace = workspace_for_llms_test(vec![team_a.clone(), team_b.clone()]);
+
+    App::test((), |mut app| async move {
+        initialize_team_scope_test_app(&mut app, workspace);
+        let llm_preferences = app.add_singleton_model(LLMPreferences::new);
+
+        let (window_a, view_a) = create_team_scope_test_window(&mut app);
+        let (window_b, view_b) = create_team_scope_test_window(&mut app);
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.set_team_for_window(window_a, team_a.uid, ctx);
+            user_workspaces.set_team_for_window(window_b, team_b.uid, ctx);
+        });
+
+        // Each window mints its own context through the same production path a real
+        // call site would use (`UserWorkspaces::team_context_for_view`).
+        let context_a = view_a
+            .update(&mut app, |_, ctx| {
+                UserWorkspaces::as_ref(ctx).team_context_for_view(ctx)
+            })
+            .expect("window A has a team");
+        let context_b = view_b
+            .update(&mut app, |_, ctx| {
+                UserWorkspaces::as_ref(ctx).team_context_for_view(ctx)
+            })
+            .expect("window B has a team");
+
+        let models_a = ModelsByFeature {
+            agent_mode: available(
+                "auto",
+                vec![server_llm("auto", None), server_llm("team-a-model", None)],
+            ),
+            ..ModelsByFeature::default()
+        };
+        let models_b = ModelsByFeature {
+            agent_mode: available(
+                "auto",
+                vec![server_llm("auto", None), server_llm("team-b-model", None)],
+            ),
+            ..ModelsByFeature::default()
+        };
+
+        llm_preferences.update(&mut app, |preferences, _| {
+            preferences
+                .update_feature_model_choices_for_context(Some(&context_a), Ok(models_a.clone()));
+            preferences
+                .update_feature_model_choices_for_context(Some(&context_b), Ok(models_b.clone()));
+        });
+
+        llm_preferences.read(&app, |preferences, _| {
+            assert_eq!(
+                preferences.models_by_feature_for_context(Some(&context_a)),
+                &models_a,
+                "window A's context should read window A's catalog"
+            );
+            assert_eq!(
+                preferences.models_by_feature_for_context(Some(&context_b)),
+                &models_b,
+                "window B's context should read window B's catalog, independent of window A's"
+            );
+            assert_eq!(
+                preferences.models_by_feature_for_context(None),
+                &ModelsByFeature::default(),
+                "a resolved no-team scope must stay independent of either team's catalog"
+            );
+            assert_eq!(
+                preferences.models_by_feature(),
+                &ModelsByFeature::default(),
+                "the legacy bucket must not observe either team's update"
+            );
+        });
+    });
+}
+
+#[test]
+fn teams_changed_prunes_a_removed_teams_scoped_catalog() {
+    let team = team_for_llms_test(111, "team-a");
+    let workspace = workspace_for_llms_test(vec![team.clone()]);
+
+    App::test((), |mut app| async move {
+        initialize_team_scope_test_app(&mut app, workspace);
+        let llm_preferences = app.add_singleton_model(LLMPreferences::new);
+
+        let (window, view) = create_team_scope_test_window(&mut app);
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.set_team_for_window(window, team.uid, ctx);
+        });
+        let context = view
+            .update(&mut app, |_, ctx| {
+                UserWorkspaces::as_ref(ctx).team_context_for_view(ctx)
+            })
+            .expect("window has a team");
+
+        // Seed a cached entry as if a caller had already fetched this team's catalog.
+        llm_preferences.update(&mut app, |preferences, _| {
+            preferences.update_feature_model_choices_for_context(
+                Some(&context),
+                Ok(ModelsByFeature::default()),
+            );
+        });
+        llm_preferences.read(&app, |preferences, _| {
+            assert_eq!(
+                preferences.models_by_feature_for_context(Some(&context)),
+                &ModelsByFeature::default(),
+                "the entry should be seeded before the team is removed"
+            );
+            assert_eq!(preferences.models_by_team.len(), 1);
+        });
+
+        // The user leaves the team: no workspace has it anymore.
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.update_workspaces(vec![], ctx);
+        });
+
+        llm_preferences.read(&app, |preferences, _| {
+            assert!(
+                preferences.models_by_team.is_empty(),
+                "a team removed from every workspace should be pruned from models_by_team"
+            );
+        });
     });
 }
