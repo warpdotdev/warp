@@ -22,7 +22,7 @@ use crate::terminal::model::completions::ShellCompletion;
 use crate::terminal::model::session::{
     ExecutorCommandEvent, InBandCommandCancelledEvent, SessionInfo, Sessions,
 };
-use crate::terminal::model::{StartCommandOutcome, escape_sequences, native_shell_completions};
+use crate::terminal::model::{StartCommandOutcome, escape_sequences};
 use crate::terminal::model_events::{AnsiHandlerEvent, ModelEvent, ModelEventDispatcher};
 use crate::terminal::shell::ShellType;
 use crate::terminal::view::LINEFEED_REGEX;
@@ -62,7 +62,7 @@ enum PtyWrite {
     },
     RunNativeShellCompletions {
         /// The generator-command line to write to the PTY, computed by
-        /// `native_shell_completions::generator_command_for`. Run as an in-band foreground command
+        /// `ShellType::native_completions_generator_command`. Run as an in-band foreground command
         /// for all four shells.
         command: String,
         shell_type: ShellType,
@@ -652,8 +652,9 @@ impl<T: EventLoopSender> PtyController<T> {
                 self.in_flight_native_completions_results_tx = Some(results_tx);
 
                 // Write the generator command exactly as any other in-band command: the shell's
-                // own bootstrap logic (matched by name, see `native_shell_completions`) hides it
-                // from history and treats its output as in-band rather than a new block.
+                // own bootstrap logic (matched by name -- see
+                // `ShellType::native_completions_generator_command`) hides it from history and
+                // treats its output as in-band rather than a new block.
                 let terminal_model = self.terminal_model.clone();
                 (
                     Cow::Owned(bytes_to_execute_command(
@@ -740,7 +741,11 @@ impl<T: EventLoopSender> PtyController<T> {
             let _ = results_tx.try_send((Vec::new(), None));
             return;
         };
-        let command = native_shell_completions::generator_command_for(shell_type, &buffer_text);
+        // Hex-encode the buffer text here -- the single place that turns buffer text into a
+        // generator payload -- so `ShellType`'s builder stays a pure command-string builder with
+        // no encoding (or `hex`) dependency of its own.
+        let command =
+            shell_type.native_completions_generator_command(&hex::encode(buffer_text.as_bytes()));
 
         // Make sure we only have a single pending native shell completions
         // request at a time by dropping any existing ones from the queue.

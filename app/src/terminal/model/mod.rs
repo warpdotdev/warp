@@ -21,7 +21,6 @@ pub mod blocks;
 pub mod bootstrap;
 pub mod completions;
 pub mod header_grid;
-pub mod native_shell_completions;
 pub mod rich_content;
 
 pub mod early_output;
