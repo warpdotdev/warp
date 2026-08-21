@@ -2921,6 +2921,89 @@ fn build_suggestion_results<S: Into<Span>>(
     })
 }
 
+/// The flag-only native-completions path is a two-phase spawn: the bundled spec pass runs first,
+/// and only when it comes back empty does the foreground callback ask the shell, via
+/// `dispatch_native_shell_completions_after_empty_specs`. That phase-two method is where the parts
+/// that can silently regress live -- the as-you-type dispatch snapshot (whose
+/// `555ef0d`/`8c2858c` invariant keeps the shell-idle retry from looping) and the staleness guard
+/// that keeps a superseded request from asking the shell or clobbering a newer request's abort
+/// handle. Drive it directly and assert its observable effects on `Input`:
+/// - a real dispatch records the snapshot equal to the buffer the generator ran for, so the next
+///   `Precmd` retry sees no change and does not re-fire; and
+/// - if the buffer moved on while the spec pass was running, it bails without recording a snapshot
+///   and without arming/clobbering `completions_abort_handle` (the early return before the snapshot
+///   and the generator dispatch is what keeps the shell from being asked).
+#[test]
+fn native_completions_after_empty_specs_records_snapshot_and_bails_when_stale() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let terminal = add_window_with_bootstrapped_terminal(
+            &mut app, None, /* history_file_commands */
+            None,
+        )
+        .await;
+        let input = terminal.read(&app, |terminal, _| terminal.input().clone());
+
+        // Fresh dispatch: the buffer still matches what the request was computed from.
+        input.update(&mut app, |input, ctx| {
+            input.clear_buffer_and_reset_undo_stack(ctx);
+            input.user_insert("git ", ctx);
+        });
+        let snapshot_git = input.update(&mut app, |input, ctx| editor_model_snapshot(input, ctx));
+        input.update(&mut app, |input, ctx| {
+            input.dispatch_native_shell_completions_after_empty_specs(
+                "git ".to_string(),
+                "git ".len(),
+                CompletionsTrigger::AsYouType,
+                snapshot_git.clone(),
+                ctx,
+            );
+            let recorded = input
+                .native_completions_as_you_type_dispatch_snapshot
+                .clone()
+                .expect("a real empty-specs dispatch records the as-you-type snapshot");
+            // The recorded snapshot equals the current buffer, so the shell-idle retry sees no
+            // change and won't re-fire (the loop guard `555ef0d`/`8c2858c` established).
+            let current = AsYouTypeCompletionsBufferState::from_editor_snapshot(&snapshot_git);
+            assert!(
+                !should_retry_as_you_type_completions(Some(&recorded), &current),
+                "snapshot must equal the dispatch buffer so the next Precmd doesn't loop"
+            );
+            assert!(
+                input.completions_abort_handle.is_some(),
+                "a real dispatch arms the completions abort handle"
+            );
+        });
+
+        // Stale dispatch: the buffer moved on while the (async) spec pass was running, so this
+        // phase-two callback -- computed from the older snapshot -- must not ask the shell.
+        input.update(&mut app, |input, ctx| {
+            // Clear the fields first so a bail is observable as "still unset".
+            input.native_completions_as_you_type_dispatch_snapshot = None;
+            input.completions_abort_handle = None;
+            input.clear_buffer_and_reset_undo_stack(ctx);
+            input.user_insert("git checkout", ctx);
+            input.dispatch_native_shell_completions_after_empty_specs(
+                "git ".to_string(),
+                "git ".len(),
+                CompletionsTrigger::AsYouType,
+                snapshot_git.clone(),
+                ctx,
+            );
+            assert!(
+                input
+                    .native_completions_as_you_type_dispatch_snapshot
+                    .is_none(),
+                "a stale request (buffer moved on) must not record a dispatch snapshot"
+            );
+            assert!(
+                input.completions_abort_handle.is_none(),
+                "a stale request must not arm or clobber the abort handle"
+            );
+        });
+    });
+}
+
 #[test]
 fn test_tab_completion_with_multibyte_chars() {
     App::test((), |mut app| async move {

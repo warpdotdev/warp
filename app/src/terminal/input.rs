@@ -1662,9 +1662,8 @@ fn bundled_specs_are_empty(spec_suggestions: Option<&SuggestionResults>) -> bool
     }
 }
 
-/// Builds [`SuggestionResults`] from a shell's native-completions reply, shared by both native
-/// dispatch paths (up front under force, or after empty specs). The shell's own reported span
-/// (`shell_replacement_span`) is preferred when present, since the whitespace-delimited token
+/// Builds [`SuggestionResults`] from a shell's native-completions reply. The shell's own reported
+/// span (`shell_replacement_span`) is preferred when present, since the whitespace-delimited token
 /// heuristic below assumes the token being completed is whitespace-delimited -- which doesn't hold
 /// for e.g. a `$_.` member-access completion in PowerShell, where the shell replaces a zero-length
 /// or sub-token span within a larger, non-whitespace-delimited expression. Not every shell reports
@@ -12850,16 +12849,21 @@ impl Input {
 
         let cursor_position = cursor_position.as_usize();
 
+        // How this request factors the shell's native completions in relative to Warp's own
+        // bundled specs (see `NativeCompletionsDispatch`). Bound once so the enum -- not a
+        // re-derivation from the raw feature/pref booleans -- owns each branch below.
+        let dispatch = native_completions_dispatch(
+            use_native_shell_completions,
+            force_native_shell_completions,
+        );
+
         // In the shipping flag-only configuration, run Warp's own bundled completion specs first
         // and ask the shell for native completions only if they come back empty -- so the user's
         // shell isn't made to pay for a foreground round trip on a keystroke a bundled spec
         // ultimately answers. This needs a two-phase spawn (the generator dispatch below needs the
         // `ViewContext`, which the background spec-pass future doesn't have), so it's handled
         // separately from the up-front/no-native cases that follow.
-        if let NativeCompletionsDispatch::OnlyIfSpecsEmpty = native_completions_dispatch(
-            use_native_shell_completions,
-            force_native_shell_completions,
-        ) {
+        if dispatch == NativeCompletionsDispatch::OnlyIfSpecsEmpty {
             let completion_session = completion_context.session.clone();
             let abort_handle = ctx
                 .spawn_abortable(
@@ -12908,13 +12912,15 @@ impl Input {
             return;
         }
 
-        // Either native shell completions aren't in use, or the `ForceNativeShellCompletions` pref
-        // is set. Under force, dispatch the generator up front so the shell computes concurrently
+        // Either native shell completions aren't in use (`Skip`) or the `ForceNativeShellCompletions`
+        // pref is set (`UpFront`) -- the two cases deliberately share this single up-front-or-none
+        // spawn. Under force, dispatch the generator up front so the shell computes concurrently
         // with the spec pass (whose result is then discarded) -- the `!force_native_shell_completions`
         // guard when selecting results below is what preserves the pref's "native or nothing"
         // semantics (a bundled spec is never substituted under force, even if native returns
         // nothing).
-        let native_results_fut = if use_native_shell_completions {
+        let dispatch_native_up_front = dispatch == NativeCompletionsDispatch::UpFront;
+        let native_results_fut = if dispatch_native_up_front {
             if completions_trigger == CompletionsTrigger::AsYouType {
                 // Track what this dispatch was computed from so a later `Precmd` (the shell
                 // returning to idle) can tell whether the buffer has moved on since -- see the
