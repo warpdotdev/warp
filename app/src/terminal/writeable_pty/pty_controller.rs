@@ -769,20 +769,31 @@ impl<T: EventLoopSender> Entity for PtyController<T> {
     type Event = PtyControllerEvent;
 }
 
-/// If `shell_type`'s kill-buffer bytes need to be written to the pty as their own write, separate
-/// from the rest of `bytes` (the full output of `bytes_to_execute_command`), returns
-/// `Some((kill_buffer_bytes, rest))`. Returns `None` if no split is needed, in which case `bytes`
-/// should be sent as a single write. See the call site in `send_write_to_event_loop` for why this
-/// is currently only needed for PowerShell.
+/// If `shell_type`'s kill-buffer bytes are the prefix of `bytes` (the full output of
+/// `bytes_to_execute_command`, which prepends them) and something follows them, returns
+/// `Some((kill_buffer_bytes, rest))` so the chord can be written to the pty as its own write,
+/// separate from the rest. Returns `None` when no split is needed or possible, in which case
+/// `bytes` should be sent as a single write. See the call site in `send_write_to_event_loop` for
+/// why this is currently only needed for PowerShell.
+///
+/// The kill-buffer prefix is validated, not assumed: `bytes` is expected to start with the chord,
+/// but splitting at the chord length without checking would miscut unrelated data if a caller ever
+/// handed this something else -- a silent, hard-to-trace error. A non-matching prefix returns
+/// `None` and the write goes out whole: an unsplit write is a known, survivable failure mode; a
+/// mis-split is not.
 fn split_kill_buffer_write(bytes: &[u8], shell_type: ShellType) -> Option<(&[u8], &[u8])> {
     if shell_type != ShellType::PowerShell {
         return None;
     }
-    let kill_buffer_len = shell_type.kill_buffer_bytes().len();
-    if bytes.len() <= kill_buffer_len {
+    let kill_buffer = shell_type.kill_buffer_bytes();
+    if !bytes.starts_with(kill_buffer) {
         return None;
     }
-    Some(bytes.split_at(kill_buffer_len))
+    let (kill_buffer_bytes, rest) = bytes.split_at(kill_buffer.len());
+    if rest.is_empty() {
+        return None;
+    }
+    Some((kill_buffer_bytes, rest))
 }
 
 /// Returns the shell-dependent array of bytes to be written to the PTY to execute `command`.
