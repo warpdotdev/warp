@@ -2825,6 +2825,19 @@ pub struct ReceivedMessageInput {
     pub message_body: String,
 }
 
+/// Identifies the GitHub-native pull request stack layer a review batch was
+/// collected against (CODE-1947), so submission doesn't require the agent to
+/// infer which layer was reviewed. `None` when the batch was collected
+/// against the working tree rather than a stack layer. Carrying only the
+/// number and URL — not comment contents or the layer's diff — keeps this
+/// authorization-free: it identifies context, it does not grant the agent
+/// any ability to create or mutate stacks.
+#[derive(Clone, Debug, PartialEq)]
+pub struct StackLayerReference {
+    pub number: u64,
+    pub url: String,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct AgentReviewCommentBatch {
     /// The review comments in this batch. Uses `code_review::comments::ReviewComment`
@@ -2832,6 +2845,8 @@ pub struct AgentReviewCommentBatch {
     pub comments: Vec<CodeReviewComment>,
     /// All diff hunks that have comments in this batch attached to them, grouped by file name.
     pub diff_set: HashMap<String, Vec<DiffSetHunk>>,
+    /// The pull request stack layer this batch was reviewed against, if any.
+    pub pull_request: Option<StackLayerReference>,
 }
 
 impl AgentReviewCommentBatch {

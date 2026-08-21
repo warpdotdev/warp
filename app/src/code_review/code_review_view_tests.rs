@@ -1104,6 +1104,156 @@ fn test_handle_edit_comment_scrolls_with_buffer() {
 }
 
 #[test]
+fn test_switch_review_context_isolates_comments_per_stack_layer() {
+    App::test((), |mut app| async move {
+        let ctx = TestContext::new(&mut app, "test.txt", "line 1\nline 2\nline 3");
+
+        let layer_1_mode = DiffMode::PullRequestLayer {
+            pr_number: 1,
+            base_oid: "a".repeat(40),
+            head_oid: "b".repeat(40),
+        };
+        let layer_2_mode = DiffMode::PullRequestLayer {
+            pr_number: 2,
+            base_oid: "c".repeat(40),
+            head_oid: "d".repeat(40),
+        };
+
+        ctx.code_review_view.update(&mut app, |view, view_ctx| {
+            let working_tree_model = view
+                .working_tree_comment_model
+                .clone()
+                .expect("working tree comment model set at construction");
+
+            let working_tree_comment = create_general_comment("working tree comment");
+            working_tree_model.update(view_ctx, |batch, ctx| {
+                batch.upsert_comment(working_tree_comment, ctx);
+            });
+
+            // Enter layer #1: gets its own, initially-empty batch.
+            view.switch_review_context_for_mode(&layer_1_mode, view_ctx);
+            assert_eq!(view.selected_stack_pr, Some(1));
+            let layer_1_model = view
+                .active_comment_model
+                .clone()
+                .expect("layer 1 comment model");
+            assert_ne!(
+                layer_1_model, working_tree_model,
+                "a stack layer must not share the working-tree comment batch"
+            );
+            assert!(
+                layer_1_model.read(view_ctx, |batch, _| batch.comments.is_empty()),
+                "layer 1 should start with no comments"
+            );
+
+            let layer_1_comment = create_general_comment("layer 1 comment");
+            layer_1_model.update(view_ctx, |batch, ctx| {
+                batch.upsert_comment(layer_1_comment, ctx);
+            });
+
+            // Enter layer #2: must not see layer 1's comment (spec item 26 —
+            // never leak a comment across layers).
+            view.switch_review_context_for_mode(&layer_2_mode, view_ctx);
+            assert_eq!(view.selected_stack_pr, Some(2));
+            let layer_2_model = view
+                .active_comment_model
+                .clone()
+                .expect("layer 2 comment model");
+            assert_ne!(layer_2_model, layer_1_model);
+            assert!(
+                layer_2_model.read(view_ctx, |batch, _| batch.comments.is_empty()),
+                "layer 2 must not see layer 1's comment"
+            );
+
+            // Return to layer #1: its comment must still be there (drafts
+            // persist for the application lifetime while switching layers).
+            view.switch_review_context_for_mode(&layer_1_mode, view_ctx);
+            let layer_1_model_again = view
+                .active_comment_model
+                .clone()
+                .expect("layer 1 comment model still present");
+            assert_eq!(layer_1_model_again, layer_1_model);
+            assert_eq!(
+                layer_1_model_again.read(view_ctx, |batch, _| batch.comments.len()),
+                1,
+                "layer 1's comment should persist across a round trip through layer 2"
+            );
+
+            // Return to the working tree: its comment is untouched, and
+            // neither layer's comment leaks into it.
+            view.switch_review_context_for_mode(&DiffMode::Head, view_ctx);
+            assert_eq!(view.selected_stack_pr, None);
+            let restored_model = view
+                .active_comment_model
+                .clone()
+                .expect("working tree comment model restored");
+            assert_eq!(restored_model, working_tree_model);
+            assert_eq!(
+                restored_model.read(view_ctx, |batch, _| batch.comments.len()),
+                1,
+                "working-tree batch should be unaffected by stack layer review"
+            );
+        });
+    });
+}
+
+#[test]
+fn test_pull_request_layer_diff_uses_read_only_editor() {
+    App::test((), |mut app| async move {
+        let ctx = TestContext::new(&mut app, "test.txt", "line 1\nline 2\nline 3");
+
+        let layer_mode = DiffMode::PullRequestLayer {
+            pr_number: 6,
+            base_oid: "a".repeat(40),
+            head_oid: "b".repeat(40),
+        };
+
+        let is_editable = ctx.code_review_view.update(&mut app, |view, view_ctx| {
+            // Force the diff state model into pull-request-layer mode
+            // without going through the real git-backed loader (the test
+            // model has no repository, so `set_diff_mode` is a pure state
+            // update here).
+            view.diff_state_model.update(view_ctx, |model, ctx| {
+                model.set_diff_mode(layer_mode.clone(), false, false, None, ctx);
+            });
+
+            let file = FileDiffAndContent {
+                file_diff: FileDiff {
+                    file_path: "README.md".to_string(),
+                    status: GitFileStatus::Modified,
+                    hunks: Arc::new(vec![]),
+                    is_binary: false,
+                    is_autogenerated: false,
+                    max_line_number: 1,
+                    has_hidden_bidi_chars: false,
+                    size: DiffSize::Normal,
+                },
+                content_at_head: Some("# Hello\n".to_string()),
+                content_at_new_commit: Some("# Say hello\n".to_string()),
+            };
+
+            let file_states = view.build_view_state_for_file_diffs(&[file], view_ctx);
+            let editor_state = file_states[0]
+                .editor_state
+                .as_ref()
+                .expect("editor should be created for a non-binary file with content");
+            editor_state.editor().read(view_ctx, |local_editor, ctx| {
+                local_editor
+                    .editor()
+                    .read(ctx, |editor, ctx| editor.is_editable(ctx))
+            })
+        });
+
+        assert!(
+            !is_editable,
+            "a pull request layer's diff editor must never be editable, regardless of the \
+             CodeReviewSaveChanges rollout state, since it renders an immutable historical \
+             commit range rather than the working tree"
+        );
+    });
+}
+
+#[test]
 fn test_active_comments_not_marked_outdated() {
     App::test((), |mut app| async move {
         let ctx = TestContext::new(&mut app, "test.txt", "line 1\nline 2\nline 3");

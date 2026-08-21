@@ -3709,6 +3709,9 @@ impl ServerModel {
             GitHubRepoEvent::RepositoryInfoChanged => {
                 me.push_github_repository_info(&path_for_sub, ctx)
             }
+            // PR stacking is local-only in V1 (specs/CODE-1947/PRODUCT.md
+            // assumption A5); the daemon doesn't push stack info to clients.
+            GitHubRepoEvent::StackInfoChanged => {}
         });
 
         self.github_repo_models.insert(repo_path.clone(), handle);

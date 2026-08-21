@@ -29,6 +29,11 @@ impl From<&proto::DiffMode> for DiffMode {
             Some(proto::diff_mode::Mode::OtherBranch(ob)) => {
                 DiffMode::OtherBranch(ob.branch_name.clone())
             }
+            Some(proto::diff_mode::Mode::PullRequestLayer(layer)) => DiffMode::PullRequestLayer {
+                pr_number: layer.pr_number,
+                base_oid: layer.base_oid.clone(),
+                head_oid: layer.head_oid.clone(),
+            },
         }
     }
 }
@@ -275,6 +280,9 @@ impl TryFrom<&proto::FileDiff> for FileDiffAndContent {
         Ok(Self {
             file_diff: FileDiff::try_from(file)?,
             content_at_head: file.content_at_base.clone(),
+            // A pull request layer never crosses the wire in V1 (stack
+            // review is local-only), so the proto has no equivalent field.
+            content_at_new_commit: None,
         })
     }
 }
@@ -388,6 +396,15 @@ impl From<&DiffMode> for proto::DiffMode {
                     branch_name: branch.clone(),
                 })
             }
+            DiffMode::PullRequestLayer {
+                pr_number,
+                base_oid,
+                head_oid,
+            } => proto::diff_mode::Mode::PullRequestLayer(proto::DiffModePullRequestLayer {
+                pr_number: *pr_number,
+                base_oid: base_oid.clone(),
+                head_oid: head_oid.clone(),
+            }),
         };
         proto::DiffMode {
             mode: Some(mode_oneof),
