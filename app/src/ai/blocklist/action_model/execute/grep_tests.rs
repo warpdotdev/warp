@@ -312,3 +312,39 @@ fn parse_single_file_grep_output_skips_lines_without_a_leading_line_number() {
 fn parse_single_file_grep_output_returns_empty_for_empty_output() {
     assert_eq!(parse_single_file_grep_output(""), Vec::<usize>::new());
 }
+
+#[test]
+fn parse_grep_list_files_output_splits_one_path_per_line() {
+    let output = "src/main.rs\nsrc/lib.rs\n";
+
+    assert_eq!(
+        parse_grep_list_files_output(output),
+        vec!["src/main.rs".to_string(), "src/lib.rs".to_string()]
+    );
+}
+
+#[test]
+fn parse_grep_list_files_output_returns_empty_for_empty_output() {
+    assert_eq!(parse_grep_list_files_output(""), Vec::<String>::new());
+}
+
+#[test]
+fn parse_grep_list_files_output_splits_a_newline_bearing_path_into_two_entries() {
+    // Pins a known, deliberate limitation (see run_grep_per_file_fallback's
+    // doc comment): `grep -l` has no NUL-delimited form on a `grep` that
+    // lacks `-Z`/`--null` in the first place, so a path containing a raw
+    // newline byte can't be told apart from two separate matched files
+    // here. `run_grep_per_file_fallback`'s second phase then fails to find
+    // either bogus path and skips it -- a missed match, not the
+    // wrong-file/wrong-line defect this fallback exists to avoid.
+    let output = "weird\nname.rs\nnormal.rs\n";
+
+    assert_eq!(
+        parse_grep_list_files_output(output),
+        vec![
+            "weird".to_string(),
+            "name.rs".to_string(),
+            "normal.rs".to_string(),
+        ]
+    );
+}

@@ -569,6 +569,12 @@ async fn run_grep_command(
 /// support `-Z`/`--null`. Returns `original_error` if listing the files
 /// itself also fails, since that indicates `grep` is unusable here for a
 /// reason unrelated to `-Z`.
+///
+/// This resolves a colon anywhere in a path, but not a raw newline byte in
+/// one: see `parse_grep_list_files_output`. That's a silent, missing match
+/// rather than the wrong-file/wrong-line defect this fallback exists to
+/// avoid, since the second phase below simply fails to find the resulting
+/// bogus path and skips it.
 async fn run_grep_per_file_fallback(
     queries: &[String],
     target_path: &str,
@@ -586,12 +592,7 @@ async fn run_grep_per_file_fallback(
                     matched_files: vec![],
                 });
             }
-            Ok(GrepCommandOutcome::Matches(output)) => output
-                .trim()
-                .split('\n')
-                .filter(|line| !line.is_empty())
-                .map(str::to_string)
-                .collect::<Vec<_>>(),
+            Ok(GrepCommandOutcome::Matches(output)) => parse_grep_list_files_output(&output),
             Err(_) => return Err(original_error),
         };
 
@@ -627,6 +628,24 @@ async fn run_grep_per_file_fallback(
         }
     }
     Ok(GrepResult::Success { matched_files })
+}
+
+/// Parses `grep -l`'s output (see `build_grep_list_files_command`) into one
+/// path per matched file.
+///
+/// Splits on `\n`, since `-l` has no NUL-delimited form on a `grep` that
+/// doesn't support `-Z`/`--null` in the first place -- that's exactly why
+/// `run_grep_per_file_fallback` is only reached without it. A path
+/// containing a raw newline byte therefore splits into more than one entry
+/// here, rather than being safely delimited the way `parse_null_delimited_grep_output`
+/// handles that case.
+fn parse_grep_list_files_output(output: &str) -> Vec<String> {
+    output
+        .trim()
+        .split('\n')
+        .filter(|line| !line.is_empty())
+        .map(str::to_string)
+        .collect()
 }
 
 /// Runs a PowerShell `Select-String` command.
