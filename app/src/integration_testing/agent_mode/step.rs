@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs::read;
 use std::io::{Cursor, Write};
 use std::path::Path;
@@ -14,7 +14,10 @@ use crate::ai::agent::conversation::AIConversation;
 use crate::ai::agent::{AIAgentActionType, AIAgentOutputStatus, FinishedAIAgentOutput};
 use crate::ai::execution_profiles::ActionPermission;
 use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
-use crate::ai::llms::{LLMId, LLMPreferences};
+use crate::ai::llms::{
+    AvailableLLMs, LLMContextWindow, LLMId, LLMInfo, LLMPreferences, LLMProvider, LLMUsageMetadata,
+    ModelsByFeature,
+};
 use crate::integration_testing::agent_mode::{
     ConversationTarget, assert_latest_task_succeeds_or_blocked, assert_task_is_blocked,
 };
@@ -398,6 +401,70 @@ pub fn set_execution_profile_no_auto_execute() -> TestStep {
                 );
             });
             async_assert!(true, "Successfully updated execution profile")
+        },
+    )
+}
+
+fn test_model(id: &str, display_name: &str, provider: LLMProvider) -> LLMInfo {
+    LLMInfo {
+        display_name: display_name.to_owned(),
+        base_model_name: display_name.to_owned(),
+        id: id.into(),
+        reasoning_level: None,
+        usage_metadata: LLMUsageMetadata {
+            request_multiplier: 1,
+            credit_multiplier: None,
+        },
+        description: None,
+        disable_reason: None,
+        vision_supported: true,
+        spec: None,
+        provider,
+        host_configs: HashMap::new(),
+        discount_percentage: None,
+        context_window: LLMContextWindow::default(),
+    }
+}
+
+/// Seeds the agent-mode model catalog with one model per major provider plus
+/// two Kimi entries, so the inline model selector renders real provider
+/// logos (including the Kimi logo) without depending on the live server
+/// catalog. Kimi models are Fireworks-hosted and report `LLMProvider::Unknown`
+/// from the server, matching production behavior.
+pub fn seed_agent_mode_models_with_provider_variety() -> TestStep {
+    TestStep::new("Seed agent-mode models with provider variety").add_named_assertion(
+        "Update available agent-mode models",
+        |app, _window_id| {
+            let choices = vec![
+                test_model("auto", "auto", LLMProvider::Unknown),
+                test_model("gpt-5-4-high", "GPT-5.4", LLMProvider::OpenAI),
+                test_model(
+                    "claude-4-8-opus-high",
+                    "Claude Opus",
+                    LLMProvider::Anthropic,
+                ),
+                test_model("gemini-3.1-pro", "Gemini 3.1 Pro", LLMProvider::Google),
+                test_model("grok-4-6-high", "Grok 4.6", LLMProvider::Xai),
+                test_model(
+                    "kimi-k27-code-fireworks",
+                    "Kimi K2.7 Code",
+                    LLMProvider::Unknown,
+                ),
+                test_model("kimi-k3-fireworks", "Kimi K3", LLMProvider::Unknown),
+            ];
+            let agent_mode =
+                AvailableLLMs::new("auto".into(), choices, None).expect("choices are non-empty");
+            let models = ModelsByFeature {
+                coding: agent_mode.clone(),
+                agent_mode,
+                cli_agent: None,
+                computer_use: None,
+            };
+
+            LLMPreferences::handle(app).update(app, |llm_preferences, ctx| {
+                llm_preferences.update_feature_model_choices(Ok(models), ctx);
+            });
+            async_assert!(true, "Seeded agent-mode models")
         },
     )
 }

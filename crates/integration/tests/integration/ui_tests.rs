@@ -378,6 +378,10 @@ integration_tests! {
     #[ignore = "Manual test: requires real display for frame capture"]
     test_video_recording,
 
+    // Kimi model picker screenshot test — requires real display, run manually
+    #[ignore = "Manual test: requires real display for frame capture"]
+    test_kimi_model_picker_screenshot,
+
     // Rich Input Ctrl+Enter submit toggle (issue #11588)
     test_rich_input_toggle_on_enter_inserts_newline_and_ctrl_enter_submits,
     // Regression: Enter must accept inline menus (not insert newline) when toggle=true

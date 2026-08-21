@@ -3,10 +3,9 @@
 use ai::LLMId;
 use onboarding::slides::OnboardingModelInfo;
 use onboarding::{CreditPackOption, OnboardingAuthState};
-use warp_core::ui::icons::Icon;
 use warpui::{AppContext, SingletonEntity};
 
-use super::llms::{LLMInfo, LLMPreferences};
+use super::llms::{LLMInfo, LLMPreferences, model_provider_icon};
 use crate::auth::AuthStateProvider;
 use crate::pricing::{PricingInfoModel, onboarding_credit_pack_options};
 use crate::workspaces::user_workspaces::UserWorkspaces;
@@ -16,7 +15,7 @@ impl From<&LLMInfo> for OnboardingModelInfo {
         Self {
             id: llm.id.clone(),
             title: llm.display_name.clone(),
-            icon: llm.provider.icon().unwrap_or(Icon::Agent),
+            icon: model_provider_icon(llm),
             is_default: false,
         }
     }

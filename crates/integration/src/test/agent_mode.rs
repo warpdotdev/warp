@@ -10,7 +10,13 @@ use pathfinder_geometry::vector::{Vector2F, vec2f};
 use settings::ToggleableSetting;
 use warp::cmd_or_ctrl_shift;
 use warp::features::FeatureFlag;
+use warp::integration_testing::agent_mode::{
+    enter_agent_view, seed_agent_mode_models_with_provider_variety,
+};
 use warp::integration_testing::clipboard::assert_clipboard_contains_string;
+use warp::integration_testing::input::{
+    input_contains_string, open_inline_model_selector_from_chip,
+};
 use warp::integration_testing::step::new_step_with_default_assertions;
 use warp::integration_testing::terminal::{
     assert_view_has_text_selection, clear_blocklist_to_remove_bootstrapped_blocks,
@@ -1530,5 +1536,47 @@ T This is a dummy title
 •  Hi, I am agent mode and this is my dummy output. Hope that answers your question."
                         .into(),
                 )),
+        )
+}
+
+/// Manual visual-verification test: seeds the agent-mode model catalog with one
+/// model per major provider plus two Kimi entries, opens the inline model
+/// selector, and captures screenshots of the unfiltered list and a
+/// "kimi"-filtered list so the new Kimi logo can be reviewed alongside the
+/// existing OpenAI/Claude/Gemini/Grok logos.
+///
+/// Run manually with a real display:
+/// ```sh
+/// WARPUI_USE_REAL_DISPLAY_IN_INTEGRATION_TESTS=1 \
+///   cargo run -p integration --bin integration -- test_kimi_model_picker_screenshot
+/// ```
+pub fn test_kimi_model_picker_screenshot() -> Builder {
+    new_builder()
+        .with_real_display()
+        .with_step(wait_until_bootstrapped_single_pane_for_tab(0))
+        .with_step(clear_blocklist_to_remove_bootstrapped_blocks())
+        .with_step(seed_agent_mode_models_with_provider_variety())
+        // The inline model selector's dropdown only has a meaningful anchor position once
+        // the pane is in an agent conversation (Agent View); entering it first lets the
+        // popup render with the real geometry a user would see.
+        .with_step(enter_agent_view())
+        .with_step(open_inline_model_selector_from_chip())
+        .with_step(
+            TestStep::new("Screenshot of unfiltered model list")
+                .set_post_step_pause(Duration::from_millis(500))
+                .with_take_screenshot("model_list_unfiltered.png"),
+        )
+        .with_step(
+            new_step_with_default_assertions("Filter model list to kimi")
+                .with_typed_characters(&["kimi"])
+                .add_named_assertion(
+                    "Model search text is in the input",
+                    input_contains_string(0, "kimi".to_owned()),
+                ),
+        )
+        .with_step(
+            TestStep::new("Screenshot of kimi-filtered model list")
+                .set_post_step_pause(Duration::from_millis(500))
+                .with_take_screenshot("model_list_kimi_filtered.png"),
         )
 }

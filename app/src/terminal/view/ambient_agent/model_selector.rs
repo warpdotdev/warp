@@ -22,7 +22,9 @@ use crate::ai::custom_model_routers::is_custom_router_id;
 use crate::ai::execution_profiles::model_menu_items::is_auto;
 use crate::ai::harness_availability::{HarnessAvailabilityEvent, HarnessAvailabilityModel};
 use crate::ai::harness_display::icon_for as harness_icon_for;
-use crate::ai::llms::{LLMId, LLMPreferences, LLMPreferencesEvent};
+use crate::ai::llms::{
+    LLMId, LLMPreferences, LLMPreferencesEvent, ModelIconFlags, model_leading_icon,
+};
 use crate::editor::{
     EditorView, Event as EditorEvent, PropagateAndNoOpEscapeKey, PropagateAndNoOpNavigationKeys,
     SingleLineEditorOptions, TextOptions,
@@ -30,7 +32,6 @@ use crate::editor::{
 use crate::menu::{Event as MenuEvent, Menu, MenuItem, MenuItemFields, MenuVariant};
 use crate::terminal::input::{MenuPositioning, MenuPositioningProvider};
 use crate::terminal::view::ambient_agent::{AmbientAgentViewModel, AmbientAgentViewModelEvent};
-use crate::ui_components::icons::Icon;
 use crate::view_components::action_button::{ActionButton, ButtonSize};
 
 const ITEM_FONT_SIZE: f32 = 14.;
@@ -507,11 +508,14 @@ impl ModelSelector {
             .chain(other_choices)
             .map(|llm| {
                 let display_name = llm.menu_display_name();
-                let leading_icon = if is_custom_router_id(llm.id.as_str()) {
-                    Icon::Dataflow
-                } else {
-                    llm.provider.icon().unwrap_or(Icon::Agent)
-                };
+                let leading_icon = model_leading_icon(
+                    llm,
+                    ModelIconFlags {
+                        is_custom_router: is_custom_router_id(llm.id.as_str()),
+                        is_auto: is_auto(llm),
+                        ..Default::default()
+                    },
+                );
                 let fields = MenuItemFields::new(display_name)
                     .with_icon(leading_icon)
                     .with_icon_size_override(ITEM_ICON_SIZE)
