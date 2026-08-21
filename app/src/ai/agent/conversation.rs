@@ -201,6 +201,21 @@ pub struct ConversationUsageTotals {
     pub charged_usage: Option<ChargedUsageTotals>,
 }
 
+impl ConversationUsageTotals {
+    /// The dollar total to display for the whole conversation: the
+    /// accumulated charged usage's total (matching
+    /// `charged_usage_for_last_block`'s accounting family) when present,
+    /// falling back to the provider-only baseline for conversations that
+    /// predate charged-usage tracking. Displaying the two totals from
+    /// different pipelines is what let "last response" exceed "total" by a
+    /// cent (APP-5579).
+    pub fn total_cost_in_cents(&self) -> Option<f32> {
+        self.charged_usage
+            .map(|usage| usage.total_cost_in_cents())
+            .or(self.cost_in_cents)
+    }
+}
+
 /// Whether persisted or server usage metadata carries evidence that the
 /// conversation actually incurred usage. Metadata presence alone is not
 /// enough: the local persistence path always writes a (possibly all-default)

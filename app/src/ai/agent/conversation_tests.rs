@@ -938,6 +938,41 @@ fn usage_totals_reads_gui_credits_and_accumulates_provider_cost() {
     });
 }
 
+/// APP-5579 regression: for a single-response conversation, the footer's
+/// "total" dollar figure must come from the same accounting family as its
+/// "last response" figure, even when the older provider-only cost
+/// accumulator has diverged from the charged-usage total (e.g. by a
+/// rounded cent). Both figures must read from charged usage.
+#[test]
+fn usage_totals_dollar_total_matches_last_block_when_provider_cost_diverges() {
+    let mut conversation = AIConversation::new(false, false);
+
+    let charged_usage = ChargedUsageTotals {
+        input_cost_in_cents: 4.0,
+        ..Default::default()
+    };
+    // Deliberately diverge the provider-only baseline from the charged-
+    // usage total, mirroring the reported symptom of a stale/rounded
+    // provider figure sitting alongside an accurate charged-usage figure.
+    conversation.set_cost_in_cents_for_test(Some(5.0));
+    conversation.set_charged_usage_for_test(Some(charged_usage));
+    conversation.set_charged_usage_for_last_block_for_test(Some(charged_usage));
+
+    let totals = conversation.usage_totals();
+    let last_block_cost_in_cents = conversation
+        .charged_usage_for_last_block()
+        .expect("last block charged usage should be set")
+        .total_cost_in_cents();
+
+    assert_eq!(
+        totals.total_cost_in_cents(),
+        Some(last_block_cost_in_cents),
+        "a single-response conversation's total dollar figure must match its \
+         last-response figure, not the divergent provider-only baseline"
+    );
+    assert_eq!(totals.total_cost_in_cents(), Some(4.0));
+}
+
 #[test]
 fn update_cost_and_usage_resets_stale_charged_usage_for_last_block_on_new_user_turn() {
     App::test((), |mut app| async move {

@@ -6958,11 +6958,6 @@ impl TerminalView {
             conversation.total_agent_response_time_since_last_user_query_ms();
         let wall_to_wall_response_time_ms =
             conversation.wall_to_wall_response_time_since_last_query();
-        // Same rollup-vs-own-totals split as the footer's compact usage
-        // button (`render_usage_button`): `cost_in_cents` is the
-        // server-authoritative provider cost baseline, while the token
-        // count comes from the charged-usage breakdown, which is the only
-        // place it's tracked.
         let usage_totals = conversation.usage_totals();
         let charged_usage_for_last_block = conversation.charged_usage_for_last_block();
 
@@ -6979,7 +6974,7 @@ impl TerminalView {
             lines_removed: tool_usage.apply_file_diff_stats.lines_removed,
             commands_executed: tool_usage.run_command_stats.commands_executed,
             total_tokens: usage_totals.charged_usage.map(|usage| usage.total_tokens()),
-            total_cost_in_cents: usage_totals.cost_in_cents,
+            total_cost_in_cents: usage_totals.total_cost_in_cents(),
             tokens_for_last_block: charged_usage_for_last_block.map(|usage| usage.total_tokens()),
             cost_in_cents_for_last_block: charged_usage_for_last_block
                 .map(|usage| usage.total_cost_in_cents()),
