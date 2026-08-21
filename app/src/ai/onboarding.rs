@@ -6,7 +6,7 @@ use onboarding::{CreditPackOption, OnboardingAuthState};
 use warp_core::ui::icons::Icon;
 use warpui::{AppContext, SingletonEntity};
 
-use super::llms::{LLMInfo, LLMPreferences};
+use super::llms::{LLMInfo, LLMPreferences, is_kimi_model_id};
 use crate::auth::AuthStateProvider;
 use crate::pricing::{PricingInfoModel, onboarding_credit_pack_options};
 use crate::workspaces::user_workspaces::UserWorkspaces;
@@ -32,6 +32,14 @@ pub fn build_onboarding_models(
         .map(|llm| {
             let mut info = OnboardingModelInfo::from(llm);
             info.is_default = info.id == default_id;
+            // Kimi models arrive as `LLMProvider::Unknown` (see `llms::is_kimi_model_id`),
+            // so key off the model id to still show the Kimi mark here. Skip this for a
+            // custom-endpoint model, whose id is a user-chosen `config_key` string that
+            // must never be mis-branded by this heuristic.
+            if is_kimi_model_id(llm.id.as_str()) && prefs.custom_llm_info_for_id(&llm.id).is_none()
+            {
+                info.icon = Icon::KimiLogo;
+            }
             info
         })
         .collect();

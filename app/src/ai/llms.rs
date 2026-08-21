@@ -171,6 +171,27 @@ pub struct ModelIconFlags {
     pub is_auto: bool,
     pub is_using_bedrock: bool,
     pub is_using_gemini_enterprise: bool,
+    /// True when `llm` is a synthetic BYO custom-endpoint model (see
+    /// [`LLMPreferences::custom_llm_info_for_id`]). Its `id` is a user-chosen
+    /// `config_key` string rather than a server-issued model id, so it must
+    /// never be mis-branded by an id-based heuristic like [`is_kimi_model_id`]
+    /// below — a user could otherwise name a custom endpoint model
+    /// `kimi-private` and have it wrongly show the Kimi logo.
+    pub is_custom_endpoint: bool,
+}
+
+/// Kimi models are hosted through Fireworks, and the server's provider mapping
+/// (`LLMProviderForModelId`) doesn't have a Fireworks/Moonshot case, so every Kimi
+/// model reaches the client as `LLMProvider::Unknown` — see `LLMProvider::icon` in
+/// `crates/ai/src/llm_provider.rs`. Keying off the model id here (rather than the
+/// provider enum, which can't distinguish Kimi from any other unknown-provider model)
+/// lets the picker show the Kimi mark without a server/GraphQL enum change. Matching
+/// by prefix, rather than an exact-id allowlist, means newly added Kimi variants (e.g.
+/// a future `kimi-k4-fireworks`) automatically pick up the logo. Callers must also set
+/// [`ModelIconFlags::is_custom_endpoint`] so a user's own custom-endpoint model can
+/// never collide with this heuristic (see that field's doc comment).
+pub(crate) fn is_kimi_model_id(id: &str) -> bool {
+    id.starts_with("kimi-")
 }
 
 /// The leading icon shown next to a model in the model picker and model menus.
@@ -186,6 +207,8 @@ pub fn model_leading_icon(llm: &LLMInfo, flags: ModelIconFlags) -> Icon {
         Icon::Aws
     } else if flags.is_using_gemini_enterprise {
         Icon::GeminiEnterpriseAgentPlatform
+    } else if !flags.is_custom_endpoint && is_kimi_model_id(llm.id.as_str()) {
+        Icon::KimiLogo
     } else {
         llm.provider.icon().unwrap_or(Icon::Agent)
     }

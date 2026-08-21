@@ -874,6 +874,15 @@ impl ExecutionProfileEditorView {
         &self.profile_id
     }
 
+    /// Test-only helper: toggles the base model dropdown open/closed so its
+    /// rendered menu items (including provider/model logos) can be captured
+    /// by integration tests.
+    pub fn integration_test_toggle_base_model_dropdown(&mut self, ctx: &mut ViewContext<Self>) {
+        self.base_model_dropdown.update(ctx, |dropdown, ctx| {
+            dropdown.toggle_expanded(ctx);
+        });
+    }
+
     fn update_mouse_state_handles(&mut self, ctx: &mut ViewContext<Self>) {
         let app = ctx;
         let permissions = BlocklistAIPermissions::as_ref(app);
