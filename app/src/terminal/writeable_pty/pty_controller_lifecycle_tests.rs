@@ -201,7 +201,6 @@ fn native_shell_completions_for_powershell_types_hex_then_chord_without_command_
                     command: "676974206368".to_owned(),
                     shell_type: ShellType::PowerShell,
                     results_tx,
-                    buffer_text: "git ch".to_owned(),
                 },
                 ctx,
             )

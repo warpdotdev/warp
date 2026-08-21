@@ -301,56 +301,6 @@ impl EarlyOutput {
         }
     }
 
-    /// Shifts every currently-live candidate position back by `distance` and adds the result to
-    /// the set of live candidates, without discarding the originals (see
-    /// `expected_echo_positions`'s doc comment for why the originals stay live too). Called on
-    /// a backspace (`distance` 1) or CUB (`distance` the column count from the escape
-    /// sequence), where -- unlike a carriage return -- the exact rewind distance is known, so
-    /// each candidate's new position can be computed directly rather than seeding every
-    /// position in the pattern. A candidate whose position is less than `distance` (the rewind
-    /// would move before where this candidate's matching started) is dropped rather than
-    /// underflowing.
-    fn rearm_after_rewind(&mut self, distance: usize) {
-        let rewound: BTreeSet<usize> = self
-            .expected_echo_positions
-            .iter()
-            .filter_map(|&position| position.checked_sub(distance))
-            .collect();
-        self.expected_echo_positions.extend(rewound);
-    }
-
-    /// Whether at least one live candidate position (see `expected_echo_positions`) still has
-    /// more of the registered pattern ahead of it. Used to scope wrapped-line space-fill
-    /// swallowing (see `EarlyOutputHandler::input()`) to redraws that are genuinely still in
-    /// progress, rather than to every space received for as long as the window happens to stay
-    /// open.
-    fn awaiting_more_expected_echo(&self) -> bool {
-        self.expected_echo_positions
-            .iter()
-            .any(|&position| position < self.expected_echo.len())
-    }
-
-    /// Shifts every currently-live candidate position forward by `distance` and adds the
-    /// result to the set of live candidates, without discarding the originals. Called on CUF
-    /// (`move_forward`) with the column count from the escape sequence. Unlike a rewind, where
-    /// a redraw of the skipped-over content may or may not follow, a forward move is not
-    /// ambiguous: the terminal is asserting that the columns it just skipped over already hold
-    /// the correct content (moving over content without redrawing it would otherwise leave
-    /// wrong content on screen), so every live candidate's logical position genuinely advances
-    /// by `distance`. Measured case: a syntax-highlighting recolour pass that ends with a CUF
-    /// skipping over an unchanged trailing fragment of the line, after which a live candidate
-    /// left at its pre-move position would be stranded -- correctly matching nothing further
-    /// until whatever comes after the skipped fragment arrives, and mismatching (and leaking)
-    /// if that turns out to be a continuation of the pattern rather than something new.
-    fn advance_after_forward_move(&mut self, distance: usize) {
-        let advanced: BTreeSet<usize> = self
-            .expected_echo_positions
-            .iter()
-            .map(|&position| position + distance)
-            .collect();
-        self.expected_echo_positions.extend(advanced);
-    }
-
     /// Check a character received on the PTY, which may be typeahead or
     /// background output.
     fn handle_potential_typeahead(&mut self, ch: char) -> bool {
@@ -536,24 +486,6 @@ impl ansi::Handler for EarlyOutputHandler<'_> {
         if self.inner().consume_expected_echo(c) {
             return;
         }
-        // A wrapped line's redraw clears the remainder of a display row with literal space
-        // characters, not an erase-to-end-of-line escape, before moving to the next row (CUD;
-        // see `move_down`) -- measured on real zsh sessions. Those spaces are still part of the
-        // very redraw being matched, not real output, but they don't appear in the buffer text
-        // itself, so they'd otherwise be treated as the first real mismatch and end the window
-        // (see below), leaking everything from the wrap point on even though it does go on to
-        // match. A space is therefore swallowed without ending the window whenever at least one
-        // live candidate still expects more of the pattern -- i.e. this is deliberately
-        // narrower than "the window is open at all": once every live candidate has reached the
-        // pattern's own end, there is nothing left to redraw, so a stray space at that point is
-        // far more likely to be unrelated output than wrap padding, and is left to the normal
-        // mismatch handling below. This can still swallow a leading space of unrelated
-        // background output that happens to start while a redraw is genuinely still in
-        // progress, the same bounded, already-accepted trade-off as the single-character
-        // exposure described below.
-        if c == ' ' && self.inner().awaiting_more_expected_echo() {
-            return;
-        }
         // The first *real* character the pattern can't explain ends its window (see
         // `reset_expected_echo`'s doc comment for why this lives here and not inside
         // `consume_expected_echo` itself): no external signal reliably lands only after a
@@ -627,36 +559,20 @@ impl ansi::Handler for EarlyOutputHandler<'_> {
         if self.inner().consume_expected_echo('\r') {
             return;
         }
-        // A carriage return means the cursor just returned to the start of the line -- if a
-        // line editor is about to redraw (and therefore re-echo) the buffer this expected a
-        // single echo of, the redraw's characters start arriving right after this. See
-        // `rearm_at_column`.
-        self.inner().rearm_at_column(0);
         if !self.inner().handle_potential_typeahead('\r') {
             delegate!(self.carriage_return());
         }
     }
 
     fn backspace(&mut self) {
-        // A backspace is a rewind of exactly one column -- unlike a carriage return, whose
-        // redraw might restart from any position, a redraw following a backspace can only
-        // continue from one column earlier than wherever matching currently stands. See
-        // `rearm_after_rewind`.
-        self.inner().rearm_after_rewind(1);
         delegate!(self.backspace());
     }
 
     fn move_backward(&mut self, columns: usize) {
-        // CUB: the same rewind as a backspace, but by a given column count rather than
-        // always one. See `rearm_after_rewind`.
-        self.inner().rearm_after_rewind(columns);
         delegate!(self.move_backward(columns));
     }
 
     fn move_forward(&mut self, columns: usize) {
-        // CUF: the forward counterpart to move_backward/backspace. See
-        // `advance_after_forward_move`.
-        self.inner().advance_after_forward_move(columns);
         delegate!(self.move_forward(columns));
     }
 

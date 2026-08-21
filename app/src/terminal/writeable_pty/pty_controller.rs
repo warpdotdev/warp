@@ -1,6 +1,5 @@
 use std::borrow::Cow;
 use std::collections::VecDeque;
-use std::mem;
 use std::sync::Arc;
 
 use async_channel::{Receiver, Sender};
@@ -79,14 +78,6 @@ enum PtyWrite {
         command: String,
         shell_type: ShellType,
         results_tx: async_channel::Sender<(Vec<ShellCompletion>, Option<Span>)>,
-        /// The input editor's buffer text this request was computed from. For the three shells
-        /// that run this as a foreground command, the generator command necessarily clears the
-        /// shell's real input buffer to run (see `bytes_to_execute_command`), so once results
-        /// come back this is written back to the pty verbatim -- see
-        /// `in_flight_native_completions_buffer_text`. PowerShell never touches the real buffer
-        /// in the first place (see `send_write_to_event_loop`'s handling of this variant), so
-        /// this field goes unused for it.
-        buffer_text: String,
     },
 }
 
@@ -111,22 +102,6 @@ pub struct PtyController<T: EventLoopSender> {
     bootstrap_file: Option<TempBootstrapFile>,
     in_flight_native_completions_results_tx:
         Option<async_channel::Sender<(Vec<ShellCompletion>, Option<Span>)>>,
-    /// The buffer text of the currently in-flight native-completions request, if any. Written
-    /// back to the pty verbatim once results come back (see `ModelEvent::CompletionsFinished`
-    /// handling below), to undo the buffer-clearing that `bytes_to_execute_command` necessarily
-    /// performs to run the request as a foreground command. Left `None` for PowerShell requests,
-    /// which never touch the real buffer in the first place (see `send_write_to_event_loop`'s
-    /// handling of `PtyWrite::RunNativeShellCompletions`), so nothing needs restoring.
-    in_flight_native_completions_buffer_text: Option<String>,
-    /// Set right when a native-completions buffer restore write is queued (see
-    /// `ModelEvent::CompletionsFinished` handling below) and cleared the next time the line
-    /// editor becomes active. While set, the `LineEditorStatusEvent::Active` subscription skips
-    /// queueing the input-reporting sequence -- both fire from the same underlying trigger (the
-    /// shell returning to a fresh prompt after the generator command completes), in an order
-    /// that isn't guaranteed, and re-running input reporting right after the restore would
-    /// report and clear the text this just wrote back, producing PTY output `push_expected_echo`
-    /// never registered and so isn't recognized, rendering as a phantom background block.
-    just_restored_native_completions_buffer: bool,
 }
 
 impl<T: EventLoopSender> PtyController<T> {
@@ -173,78 +148,12 @@ impl<T: EventLoopSender> PtyController<T> {
                     return;
                 };
                 let _ = block_on(results_tx.send((data.clone(), *replacement_span)));
-
-                // The generator command necessarily cleared the shell's real input buffer to
-                // run in the foreground (see `bytes_to_execute_command`); write back what the
-                // user had actually typed so it isn't lost. This is queued to the front so it
-                // goes out as soon as the line editor is active again (i.e. once the shell has
-                // returned to a fresh prompt after the generator command completes), ahead of
-                // anything else queued in the meantime -- *unless* what's queued behind it is a
-                // newer completions request: that request's own kill-buffer is about to clear
-                // whatever's on the line again anyway, making this restore pointless to send at
-                // all, and (unlike an ordinary write) sending it regardless would race the newer
-                // request's kill-buffer/generator-command write, which drains immediately behind
-                // it since it isn't gated by `execute_next_queued_write`'s `is_command` check
-                // the way a `Command` is. Skipping a redundant restore sidesteps that race
-                // without needing to gate draining on this write at all -- the newer request
-                // will produce its own, current restore once it completes.
-                //
-                // Skipping is safe rather than a new way to lose the buffer: either the newer
-                // request's write never reaches the pty at all (its `before_write_fn` rejects
-                // it, or it gets retain-filtered by a still-newer request while still queued --
-                // see `run_native_shell_completions`), in which case the real buffer was never
-                // touched and there's nothing to restore; or its kill-buffer does go out, at
-                // which point it can no longer be retain-filtered away, so it will run to
-                // completion and fire its own `CompletionsFinished`, where this same check
-                // repeats. That recursion is bounded by real keystrokes -- each further
-                // supersession needs another character typed -- so the first request in the
-                // chain that finishes with nothing newer queued behind it has its restore sent,
-                // and submitting a command requires the user to stop typing regardless, which
-                // is exactly what lets the chain resolve before Enter is reachable.
-                //
-                // The one case this doesn't cover, and it's pre-existing rather than introduced
-                // here: if a request's kill-buffer goes out but its generator command then
-                // hangs, crashes, or is interrupted before emitting `9280;B`, `CompletionsFinished`
-                // never fires for it and the buffer is never restored -- true before this change
-                // and after it, since the original code also only ever restored on that event.
-                if let Some(buffer_text) = me.in_flight_native_completions_buffer_text.take()
-                    && !buffer_text.is_empty()
-                    && !me
-                        .pending_writes
-                        .iter()
-                        .any(|write| matches!(write, PtyWrite::RunNativeShellCompletions { .. }))
-                {
-                    // Register the restored text as expected echo *before* writing it, so the
-                    // shell echoing it back is dropped entirely rather than rendered as a
-                    // phantom background block mirroring the restored text. See
-                    // `EarlyOutput::consume_expected_echo` for how the registration's lifetime
-                    // is bounded -- `LineEditorStatusEvent::Active` looked like the right place
-                    // to end it here, but measured logs showed it firing before this write is
-                    // even flushed (`pending_writes_len=1` at that point), so clearing there
-                    // would have discarded the pattern before a single echoed character could
-                    // arrive.
-                    me.terminal_model.lock().push_expected_echo(&buffer_text);
-                    me.just_restored_native_completions_buffer = true;
-                    me.pending_writes.push_front(PtyWrite::Bytes {
-                        bytes: Cow::Owned(buffer_text.into_bytes()),
-                    });
-                    me.execute_next_queued_write(ctx);
-                }
             }
             _ => (),
         });
 
         ctx.subscribe_to_model(&line_editor_status, |me, _, event, ctx| {
             if let LineEditorStatusEvent::Active = event {
-                if mem::replace(&mut me.just_restored_native_completions_buffer, false) {
-                    // Skip input reporting this one time -- see the field's doc comment. Note
-                    // this fires *before* the restore write below is flushed (it's what
-                    // triggers `execute_next_queued_write` to actually send it, when nothing
-                    // else already has) -- see `EarlyOutput::consume_expected_echo` for where
-                    // the registration's lifetime is actually bounded, not here.
-                    me.execute_next_queued_write(ctx);
-                    return;
-                }
                 let input_reporting_seq = me
                     .model_event_dispatcher
                     .as_ref(ctx)
@@ -291,8 +200,6 @@ impl<T: EventLoopSender> PtyController<T> {
             #[cfg(not(target_family = "wasm"))]
             bootstrap_file: None,
             in_flight_native_completions_results_tx: None,
-            in_flight_native_completions_buffer_text: None,
-            just_restored_native_completions_buffer: false,
         }
     }
 
@@ -758,7 +665,6 @@ impl<T: EventLoopSender> PtyController<T> {
                 command,
                 shell_type,
                 results_tx,
-                buffer_text,
             } => {
                 self.in_flight_native_completions_results_tx = Some(results_tx);
 
@@ -771,15 +677,12 @@ impl<T: EventLoopSender> PtyController<T> {
                     // `generator_command_for`'s `ShellType::PowerShell` case), typed as ordinary
                     // characters immediately followed by the trigger chord. Because nothing ever
                     // executes -- no kill-buffer, no Enter, no preexec/precmd -- there is nothing
-                    // to restore afterward, unlike the other three shells: deliberately leave
-                    // `in_flight_native_completions_buffer_text` unset.
+                    // to restore afterward.
                     self.terminal_model.lock().push_expected_echo(&command);
                     let mut bytes_to_write = command.into_bytes();
                     bytes_to_write.extend_from_slice(POWERSHELL_NATIVE_COMPLETIONS_TRIGGER);
                     (Cow::Owned(bytes_to_write), false, None, None)
                 } else {
-                    self.in_flight_native_completions_buffer_text = Some(buffer_text);
-
                     // Write the generator command exactly as any other in-band command: the
                     // shell's own bootstrap logic (matched by name, see
                     // `native_shell_completions`) hides it from history and treats its output as
@@ -883,7 +786,6 @@ impl<T: EventLoopSender> PtyController<T> {
                 command,
                 shell_type,
                 results_tx,
-                buffer_text,
             });
         self.execute_next_queued_write(ctx);
     }
