@@ -77,7 +77,7 @@ fn test_create_redacted_grep_error_event() {
 fn build_git_grep_command_single_quotes_shell_substitution() {
     let queries = vec!["$(touch /tmp/warp-poc); `id`".to_string()];
 
-    let command = build_git_grep_command(&queries, "/tmp/repo path", ShellType::Bash);
+    let command = build_git_grep_command(&queries, "/tmp/repo path", ShellType::Bash, false);
 
     assert_eq!(
         command,
@@ -86,14 +86,38 @@ fn build_git_grep_command_single_quotes_shell_substitution() {
 }
 
 #[test]
+fn build_git_grep_command_null_delimited_adds_z_flag() {
+    let queries = vec!["needle".to_string()];
+
+    let command = build_git_grep_command(&queries, "/tmp/repo", ShellType::Bash, true);
+
+    assert_eq!(
+        command,
+        "git --no-pager grep --color=never --untracked -nIE -z -e 'needle' '/tmp/repo'"
+    );
+}
+
+#[test]
 fn build_grep_command_escapes_single_quotes() {
     let queries = vec!["owner's code".to_string()];
 
-    let command = build_grep_command(&queries, "/tmp/repo", ShellType::Bash);
+    let command = build_grep_command(&queries, "/tmp/repo", ShellType::Bash, false);
 
     assert_eq!(
         command,
         r#"grep --color=never -nrIHE --devices=skip -e 'owner'"'"'s code' '/tmp/repo'"#
+    );
+}
+
+#[test]
+fn build_grep_command_null_delimited_adds_capital_z_flag() {
+    let queries = vec!["needle".to_string()];
+
+    let command = build_grep_command(&queries, "/tmp/repo", ShellType::Bash, true);
+
+    assert_eq!(
+        command,
+        "grep --color=never -nrIHE --devices=skip -Z -e 'needle' '/tmp/repo'"
     );
 }
 
@@ -105,15 +129,17 @@ fn build_select_string_command_single_quotes_powershell_substitution() {
 
     assert_eq!(
         command,
-        r#"Get-ChildItem -Path 'C:\repo path' -Recurse -File | Select-String -NoEmphasis -CaseSensitive -Pattern '$(New-Item C:\pwn); ''literal'''"#
+        r#"Get-ChildItem -Path 'C:\repo path' -Recurse -File | Select-String -NoEmphasis -CaseSensitive -Pattern '$(New-Item C:\pwn); ''literal''' | ForEach-Object { "$($_.Path)`0$($_.LineNumber)`0" }"#
     );
 }
 
 #[test]
-fn parse_grep_output_handles_colon_in_windows_path() {
-    let output = r#"C:\repo\file.rs:42:some content"#;
+fn parse_null_delimited_grep_output_handles_colon_in_windows_path() {
+    // git-grep-`-z`-style record: both separators are NUL.
+    let output = "C:\\repo\\file.rs\x0042\0some content\n";
 
-    let matched_files = parse_grep_output(output, None, None).expect("Should parse successfully");
+    let matched_files =
+        parse_null_delimited_grep_output(output, None, None).expect("Should parse successfully");
 
     assert_eq!(matched_files.len(), 1);
     assert_eq!(matched_files[0].file_path, r#"C:\repo\file.rs"#);
@@ -124,10 +150,13 @@ fn parse_grep_output_handles_colon_in_windows_path() {
 }
 
 #[test]
-fn parse_grep_output_handles_colon_in_relative_path() {
-    let output = "path/with:colon/file.go:7:content";
+fn parse_null_delimited_grep_output_handles_gnu_grep_capital_z_style() {
+    // GNU/BSD `grep -Z` only replaces the path separator with NUL; the
+    // line-number separator stays `:`.
+    let output = "path/with:colon/file.go\x007:content\n";
 
-    let matched_files = parse_grep_output(output, None, None).expect("Should parse successfully");
+    let matched_files =
+        parse_null_delimited_grep_output(output, None, None).expect("Should parse successfully");
 
     assert_eq!(matched_files.len(), 1);
     assert_eq!(matched_files[0].file_path, "path/with:colon/file.go");
@@ -138,10 +167,157 @@ fn parse_grep_output_handles_colon_in_relative_path() {
 }
 
 #[test]
-fn parse_grep_output_handles_colon_in_go_module_path() {
+fn parse_null_delimited_grep_output_handles_path_that_looks_like_a_record_boundary() {
+    // Regression test: `parse_legacy_grep_output`'s `:<digits>:` heuristic
+    // misparses this path, since the path itself contains that exact
+    // sequence. The NUL-delimited format has no such ambiguity.
+    let output = "src/a:123:part.rs\x007\0needle\n";
+
+    let matched_files =
+        parse_null_delimited_grep_output(output, None, None).expect("Should parse successfully");
+
+    assert_eq!(matched_files.len(), 1);
+    assert_eq!(matched_files[0].file_path, "src/a:123:part.rs");
+    assert_eq!(
+        matched_files[0].matched_lines,
+        vec![GrepLineMatch { line_number: 7 }]
+    );
+}
+
+#[test]
+fn parse_null_delimited_grep_output_handles_newline_embedded_in_path() {
+    // A path containing a raw newline is safe too: the path is delimited by
+    // the first NUL byte regardless of what bytes precede it.
+    let output = "weird\nname.rs\x0042\0content\n";
+
+    let matched_files =
+        parse_null_delimited_grep_output(output, None, None).expect("Should parse successfully");
+
+    assert_eq!(matched_files.len(), 1);
+    assert_eq!(matched_files[0].file_path, "weird\nname.rs");
+    assert_eq!(
+        matched_files[0].matched_lines,
+        vec![GrepLineMatch { line_number: 42 }]
+    );
+}
+
+#[test]
+fn parse_null_delimited_grep_output_handles_multiple_records() {
+    // Real `git grep -z -n` output for two matches in one file and one in
+    // another.
+    let output = "colon:file.txt\x001\0needle one\ncolon:file.txt\x002\0second line needle\nnormal.txt\x001\0needle two\n";
+
+    let mut matched_files =
+        parse_null_delimited_grep_output(output, None, None).expect("Should parse successfully");
+    matched_files.sort_by(|a, b| a.file_path.cmp(&b.file_path));
+
+    assert_eq!(
+        matched_files,
+        vec![
+            GrepFileMatch {
+                file_path: "colon:file.txt".to_string(),
+                matched_lines: vec![
+                    GrepLineMatch { line_number: 1 },
+                    GrepLineMatch { line_number: 2 },
+                ],
+            },
+            GrepFileMatch {
+                file_path: "normal.txt".to_string(),
+                matched_lines: vec![GrepLineMatch { line_number: 1 }],
+            },
+        ]
+    );
+}
+
+#[test]
+fn parse_null_delimited_grep_output_skips_unparseable_records_but_keeps_valid_matches() {
+    // The middle record has a NUL but no digits after it, so it's
+    // unparseable; parsing should resync on the following newline and keep
+    // going instead of misattributing it to a neighboring record.
+    let output = "src/main.rs\x0010\0foo\nbad\0not-a-number\nsrc/lib.rs\x0020\0bar\n";
+
+    let mut matched_files =
+        parse_null_delimited_grep_output(output, None, None).expect("Should parse successfully");
+    matched_files.sort_by(|a, b| a.file_path.cmp(&b.file_path));
+
+    assert_eq!(
+        matched_files,
+        vec![
+            GrepFileMatch {
+                file_path: "src/lib.rs".to_string(),
+                matched_lines: vec![GrepLineMatch { line_number: 20 }],
+            },
+            GrepFileMatch {
+                file_path: "src/main.rs".to_string(),
+                matched_lines: vec![GrepLineMatch { line_number: 10 }],
+            },
+        ]
+    );
+}
+
+#[test]
+fn parse_null_delimited_grep_output_errors_when_every_record_is_unparseable() {
+    let output = "not a grep record\nneither is this one";
+
+    let result = parse_null_delimited_grep_output(output, None, None);
+
+    assert!(result.is_err());
+}
+
+#[test]
+fn parse_null_delimited_grep_output_returns_empty_for_empty_output() {
+    let matched_files =
+        parse_null_delimited_grep_output("", None, None).expect("Should parse successfully");
+
+    assert!(matched_files.is_empty());
+}
+
+#[test]
+fn take_null_delimited_record_rejects_empty_path() {
+    assert_eq!(take_null_delimited_record("\x0010\0content\n"), None);
+}
+
+#[test]
+fn take_null_delimited_record_rejects_missing_line_number() {
+    assert_eq!(take_null_delimited_record("path.rs\0not-a-number\n"), None);
+}
+
+#[test]
+fn parse_legacy_grep_output_handles_colon_in_windows_path() {
+    let output = r#"C:\repo\file.rs:42:some content"#;
+
+    let matched_files =
+        parse_legacy_grep_output(output, None, None).expect("Should parse successfully");
+
+    assert_eq!(matched_files.len(), 1);
+    assert_eq!(matched_files[0].file_path, r#"C:\repo\file.rs"#);
+    assert_eq!(
+        matched_files[0].matched_lines,
+        vec![GrepLineMatch { line_number: 42 }]
+    );
+}
+
+#[test]
+fn parse_legacy_grep_output_handles_colon_in_relative_path() {
+    let output = "path/with:colon/file.go:7:content";
+
+    let matched_files =
+        parse_legacy_grep_output(output, None, None).expect("Should parse successfully");
+
+    assert_eq!(matched_files.len(), 1);
+    assert_eq!(matched_files[0].file_path, "path/with:colon/file.go");
+    assert_eq!(
+        matched_files[0].matched_lines,
+        vec![GrepLineMatch { line_number: 7 }]
+    );
+}
+
+#[test]
+fn parse_legacy_grep_output_handles_colon_in_go_module_path() {
     let output = "vendor/github.com/foo/bar:v1/pkg/x.go:42:return nil";
 
-    let matched_files = parse_grep_output(output, None, None).expect("Should parse successfully");
+    let matched_files =
+        parse_legacy_grep_output(output, None, None).expect("Should parse successfully");
 
     assert_eq!(matched_files.len(), 1);
     assert_eq!(
@@ -155,11 +331,11 @@ fn parse_grep_output_handles_colon_in_go_module_path() {
 }
 
 #[test]
-fn parse_grep_output_skips_unparseable_lines_but_keeps_valid_matches() {
+fn parse_legacy_grep_output_skips_unparseable_lines_but_keeps_valid_matches() {
     let output = "src/main.rs:10:foo\nthis line has no line number\nsrc/lib.rs:20:bar";
 
     let mut matched_files =
-        parse_grep_output(output, None, None).expect("Should parse successfully");
+        parse_legacy_grep_output(output, None, None).expect("Should parse successfully");
     matched_files.sort_by(|a, b| a.file_path.cmp(&b.file_path));
     assert_eq!(
         matched_files,
@@ -177,17 +353,18 @@ fn parse_grep_output_skips_unparseable_lines_but_keeps_valid_matches() {
 }
 
 #[test]
-fn parse_grep_output_errors_when_every_line_is_unparseable() {
+fn parse_legacy_grep_output_errors_when_every_line_is_unparseable() {
     let output = "not a grep line\nneither is this one";
 
-    let result = parse_grep_output(output, None, None);
+    let result = parse_legacy_grep_output(output, None, None);
 
     assert!(result.is_err());
 }
 
 #[test]
-fn parse_grep_output_returns_empty_for_empty_output() {
-    let matched_files = parse_grep_output("", None, None).expect("Should parse successfully");
+fn parse_legacy_grep_output_returns_empty_for_empty_output() {
+    let matched_files =
+        parse_legacy_grep_output("", None, None).expect("Should parse successfully");
 
     assert!(matched_files.is_empty());
 }
