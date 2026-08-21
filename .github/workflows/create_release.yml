@@ -546,10 +546,16 @@ jobs:
         env:
           DEBUG_FILE_OR_FOLDER_PATH: ${{ steps.bundle_cli.outputs.dsym_path }}
 
-  release_macos_tui:
-    name: Build Release (macOS TUI ${{ matrix.arch }})
+  # Builds the TUI binary only, with no dependency on release_macos_single_arch,
+  # so this heavy build+notarize step keeps running in parallel with the app
+  # build instead of serializing behind it. Packaging (which needs the
+  # canonical schema release_macos_single_arch produces) happens in
+  # release_macos_tui below, mirroring the build_windows_binaries /
+  # release_windows split.
+  build_macos_tui_binaries:
+    name: Build Release Binary (macOS TUI ${{ matrix.arch }})
     runs-on: macos-26-xlarge
-    needs: [prepare_release, release_macos_single_arch]
+    needs: prepare_release
     if: ${{ inputs.build_macos != false }}
     timeout-minutes: 60
     strategy:
@@ -586,16 +592,100 @@ jobs:
           config_file: ${{ env.CONFIG_FILE }}
           channel: ${{ inputs.channel }}
 
+      # Only the binary matters here; this job's own bundled resources are
+      # discarded, so skip signing/notarization and the (otherwise mandatory)
+      # schema, both of which belong to the packaging step below.
+      - name: Build ${{ matrix.arch }} binary
+        id: build_tui
+        run: |
+          script/bundle --channel $CHANNEL --arch ${{ matrix.arch }} --artifact tui --nosign
+        shell: bash
+        env:
+          CHANNEL: ${{ steps.get-config.outputs.channel }}
+          GIT_RELEASE_TAG: ${{ needs.prepare_release.outputs.release_tag }}
+          NO_LICENSES: "1"
+          SKIP_SETTINGS_SCHEMA: "1"
+
+      # binary_path is already copied out of the per-target-triple Cargo output
+      # directory; --skip-build (used by release_macos_tui below) re-derives
+      # that copy from the triple directory, so preserve it here instead.
+      - name: Create tar archive with build artifacts
+        run: |
+          BINARY_PATH="${{ steps.build_tui.outputs.binary_path }}"
+          PROFILE_DIR="${BINARY_PATH#target/}"
+          PROFILE_DIR="${PROFILE_DIR%/bundle/osx/*}"
+          RAW_BINARY_PATH="target/${{ steps.build_tui.outputs.rust_target }}/$PROFILE_DIR/$(basename "$BINARY_PATH")"
+          TAR_PATHS=("$RAW_BINARY_PATH")
+          if [[ -e "$RAW_BINARY_PATH.dSYM" ]]; then
+            TAR_PATHS+=("$RAW_BINARY_PATH.dSYM")
+          fi
+          tar czfv build-artifacts.tar.gz "${TAR_PATHS[@]}"
+        shell: bash
+
+      - name: Archive ${{ matrix.arch }} TUI build artifacts
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: macos-tui-${{ matrix.arch }}-${{ steps.get-config.outputs.channel }}
+          retention-days: 1
+          # We compress the tar archive, so no need to re-compress.
+          compression-level: 0
+          path: build-artifacts.tar.gz
+
+  release_macos_tui:
+    name: Build Release (macOS TUI ${{ matrix.arch }})
+    runs-on: macos-26-xlarge
+    needs: [prepare_release, release_macos_single_arch, build_macos_tui_binaries]
+    if: ${{ inputs.build_macos != false }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: aarch64
+          - arch: x86_64
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+
+      - uses: ./.github/actions/prepare_environment
+        with:
+          target_os: macos
+          is_self_hosted: false
+          ref: ${{ needs.prepare_release.outputs.release_branch }}
+          install_release_deps: true
+          ssh_key: ${{ secrets.WARP_CHANNEL_CONFIG_ACCESS_SSH_KEY }}
+
+      # Install go toolchain, as it may be needed for some build steps.
+      - name: Setup Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version: stable
+
+      - name: Get channel configuration
+        id: get-config
+        uses: ./.github/actions/get_channel_config/
+        with:
+          config_file: ${{ env.CONFIG_FILE }}
+          channel: ${{ inputs.channel }}
+
+      - name: Download ${{ matrix.arch }} TUI build artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: macos-tui-${{ matrix.arch }}-${{ steps.get-config.outputs.channel }}
+
+      - name: Extract TUI build artifacts
+        run: tar xvfz build-artifacts.tar.gz
+        shell: bash
+
       - name: Download canonical macOS settings schema
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: settings-schema-macos-aarch64-${{ steps.get-config.outputs.channel }}
           path: .release-artifacts/settings-schema-macos
 
-      - name: Build ${{ matrix.arch }} binary
+      - name: Bundle ${{ matrix.arch }} binary
         id: bundle_tui
         run: |
-          script/bundle --read-passwords-from-env --channel $CHANNEL --arch ${{ matrix.arch }} --artifact tui
+          script/bundle --skip-build --read-passwords-from-env --channel $CHANNEL --arch ${{ matrix.arch }} --artifact tui
         shell: bash
         env:
           CHANNEL: ${{ steps.get-config.outputs.channel }}
@@ -668,10 +758,15 @@ jobs:
           name: release-macos-tui-${{ matrix.arch }}-${{ steps.get-config.outputs.channel }}
           path: warp-tui-${{ steps.get-config.outputs.channel }}-macos-${{ matrix.arch }}.tar.gz
 
-  release_linux_tui:
-    name: Build Release (Linux TUI ${{ matrix.arch }})
+  # Builds the TUI binary only, with no dependency on release_linux_x86, so
+  # this native, per-arch build keeps running in parallel with the app build
+  # instead of serializing behind it. Packaging (which needs the canonical
+  # schema release_linux_x86 produces) happens in release_linux_tui below,
+  # mirroring the build_windows_binaries / release_windows split.
+  build_linux_tui_binaries:
+    name: Build Release Binary (Linux TUI ${{ matrix.arch }})
     runs-on: ${{ matrix.runner }}
-    needs: [prepare_release, release_linux_x86]
+    needs: prepare_release
     if: ${{ inputs.build_linux != false }}
     timeout-minutes: 180
     strategy:
@@ -710,6 +805,93 @@ jobs:
           config_file: ${{ env.CONFIG_FILE }}
           channel: ${{ inputs.channel }}
 
+      # Namespace's User Bundled Cache persists target/ between jobs on the same profile.
+      - name: Clean stale bundle output
+        run: |
+          if [[ -d target ]]; then
+            find target -path '*/bundle/linux' -type d -prune -exec rm -rf {} +
+          fi
+        shell: bash
+
+      # Only the binary matters here; this job's own bundled resources are
+      # discarded, so skip the (otherwise mandatory) schema and third-party
+      # license generation, both of which belong to the packaging step below.
+      - name: Build TUI binary
+        id: build_tui
+        run: script/bundle --channel "$CHANNEL" --artifact tui --arch "${{ matrix.arch }}"
+        shell: bash
+        env:
+          CHANNEL: ${{ steps.get-config.outputs.channel }}
+          GIT_RELEASE_TAG: ${{ needs.prepare_release.outputs.release_tag }}
+          NO_LICENSES: "1"
+          SKIP_SETTINGS_SCHEMA: "1"
+
+      - name: Create tar archive with build artifacts
+        run: |
+          EXECUTABLE_PATH="$(realpath --relative-to=$(pwd) "$EXECUTABLE_PATH")"
+          tar czvf build-artifacts.tar.gz "$EXECUTABLE_PATH"
+        shell: bash
+        env:
+          EXECUTABLE_PATH: ${{ steps.build_tui.outputs.executable_path }}
+
+      - name: Archive ${{ matrix.arch }} TUI build artifacts
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: linux-tui-${{ matrix.arch }}-${{ steps.get-config.outputs.channel }}
+          retention-days: 1
+          path: build-artifacts.tar.gz
+
+  release_linux_tui:
+    name: Build Release (Linux TUI ${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    needs: [prepare_release, release_linux_x86, build_linux_tui_binaries]
+    if: ${{ inputs.build_linux != false }}
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: namespace-profile-ubuntu-20-04
+          - arch: aarch64
+            runner: namespace-profile-ubuntu-20-04-arm
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+
+      - uses: ./.github/actions/prepare_environment
+        with:
+          target_os: linux
+          is_self_hosted: false
+          ref: ${{ needs.prepare_release.outputs.release_branch }}
+          install_release_deps: true
+          ssh_key: ${{ secrets.WARP_CHANNEL_CONFIG_ACCESS_SSH_KEY }}
+
+      # Install gcc 10, as gcc 9.5 has a bug with memcmp that is incompatible
+      # with aws-lc-rs (see https://gcc.gnu.org/bugzilla/show_bug.cgi?id=95189).
+      - name: Install and configure gcc-10
+        run: |
+          sudo apt update
+          sudo apt install -y gcc-10 g++-10
+          sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-10 60 --slave /usr/bin/g++ g++ /usr/bin/g++-10
+          gcc --version
+          g++ --version
+
+      - name: Get channel configuration
+        id: get-config
+        uses: ./.github/actions/get_channel_config/
+        with:
+          config_file: ${{ env.CONFIG_FILE }}
+          channel: ${{ inputs.channel }}
+
+      - name: Download ${{ matrix.arch }} TUI build artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: linux-tui-${{ matrix.arch }}-${{ steps.get-config.outputs.channel }}
+
+      - name: Extract TUI build artifacts
+        run: tar xzvf build-artifacts.tar.gz
+        shell: bash
+
       - name: Download canonical Linux settings schema
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
@@ -726,7 +908,7 @@ jobs:
 
       - name: Bundle TUI
         id: bundle_tui
-        run: script/bundle --channel "$CHANNEL" --artifact tui --arch "${{ matrix.arch }}"
+        run: script/bundle --channel "$CHANNEL" --artifact tui --arch "${{ matrix.arch }}" --skip-build
         shell: bash
         env:
           CHANNEL: ${{ steps.get-config.outputs.channel }}
@@ -1686,10 +1868,68 @@ jobs:
           name: release-web-${{ steps.get-config.outputs.channel }}
           path: ${{ steps.bundle_app.outputs.packages_dir }}
 
+  # Builds the TUI binary only, with no dependency on build_windows_binaries,
+  # so this build keeps running in parallel with the app build instead of
+  # serializing behind it. Packaging (which needs the canonical schema
+  # build_windows_binaries produces) happens in release_windows_tui below,
+  # following the same split build_windows_binaries already uses for
+  # release_windows.
+  build_windows_tui_binaries:
+    name: Build Release Binary (Windows TUI ${{ matrix.arch }})
+    runs-on: windows-latest-large
+    needs: prepare_release
+    if: ${{ inputs.build_windows != false }}
+    timeout-minutes: 150
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+          - arch: arm64
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+
+      - uses: ./.github/actions/prepare_environment
+        with:
+          target_os: windows
+          cache_key: tui-${{ matrix.arch }}
+          is_self_hosted: false
+          ref: ${{ needs.prepare_release.outputs.release_branch }}
+          install_release_deps: true
+          ssh_key: ${{ secrets.WARP_CHANNEL_CONFIG_ACCESS_SSH_KEY }}
+      - name: Add arm64 target
+        if: ${{ matrix.arch == 'arm64' }}
+        run: rustup target add aarch64-pc-windows-msvc
+        shell: bash
+
+      - name: Get channel configuration
+        id: get-config
+        uses: ./.github/actions/get_channel_config/
+        with:
+          config_file: ${{ env.CONFIG_FILE }}
+          channel: ${{ inputs.channel }}
+
+      - name: Build Warp Agent CLI
+        id: build_tui
+        run: script/bundle --artifact tui --channel "$CHANNEL" --skip_build_installer --arch ${{ matrix.arch }}
+        shell: bash
+        env:
+          CHANNEL: ${{ steps.get-config.outputs.channel }}
+          GIT_RELEASE_TAG: ${{ needs.prepare_release.outputs.release_tag }}
+
+      - name: Archive Windows TUI binary build
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: windows-tui-binary-${{ matrix.arch }}-${{ steps.get-config.outputs.channel }}
+          retention-days: 1
+          path: |
+            ${{ steps.build_tui.outputs.binary_path }}
+            ${{ steps.build_tui.outputs.pdb_file_path }}
+
   release_windows_tui:
     name: Build Release (Windows TUI ${{ matrix.arch }})
     runs-on: windows-latest-large
-    needs: [prepare_release, build_windows_binaries]
+    needs: [prepare_release, build_windows_binaries, build_windows_tui_binaries]
     if: ${{ inputs.build_windows != false }}
     timeout-minutes: 150
     strategy:
@@ -1715,10 +1955,6 @@ jobs:
           ref: ${{ needs.prepare_release.outputs.release_branch }}
           install_release_deps: true
           ssh_key: ${{ secrets.WARP_CHANNEL_CONFIG_ACCESS_SSH_KEY }}
-      - name: Add arm64 target
-        if: ${{ matrix.arch == 'arm64' }}
-        run: rustup target add aarch64-pc-windows-msvc
-        shell: bash
 
       - name: Get channel configuration
         id: get-config
@@ -1726,6 +1962,12 @@ jobs:
         with:
           config_file: ${{ env.CONFIG_FILE }}
           channel: ${{ inputs.channel }}
+
+      - name: Download Windows TUI binary build
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: windows-tui-binary-${{ matrix.arch }}-${{ steps.get-config.outputs.channel }}
+          path: .
 
       - name: Download canonical Windows settings schema
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
@@ -1738,9 +1980,9 @@ jobs:
         run: ./script/windows/test_tui_installer.ps1
         shell: pwsh
 
-      - name: Build Warp Agent CLI
+      - name: Locate TUI binary build outputs
         id: build_tui
-        run: script/bundle --artifact tui --channel "$CHANNEL" --skip_build_installer --arch ${{ matrix.arch }}
+        run: script/bundle --artifact tui --channel "$CHANNEL" --skip_build_binary --skip_build_installer --arch ${{ matrix.arch }}
         shell: bash
         env:
           CHANNEL: ${{ steps.get-config.outputs.channel }}
