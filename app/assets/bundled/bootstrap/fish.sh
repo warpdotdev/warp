@@ -267,6 +267,8 @@ function fish_title
     # for a generator request -- by handing the delegate an explicit empty override -- so the
     # title shows its no-command (pwd) state instead of briefly flashing the generator command.
     if string match -q "warp_run_generator_command*" -- (string trim -- "$command")
+        # A custom fish_title that ignores $argv and reads `status current-command` itself would
+        # bypass this and briefly flash the generator command (cosmetic; considered, left undefended).
         set argv ""
     end
     if functions -q warp_original_fish_title
