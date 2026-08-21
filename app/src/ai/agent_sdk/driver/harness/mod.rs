@@ -311,10 +311,9 @@ fn insert_non_empty_task_env_var(
 
 /// Writes `value` under every name in `keys`.
 ///
-/// Used to give a variable both its `OZ_` and its `WARP_` name from a single value. Nothing
-/// derives one name from the other, so retiring the `OZ_` half later means deleting it from
-/// these lists. `task_env_vars_mirror_every_oz_var_to_a_warp_name` fails if a name is added
-/// here under only one of the two spellings.
+/// Gives a variable both its `OZ_` and its `WARP_` name from a single value, so the two cannot
+/// carry different ones. `task_env_vars_mirror_every_oz_var_to_a_warp_name` fails if a name is
+/// listed here under only one of the two spellings.
 ///
 /// Takes `AsRef<OsStr>` rather than `&str` so a path-valued variable stays byte-exact: `OZ_CLI`
 /// holds an executable path that agents exec, and a lossy conversion would replace non-UTF-8

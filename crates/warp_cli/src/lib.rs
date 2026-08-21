@@ -40,9 +40,7 @@ pub mod secret;
 pub mod share;
 pub mod task;
 // Each of these variables is injected under both its `OZ_` and its `WARP_` name, carrying the
-// identical value. Neither name is derived from the other: both are written out at every set
-// site, so retiring the `OZ_` half later is a deletion rather than an unwinding. Read sites
-// still use the `OZ_` names.
+// identical value. Read sites still use the `OZ_` names.
 pub const OZ_RUN_ID_ENV: &str = "OZ_RUN_ID";
 pub const WARP_RUN_ID_ENV: &str = "WARP_RUN_ID";
 pub const OZ_PARENT_RUN_ID_ENV: &str = "OZ_PARENT_RUN_ID";

@@ -23,9 +23,8 @@ fn identifies_worker_subcommands() {
     assert!(!is_worker_invocation("--prompt"));
 }
 
-/// The `OZ_` and `WARP_` constants are written out independently rather than derived from one
-/// another, so this pins that each pair actually names the same variable. A typo in either
-/// half would otherwise go unnoticed until a consumer read the wrong name.
+/// Pins that each pair of constants names the same variable under both prefixes. A typo in
+/// either half would otherwise go unnoticed until a consumer read the wrong name.
 #[test]
 fn oz_and_warp_env_var_constants_name_the_same_variables() {
     for (oz_name, warp_name) in [

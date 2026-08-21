@@ -1110,9 +1110,8 @@ fn task_env_vars_propagate_message_listener_state_root_with_legacy_alias() {
     );
 }
 
-/// Nothing derives the `WARP_` names any more: every set site writes both outright. This is
-/// the guard that keeps them in step, by failing when an `OZ_` variable reaches a harness
-/// subprocess without a `WARP_` one carrying the same value.
+/// Every `OZ_` variable reaching a harness subprocess has a `WARP_` twin carrying the same
+/// value. This guard fails when one of a pair is injected without the other.
 ///
 /// The legacy `OZ_PARENT_*` listener names are exempt: they exist only to keep an external
 /// Claude plugin working through its migration and are deliberately not given `WARP_` twins.

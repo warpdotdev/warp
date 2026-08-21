@@ -63,8 +63,7 @@ const DECLARATION_VERSION: u32 = 1;
 const DECLARATIONS_PATH_ENV_VAR: &str = "OZ_SNAPSHOT_DECLARATIONS_FILE";
 
 /// Warp-branded name for the same path, set alongside [`DECLARATIONS_PATH_ENV_VAR`] with the
-/// same value. Written out rather than derived from it, so retiring the `OZ_` name is a
-/// deletion. Only the `OZ_` name is read back.
+/// same value. Only the `OZ_` name is read back.
 const WARP_DECLARATIONS_PATH_ENV_VAR: &str = "WARP_SNAPSHOT_DECLARATIONS_FILE";
 
 /// Env var pointing directly at the declarations-generator script.
