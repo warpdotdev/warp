@@ -456,6 +456,35 @@ mod format_terminal_state_tests {
     }
 }
 
+mod pending_confirmation_status_kind_tests {
+    use super::super::{StatusKind, pending_confirmation_status_kind};
+    use crate::ai::blocklist::action_model::AIActionStatus;
+
+    #[test]
+    fn no_status_while_still_streaming_keeps_configuring_placeholder() {
+        let (label, kind) = pending_confirmation_status_kind(None, true);
+        assert_eq!(label, "Configuring agents\u{2026}");
+        assert!(matches!(kind, StatusKind::Spawning));
+    }
+
+    #[test]
+    fn no_status_after_streaming_ends_shows_cancelled() {
+        let (label, kind) = pending_confirmation_status_kind(None, false);
+        assert_eq!(label, "Spawn agents cancelled");
+        assert!(matches!(kind, StatusKind::Cancelled));
+    }
+
+    #[test]
+    fn queued_status_keeps_configuring_placeholder_even_after_streaming_ends() {
+        // A `Queued` action was already registered with the action model and
+        // will resolve to a real terminal result through the normal
+        // cancellation path, so it must not be special-cased here.
+        let (label, kind) = pending_confirmation_status_kind(Some(&AIActionStatus::Queued), false);
+        assert_eq!(label, "Configuring agents\u{2026}");
+        assert!(matches!(kind, StatusKind::Spawning));
+    }
+}
+
 mod override_from_approved_config_tests {
     use ai::agent::orchestration_config::{OrchestrationConfig, OrchestrationExecutionMode};
 

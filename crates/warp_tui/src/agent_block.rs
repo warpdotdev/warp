@@ -907,6 +907,16 @@ impl TuiAIBlock {
             let fallback_base_model_id = self.block_model.base_model(ctx).map(|id| id.to_string());
             let is_restored = self.is_restored_for_telemetry;
             let conversation_id = self.conversation_id;
+            // Shares the exchange's own `AIBlockModel` with the GUI card's
+            // equivalent check: a tool call with no action status is
+            // "still constructing" only while this exchange's response
+            // stream is still streaming, not merely while some status is
+            // absent.
+            let block_model_for_streaming = self.block_model.clone();
+            let is_output_streaming: Rc<dyn Fn(&AppContext) -> bool> =
+                Rc::new(move |app: &AppContext| {
+                    block_model_for_streaming.status(app).is_streaming()
+                });
             let view = ctx.add_typed_action_tui_view(move |ctx| {
                 TuiOrchestrationBlock::new(
                     conversation_id,
@@ -917,6 +927,7 @@ impl TuiAIBlock {
                     run_agents_executor,
                     fallback_base_model_id,
                     is_restored,
+                    is_output_streaming,
                     ctx,
                 )
             });

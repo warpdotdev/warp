@@ -17,6 +17,7 @@ use warpui_core::elements::tui::{
 use super::{CardMode, ORCHESTRATION_BLOCK_TITLE, TuiOrchestrationBlock};
 use crate::agent_block_sections::render_fallback_tool_call_section;
 use crate::orchestrated_agent_identity_styling::{AgentIdentity, assign_agent_identity_indices};
+use crate::tool_call_labels::{ToolCallDisplayState, styled_tool_call_label_spans};
 use crate::tui_builder::TuiUiBuilder;
 
 impl TuiOrchestrationBlock {
@@ -242,6 +243,30 @@ impl TuiOrchestrationBlock {
     }
 }
 
+/// Renders the terminal "cancelled" row for a `run_agents` tool call whose
+/// arguments never finished streaming: the action never reached the action
+/// model (`status` stays `None` forever), so it can never become `Blocked`
+/// on its own. Mirrors the shared fallback tool-call row's `Cancelled`
+/// state and the GUI card's equivalent copy.
+fn render_cancelled_before_construction(app: &AppContext) -> Box<dyn TuiElement> {
+    let builder = TuiUiBuilder::from_app(app);
+    let state = ToolCallDisplayState::Cancelled;
+    TuiFlex::row()
+        .child(
+            TuiText::new(format!("{} ", state.glyph()))
+                .with_style(state.glyph_style(&builder))
+                .finish(),
+        )
+        .child(
+            TuiText::from_spans(styled_tool_call_label_spans(
+                "Spawn agents cancelled",
+                &builder,
+            ))
+            .finish(),
+        )
+        .finish()
+}
+
 /// Renders the orchestration block in interactive or fallback form.
 pub(super) fn render(block: &TuiOrchestrationBlock, app: &AppContext) -> Box<dyn TuiElement> {
     let status = block.controller.action_status(&block.action_id, app);
@@ -249,6 +274,17 @@ pub(super) fn render(block: &TuiOrchestrationBlock, app: &AppContext) -> Box<dyn
         && block.spawning.is_none()
         && matches!(status, Some(AIActionStatus::Blocked));
     if !interactive {
+        // A `run_agents` tool call with no status at all is normally still
+        // being constructed. But if the owning exchange's own response
+        // stream has already stopped streaming (e.g. it was cancelled
+        // mid-construction), the action will never be queued and `status`
+        // stays `None` forever — the shared fallback would otherwise show
+        // "Configuring agents…" indefinitely. Render the terminal cancelled
+        // row instead, mirroring the GUI card's equivalent fix (both read
+        // the same underlying `AIBlockOutputStatus::is_streaming` signal).
+        if status.is_none() && !(block.is_output_streaming)(app) {
+            return render_cancelled_before_construction(app);
+        }
         return render_fallback_tool_call_section(&block.action, status.as_ref(), false, None, app);
     }
 

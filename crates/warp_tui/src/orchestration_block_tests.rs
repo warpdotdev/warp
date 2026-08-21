@@ -12,7 +12,7 @@ use warp::tui_export::{
 };
 use warp_core::features::FeatureFlag;
 use warpui::platform::WindowStyle;
-use warpui::{AddWindowOptions, App, ViewHandle};
+use warpui::{AddWindowOptions, App, AppContext, ViewHandle};
 use warpui_core::elements::tui::{TuiBufferExt, TuiRect};
 use warpui_core::keymap::Keystroke;
 use warpui_core::presenter::tui::TuiPresenter;
@@ -245,10 +245,31 @@ fn build_request_omits_the_auth_secret_when_the_picker_is_not_applicable() {
     );
 }
 
-#[derive(Default)]
 struct TestController {
     executed_requests: RefCell<Vec<RunAgentsRequest>>,
     accept_error: RefCell<Option<String>>,
+    status: RefCell<Option<AIActionStatus>>,
+}
+
+impl Default for TestController {
+    fn default() -> Self {
+        Self {
+            executed_requests: RefCell::new(Vec::new()),
+            accept_error: RefCell::new(None),
+            status: RefCell::new(Some(AIActionStatus::Blocked)),
+        }
+    }
+}
+
+impl TestController {
+    /// Builds a controller reporting the given action status (e.g. `None`
+    /// to simulate a tool call that never reached the action model).
+    fn with_status(status: Option<AIActionStatus>) -> Self {
+        Self {
+            status: RefCell::new(status),
+            ..Default::default()
+        }
+    }
 }
 
 impl OrchestrationBlockController for TestController {
@@ -257,7 +278,7 @@ impl OrchestrationBlockController for TestController {
         _action_id: &AIAgentActionId,
         _ctx: &warpui::AppContext,
     ) -> Option<AIActionStatus> {
-        Some(AIActionStatus::Blocked)
+        self.status.borrow().clone()
     }
 
     fn snapshot_for_page(
@@ -343,6 +364,13 @@ fn row(id: &str, label: &str) -> OptionRow {
     }
 }
 
+/// A stand-in for "the exchange's response stream is still streaming",
+/// used by tests that don't exercise the streaming-vs-cancelled fallback
+/// and so just need a stable, always-true signal.
+fn always_streaming() -> Rc<dyn Fn(&AppContext) -> bool> {
+    Rc::new(|_: &AppContext| true)
+}
+
 /// Constructs an interactive block with the local fake controller.
 fn test_block(
     app: &mut App,
@@ -377,6 +405,7 @@ fn test_block(
                 Some("auto".to_string()),
                 false,
                 Vec::new(),
+                always_streaming(),
                 ctx,
             )
         })
@@ -423,6 +452,7 @@ fn renderable_test_block(app: &mut App) -> ViewHandle<TuiOrchestrationBlock> {
                 Some("auto".to_string()),
                 false,
                 Vec::new(),
+                always_streaming(),
                 ctx,
             )
         })
@@ -440,6 +470,90 @@ fn rendered_block_lines(block: &ViewHandle<TuiOrchestrationBlock>, app: &App) ->
             .buffer
             .to_lines()
     })
+}
+
+/// Builds a block with a custom controller and streaming signal
+/// (bypassing `TuiOrchestrationBlock::new`'s model subscriptions, like
+/// `test_block`/`renderable_test_block`).
+fn test_block_with_controller_and_streaming(
+    app: &mut App,
+    controller: Rc<dyn OrchestrationBlockController>,
+    is_output_streaming: Rc<dyn Fn(&AppContext) -> bool>,
+) -> ViewHandle<TuiOrchestrationBlock> {
+    let request = request("oz", RunAgentsExecutionMode::Local);
+    let action = AIAgentAction {
+        id: AIAgentActionId::from("run-agents-1".to_string()),
+        task_id: TaskId::new("task-1".to_string()),
+        action: AIAgentActionType::RunAgents(request.clone()),
+        requires_result: true,
+    };
+    app.update(|ctx| {
+        let (window_id, _) = ctx.add_tui_window(
+            AddWindowOptions {
+                window_style: WindowStyle::NotStealFocus,
+                ..Default::default()
+            },
+            |_| TestHostView,
+        );
+        ctx.add_typed_action_tui_view(window_id, move |ctx| {
+            TuiOrchestrationBlock::from_parts(
+                AIConversationId::new(),
+                action,
+                &request,
+                None,
+                controller,
+                Some("auto".to_string()),
+                false,
+                Vec::new(),
+                is_output_streaming,
+                ctx,
+            )
+        })
+    })
+}
+
+/// A `run_agents` tool call with no action status is genuinely still being
+/// streamed while its exchange's own response stream is still streaming
+/// (the same signal the GUI card reads from its `AIBlockModel`) — the
+/// fallback must keep showing the "still constructing" placeholder.
+#[test]
+fn no_status_while_output_is_streaming_keeps_configuring_placeholder() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        app.update(warp_core::telemetry::testing::MockTelemetryContextProvider::register);
+        let controller: Rc<dyn OrchestrationBlockController> =
+            Rc::new(TestController::with_status(None));
+        let block =
+            test_block_with_controller_and_streaming(&mut app, controller, always_streaming());
+        let lines = rendered_block_lines(&block, &app);
+        assert!(
+            lines.iter().any(|line| line.contains("Configuring agents")),
+            "{lines:?}"
+        );
+    });
+}
+
+/// Once the exchange's own response stream has stopped streaming —
+/// mirroring a stream cancelled before the `run_agents` tool call finished
+/// streaming, so the action never reached the action model — the block
+/// must not hang on the "Configuring agents…" placeholder forever.
+#[test]
+fn no_status_after_output_stops_streaming_shows_cancelled() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        app.update(warp_core::telemetry::testing::MockTelemetryContextProvider::register);
+        let controller: Rc<dyn OrchestrationBlockController> =
+            Rc::new(TestController::with_status(None));
+        let not_streaming: Rc<dyn Fn(&AppContext) -> bool> = Rc::new(|_: &AppContext| false);
+        let block = test_block_with_controller_and_streaming(&mut app, controller, not_streaming);
+        let lines = rendered_block_lines(&block, &app);
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("Spawn agents cancelled")),
+            "{lines:?}"
+        );
+    });
 }
 
 #[test]
