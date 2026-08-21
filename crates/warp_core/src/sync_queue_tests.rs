@@ -218,3 +218,71 @@ fn streaming_cancel_all_clears_queued_tasks() {
     queue.cancel_all();
     assert!(!queue.has_queued_task(|task| task.id == 1));
 }
+
+/// Regression test for a bug where `enqueue`/`enqueue_with_result` cloned a
+/// brand-new `Sender` on every call. `futures::mpsc` grants each live
+/// `Sender` its own guaranteed buffer slot, so a fresh disposable clone per
+/// call defeated `DEFAULT_BUFFER_SIZE` backpressure: `try_send` almost never
+/// failed, so `task_map` grew without bound whenever the (serial) worker
+/// couldn't keep up with a burst of enqueues. With a single reused `Sender`,
+/// capacity is fixed at `DEFAULT_BUFFER_SIZE + 1`, so `try_send` genuinely
+/// fails once the backlog exceeds it, bounding `task_map`.
+#[test]
+fn enqueue_bounds_task_map_size_under_backpressure() {
+    let (queue, _executor) = create_streaming_queue();
+    let _rx = queue.subscribe();
+
+    // Block the worker on a task that never completes, so every subsequent
+    // enqueue piles up in the channel buffer instead of being drained.
+    let (blocker, _gate_tx) = gated_task(0);
+    queue.enqueue(blocker, None, "blocker");
+    std::thread::sleep(Duration::from_millis(50));
+
+    // Enqueue far more tasks than DEFAULT_BUFFER_SIZE while the worker is blocked.
+    let attempts = DEFAULT_BUFFER_SIZE * 4;
+    for i in 0..attempts {
+        queue.enqueue(ungated_task(i as u32), None, "burst");
+    }
+
+    let map_len = queue.task_map.lock().unwrap().len();
+    assert!(
+        map_len <= DEFAULT_BUFFER_SIZE + 1,
+        "task_map grew unbounded: {map_len} entries after {attempts} enqueue attempts"
+    );
+}
+
+/// Regression test proving `enqueue`'s return value distinguishes a task
+/// that was actually submitted from one dropped due to a full channel.
+/// Callers that key their own bookkeeping (e.g. a caller-owned dedup set)
+/// off a task rely on this to avoid stranding an entry forever: a dropped
+/// task never runs, so no broadcast result will ever arrive to clean it up.
+#[test]
+fn enqueue_returns_false_once_buffer_is_exhausted() {
+    let (queue, _executor) = create_streaming_queue();
+    let _rx = queue.subscribe();
+
+    // Block the worker so every subsequent enqueue piles up in the channel
+    // buffer instead of being drained.
+    let (blocker, _gate_tx) = gated_task(0);
+    assert!(queue.enqueue(blocker, None, "blocker"));
+    std::thread::sleep(Duration::from_millis(50));
+
+    let mut successes = 0;
+    let mut failures = 0;
+    for i in 0..(DEFAULT_BUFFER_SIZE * 2) {
+        if queue.enqueue(ungated_task(i as u32), None, "burst") {
+            successes += 1;
+        } else {
+            failures += 1;
+        }
+    }
+
+    assert!(
+        successes <= DEFAULT_BUFFER_SIZE + 1,
+        "successes should not exceed real channel capacity: {successes}"
+    );
+    assert!(
+        failures > 0,
+        "expected some enqueues to be rejected once the buffer fills"
+    );
+}
