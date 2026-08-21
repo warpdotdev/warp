@@ -19,10 +19,12 @@ use super::debug::Describe;
 use super::test_utils::{layout_paragraph, layout_paragraphs};
 use super::{
     BlockItem, BlockLocation, COMMAND_SPACING, CellLayout, DEFAULT_BLOCK_SPACINGS,
-    HiddenBlockConfig, ImageBlockConfig, LaidOutTable, ParagraphBlock, RenderState,
+    HiddenBlockConfig, ImageBlockConfig, LaidOutTable, MAX_DEFERRED_LAYOUT_CHARS,
+    MAX_DEFERRED_LAYOUTS, ParagraphBlock, PendingLayout, PendingLayouts, RenderState,
     TableBlockConfig, TableStyle, table_offset_map,
 };
-use crate::content::edit::ParsedUrl;
+use crate::content::buffer::{StyledBufferBlock, StyledTextBlock};
+use crate::content::edit::{EditDelta, ParsedUrl};
 use crate::content::text::{
     BufferBlockStyle, CodeBlockType, FormattedTable, FormattedTextFragment, table_cell_offset_maps,
 };
@@ -1470,6 +1472,62 @@ fn test_first_hidden_section_line_range_none_without_hidden_sections() {
         None,
         "a diff with no hidden sections should resolve to None"
     );
+}
+
+/// A deferred buffer edit that carries `chars` characters of replacement text.
+fn deferred_edit(chars: usize) -> PendingLayout {
+    PendingLayout::Edit {
+        delta: EditDelta {
+            new_lines: vec![StyledBufferBlock::Text(StyledTextBlock {
+                block: Vec::new(),
+                style: BufferBlockStyle::PlainText,
+                content_length: chars.into(),
+            })],
+            ..Default::default()
+        },
+        hidden_ranges: None,
+    }
+}
+
+#[test]
+fn deferring_more_actions_than_the_budget_allows_goes_over_budget() {
+    let mut pending = PendingLayouts::default();
+    for _ in 0..MAX_DEFERRED_LAYOUTS {
+        pending.push(deferred_edit(1));
+    }
+
+    assert!(!pending.over_budget());
+
+    pending.push(deferred_edit(1));
+
+    assert!(pending.over_budget());
+}
+
+#[test]
+fn a_pair_of_whole_file_edits_goes_over_budget_well_before_the_action_count_does() {
+    let mut pending = PendingLayouts::default();
+    pending.push(deferred_edit(MAX_DEFERRED_LAYOUT_CHARS));
+
+    assert!(!pending.over_budget());
+
+    pending.push(deferred_edit(1));
+
+    assert!(
+        pending.over_budget(),
+        "two deferred actions holding a megabyte of text each must not stay deferred"
+    );
+}
+
+#[test]
+fn draining_deferred_actions_releases_their_budget() {
+    let mut pending = PendingLayouts::default();
+    pending.push(deferred_edit(MAX_DEFERRED_LAYOUT_CHARS + 1));
+    assert!(pending.over_budget());
+
+    let backlog = pending.drain();
+
+    assert_eq!(backlog.len(), 1);
+    assert!(!pending.over_budget());
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
