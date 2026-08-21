@@ -241,34 +241,50 @@ function warp_run_generator_command_native_completions
     printf '\e]9280;B\a'
 end
 
-# Fish's own builtin `fish_title` sets the window title to the currently-running command
-# (truncated) by default, going through the normal OSC 0/2 title-setting mechanism rather
-# than Warp's own hooks -- so it has no way to know a command is an in-band/generator command
-# the way `warp_preexec`'s JSON hook does. Override it to fall back to the same "just show the
-# pwd" behavior it already uses for its own "fish" builtin case, matching upstream's exact
-# format otherwise.
-function fish_title
-    if not set -q INSIDE_EMACS; or string match -vq '*,term:*' -- $INSIDE_EMACS
-        set -l command $argv[1]
-        if not set -q command[1]
-            set command (status current-command)
-        end
-        if test "$command" = fish
-            set command ""
-        end
-        # Generator commands (including native-completions requests) have a leading space
-        # added to omit them from fish's history file (fish's only, non-configurable,
-        # history-exclusion mechanism -- see generator_command_for's ShellType::Fish case),
-        # so trim before matching or this never fires and the tab title briefly shows the
-        # generator command instead of falling back to the pwd like the "fish" case above.
-        if string match -q "warp_run_generator_command*" -- (string trim -- "$command")
-            set command ""
-        end
+# Fish's own `fish_title` sets the window title to the currently-running command by default,
+# going through the normal OSC 0/2 title-setting mechanism rather than Warp's own hooks -- so it
+# has no way to know a command is an in-band/generator command the way `warp_preexec`'s JSON hook
+# does. Warp's bootstrap is sourced after the user's config.fish (fish is launched `--login` and
+# sources config normally; the bootstrap is delivered into the running session afterward), so at
+# this point `fish_title` is the user's own if they defined one, otherwise fish's autoloaded
+# default. Back it up and delegate to it -- the same pattern `warp_update_prompt_vars` uses for
+# `fish_prompt` -- rather than replacing it, which would silently drop a user-defined title. The
+# only thing layered on top is the generator-command guard.
+if functions -q fish_title; and not functions -q warp_original_fish_title
+    functions -c fish_title warp_original_fish_title
+end
 
-        set -l ssh
-        set -q SSH_TTY
-        and set ssh "["(prompt_hostname | string sub -l 10 | string collect)"]"
-        echo -- $ssh (string sub -l 20 -- $command) (prompt_pwd -d 1 -D 1)
+function fish_title
+    # Fish passes the command being titled as $argv[1] for a running command, and no arguments
+    # for the idle prompt (where the delegate resolves it via `status current-command`).
+    set -l command $argv[1]
+    if not set -q command[1]
+        set command (status current-command)
+    end
+    # Generator commands (including native-completions requests) carry a leading space so fish
+    # omits them from its history (its only, non-configurable exclusion mechanism -- see
+    # generator_command_for's ShellType::Fish case), so trim before matching. Blank the command
+    # for a generator request -- by handing the delegate an explicit empty override -- so the
+    # title shows its no-command (pwd) state instead of briefly flashing the generator command.
+    if string match -q "warp_run_generator_command*" -- (string trim -- "$command")
+        set argv ""
+    end
+    if functions -q warp_original_fish_title
+        warp_original_fish_title $argv
+    else
+        # Nothing to delegate to -- fish autoloads a default `fish_title`, so this is only reached
+        # if the user erased it. Reproduce fish's default title, matching its format.
+        if not set -q INSIDE_EMACS; or string match -vq '*,term:*' -- $INSIDE_EMACS
+            set -l ssh
+            set -q SSH_TTY
+            and set ssh "["(prompt_hostname | string sub -l 10 | string collect)"]"
+            set -l shown $argv[1]
+            if not set -q shown[1]
+                set shown (status current-command)
+                test "$shown" = fish; and set shown ""
+            end
+            echo -- $ssh (string sub -l 20 -- $shown) (prompt_pwd -d 1 -D 1)
+        end
     end
 end
 
