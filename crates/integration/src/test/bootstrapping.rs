@@ -364,6 +364,86 @@ zle -N zle-line-init
         ))
 }
 
+/// Regression test for https://github.com/warpdotdev/Warp/issues/1162 (CSAT-1770): with
+/// "Honor user's custom prompt (PS1)" enabled and bash older than 4.4 (no `${@P}` expansion),
+/// Warp expands PS1 by launching a nested `bash --norc -i` and capturing its stdout+stderr. If
+/// that nested shell inherits an exported `PROMPT_COMMAND` (as can happen with some
+/// bash-preexec-style frameworks) referencing a function -- like Warp's own
+/// `__bp_interactive_mode` -- that only exists in the parent shell, the nested shell prints a
+/// "command not found" error that gets captured into the expanded prompt.
+///
+/// We force the nested-shell expansion path (normally only used on bash < 4.4) by setting
+/// `WARP_PS1_EXPANSION_SUPPORTED=0` directly from the RC file, regardless of the actual bash
+/// version running the test. On bash >= 5.1, Warp's bash-preexec install turns `PROMPT_COMMAND`
+/// into an indexed array (see `bash.sh`'s `__bp_install`), and arrays cannot be exported into a
+/// child process's environment at all -- so a `precmd_functions` hook that merely does
+/// `export PROMPT_COMMAND` would be a no-op there and the test would pass vacuously regardless
+/// of the fix. To force a genuine, version-independent leak, the hook below first flattens
+/// `PROMPT_COMMAND` into a scalar string (the same flattening Warp itself does elsewhere for the
+/// array case) before exporting it.
+pub fn test_bash_honor_ps1_nested_expansion_does_not_leak_prompt_command() -> Builder {
+    new_builder()
+        .set_should_run_test(|| {
+            // Only run this one on bash
+            let (starter, _version) = current_shell_starter_and_version();
+            matches!(starter.shell_type(), shell::ShellType::Bash)
+        })
+        .with_user_defaults(std::collections::HashMap::from([(
+            HonorPS1::storage_key().to_owned(),
+            true.to_string(),
+        )]))
+        .with_setup(|utils| {
+            let dir = utils.test_dir();
+            write_rc_files_for_test(
+                dir,
+                r#"
+export PS1="csat1770> "
+WARP_PS1_EXPANSION_SUPPORTED=0
+warp_test_export_prompt_command() {
+    if [[ "$(declare -p PROMPT_COMMAND 2>/dev/null)" == "declare -a"* ]]; then
+        local flattened
+        flattened=$(IFS=$'\n'; echo "${PROMPT_COMMAND[*]}")
+        # Reassigning a plain string to a variable that already has the array
+        # attribute only overwrites index 0, so it must be unset first.
+        unset PROMPT_COMMAND
+        PROMPT_COMMAND="$flattened"
+    fi
+    export PROMPT_COMMAND
+}
+precmd_functions+=(warp_test_export_prompt_command)
+"#,
+                [ShellRcType::Bash],
+            );
+        })
+        .with_step(wait_until_bootstrapped_single_pane_for_tab(0))
+        .with_step(execute_command_for_single_terminal_in_tab(
+            0, /*tab_idx*/
+            "true".to_string(),
+            ExpectedExitStatus::Success,
+            (),
+        ))
+        .with_step(
+            new_step_with_default_assertions("Check PS1 value does not leak a bash-preexec error")
+                .add_assertion(move |app, window_id| {
+                    let terminal_view = single_terminal_view_for_tab(app, window_id, 0);
+                    let prompt = terminal_view.read(app, |view, _ctx| {
+                        let model = view.model.lock();
+                        let block = model
+                            .block_list()
+                            .blocks()
+                            .last()
+                            .expect("After bootstrapping, we should have a block");
+                        block.prompt_to_string()
+                    });
+                    async_assert_eq!(
+                        prompt,
+                        "csat1770> ",
+                        "prompt should be the clean custom prompt 'csat1770> ' but got '{prompt}' instead"
+                    )
+                }),
+        )
+}
+
 pub fn test_bash_bootstraps_with_prompt_command_array_that_sets_ps1() -> Builder {
     new_builder()
         .set_should_run_test(|| {
