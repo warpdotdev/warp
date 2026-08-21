@@ -241,8 +241,13 @@ impl Workspace {
         let anchor_previous_group_id = self.tabs[anchor_index].group_id;
 
         // Assign membership and clear flags for every selected tab. The new
-        // group is unpinned, so any selected tab in set as unpinned.
+        // group is unpinned, so any selected tab in set as unpinned. The
+        // queued-for-placement marker goes too — see
+        // `Workspace::note_manual_tab_placement`. The group itself adopts no
+        // project key: a selection spans no single project, so it is an
+        // ordinary manual group and every member of it is detached.
         for &index in &selected_indices {
+            self.note_manual_tab_placement(index);
             let tab = &mut self.tabs[index];
             tab.group_id = Some(group_id);
             tab.pinned = false;
@@ -346,8 +351,12 @@ impl Workspace {
 
         // Assign membership and clear flags for every selected tab. Entering
         // the group removes any per-tab pinned flag — the destination group's
-        // own `pinned` flag now governs the member's position.
+        // own `pinned` flag now governs the member's position — and retires
+        // the queued-for-placement marker, so automation cannot pull a tab
+        // back out of the group the user chose for it. See
+        // `Workspace::note_manual_tab_placement`.
         for &index in &selected_indices {
+            self.note_manual_tab_placement(index);
             let tab = &mut self.tabs[index];
             tab.group_id = Some(group_id);
             tab.pinned = false;
@@ -411,9 +420,13 @@ impl Workspace {
         let selected_indices = self.selected_tab_indices();
         let selected_set: HashSet<usize> = selected_indices.iter().copied().collect();
 
-        // Clear the group that all selected tabs belonged to.
+        // Clear the group that all selected tabs belonged to. Leaving a group
+        // is a placement too: the tabs are now ungrouped *and* detached, and
+        // stay that way until the user puts them somewhere. See
+        // `Workspace::note_manual_tab_placement`.
         for &index in &selected_indices {
             self.tabs[index].group_id = None;
+            self.note_manual_tab_placement(index);
         }
 
         // Non-selected tabs originally before the group's first member; if the
@@ -546,6 +559,69 @@ impl Workspace {
         idx.max(self.pinned_boundary_index(tabs))
     }
 
+    /// The commit point for a tab-drag placement.
+    ///
+    /// The vertical panel and the horizontal tab bar both dispatch `DragTab`,
+    /// so `Workspace::on_tab_drag` is the one place a drag changes membership,
+    /// and this is the one call inside it that does. Membership is committed
+    /// while the drag is still in flight rather than on mouse-up: that is how
+    /// the dragged tab renders inside its new group, and it is also what keeps
+    /// a reconcile arriving mid-drag from disagreeing with what the user is
+    /// looking at.
+    ///
+    /// `group_id` is `None` when the drag left every group.
+    ///
+    /// The colour follows the membership, exactly as it does on automation's own
+    /// paths: the key the tab is leaving judges whether the colour it carries is
+    /// automation's, and the group it lands in supplies the new one. A drag out
+    /// of every group resolves to no key, which hands the colour back. Detaching
+    /// the tab (R13) does not freeze its colour on the project it left — a tab
+    /// wearing one project's colour inside another project's group is the state
+    /// this avoids.
+    pub(super) fn commit_dragged_tab_group(
+        &mut self,
+        tab_index: usize,
+        group_id: Option<TabGroupId>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let previous_key = self.project_key_of_tabs_group(tab_index);
+        // Membership only; `assign_tab_to_group` never reorders, so
+        // `tab_index` still addresses the same tab afterwards.
+        self.assign_tab_to_group(tab_index, group_id, ctx);
+        self.note_manual_tab_placement(tab_index);
+        let key = self.project_key_of_tabs_group(tab_index);
+        self.apply_derived_tab_color(tab_index, key.as_ref(), previous_key.as_ref(), ctx);
+    }
+
+    /// Restores the contiguity convention after a raw reorder moved the tab at
+    /// `tab_index`.
+    ///
+    /// The cross-window drag reorders the target window's tab list directly
+    /// while the drag is in flight, and automatic grouping may have put the
+    /// arriving tab into a group first. Dragging it out of that group's run is
+    /// the same gesture the in-window drag path already reads as a deliberate
+    /// placement, so it is committed as one: the tab leaves the group, which
+    /// prunes the group when it is now empty and hands automation's colour back.
+    /// A tab still inside its own run keeps its membership, so nudging a tab
+    /// around within its group does not detach it.
+    pub(crate) fn detach_tab_if_it_left_its_group_run(
+        &mut self,
+        tab_index: usize,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let Some(group_id) = self.tabs.get(tab_index).and_then(|tab| tab.group_id) else {
+            return;
+        };
+        let indices: Vec<usize> = group_member_indices(&self.tabs, group_id).collect();
+        let (Some(&first), Some(&last)) = (indices.first(), indices.last()) else {
+            return;
+        };
+        if last - first + 1 == indices.len() {
+            return;
+        }
+        self.commit_dragged_tab_group(tab_index, None, ctx);
+    }
+
     /// Returns the slot just past the last member of `group_id`, suitable as
     /// an insert/move target that keeps the group contiguous. `None` when the
     /// group has no members.
@@ -575,6 +651,16 @@ impl Workspace {
         // Identify where this newly pinned tab should land (after the last pinned item).
         let target = self.pinned_boundary_index(&self.tabs);
 
+        // Pinning takes the tab out of its group (R23), so automation's colour
+        // goes back with the membership it belongs to. Handing it back here is
+        // also what keeps unpinning correct: outside a group there is no key to
+        // judge provenance against, so a colour kept across the pin would read
+        // as the user's for ever and the tab would never take the colour of
+        // whatever project it is unpinned into.
+        if let Some(previous_group_id) = previous_group_id {
+            self.clear_derived_tab_color_on_leaving(tab_index, previous_group_id, ctx);
+        }
+
         self.tabs[tab_index].group_id = None;
         self.tabs[tab_index].pinned = true;
         self.move_tab_to_index(tab_index, target, ctx);
@@ -603,9 +689,16 @@ impl Workspace {
 
         // This tab should land right after all pinned items.
         let target = self.pinned_boundary_index(&self.tabs);
+        let pane_group_id = tab.pane_group.id();
 
         self.tabs[tab_index].pinned = false;
         self.move_tab_to_index(tab_index, target, ctx);
+
+        // Automatic grouping skips pinned tabs entirely, so an unpinned tab has
+        // never been placed. It reconciles as if it were newly created; pinning
+        // it again would take it back out of its group without marking it
+        // detached, so the two operations round-trip.
+        self.place_tab_by_auto_grouping(pane_group_id, ctx);
 
         ctx.dispatch_global_action("workspace:save_app", ());
         ctx.notify();

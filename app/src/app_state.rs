@@ -70,6 +70,9 @@ pub struct TabGroupSnapshot {
     pub color: SelectedTabColor,
     pub collapsed: bool,
     pub pinned: bool,
+    /// The project key this group is keyed by, when automatic grouping created
+    /// it. `None` for a manual group.
+    pub project_key: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -84,6 +87,10 @@ pub struct TabSnapshot {
     pub group_id: Option<TabGroupId>,
     /// True when this tab is pinned to the front of the tab list.
     pub pinned: bool,
+    /// True while this tab is still waiting to be placed by automatic
+    /// grouping. It distinguishes a tab the user deliberately ungrouped from
+    /// one automation never reached because its project key had not resolved.
+    pub placed_by_automation: bool,
 }
 
 impl TabSnapshot {

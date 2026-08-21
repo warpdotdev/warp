@@ -353,6 +353,7 @@ pub struct Tab {
     pub color: Option<String>,
     pub tab_group_id: Option<i32>,
     pub pinned: bool,
+    pub placed_by_automation: bool,
 }
 
 #[derive(Insertable)]
@@ -363,6 +364,7 @@ pub struct NewTab {
     pub color: Option<String>,
     pub tab_group_id: Option<i32>,
     pub pinned: bool,
+    pub placed_by_automation: bool,
 }
 
 /// Persisted form of a tab group. `name` is optional — untitled groups omit
@@ -377,6 +379,9 @@ pub struct TabGroup {
     pub color: Option<String>,
     pub collapsed: bool,
     pub pinned: bool,
+    /// The project key this group is keyed by, when it was created by
+    /// automatic grouping. `None` for a manual group.
+    pub project_key: Option<String>,
 }
 
 #[derive(Insertable)]
@@ -387,6 +392,7 @@ pub struct NewTabGroup {
     pub color: Option<String>,
     pub collapsed: bool,
     pub pinned: bool,
+    pub project_key: Option<String>,
 }
 
 /// The panes data model includes pane_nodes, pane_leaves and pane_branches.

@@ -3,7 +3,14 @@
 use uuid::Uuid;
 use warpui::elements::DraggableState;
 
+use crate::features::FeatureFlag;
 use crate::tab::SelectedTabColor;
+
+/// Whether the automatic tab grouping mode is available at all. Layered over `GroupedTabs`
+/// because the mode has nothing to put tabs into where groups themselves are unavailable.
+pub fn auto_tab_grouping_available() -> bool {
+    FeatureFlag::GroupedTabs.is_enabled() && FeatureFlag::AutoTabGrouping.is_enabled()
+}
 
 /// Stable identity for a tab group.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -32,6 +39,10 @@ pub struct TabGroup {
     pub draggable_state: DraggableState,
     /// True when this whole group is pinned to the front of the tab list.
     pub pinned: bool,
+    /// The project key this group is keyed by, when automatic grouping created
+    /// it. `None` for a group the user made, which is what tells the two apart
+    /// after a restart.
+    pub project_key: Option<String>,
 }
 
 impl TabGroup {
@@ -44,6 +55,7 @@ impl TabGroup {
             collapsed: false,
             draggable_state: Default::default(),
             pinned: false,
+            project_key: None,
         }
     }
 }
