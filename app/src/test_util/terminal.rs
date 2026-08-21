@@ -189,6 +189,9 @@ pub fn initialize_app_for_terminal_view(app: &mut App) {
 
     app.update(experiments::init);
     AltScreenReporting::register(app);
+    // `TerminalView` reads this singleton before taking focus on a visible
+    // bootstrap block, so every test reaching that path needs it registered.
+    crate::workspace::inline_rename_state::register(app);
 }
 
 /// Creates a window in `app` with a [`TerminalView`] as the root view.
