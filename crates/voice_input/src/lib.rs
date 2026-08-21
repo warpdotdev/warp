@@ -24,6 +24,14 @@ const NUM_CHANNELS: u16 = 1;
 // Voice input is typically sampled at 16000Hz (and required by Wispr)
 const TARGET_SAMPLE_RATE: f32 = 16000.0;
 const STREAM_TIMEOUT: Duration = Duration::from_secs(60 * 6);
+// Hard ceiling on how much audio a single session accumulates. A session is only
+// supposed to hold this much audio briefly, between start_listening and the next
+// stop/abort call, but if the normal stop trigger never fires (e.g. the app is
+// backgrounded while listening), nothing else bounds `resampled`'s growth. 15
+// minutes is far beyond any real dictation, so this is purely a memory safety net.
+const MAX_LISTENING_DURATION: Duration = Duration::from_secs(15 * 60);
+const MAX_RESAMPLED_SAMPLES: usize =
+    TARGET_SAMPLE_RATE as usize * MAX_LISTENING_DURATION.as_secs() as usize;
 
 /// Surface-independent voice-input lifecycle state.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -117,6 +125,9 @@ pub enum VoiceInputState {
         enabled_from: VoiceInputToggledFrom,
         resampler: Arc<Mutex<SincFixedIn<f32>>>,
         resampled: Arc<Mutex<Vec<f32>>>,
+        /// Set once `resampled` has hit `MAX_RESAMPLED_SAMPLES`, so further frames are
+        /// dropped without resampling and the cap is reported only once per session.
+        resample_cap_reached: bool,
         /// Channel to send the result when recording stops.
         result_tx: Option<oneshot::Sender<VoiceSessionResult>>,
     },
@@ -340,6 +351,7 @@ impl VoiceInput {
             resampled: Arc::new(Mutex::new(vec![])),
             chunk_size: buffer_size as usize,
             enabled_from: source,
+            resample_cap_reached: false,
             result_tx: Some(result_tx),
             // We need to keep the stream around to keep the audio flowing.
             stream,
@@ -453,11 +465,19 @@ impl VoiceInput {
             resampler,
             resampled,
             chunk_size,
+            resample_cap_reached,
             ..
         } = &mut self.state
         else {
             return;
         };
+
+        // Once capped, skip resampling entirely: the buffer already holds all the
+        // audio we'll keep, and a session stuck in Listening should stop burning CPU
+        // on every incoming frame, not just stop growing memory.
+        if *resample_cap_reached {
+            return;
+        }
 
         if input_buffer.len() < *chunk_size {
             input_buffer.resize(*chunk_size, 0.0); // Zero-pad if too short.
@@ -465,27 +485,49 @@ impl VoiceInput {
 
         let resampler = resampler.clone();
         let resampled = resampled.clone();
+        let session_resampled = resampled.clone();
         ctx.spawn(
-            async move {
-                if let Err(e) = Self::resample_audio_frame(resampler, resampled, input_buffer).await
-                {
-                    report_error!(e.context("Failed to resample audio frame"));
+            async move { Self::resample_audio_frame(resampler, resampled, input_buffer).await },
+            move |me, result, _ctx| match result {
+                Ok(cap_reached) => {
+                    if !cap_reached {
+                        return;
+                    }
+                    let VoiceInputState::Listening {
+                        resampled,
+                        resample_cap_reached,
+                        ..
+                    } = &mut me.state
+                    else {
+                        return;
+                    };
+                    if mark_resample_cap_reached(
+                        resampled,
+                        &session_resampled,
+                        resample_cap_reached,
+                    ) {
+                        report_error!(
+                            "Voice input session hit the recording length cap; audio was truncated",
+                            extra: { "max_duration_secs" => %MAX_LISTENING_DURATION.as_secs() }
+                        );
+                    }
                 }
+                Err(e) => report_error!(e.context("Failed to resample audio frame")),
             },
-            |_, _, _| {},
         );
     }
 
-    // Processes a single audio frame, resampling it to 16000Hz and adding it to the resampled buffer.
+    // Processes a single audio frame, resampling it to 16000Hz and appending it to the
+    // resampled buffer. Returns whether the buffer is at MAX_RESAMPLED_SAMPLES afterward.
     async fn resample_audio_frame(
         resampler: Arc<Mutex<SincFixedIn<f32>>>,
         resampled: Arc<Mutex<Vec<f32>>>,
         input_buffer: Vec<f32>,
-    ) -> Result<(), anyhow::Error> {
+    ) -> Result<bool, anyhow::Error> {
         let mut resampler = resampler.lock();
         let mut resampled = resampled.lock();
-        resampled.extend(resampler.process(&[input_buffer], None)?[0].to_vec());
-        Ok(())
+        let processed = resampler.process(&[input_buffer], None)?[0].to_vec();
+        Ok(append_resampled_samples(&mut resampled, &processed))
     }
 
     // Converts the resampled audio to a WAV file and returns the base64 encoded WAV data.
@@ -520,6 +562,37 @@ impl Entity for VoiceInput {
 }
 
 impl SingletonEntity for VoiceInput {}
+
+/// Appends `samples` into `buffer`, stopping at `MAX_RESAMPLED_SAMPLES` rather than
+/// growing past it, so a session that hits the cap still keeps the audio captured up
+/// to the limit instead of losing it outright. Returns whether `buffer` is at
+/// capacity afterward.
+fn append_resampled_samples(buffer: &mut Vec<f32>, samples: &[f32]) -> bool {
+    if buffer.len() < MAX_RESAMPLED_SAMPLES {
+        let remaining = MAX_RESAMPLED_SAMPLES - buffer.len();
+        buffer.extend(samples.iter().take(remaining).copied());
+    }
+    buffer.len() >= MAX_RESAMPLED_SAMPLES
+}
+
+/// Marks the cap reached for the session identified by `current_resampled`, unless
+/// the completion belongs to a stale session. A resample future spawned before a
+/// session hits the cap can still be in flight after that session is stopped or
+/// aborted and a new one starts; comparing `Arc` identity (rather than trusting
+/// whichever `Listening` state happens to be current) keeps a stale completion from
+/// truncating the new session's recording. Returns whether the cap was newly
+/// reached, so the caller reports it exactly once.
+fn mark_resample_cap_reached(
+    current_resampled: &Arc<Mutex<Vec<f32>>>,
+    session_resampled: &Arc<Mutex<Vec<f32>>>,
+    cap_reached: &mut bool,
+) -> bool {
+    if *cap_reached || !Arc::ptr_eq(current_resampled, session_resampled) {
+        return false;
+    }
+    *cap_reached = true;
+    true
+}
 
 #[cfg(test)]
 #[path = "lib_tests.rs"]
