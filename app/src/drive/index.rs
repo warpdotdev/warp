@@ -613,6 +613,14 @@ pub fn init(app: &mut AppContext) {
 }
 
 impl DriveIndex {
+    /// The destination `Space` captured by the "create object" naming dialog, if it's currently
+    /// open. Lets tests confirm which destination a current-window creation action captured,
+    /// without depending on the dialog's other UI-only state.
+    #[cfg(any(test, feature = "test-util"))]
+    pub fn pending_create_object_space(&self) -> Option<Space> {
+        self.cloud_object_naming_dialog.space
+    }
+
     // Called whenever cloud model or user workspaces change.
     pub fn initialize_section_states(&mut self, ctx: &mut ViewContext<Self>) {
         let user_workspaces = UserWorkspaces::handle(ctx);

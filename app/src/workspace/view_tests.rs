@@ -323,6 +323,166 @@ fn test_open_new_window_for_team_creates_window_when_team_has_none() {
     });
 }
 
+/// Registers a single test workspace with one team per given UID, replacing any existing
+/// workspace of the same UID. Calling this again with a different team set (e.g. dropping a
+/// team) exercises the same window-team reconciliation the real app performs when a user's
+/// team membership changes.
+fn setup_workspace_with_teams(app: &mut App, team_uids: &[ServerId]) {
+    let workspace_uid = crate::workspaces::workspace::WorkspaceUid::from(ServerId::from(1));
+    let teams = team_uids
+        .iter()
+        .enumerate()
+        .map(|(i, &uid)| crate::workspaces::team::Team {
+            uid,
+            name: format!("Team {i}"),
+            settings: Default::default(),
+            color: None,
+            billing_metadata: Default::default(),
+            members: vec![],
+            invite_link: None,
+            pending_email_invites: vec![],
+            invite_link_domain_restrictions: vec![],
+            stripe_customer_id: None,
+            is_eligible_for_discovery: false,
+            has_billing_history: false,
+            visibility: crate::workspaces::team::TeamVisibility::Open,
+        })
+        .collect();
+    let data_workspace = crate::workspaces::workspace::Workspace::from_local_cache(
+        workspace_uid,
+        "Test Workspace".to_string(),
+        Some(teams),
+    );
+    UserWorkspaces::handle(app).update(app, |user_workspaces, ctx| {
+        user_workspaces.update_workspaces(vec![data_workspace], ctx);
+        user_workspaces.set_current_workspace_uid(workspace_uid, ctx);
+    });
+}
+
+/// The `Space` captured by the create-folder naming dialog for `workspace`'s window, if any.
+fn pending_create_folder_space(
+    ctx: &AppContext,
+    workspace: &ViewHandle<Workspace>,
+) -> Option<Space> {
+    let drive_panel = workspace
+        .as_ref(ctx)
+        .left_panel_view
+        .as_ref(ctx)
+        .warp_drive_view()
+        .clone();
+    drive_panel.as_ref(ctx).pending_create_object_space(ctx)
+}
+
+/// Test that two windows on different teams each capture their own team as the destination for
+/// a current-window creation action, rather than resolving through shared/global state.
+#[test]
+fn test_create_team_folder_captures_own_window_team() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let team_a: ServerId = 101.into();
+        let team_b: ServerId = 102.into();
+        setup_workspace_with_teams(&mut app, &[team_a, team_b]);
+
+        let workspace_a = mock_workspace(&mut app);
+        let window_a = workspace_a.update(&mut app, |_, ctx| ctx.window_id());
+        let workspace_b = mock_workspace(&mut app);
+        let window_b = workspace_b.update(&mut app, |_, ctx| ctx.window_id());
+
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.register_window(window_a, Some(team_a), ctx);
+            user_workspaces.register_window(window_b, Some(team_b), ctx);
+        });
+
+        workspace_a.update(&mut app, |workspace, ctx| {
+            workspace.handle_action(&WorkspaceAction::CreateTeamFolder, ctx);
+        });
+        workspace_b.update(&mut app, |workspace, ctx| {
+            workspace.handle_action(&WorkspaceAction::CreateTeamFolder, ctx);
+        });
+
+        app.read(|ctx| {
+            assert_eq!(
+                pending_create_folder_space(ctx, &workspace_a),
+                Some(Space::Team { team_uid: team_a })
+            );
+            assert_eq!(
+                pending_create_folder_space(ctx, &workspace_b),
+                Some(Space::Team { team_uid: team_b })
+            );
+        });
+    });
+}
+
+/// Test that a current-window creation action is a no-op when its window has no selected team.
+#[test]
+fn test_create_team_folder_noop_without_a_team() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let workspace = mock_workspace(&mut app);
+
+        workspace.update(&mut app, |workspace, ctx| {
+            workspace.handle_action(&WorkspaceAction::CreateTeamFolder, ctx);
+        });
+
+        app.read(|ctx| {
+            assert_eq!(pending_create_folder_space(ctx, &workspace), None);
+        });
+    });
+}
+
+/// Characterization test, not a regression guard: `CreateTeamFolder` resolves its destination
+/// and opens the naming dialog in one synchronous step, with no await, callback, or user
+/// interaction in between where a later window-team change could be observed. This test would
+/// pass against the pre-migration code too, since both versions read the window's team at the
+/// same single instant — it pins the current captured-and-carried shape (the value stored in the
+/// dialog does not track the window's team going forward) so a future change that defers the
+/// read past that instant would be caught here.
+#[test]
+fn test_create_team_folder_destination_does_not_track_later_window_team_changes() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let team_a: ServerId = 201.into();
+        let team_b: ServerId = 202.into();
+        setup_workspace_with_teams(&mut app, &[team_a]);
+
+        let workspace = mock_workspace(&mut app);
+        let window_id = workspace.update(&mut app, |_, ctx| ctx.window_id());
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.register_window(window_id, Some(team_a), ctx);
+        });
+
+        workspace.update(&mut app, |workspace, ctx| {
+            workspace.handle_action(&WorkspaceAction::CreateTeamFolder, ctx);
+        });
+        app.read(|ctx| {
+            assert_eq!(
+                pending_create_folder_space(ctx, &workspace),
+                Some(Space::Team { team_uid: team_a })
+            );
+        });
+
+        // Team A disappears from the workspace (e.g. the user is removed from it); the window
+        // falls back to whichever team remains.
+        setup_workspace_with_teams(&mut app, &[team_b]);
+
+        app.read(|ctx| {
+            assert_eq!(
+                UserWorkspaces::as_ref(ctx).team_uid_for_window(window_id),
+                Some(team_b),
+                "the window's own current team should have changed"
+            );
+            assert_eq!(
+                pending_create_folder_space(ctx, &workspace),
+                Some(Space::Team { team_uid: team_a }),
+                "the destination captured when the action fired must not be retargeted"
+            );
+        });
+    });
+}
+
 fn restored_workspace(
     app: &mut App,
     window_snapshot: crate::app_state::WindowSnapshot,
