@@ -1054,7 +1054,6 @@ fn lrc_finish_queued_compact_and_sends_followup_after_summary() {
         let _agent_view = FeatureFlag::AgentView.override_enabled(true);
         let _queue_flag = FeatureFlag::QueueSlashCommand.override_enabled(true);
         let _queued_prompts_v2 = FeatureFlag::QueuedPromptsV2.override_enabled(true);
-        let _summarization = FeatureFlag::SummarizationConversationCommand.override_enabled(true);
 
         let terminal = add_window_with_terminal(&mut app, None);
         let terminal_view_id = terminal.read(&app, |view, _| view.view_id);

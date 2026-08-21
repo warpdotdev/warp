@@ -1027,10 +1027,8 @@ fn all_commands_for_all_surfaces() -> Vec<StaticCommand> {
         commands.push(CREATE_NEW_PROJECT.clone());
     }
 
-    if FeatureFlag::SummarizationConversationCommand.is_enabled() {
-        commands.push(COMPACT.clone());
-        commands.push(COMPACT_AND.clone());
-    }
+    commands.push(COMPACT.clone());
+    commands.push(COMPACT_AND.clone());
 
     if FeatureFlag::QueueSlashCommand.is_enabled() {
         commands.push(QUEUE.clone());

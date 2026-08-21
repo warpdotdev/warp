@@ -470,9 +470,6 @@ pub enum FeatureFlag {
     /// Enables the local docker sandbox entrypoints in the client.
     LocalDockerSandbox,
 
-    /// Enables the /compact slash command.
-    SummarizationConversationCommand,
-
     /// Enables the provider command for linking third-party services.
     ProviderCommand,
 
