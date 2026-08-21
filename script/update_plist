@@ -81,18 +81,6 @@ if [[ -z "$WARP_PLIST_NO_FILE_TYPES" ]]; then
       </array>
     </dict>
     <dict>
-      <key>CFBundleTypeName</key><string>Markdown File</string>
-      <key>CFBundleTypeRole</key><string>Editor</string>
-      <key>LSHandlerRank</key><string>Alternate</string>
-      <key>LSItemContentTypes</key>
-      <array>
-        <string>net.daringfireball.markdown</string>
-        <string>com.unknown.md</string>
-        <string>net.ia.markdown</string>
-        <string>public.markdown</string>
-      </array>
-    </dict>
-    <dict>
       <key>CFBundleTypeName</key><string>Plain Text File</string>
       <key>CFBundleTypeRole</key><string>Editor</string>
       <key>LSHandlerRank</key><string>Alternate</string>
@@ -252,10 +240,14 @@ if [[ -z "$WARP_PLIST_NO_FILE_TYPES" ]]; then
   </array>" "$WARP_PLIST_PATH"
 fi
 
-# Unfortunately, there isn't a single standard UTI (what goes in LSItemContentTypes) for Markdown
-# files. Instead, we list all the common ones - see these for more info:
-# https://github.com/sbarex/QLMarkdown#installation
-# https://blog.smittytone.net/2021/01/19/how-tools-try-to-own-markdown/
+# Markdown is deliberately NOT declared above. There is no single standard UTI for it, so declaring
+# it means claiming all the common ones (net.daringfireball.markdown, net.ia.markdown,
+# public.markdown). Most editors register Markdown only by file extension, and Launch Services
+# prefers a UTI-level handler over an extension-only one - so declaring these makes Warp win the
+# default-app resolution for .md even at LSHandlerRank Alternate, and win it back on every update
+# that re-registers the bundle. See #13268; #13121 demoted the entry to Alternate, which was not
+# enough for exactly that reason. Users who want Warp to open .md can still choose it explicitly via
+# Finder's "Open With".
 
 echo "Updating plist with permissions descriptions"
 plutil -insert NSAppleEventsUsageDescription -string "A program in Warp wants to use AppleScript." "$WARP_PLIST_PATH"
