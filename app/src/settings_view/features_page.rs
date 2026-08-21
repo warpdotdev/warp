@@ -6278,7 +6278,9 @@ impl SettingsWidget for RightClickBehaviorWidget {
                 render_dropdown_item(
                     appearance,
                     "Right-click:",
-                    None,
+                    selection_settings
+                        .right_click_pastes()
+                        .then_some("Shift+right-click still opens the context menu."),
                     None,
                     LocalOnlyIconState::for_setting(
                         RightClickBehaviorSetting::storage_key(),
@@ -6294,24 +6296,6 @@ impl SettingsWidget for RightClickBehaviorWidget {
                 )
             },
         );
-        if selection_settings.right_click_pastes() {
-            let theme = appearance.theme();
-            column.add_child(
-                Container::new(
-                    appearance
-                        .ui_builder()
-                        .wrappable_text("Shift+right-click still opens the context menu.", true)
-                        .with_style(UiComponentStyles {
-                            font_color: Some(theme.sub_text_color(theme.background()).into_solid()),
-                            ..Default::default()
-                        })
-                        .build()
-                        .finish(),
-                )
-                .with_margin_bottom(10.)
-                .finish(),
-            );
-        }
         column.finish()
     }
 }
