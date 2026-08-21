@@ -166,7 +166,7 @@ impl<T: TuiView, R: TuiTerminal> TuiScreen<T, R> {
 
         let mut writer = self.terminal.writer();
         self.renderer
-            .draw(&mut writer, &frame.buffer, frame.cursor)?;
+            .draw(&mut writer, &frame.buffer, frame.cursor, &frame.hyperlinks)?;
         Ok(frame.repaint_at)
     }
     fn repair_focus_outside_presented_tree(&mut self, ctx: &mut AppContext) {
