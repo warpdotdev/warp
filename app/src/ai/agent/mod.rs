@@ -3301,9 +3301,15 @@ impl AIAgentExchange {
             .find_map(|input| input.passive_suggestion_trigger())
     }
 
+    /// Duration of this exchange. `start_time` and `finish_time` come from
+    /// different clocks that may be skewed relative to each other, so the
+    /// result is clamped to non-negative.
     pub fn duration(&self) -> Option<TimeDelta> {
-        self.finish_time
-            .map(|finish_time| finish_time.signed_duration_since(self.start_time))
+        self.finish_time.map(|finish_time| {
+            finish_time
+                .signed_duration_since(self.start_time)
+                .max(TimeDelta::zero())
+        })
     }
 
     /// The elapsed wall-clock time since this exchange started. `None` when

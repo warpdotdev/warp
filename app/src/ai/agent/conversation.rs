@@ -972,7 +972,9 @@ impl AIConversation {
             }
         }
 
-        total_ms
+        // Defense in depth: each summand is already clamped, but clamp the
+        // total too so it can never go negative.
+        total_ms.max(0)
     }
 
     /// Wall-to-wall response time for the last completed set of agent responses.
@@ -990,8 +992,10 @@ impl AIConversation {
             }
         })?;
 
+        // `start_time` and `finish_time` come from different clocks that may
+        // be skewed, so clamp to non-negative.
         let duration = finish_time.signed_duration_since(start_time);
-        Some(duration.num_milliseconds())
+        Some(duration.num_milliseconds().max(0))
     }
 
     pub fn token_usage(&self) -> &[ModelTokenUsage] {

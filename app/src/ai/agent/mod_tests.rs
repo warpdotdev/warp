@@ -1,16 +1,20 @@
+use std::collections::HashSet;
 use std::ops::Range;
 use std::sync::Arc;
 
 use anyhow::anyhow;
+use chrono::{Local, TimeDelta};
 use markdown_parser::{FormattedText, FormattedTextFragment, FormattedTextLine};
 use warp_multi_agent_api::{FileContent, FileContentLineRange};
 
 use crate::ai::agent::{
-    AIAgentContext, AIAgentOutput, AIAgentOutputMessage, AIAgentOutputMessageType, AIAgentText,
-    AIAgentTextSection, AgentOutputImage, AgentOutputImageLayout, AgentOutputMermaidDiagram,
-    AnyFileContent, FileContext, FormattedTextWrapper, MessageId, ProgrammingLanguage,
-    RenderableAIError, TransientNetworkErrorKind,
+    AIAgentContext, AIAgentExchange, AIAgentExchangeId, AIAgentOutput, AIAgentOutputMessage,
+    AIAgentOutputMessageType, AIAgentOutputStatus, AIAgentText, AIAgentTextSection,
+    AgentOutputImage, AgentOutputImageLayout, AgentOutputMermaidDiagram, AnyFileContent,
+    FileContext, FormattedTextWrapper, MessageId, ProgrammingLanguage, RenderableAIError,
+    TransientNetworkErrorKind,
 };
+use crate::ai::llms::LLMId;
 use crate::server::server_api::AIApiError;
 use crate::terminal::shell::ShellType;
 
@@ -347,6 +351,58 @@ fn format_for_copy_preserves_visual_markdown_sections() {
         output.format_for_copy(None),
         "Intro\n![Diagram](./diagram.png)\n```mermaid\ngraph TD\nA --> B\n```"
     );
+}
+
+/// Builds a minimal exchange with the given start/finish times, for
+/// exercising `AIAgentExchange::duration()` in isolation.
+fn exchange_with_times(
+    start_time: chrono::DateTime<Local>,
+    finish_time: Option<chrono::DateTime<Local>>,
+) -> AIAgentExchange {
+    AIAgentExchange {
+        id: AIAgentExchangeId::new(),
+        input: vec![],
+        output_status: AIAgentOutputStatus::Streaming { output: None },
+        added_message_ids: HashSet::new(),
+        start_time,
+        finish_time,
+        time_to_first_token_ms: None,
+        working_directory: None,
+        model_id: LLMId::from("test-model"),
+        request_cost: None,
+        coding_model_id: LLMId::from("test-model"),
+        cli_agent_model_id: LLMId::from("test-model"),
+        computer_use_model_id: LLMId::from("test-model"),
+        response_initiator: None,
+    }
+}
+
+#[test]
+fn duration_is_none_without_finish_time() {
+    let exchange = exchange_with_times(Local::now(), None);
+    assert_eq!(exchange.duration(), None);
+}
+
+#[test]
+fn duration_returns_positive_elapsed_time_unchanged() {
+    let start = Local::now();
+    let finish = start + TimeDelta::seconds(5);
+    let exchange = exchange_with_times(start, Some(finish));
+    assert_eq!(exchange.duration(), Some(TimeDelta::seconds(5)));
+}
+
+/// APP-5364 regression: `start_time` is stamped from the client's local
+/// clock while `finish_time` is derived from server message timestamps, so
+/// the two can come from clocks that drift relative to each other. When the
+/// client clock runs ahead of the server, the raw signed duration goes
+/// negative; `duration()` must clamp it to zero instead of letting it
+/// propagate into the usage footer as e.g. "-40019.9 seconds".
+#[test]
+fn duration_clamps_negative_skewed_clock_duration_to_zero() {
+    let start = Local::now();
+    let finish = start - TimeDelta::seconds(40020);
+    let exchange = exchange_with_times(start, Some(finish));
+    assert_eq!(exchange.duration(), Some(TimeDelta::zero()));
 }
 
 #[path = "suggestions_tests.rs"]
