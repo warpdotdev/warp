@@ -1,16 +1,24 @@
 //! Integration tests for native shell completions, where the client asks the user's real shell to
 //! compute completions for the current input line via an in-band generator command and renders the
 //! shell's answer in the completions menu (see `native_shell_completions.rs` on the Rust side and
-//! the `warp_run_generator_command*` functions in the bootstrap scripts).
+//! the `warp_run_generator_command*` / `Warp-Run-GeneratorCommand*` functions in the bootstrap
+//! scripts).
 //!
 //! These boot a real shell and drive it end-to-end, covering the client<->shell seam that unit
-//! tests cannot reach. They run against every shell Warp supports native completions on and that
-//! the integration runners provide -- zsh, bash, and fish. PowerShell is excluded: it is not
-//! installed on the integration runners and the harness writes no PowerShell rc file, so its
-//! PSReadLine-driven path cannot be exercised here.
+//! tests cannot reach. They run against every shell CI exercises the shell integration suite
+//! against -- zsh, bash, fish, and PowerShell -- which on the unix runners is all four, under
+//! xvfb. Each shell registers the test's completions through its own rc file / profile; Warp's
+//! bootstrap sources all four, including PowerShell (launched `-NoProfile`, then the bootstrap
+//! dot-sources the user profile itself). What stays uncovered is Windows and its conpty, where CI
+//! skips the shell integration tests entirely -- and that is the residual that matters, because
+//! the PowerShell path is reintroducing command execution and conpty is where that risk lives.
 //!
 //! Native completions are Tab/keybinding-triggered only; there is deliberately no as-you-type
-//! coverage, because as-you-type does not ask the shell.
+//! coverage, because as-you-type does not ask the shell. Two further behaviors -- that the
+//! generator command stays out of the shell's history and out of the tab title -- are deliberately
+//! left to unit tests: at this layer they are only observable through a flaky signal (reading the
+//! histfile after a shell exit) or a transient one (a title flash), so a test here would assert
+//! weakly while looking like coverage.
 //!
 //! Two switches turn the feature on, and the tests use each for what it proves:
 //! - The `ForceNativeShellCompletions` private preference makes the shell's answer win
@@ -18,9 +26,9 @@
 //!   deterministically asks the shell -- ideal for exercising the shell mechanism itself.
 //! - Enabling `FeatureFlag::NativeShellCompletions` at runtime (no force pref) selects the
 //!   shipping dispatch, which asks the shell only when Warp's bundled specs come back empty. The
-//!   `..._when_a_bundled_spec_answers` / `..._when_no_bundled_spec` pair pins that decision by
-//!   observing, via a marker file the shell writes only when its completion actually runs, whether
-//!   the shell was consulted.
+//!   `..._when_a_bundled_spec_answers` test (plus its `..._when_forced` reachability control and
+//!   the `..._when_no_bundled_spec` positive case) pins that decision by observing, via a marker
+//!   file the shell writes only when its completion actually runs, whether the shell was consulted.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -67,19 +75,32 @@ fn force_native_completions_defaults() -> HashMap<String, String> {
     HashMap::from([(FORCE_NATIVE_COMPLETIONS_PREF.to_owned(), "true".to_owned())])
 }
 
-/// Whether native shell completions can be exercised against the current test shell.
+/// Enables the native-shell-completions feature flag at runtime, selecting the shipping dispatch
+/// (bundled specs first, shell only if they are empty) when the force pref is not also set.
+///
+/// This is a process-global side effect, but each integration test runs in its own process, so it
+/// cannot leak across tests. It matches how other integration tests enable a flag (e.g.
+/// `settings_private`), and unlike a unit-test scoped guard it stays in effect through the app run
+/// rather than being dropped before the app starts.
+fn enable_native_shell_completions_feature() {
+    FeatureFlag::NativeShellCompletions.set_enabled(true);
+}
+
+/// Whether native shell completions can be exercised against the current test shell. CI runs the
+/// shell integration suite against all four on the unix runners.
 fn shell_supports_native_completions() -> bool {
     let (starter, _version) = current_shell_starter_and_version();
     matches!(
         starter.shell_type(),
-        ShellType::Zsh | ShellType::Bash | ShellType::Fish
+        ShellType::Zsh | ShellType::Bash | ShellType::Fish | ShellType::PowerShell
     )
 }
 
-/// Registers a completion for a made-up, spec-less command (`warptool`) in each shell's rc file, so
-/// a completions request for it can only be answered by the shell's own machinery. `apple` and
-/// `avocado` both match the `a` prefix the tests type; `banana` does not. The two matches share no
-/// common prefix beyond `a`, so Tab opens the menu without extending the typed line.
+/// Registers a completion for a made-up, spec-less command (`warptool`) in each shell's rc file /
+/// profile, so a completions request for it can only be answered by the shell's own machinery.
+/// `apple` and `avocado` both match the `a` prefix the tests type; `banana` does not. The two
+/// matches share no common prefix beyond `a`, so Tab opens the menu without extending the typed
+/// line.
 ///
 /// When `with_marker` is set, the completion also appends to [`SHELL_ASKED_MARKER_FILE`] when it
 /// runs, so a test can detect whether the shell was actually asked.
@@ -131,19 +152,46 @@ fn write_specless_completion_rc_files(dir: impl AsRef<Path>, with_marker: bool) 
         format!("complete -c warptool -f -a '{fish_candidates}'\n"),
         [ShellRcType::Fish],
     );
+
+    // PowerShell: Warp launches pwsh with `-NoProfile` but its bootstrap dot-sources the user
+    // profile afterward, so a profile written here is sourced. A `-Native` argument completer
+    // fires for an arbitrary command line through the same completion engine the native-completions
+    // handler drives.
+    let pwsh_marker = if with_marker {
+        format!("  [System.IO.File]::AppendAllText(\"$env:HOME/{SHELL_ASKED_MARKER_FILE}\", 'x')\n")
+    } else {
+        String::new()
+    };
+    write_rc_files_for_test(
+        &dir,
+        format!(
+            "Register-ArgumentCompleter -Native -CommandName warptool -ScriptBlock {{\n  \
+               param($wordToComplete, $commandAst, $cursorPosition)\n\
+             {pwsh_marker}  \
+               @('apple','avocado','banana') | Where-Object {{ $_ -like \"$wordToComplete*\" }} | ForEach-Object {{\n    \
+                 [System.Management.Automation.CompletionResult]::new($_, $_, 'ParameterValue', $_)\n  \
+               }}\n\
+             }}\n"
+        ),
+        [ShellRcType::PowerShell],
+    );
 }
 
 /// Overrides the completion for `git` -- a command that has a bundled Warp spec -- with an
-/// instrumented one that appends to [`SHELL_ASKED_MARKER_FILE`] and offers a sentinel candidate
-/// (`checkzzz`) that the bundled spec would never produce. Under the shipping dispatch the shell is
-/// not asked for `git`, so neither the marker nor the sentinel should ever appear.
+/// instrumented one that appends to [`SHELL_ASKED_MARKER_FILE`] and offers sentinel candidates
+/// (`checkzzz`, `checkyyy`) that the bundled spec would never produce. Under the shipping dispatch
+/// the shell is not asked for `git`, so neither the marker nor a sentinel should appear; under the
+/// force pref the shell is asked, so both must (see the reachability-control test).
+///
+/// Two sentinels are offered rather than one so a menu reliably opens: a lone match is inserted
+/// straight into the buffer instead of being shown in the menu (see `test_function_completions`).
 fn write_spec_command_marker_override_rc_files(dir: impl AsRef<Path>) {
     write_rc_files_for_test(
         &dir,
         format!(
             "_git_override_complete() {{\n  \
                printf 'x' >> \"$HOME/{SHELL_ASKED_MARKER_FILE}\"\n  \
-               COMPREPLY=( checkzzz )\n\
+               COMPREPLY=( checkzzz checkyyy )\n\
              }}\n\
              complete -F _git_override_complete git\n"
         ),
@@ -155,7 +203,7 @@ fn write_spec_command_marker_override_rc_files(dir: impl AsRef<Path>) {
         format!(
             "autoload -Uz compinit\n\
              compinit -u\n\
-             _git_override_complete() {{ printf 'x' >> \"$HOME/{SHELL_ASKED_MARKER_FILE}\"; compadd checkzzz }}\n\
+             _git_override_complete() {{ printf 'x' >> \"$HOME/{SHELL_ASKED_MARKER_FILE}\"; compadd checkzzz checkyyy }}\n\
              compdef _git_override_complete git\n"
         ),
         [ShellRcType::Zsh],
@@ -164,10 +212,59 @@ fn write_spec_command_marker_override_rc_files(dir: impl AsRef<Path>) {
     write_rc_files_for_test(
         &dir,
         format!(
-            "complete -c git -f -a '(printf \"x\" >> $HOME/{SHELL_ASKED_MARKER_FILE}; echo checkzzz)'\n"
+            "complete -c git -f -a '(printf \"x\" >> $HOME/{SHELL_ASKED_MARKER_FILE}; echo checkzzz; echo checkyyy)'\n"
         ),
         [ShellRcType::Fish],
     );
+
+    write_rc_files_for_test(
+        &dir,
+        format!(
+            "Register-ArgumentCompleter -Native -CommandName git -ScriptBlock {{\n  \
+               param($wordToComplete, $commandAst, $cursorPosition)\n  \
+               [System.IO.File]::AppendAllText(\"$env:HOME/{SHELL_ASKED_MARKER_FILE}\", 'x')\n  \
+               @('checkzzz','checkyyy') | ForEach-Object {{ [System.Management.Automation.CompletionResult]::new($_, $_, 'ParameterValue', $_) }}\n\
+             }}\n"
+        ),
+        [ShellRcType::PowerShell],
+    );
+}
+
+/// Asserts that no user-visible block holds the native-completions generator command.
+///
+/// The generator runs as an in-band command whose block is hidden (zero height), so it never
+/// surfaces to the user; a visible block (non-zero height, the signal `assertion.rs` uses for
+/// "rendered") carrying the generator command would be the ghost block this guards against. The
+/// name is normalized before matching so it catches both the POSIX shells'
+/// `warp_run_generator_command*` and PowerShell's `Warp-Run-GeneratorCommand*`.
+fn assert_no_visible_generator_block()
+-> impl Fn(&mut warpui_core::App, warpui_core::WindowId) -> warpui_core::integration::AssertionOutcome
+{
+    move |app, window_id| {
+        let terminal_view = single_terminal_view_for_tab(app, window_id, 0);
+        terminal_view.read(app, |view, _ctx| {
+            let visible_generator_blocks: Vec<String> = view
+                .model
+                .lock()
+                .block_list()
+                .blocks()
+                .iter()
+                .filter(|block| block.height(&TranscriptScope::Terminal) != Lines::zero())
+                .map(|block| block.command_with_secrets_unobfuscated(false))
+                .filter(|command| {
+                    command
+                        .to_ascii_lowercase()
+                        .replace(['_', '-'], "")
+                        .contains("warprungeneratorcommand")
+                })
+                .collect();
+            async_assert!(
+                visible_generator_blocks.is_empty(),
+                "the generator command must not appear as a visible block; visible generator \
+                 blocks = {visible_generator_blocks:?}"
+            )
+        })
+    }
 }
 
 /// Requesting completions for a spec-less command surfaces the real shell's own matches, filtered
@@ -222,32 +319,7 @@ pub fn test_native_shell_completions_menu() -> Builder {
                 )
                 .add_named_assertion(
                     "the generator command leaves no visible block",
-                    |app, window_id| {
-                        let terminal_view = single_terminal_view_for_tab(app, window_id, 0);
-                        terminal_view.read(app, |view, _ctx| {
-                            let model = view.model.lock();
-                            // The generator runs as an in-band command whose block is hidden
-                            // (zero height), so it never surfaces to the user. A visible block
-                            // (non-zero height, the signal `assertion.rs` uses for "rendered")
-                            // carrying the generator command would be the ghost block this guards
-                            // against.
-                            let visible_generator_blocks: Vec<String> = model
-                                .block_list()
-                                .blocks()
-                                .iter()
-                                .filter(|block| {
-                                    block.height(&TranscriptScope::Terminal) != Lines::zero()
-                                })
-                                .map(|block| block.command_with_secrets_unobfuscated(false))
-                                .filter(|command| command.contains("warp_run_generator_command"))
-                                .collect();
-                            async_assert!(
-                                visible_generator_blocks.is_empty(),
-                                "the generator command must not appear as a visible block; visible \
-                                 generator blocks = {visible_generator_blocks:?}"
-                            )
-                        })
-                    },
+                    assert_no_visible_generator_block(),
                 ),
         )
 }
@@ -294,7 +366,7 @@ pub fn test_command_runs_cleanly_after_native_shell_completion() -> Builder {
 /// asked. This is the positive half of the dispatch decision and confirms the marker mechanism
 /// fires when the shell really is consulted.
 pub fn test_native_shell_completions_used_when_no_bundled_spec() -> Builder {
-    FeatureFlag::NativeShellCompletions.set_enabled(true);
+    enable_native_shell_completions_feature();
     new_builder()
         .set_should_run_test(shell_supports_native_completions)
         .with_setup(|utils| write_specless_completion_rc_files(utils.test_dir(), true))
@@ -341,8 +413,13 @@ pub fn test_native_shell_completions_used_when_no_bundled_spec() -> Builder {
 /// answered by the spec and the shell is never asked. This is the behavior the feature was
 /// specifically requested to have: the shell does not pay for a foreground round trip on a
 /// keystroke a bundled spec already answers.
+///
+/// The absence signals here (no `checkzzz`, no marker) only mean "the shell was not asked" because
+/// `test_native_shell_completions_reach_a_spec_command_under_force` proves the same override *does*
+/// fire when git is dispatched to the shell -- so this silence is not a silently-failed
+/// registration.
 pub fn test_native_shell_completions_skipped_when_a_bundled_spec_answers() -> Builder {
-    FeatureFlag::NativeShellCompletions.set_enabled(true);
+    enable_native_shell_completions_feature();
     new_builder()
         .set_should_run_test(shell_supports_native_completions)
         .with_setup(|utils| write_spec_command_marker_override_rc_files(utils.test_dir()))
@@ -383,5 +460,52 @@ pub fn test_native_shell_completions_skipped_when_a_bundled_spec_answers() -> Bu
                     )
                 },
             ),
+        )
+}
+
+/// Reachability control for `test_native_shell_completions_skipped_when_a_bundled_spec_answers`.
+///
+/// Under the force pref, even a spec-backed command like `git` is dispatched to the shell, so the
+/// same instrumented override must fire: its sentinel appears and the marker is written. This
+/// demonstrates the override is reachable, which is what makes the negative test's silence mean
+/// "the shell was not asked" rather than "the override never registered" -- git is exactly the
+/// command most likely to have a competing completion already loaded, so this control is not
+/// hypothetical.
+pub fn test_native_shell_completions_reach_a_spec_command_under_force() -> Builder {
+    new_builder()
+        .set_should_run_test(shell_supports_native_completions)
+        .with_user_defaults(force_native_completions_defaults())
+        .with_setup(|utils| write_spec_command_marker_override_rc_files(utils.test_dir()))
+        .with_step(wait_until_bootstrapped_single_pane_for_tab(0))
+        .with_step(clear_blocklist_to_remove_bootstrapped_blocks())
+        .with_step(
+            new_step_with_default_assertions("Type 'git ch' and press tab")
+                .with_typed_characters(&["git ch"])
+                .with_keystrokes(&["tab"])
+                .set_timeout(Duration::from_secs(30))
+                .add_named_assertion(
+                    "the marker shows the git override ran",
+                    |_app, _window_id| {
+                        async_assert!(
+                            shell_asked_marker_path().exists(),
+                            "expected the shell to have been asked (marker file should exist)"
+                        )
+                    },
+                )
+                .add_named_assertion(
+                    "the instrumented git override's sentinel appears because the shell is asked",
+                    |app, window_id| {
+                        let suggestions = single_input_suggestions_view_for_tab(app, window_id, 0);
+                        suggestions.read(app, |view, _ctx| {
+                            let texts: Vec<_> =
+                                view.items().iter().map(|item| item.text()).collect();
+                            async_assert!(
+                                view.items().iter().any(|item| item.text() == "checkzzz"),
+                                "expected the shell override's 'checkzzz' under the force pref, \
+                                 got {texts:?}"
+                            )
+                        })
+                    },
+                ),
         )
 }
