@@ -2922,6 +2922,67 @@ fn build_suggestion_results<S: Into<Span>>(
     })
 }
 
+/// Phase two of the flag-only Tab path (`dispatch_native_shell_completions_after_empty_specs`)
+/// must bail on a stale request -- one whose buffer moved on while the (async) bundled spec pass
+/// was running -- without asking the shell or clobbering a newer request's abort handle. Native
+/// completions are Tab/keybinding-only, so this exercises a `Keybinding` trigger: a user who keeps
+/// typing between an explicit Tab and the spec pass resolving. The abort handle is only ever armed
+/// at the very end of the method, after the shell has been asked, so an untouched (`None`) handle
+/// after a stale call proves the method bailed before dispatching any generator.
+#[test]
+fn native_completions_after_empty_specs_bails_when_stale() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let terminal = add_window_with_bootstrapped_terminal(
+            &mut app, None, /* history_file_commands */
+            None,
+        )
+        .await;
+        let input = terminal.read(&app, |terminal, _| terminal.input().clone());
+
+        // Fresh dispatch: the buffer still matches what the request was computed from, so the
+        // shell is asked and the abort handle is armed.
+        input.update(&mut app, |input, ctx| {
+            input.clear_buffer_and_reset_undo_stack(ctx);
+            input.user_insert("git ", ctx);
+        });
+        let snapshot_git = input.update(&mut app, |input, ctx| editor_model_snapshot(input, ctx));
+        input.update(&mut app, |input, ctx| {
+            input.dispatch_native_shell_completions_after_empty_specs(
+                "git ".to_string(),
+                "git ".len(),
+                CompletionsTrigger::Keybinding,
+                snapshot_git.clone(),
+                ctx,
+            );
+            assert!(
+                input.completions_abort_handle.is_some(),
+                "a real dispatch arms the completions abort handle"
+            );
+        });
+
+        // Stale dispatch: the buffer moved on while the (async) spec pass was running, so this
+        // phase-two callback -- computed from the older snapshot -- must not ask the shell, and
+        // must leave the abort handle a newer request may already own untouched.
+        input.update(&mut app, |input, ctx| {
+            input.completions_abort_handle = None;
+            input.clear_buffer_and_reset_undo_stack(ctx);
+            input.user_insert("git checkout", ctx);
+            input.dispatch_native_shell_completions_after_empty_specs(
+                "git ".to_string(),
+                "git ".len(),
+                CompletionsTrigger::Keybinding,
+                snapshot_git.clone(),
+                ctx,
+            );
+            assert!(
+                input.completions_abort_handle.is_none(),
+                "a stale request must not ask the shell or arm/clobber the abort handle"
+            );
+        });
+    });
+}
+
 /// Counts `TerminalAction::RunNativeShellCompletions` dispatches -- the only call site that ever
 /// asks the shell for native completions -- observed via the `TerminalView`'s own emitted event,
 /// so tests can assert dispatch counts through the real production paths (`run_completions_async`
