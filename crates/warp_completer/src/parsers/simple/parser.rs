@@ -162,6 +162,8 @@ where
                 Some(Token::Dollar) => {
                     if let Some(Token::OpenParen) = self.tokens.peekpeek() {
                         builder.add_part(self.parse_dollar_subshell());
+                    } else if let Some(Token::OpenCurly) = self.tokens.peekpeek() {
+                        self.consume_dollar_brace_expression(&mut builder);
                     } else {
                         // Consume the dollar token
                         self.tokens.next();
@@ -211,6 +213,34 @@ where
         }
 
         builder.complete(self.tokens.pos())
+    }
+
+    /// Consumes a `${...}` POSIX brace-form variable reference as part of the current word.
+    ///
+    /// Without this, `{`/`}` are command-grouping terminators (see `is_command_terminator`), so
+    /// `cd ${HOME}/foo` would otherwise end the current word (and even the current command) right
+    /// at the `{`, misparsing `{HOME}` as a `{ ... }` command group.
+    ///
+    /// Note: This must only be called when the next two tokens are `$` and `{`.
+    fn consume_dollar_brace_expression(&mut self, builder: &mut PartBuilder) {
+        let check = self.tokens.next();
+        debug_assert!(matches!(check, Some(Token::Dollar)));
+        builder.add_raw(Token::Dollar.as_str());
+
+        let check = self.tokens.next();
+        debug_assert!(matches!(check, Some(Token::OpenCurly)));
+        builder.add_raw(Token::OpenCurly.as_str());
+
+        // Consume through the matching closing curly (if any) as raw content. We intentionally
+        // don't try to support nested expansions here -- `${VAR}` is the only brace form we need
+        // to recognize.
+        while let Some(token) = self.tokens.next() {
+            let is_close = matches!(token, Token::CloseCurly);
+            builder.add_raw(token.as_str());
+            if is_close {
+                break;
+            }
+        }
     }
 
     /// Parse a backticked subshell section

@@ -53,6 +53,13 @@ pub struct SessionContext {
 
     /// Snapshot of all Warp workflow aliases.
     workflow_aliases: HashMap<String, String>,
+
+    /// Known environment variable values for the active session (e.g. `KUBECONFIG`), used to
+    /// expand a `$VAR`/`${VAR}` prefix during path completion (see
+    /// `PathCompletionContext::environment_variable`). This is best-effort: it only contains
+    /// whichever variables the app has captured for the session, not a full live snapshot of the
+    /// shell's environment.
+    environment_variables: HashMap<String, String>,
 }
 
 impl SessionContext {
@@ -177,6 +184,10 @@ impl PathCompletionContext for SessionContext {
 
     fn cdpath(&self) -> Option<&str> {
         self.session.cdpath()
+    }
+
+    fn environment_variable(&self, name: &str) -> Option<&str> {
+        self.environment_variables.get(name).map(String::as_str)
     }
 
     fn pwd(&self) -> TypedPath<'_> {
@@ -356,6 +367,7 @@ impl SessionContext {
                     js_ctx: js_function_caller.map(js::SessionJsExecutionContext::new),
                     cached_directory_entries: Arc::new(Default::default()),
                     workflow_aliases,
+                    environment_variables: Default::default(),
                 }
             } else {
                 Self {
@@ -364,9 +376,20 @@ impl SessionContext {
                     current_working_directory,
                     cached_directory_entries: Arc::new(Default::default()),
                     workflow_aliases,
+                    environment_variables: Default::default(),
                 }
             }
         }
+    }
+
+    /// Sets the known environment variable values for the session, used to expand a `$VAR`/
+    /// `${VAR}` prefix during path completion.
+    pub fn with_environment_variables(
+        mut self,
+        environment_variables: HashMap<String, String>,
+    ) -> Self {
+        self.environment_variables = environment_variables;
+        self
     }
 }
 

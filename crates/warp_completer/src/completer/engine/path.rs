@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::collections::HashSet;
 use std::fmt::{Display, Formatter};
 use std::fs::DirEntry;
@@ -144,7 +145,7 @@ pub(crate) async fn sorted_cd_directories(
     matcher: MatchStrategy,
     ctx: &dyn PathCompletionContext,
 ) -> Vec<MatchedSuggestion> {
-    if !is_cdpath_eligible_token(path.as_str()) {
+    if !is_cdpath_eligible_token(path.as_str(), ctx) {
         return sorted_directories_relative_to(path, matcher, ctx).await;
     }
 
@@ -213,13 +214,30 @@ fn resolve_cdpath_entry(entry: &str, ctx: &dyn PathCompletionContext) -> TypedPa
     }
 }
 
-fn is_cdpath_eligible_token(token: &str) -> bool {
-    !(token.starts_with('/')
+fn is_cdpath_eligible_token(token: &str, ctx: &dyn PathCompletionContext) -> bool {
+    if token.starts_with('/')
         || token.starts_with('~')
         || token.starts_with("./")
         || token.starts_with("../")
         || token == "."
-        || token == "..")
+        || token == ".."
+    {
+        return false;
+    }
+
+    let Some((var_name, _)) = leading_env_var_reference(token, &['/']) else {
+        return true;
+    };
+
+    // Only skip CDPATH when the variable is known to resolve to an absolute path, matching the
+    // treatment of any other absolute token. A variable that resolves to a relative value should
+    // still be searched via CDPATH: `SplitPath` joins a relative value against `ctx.pwd()`, and
+    // `sorted_cd_directories` re-resolves the token against a `CdpathOverrideContext` per entry,
+    // so each CDPATH entry naturally gets prepended to the resolved relative path -- matching how
+    // a relative `$CDPATH` entry itself is resolved. An unset variable still yields no
+    // suggestions regardless, via `SplitPath`'s unresolved-variable handling.
+    !ctx.environment_variable(var_name)
+        .is_some_and(|value| TypedPathBuf::from(value).is_absolute())
 }
 
 /// Wraps a `PathCompletionContext` and overrides only `pwd()` so we can reuse
@@ -242,6 +260,10 @@ impl<'a> PathCompletionContext for CdpathOverrideContext<'a> {
     fn cdpath(&self) -> Option<&str> {
         // Avoid recursing — the outer call already iterates entries.
         None
+    }
+
+    fn environment_variable(&self, name: &str) -> Option<&str> {
+        self.inner.environment_variable(name)
     }
 
     fn shell_family(&self) -> ShellFamily {
@@ -286,15 +308,16 @@ async fn list_directory_contents(
     matcher: MatchStrategy,
     ctx: &dyn PathCompletionContext,
 ) -> Vec<MatchedSuggestion> {
-    let home_dir = ctx.home_directory();
+    let split_path = SplitPath::new(relative_to.as_str(), ctx);
+
+    // A `$VAR`/`${VAR}` prefix that didn't resolve to a usable value (unset, or empty) should
+    // yield no suggestions at all, rather than falling back to listing `.`/`..` or treating the
+    // token as a literal relative path.
+    if split_path.unresolved_environment_variable {
+        return Vec::new();
+    }
 
     let path_separators = ctx.path_separators();
-    let split_path = SplitPath::new(
-        ctx.pwd(),
-        relative_to.as_str(),
-        home_dir,
-        path_separators.all,
-    );
 
     let dir_entries = ctx
         .list_directory_entries(split_path.directory_absolute_path.clone())
@@ -334,9 +357,12 @@ async fn list_directory_contents(
                         // distinguish between a tilde representing the home directory and a literal
                         // tilde. `shell_escape()` will doubly escape an escaped tilde which is
                         // incorrect so we correct that behavior here.
-                        ctx.shell_family()
-                            .shell_escape(split_path.directory_relative_path_name.as_str())
-                            .replace(r"\\\~", r"\~")
+                        shell_escape_directory_prefix(
+                            ctx.shell_family(),
+                            split_path.directory_relative_path_name.as_str(),
+                            path_separators.all,
+                        )
+                        .replace(r"\\\~", r"\~")
                     },
                     // Home directory expansion is never needed on file names, so we use the
                     // standard `escape()`.
@@ -366,6 +392,76 @@ async fn list_directory_contents(
         .collect_vec()
 }
 
+/// If `token` begins with a POSIX-style `$NAME` or `${NAME}` environment variable reference
+/// immediately followed by one of `separators`, returns the variable name and the number of
+/// bytes consumed by the reference plus the separator (i.e. the byte length of `$NAME<sep>` or
+/// `${NAME}<sep>`). Matches the same variable name grammar as `ENV_VAR_NAME_REGEX` in
+/// `parsers::mod`: an ASCII letter or underscore, followed by any number of ASCII alphanumerics
+/// or underscores.
+fn leading_env_var_reference<'a>(token: &'a str, separators: &[char]) -> Option<(&'a str, usize)> {
+    let after_dollar = token.strip_prefix('$')?;
+
+    let (name, after_name) = if let Some(braced) = after_dollar.strip_prefix('{') {
+        let close = braced.find('}')?;
+        (&braced[..close], &braced[close + 1..])
+    } else {
+        let end = after_dollar
+            .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+            .unwrap_or(after_dollar.len());
+        (&after_dollar[..end], &after_dollar[end..])
+    };
+
+    let is_valid_name = name
+        .chars()
+        .next()
+        .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+        && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
+    if !is_valid_name {
+        return None;
+    }
+
+    let separator = after_name
+        .chars()
+        .next()
+        .filter(|c| separators.contains(c))?;
+    let consumed = token.len() - after_name.len() + separator.len_utf8();
+    Some((name, consumed))
+}
+
+/// Escapes `directory_relative_path_name` for use in a suggestion replacement, keeping a leading
+/// `~`, `$HOME`, or resolved `$VAR`/`${VAR}` environment-variable reference intact (mirroring
+/// `ShellFamily::shell_escape`'s handling of `~`/`$HOME`), while escaping the remainder.
+///
+/// This is deliberately local to path completion rather than a change to the general-purpose
+/// `ShellFamily::shell_escape`, since we only want to skip escaping the `$NAME` prefix when we
+/// already know (from `SplitPath`) that it was actually treated as a variable reference, not for
+/// every caller of `shell_escape` (which could otherwise misinterpret a literal file name that
+/// happens to start with `$NAME/`).
+fn shell_escape_directory_prefix<'a>(
+    shell_family: ShellFamily,
+    directory_relative_path_name: &'a str,
+    path_separators: &[char],
+) -> Cow<'a, str> {
+    if let Some((_, consumed)) =
+        leading_env_var_reference(directory_relative_path_name, path_separators)
+    {
+        let prefix = &directory_relative_path_name[..consumed];
+        let suffix = &directory_relative_path_name[consumed..];
+        return if suffix.is_empty() {
+            Cow::Borrowed(prefix)
+        } else {
+            let escaped_suffix = shell_family.escape(suffix);
+            if matches!(escaped_suffix, Cow::Borrowed(_)) {
+                Cow::Borrowed(directory_relative_path_name)
+            } else {
+                Cow::Owned(format!("{prefix}{escaped_suffix}"))
+            }
+        };
+    }
+
+    shell_family.shell_escape(directory_relative_path_name)
+}
+
 /// A path split into the parent path (the entire piece before the last separator) and the
 /// file_name (the piece after the last separator).
 #[derive(Debug, PartialEq, Eq)]
@@ -374,47 +470,85 @@ struct SplitPath {
     directory_absolute_path: TypedPathBuf,
 
     /// The path to the directory containing the file named `file_name`, relative to the current
-    /// working directory.  This is may contain unexpanded `~` or `$HOME`.
+    /// working directory.  This is may contain unexpanded `~`, `$HOME`, or another `$VAR`.
     directory_relative_path_name: String,
 
     /// The name of the `file`.
     file_name: String,
+
+    /// `true` when `relative_path` began with a `$VAR`/`${VAR}` reference that could not be
+    /// resolved to a usable value (the variable is unset, or its value is empty). Callers should
+    /// suggest nothing in this case, rather than falling back to treating the token as a literal
+    /// relative path.
+    unresolved_environment_variable: bool,
 }
 
 impl SplitPath {
     /// Returns a `SplitPath` based on the given path values.
     ///
-    /// `current_directory` is the directory to which `relative_path` is relative.
-    /// `relative_path` may contain '~' or '$HOME'. If `relative_path` begins with one of those
-    /// strings, we expand that part of the path to the given `home_directory` value, if it is
-    /// `Some()`. Note that `relative_path` comes directly from a user-specified path token. This
-    /// may contain escaped tildes (for example if the user is completing on a path that contains
-    /// literal tildes), which need to be unescaped before using the path to generate path
-    /// suggestions.
-    fn new(
-        current_directory: TypedPath,
-        relative_path: &str,
-        home_directory: Option<&str>,
-        path_separators: &[char],
-    ) -> Self {
+    /// `relative_path` may contain '~', '$HOME', or another POSIX `$VAR`/`${VAR}` reference. If
+    /// `relative_path` begins with one of those, we expand that part of the path: `~`/`$HOME` are
+    /// expanded via `ctx.home_directory()`, while any other complete `$VAR`/`${VAR}` reference
+    /// immediately followed by a path separator is expanded via `ctx.environment_variable()`.
+    /// Note that `relative_path` comes directly from a user-specified path token. This may contain
+    /// escaped tildes (for example if the user is completing on a path that contains literal
+    /// tildes), which need to be unescaped before using the path to generate path suggestions.
+    fn new(relative_path: &str, ctx: &dyn PathCompletionContext) -> Self {
+        let path_separators = ctx.path_separators().all;
+
         let (directory_relative_path_name, file_name) = match relative_path.rfind(path_separators) {
             Some(pos) => relative_path.split_at(pos + 1),
             None => ("", relative_path),
         };
 
-        let directory_absolute_path = if directory_relative_path_name.is_empty() {
-            current_directory.to_path_buf()
-        } else if let Some(rest) = iproduct!([HOME_DIR_ENV_VAR_PREFIX, "~"], path_separators)
-            .find_map(|(prefix, sep)| {
-                directory_relative_path_name.strip_prefix(&format!("{prefix}{sep}"))
-            })
-        {
-            let mut home_directory = TypedPathBuf::from(home_directory.unwrap_or_default());
-            home_directory.push(rest.replace(r"\~", "~"));
-            home_directory
-        } else {
-            current_directory.join(directory_relative_path_name.replace(r"\~", "~"))
-        };
+        let (directory_absolute_path, unresolved_environment_variable) =
+            if directory_relative_path_name.is_empty() {
+                (ctx.pwd().to_path_buf(), false)
+            } else if let Some(rest) = iproduct!([HOME_DIR_ENV_VAR_PREFIX, "~"], path_separators)
+                .find_map(|(prefix, sep)| {
+                    directory_relative_path_name.strip_prefix(&format!("{prefix}{sep}"))
+                })
+            {
+                let mut home_directory =
+                    TypedPathBuf::from(ctx.home_directory().unwrap_or_default());
+                home_directory.push(rest.replace(r"\~", "~"));
+                (home_directory, false)
+            } else if let Some((var_name, consumed)) =
+                leading_env_var_reference(directory_relative_path_name, path_separators)
+            {
+                match ctx
+                    .environment_variable(var_name)
+                    .filter(|value| !value.is_empty())
+                {
+                    Some(value) => {
+                        let value_path = TypedPathBuf::from(value);
+                        // A relative value resolves against the shell's pwd, mirroring how a
+                        // relative `$CDPATH` entry is resolved in `resolve_cdpath_entry`.
+                        let mut base = if value_path.is_absolute() {
+                            value_path
+                        } else {
+                            ctx.pwd().join(value_path)
+                        };
+                        // Strip any extra leading separators from the remainder before joining:
+                        // `TypedPathBuf::push` treats an absolute suffix as a replacement for the
+                        // receiver, so joining an unstripped remainder like "/App" (from a
+                        // doubled separator, e.g. `$VAR//App`) would discard `base` entirely
+                        // instead of appending to it.
+                        let rest = directory_relative_path_name[consumed..]
+                            .trim_start_matches(path_separators)
+                            .replace(r"\~", "~");
+                        base.push(rest);
+                        (base, false)
+                    }
+                    None => (TypedPathBuf::from(""), true),
+                }
+            } else {
+                (
+                    ctx.pwd()
+                        .join(directory_relative_path_name.replace(r"\~", "~")),
+                    false,
+                )
+            };
 
         // Unescape escaped tildes in the filename.
         let file_name = file_name.replace(r"\~", "~");
@@ -423,6 +557,7 @@ impl SplitPath {
             directory_absolute_path,
             directory_relative_path_name: directory_relative_path_name.to_owned(),
             file_name,
+            unresolved_environment_variable,
         }
     }
 }
