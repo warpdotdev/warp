@@ -104,17 +104,18 @@ impl RunAgentsExecutor {
         self.pending.contains_key(action_id)
     }
 
-    /// Cancels a pending run so publication completion cannot fan out children.
+    /// Cancels a pending run. While the run is still `Publishing` (waiting
+    /// on plan publication before fan-out), this also prevents publication
+    /// completion from dispatching children. While `Spawning`, children have
+    /// already been dispatched and this only clears the local pending marker
+    /// so dependent UI (e.g. the confirmation card's spawning snapshot) does
+    /// not get stuck showing an in-progress state.
     pub(super) fn cancel_execution(
         &mut self,
         action_id: &AIAgentActionId,
         ctx: &mut ModelContext<Self>,
     ) {
-        if matches!(
-            self.pending.get(action_id),
-            Some(PendingRunAgents::Publishing)
-        ) {
-            self.pending.remove(action_id);
+        if self.pending.remove(action_id).is_some() {
             ctx.emit(RunAgentsExecutorEvent::SpawningFinished {
                 action_id: action_id.clone(),
             });
@@ -368,10 +369,17 @@ impl RunAgentsExecutor {
                     execution_mode: launched_mode,
                     agents,
                 };
-                me.pending.remove(&action_id_for_aggr);
-                ctx.emit(RunAgentsExecutorEvent::SpawningFinished {
-                    action_id: action_id_for_aggr,
-                });
+                // `cancel_execution` may have already removed this entry (and
+                // emitted `SpawningFinished`) while this aggregation was still
+                // in flight — e.g. a late child result or the spawn timeout
+                // arriving after a cancel. Only emit here when this call is
+                // the one that actually cleared the pending marker, so a
+                // cancelled run never produces a second finish event.
+                if me.pending.remove(&action_id_for_aggr).is_some() {
+                    ctx.emit(RunAgentsExecutorEvent::SpawningFinished {
+                        action_id: action_id_for_aggr,
+                    });
+                }
                 let _ = sender.try_send(result);
             },
         );
