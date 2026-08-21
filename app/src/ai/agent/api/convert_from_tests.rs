@@ -63,6 +63,27 @@ fn file_artifact_created_message(filepath: &str, description: &str) -> api::Mess
     }
 }
 
+fn agent_reasoning_message(reasoning: &str, finished_seconds: i64) -> api::Message {
+    api::Message {
+        fetched_memories: vec![],
+        id: "message-id".to_string(),
+        task_id: "task-id".to_string(),
+        server_message_data: String::new(),
+        citations: vec![],
+        message: Some(api::message::Message::AgentReasoning(
+            api::message::AgentReasoning {
+                reasoning: reasoning.to_string(),
+                finished_duration: Some(prost_types::Duration {
+                    seconds: finished_seconds,
+                    nanos: 0,
+                }),
+            },
+        )),
+        request_id: "request-id".to_string(),
+        timestamp: None,
+    }
+}
+
 fn build_multiple_choice_question(
     recommended_option_index: i32,
 ) -> api::ask_user_question::Question {
@@ -195,6 +216,57 @@ fn converts_file_artifact_created_message_with_filename() {
         Some("Build output for the latest run")
     );
     assert_eq!(size_bytes, 42);
+}
+
+// A provider that returns encrypted reasoning with no summary reaches the client as reasoning with
+// no text. It must not become an output message, because a reasoning block that draws nothing still
+// occupies layout height and leaves a blank gap in the transcript.
+#[test]
+fn empty_agent_reasoning_has_no_client_representation() {
+    let task_id = TaskId::new("task-id".to_string());
+
+    for reasoning in ["", "   \n\n  "] {
+        let converted = agent_reasoning_message(reasoning, 2)
+            .to_client_output_message(ConversionParams {
+                task_id: &task_id,
+                current_todo_list: None,
+                active_code_review: None,
+                skill_path_origin: &SkillPathOrigin::Local,
+            })
+            .expect("conversion should succeed");
+
+        assert!(matches!(
+            converted,
+            MaybeAIAgentOutputMessage::NoClientRepresentation
+        ));
+    }
+}
+
+#[test]
+fn agent_reasoning_with_text_converts_to_reasoning_message() {
+    let task_id = TaskId::new("task-id".to_string());
+
+    let converted = agent_reasoning_message("Let me check the workflow doc", 2)
+        .to_client_output_message(ConversionParams {
+            task_id: &task_id,
+            current_todo_list: None,
+            active_code_review: None,
+            skill_path_origin: &SkillPathOrigin::Local,
+        })
+        .expect("conversion should succeed");
+
+    let MaybeAIAgentOutputMessage::Message(output) = converted else {
+        panic!("expected reasoning to produce an output message");
+    };
+    let AIAgentOutputMessageType::Reasoning {
+        text,
+        finished_duration,
+    } = output.message
+    else {
+        panic!("expected reasoning output message");
+    };
+    assert_eq!(finished_duration, Some(std::time::Duration::from_secs(2)));
+    assert!(!text.sections.is_empty());
 }
 
 #[test]
