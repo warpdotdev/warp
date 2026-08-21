@@ -36,8 +36,8 @@ use crate::cloud_object::{Owner, Revision, ServerMetadata, ServerPermissions};
 use crate::input_suggestions::HistoryInputSuggestion;
 use crate::persistence::ModelEvent;
 use crate::persistence::model::{
-    AgentConversation, AgentConversationData, AgentConversationRecord, AgentConversationSummary,
-    PersistedAutoexecuteMode,
+    AGENT_CONVERSATION_SUMMARY_VERSION, AgentConversation, AgentConversationData,
+    AgentConversationRecord, AgentConversationSummary, PersistedAutoexecuteMode,
 };
 use crate::server::ids::ServerId;
 use crate::server::telemetry::context_provider::AppTelemetryContextProvider;
@@ -821,11 +821,13 @@ fn test_initialize_historical_conversations_uses_summary_column_without_tasks() 
         let conversation_id = AIConversationId::new();
         let now = Utc::now().naive_utc();
         let summary = AgentConversationSummary {
+            version: AGENT_CONVERSATION_SUMMARY_VERSION,
             initial_query: "Initial query".to_string(),
             title: "Summary title".to_string(),
             initial_working_directory: Some("/tmp/repo".to_string()),
             is_restorable: true,
             is_unlisted_auto_code_diff: false,
+            is_entirely_passive: Some(false),
         };
         let conversations = vec![AgentConversation {
             conversation: AgentConversationRecord {
@@ -882,22 +884,26 @@ fn test_initialize_historical_conversations_skips_unrestorable_and_unlisted_summ
             record(
                 &unrestorable_id,
                 &AgentConversationSummary {
+                    version: AGENT_CONVERSATION_SUMMARY_VERSION,
                     initial_query: "Initial query".to_string(),
                     title: "Unrestorable".to_string(),
                     initial_working_directory: None,
                     is_restorable: false,
                     is_unlisted_auto_code_diff: false,
+                    is_entirely_passive: Some(false),
                 },
                 0,
             ),
             record(
                 &unlisted_id,
                 &AgentConversationSummary {
+                    version: AGENT_CONVERSATION_SUMMARY_VERSION,
                     initial_query: "diff".to_string(),
                     title: "Passive diff".to_string(),
                     initial_working_directory: None,
                     is_restorable: true,
                     is_unlisted_auto_code_diff: true,
+                    is_entirely_passive: Some(true),
                 },
                 1,
             ),

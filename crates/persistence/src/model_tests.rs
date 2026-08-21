@@ -3,8 +3,8 @@ use std::collections::HashMap;
 use warp_multi_agent_api as api;
 
 use super::{
-    AgentConversation, AgentConversationData, AgentConversationSummary, ChargedUsageTotals,
-    ConversationUsageMetadata, ModelTokenUsage,
+    AGENT_CONVERSATION_SUMMARY_VERSION, AgentConversation, AgentConversationData,
+    AgentConversationSummary, ChargedUsageTotals, ConversationUsageMetadata, ModelTokenUsage,
 };
 
 fn parentless_task(id: &str, message_count: usize) -> api::Task {
@@ -347,6 +347,265 @@ fn summary_roundtrips_through_json() {
     let roundtripped: AgentConversationSummary =
         serde_json::from_str(&json).expect("summary should deserialize");
     assert_eq!(roundtripped, summary);
+}
+
+fn auto_code_diff_task(id: &str) -> api::Task {
+    let mut task = parentless_task(id, 0);
+    task.messages = vec![auto_code_diff_message(id)];
+    task
+}
+
+fn tool_call_result_message(
+    task_id: &str,
+    result: api::message::tool_call_result::Result,
+) -> api::Message {
+    api::Message {
+        id: format!("{task_id}-tool-call-result"),
+        task_id: task_id.to_string(),
+        message: Some(api::message::Message::ToolCallResult(
+            api::message::ToolCallResult {
+                tool_call_id: format!("{task_id}-tool-call"),
+                result: Some(result),
+                ..Default::default()
+            },
+        )),
+        ..Default::default()
+    }
+}
+
+/// The current-version marker is what tells a newer client that a stored
+/// summary carries every derived field it expects.
+#[test]
+fn summary_from_tasks_is_stamped_with_the_current_version() {
+    let summary = AgentConversationSummary::from_tasks([&parentless_task("root", 1)]);
+    assert_eq!(summary.version, AGENT_CONVERSATION_SUMMARY_VERSION);
+    assert!(summary.is_current_version());
+}
+
+/// A summary written before the version field existed must not be trusted:
+/// its derived fields are absent, and defaulting them would silently change
+/// restore decisions.
+#[test]
+fn summary_without_a_version_is_not_current_and_reports_unknown_passiveness() {
+    let legacy_json =
+        r#"{"initial_query":"Initial query","title":"Root title","is_restorable":true}"#;
+    let summary: AgentConversationSummary =
+        serde_json::from_str(legacy_json).expect("legacy summaries must still deserialize");
+
+    assert_eq!(summary.version, 0);
+    assert!(!summary.is_current_version());
+    assert_eq!(
+        summary.is_entirely_passive, None,
+        "a missing derived field must read as unknown, never as a default answer"
+    );
+}
+
+/// A conversation whose root task holds only a passive `AutoCodeDiff` query is
+/// what `AIConversation::is_entirely_passive()` reports `true` for.
+#[test]
+fn is_entirely_passive_is_true_for_an_untouched_auto_code_diff() {
+    let summary = AgentConversationSummary::from_tasks([&auto_code_diff_task("root")]);
+    assert_eq!(summary.is_entirely_passive, Some(true));
+}
+
+/// A user query anywhere in the root task means the user engaged with the
+/// conversation, so it is no longer entirely passive.
+#[test]
+fn is_entirely_passive_is_false_once_the_root_task_has_a_user_query() {
+    let mut root = auto_code_diff_task("root");
+    root.messages
+        .push(user_query_message("root", "Follow-up", None));
+    assert_eq!(
+        AgentConversationSummary::from_tasks([&root]).is_entirely_passive,
+        Some(false)
+    );
+
+    // Order must not matter: the predicate is existential over exchanges.
+    let mut root = parentless_task("root", 0);
+    root.messages = vec![
+        user_query_message("root", "Follow-up", None),
+        auto_code_diff_message("root"),
+    ];
+    assert_eq!(
+        AgentConversationSummary::from_tasks([&root]).is_entirely_passive,
+        Some(false)
+    );
+}
+
+/// No passive request at all means the conversation cannot be entirely
+/// passive, whatever else it contains.
+#[test]
+fn is_entirely_passive_is_false_without_any_passive_request() {
+    let mut root = parentless_task("root", 0);
+    root.messages = vec![user_query_message("root", "Initial query", None)];
+    assert_eq!(
+        AgentConversationSummary::from_tasks([&root]).is_entirely_passive,
+        Some(false)
+    );
+
+    // A root task with no messages restores to a conversation with a single
+    // exchange-less root task, which is not entirely passive either.
+    assert_eq!(
+        AgentConversationSummary::from_tasks([&parentless_task("root", 0)]).is_entirely_passive,
+        Some(false)
+    );
+}
+
+/// Restore synthesizes a fresh root task for a row with no persisted tasks, so
+/// there is no passive exchange to find.
+#[test]
+fn is_entirely_passive_is_false_for_a_task_less_row() {
+    let summary = AgentConversationSummary::from_tasks(std::iter::empty());
+    assert_eq!(summary.is_entirely_passive, Some(false));
+}
+
+/// Only the *root* task's exchanges feed the predicate: a user query in a
+/// subtask does not make an otherwise passive conversation active.
+#[test]
+fn is_entirely_passive_only_considers_the_root_task() {
+    let mut subtask = child_task("child-1", "root");
+    subtask.messages = vec![user_query_message("child-1", "Subagent prompt", None)];
+
+    let summary = AgentConversationSummary::from_tasks([&auto_code_diff_task("root"), &subtask]);
+    assert_eq!(summary.is_entirely_passive, Some(true));
+}
+
+/// An accepted prompt suggestion restores to an input that renders a display
+/// query, so it counts as a user query; a rejected one does not.
+#[test]
+fn is_entirely_passive_accounts_for_accepted_prompt_suggestions() {
+    let accepted = tool_call_result_message(
+        "root",
+        api::message::tool_call_result::Result::SuggestPrompt(api::SuggestPromptResult {
+            result: Some(api::suggest_prompt_result::Result::Accepted(())),
+        }),
+    );
+    let mut root = auto_code_diff_task("root");
+    root.messages.push(accepted);
+    assert_eq!(
+        AgentConversationSummary::from_tasks([&root]).is_entirely_passive,
+        Some(false)
+    );
+
+    let rejected = tool_call_result_message(
+        "root",
+        api::message::tool_call_result::Result::SuggestPrompt(api::SuggestPromptResult {
+            result: Some(api::suggest_prompt_result::Result::Rejected(())),
+        }),
+    );
+    let mut root = auto_code_diff_task("root");
+    root.messages.push(rejected);
+    assert_eq!(
+        AgentConversationSummary::from_tasks([&root]).is_entirely_passive,
+        Some(true)
+    );
+}
+
+/// Two message-bearing parentless tasks leave restore's own root pick up to
+/// hash iteration order, so the summary must decline to answer rather than
+/// pick a side.
+#[test]
+fn is_entirely_passive_is_unknown_for_an_ambiguous_root() {
+    let mut other_root = parentless_task("root-b", 0);
+    other_root.messages = vec![user_query_message("root-b", "Initial query", None)];
+
+    let summary =
+        AgentConversationSummary::from_tasks([&auto_code_diff_task("root-a"), &other_root]);
+    assert_eq!(summary.is_entirely_passive, None);
+}
+
+/// Every persisted task having a parent is the shape restore rejects with
+/// `NoRootTask`; there is no root to evaluate, so the answer is unknown.
+#[test]
+fn is_entirely_passive_is_unknown_without_a_parentless_task() {
+    let summary = AgentConversationSummary::from_tasks([&child_task("child-1", "missing-root")]);
+    assert_eq!(summary.is_entirely_passive, None);
+}
+
+fn invoke_skill_message(task_id: &str) -> api::Message {
+    api::Message {
+        id: format!("{task_id}-invoke-skill"),
+        task_id: task_id.to_string(),
+        message: Some(api::message::Message::InvokeSkill(
+            api::message::InvokeSkill {
+                skill: Some(Default::default()),
+                ..Default::default()
+            },
+        )),
+        ..Default::default()
+    }
+}
+
+/// Whether an `InvokeSkill` message renders a display query depends on client
+/// state this crate cannot see, so a root that pairs one with a passive request
+/// degrades to unknown rather than guessing.
+#[test]
+fn is_entirely_passive_is_unknown_when_the_root_invokes_a_skill() {
+    let mut root = auto_code_diff_task("root");
+    root.messages.push(invoke_skill_message("root"));
+
+    assert_eq!(
+        AgentConversationSummary::from_tasks([&root]).is_entirely_passive,
+        None
+    );
+}
+
+/// An unclassifiable message can only resolve to a user query or to nothing,
+/// never to a passive request. Without a passive request in the root the answer
+/// is settled either way, so a slash-command conversation must not be pushed
+/// onto the slow path.
+#[test]
+fn is_entirely_passive_is_false_for_a_skill_invocation_without_a_passive_request() {
+    let mut root = parentless_task("root", 0);
+    root.messages = vec![invoke_skill_message("root")];
+
+    assert_eq!(
+        AgentConversationSummary::from_tasks([&root]).is_entirely_passive,
+        Some(false)
+    );
+}
+
+/// Restore treats `Some(Dependencies { parent_task_id: "" })` as parentless (via
+/// `TaskExt::parent_id`), so the summary must too. In the legacy QUALITY-774
+/// `[stub + real root]` shape, answering from the empty stub instead of the real
+/// root would call a passive-only conversation active and restore it with a
+/// spurious "Previous session" banner.
+#[test]
+fn is_entirely_passive_treats_an_empty_parent_task_id_as_parentless() {
+    let mut real_root = child_task("server-root-id", "");
+    real_root.messages = vec![auto_code_diff_message("server-root-id")];
+
+    let summary = AgentConversationSummary::from_tasks([
+        &parentless_task("optimistic-stub-uuid", 0),
+        &real_root,
+    ]);
+    assert_eq!(summary.is_entirely_passive, Some(true));
+
+    // The same shape with a real user query in the real root.
+    let mut real_root = child_task("server-root-id", "");
+    real_root.messages = vec![user_query_message("server-root-id", "Initial query", None)];
+
+    let summary = AgentConversationSummary::from_tasks([
+        &parentless_task("optimistic-stub-uuid", 0),
+        &real_root,
+    ]);
+    assert_eq!(summary.is_entirely_passive, Some(false));
+
+    // Only `restored_root_task` prefers the message-bearing candidate; the
+    // title/query finder shares the parentless rule but still takes the first
+    // candidate in order, so a leading stub still wins there. That asymmetry is
+    // pre-existing and out of scope here — pinned so a future change to the
+    // finder is a deliberate one.
+    let mut real_root_with_title = real_root.clone();
+    real_root_with_title.description = "Root title".to_string();
+    let summary = AgentConversationSummary::from_tasks([
+        &parentless_task("optimistic-stub-uuid", 0),
+        &real_root_with_title,
+    ]);
+    assert_eq!(summary.title, "");
+    let summary = AgentConversationSummary::from_tasks([&real_root_with_title]);
+    assert_eq!(summary.title, "Root title");
+    assert_eq!(summary.initial_query, "Initial query");
 }
 
 #[test]
