@@ -1895,6 +1895,9 @@ pub enum Event {
     /// Emitted when a pending command (e.g. tab config setup commands) has
     /// been submitted and its block has completed.
     PendingCommandCompleted,
+    /// The user mutated this session's content — typing, deleting, or pasting input. Purely
+    /// navigational interaction and background session activity do not emit this.
+    UserMutatedSession,
     SessionBootstrapped,
     AnonymousUserSignup,
     ShellSpawned(ShellType),
@@ -21824,6 +21827,8 @@ impl TerminalView {
                     ScrollPositionUpdate::AfterCommandExecutionStarted,
                     ctx,
                 );
+
+                ctx.emit(Event::UserMutatedSession);
             }
             InputEvent::SendAgentPrompt {
                 server_conversation_token,
@@ -21835,11 +21840,13 @@ impl TerminalView {
                     prompt: prompt.clone(),
                     attachments: attachments.clone(),
                 });
+                ctx.emit(Event::UserMutatedSession);
             }
             InputEvent::SubmitCloudFollowup { prompt } => {
                 if FeatureFlag::HandoffCloudCloud.is_enabled()
                     && self.try_submit_pending_cloud_followup(prompt.clone(), ctx)
                 {
+                    ctx.emit(Event::UserMutatedSession);
                     return;
                 }
                 self.show_error_toast("Couldn't continue this cloud task.".to_string(), ctx);
@@ -21872,6 +21879,7 @@ impl TerminalView {
                 // blocks we need to render the border for.
                 ctx.notify()
             }
+            InputEvent::UserEditedInput => ctx.emit(Event::UserMutatedSession),
             InputEvent::UnhandledCmdEnter => {
                 if is_accept_prompt_suggestion_bound_to_cmd_enter(ctx) {
                     self.resolve_passive_suggestion(
@@ -22199,6 +22207,7 @@ impl TerminalView {
             }
             InputEvent::SubmitCLIAgentInput { text } => {
                 self.submit_cli_agent_rich_input(text.clone(), ctx);
+                ctx.emit(Event::UserMutatedSession);
             }
             InputEvent::OpenAIDocumentPane {
                 document_id,

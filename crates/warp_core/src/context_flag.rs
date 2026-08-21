@@ -43,7 +43,16 @@ fn disable_flag(flag: ContextFlag) {
 
 impl ContextFlag {
     pub fn is_enabled(&self) -> bool {
-        FLAG_STATES[*self as usize].load(Ordering::Relaxed)
+        overrides::get_override(*self)
+            .unwrap_or_else(|| FLAG_STATES[*self as usize].load(Ordering::Relaxed))
+    }
+
+    /// Sets a thread-local test override for this flag, lasting until the returned guard is
+    /// dropped. Prefer this over [`ContextFlag::set`] in tests: the global flag state is shared
+    /// process-wide, so mutating it leaks into every other test in the same process.
+    #[cfg(feature = "test-util")]
+    pub fn override_enabled(self, enabled: bool) -> overrides::ContextFlagOverrideGuard {
+        overrides::override_flag(self, enabled)
     }
 
     /// Sets a ContextFlag flag. FOR DEBUG USE ONLY.
@@ -131,6 +140,57 @@ impl ContextFlag {
         disable_flag(Self::WarpEssentials);
         disable_flag(Self::ShowMCPServers);
         disable_flag(Self::RunWorkflow);
+    }
+}
+
+#[cfg(not(feature = "test-util"))]
+mod overrides {
+    #[inline(always)]
+    pub fn get_override(_flag: super::ContextFlag) -> Option<bool> {
+        None
+    }
+}
+
+/// Thread-local context flag overrides for unit tests.
+#[cfg(feature = "test-util")]
+mod overrides {
+    use std::cell::RefCell;
+    use std::collections::HashMap;
+
+    use super::ContextFlag;
+
+    thread_local! {
+        static FLAG_OVERRIDES: RefCell<HashMap<ContextFlag, bool>> = RefCell::new(HashMap::new());
+    }
+
+    /// RAII guard for a thread-local context flag override. Dropping it reverts to the global
+    /// flag state.
+    #[must_use = "if unused the override will be immediately cleared"]
+    pub struct ContextFlagOverrideGuard {
+        flag: ContextFlag,
+    }
+
+    impl Drop for ContextFlagOverrideGuard {
+        fn drop(&mut self) {
+            FLAG_OVERRIDES.with(|overrides| {
+                overrides.borrow_mut().remove(&self.flag);
+            });
+        }
+    }
+
+    pub fn get_override(flag: ContextFlag) -> Option<bool> {
+        FLAG_OVERRIDES.with(|overrides| overrides.borrow().get(&flag).copied())
+    }
+
+    pub fn override_flag(flag: ContextFlag, enabled: bool) -> ContextFlagOverrideGuard {
+        FLAG_OVERRIDES.with(|overrides| {
+            let previous = overrides.borrow_mut().insert(flag, enabled);
+            assert!(
+                previous.is_none(),
+                "Nested overrides of ContextFlag::{flag:?} are not supported"
+            );
+        });
+        ContextFlagOverrideGuard { flag }
     }
 }
 

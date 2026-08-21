@@ -82,8 +82,8 @@ use crate::terminal::alt_screen_reporting::{
     AltScreenReporting, FocusReportingEnabled, MouseReportingEnabled, ScrollReportingEnabled,
 };
 use crate::terminal::general_settings::{
-    AutoOpenCodeReviewPaneOnFirstAgentChange, GeneralSettings, LinkTooltip, LoginItem,
-    QuitOnLastWindowClosed, RestoreSession, ShowWarningBeforeQuitting,
+    AutoOpenCodeReviewPaneOnFirstAgentChange, CloseWindowOnLastTabClosed, GeneralSettings,
+    LinkTooltip, LoginItem, QuitOnLastWindowClosed, RestoreSession, ShowWarningBeforeQuitting,
 };
 use crate::terminal::input::OPEN_COMPLETIONS_KEYBINDING_NAME;
 use crate::terminal::keys_settings::{
@@ -172,6 +172,14 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
             )),
             context,
             flags::RESTORE_SESSION_CONTEXT_FLAG,
+        ),
+        ToggleSettingActionPair::new(
+            "closing the window when all tabs are closed",
+            builder(SettingsAction::FeaturesPageToggle(
+                FeaturesPageAction::ToggleCloseWindowOnLastTabClosed,
+            )),
+            context,
+            flags::CLOSE_WINDOW_ON_LAST_TAB_CLOSED_FLAG,
         ),
         ToggleSettingActionPair::new(
             EXTRA_META_KEYS_LEFT_TEXT,
@@ -784,6 +792,7 @@ pub enum FeaturesPageAction {
     ToggleShowWarningBeforeQuitting,
     ToggleLoginItem,
     ToggleQuitOnLastWindowClosed,
+    ToggleCloseWindowOnLastTabClosed,
     ToggleSmartSelection,
     SetWordCharAllowlist,
     ResetWordCharAllowlist,
@@ -1154,6 +1163,14 @@ impl FeaturesPageAction {
                 value: to_string(
                     *GeneralSettings::as_ref(ctx)
                         .quit_on_last_window_closed
+                        .value(),
+                ),
+            },
+            Self::ToggleCloseWindowOnLastTabClosed => TelemetryEvent::FeaturesPageAction {
+                action: "ToggleCloseWindowOnLastTabClosed".to_string(),
+                value: to_string(
+                    *GeneralSettings::as_ref(ctx)
+                        .close_window_on_last_tab_closed
                         .value(),
                 ),
             },
@@ -2115,6 +2132,15 @@ impl TypedActionView for FeaturesPageView {
                     );
                 })
             }
+            ToggleCloseWindowOnLastTabClosed => {
+                GeneralSettings::handle(ctx).update(ctx, |settings, ctx| {
+                    report_if_error!(
+                        settings
+                            .close_window_on_last_tab_closed
+                            .toggle_and_save_value(ctx)
+                    );
+                })
+            }
             ToggleLoginItem => GeneralSettings::handle(ctx).update(ctx, |settings, ctx| {
                 report_if_error!(settings.add_app_as_login_item.toggle_and_save_value(ctx));
             }),
@@ -2811,6 +2837,15 @@ impl FeaturesPageView {
             .is_supported_on_current_platform()
         {
             general_widgets.push(Box::new(QuitWhenAllWindowsClosedWidget::default()));
+        }
+
+        // Sits directly below "Quit when all windows are closed" per the settled placement, and
+        // keeps that slot on platforms where the macOS-only quit setting is absent.
+        if general_settings
+            .close_window_on_last_tab_closed
+            .is_supported_on_current_platform()
+        {
+            general_widgets.push(Box::new(CloseWindowOnLastTabClosedWidget::default()));
         }
 
         if general_settings
@@ -5040,6 +5075,62 @@ impl SettingsWidget for QuitWhenAllWindowsClosedWidget {
                 })
                 .finish(),
             None,
+        )
+    }
+}
+
+/// Settings label for the preference that decides whether closing the final tab closes the
+/// window. Shared with the tests that assert the settled copy.
+pub const CLOSE_WINDOW_ON_LAST_TAB_CLOSED_LABEL: &str = "Close window when all tabs are closed";
+
+/// Supporting copy for [`CLOSE_WINDOW_ON_LAST_TAB_CLOSED_LABEL`], explaining the host fallback
+/// in windows Warp cannot close.
+pub const CLOSE_WINDOW_ON_LAST_TAB_CLOSED_DESCRIPTION: &str =
+    "In windows Warp cannot close, closing the last tab opens a new tab instead.";
+
+#[derive(Default)]
+struct CloseWindowOnLastTabClosedWidget {
+    switch_state: SwitchStateHandle,
+}
+
+impl SettingsWidget for CloseWindowOnLastTabClosedWidget {
+    type View = FeaturesPageView;
+
+    fn search_terms(&self) -> &str {
+        "close window all tabs closed last tab new tab"
+    }
+
+    fn render(
+        &self,
+        view: &Self::View,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
+        let general_settings = GeneralSettings::as_ref(app);
+        let ui_builder = appearance.ui_builder();
+        render_body_item::<FeaturesPageAction>(
+            CLOSE_WINDOW_ON_LAST_TAB_CLOSED_LABEL.into(),
+            None,
+            LocalOnlyIconState::for_setting(
+                CloseWindowOnLastTabClosed::storage_key(),
+                CloseWindowOnLastTabClosed::sync_to_cloud(),
+                &mut view
+                    .button_mouse_states
+                    .local_only_icon_tooltip_states
+                    .borrow_mut(),
+                app,
+            ),
+            ToggleState::Enabled,
+            appearance,
+            ui_builder
+                .switch(self.switch_state.clone())
+                .check(*general_settings.close_window_on_last_tab_closed)
+                .build()
+                .on_click(move |ctx, _, _| {
+                    ctx.dispatch_typed_action(FeaturesPageAction::ToggleCloseWindowOnLastTabClosed);
+                })
+                .finish(),
+            Some(CLOSE_WINDOW_ON_LAST_TAB_CLOSED_DESCRIPTION.to_owned()),
         )
     }
 }

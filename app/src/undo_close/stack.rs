@@ -61,6 +61,10 @@ pub enum ClosedItem {
         workspace: WeakViewHandle<Workspace>,
         tab_index: usize,
         data: TabData,
+        /// The pane group of the fresh tab that was seeded to keep the window open when this
+        /// tab was the final one. Restoring swaps that replacement out while it is still
+        /// pristine, so an immediate undo yields one tab rather than two.
+        replacement_pane_group: Option<EntityId>,
     },
     Pane {
         data: PaneData,
@@ -218,6 +222,7 @@ impl UndoCloseStack {
         workspace: WeakViewHandle<Workspace>,
         tab_index: usize,
         data: TabData,
+        replacement_pane_group: Option<EntityId>,
         ctx: &mut ModelContext<Self>,
     ) {
         self.push_item(
@@ -225,6 +230,7 @@ impl UndoCloseStack {
                 workspace,
                 tab_index,
                 data,
+                replacement_pane_group,
             },
             ctx,
         );
@@ -277,6 +283,7 @@ impl UndoCloseStack {
                 workspace,
                 tab_index,
                 data,
+                replacement_pane_group,
             } => {
                 if let Some(workspace) = workspace.upgrade(ctx) {
                     send_telemetry_from_app_ctx!(
@@ -286,7 +293,7 @@ impl UndoCloseStack {
                         ctx
                     );
                     workspace.update(ctx, |workspace, ctx| {
-                        workspace.restore_closed_tab(tab_index, data, ctx);
+                        workspace.restore_closed_tab(tab_index, data, replacement_pane_group, ctx);
                     });
                     ctx.windows()
                         .show_window_and_focus_app(workspace.window_id(ctx));

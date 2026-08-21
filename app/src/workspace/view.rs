@@ -545,6 +545,17 @@ use crate::{
     autoupdate, send_telemetry_from_ctx, settings,
 };
 
+/// What a close operation should do when it would remove a window's final remaining tab.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FinalTabOutcome {
+    /// Close the window, the historical default.
+    CloseWindow,
+    /// Leave the tab and window exactly as they are.
+    NoOp,
+    /// Close the tab, but seed a fresh replacement first so the window keeps a tab.
+    Replace,
+}
+
 /// The padding that should be applied to the workspace as a whole.
 ///
 /// Zero on web: browsers that round the viewport's corners clip this padding into a stray
@@ -4288,7 +4299,7 @@ impl Workspace {
         } else {
             let home_pane = super::home::create_home_pane(ctx);
             placeholder_pane = Some(home_pane.as_pane().id());
-            self.add_tab_from_existing_pane(home_pane, 0, None, ctx);
+            self.add_pristine_tab_from_existing_pane(home_pane, 0, None, ctx);
 
             // If we can't start a terminal session to run the onboarding flow, show the Warp Home
             // placeholder along with Warp Drive.
@@ -5559,15 +5570,20 @@ impl Workspace {
             ctx.notify();
             return;
         }
+        let mut renamed = false;
         pane_group.update(ctx, |pane_group, ctx| {
             if pane_group.display_title(ctx) != title {
                 pane_group.set_title(title, ctx);
+                renamed = true;
                 send_telemetry_from_ctx!(
                     TelemetryEvent::TabRenamed(TabRenameEvent::CustomNameSet),
                     ctx
                 );
             }
         });
+        if renamed {
+            self.mark_tab_non_pristine(pane_group.id());
+        }
         ctx.notify();
     }
 
@@ -5593,6 +5609,7 @@ impl Workspace {
             return;
         }
         self.tabs[index].selected_color = color;
+        self.tabs[index].mark_non_pristine();
         send_telemetry_from_ctx!(
             TelemetryEvent::TabOperations {
                 action: if matches!(color, SelectedTabColor::Color(_)) {
@@ -5712,6 +5729,7 @@ impl Workspace {
         tab.pane_group.update(ctx, |view, ctx| {
             view.clear_title(ctx);
         });
+        self.tabs[index].mark_non_pristine();
         send_telemetry_from_ctx!(
             TelemetryEvent::TabRenamed(TabRenameEvent::CustomNameCleared),
             ctx
@@ -5740,6 +5758,7 @@ impl Workspace {
             });
             ctx.emit(pane_group::Event::AppStateChanged);
         });
+        self.mark_tab_non_pristine(locator.pane_group_id);
     }
 
     pub fn clear_pane_name(&mut self, locator: PaneViewLocator, ctx: &mut ViewContext<Self>) {
@@ -5757,6 +5776,7 @@ impl Workspace {
             });
             ctx.emit(pane_group::Event::AppStateChanged);
         });
+        self.mark_tab_non_pristine(locator.pane_group_id);
         ctx.dispatch_global_action("workspace:save_app", ());
         ctx.notify();
     }
@@ -7400,6 +7420,7 @@ impl Workspace {
         self.tabs[tab_index].group_id = Some(group_id);
         // Pin state is cleared when a new group with this tab is created.
         self.tabs[tab_index].pinned = false;
+        self.tabs[tab_index].mark_non_pristine();
 
         self.move_tab_to_index(tab_index, target, ctx);
 
@@ -7446,6 +7467,7 @@ impl Workspace {
 
         // Moving a tab to a group, clear its pinned state.
         self.tabs[tab_index].pinned = false;
+        self.tabs[tab_index].mark_non_pristine();
         self.expand_tab_group(group_id, ctx);
         self.move_tab_to_index(tab_index, target_index, ctx);
 
@@ -7480,6 +7502,7 @@ impl Workspace {
             .map(|t| self.clamp_to_unpinned_region(&self.tabs, t));
 
         self.tabs[tab_index].group_id = None;
+        self.tabs[tab_index].mark_non_pristine();
 
         if let Some(target) = target {
             self.move_tab_to_index(tab_index, target, ctx);
@@ -7505,6 +7528,7 @@ impl Workspace {
         for tab in &mut self.tabs {
             if tab.group_id == Some(group_id) {
                 tab.group_id = None;
+                tab.mark_non_pristine();
             }
         }
         self.tab_groups.remove(&group_id);
@@ -12057,29 +12081,123 @@ impl Workspace {
         true
     }
 
+    /// Records that a user action mutated the tab backed by `pane_group_id`.
+    fn mark_tab_non_pristine(&mut self, pane_group_id: EntityId) {
+        if let Some(tab) = self
+            .tabs
+            .iter_mut()
+            .find(|tab| tab.pane_group.id() == pane_group_id)
+        {
+            tab.mark_non_pristine();
+        }
+    }
+
+    /// True when a close that would empty the window must instead keep it open. Hosts that
+    /// cannot close a window have no alternative, so they ignore the preference.
+    pub(crate) fn keeps_window_on_final_tab_close(ctx: &AppContext) -> bool {
+        !ContextFlag::CloseWindow.is_enabled()
+            || !*GeneralSettings::as_ref(ctx).close_window_on_last_tab_closed
+    }
+
+    /// Resolves what closing the tab at `index` should do when it is the only tab left.
+    pub(crate) fn final_tab_outcome(&self, index: usize, ctx: &AppContext) -> FinalTabOutcome {
+        if !Self::keeps_window_on_final_tab_close(ctx) {
+            return FinalTabOutcome::CloseWindow;
+        }
+        if self.tabs.get(index).is_some_and(TabData::is_pristine) {
+            FinalTabOutcome::NoOp
+        } else {
+            FinalTabOutcome::Replace
+        }
+    }
+
+    /// Creates the fresh tab that takes a closing final tab's place, using ordinary New Tab
+    /// semantics — or the same host-specific seed an empty workspace gets where no terminal
+    /// session can be created. Returns the replacement's pane-group id, or `None` when creation
+    /// failed and the original tab must stay attached.
+    ///
+    /// The identity is recovered by diffing the tab list rather than reading the active index,
+    /// so it stays correct even if a creation path stops activating the tab it inserts.
+    fn seed_final_tab_replacement(&mut self, ctx: &mut ViewContext<Self>) -> Option<EntityId> {
+        let ids_before: HashSet<EntityId> =
+            self.tabs.iter().map(|tab| tab.pane_group.id()).collect();
+        if ContextFlag::CreateNewSession.is_enabled() {
+            self.add_new_session_tab_with_default_mode(
+                NewSessionSource::Tab,
+                Some(ctx.window_id()),
+                None,  /* chosen_shell */
+                None,  /* conversation_restoration */
+                false, /* hide_homepage */
+                ctx,
+            );
+        } else {
+            let home_pane = super::home::create_home_pane(ctx);
+            let (new_idx, group_id) = self.new_tab_index_and_group(ctx);
+            self.add_pristine_tab_from_existing_pane(home_pane, new_idx, group_id, ctx);
+        }
+
+        let new_ids: Vec<EntityId> = self
+            .tabs
+            .iter()
+            .map(|tab| tab.pane_group.id())
+            .filter(|id| !ids_before.contains(id))
+            .collect();
+        debug_assert!(
+            new_ids.len() <= 1,
+            "Seeding a final-tab replacement created more than one tab"
+        );
+        new_ids.first().copied()
+    }
+
+    /// Removes the tab at `index`, or applies the final-tab rule in its place when it is the
+    /// last one. Returns whether the close was carried out: `true` when the tab was removed or
+    /// the window was closed instead, `false` when the pristine final-tab rule turned the close
+    /// into a no-op or no replacement could be created.
     fn remove_tab(
         &mut self,
-        index: usize,
+        mut index: usize,
         add_to_undo_stack: bool,
         detach_panes_for_close: bool,
         ctx: &mut ViewContext<Self>,
-    ) {
+    ) -> bool {
         let Some(pane_group) = self.tabs.get(index).map(|t| t.pane_group.clone()) else {
             debug_assert!(false, "Tried to remove a tab with an invalid index");
-            return;
+            return false;
         };
 
         // Clear a detail sidecar anchored to this tab before the tab disappears.
         self.vertical_tabs_panel
             .clear_detail_sidecar_if_for_pane_group(pane_group.id());
 
-        // If this is the last tab, close the window instead of actually removing
-        // the tab.
+        let mut replacement_pane_group_id = None;
         if self.tabs.len() == 1 {
-            if ContextFlag::CloseWindow.is_enabled() {
-                ctx.close_window();
+            match self.final_tab_outcome(index, ctx) {
+                FinalTabOutcome::CloseWindow => {
+                    ctx.close_window();
+                    return true;
+                }
+                FinalTabOutcome::NoOp => return false,
+                FinalTabOutcome::Replace => {
+                    let closing_pane_group_id = pane_group.id();
+                    // Seed the replacement before detaching anything so the workspace never
+                    // exposes a zero-tab state and New Tab's working-directory rules can still
+                    // inspect the outgoing session.
+                    replacement_pane_group_id = self.seed_final_tab_replacement(ctx);
+                    let Some(new_index) = self
+                        .tabs
+                        .iter()
+                        .position(|tab| tab.pane_group.id() == closing_pane_group_id)
+                    else {
+                        debug_assert!(false, "Closing tab vanished while seeding its replacement");
+                        return false;
+                    };
+                    if replacement_pane_group_id.is_none() {
+                        // Creation failed; leave the original tab attached and usable.
+                        return false;
+                    }
+                    index = new_index;
+                }
             }
-            return;
         }
 
         // Preserve split-off child-agent tabs by moving their lone pane back
@@ -12127,7 +12245,7 @@ impl Workspace {
             let handle = ctx.handle();
             UndoCloseStack::handle(ctx).update(ctx, |stack, ctx| {
                 log::info!("storing data for closed tab");
-                stack.handle_tab_closed(handle, index, tab_data, ctx);
+                stack.handle_tab_closed(handle, index, tab_data, replacement_pane_group_id, ctx);
             });
         }
 
@@ -12151,12 +12269,14 @@ impl Workspace {
 
         ctx.dispatch_global_action("workspace:save_app", ());
         ctx.notify();
+        true
     }
 
     fn should_confirm_close_session(&self, ctx: &mut ViewContext<Self>) -> bool {
-        // If we're closing the only remaining tab, we're actually going to close the window.
-        // We don't need a user confirmation here because there's already another one on window close.
-        if self.tab_count() == 1 {
+        // Closing the only remaining tab normally closes the window, which runs its own
+        // confirmation. That prompt never appears when the window is kept open, so the
+        // tab-level confirmation has to cover the final session itself.
+        if self.tab_count() == 1 && !Self::keeps_window_on_final_tab_close(ctx) {
             return false;
         }
         // TODO: remove session sharing flag check when long-running commands are included
@@ -12167,7 +12287,8 @@ impl Workspace {
 
     /// Checks if the provided tab indices need to be confirmed before closing, unless skip_confirmation is true.
     /// If none of them need confirmation (or the confirm setting is turned off), we close all the provided tabs.
-    /// Returns true iff all of the tabs were closed.
+    /// Returns true iff all of the tabs were closed. A pending confirmation returns false, and so
+    /// does the pristine final-tab no-op, which leaves its tab in place.
     pub(crate) fn close_tabs(
         &mut self,
         tab_indices: impl Iterator<Item = usize>,
@@ -12263,10 +12384,11 @@ impl Workspace {
         self.cancel_tab_rename(ctx);
 
         // Remove the tabs in reverse order to avoid indexing OOB.
+        let mut all_closed = true;
         for i in tab_indices_vec.into_iter().sorted().rev() {
-            self.remove_tab(i, add_to_undo_stack, true, ctx);
+            all_closed &= self.remove_tab(i, add_to_undo_stack, true, ctx);
         }
-        true
+        all_closed
     }
 
     /// Opens a confirmation dialog if necessary, or closes immediately if not.
@@ -12278,8 +12400,8 @@ impl Workspace {
         add_to_undo_stack: bool,
         ctx: &mut ViewContext<Self>,
     ) {
-        let is_last_tab = self.tabs.len() == 1;
-        if !ContextFlag::CloseWindow.is_enabled() && is_last_tab {
+        let final_tab_outcome = (self.tabs.len() == 1).then(|| self.final_tab_outcome(index, ctx));
+        if final_tab_outcome == Some(FinalTabOutcome::NoOp) {
             return;
         }
 
@@ -12288,7 +12410,9 @@ impl Workspace {
         let tabs_closed = self.close_tabs(
             vec![index].into_iter(),
             OpenDialogSource::CloseTab { tab_index: index },
-            skip_confirmation || is_last_tab, // If this is the last tab, the confirmation dialog will be handled by the window close.
+            // Only the window-close outcome can defer confirmation, because the window close
+            // runs its own prompt. A replacement keeps the window, so it must confirm here.
+            skip_confirmation || final_tab_outcome == Some(FinalTabOutcome::CloseWindow),
             add_to_undo_stack,
             ctx,
         );
@@ -12451,6 +12575,7 @@ impl Workspace {
         &mut self,
         tab_index: usize,
         mut tab_data: TabData,
+        replacement_pane_group: Option<EntityId>,
         ctx: &mut ViewContext<Self>,
     ) {
         // When restoring a closed tab, we have to reattach its panes so that they know they're
@@ -12476,17 +12601,50 @@ impl Workspace {
         };
 
         self.tabs.insert(insert_index, tab_data);
-        self.tab_mru_order
-            .push(self.tabs[insert_index].pane_group.id());
+        let restored_pane_group_id = self.tabs[insert_index].pane_group.id();
+        self.tab_mru_order.push(restored_pane_group_id);
 
         // Expand the group so the restored tab is immediately visible.
         if let Some(group_id) = self.tabs[insert_index].group_id {
             self.expand_tab_group(group_id, ctx);
         }
 
-        self.activate_tab(insert_index, ctx);
+        // This tab was the window's last one, so a fresh tab was seeded in its place. Drop that
+        // replacement while it is still untouched so undo yields the closed tab alone; once the
+        // user has worked in it, restore alongside it instead of discarding their work.
+        if let Some(replacement_pane_group) = replacement_pane_group {
+            self.discard_pristine_replacement_tab(replacement_pane_group, ctx);
+        }
+
+        let activate_index = self
+            .tabs
+            .iter()
+            .position(|tab| tab.pane_group.id() == restored_pane_group_id)
+            .unwrap_or(insert_index);
+        self.activate_tab(activate_index, ctx);
 
         ctx.notify();
+    }
+
+    /// Removes an automatically-created final-tab replacement that the user never touched, so
+    /// undoing the close that created it does not leave a spare tab behind. Called only once
+    /// the restored tab is already attached, so the window is never left empty.
+    fn discard_pristine_replacement_tab(
+        &mut self,
+        replacement_pane_group: EntityId,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if self.tabs.len() < 2 {
+            return;
+        }
+        let Some(index) = self
+            .tabs
+            .iter()
+            .position(|tab| tab.pane_group.id() == replacement_pane_group && tab.is_pristine())
+        else {
+            return;
+        };
+        self.remove_tab(index, false /* add_to_undo_stack */, true, ctx);
     }
 
     /// Insertion index for a restored tab that is not part of an existing group.
@@ -12824,6 +12982,12 @@ impl Workspace {
 
         let is_new_terminal = matches!(panes_layout, PanesLayout::SingleTerminal(_));
         let is_restoration = matches!(panes_layout, PanesLayout::Snapshot(_));
+        // A snapshot, a launch-config template, or a hydrated cloud run arrives with content the
+        // runtime never watched being created, so it can never be treated as untouched.
+        let starts_pristine = !matches!(
+            panes_layout,
+            PanesLayout::Snapshot(_) | PanesLayout::Template(_) | PanesLayout::AmbientAgent
+        );
         let new_pane_group = ctx.add_typed_action_view(|ctx| {
             let mut pane_group = PaneGroup::new_with_panes_layout(
                 self.tips_completed.clone(),
@@ -12854,7 +13018,12 @@ impl Workspace {
         } else {
             self.new_tab_index_and_group(ctx)
         };
-        self.tabs.insert(insert_idx, TabData::new(new_pane_group));
+        let new_tab = if starts_pristine {
+            TabData::new_pristine(new_pane_group)
+        } else {
+            TabData::new(new_pane_group)
+        };
+        self.tabs.insert(insert_idx, new_tab);
         self.tab_mru_order
             .push(self.tabs[insert_idx].pane_group.id());
         self.activate_tab_internal(insert_idx, ctx);
@@ -12901,11 +13070,37 @@ impl Workspace {
         }
     }
 
+    /// Adopts an existing pane into a new tab. The pane predates the tab, so the tab starts
+    /// non-pristine; use [`Workspace::add_pristine_tab_from_existing_pane`] for a tab the
+    /// runtime itself is seeding.
     pub fn add_tab_from_existing_pane(
         &mut self,
         pane: Box<dyn AnyPaneContent>,
         new_idx: usize,
         group_id: Option<TabGroupId>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        self.add_tab_from_existing_pane_internal(pane, new_idx, group_id, false, ctx);
+    }
+
+    /// Same as [`Workspace::add_tab_from_existing_pane`], but for a pane the runtime just
+    /// created as an empty starting point, so the tab counts as untouched.
+    fn add_pristine_tab_from_existing_pane(
+        &mut self,
+        pane: Box<dyn AnyPaneContent>,
+        new_idx: usize,
+        group_id: Option<TabGroupId>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        self.add_tab_from_existing_pane_internal(pane, new_idx, group_id, true, ctx);
+    }
+
+    fn add_tab_from_existing_pane_internal(
+        &mut self,
+        pane: Box<dyn AnyPaneContent>,
+        new_idx: usize,
+        group_id: Option<TabGroupId>,
+        starts_pristine: bool,
         ctx: &mut ViewContext<Self>,
     ) {
         let new_pane_group = ctx.add_typed_action_view(|ctx| {
@@ -12923,13 +13118,18 @@ impl Workspace {
             me.handle_file_tree_event(pane_group, event, ctx)
         });
 
+        let new_tab = if starts_pristine {
+            TabData::new_pristine(new_pane_group)
+        } else {
+            TabData::new(new_pane_group)
+        };
         if self.tab_count() == 0 {
-            self.tabs.push(TabData::new(new_pane_group));
+            self.tabs.push(new_tab);
             self.tab_mru_order
                 .push(self.tabs.last().unwrap().pane_group.id());
             self.activate_tab_internal(self.tab_count() - 1, ctx);
         } else {
-            self.tabs.insert(new_idx, TabData::new(new_pane_group));
+            self.tabs.insert(new_idx, new_tab);
             self.tab_mru_order.push(self.tabs[new_idx].pane_group.id());
             self.activate_tab_internal(new_idx, ctx);
         }
@@ -14241,6 +14441,7 @@ impl Workspace {
         // `hop_tab_to_index` keeps the same tab active across the move, so we
         // only capture whether the moved tab was the active one for telemetry.
         let moving_active_tab = index == self.active_tab_index;
+        self.tabs[index].mark_non_pristine();
         self.hop_tab_to_index(index, target, ctx);
 
         if moving_active_tab {
@@ -16133,7 +16334,11 @@ impl Workspace {
             pane_group::Event::InvalidatedActiveConversation => {
                 self.handle_task_status_reset(pane_group.id(), ctx);
             }
+            pane_group::Event::UserMutatedTab => {
+                self.mark_tab_non_pristine(pane_group.id());
+            }
             pane_group::Event::ExecuteCommand(execute_event) => {
+                self.mark_tab_non_pristine(pane_group.id());
                 // Clear the task status indicator as soon as the user runs a command. If a command is
                 // run as part of the task, leave the task marked as in-progress.
                 if !execute_event.source.is_ai_command() {
@@ -23007,6 +23212,12 @@ impl Workspace {
             context.set.insert(flags::RESTORE_SESSION_CONTEXT_FLAG);
         }
 
+        if *general_settings.close_window_on_last_tab_closed {
+            context
+                .set
+                .insert(flags::CLOSE_WINDOW_ON_LAST_TAB_CLOSED_FLAG);
+        }
+
         if *session_settings.honor_ps1 {
             context.set.insert(flags::HONOR_PS1_CONTEXT_FLAG);
         }
@@ -28033,6 +28244,8 @@ impl Workspace {
         // Never split a group: a drop that resolves to the middle of a group's
         // run is pushed past the group's last member instead.
         let index = self.clamp_past_group(index);
+        // Moving a tab between windows is itself a user mutation, so the arriving tab is never
+        // treated as untouched in its new home.
         let mut tab_data = TabData::new(pane_group);
         tab_data.selected_color = color.map_or(SelectedTabColor::Unset, SelectedTabColor::Color);
         tab_data.draggable_state = draggable_state;
@@ -28241,6 +28454,29 @@ impl Workspace {
 
     pub fn remove_tab_without_undo(&mut self, index: usize, ctx: &mut ViewContext<Self>) {
         self.remove_tab(index, false, false, ctx);
+    }
+
+    /// Leaves a fresh tab behind after this window's only tab was handed off to another
+    /// window, so the source survives at its original bounds instead of closing. Returns false
+    /// when the window should close as before — either the preference allows it or no
+    /// replacement could be created. The replacement is seeded only once the handoff has
+    /// committed, so an aborted drag never leaks a tab.
+    fn replace_handed_off_final_tab(
+        &mut self,
+        transferred_tab_index: usize,
+        ctx: &mut ViewContext<Self>,
+    ) -> bool {
+        if !Self::keeps_window_on_final_tab_close(ctx) {
+            return false;
+        }
+        if self.tabs.len() != 1 || transferred_tab_index != 0 {
+            return false;
+        }
+        if self.seed_final_tab_replacement(ctx).is_none() {
+            return false;
+        }
+        self.remove_tab_without_undo(transferred_tab_index, ctx);
+        true
     }
 
     /// Replaces the placeholder pane group (created by
@@ -28819,7 +29055,9 @@ impl Workspace {
                 if let Some(tab) = self.tabs.get(transferred_tab_index) {
                     ctx.unsubscribe_to_view(&tab.pane_group);
                 }
-                self.close_window_for_content_transfer(ctx);
+                if !self.replace_handed_off_final_tab(transferred_tab_index, ctx) {
+                    self.close_window_for_content_transfer(ctx);
+                }
             }
             DropResult::RemoveSourceTab {
                 transferred_tab_index,
