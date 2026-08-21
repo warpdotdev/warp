@@ -334,6 +334,9 @@ jobs:
           name: settings-schema-macos-x86_64-${{ steps.get-config.outputs.channel }}
           path: .release-artifacts/settings-schema-macos-x86_64
 
+      # These two schemas are expected to be byte-identical: no setting is currently scoped to
+      # a specific macOS architecture. A mismatch here means that assumption no longer holds,
+      # and this step needs to become architecture-aware rather than simply failing the release.
       - name: Verify macOS settings schemas match
         run: cmp .release-artifacts/settings-schema-macos/settings_schema.json .release-artifacts/settings-schema-macos-x86_64/settings_schema.json
         shell: bash
