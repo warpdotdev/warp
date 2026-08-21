@@ -175,7 +175,7 @@ const DASHED_UNDERLINE_GAP_LENGTH: f32 = 4.;
 
 /// In the future, we should also support MinimumWidth(f32) setting so the content will
 /// be laid out with a minimum width that could be larger than the viewport.
-#[derive(Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum WidthSetting {
     #[default]
     FitViewport,
@@ -2920,6 +2920,20 @@ impl RenderState {
             return action;
         }
         StyleUpdateAction::None
+    }
+
+    /// Update the width setting controlling whether text wraps to fit the viewport or lays out
+    /// at its full intrinsic width. Because the render model does not directly reference the
+    /// content model, the caller is responsible for re-laying out existing content (e.g. via
+    /// [`Self::layout_edit_delta`] over the full buffer range) when this returns `true`.
+    ///
+    /// Returns whether the setting changed, and therefore whether a relayout is needed.
+    pub fn set_width_setting(&mut self, new_setting: WidthSetting) -> bool {
+        if new_setting == self.width_setting {
+            return false;
+        }
+        self.width_setting = new_setting;
+        true
     }
 
     /// Handle to obtain saved position IDs within the rendered text.

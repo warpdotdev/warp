@@ -74,6 +74,7 @@ use crate::code::editor::line_iterator::LineIterator;
 use crate::code_review::comments::{CommentId, CommentOrigin, LineDiffContent};
 use crate::editor::InteractionState;
 use crate::notebooks::editor::model::word_unit;
+use crate::settings::CodeSettings;
 use crate::themes::theme::AnsiColorIdentifier;
 use crate::util::link_detection::get_word_range_at_offset;
 
@@ -336,6 +337,8 @@ impl CodeEditorModel {
             buffer.set_session_platform(session_platform);
         });
 
+        let width_setting = Self::width_setting_for_word_wrap(*CodeSettings::as_ref(ctx).word_wrap);
+
         Self::from_content(
             content,
             true,        // show_current_line_highlights
@@ -345,10 +348,20 @@ impl CodeEditorModel {
             |hidden_lines, ctx| {
                 ctx.add_model(|ctx| {
                     RenderState::new(text_styles, lazy_layout, Some(hidden_lines.clone()), ctx)
-                        .with_width_setting(WidthSetting::InfiniteWidth)
+                        .with_width_setting(width_setting)
                 })
             },
         )
+    }
+
+    /// Maps the user-facing word-wrap toggle to the underlying [`WidthSetting`]: when word wrap
+    /// is off, content lays out at its full intrinsic width and relies on horizontal scrolling.
+    fn width_setting_for_word_wrap(word_wrap: bool) -> WidthSetting {
+        if word_wrap {
+            WidthSetting::FitViewport
+        } else {
+            WidthSetting::InfiniteWidth
+        }
     }
 
     /// Constructs a `CodeEditorModel` in TUI char-cell mode.
@@ -1809,6 +1822,18 @@ impl CodeEditorModel {
         self.set_color_map(ctx);
         self.update_cursor_line_highlights(ctx);
         ctx.notify();
+    }
+
+    /// Handle a change to the user's word-wrap setting, relaying out the buffer if needed.
+    pub fn handle_word_wrap_setting_change(&self, word_wrap: bool, ctx: &mut ModelContext<Self>) {
+        let width_setting = Self::width_setting_for_word_wrap(word_wrap);
+        let changed = self.render_state.update(ctx, |render_state, _| {
+            render_state.set_width_setting(width_setting)
+        });
+
+        if changed {
+            self.rebuild_layout_and_refresh_diff(ctx);
+        }
     }
 
     /// Begin selecting at `offset`.

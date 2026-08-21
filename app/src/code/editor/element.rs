@@ -12,6 +12,7 @@ use warp_core::features::FeatureFlag;
 use warp_core::ui::appearance::Appearance;
 use warp_core::ui::theme::Fill;
 use warp_core::ui::theme::color::internal_colors;
+use warp_editor::content::buffer::{Buffer, ToBufferPoint};
 use warp_editor::editor::EditorView;
 use warp_editor::render::element::lens_element::RichTextElementLens;
 use warp_editor::render::element::{RenderableBlock, RichTextElement, VerticalExpansionBehavior};
@@ -379,6 +380,10 @@ struct CommentBox {
 
 pub struct EditorWrapper<V: EditorView> {
     editor: InnerEditor<V>,
+    /// The underlying text buffer. Used to resolve wrap-independent, logical (source) line
+    /// numbers for the gutter and diff-hunk matching, since [`RenderState`]'s own `LineCount`
+    /// counts wrapped visual rows rather than raw buffer lines when word wrap is enabled.
+    buffer: ModelHandle<Buffer>,
     element_size: Option<Vector2F>,
     element_origin: Option<Point>,
     /// Whether the editor should expand vertically to fill the available space.
@@ -499,6 +504,7 @@ impl<V: EditorView> EditorWrapper<V> {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         editor: InnerEditor<V>,
+        buffer: ModelHandle<Buffer>,
         vertical_expansion_behavior: VerticalExpansionBehavior,
         line_number_config: Option<LineNumberConfig>,
         diff_status: DiffStatus,
@@ -518,6 +524,7 @@ impl<V: EditorView> EditorWrapper<V> {
     ) -> Self {
         Self {
             editor,
+            buffer,
             vertical_expansion_behavior,
             element_size: None,
             element_origin: None,
@@ -585,6 +592,27 @@ impl<V: EditorView> EditorWrapper<V> {
         line_number_config.active_cursor_is_visible
     }
 
+    /// Returns the 0-indexed logical (source) line number containing `offset`, counted from
+    /// actual newlines in the buffer's raw text.
+    ///
+    /// This is deliberately independent of [`RenderState`]'s own `LineCount`, which counts
+    /// wrapped *visual* rows: when word wrap is enabled, a single source line can span multiple
+    /// visual rows, which would otherwise inflate line numbers for every line that follows it.
+    /// Diff hunks (from [`DiffStatus`]) are keyed by real source line numbers too, so using this
+    /// instead of the render model's line index keeps gutter numbers and diff-hunk matching
+    /// correct regardless of wrapping.
+    fn logical_line_number(
+        &self,
+        offset: string_offset::CharOffset,
+        app: &AppContext,
+    ) -> LineCount {
+        let buffer = self.buffer.as_ref(app);
+        // Buffer `Point`s report rows using the editor's one-based convention, while `LineCount`
+        // (as used by render blocks, e.g. `RenderState::start_line_index`) is zero-based.
+        let row = offset.to_buffer_point(buffer).row.saturating_sub(1);
+        LineCount::from(row as usize)
+    }
+
     /// Returning **no** gutter means the gutter shouldn't be rendered at all.
     /// Returning an **empty** gutter means the gutter should be rendered with no contents.
     fn gutter_elements(&self, app: &AppContext) -> Option<Vec<GutterElement>> {
@@ -605,9 +633,7 @@ impl<V: EditorView> EditorWrapper<V> {
         let mut removed_hunk_line_number: Option<LineCount> = None;
         let mut removed_hunk_line_index: usize = 0;
         for (block_idx, block) in blocks.iter().enumerate() {
-            let Some(line_count) = model.start_line_index(&**block) else {
-                continue;
-            };
+            let line_count = self.logical_line_number(block.viewport_item().block_offset, app);
 
             // For lens element, we need to use use the content offset - scroll top instead of the render model's viewport
             // offset since we are only rendering a section of the editor.
@@ -728,11 +754,12 @@ impl<V: EditorView> EditorWrapper<V> {
             }
 
             if block.is_hidden_section() {
-                let line_range = self
-                    .model()
-                    .as_ref(app)
-                    .line_range(&**block)
-                    .unwrap_or_default();
+                // Hidden blocks are never soft-wrapped (they render no text), so their length in
+                // lines is unaffected by word wrap. Only the range's start needs to come from the
+                // logical (wrap-independent) line number computed above.
+                let render_line_range = model.line_range(&**block).unwrap_or_default();
+                let line_range =
+                    line_count..(line_count + (render_line_range.end - render_line_range.start));
 
                 let range_hovered = hovered_range
                     .as_ref()
