@@ -613,6 +613,9 @@ impl BlocklistAIController {
             } => {
                 me.handle_dormant_claude_wake_ready(*conversation_id, wake_message.clone(), ctx);
             }
+            OrchestrationEventStreamerEvent::ParentCompletionSucceeded { conversation_id } => {
+                me.stop_conversation_for_parent_completed_success(*conversation_id, ctx);
+            }
             // Viewer-mode events are handled by `OrchestrationViewerModel`.
             OrchestrationEventStreamerEvent::ChildSpawned { .. }
             | OrchestrationEventStreamerEvent::ChildStatusChanged { .. }
@@ -2837,6 +2840,67 @@ impl BlocklistAIController {
                 );
             });
         }
+    }
+
+    /// Finalizes a local descendant conversation as a terminal `Success` because the server
+    /// recorded a parent-authoritative completion for it (`run_succeeded_by_parent_completion`)
+    /// while it was still running locally.
+    ///
+    /// Invoked by the orchestration event streamer when it observes that event scoped to this
+    /// conversation's own run. The conversation is moved straight to `Success` by this dedicated
+    /// path rather than through the ordinary cancellation-to-status machinery: the server already
+    /// recorded `SUCCEEDED`, so reporting `CANCELLED` back would contradict that authoritative
+    /// state. `ParentOrchestrationCompleted` maps to `CancellationOutcome::FinalizedExternally`,
+    /// which suppresses the ordinary cancellation status write (see `try_cancel_pending_response_stream`
+    /// and `cancel_all_pending_actions`) so only this method's direct `Success` write takes effect.
+    pub fn stop_conversation_for_parent_completed_success(
+        &mut self,
+        conversation_id: AIConversationId,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let terminal_surface_id = self.terminal_surface_id;
+        let history_model = BlocklistAIHistoryModel::handle(ctx);
+
+        // Only act on conversations that are still running. A conversation that already
+        // finished locally (e.g. it reported its own success moments earlier) must not be
+        // retroactively overwritten.
+        let is_in_progress = history_model
+            .as_ref(ctx)
+            .conversation(&conversation_id)
+            .is_some_and(|conversation| conversation.status().is_in_progress());
+        if !is_in_progress {
+            return;
+        }
+
+        let stream_ids = self
+            .in_flight_response_streams
+            .stream_ids_for_conversation(conversation_id, ctx);
+        for stream_id in &stream_ids {
+            self.try_cancel_pending_response_stream(
+                stream_id,
+                CancellationReason::ParentOrchestrationCompleted,
+                ctx,
+            );
+        }
+
+        // Stop any pending or mid-execution actions so a queued action result can't
+        // subsequently move the conversation back to InProgress/Cancelled.
+        self.action_model.update(ctx, |action_model, ctx| {
+            action_model.cancel_all_pending_actions(
+                conversation_id,
+                Some(CancellationReason::ParentOrchestrationCompleted),
+                ctx,
+            );
+        });
+
+        history_model.update(ctx, |history_model, ctx| {
+            history_model.update_conversation_status(
+                terminal_surface_id,
+                conversation_id,
+                ConversationStatus::Success,
+                ctx,
+            );
+        });
     }
 
     /// Clears finished action results for a conversation. Used when reverting.

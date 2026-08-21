@@ -117,6 +117,14 @@ pub enum CancellationReason {
     /// finalized as a terminal `Error` (with a shell-exit message) by the
     /// controller rather than reported as a user cancellation.
     AgentExitedShell,
+
+    /// The server-authoritative parent orchestration completed successfully while this
+    /// local descendant conversation was still running. The in-flight stream/actions are
+    /// cancelled to stop work, but the conversation is finalized as a terminal `Success` by
+    /// a dedicated controller path rather than reported as a user cancellation: the server
+    /// already recorded `SUCCEEDED` for this run, so sending `CANCELLED` back would
+    /// contradict server-authoritative state.
+    ParentOrchestrationCompleted,
 }
 
 /// How a [`CancellationReason`] maps to the conversation's resulting status.
@@ -157,6 +165,9 @@ impl Display for CancellationReason {
             }
             CancellationReason::AgentExitedShell => {
                 write!(f, "agent command exited the shell")
+            }
+            CancellationReason::ParentOrchestrationCompleted => {
+                write!(f, "parent orchestration completed successfully")
             }
         }
     }
@@ -204,6 +215,12 @@ impl CancellationReason {
             // The shell died under the agent; a dedicated path finalizes this as a
             // terminal `Error`, so the cancellation machinery must not stamp a status.
             CancellationReason::AgentExitedShell => CancellationOutcome::FinalizedExternally,
+            // The server already recorded this run as SUCCEEDED via parent completion; a
+            // dedicated path finalizes the local conversation as Success, so the
+            // cancellation machinery must not stamp Cancelled over that.
+            CancellationReason::ParentOrchestrationCompleted => {
+                CancellationOutcome::FinalizedExternally
+            }
             CancellationReason::ManuallyCancelled
             | CancellationReason::AutomaticCloudHandoff
             | CancellationReason::UserCommandExecuted
