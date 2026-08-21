@@ -11,6 +11,7 @@ use super::{
     artifact_from_fork_proto, footer_model_token_usage,
 };
 use crate::ai::artifacts::Artifact;
+use crate::ai::blocklist::SerializedBlockListItem;
 use crate::ai::llms::LLMPreferences;
 use crate::auth::AuthStateProvider;
 use crate::auth::auth_manager::AuthManager;
@@ -222,6 +223,41 @@ fn stop_recording_error_result(message: &str) -> api::message::tool_call_result:
         )),
     })
 }
+
+fn run_shell_command_tool_call(command: &str) -> api::message::tool_call::Tool {
+    api::message::tool_call::Tool::RunShellCommand(api::message::tool_call::RunShellCommand {
+        command: command.to_string(),
+        is_read_only: false,
+        uses_pager: false,
+        citations: vec![],
+        is_risky: false,
+        wait_until_complete_value: None,
+        risk_category: 0,
+    })
+}
+
+#[allow(deprecated)]
+fn run_shell_command_finished_result(
+    command: &str,
+    output: &str,
+    command_id: &str,
+) -> api::message::tool_call_result::Result {
+    api::message::tool_call_result::Result::RunShellCommand(api::RunShellCommandResult {
+        command: command.to_string(),
+        output: output.to_string(),
+        exit_code: 0,
+        result: Some(api::run_shell_command_result::Result::CommandFinished(
+            api::ShellCommandFinished {
+                command_id: command_id.to_string(),
+                output: output.to_string(),
+                exit_code: 0,
+                start_ts: None,
+                finish_ts: None,
+            },
+        )),
+    })
+}
+
 fn restored_conversation_with_messages(messages: Vec<api::Message>) -> AIConversation {
     AIConversation::new_restored(
         AIConversationId::new(),
@@ -1485,5 +1521,94 @@ fn fetched_memories_dedupes_keeping_first_position_and_latest_data() {
             fetched_memory("m2", "other", "store-1", None),
             fetched_memory("m1", "same memory id different store", "store-2", None),
         ]
+    );
+}
+
+/// Builds a restored conversation with `n` sequential `RunShellCommand` tool
+/// calls/results (`echo 0`, `echo 1`, ... `echo {n-1}`), in chronological order.
+fn restored_conversation_with_n_run_shell_commands(n: usize) -> AIConversation {
+    let mut messages = Vec::with_capacity(n * 2);
+    for i in 0..n {
+        let tool_call_id = format!("call-{i}");
+        let command = format!("echo {i}");
+        messages.push(tool_call_message(
+            &format!("tool-call-{i}"),
+            "req",
+            &tool_call_id,
+            run_shell_command_tool_call(&command),
+        ));
+        messages.push(tool_call_result_message(
+            &format!("tool-result-{i}"),
+            "req",
+            &tool_call_id,
+            run_shell_command_finished_result(&command, &i.to_string(), &format!("command-{i}")),
+        ));
+    }
+    restored_conversation_with_messages(messages)
+}
+
+/// Regression test for APP-5428: a conversation with far more historical shell
+/// commands than `MAX_RESTORED_COMMAND_BLOCKS` must not restore one terminal block
+/// per command (each of which allocates several full-size grids). Only the most
+/// recent commands are kept, and a synthetic notice block communicates the
+/// truncation instead of silently dropping history.
+#[test]
+fn to_serialized_blocklist_items_caps_command_blocks_and_notes_truncation() {
+    let extra_commands = 10;
+    let total_commands = super::MAX_RESTORED_COMMAND_BLOCKS + extra_commands;
+    let conversation = restored_conversation_with_n_run_shell_commands(total_commands);
+    let items = conversation.to_serialized_blocklist_items();
+
+    // +1 for the synthetic truncation-notice block.
+    assert_eq!(items.len(), super::MAX_RESTORED_COMMAND_BLOCKS + 1);
+
+    let SerializedBlockListItem::Command { block: notice } = &items[0];
+    let notice_command = String::from_utf8_lossy(&notice.stylized_command).into_owned();
+    assert!(
+        notice_command.contains(&format!("{extra_commands} earlier command")),
+        "expected a truncation notice mentioning the dropped command count, got: {notice_command:?}"
+    );
+
+    // The oldest *kept* command is the 10th (0-indexed): the first 10 were dropped
+    // to stay within the cap.
+    let SerializedBlockListItem::Command { block: first_kept } = &items[1];
+    let first_kept_command = String::from_utf8_lossy(&first_kept.stylized_command).into_owned();
+    assert!(
+        first_kept_command.contains(&format!("echo {extra_commands}")),
+        "expected the oldest restored command to be the {extra_commands}th, got: {first_kept_command:?}"
+    );
+
+    let SerializedBlockListItem::Command { block: last_kept } = items.last().unwrap();
+    let last_kept_command = String::from_utf8_lossy(&last_kept.stylized_command).into_owned();
+    assert!(
+        last_kept_command.contains(&format!("echo {}", total_commands - 1)),
+        "expected the most recent command to be restored, got: {last_kept_command:?}"
+    );
+}
+
+/// Regression test for APP-5428 review finding: pins the `>` (not `>=`) boundary
+/// condition. At exactly `MAX_RESTORED_COMMAND_BLOCKS` commands, nothing is
+/// truncated: all commands are returned and no synthetic notice block is inserted.
+#[test]
+fn to_serialized_blocklist_items_does_not_truncate_at_exact_cap() {
+    let conversation =
+        restored_conversation_with_n_run_shell_commands(super::MAX_RESTORED_COMMAND_BLOCKS);
+    let items = conversation.to_serialized_blocklist_items();
+
+    assert_eq!(items.len(), super::MAX_RESTORED_COMMAND_BLOCKS);
+
+    let SerializedBlockListItem::Command { block: first } = &items[0];
+    let first_command = String::from_utf8_lossy(&first.stylized_command).into_owned();
+    assert!(
+        first_command.contains("echo 0"),
+        "at exactly the cap, the oldest command must still be the very first one \
+         restored (no notice block prepended), got: {first_command:?}"
+    );
+
+    let SerializedBlockListItem::Command { block: last } = items.last().unwrap();
+    let last_command = String::from_utf8_lossy(&last.stylized_command).into_owned();
+    assert!(
+        last_command.contains(&format!("echo {}", super::MAX_RESTORED_COMMAND_BLOCKS - 1)),
+        "got: {last_command:?}"
     );
 }

@@ -218,6 +218,28 @@ fn usage_metadata_indicates_usage(metadata: &ConversationUsageMetadata) -> bool 
         || metadata.was_summarized
 }
 
+/// Upper bound on the number of historical shell command blocks materialized when
+/// restoring AI conversation(s) into a terminal block list.
+///
+/// Each restored command becomes a full terminal `Block`, which owns several full-size
+/// grid buffers (prompt, prompt+command, output, rprompt) sized to the pane's current
+/// rows x columns, not to the command's actual content. A conversation with an
+/// unbounded number of historical commands (e.g. a long-running CLI agent session with
+/// thousands of tool calls) would otherwise materialize thousands of these grids up
+/// front at restoration time. Restoring only the most recent commands bounds that
+/// memory usage; the full AI transcript (exchanges, tool calls, agent output) is
+/// unaffected and always restored in full.
+///
+/// This bound must be enforced exactly once per independently-restored block list,
+/// via [`AIConversation::cap_restored_command_blocks`]. [`AIConversation::to_serialized_blocklist_items`]
+/// applies it to a single conversation. Callers that flatten *every* conversation
+/// recorded for one terminal surface into a single block list (e.g. app startup) must
+/// instead collect each conversation's uncapped blocks via
+/// [`AIConversation::extract_serialized_command_blocks`], merge them, and apply this cap
+/// once to the combined total -- capping each conversation independently would still let
+/// the combined total grow unboundedly with the number of conversations on that surface.
+pub(crate) const MAX_RESTORED_COMMAND_BLOCKS: usize = 500;
+
 // basic info for creating a dummy command block based on an exchange's inputs
 pub(crate) struct CommandBlockInfo {
     pub(crate) command: String,
@@ -4144,13 +4166,16 @@ impl AIConversation {
         }
     }
 
-    /// Converts the conversation into a vector of serialized command blocks.
-    /// When we open a new tab to restore a conversation in, we need to precompute this serialized list of blocks
-    /// to pass into the TerminalModel constructor since command blocks must be created
-    /// before the warp input block to not break bootstrapping.
-    /// Only the command blocks are actually created in the terminal model. During restoration in the TerminalView,
-    /// AI blocks are inserted relative to the command blocks based on timestamp.
-    pub fn to_serialized_blocklist_items(&self) -> Vec<SerializedBlockListItem> {
+    /// Extracts every historical shell command block from this conversation and
+    /// serializes it into a `SerializedBlockListItem`, with **no cap** on the number
+    /// returned.
+    ///
+    /// Most callers should use [`Self::to_serialized_blocklist_items`] instead, which
+    /// additionally bounds the result via [`Self::cap_restored_command_blocks`]. Use this
+    /// uncapped form only when merging command blocks from multiple conversations into a
+    /// single terminal surface's block list before applying one aggregate cap across all
+    /// of them (see [`MAX_RESTORED_COMMAND_BLOCKS`]).
+    pub fn extract_serialized_command_blocks(&self) -> Vec<SerializedBlockListItem> {
         let mut serialized_blocks = Vec::new();
 
         // Extract all command blocks from the task messages
@@ -4221,6 +4246,89 @@ impl AIConversation {
         }
 
         serialized_blocks
+    }
+
+    /// Converts the conversation into a vector of serialized command blocks, bounded at
+    /// [`MAX_RESTORED_COMMAND_BLOCKS`] and scoped to this conversation's agent view.
+    /// When we open a new tab to restore a conversation in, we need to precompute this serialized list of blocks
+    /// to pass into the TerminalModel constructor since command blocks must be created
+    /// before the warp input block to not break bootstrapping.
+    /// Only the command blocks are actually created in the terminal model. During restoration in the TerminalView,
+    /// AI blocks are inserted relative to the command blocks based on timestamp.
+    ///
+    /// Only use this for a block list that restores a single conversation. A block list
+    /// that flattens multiple conversations (e.g. every conversation recorded for one
+    /// terminal surface at startup) must instead call [`Self::extract_serialized_command_blocks`]
+    /// per conversation, merge the results, and cap the combined total once via
+    /// [`Self::cap_restored_command_blocks`] -- otherwise each conversation's independent
+    /// cap still lets the merged total grow unboundedly with the conversation count.
+    pub fn to_serialized_blocklist_items(&self) -> Vec<SerializedBlockListItem> {
+        Self::cap_restored_command_blocks(self.extract_serialized_command_blocks(), Some(self.id()))
+    }
+
+    /// Caps `items` at [`MAX_RESTORED_COMMAND_BLOCKS`], keeping the most recent, and
+    /// prepends a synthetic notice block when any were dropped so the truncation is
+    /// discoverable rather than silent. `items` must be in chronological order.
+    ///
+    /// Each restored command becomes a full terminal `Block` with several full-size grid
+    /// buffers, so an agent conversation (or set of conversations sharing one terminal
+    /// surface) with an unbounded command history would otherwise allocate unbounded
+    /// memory at restoration time. Keeping the most recent commands serves the ones a
+    /// user restoring the conversation is most likely to want to see; the full AI
+    /// transcript (chat messages, tool calls, agent output) is unaffected and always
+    /// restored in full.
+    ///
+    /// `notice_conversation_id` scopes the notice block's agent-view visibility to a
+    /// single conversation. Pass `None` when `items` were merged from multiple
+    /// conversations, so the notice is scoped to the terminal transcript generally
+    /// instead of any one conversation.
+    pub fn cap_restored_command_blocks(
+        mut items: Vec<SerializedBlockListItem>,
+        notice_conversation_id: Option<AIConversationId>,
+    ) -> Vec<SerializedBlockListItem> {
+        let total = items.len();
+        let truncated_count = total.saturating_sub(MAX_RESTORED_COMMAND_BLOCKS);
+        if truncated_count == 0 {
+            return items;
+        }
+
+        let mut items = items.split_off(truncated_count);
+        log::warn!(
+            "{total} historical command blocks were restored for one terminal surface; only \
+             restoring the most recent {MAX_RESTORED_COMMAND_BLOCKS} to bound memory usage"
+        );
+
+        // Surface the truncation to the user rather than silently dropping history: insert
+        // a synthetic shell-comment block right before the oldest command we kept.
+        let (pwd, first_retained_ts) = match items.first() {
+            Some(SerializedBlockListItem::Command { block }) => (block.pwd.clone(), block.start_ts),
+            None => (None, None),
+        };
+        let notice_ts = first_retained_ts
+            .map(|ts| ts - chrono::Duration::seconds(1))
+            .unwrap_or_else(Local::now);
+
+        let notice_block = SerializedBlock {
+            id: BlockId::new(),
+            stylized_command: Self::to_stylized_bytes(&format!(
+                "# {truncated_count} earlier command(s) were not restored to limit memory usage"
+            )),
+            pwd,
+            exit_code: ExitCode::from(0),
+            did_execute: true,
+            start_ts: Some(notice_ts),
+            completed_ts: Some(notice_ts),
+            agent_view_visibility: notice_conversation_id
+                .map(|id| AgentViewVisibility::new_from_conversation(id).into()),
+            ..Default::default()
+        };
+        items.insert(
+            0,
+            SerializedBlockListItem::Command {
+                block: Box::new(notice_block),
+            },
+        );
+        items
     }
 
     pub fn mark_action_as_reverted(
