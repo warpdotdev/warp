@@ -93,6 +93,7 @@ impl Describe for BlockItem {
         match self {
             BlockItem::Paragraph(_) => f.write_str("Paragraph")?,
             BlockItem::TextBlock { .. } => f.write_str("Text Block")?,
+            BlockItem::BlockQuote { .. } => f.write_str("Block Quote")?,
             BlockItem::RunnableCodeBlock {
                 code_block_type, ..
             } => write!(f, "Code Block - {code_block_type}",)?,

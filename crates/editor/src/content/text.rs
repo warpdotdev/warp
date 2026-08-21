@@ -208,6 +208,7 @@ fn parse_table_cell_markdown_inline(cell: &str) -> FormattedTextInline {
     for line in parsed.lines {
         match line {
             FormattedTextLine::Line(fragments) => inline.extend(fragments),
+            FormattedTextLine::BlockQuote(fragments) => inline.extend(fragments),
             FormattedTextLine::Heading(header) => inline.extend(header.text),
             FormattedTextLine::OrderedList(item) => inline.extend(item.indented_text.text),
             FormattedTextLine::UnorderedList(item) => inline.extend(item.text),
@@ -630,6 +631,7 @@ impl Display for BufferText {
                         write!(f, "code:{code_block_type}")?;
                     }
                     BufferBlockStyle::PlainText => f.write_str("text")?,
+                    BufferBlockStyle::BlockQuote => f.write_str("quote")?,
                     BufferBlockStyle::Header { header_size } => {
                         write!(f, "header{}", Into::<usize>::into(*header_size))?;
                     }
@@ -873,6 +875,7 @@ pub enum BufferBlockStyle {
         complete: bool,
     },
     PlainText,
+    BlockQuote,
     Header {
         header_size: BlockHeaderSize,
     },
@@ -904,6 +907,7 @@ impl BufferBlockStyle {
     pub(super) fn line_break_behavior(&self) -> BlockLineBreakBehavior {
         match self {
             Self::Header { .. } => BlockLineBreakBehavior::BlockMarker(BufferBlockStyle::PlainText),
+            Self::BlockQuote => BlockLineBreakBehavior::BlockMarker(BufferBlockStyle::BlockQuote),
             Self::TaskList { indent_level, .. } => {
                 BlockLineBreakBehavior::BlockMarker(BufferBlockStyle::TaskList {
                     indent_level: *indent_level,
@@ -944,6 +948,7 @@ impl BufferBlockStyle {
             // 1) The block styling is different.
             // 2) The cursor is either inline or in a runnable code block.
             Self::Header { .. }
+            | Self::BlockQuote
             | Self::OrderedList { .. }
             | Self::UnorderedList { .. }
             | Self::TaskList { .. } => {
@@ -959,6 +964,7 @@ impl BufferBlockStyle {
     pub fn allows_formatting(&self) -> bool {
         match self {
             Self::PlainText
+            | Self::BlockQuote
             | Self::Header { .. }
             | Self::UnorderedList { .. }
             | Self::OrderedList { .. }

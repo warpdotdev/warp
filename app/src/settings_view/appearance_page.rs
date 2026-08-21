@@ -63,8 +63,8 @@ use crate::settings::{
     CursorDisplayType, DEFAULT_MONOSPACE_FONT_NAME, EnforceMinimumContrast, FocusPaneOnHover,
     FontSettings, FontSettingsChangedEvent, GPUSettings, InputBoxType, InputModeSettings,
     InputModeState, InputSettings, InputSettingsChangedEvent, MonospaceFontName, PaneSettings,
-    ShouldDimInactivePanes, ThemeSettings, UseSystemTheme, UseThinStrokes, active_theme_kind,
-    respect_system_theme,
+    ShouldDimInactivePanes, ThemeSettings, UIFontName, UseSystemTheme, UseThinStrokes,
+    active_theme_kind, respect_system_theme,
 };
 use crate::terminal::block_list_viewport::InputMode;
 use crate::terminal::blockgrid_element::BlockGridElement;
@@ -502,6 +502,7 @@ pub enum AppearancePageAction {
     BlurSliderDragged(f32),
     SetFontFamily(String),
     SetAIFontFamily(String),
+    SetUIFontFamily(String),
     SetThinStrokes(ThinStrokes),
     SetInputMode {
         new_mode: InputMode,
@@ -563,6 +564,7 @@ pub struct AppearanceSettingsPageView {
     line_height_editor: ViewHandle<EditorView>,
     notebook_font_size_editor: ViewHandle<EditorView>,
     ai_font_family_dropdown: ViewHandle<FilterableDropdown<AppearancePageAction>>,
+    ui_font_family_dropdown: ViewHandle<FilterableDropdown<AppearancePageAction>>,
     new_window_columns_editor: ViewHandle<EditorView>,
     valid_new_window_columns: bool,
     new_window_rows_editor: ViewHandle<EditorView>,
@@ -638,6 +640,7 @@ impl TypedActionView for AppearanceSettingsPageView {
                     );
                 });
             }
+            SetUIFontFamily(name) => self.set_ui_font_family(name, ctx),
             SetThinStrokes(value) => self.set_thin_strokes(value, ctx),
             SetEnforceMinimumContrast(value) => {
                 FontSettings::handle(ctx).update(ctx, |font_settings, ctx| {
@@ -1143,6 +1146,14 @@ impl AppearanceSettingsPageView {
             dropdown.set_selected_by_index(0, ctx);
             dropdown
         });
+        let ui_font_family_dropdown = ctx.add_typed_action_view(|ctx| {
+            let mut dropdown = FilterableDropdown::new(ctx);
+            dropdown.set_top_bar_max_width(FONT_FAMILY_DROPDOWN_WIDTH);
+            dropdown.set_menu_width(FONT_FAMILY_DROPDOWN_WIDTH, ctx);
+            dropdown.add_items(vec![Self::default_ui_font_item()], ctx);
+            dropdown.set_selected_by_index(0, ctx);
+            dropdown
+        });
 
         let font_weight_dropdown = ctx.add_typed_action_view(|ctx| {
             let mut dropdown = Dropdown::new(ctx);
@@ -1337,6 +1348,7 @@ impl AppearanceSettingsPageView {
             window_id: ctx.window_id(),
             local_only_icon_tooltip_states: Default::default(),
             ai_font_family_dropdown,
+            ui_font_family_dropdown,
             notebook_font_size_editor,
             font_size_editor,
             line_height_editor,
@@ -1489,6 +1501,7 @@ impl AppearanceSettingsPageView {
         let font_settings = FontSettings::as_ref(ctx);
         let mut text_settings_widgets: Vec<Box<dyn SettingsWidget<View = Self>>> = vec![
             Box::new(TerminalFontWidget::default()),
+            Box::new(UIFontWidget),
             Box::new(AIFontWidget::default()),
             Box::new(NotebookFontSizeWidget::default()),
         ];
@@ -1594,7 +1607,8 @@ impl AppearanceSettingsPageView {
         ctx: &mut ViewContext<Self>,
     ) {
         match event {
-            AppearanceEvent::MonospaceFontFamilyChanged { .. } => {
+            AppearanceEvent::MonospaceFontFamilyChanged { .. }
+            | AppearanceEvent::UiFontFamilyChanged { .. } => {
                 self.update_font_dropdown(ctx);
             }
             AppearanceEvent::MonospaceFontSizeChanged { .. } => {
@@ -1620,7 +1634,6 @@ impl AppearanceSettingsPageView {
                 // preview chips when the theme changes to keep them in sync.
                 self.context_chips = Self::get_context_chip_renderers(ctx);
             }
-            _ => {}
         }
 
         ctx.notify();
@@ -1678,6 +1691,13 @@ impl AppearanceSettingsPageView {
         }
 
         initial_dropdown_item
+    }
+
+    fn default_ui_font_item() -> DropdownItem<AppearancePageAction> {
+        DropdownItem::new(
+            "System default",
+            AppearancePageAction::SetUIFontFamily(String::new()),
+        )
     }
 
     fn input_mode_dropdown_item_label(val: InputMode) -> &'static str {
@@ -2056,6 +2076,8 @@ impl AppearanceSettingsPageView {
     fn update_font_dropdown(&mut self, ctx: &mut ViewContext<Self>) {
         let monospace_font_family = Appearance::as_ref(ctx).monospace_font_family();
         let ai_font_family = Appearance::as_ref(ctx).ai_font_family();
+        let ui_font_family = Appearance::as_ref(ctx).ui_font_family();
+        let ui_font_name = FontSettings::as_ref(ctx).ui_font_name.value().clone();
 
         self.font_family_dropdown.update(ctx, |dropdown, ctx| {
             // Get the family name of the current monospace font.
@@ -2183,6 +2205,42 @@ impl AppearanceSettingsPageView {
             }
         });
 
+        self.ui_font_family_dropdown.update(ctx, |dropdown, ctx| {
+            if !ui_font_name.is_empty() {
+                self.available_families
+                    .entry(ui_font_name.clone())
+                    .and_modify(|entry| entry.0 = Some(ui_font_family))
+                    .or_insert((Some(ui_font_family), FontType::Any));
+            }
+
+            let mut items = self
+                .available_families
+                .iter()
+                .map(|(name, (family, _font_type))| {
+                    let mut item = DropdownItem::new(
+                        name,
+                        AppearancePageAction::SetUIFontFamily(name.clone()),
+                    );
+                    if cfg!(not(any(target_os = "linux", target_os = "freebsd")))
+                        && let Some(family_id) = family
+                    {
+                        item = item.with_font_override(*family_id);
+                    }
+                    item
+                })
+                .collect::<Vec<_>>();
+            items.sort_by(|a, b| a.display_text.cmp(&b.display_text));
+            items.insert(0, Self::default_ui_font_item());
+            dropdown.set_items(items, ctx);
+
+            let selected_name = if ui_font_name.is_empty() {
+                "System default"
+            } else {
+                &ui_font_name
+            };
+            dropdown.set_selected_by_name(selected_name, ctx);
+        });
+
         ctx.notify();
     }
 
@@ -2251,6 +2309,12 @@ impl AppearanceSettingsPageView {
     pub fn set_ai_font_family(&mut self, name: &str, ctx: &mut ViewContext<Self>) {
         FontSettings::handle(ctx).update(ctx, |font_settings, ctx| {
             report_if_error!(font_settings.ai_font_name.set_value(name.to_string(), ctx))
+        });
+    }
+
+    pub fn set_ui_font_family(&mut self, name: &str, ctx: &mut ViewContext<Self>) {
+        FontSettings::handle(ctx).update(ctx, |font_settings, ctx| {
+            report_if_error!(font_settings.ui_font_name.set_value(name.to_string(), ctx))
         });
     }
 
@@ -4152,6 +4216,44 @@ impl SettingsWidget for ShowBlockDividersWidget {
 #[derive(Default)]
 struct AIFontWidget {
     checkbox_state: MouseStateHandle,
+}
+
+struct UIFontWidget;
+
+impl SettingsWidget for UIFontWidget {
+    type View = AppearanceSettingsPageView;
+
+    fn search_terms(&self) -> &str {
+        "text interface ui application system font family"
+    }
+
+    fn render(
+        &self,
+        view: &Self::View,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
+        let mut ui_font = Flex::column();
+        ui_font.add_child(render_body_item_label::<AppearancePageAction>(
+            "Interface font".to_string(),
+            None,
+            None,
+            LocalOnlyIconState::for_setting(
+                UIFontName::storage_key(),
+                UIFontName::sync_to_cloud(),
+                &mut view.local_only_icon_tooltip_states.borrow_mut(),
+                app,
+            ),
+            ToggleState::Enabled,
+            appearance,
+        ));
+        ui_font.add_child(
+            Container::new(ChildView::new(&view.ui_font_family_dropdown).finish())
+                .with_margin_bottom(10.)
+                .finish(),
+        );
+        ui_font.finish()
+    }
 }
 
 impl SettingsWidget for AIFontWidget {

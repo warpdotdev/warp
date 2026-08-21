@@ -152,6 +152,9 @@ impl<'a> Positioned<'a, BlockItem> {
             BlockItem::TaskList { paragraph, .. } => self
                 .task_list(paragraph)
                 .coordinate_to_location(self.unpad_x(x), y),
+            BlockItem::BlockQuote { paragraph } => self
+                .block_quote(paragraph)
+                .coordinate_to_location(self.unpad_x(x), y),
             BlockItem::UnorderedList { paragraph, .. } => self
                 .unordered_list(paragraph)
                 .coordinate_to_location(self.unpad_x(x), y),

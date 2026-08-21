@@ -167,6 +167,7 @@ fn parse_markdown_internal<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
                 })
             }),
             map(parse_header, FormattedTextLine::Heading),
+            parse_block_quote,
             map(parse_image, FormattedTextLine::Image),
             |i| {
                 parse_task_list(i, &indentation_context)
@@ -338,6 +339,29 @@ fn parse_header<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
         map(
             pair(parse_header_tag, parse_markdown_line),
             |(heading_size, text)| FormattedTextHeader { heading_size, text },
+        ),
+    )(markdown)
+}
+
+/// Parse a block quote line, discarding its marker before parsing inline formatting.
+fn parse_block_quote<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
+    markdown: &'a str,
+) -> IResult<&'a str, FormattedTextLine, E> {
+    context(
+        "block_quote",
+        map(
+            preceded(
+                tuple((
+                    parse_block_leading_spaces,
+                    fold_many1(
+                        terminated(char('>'), many_m_n(0, 1, char(' '))),
+                        || (),
+                        |_, _| (),
+                    ),
+                )),
+                parse_markdown_line,
+            ),
+            FormattedTextLine::BlockQuote,
         ),
     )(markdown)
 }

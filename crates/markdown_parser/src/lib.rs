@@ -156,6 +156,7 @@ impl FormattedText {
 pub enum FormattedTextLine {
     Heading(FormattedTextHeader),
     Line(FormattedTextInline),
+    BlockQuote(FormattedTextInline),
     OrderedList(OrderedFormattedIndentTextInline),
     UnorderedList(FormattedIndentTextInline),
     CodeBlock(CodeBlockText),
@@ -176,7 +177,9 @@ impl FormattedTextLine {
                 .iter()
                 .map(|fragment| fragment.raw_text())
                 .join(""),
-            Self::Line(line) => line.iter().map(|fragment| fragment.raw_text()).join(""),
+            Self::Line(line) | Self::BlockQuote(line) => {
+                line.iter().map(|fragment| fragment.raw_text()).join("")
+            }
             Self::TaskList(line) => line
                 .text
                 .iter()
@@ -212,7 +215,7 @@ impl FormattedTextLine {
                     fragment.styles.weight = weight;
                 }
             }
-            Self::Line(line) => {
+            Self::Line(line) | Self::BlockQuote(line) => {
                 for fragment in line {
                     fragment.styles.weight = weight;
                 }
@@ -245,7 +248,7 @@ impl FormattedTextLine {
     fn inline_fragments(&self) -> Option<&FormattedTextInline> {
         match &self {
             FormattedTextLine::Heading(header) => Some(&header.text),
-            FormattedTextLine::Line(texts) => Some(texts),
+            FormattedTextLine::Line(texts) | FormattedTextLine::BlockQuote(texts) => Some(texts),
             FormattedTextLine::OrderedList(texts) => Some(&texts.indented_text.text),
             FormattedTextLine::UnorderedList(texts) => Some(&texts.text),
             FormattedTextLine::TaskList(list) => Some(&list.text),
@@ -286,7 +289,7 @@ impl LineCount for FormattedTextLine {
         match self {
             Self::CodeBlock(text) => text.code.matches('\n').count(),
             Self::Heading(_) => 1,
-            Self::Line(_) => 1,
+            Self::Line(_) | Self::BlockQuote(_) => 1,
             Self::OrderedList(_) => 1,
             Self::UnorderedList(_) => 1,
             Self::TaskList(_) => 1,

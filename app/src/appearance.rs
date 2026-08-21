@@ -90,6 +90,19 @@ impl AppearanceManager {
                         appearance.set_monospace_font_weight(new_font_weight, ctx)
                     });
                 }
+                FontSettingsChangedEvent::UIFontName { .. } => {
+                    let font_name = FontSettings::as_ref(ctx).ui_font_name.value().clone();
+                    let new_family = if font_name.is_empty() {
+                        load_default_ui_font_family(ctx).ok()
+                    } else {
+                        get_or_load_font_family(&font_name, ctx)
+                    };
+                    if let Some(new_family) = new_family {
+                        Appearance::handle(ctx).update(ctx, |appearance, ctx| {
+                            appearance.set_ui_font_family(new_family, ctx)
+                        });
+                    }
+                }
                 FontSettingsChangedEvent::LineHeightRatio { .. } => {
                     let new_line_height_ratio =
                         *FontSettings::as_ref(ctx).line_height_ratio.value();
@@ -406,6 +419,10 @@ fn build_appearance(ctx: &mut AppContext) -> Appearance {
 
     let ui_font_family =
         load_default_ui_font_family(ctx).expect("unable to load default ui font family");
+    let ui_font_name = FontSettings::as_ref(ctx).ui_font_name.value().clone();
+    let ui_font_family_from_settings = (!ui_font_name.is_empty())
+        .then(|| get_or_load_font_family(&ui_font_name, ctx))
+        .flatten();
 
     let am_font_family_from_settings = get_or_load_font_family(&am_font_name, ctx);
 
@@ -428,7 +445,7 @@ fn build_appearance(ctx: &mut AppContext) -> Appearance {
         monospace_font_family_from_settings.unwrap_or(default_monospace_font_family),
         monospace_font_size,
         monospace_font_weight,
-        ui_font_family,
+        ui_font_family_from_settings.unwrap_or(ui_font_family),
         line_height_ratio,
         am_font_family_from_settings.unwrap_or(default_monospace_font_family),
         password_font_family,
