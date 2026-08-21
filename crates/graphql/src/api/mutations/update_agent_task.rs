@@ -1,5 +1,6 @@
 use crate::ai::{AgentTaskState, PlatformErrorCode};
 use crate::error::UserFacingError;
+pub use crate::platform_error::{PlatformErrorInput, PlatformErrorMetadataInput};
 use crate::request_context::RequestContext;
 use crate::response_context::ResponseContext;
 use crate::schema;
@@ -37,21 +38,6 @@ pub struct AgentTaskStatusMessageInput {
     pub message: String,
     #[cynic(skip_serializing_if = "Option::is_none")]
     pub error: Option<PlatformErrorInput>,
-}
-
-#[derive(cynic::InputObject, Debug)]
-pub struct PlatformErrorInput {
-    pub code: PlatformErrorCode,
-    pub retryable: bool,
-    pub metadata: Vec<PlatformErrorMetadataInput>,
-    #[cynic(skip_serializing_if = "Option::is_none")]
-    pub debug: Option<String>,
-}
-
-#[derive(cynic::InputObject, Debug)]
-pub struct PlatformErrorMetadataInput {
-    pub key: String,
-    pub value: String,
 }
 
 #[derive(cynic::QueryFragment, Debug)]

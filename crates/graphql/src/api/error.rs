@@ -1,5 +1,5 @@
-use super::ai::PlatformErrorCode;
 use super::object::ObjectType;
+use super::platform_error::PlatformErrorInfoResponse;
 use crate::response_context::ResponseContext;
 use crate::schema;
 
@@ -13,21 +13,7 @@ pub struct UserFacingError {
 pub struct PlatformError {
     pub message: String,
     pub detail: Option<String>,
-    pub info: PlatformErrorInfo,
-}
-
-#[derive(cynic::QueryFragment, Debug)]
-pub struct PlatformErrorInfo {
-    pub code: PlatformErrorCode,
-    pub retryable: bool,
-    pub metadata: Vec<PlatformErrorMetadata>,
-    pub debug: Option<String>,
-}
-
-#[derive(cynic::QueryFragment, Debug)]
-pub struct PlatformErrorMetadata {
-    pub key: String,
-    pub value: String,
+    pub info: PlatformErrorInfoResponse,
 }
 
 #[derive(cynic::InlineFragments, Debug)]

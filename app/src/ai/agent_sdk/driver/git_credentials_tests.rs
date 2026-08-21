@@ -1,19 +1,22 @@
 use futures::executor::block_on;
 use warp_graphql::ai::PlatformErrorCode;
+use warp_graphql::platform_error::PlatformErrorInfo;
 
 use super::*;
 
 fn dependency_error(retryable: bool) -> TaskGitCredentialsError {
     TaskGitCredentialsError::Platform {
         message: "GitHub is temporarily unavailable.".to_string(),
-        code: PlatformErrorCode::ResourceUnavailable,
-        retryable,
         detail: Some("Repository access could not be resolved.".to_string()),
-        metadata: std::collections::BTreeMap::from([
-            ("provider".to_string(), "github".to_string()),
-            ("resource".to_string(), "installation".to_string()),
-        ]),
-        debug: None,
+        info: PlatformErrorInfo {
+            code: PlatformErrorCode::ResourceUnavailable,
+            retryable,
+            metadata: std::collections::BTreeMap::from([
+                ("provider".to_string(), "github".to_string()),
+                ("resource".to_string(), "installation".to_string()),
+            ]),
+            debug: None,
+        },
     }
 }
 
@@ -93,7 +96,10 @@ fn fetch_with_retry_exhausts_bounded_dependency_attempts() {
     assert!(matches!(
         error,
         TaskGitCredentialsError::Platform {
-            retryable: true,
+            info: PlatformErrorInfo {
+                retryable: true,
+                ..
+            },
             ..
         }
     ));

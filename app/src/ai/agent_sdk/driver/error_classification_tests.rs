@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 
 use warp_graphql::ai::{AgentTaskState, PlatformErrorCode};
+use warp_graphql::platform_error::PlatformErrorInfo;
 
 use super::classify_driver_error;
 use crate::ai::agent_sdk::driver::AgentDriverError;
@@ -25,14 +26,16 @@ fn retryable_dependency_credentials_failure_is_error_with_structured_metadata() 
     let (state, update) = classify_driver_error(&AgentDriverError::GitCredentialsFetchFailed(
         TaskGitCredentialsError::Platform {
             message: "External dependency is unavailable.".to_string(),
-            code: PlatformErrorCode::ResourceUnavailable,
-            retryable: true,
             detail: Some("Repository access could not be resolved.".to_string()),
-            metadata: BTreeMap::from([
-                ("provider".to_string(), "github".to_string()),
-                ("resource".to_string(), "installation".to_string()),
-            ]),
-            debug: None,
+            info: PlatformErrorInfo {
+                code: PlatformErrorCode::ResourceUnavailable,
+                retryable: true,
+                metadata: BTreeMap::from([
+                    ("provider".to_string(), "github".to_string()),
+                    ("resource".to_string(), "installation".to_string()),
+                ]),
+                debug: None,
+            },
         },
     ));
 
@@ -57,14 +60,16 @@ fn user_credentials_failure_remains_failed() {
     let (state, update) = classify_driver_error(&AgentDriverError::GitCredentialsFetchFailed(
         TaskGitCredentialsError::Platform {
             message: "Repository was not found.".to_string(),
-            code: PlatformErrorCode::ResourceNotFound,
-            retryable: false,
             detail: None,
-            metadata: BTreeMap::from([
-                ("provider".to_string(), "github".to_string()),
-                ("resource".to_string(), "repository".to_string()),
-            ]),
-            debug: None,
+            info: PlatformErrorInfo {
+                code: PlatformErrorCode::ResourceNotFound,
+                retryable: false,
+                metadata: BTreeMap::from([
+                    ("provider".to_string(), "github".to_string()),
+                    ("resource".to_string(), "repository".to_string()),
+                ]),
+                debug: None,
+            },
         },
     ));
 

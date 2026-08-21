@@ -5,12 +5,12 @@ use itertools::Itertools;
 use mockito::{Matcher, Server};
 use warp_graphql::ai::{AgentTaskState, PlatformErrorCode};
 use warp_graphql::error::{
-    PlatformError as GraphqlPlatformError, PlatformErrorInfo, PlatformErrorMetadata,
-    UserFacingError, UserFacingErrorInterface,
+    PlatformError as GraphqlPlatformError, UserFacingError, UserFacingErrorInterface,
 };
 use warp_graphql::mutations::update_agent_task::{
     UpdateAgentTask, UpdateAgentTaskInput, UpdateAgentTaskVariables,
 };
+use warp_graphql::platform_error::{PlatformErrorInfoResponse, PlatformErrorMetadataResponse};
 use warp_graphql::queries::task_git_credentials::TaskGitCredentials;
 use warp_graphql::response_context::ResponseContext;
 use warp_server_client::base_client::CLOUD_AGENT_ID_HEADER;
@@ -38,49 +38,83 @@ fn parses_structured_task_git_credentials_error() {
         error: UserFacingErrorInterface::PlatformError(GraphqlPlatformError {
             message: "GitHub is temporarily unavailable.".to_string(),
             detail: Some("Repository access could not be resolved.".to_string()),
-            info: PlatformErrorInfo {
+            info: PlatformErrorInfoResponse {
                 code: PlatformErrorCode::ResourceUnavailable,
                 retryable: true,
                 metadata: vec![
-                    PlatformErrorMetadata {
+                    PlatformErrorMetadataResponse {
                         key: "provider".to_string(),
                         value: "github".to_string(),
                     },
-                    PlatformErrorMetadata {
+                    PlatformErrorMetadataResponse {
                         key: "resource".to_string(),
                         value: "installation".to_string(),
                     },
                 ],
-                debug: None,
+                debug: Some("request-id=dogfood-only".to_string()),
             },
         }),
         response_context: ResponseContext {
             server_version: None,
         },
     });
+    let (_, status) = error.task_status();
+    assert_eq!(
+        status
+            .platform_error
+            .expect("structured platform error")
+            .debug,
+        None
+    );
 
     match error {
         TaskGitCredentialsError::Platform {
             message,
-            code,
-            retryable,
             detail,
-            metadata,
-            debug,
+            info,
         } => {
             assert_eq!(message, "GitHub is temporarily unavailable.");
-            assert_eq!(code, PlatformErrorCode::ResourceUnavailable);
-            assert!(retryable);
+            assert_eq!(info.code, PlatformErrorCode::ResourceUnavailable);
+            assert!(info.retryable);
             assert_eq!(
                 detail.as_deref(),
                 Some("Repository access could not be resolved.")
             );
-            assert_eq!(metadata["provider"], "github");
-            assert_eq!(metadata["resource"], "installation");
-            assert_eq!(debug, None);
+            assert_eq!(info.metadata["provider"], "github");
+            assert_eq!(info.metadata["resource"], "installation");
+            assert_eq!(info.debug.as_deref(), Some("request-id=dogfood-only"));
         }
         error => panic!("expected structured platform error, got {error:?}"),
     }
+}
+
+#[test]
+fn serialized_dependency_response_accepts_null_optional_fields() {
+    let error = match parse_serialized_task_git_credentials(
+        DEPENDENCY_CREDENTIALS_RESPONSE_WITH_NULL_OPTIONAL_FIELDS,
+    ) {
+        Err(error) => error,
+        Ok(_) => panic!("dependency fixture should return a platform error"),
+    };
+
+    match error {
+        TaskGitCredentialsError::Platform {
+            detail: None, info, ..
+        } => {
+            assert_eq!(info.debug, None);
+            assert_eq!(info.metadata["provider"], "github");
+        }
+        error => panic!("expected structured platform error, got {error:?}"),
+    }
+}
+
+#[test]
+fn serialized_dependency_response_rejects_malformed_metadata() {
+    let response = serde_json::from_str::<cynic::GraphQlResponse<TaskGitCredentials>>(
+        MALFORMED_DEPENDENCY_CREDENTIALS_RESPONSE,
+    );
+
+    assert!(response.is_err());
 }
 
 const DEPENDENCY_CREDENTIALS_RESPONSE: &str = r#"{
@@ -133,6 +167,49 @@ const USER_CREDENTIALS_RESPONSE: &str = r#"{
     }
 }"#;
 
+const DEPENDENCY_CREDENTIALS_RESPONSE_WITH_NULL_OPTIONAL_FIELDS: &str = r#"{
+    "data": {
+        "taskGitCredentials": {
+            "__typename": "UserFacingError",
+            "error": {
+                "__typename": "PlatformError",
+                "message": "GitHub is temporarily unavailable.",
+                "detail": null,
+                "info": {
+                    "code": "RESOURCE_UNAVAILABLE",
+                    "retryable": true,
+                    "metadata": [
+                        {"key": "provider", "value": "github"}
+                    ],
+                    "debug": null
+                }
+            },
+            "responseContext": {"serverVersion": null}
+        }
+    }
+}"#;
+
+const MALFORMED_DEPENDENCY_CREDENTIALS_RESPONSE: &str = r#"{
+    "data": {
+        "taskGitCredentials": {
+            "__typename": "UserFacingError",
+            "error": {
+                "__typename": "PlatformError",
+                "message": "GitHub is temporarily unavailable.",
+                "detail": null,
+                "info": {
+                    "code": "RESOURCE_UNAVAILABLE",
+                    "retryable": true,
+                    "metadata": [
+                        {"key": "provider"}
+                    ],
+                    "debug": null
+                }
+            },
+            "responseContext": {"serverVersion": null}
+        }
+    }
+}"#;
 fn parse_serialized_task_git_credentials(
     body: &str,
 ) -> Result<Vec<super::GitCredential>, TaskGitCredentialsError> {

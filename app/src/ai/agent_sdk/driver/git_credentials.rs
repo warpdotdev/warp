@@ -287,37 +287,35 @@ fn log_task_git_credentials_failure(
     retry_delay: Option<Duration>,
 ) {
     match error {
-        TaskGitCredentialsError::Platform {
-            code,
-            retryable,
-            metadata,
-            debug,
-            ..
-        } => {
-            let provider = metadata
+        TaskGitCredentialsError::Platform { info, .. } => {
+            let provider = info
+                .metadata
                 .get("provider")
                 .map(String::as_str)
                 .unwrap_or("unknown");
-            let resource = metadata
+            let resource = info
+                .metadata
                 .get("resource")
                 .map(String::as_str)
                 .unwrap_or("unknown");
             log::warn!(
-                "{operation} failed (attempt {attempt}, code={code:?}, retryable={retryable}, \
+                "{operation} failed (attempt {attempt}, code={:?}, retryable={}, \
                  provider={provider}, resource={resource}, retry_delay_seconds={})",
+                info.code,
+                info.retryable,
                 retry_delay.map_or(0, |delay| delay.as_secs()),
             );
             tracing::warn!(
                 operation,
                 attempt,
-                error_code = ?code,
-                retryable,
+                error_code = ?info.code,
+                retryable = info.retryable,
                 provider,
                 resource,
                 retry_delay_seconds = retry_delay.map_or(0, |delay| delay.as_secs()),
                 "Task git credentials request failed"
             );
-            if let Some(debug) = debug {
+            if let Some(debug) = &info.debug {
                 safe_warn!(
                     safe: ("{operation} staging debug details are redacted"),
                     full: ("{operation} staging debug details: {debug}")
