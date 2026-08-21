@@ -973,6 +973,27 @@ fn usage_totals_dollar_total_matches_last_block_when_provider_cost_diverges() {
     assert_eq!(totals.total_cost_in_cents(), Some(4.0));
 }
 
+/// APP-5579 regression: when a conversation has no charged-usage total
+/// (e.g. a legacy or restored conversation from before charged-usage
+/// tracking), `total_cost_in_cents()` must fall back to the provider-only
+/// baseline, including a known-zero baseline, rather than reading as
+/// unknown or zero.
+#[test]
+fn total_cost_in_cents_falls_back_to_provider_baseline_without_charged_usage() {
+    let known_positive =
+        restored_conversation(Some(conversation_data_with_provider_cost(Some(3.2))));
+    assert_eq!(
+        known_positive.usage_totals().total_cost_in_cents(),
+        Some(3.2)
+    );
+
+    let known_zero = restored_conversation(Some(conversation_data_with_provider_cost(Some(0.0))));
+    assert_eq!(known_zero.usage_totals().total_cost_in_cents(), Some(0.0));
+
+    let unknown = restored_conversation(Some(conversation_data_with_provider_cost(None)));
+    assert_eq!(unknown.usage_totals().total_cost_in_cents(), None);
+}
+
 #[test]
 fn update_cost_and_usage_resets_stale_charged_usage_for_last_block_on_new_user_turn() {
     App::test((), |mut app| async move {

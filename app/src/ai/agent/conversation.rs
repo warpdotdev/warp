@@ -202,13 +202,8 @@ pub struct ConversationUsageTotals {
 }
 
 impl ConversationUsageTotals {
-    /// The dollar total to display for the whole conversation: the
-    /// accumulated charged usage's total (matching
-    /// `charged_usage_for_last_block`'s accounting family) when present,
-    /// falling back to the provider-only baseline for conversations that
-    /// predate charged-usage tracking. Displaying the two totals from
-    /// different pipelines is what let "last response" exceed "total" by a
-    /// cent (APP-5579).
+    /// Returns the charged-usage total when available, otherwise the
+    /// provider-cost baseline.
     pub fn total_cost_in_cents(&self) -> Option<f32> {
         self.charged_usage
             .map(|usage| usage.total_cost_in_cents())
