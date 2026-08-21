@@ -67,6 +67,12 @@ pub enum OrchestrationEventServiceEvent {
     /// Signals that a conversation may have pending orchestration events
     /// ready to drain.
     EventsReady { conversation_id: AIConversationId },
+    /// Delivery attempts for a batch of events exhausted their retry budget.
+    /// The events are parked back in the pending queue with a fresh budget
+    /// and drain on the next `EventsReady` trigger (a status change back to
+    /// a ready state, or new inbound events); the controller surfaces the
+    /// failure to the user instead of retrying immediately.
+    EventsDeliveryExhausted { conversation_id: AIConversationId },
 }
 
 /// Synchronous state manager for orchestration event queuing, delivery tracking, and readiness detection.
@@ -323,8 +329,10 @@ impl OrchestrationEventService {
     }
 
     /// Moves all awaiting events back to pending for retry after a failed
-    /// send attempt. Increments attempt counts and drops events that have
-    /// exhausted their retry limit.
+    /// send attempt. Events that exhaust their retry limit are parked rather
+    /// than dropped: they return to the pending queue with a fresh retry
+    /// budget but do not re-fire `EventsReady`, breaking the immediate retry
+    /// loop while preserving the events for the next drain trigger.
     pub fn requeue_awaiting_events(
         &mut self,
         conversation_id: AIConversationId,
@@ -338,22 +346,22 @@ impl OrchestrationEventService {
             return;
         }
 
-        let (retryable, exhausted) =
-            increment_attempt_and_partition_by_retry_limit(events, MAX_RETRY_ATTEMPTS);
+        let (requeued, any_exhausted) =
+            requeue_events_after_failed_send(events, MAX_RETRY_ATTEMPTS);
 
-        if !exhausted.is_empty() {
-            log::warn!(
-                "Dropping {} orchestration events after exhausting retries",
-                exhausted.len()
-            );
-        }
-
-        if !retryable.is_empty() {
+        if !requeued.is_empty() {
             let queue = self.pending_events.entry(conversation_id).or_default();
-            let mut combined = retryable;
+            let mut combined = requeued;
             combined.append(queue);
             *queue = combined;
+        }
 
+        if any_exhausted {
+            log::warn!(
+                "Orchestration event delivery retries exhausted; parking events for a later drain: conversation_id={conversation_id:?}"
+            );
+            ctx.emit(OrchestrationEventServiceEvent::EventsDeliveryExhausted { conversation_id });
+        } else {
             ctx.emit(OrchestrationEventServiceEvent::EventsReady { conversation_id });
         }
     }
@@ -690,18 +698,27 @@ fn count_pending_lifecycle_events(queue: &[PendingEvent]) -> usize {
         .count()
 }
 
-/// Increment attempt counts and split events into retryable vs exhausted buckets.
-/// Exhaustion is based on `max_retry_attempts` after incrementing this attempt.
-fn increment_attempt_and_partition_by_retry_limit(
-    mut attempted_events: Vec<PendingEvent>,
+/// Increments attempt counts after a failed send and returns the events to
+/// requeue (in their original order) plus whether any exhausted their retry
+/// budget. Exhausted events are parked instead of dropped: their attempt
+/// count resets to zero so a later drain retries them with a fresh budget.
+fn requeue_events_after_failed_send(
+    attempted_events: Vec<PendingEvent>,
     max_retry_attempts: i32,
-) -> (Vec<PendingEvent>, Vec<PendingEvent>) {
-    for event in &mut attempted_events {
-        event.attempt_count += 1;
-    }
-    attempted_events
+) -> (Vec<PendingEvent>, bool) {
+    let mut any_exhausted = false;
+    let requeued = attempted_events
         .into_iter()
-        .partition(|event| event.attempt_count < max_retry_attempts)
+        .map(|mut event| {
+            event.attempt_count += 1;
+            if event.attempt_count >= max_retry_attempts {
+                any_exhausted = true;
+                event.attempt_count = 0;
+            }
+            event
+        })
+        .collect();
+    (requeued, any_exhausted)
 }
 
 impl Default for OrchestrationEventService {

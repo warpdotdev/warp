@@ -601,9 +601,13 @@ impl BlocklistAIController {
         // Subscribe to the orchestration event service to inject events
         // (e.g. MessagesReceivedFromAgents) into conversations that receive inter-agent messages.
         let svc = OrchestrationEventService::handle(ctx);
-        ctx.subscribe_to_model(&svc, move |me, _, event, ctx| {
-            let OrchestrationEventServiceEvent::EventsReady { conversation_id } = event;
-            me.handle_pending_events_ready(*conversation_id, ctx);
+        ctx.subscribe_to_model(&svc, move |me, _, event, ctx| match event {
+            OrchestrationEventServiceEvent::EventsReady { conversation_id } => {
+                me.handle_pending_events_ready(*conversation_id, ctx);
+            }
+            OrchestrationEventServiceEvent::EventsDeliveryExhausted { conversation_id } => {
+                me.handle_pending_events_delivery_exhausted(*conversation_id, ctx);
+            }
         });
         let streamer = OrchestrationEventStreamer::handle(ctx);
         ctx.subscribe_to_model(&streamer, move |me, _, event, ctx| match event {
@@ -1928,18 +1932,66 @@ impl BlocklistAIController {
             )
             .is_err()
         {
-            // TODO: surface retry exhaustion. The existing requeue
-            // re-emits `EventsReady` until `MAX_RETRY_ATTEMPTS` is hit,
-            // after which events are dropped silently and the wait has
-            // already been cancelled — the conversation can end up stuck
-            // with no executor pending entry, no watchdog, and no
-            // in-flight stream. Follow-up: park-on-exhaust the events
-            // and transition the conversation to `Error` so the next
-            // user resume can carry them along.
+            // The requeue either re-emits `EventsReady` (retry budget
+            // remaining) or parks the events and emits
+            // `EventsDeliveryExhausted`, which transitions the conversation
+            // to `Error` so the next user resume drains the parked events.
             OrchestrationEventService::handle(ctx).update(ctx, |svc, ctx| {
                 svc.requeue_awaiting_events(conversation_id, ctx);
             });
         }
+    }
+
+    /// Handles the EventsDeliveryExhausted signal. The events themselves are
+    /// parked in the service's pending queue with a fresh retry budget, and
+    /// any in-flight wait_for_events has already been cancelled by the failed
+    /// injection attempt. Without intervention the conversation would sit
+    /// quiescent with no executor entry, no watchdog, and no in-flight
+    /// stream, so transition it to `Error`: the user's resume brings it back
+    /// through `InProgress` to a ready status, which re-fires `EventsReady`
+    /// and carries the parked events along.
+    fn handle_pending_events_delivery_exhausted(
+        &mut self,
+        conversation_id: AIConversationId,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let Some(conversation) =
+            BlocklistAIHistoryModel::as_ref(ctx).conversation(&conversation_id)
+        else {
+            return;
+        };
+        // An in-flight stream settles the status on its own, and non-ready
+        // statuses (Error, Blocked, Cancelled, InProgress) already require
+        // user or stream activity that re-fires EventsReady on the way back
+        // to a ready status. Only quiescent ready statuses would otherwise
+        // strand the parked events silently.
+        if self
+            .in_flight_response_streams
+            .has_active_stream_for_conversation(conversation_id, ctx)
+            || !matches!(
+                conversation.status(),
+                ConversationStatus::Success | ConversationStatus::WaitingForEvents
+            )
+        {
+            log::info!(
+                "Orchestration event delivery exhausted; leaving conversation status untouched: conversation_id={conversation_id:?} status={:?}",
+                conversation.status()
+            );
+            return;
+        }
+
+        log::warn!(
+            "Orchestration event delivery exhausted; marking conversation errored so a resume can drain parked events: conversation_id={conversation_id:?}"
+        );
+        let terminal_surface_id = self.terminal_surface_id;
+        BlocklistAIHistoryModel::handle(ctx).update(ctx, |history_model, ctx| {
+            history_model.update_conversation_status(
+                terminal_surface_id,
+                conversation_id,
+                ConversationStatus::Error,
+                ctx,
+            );
+        });
     }
 
     /// Handles the EventsReady signal. Checks readiness, drains
