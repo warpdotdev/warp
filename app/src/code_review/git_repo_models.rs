@@ -154,6 +154,26 @@ impl GitRepoModels {
             .insert(repo.clone(), handle.downgrade());
         Ok(handle)
     }
+
+    /// Forces a metadata refresh (branch names, diff stats) on the per-repo
+    /// status model for `repo`, if one currently exists.
+    ///
+    /// No-ops when nothing is subscribed to `repo` (e.g. no terminal or code
+    /// review panel currently has it open), so callers that mutate the
+    /// working tree from a context that doesn't itself hold a subscription
+    /// (e.g. after a Code Review panel discard/undo operation) can call this
+    /// unconditionally to make sure any active consumer — such as a
+    /// terminal's git status chip — reflects the change immediately, instead
+    /// of waiting on the filesystem watcher or an unrelated terminal event.
+    pub fn refresh_repo(&self, repo: &LocalOrRemotePath, ctx: &mut ModelContext<Self>) {
+        if let Some(handle) = self
+            .git_status_models
+            .get(repo)
+            .and_then(|weak| weak.upgrade(ctx))
+        {
+            handle.update(ctx, |model, ctx| model.refresh_metadata(ctx));
+        }
+    }
 }
 
 impl Default for GitRepoModels {
