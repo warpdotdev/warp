@@ -608,16 +608,24 @@ jobs:
 
       # binary_path is already copied out of the per-target-triple Cargo output
       # directory; --skip-build (used by release_macos_tui below) re-derives
-      # that copy from the triple directory, so preserve it here instead.
+      # that copy from the triple directory, so preserve it here instead. The
+      # dSYM Cargo produces there is itself a symlink into target/.../deps, so
+      # (as with the app archive above) also include its resolved target;
+      # otherwise the link dangles once extracted into a fresh job.
       - name: Create tar archive with build artifacts
         run: |
           BINARY_PATH="${{ steps.build_tui.outputs.binary_path }}"
           PROFILE_DIR="${BINARY_PATH#target/}"
           PROFILE_DIR="${PROFILE_DIR%/bundle/osx/*}"
           RAW_BINARY_PATH="target/${{ steps.build_tui.outputs.rust_target }}/$PROFILE_DIR/$(basename "$BINARY_PATH")"
+          RAW_DSYM_PATH="$RAW_BINARY_PATH.dSYM"
           TAR_PATHS=("$RAW_BINARY_PATH")
-          if [[ -e "$RAW_BINARY_PATH.dSYM" ]]; then
-            TAR_PATHS+=("$RAW_BINARY_PATH.dSYM")
+          if [[ -e "$RAW_DSYM_PATH" ]]; then
+            TAR_PATHS+=("$RAW_DSYM_PATH")
+            if [[ -L "$RAW_DSYM_PATH" ]]; then
+              REAL_DSYM_PATH="$(python3 -c 'import os,sys; print(os.path.relpath(sys.argv[1]))' "$(realpath "$RAW_DSYM_PATH")")"
+              TAR_PATHS+=("$REAL_DSYM_PATH")
+            fi
           fi
           tar czfv build-artifacts.tar.gz "${TAR_PATHS[@]}"
         shell: bash
@@ -826,13 +834,19 @@ jobs:
           NO_LICENSES: "1"
           SKIP_SETTINGS_SCHEMA: "1"
 
+      # executable_path is the copy already staged into bundle/linux;
+      # --skip-build (used by release_linux_tui below) instead re-copies from
+      # the raw target/<profile>/<bin> Cargo output, which debug_executable_path
+      # (that raw path plus ".debug") lets us recover without duplicating the
+      # channel/profile-naming logic that lives in script/linux/bundle.
       - name: Create tar archive with build artifacts
         run: |
-          EXECUTABLE_PATH="$(realpath --relative-to=$(pwd) "$EXECUTABLE_PATH")"
-          tar czvf build-artifacts.tar.gz "$EXECUTABLE_PATH"
+          DEBUG_EXECUTABLE_PATH="$(realpath --relative-to=$(pwd) "$DEBUG_EXECUTABLE_PATH")"
+          RAW_EXECUTABLE_PATH="${DEBUG_EXECUTABLE_PATH%.debug}"
+          tar czvf build-artifacts.tar.gz "$RAW_EXECUTABLE_PATH"
         shell: bash
         env:
-          EXECUTABLE_PATH: ${{ steps.build_tui.outputs.executable_path }}
+          DEBUG_EXECUTABLE_PATH: ${{ steps.build_tui.outputs.debug_executable_path }}
 
       - name: Archive ${{ matrix.arch }} TUI build artifacts
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
