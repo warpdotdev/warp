@@ -6270,9 +6270,10 @@ impl SettingsWidget for RightClickBehaviorWidget {
         app: &AppContext,
     ) -> Box<dyn Element> {
         let mut column = Flex::column();
+        let selection_settings = SelectionSettings::as_ref(app);
         add_setting(
             &mut column,
-            &SelectionSettings::as_ref(app).right_click_behavior,
+            &selection_settings.right_click_behavior,
             || {
                 render_dropdown_item(
                     appearance,
@@ -6293,6 +6294,20 @@ impl SettingsWidget for RightClickBehaviorWidget {
                 )
             },
         );
+        if selection_settings.right_click_pastes() {
+            let theme = appearance.theme();
+            column.add_child(
+                appearance
+                    .ui_builder()
+                    .wrappable_text("Shift+right-click still opens the context menu.", true)
+                    .with_style(UiComponentStyles {
+                        font_color: Some(theme.sub_text_color(theme.background()).into_solid()),
+                        ..Default::default()
+                    })
+                    .build()
+                    .finish(),
+            );
+        }
         column.finish()
     }
 }
