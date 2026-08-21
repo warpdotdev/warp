@@ -70,6 +70,21 @@ pub fn classify_driver_error(error: &AgentDriverError) -> (AgentTaskState, TaskS
                 PlatformErrorCode::InternalError,
             ),
         ),
+        // The environment ID may well be valid — the local Drive environment catalog was empty
+        // when we looked it up, most likely because the object sync that populates it hasn't
+        // completed or failed. This is a platform-side problem, not a misconfigured environment,
+        // so it must not be classified as FAILED (which would tell the user to check a team
+        // setting that is probably fine) nor worded like `EnvironmentNotFound`.
+        AgentDriverError::EnvironmentCatalogUnavailable(id) => (
+            AgentTaskState::Error,
+            TaskStatusUpdate::with_error_code(
+                format!(
+                    "The agent could not load the environment catalog needed to resolve environment '{id}'. \
+                     This is a transient platform-side problem, not a problem with your environment. Please try again."
+                ),
+                PlatformErrorCode::ResourceUnavailable,
+            ),
+        ),
         AgentDriverError::NotLoggedIn => {
             let bin = warp_cli::binary_name().unwrap_or_else(|| "warp".to_string());
             (

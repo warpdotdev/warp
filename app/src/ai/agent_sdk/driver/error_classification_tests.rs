@@ -105,6 +105,27 @@ fn warp_drive_sync_failed_is_error() {
     );
 }
 
+#[test]
+fn environment_catalog_unavailable_is_error_not_failed() {
+    // An empty/failed-sync catalog is a platform-side problem, not a user
+    // misconfiguration, so it must classify as ERROR (unlike the genuine
+    // `EnvironmentNotFound` case below, which is FAILED).
+    let (state, update) = classify_driver_error(&AgentDriverError::EnvironmentCatalogUnavailable(
+        "env-123".into(),
+    ));
+    assert_eq!(state, AgentTaskState::Error);
+    assert_eq!(
+        update.error_code,
+        Some(PlatformErrorCode::ResourceUnavailable)
+    );
+    assert!(update.message.contains("env-123"), "{}", update.message);
+    assert!(
+        !update.message.to_lowercase().contains("team settings"),
+        "must not tell the user to check team settings for an environment that may well exist: {}",
+        update.message
+    );
+}
+
 // --- Config/user errors → FAILED ---
 
 #[test]

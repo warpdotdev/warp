@@ -199,6 +199,12 @@ pub struct UpdateManager {
     should_poll_for_updated_objects: bool,
     spawned_futures: Vec<FutureId>,
     has_initial_load: Condition,
+    /// Whether the most recently processed object sync had partial GraphQL errors (see
+    /// [`InitialLoadResponse::had_errors`]). `true` before any sync has completed, since we
+    /// can't yet vouch for the local cache's completeness. Consulted by callers that need to
+    /// know whether an absence in the local cache (e.g. an environment ID not found) reflects
+    /// a genuinely complete, healthy sync rather than a partially-failed one.
+    last_sync_had_errors: bool,
 }
 
 impl UpdateManager {
@@ -228,6 +234,7 @@ impl UpdateManager {
             should_poll_for_updated_objects: false,
             spawned_futures: Default::default(),
             has_initial_load: Condition::new(),
+            last_sync_had_errors: true,
         }
     }
 
@@ -787,6 +794,7 @@ impl UpdateManager {
         ctx: &mut ModelContext<UpdateManager>,
     ) {
         let is_first_load = !self.has_initial_load.is_set();
+        self.last_sync_had_errors = response.had_errors;
         let cloud_model = CloudModel::as_ref(ctx);
         // any folder from the server will have its `is_open` model parameter set to false,
         // since the server doesn't know about open/closed states. so in order to not clobber
@@ -1236,6 +1244,13 @@ impl UpdateManager {
     /// Returns whether the current account's initial cloud-object load has completed.
     pub(crate) fn has_completed_initial_load(&self) -> bool {
         self.has_initial_load.is_set()
+    }
+
+    /// Returns whether the most recently processed object sync had partial errors, meaning the
+    /// local cloud object cache (including the environment catalog) may be incomplete rather
+    /// than accurately reflecting the account's full state. `true` if no sync has completed yet.
+    pub(crate) fn last_sync_had_errors(&self) -> bool {
+        self.last_sync_had_errors
     }
 
     /// Reset the initial-load condition so that subsequent callers of

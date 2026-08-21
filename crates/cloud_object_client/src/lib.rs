@@ -119,6 +119,12 @@ pub struct InitialLoadResponse {
     pub user_profiles: Vec<UserProfileWithUID>,
     pub action_histories: Vec<ObjectActionHistory>,
     pub mcp_gallery: Vec<MCPGalleryTemplate>,
+    /// Whether the underlying GraphQL response for this load carried partial
+    /// errors (`response.errors` was non-empty even though `response.data`
+    /// was present). A `true` value means this response may be incomplete —
+    /// e.g. some objects (including cloud environments) may have been
+    /// silently omitted rather than genuinely deleted or nonexistent.
+    pub had_errors: bool,
 }
 
 pub struct GetCloudObjectResponse {

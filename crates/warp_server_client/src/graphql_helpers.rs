@@ -23,6 +23,26 @@ where
     O: Operation<QF> + Send + 'a,
 {
     Box::pin(async move {
+        let (data, _had_partial_errors) =
+            send_graphql_request_with_partial_errors(base_client, operation, timeout).await?;
+        Ok(data)
+    })
+}
+
+/// Like [`send_graphql_request`], but also reports whether the response carried GraphQL
+/// "partial errors" — i.e. `response.errors` was non-empty even though `response.data` was
+/// still present and returned. Callers that build up client-side caches from paginated /
+/// partial data (e.g. the Warp Drive object sync) need this to know when the returned data
+/// may be incomplete, since a partial error is not surfaced any other way once `data` exists.
+pub fn send_graphql_request_with_partial_errors<'a, QF: 'a, O>(
+    base_client: &'a BaseClient,
+    operation: O,
+    timeout: Option<Duration>,
+) -> BoxFuture<'a, Result<(QF, bool)>>
+where
+    O: Operation<QF> + Send + 'a,
+{
+    Box::pin(async move {
         let operation_name = operation.operation_name().map(Cow::into_owned);
         let options = base_client.graphql_request_options(timeout).await?;
         let response = match operation
@@ -55,6 +75,11 @@ where
             }
         };
 
+        let had_partial_errors = response
+            .errors
+            .as_ref()
+            .is_some_and(|errors| !errors.is_empty());
+
         if let Some(errors) = response.errors.as_ref() {
             warp_core::safe_error!(
                 safe: ("graphql response for {:?} had errors", operation_name),
@@ -76,7 +101,7 @@ where
             }
         }
 
-        response.data.ok_or_else(|| {
+        let data = response.data.ok_or_else(|| {
             let operation_label = operation_name
                 .as_deref()
                 .unwrap_or("unknown GraphQL operation");
@@ -100,7 +125,9 @@ where
                 }
                 None => anyhow!("missing response data for {operation_label}"),
             }
-        })
+        })?;
+
+        Ok((data, had_partial_errors))
     })
 }
 

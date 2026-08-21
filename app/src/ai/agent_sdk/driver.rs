@@ -716,6 +716,13 @@ pub enum AgentDriverError {
     WarpDriveSyncFailed,
     #[error("Requested environment not found: {0}")]
     EnvironmentNotFound(String),
+    /// The environment lookup failed not because the ID is genuinely absent, but because the
+    /// local Warp Drive environment catalog was empty at lookup time (e.g. the object sync that
+    /// populates it had not completed or failed silently). Distinguished from
+    /// `EnvironmentNotFound` so we don't tell the user to check a team setting that is actually
+    /// fine. See `common::classify_environment_lookup_failure`.
+    #[error("Could not load the Warp Drive environment catalog while resolving '{0}'")]
+    EnvironmentCatalogUnavailable(String),
     #[error("Environment setup failed: {0}")]
     EnvironmentSetupFailed(String),
     #[error("Cloud provider setup failed")]
@@ -1356,10 +1363,13 @@ impl AgentDriver {
         }
     }
 
-    /// Log all valid environment IDs for the user.
-    pub(super) fn log_valid_environments(app: &AppContext) {
+    /// Log all valid environment IDs for the user, and report whether the local Warp Drive
+    /// environment catalog is empty (e.g. because the object sync that populates it hasn't
+    /// completed or failed silently) as opposed to simply not containing the requested ID.
+    pub(super) fn log_valid_environments(app: &AppContext) -> bool {
         let environments = CloudAmbientAgentEnvironment::get_all(app);
-        if environments.is_empty() {
+        let catalog_is_empty = environments.is_empty();
+        if catalog_is_empty {
             log::error!("No environments available for this user.");
         } else {
             log::error!("Valid environment IDs:");
@@ -1367,6 +1377,7 @@ impl AgentDriver {
                 log::error!("  - {} ({})", env.sync_id(), env.model().string_model.name);
             }
         }
+        catalog_is_empty
     }
 
     /// Check that the working directory exists. Since it's user-specified, we don't automatically
