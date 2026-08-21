@@ -180,10 +180,6 @@ fn sums_cost_in_cents_when_all_contributors_have_a_baseline() {
     });
 }
 
-/// APP-5579 regression: the rollup must sum each contributor's
-/// charged-usage cost, not the provider-only baseline, so a
-/// parent/child orchestration doesn't reintroduce the mismatch fixed for
-/// the single-conversation case.
 #[test]
 fn sums_charged_usage_cost_over_divergent_provider_cost() {
     App::test((), |mut app| async move {

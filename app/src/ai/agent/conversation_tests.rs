@@ -973,11 +973,8 @@ fn usage_totals_dollar_total_matches_last_block_when_provider_cost_diverges() {
     assert_eq!(totals.total_cost_in_cents(), Some(4.0));
 }
 
-/// APP-5579 regression: when a conversation has no charged-usage total
-/// (e.g. a legacy or restored conversation from before charged-usage
-/// tracking), `total_cost_in_cents()` must fall back to the provider-only
-/// baseline, including a known-zero baseline, rather than reading as
-/// unknown or zero.
+/// A known-zero baseline is a real value, not an absence, so it must fall
+/// back too rather than reading as unknown.
 #[test]
 fn total_cost_in_cents_falls_back_to_provider_baseline_without_charged_usage() {
     let known_positive =
