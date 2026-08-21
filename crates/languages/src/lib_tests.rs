@@ -2,7 +2,10 @@ use std::path::Path;
 
 use warp_util::standardized_path::StandardizedPath;
 
-use crate::{SUPPORTED_LANGUAGES, language_by_filename, language_by_local_filename, load_language};
+use crate::{
+    SUPPORTED_LANGUAGES, language_by_filename, language_by_local_filename, language_by_name,
+    load_language,
+};
 
 /// Validate that every supported language can be loaded successfully.
 /// This catches invalid node types, syntax errors, and other issues in .scm query files
@@ -94,4 +97,39 @@ fn markdown_extensions_resolve_to_markdown() {
             "{filename} should resolve to Markdown",
         );
     }
+}
+
+#[test]
+fn r_extensions_resolve_to_r() {
+    for filename in ["analysis.R", "analysis.r"] {
+        let path = StandardizedPath::try_new(&format!("/tmp/{filename}"))
+            .expect("test path should be absolute");
+        let language = language_by_filename(&path)
+            .unwrap_or_else(|| panic!("expected {filename} to resolve to a language"));
+        assert_eq!(
+            language.display_name(),
+            "R",
+            "{filename} should resolve to R"
+        );
+    }
+}
+
+#[test]
+fn local_r_extensions_resolve_to_r() {
+    for filename in ["analysis.R", "analysis.r"] {
+        let language = language_by_local_filename(Path::new(filename))
+            .unwrap_or_else(|| panic!("expected {filename} to resolve to a language"));
+        assert_eq!(
+            language.display_name(),
+            "R",
+            "{filename} should resolve to R"
+        );
+    }
+}
+
+#[test]
+fn uppercase_r_language_name_resolves_to_r() {
+    let language = language_by_name("R").expect("`R` should resolve to a language");
+
+    assert_eq!(language.display_name(), "R");
 }
