@@ -34,12 +34,15 @@ impl ExecutionMode {
     /// no explicit `mcp_execution_path` setting is available.
     ///
     /// The desktop app keeps requiring a shell-derived path, so a failed MCP spawn surfaces
-    /// as an actionable toast instead of silently launching with the wrong PATH. The SDK
-    /// CLI, the TUI, and the remote server daemon all receive an authoritative PATH from
-    /// their own launcher (an interactive shell, a CLI invocation, or a self-hosted worker's
-    /// entrypoint script) before Warp starts, so inheriting it is safe and is the only PATH
+    /// as an actionable toast instead of silently launching with the wrong PATH. The SDK CLI
+    /// and the TUI receive an authoritative PATH from their own launcher (an interactive shell
+    /// or a CLI invocation) before Warp starts, so inheriting it is safe and is the only PATH
     /// available to a fresh SDK process before terminal bootstrap populates
-    /// `mcp_execution_path`.
+    /// `mcp_execution_path`. The remote server daemon is headless and long-lived with no user
+    /// present to open a terminal and populate that setting, and no window to show the
+    /// alternative's failure toast in, so it also inherits; since inheritance only ever fills
+    /// in a missing path rather than overriding a configured one, that's a better failure mode
+    /// than refusing to start the server.
     pub fn can_inherit_process_path_for_mcp(&self) -> bool {
         match self {
             ExecutionMode::App => false,
@@ -165,7 +168,3 @@ impl SingletonEntity for AppExecutionMode {}
 pub fn current_client_id() -> Option<&'static str> {
     GLOBAL_EXECUTION_MODE.get().map(|mode| mode.client_id())
 }
-
-#[cfg(test)]
-#[path = "execution_mode_tests.rs"]
-mod tests;

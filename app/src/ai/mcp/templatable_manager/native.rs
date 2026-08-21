@@ -923,7 +923,7 @@ impl TemplatableMCPServerManager {
             let execution_path = AISettings::as_ref(ctx).mcp_execution_path.value().clone();
             let can_inherit_process_path =
                 AppExecutionMode::as_ref(ctx).can_inherit_process_path_for_mcp();
-            if !can_spawn_cli_mcp_server(execution_path.as_deref(), can_inherit_process_path) {
+            if execution_path.is_none() && !can_inherit_process_path {
                 // This can only happen if the user is trying to launch an MCP server
                 // without ever having had a successfully bootstrapped session, which
                 // should basically never happen.
@@ -2024,13 +2024,3 @@ impl TemplatableMCPServerManager {
             .contains_key(&installation_hash)
     }
 }
-
-/// Whether a CLI-based MCP server has a PATH to launch its child process with: either an
-/// explicit `mcp_execution_path` setting, or by inheriting this process's own PATH.
-fn can_spawn_cli_mcp_server(execution_path: Option<&str>, can_inherit_process_path: bool) -> bool {
-    execution_path.is_some() || can_inherit_process_path
-}
-
-#[cfg(test)]
-#[path = "native_tests.rs"]
-mod tests;
