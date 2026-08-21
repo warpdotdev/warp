@@ -616,7 +616,6 @@ if [[ "$ARTIFACT" == "app" ]]; then
 
       tmp_bundle_dir=$(mktemp -d -t ci-XXXXXXXXXX)
 
-      echo "Adding rpath to both binaries for universal executable"
       "$WORKSPACE_ROOT_DIR/script/macos/add_framework_rpath" \
         "target/$INTEL_TARGET/$TARGET_PROFILE_DIR/$WARP_BIN" \
         "target/$ARM_TARGET/$TARGET_PROFILE_DIR/$WARP_BIN"
