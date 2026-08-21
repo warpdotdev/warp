@@ -301,7 +301,7 @@ use crate::pane_group::{
     self, AIFactPane, AnyPaneContent, ChildAgentOrigin, CodeDiffPane, CodePane, CodeReviewPanelArg,
     CustomRouterEditorPane, Direction as PaneGroupDirection, Direction, EnvironmentManagementPane,
     ExecutionProfileEditorPane, NetworkLogPane, NewTerminalOptions, PaneGroup, PaneId, PanesLayout,
-    TabBarHoverIndex, TerminalPaneId,
+    SettingsPane, TabBarHoverIndex, TerminalPaneId,
 };
 use crate::persistence::ModelEvent;
 use crate::projects::ProjectManagementModel;
@@ -1782,6 +1782,16 @@ impl Workspace {
             me.handle_theme_chooser_event(event, ctx);
         });
 
+        let settings_pane = Self::build_native_settings_view(ctx);
+
+        (settings_pane, theme_chooser_view)
+    }
+
+    /// Creates a new native `SettingsView` for this window and registers it
+    /// with `SettingsPaneManager`. Factored out of `build_settings_views` so
+    /// `replace_native_settings_view` can create a replacement using the
+    /// exact same setup.
+    fn build_native_settings_view(ctx: &mut ViewContext<Self>) -> ViewHandle<SettingsView> {
         let settings_pane = ctx.add_typed_action_view(move |ctx| SettingsView::new(None, ctx));
         ctx.subscribe_to_view(&settings_pane, move |me, _, event, ctx| {
             me.handle_settings_pane_event(event, ctx);
@@ -1792,7 +1802,49 @@ impl Workspace {
             manager.register_view(window_id, settings_pane.clone());
         });
 
-        (settings_pane, theme_chooser_view)
+        settings_pane
+    }
+
+    /// Replaces this window's native Settings view (`self.settings_pane`)
+    /// and its `SettingsPaneManager` registration with a freshly created
+    /// one. `SettingsPane::new` always fetches this window's registered
+    /// native view rather than owning a dedicated one, so when a Settings
+    /// pane is dragged into another window, `AppContext::
+    /// transfer_view_tree_to_window` physically relocates that same native
+    /// view along with it -- leaving this window's field/registration
+    /// dangling. Called from `PaneGroup::rehome_pane_event_subscription`
+    /// whenever that happens, so `self.settings_pane` and the manager
+    /// always point at a view that actually lives in this window. See
+    /// APP-5311.
+    pub(crate) fn replace_native_settings_view(&mut self, ctx: &mut ViewContext<Self>) {
+        self.settings_pane = Self::build_native_settings_view(ctx);
+    }
+
+    /// Creates a new native `AIFactView` (Rules) for this window and
+    /// registers it with `AIFactManager`. Factored out so
+    /// `replace_native_ai_fact_view` can create a replacement using the
+    /// exact same setup.
+    fn build_native_ai_fact_view(ctx: &mut ViewContext<Self>) -> ViewHandle<AIFactView> {
+        let ai_fact_view = ctx.add_typed_action_view(AIFactView::new);
+        ctx.subscribe_to_view(&ai_fact_view, move |me, _, event, ctx| {
+            me.handle_ai_fact_view_event(event, ctx);
+        });
+
+        let window_id = ctx.window_id();
+        AIFactManager::handle(ctx).update(ctx, |manager, _| {
+            manager.register_view(window_id, ai_fact_view.clone());
+        });
+
+        ai_fact_view
+    }
+
+    /// Replaces this window's native AI-fact (Rules) view
+    /// (`self.ai_fact_view`) and its `AIFactManager` registration with a
+    /// freshly created one. Same reasoning as
+    /// `replace_native_settings_view`, for the Rules pane's per-window
+    /// singleton view. See APP-5311.
+    pub(crate) fn replace_native_ai_fact_view(&mut self, ctx: &mut ViewContext<Self>) {
+        self.ai_fact_view = Self::build_native_ai_fact_view(ctx);
     }
 
     fn build_require_login_modal(ctx: &mut ViewContext<Self>) -> ViewHandle<AuthView> {
@@ -3058,14 +3110,7 @@ impl Workspace {
             me.handle_command_search_event(event, ctx);
         });
 
-        let ai_fact_view = ctx.add_typed_action_view(AIFactView::new);
-        ctx.subscribe_to_view(&ai_fact_view, move |me, _, event, ctx| {
-            me.handle_ai_fact_view_event(event, ctx);
-        });
-
-        AIFactManager::handle(ctx).update(ctx, |manager, _| {
-            manager.register_view(window_id, ai_fact_view.clone());
-        });
+        let ai_fact_view = Self::build_native_ai_fact_view(ctx);
 
         let working_directories_model =
             ctx.add_model(|_| pane_group::WorkingDirectoriesModel::new());
@@ -6286,7 +6331,11 @@ impl Workspace {
         ctx.focus(&self.header_toolbar_editor_modal);
     }
 
-    fn handle_ai_fact_view_event(&mut self, event: &AIFactViewEvent, ctx: &mut ViewContext<Self>) {
+    pub(crate) fn handle_ai_fact_view_event(
+        &mut self,
+        event: &AIFactViewEvent,
+        ctx: &mut ViewContext<Self>,
+    ) {
         match event {
             AIFactViewEvent::OpenSettings => {
                 self.show_settings_with_section(Some(SettingsSection::WarpAgent), ctx);
@@ -8599,6 +8648,27 @@ impl Workspace {
         }
     }
 
+    /// Resolves `locator` to its live `SettingsPane`'s inner `SettingsView`,
+    /// if the pane group and pane it points at still exist in this
+    /// workspace's tabs. A locator can be registered but no longer resolve
+    /// to a live pane via paths other than the normal detach hook (e.g. see
+    /// APP-5311), so callers must always handle `None`.
+    fn live_settings_view_for_locator(
+        &self,
+        locator: PaneViewLocator,
+        ctx: &AppContext,
+    ) -> Option<ViewHandle<SettingsView>> {
+        self.tabs
+            .iter()
+            .find(|tab| tab.pane_group.id() == locator.pane_group_id)
+            .and_then(|tab| {
+                tab.pane_group
+                    .as_ref(ctx)
+                    .downcast_pane_by_id::<SettingsPane>(locator.pane_id)
+            })
+            .map(|pane| pane.settings_view(ctx))
+    }
+
     fn open_settings_pane(
         &mut self,
         page: Option<SettingsSection>,
@@ -8608,22 +8678,37 @@ impl Workspace {
         // Ensure there is only one settings pane per window
         let settings_pane_manager = SettingsPaneManager::handle(ctx);
         if let Some(locator) = settings_pane_manager.as_ref(ctx).find_pane(ctx.window_id()) {
-            // Update the page and/or search query if specified. The search query
-            // must be applied even when no page is given (e.g. `warp://settings?q=`)
-            // so an already-open settings tab reflects the new query.
-            if page.is_some() || search_query.is_some() {
-                self.settings_pane.update(ctx, |settings_pane, ctx| {
-                    if let Some(page) = page {
-                        settings_pane.set_and_refresh_current_page(page, ctx);
-                    }
-                    if let Some(search_query) = search_query {
-                        settings_pane.set_search_query(search_query, ctx);
-                    }
-                });
+            if let Some(settings_view) = self.live_settings_view_for_locator(locator, ctx) {
+                // Update the page and/or search query if specified. The search query
+                // must be applied even when no page is given (e.g. `warp://settings?q=`)
+                // so an already-open settings tab reflects the new query. Resolve the
+                // located pane's own view rather than this window's native
+                // `self.settings_pane`, which may be a different, non-rendered
+                // instance if the located pane was dragged in from another window.
+                if page.is_some() || search_query.is_some() {
+                    settings_view.update(ctx, |settings_pane, ctx| {
+                        if let Some(page) = page {
+                            settings_pane.set_and_refresh_current_page(page, ctx);
+                        }
+                        if let Some(search_query) = search_query {
+                            settings_pane.set_search_query(search_query, ctx);
+                        }
+                    });
+                }
+                // Navigate to and focus existing pane
+                self.focus_pane(locator, ctx);
+                return;
             }
-            // Navigate to and focus existing pane
-            self.focus_pane(locator, ctx);
-            return;
+
+            // The registered locator no longer resolves to a live tab in this
+            // window (e.g. the settings tab was dragged into another window).
+            // Clear it so we fall through to opening a fresh settings tab
+            // below, instead of silently no-op'ing forever. See APP-5311.
+            let window_id = ctx.window_id();
+            log::warn!("Clearing stale settings pane locator for window {window_id:?}");
+            settings_pane_manager.update(ctx, |manager, ctx| {
+                manager.deregister_pane(&window_id, locator.pane_group_id, locator.pane_id, ctx);
+            });
         }
 
         let ps1_grid_info = self.active_session_ps1_grid_info(ctx);
@@ -8958,6 +9043,27 @@ impl Workspace {
         }
     }
 
+    /// Resolves `locator` to its live `AIFactPane`'s inner `AIFactView`, if
+    /// the pane group and pane it points at still exist in this workspace's
+    /// tabs. A locator can be registered but no longer resolve to a live
+    /// pane via paths other than the normal detach hook (e.g. see
+    /// APP-5311), so callers must always handle `None`.
+    fn live_ai_fact_view_for_locator(
+        &self,
+        locator: PaneViewLocator,
+        ctx: &AppContext,
+    ) -> Option<ViewHandle<AIFactView>> {
+        self.tabs
+            .iter()
+            .find(|tab| tab.pane_group.id() == locator.pane_group_id)
+            .and_then(|tab| {
+                tab.pane_group
+                    .as_ref(ctx)
+                    .downcast_pane_by_id::<AIFactPane>(locator.pane_id)
+            })
+            .map(|pane| pane.ai_fact_view(ctx))
+    }
+
     /// Open the AI Fact Collection pane in a split pane (default direction is left).
     pub fn open_ai_fact_collection_pane(
         &mut self,
@@ -8970,13 +9076,29 @@ impl Workspace {
 
         // Navigate to and focus existing pane
         if let Some(locator) = manager.as_ref(ctx).find_pane(ctx.window_id()) {
-            if let Some(page) = page {
-                self.ai_fact_view.update(ctx, |view, ctx| {
-                    view.update_page(page, ctx);
-                });
+            if let Some(ai_fact_view) = self.live_ai_fact_view_for_locator(locator, ctx) {
+                // Resolve the located pane's own view rather than this
+                // window's native `self.ai_fact_view`, which may be a
+                // different, non-rendered instance if the located pane was
+                // dragged in from another window.
+                if let Some(page) = page {
+                    ai_fact_view.update(ctx, |view, ctx| {
+                        view.update_page(page, ctx);
+                    });
+                }
+                self.focus_pane(locator, ctx);
+                return;
             }
-            self.focus_pane(locator, ctx);
-            return;
+
+            // The registered locator no longer resolves to a live tab in this
+            // window (e.g. the pane was dragged into another window as part
+            // of a tab transfer). Clear it so we fall through to opening a
+            // fresh pane below, instead of silently no-op'ing forever.
+            let window_id = ctx.window_id();
+            log::warn!("Clearing stale AI fact pane locator for window {window_id:?}");
+            manager.update(ctx, |manager, ctx| {
+                manager.deregister_pane(&window_id, locator.pane_group_id, locator.pane_id, ctx);
+            });
         }
 
         let pane = AIFactPane::from_view(self.ai_fact_view.clone(), ctx);
@@ -12057,6 +12179,46 @@ impl Workspace {
         true
     }
 
+    /// Reconciles a Settings/AI-fact pane transfer that collided with a pane
+    /// of the same kind already live in this window: Warp enforces at most
+    /// one Settings pane and one Rules pane per window, so the two panes
+    /// cannot coexist. Removes the just-transferred `discard` pane -- closing
+    /// its whole tab if it was the tab's only pane, or just the pane
+    /// otherwise -- and focuses the pre-existing `keep` pane. Invoked via
+    /// `WorkspaceAction::DiscardDuplicateTransferredPane`; see
+    /// `PaneGroup::rehome_pane_event_subscription` and
+    /// `PaneCollisionReconciliation` for why that dispatch is self-targeted
+    /// on this workspace rather than run synchronously.
+    fn discard_duplicate_transferred_pane(
+        &mut self,
+        keep: PaneViewLocator,
+        discard: PaneViewLocator,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let discard_tab = self
+            .tabs
+            .iter()
+            .enumerate()
+            .find(|(_, tab)| tab.pane_group.id() == discard.pane_group_id)
+            .map(|(index, tab)| (index, tab.pane_group.clone()));
+        if let Some((index, pane_group)) = discard_tab {
+            if !pane_group.as_ref(ctx).has_pane_id(discard.pane_id) {
+                log::warn!(
+                    "discard_duplicate_transferred_pane: pane group {:?} no longer contains discard pane {:?}; skipping removal",
+                    discard.pane_group_id,
+                    discard.pane_id
+                );
+            } else if pane_group.as_ref(ctx).pane_count() <= 1 {
+                self.remove_tab(index, false, true, ctx);
+            } else {
+                pane_group.update(ctx, |pane_group, ctx| {
+                    pane_group.close_pane(discard.pane_id, ctx);
+                });
+            }
+        }
+        self.focus_pane(keep, ctx);
+    }
+
     fn remove_tab(
         &mut self,
         index: usize,
@@ -15118,7 +15280,7 @@ impl Workspace {
         })
     }
 
-    fn handle_settings_pane_event(
+    pub(crate) fn handle_settings_pane_event(
         &mut self,
         event: &SettingsViewEvent,
         ctx: &mut ViewContext<Self>,
@@ -23886,6 +24048,9 @@ impl TypedActionView for Workspace {
         }
 
         match action {
+            DiscardDuplicateTransferredPane { keep, discard } => {
+                self.discard_duplicate_transferred_pane(*keep, *discard, ctx);
+            }
             ActivateTab(index) => self.activate_tab(*index, ctx),
             ActivateTabByNumber(num) => self.activate_tab(num.saturating_sub(1), ctx),
             SetTabShortcutModifierKey { key_code, pressed } => {

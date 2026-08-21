@@ -84,9 +84,11 @@ impl PaneContent for AIFactPane {
         ctx.unsubscribe_to_view(&self.view);
 
         // Always deregister from AIFactManager - it will be re-registered on attach if restored
+        let pane_id = self.id();
+        let pane_group_id = ctx.view_id();
         let window_id = ctx.window_id();
         AIFactManager::handle(ctx).update(ctx, |manager, ctx| {
-            manager.deregister_pane(&window_id, ctx);
+            manager.deregister_pane(&window_id, pane_group_id, pane_id, ctx);
         });
     }
 

@@ -10,7 +10,9 @@ use warp::cmd_or_ctrl_shift;
 use warp::features::FeatureFlag;
 use warp::integration_testing::clipboard::assert_clipboard_contains_string;
 use warp::integration_testing::command_palette::assert_command_palette_is_closed;
-use warp::integration_testing::pane_group::assert_focused_pane_index;
+use warp::integration_testing::pane_group::{
+    assert_focused_pane_index, assert_num_panes_in_tab, close_pane_by_index,
+};
 use warp::integration_testing::step::new_step_with_default_assertions;
 use warp::integration_testing::terminal::util::{
     ExpectedExitStatus, current_shell_starter_and_version,
@@ -23,7 +25,7 @@ use warp::integration_testing::terminal::{
     wait_until_bootstrapped_single_pane_for_tab,
 };
 use warp::integration_testing::view_getters::{
-    command_palette_view, terminal_view, workspace_view,
+    command_palette_view, pane_group_view, terminal_view, workspace_view,
 };
 use warp::integration_testing::window::{
     add_and_save_window, assert_num_windows_open, save_active_window_id,
@@ -33,6 +35,7 @@ use warp::integration_testing::workspace::{
 };
 use warp::search::command_palette::mixer::CommandPaletteItemAction;
 use warp::settings::PaneSettings;
+use warp::settings_view::{SettingsView, SettingsViewEvent};
 use warp::terminal::shell::ShellType;
 use warp::themes::theme::AnsiColorIdentifier;
 use warp::workspace::tab_settings::{TabSettings, VerticalTabsDisplayGranularity};
@@ -547,6 +550,20 @@ fn assert_total_tab_count(
 
 fn drag_tabs_feature_enabled() -> bool {
     cfg!(feature = "drag_tabs_to_windows")
+}
+
+/// Like the production `assert_num_panes_in_tab` helper, but checks
+/// `visible_pane_count()` instead of `pane_count()`. `UndoClosedPanes` is on
+/// by default, so a closed pane is hidden rather than removed from
+/// `pane_count()` -- this is what a test should check after closing a pane
+/// via the UI, since that's what's actually visible on screen.
+fn assert_num_visible_panes_in_tab(tab_index: usize, num_panes: usize) -> AssertionCallback {
+    Box::new(move |app, window_id| {
+        let pane_group = pane_group_view(app, window_id, tab_index);
+        pane_group.read(app, |view, _| {
+            async_assert_eq!(view.visible_pane_count(), num_panes)
+        })
+    })
 }
 
 pub fn test_cycle_active_tab_color_with_keybinding() -> Builder {
@@ -1504,4 +1521,432 @@ pub fn test_single_tab_handoff_continues_drag() -> Builder {
                 .add_assertion(assert_focused_editor_in_tab(0)),
         )
         .with_step(focus_saved_window(TARGET_WINDOW_KEY).add_assertion(assert_tab_count(1)))
+}
+
+/// Drags the Settings tab (always at index 1: index 0 is the terminal tab) out
+/// of the saved source window via real mouse events, mirroring
+/// `test_detach_tab_to_new_window_with_drag`. Used as the shared "detach"
+/// gesture for the APP-5311 visual verification flows below, since the bug
+/// and its fix are both specifically about the real drag-driven handoff path
+/// (not the internal transfer APIs exercised by the unit tests in
+/// `view_tests.rs`).
+fn detach_settings_tab_step(step_name: &'static str) -> TestStep {
+    const SETTINGS_TAB_INDEX: usize = 1;
+    TestStep::new(step_name)
+        .with_action(|app, _, data| {
+            let source_window_id = *data
+                .get::<_, WindowId>(SOURCE_WINDOW_KEY)
+                .expect("saved source window id should exist");
+            let start = tab_center(app, source_window_id, SETTINGS_TAB_INDEX);
+            dispatch_mouse_event(
+                app,
+                source_window_id,
+                Event::LeftMouseDown {
+                    position: start,
+                    modifiers: ModifiersState::default(),
+                    click_count: 1,
+                    is_first_mouse: false,
+                },
+            );
+        })
+        .with_action(|app, _, data| {
+            let source_window_id = *data
+                .get::<_, WindowId>(SOURCE_WINDOW_KEY)
+                .expect("saved source window id should exist");
+            let start = tab_center(app, source_window_id, SETTINGS_TAB_INDEX);
+            dispatch_mouse_event(
+                app,
+                source_window_id,
+                Event::LeftMouseDragged {
+                    position: start + vec2f(12.0, 0.0),
+                    modifiers: ModifiersState::default(),
+                },
+            );
+        })
+        .with_action(|app, _, data| {
+            let source_window_id = *data
+                .get::<_, WindowId>(SOURCE_WINDOW_KEY)
+                .expect("saved source window id should exist");
+            let start = tab_center(app, source_window_id, SETTINGS_TAB_INDEX);
+            dispatch_mouse_event(
+                app,
+                source_window_id,
+                Event::LeftMouseDragged {
+                    position: start + vec2f(0.0, 140.0),
+                    modifiers: ModifiersState::default(),
+                },
+            );
+        })
+        .with_action(|app, _, data| {
+            let source_window_id = *data
+                .get::<_, WindowId>(SOURCE_WINDOW_KEY)
+                .expect("saved source window id should exist");
+            let start = tab_center(app, source_window_id, SETTINGS_TAB_INDEX);
+            let drop_position = start + vec2f(220.0, 220.0);
+            dispatch_mouse_event(
+                app,
+                source_window_id,
+                Event::LeftMouseDragged {
+                    position: drop_position,
+                    modifiers: ModifiersState::default(),
+                },
+            );
+        })
+        .with_action(|app, _, data| {
+            let source_window_id = *data
+                .get::<_, WindowId>(SOURCE_WINDOW_KEY)
+                .expect("saved source window id should exist");
+            let start = tab_center(app, source_window_id, SETTINGS_TAB_INDEX);
+            let drop_position = start + vec2f(220.0, 220.0);
+            dispatch_mouse_event(
+                app,
+                source_window_id,
+                Event::LeftMouseUp {
+                    position: drop_position,
+                    modifiers: ModifiersState::default(),
+                },
+            );
+        })
+        .add_assertion(assert_num_windows_open(2))
+        .add_assertion(assert_tab_count(1))
+}
+
+/// Drags the source window's Settings tab (index 1) into the tab bar of the
+/// window saved under `DETACHED_WINDOW_KEY`, mirroring
+/// `test_attach_tab_to_other_window_and_continue_drag`. Used for the
+/// one-pane-per-window collision case, where the destination window already
+/// hosts its own Settings pane.
+fn drag_settings_tab_into_detached_window_step() -> TestStep {
+    const SETTINGS_TAB_INDEX: usize = 1;
+    TestStep::new(
+        "Drag Settings from the original window into the window that already has Settings",
+    )
+    .with_action(|app, _, data| {
+        let source_window_id = *data
+            .get::<_, WindowId>(SOURCE_WINDOW_KEY)
+            .expect("saved source window id should exist");
+        let start = tab_center(app, source_window_id, SETTINGS_TAB_INDEX);
+        dispatch_mouse_event(
+            app,
+            source_window_id,
+            Event::LeftMouseDown {
+                position: start,
+                modifiers: ModifiersState::default(),
+                click_count: 1,
+                is_first_mouse: false,
+            },
+        );
+    })
+    .with_action(|app, _, data| {
+        let source_window_id = *data
+            .get::<_, WindowId>(SOURCE_WINDOW_KEY)
+            .expect("saved source window id should exist");
+        let start = tab_center(app, source_window_id, SETTINGS_TAB_INDEX);
+        dispatch_mouse_event(
+            app,
+            source_window_id,
+            Event::LeftMouseDragged {
+                position: start + vec2f(12.0, 0.0),
+                modifiers: ModifiersState::default(),
+            },
+        );
+    })
+    .with_action(|app, _, data| {
+        let source_window_id = *data
+            .get::<_, WindowId>(SOURCE_WINDOW_KEY)
+            .expect("saved source window id should exist");
+        let start = tab_center(app, source_window_id, SETTINGS_TAB_INDEX);
+        dispatch_mouse_event(
+            app,
+            source_window_id,
+            Event::LeftMouseDragged {
+                position: start + vec2f(0.0, 220.0),
+                modifiers: ModifiersState::default(),
+            },
+        );
+    })
+    .with_action(|app, _, data| {
+        let source_window_id = *data
+            .get::<_, WindowId>(SOURCE_WINDOW_KEY)
+            .expect("saved source window id should exist");
+        let target_window_id = *data
+            .get::<_, WindowId>(DETACHED_WINDOW_KEY)
+            .expect("saved detached window id should exist");
+        let target_tab_bounds = tab_bounds(app, target_window_id, 0);
+        let attach_point = tab_screen_point(
+            app,
+            target_window_id,
+            0,
+            8.0,
+            target_tab_bounds.height() / 2.0,
+        );
+        let source_local_target =
+            source_local_point_for_screen_point(app, source_window_id, attach_point);
+        dispatch_mouse_event(
+            app,
+            source_window_id,
+            Event::LeftMouseDragged {
+                position: source_local_target,
+                modifiers: ModifiersState::default(),
+            },
+        );
+    })
+    .with_action(|app, _, data| {
+        let source_window_id = *data
+            .get::<_, WindowId>(SOURCE_WINDOW_KEY)
+            .expect("saved source window id should exist");
+        let target_window_id = *data
+            .get::<_, WindowId>(DETACHED_WINDOW_KEY)
+            .expect("saved detached window id should exist");
+        let target_tab_bounds = tab_bounds(app, target_window_id, 0);
+        let attach_point = tab_screen_point(
+            app,
+            target_window_id,
+            0,
+            8.0,
+            target_tab_bounds.height() / 2.0,
+        );
+        let source_local_target =
+            source_local_point_for_screen_point(app, source_window_id, attach_point);
+        dispatch_mouse_event(
+            app,
+            source_window_id,
+            Event::LeftMouseDragged {
+                position: source_local_target,
+                modifiers: ModifiersState::default(),
+            },
+        );
+    })
+    .with_action(|app, _, data| {
+        let source_window_id = *data
+            .get::<_, WindowId>(SOURCE_WINDOW_KEY)
+            .expect("saved source window id should exist");
+        let target_window_id = *data
+            .get::<_, WindowId>(DETACHED_WINDOW_KEY)
+            .expect("saved detached window id should exist");
+        let target_tab_bounds = tab_bounds(app, target_window_id, 0);
+        let attach_point = tab_screen_point(
+            app,
+            target_window_id,
+            0,
+            8.0,
+            target_tab_bounds.height() / 2.0,
+        );
+        let source_local_target =
+            source_local_point_for_screen_point(app, source_window_id, attach_point);
+        dispatch_mouse_event(
+            app,
+            source_window_id,
+            Event::LeftMouseUp {
+                position: source_local_target,
+                modifiers: ModifiersState::default(),
+            },
+        );
+    })
+}
+
+/// Dispatches `WorkspaceAction::ShowSettings` on the workspace hosted in the
+/// given saved window -- exactly the action the tab-bar gear icon's `on_click`
+/// dispatches. Used instead of the `cmdorctrl-,` keybinding because keystrokes
+/// depend on keyboard-focus bookkeeping that this test's synthetic window
+/// juggling (detach/close/refocus) does not reliably keep current; the direct
+/// action dispatch is the same real product code path (`show_settings`), not
+/// a bypass of anything under test here.
+fn open_settings_step(step_name: &'static str, window_key: &'static str) -> TestStep {
+    TestStep::new(step_name).with_action(move |app, _, data| {
+        let window_id = *data
+            .get::<_, WindowId>(window_key)
+            .expect("saved window id should exist");
+        // Deferred rather than a direct `handle_action` call: this can run
+        // immediately after a cross-window transfer/close settles, and a
+        // synchronous call can re-enter a workspace view update still being
+        // flushed from that prior transfer ("Circular view update").
+        workspace_view(app, window_id).update(app, |_, ctx| {
+            ctx.dispatch_typed_action_deferred(WorkspaceAction::ShowSettings);
+        });
+    })
+}
+
+/// Emits `SettingsViewEvent::OpenAIFactCollection` on the live `SettingsView`
+/// hosted in the given saved window, i.e. exactly the event
+/// `ManageRulesWidget`'s "Manage rules" button dispatches on click. Used
+/// instead of a raw screen click because that button has no cached click
+/// position; the event itself is real product wiring, not a bypass of the
+/// cross-window transfer mechanism under test (which is always exercised via
+/// real mouse drag events in this file).
+fn click_rules_button_in_settings_step(
+    step_name: &'static str,
+    window_key: &'static str,
+) -> TestStep {
+    TestStep::new(step_name).with_action(move |app, _, data| {
+        let window_id = *data
+            .get::<_, WindowId>(window_key)
+            .expect("saved window id should exist");
+        let settings_view = app
+            .views_of_type::<SettingsView>(window_id)
+            .expect("settings view should exist in the window")
+            .first()
+            .expect("settings view should exist in the window")
+            .clone();
+        settings_view.update(app, |_, ctx| {
+            ctx.emit(SettingsViewEvent::OpenAIFactCollection);
+        });
+    })
+}
+
+/// Closes the saved window via `TerminationMode::Cancellable` -- the same
+/// path a real click on the window's close button takes (see
+/// `close_window_requested` in `crates/warpui/src/windowing/winit/event_loop/mod.rs`,
+/// which falls through to this same internal close for an approved,
+/// interruptible close). Used instead of the `close_window` production test
+/// helper (which hardcodes `ForceTerminate`) so this test exercises the real
+/// user gesture, not just a forced teardown.
+fn close_window_via_real_close_button(
+    step_name: &'static str,
+    window_key: &'static str,
+    expected_num_windows: usize,
+) -> TestStep {
+    new_step_with_default_assertions(step_name)
+        .with_action(move |app, _, data| {
+            let window_id = *data
+                .get::<_, WindowId>(window_key)
+                .expect("saved window id should exist");
+            app.update(|ctx| {
+                WindowManager::as_ref(ctx).close_window(
+                    window_id,
+                    warpui_core::platform::TerminationMode::Cancellable,
+                );
+            });
+        })
+        .add_assertion(move |app, _| async_assert_eq!(app.window_ids().len(), expected_num_windows))
+}
+
+/// Manual visual-verification companion for APP-5311. Drives the real
+/// cross-window tab-drag gesture (never the internal transfer APIs used by
+/// the unit tests in `view_tests.rs`) to exercise all three reported
+/// symptoms plus the one-pane-per-window collision reconciliation:
+///
+/// - Flow A: Settings reopens in the original window after being dragged
+///   into a new window and that window is closed.
+/// - Flow B: clicking "Rules" from a Settings pane hosted in another window
+///   opens Rules in that same window, not the original one.
+/// - Flow C: after Settings+Rules are dragged together into a window and
+///   Rules is closed there, clicking "Rules" again reopens it in that window.
+/// - Collision: dragging a Settings tab into a window that already has its
+///   own Settings pane discards the duplicate and keeps a single pane.
+///
+/// Requires `WARPUI_USE_REAL_DISPLAY_IN_INTEGRATION_TESTS=1` to capture
+/// video/screenshots and the `drag_tabs_to_windows` cargo feature to
+/// exercise the drag gesture; skipped otherwise via `drag_tabs_feature_enabled`.
+pub fn test_settings_and_rules_panes_survive_cross_window_drag() -> Builder {
+    new_builder()
+        .set_should_run_test(drag_tabs_feature_enabled)
+        .with_step(wait_until_bootstrapped_single_pane_for_tab(0))
+        .with_step(
+            new_step_with_default_assertions("Save the original window")
+                .add_assertion(save_active_window_id(SOURCE_WINDOW_KEY))
+                .with_start_recording(),
+        )
+        .with_step(
+            open_settings_step("Open Settings", SOURCE_WINDOW_KEY)
+                .add_assertion(assert_tab_count(2)),
+        )
+        // ---- Flow A: reopen Settings after detach + close ----
+        .with_step(detach_settings_tab_step(
+            "Flow A: drag Settings into a new window",
+        ))
+        .with_step(
+            focus_other_window(DETACHED_WINDOW_KEY, SOURCE_WINDOW_KEY)
+                .add_assertion(assert_tab_count(1)),
+        )
+        // Focus back to the source window *before* closing the detached one: closing
+        // the currently-active window would leave the next step's default assertions
+        // (which resolve views via the active window) pointed at a window that no
+        // longer exists.
+        .with_step(focus_saved_window(SOURCE_WINDOW_KEY))
+        .with_step(close_window_via_real_close_button(
+            "Flow A: close the detached window (real close button path)",
+            DETACHED_WINDOW_KEY,
+            1,
+        ))
+        .with_step(
+            open_settings_step(
+                "Flow A: Settings reopens in the original window after detach + close",
+                SOURCE_WINDOW_KEY,
+            )
+            .add_assertion(assert_tab_count(2)),
+        )
+        // ---- Flow B: Rules opens in the window hosting the transferred Settings pane ----
+        .with_step(detach_settings_tab_step(
+            "Flow B: drag Settings into a new window",
+        ))
+        .with_step(
+            focus_other_window(DETACHED_WINDOW_KEY, SOURCE_WINDOW_KEY)
+                .add_assertion(assert_tab_count(1)),
+        )
+        .with_step(
+            click_rules_button_in_settings_step(
+                "Flow B: click Rules from the transferred Settings pane",
+                DETACHED_WINDOW_KEY,
+            )
+            .add_assertion(assert_num_panes_in_tab(0, 2)),
+        )
+        .with_step(
+            TestStep::new("Flow B: the original window is untouched")
+                .add_named_assertion_with_data_from_prior_step(
+                    "original window's active tab pane count is unchanged",
+                    |app, _window_id, data| {
+                        let source_window_id = *data
+                            .get::<_, WindowId>(SOURCE_WINDOW_KEY)
+                            .expect("saved source window id should exist");
+                        let pane_group = pane_group_view(app, source_window_id, 0);
+                        pane_group.read(app, |pane_group, _| {
+                            async_assert_eq!(pane_group.pane_count(), 1)
+                        })
+                    },
+                ),
+        )
+        // ---- Flow C: Rules reopens after being closed in the transferred window ----
+        // `UndoClosedPanes` is on by default (see `undo_closed_panes` in the default
+        // feature list), so closing a pane hides it for undo rather than removing it
+        // from `pane_count()`; check `visible_pane_count()` instead.
+        .with_step(close_pane_by_index(0, 1).add_assertion(assert_num_visible_panes_in_tab(0, 1)))
+        .with_step(
+            click_rules_button_in_settings_step(
+                "Flow C: click Rules again after closing it",
+                DETACHED_WINDOW_KEY,
+            )
+            .add_assertion(assert_num_visible_panes_in_tab(0, 2)),
+        )
+        // ---- Collision: dragging Settings into a window that already has one keeps a single pane ----
+        .with_step(focus_saved_window(SOURCE_WINDOW_KEY).add_assertion(assert_tab_count(1)))
+        .with_step(
+            open_settings_step(
+                "Open a fresh Settings pane in the original window",
+                SOURCE_WINDOW_KEY,
+            )
+            .add_assertion(assert_tab_count(2)),
+        )
+        // Windows in this harness render at a fairly large default size, so the
+        // separation between origins needs to exceed that size or the two
+        // windows' bounds overlap and the drag never actually leaves the
+        // source window (it gets treated as a reorder-in-place instead of a
+        // cross-window attach).
+        .with_step(set_saved_window_origin(SOURCE_WINDOW_KEY, vec2f(0.0, 0.0)))
+        .with_step(set_saved_window_origin(
+            DETACHED_WINDOW_KEY,
+            vec2f(2000.0, 0.0),
+        ))
+        .with_step(focus_saved_window(SOURCE_WINDOW_KEY))
+        .with_step(drag_settings_tab_into_detached_window_step())
+        .with_step(
+            focus_saved_window(DETACHED_WINDOW_KEY)
+                .add_assertion(assert_tab_count(1))
+                .add_assertion(assert_num_visible_panes_in_tab(0, 2)),
+        )
+        .with_step(
+            focus_saved_window(SOURCE_WINDOW_KEY)
+                .add_assertion(assert_tab_count(1))
+                .with_stop_recording(),
+        )
 }
