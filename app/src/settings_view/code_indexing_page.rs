@@ -33,7 +33,7 @@ use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
 use warpui::ui_components::switch::{SwitchStateHandle, TooltipConfig};
 use warpui::{
     Action, AppContext, Entity, ModelHandle, SingletonEntity, TypedActionView, View, ViewContext,
-    ViewHandle, WeakViewHandle, id,
+    ViewHandle, id,
 };
 
 use super::settings_page::{
@@ -141,7 +141,6 @@ enum IndexingRefreshAction {
     Resync,
 }
 pub struct CodeIndexingPageView {
-    self_handle: WeakViewHandle<Self>,
     page: PageType<Self>,
     codebase_manual_resync_mouse_states: Vec<MouseStateHandle>,
     codebase_delete_mouse_states: Vec<MouseStateHandle>,
@@ -164,24 +163,14 @@ pub struct CodeIndexingPageView {
 
 impl CodeIndexingPageView {
     pub fn new(ctx: &mut ViewContext<CodeIndexingPageView>) -> Self {
-        let window_id = ctx.window_id();
-        ctx.subscribe_to_model(&UserWorkspaces::handle(ctx), move |_, _, event, ctx| {
-            // Only a `WindowTeamChanged` for this view's own window should trigger a
-            // rerender; other windows' team assignments are independent.
-            match event {
-                UserWorkspacesEvent::WindowTeamChanged {
-                    window_id: changed_window_id,
-                } => {
-                    if *changed_window_id == window_id {
-                        ctx.notify();
-                    }
-                }
+        ctx.subscribe_to_model(&UserWorkspaces::handle(ctx), |_, _, event, ctx| {
+            if matches!(
+                event,
                 UserWorkspacesEvent::TeamsChanged
-                | UserWorkspacesEvent::CurrentWorkspaceChanged
-                | UserWorkspacesEvent::CodebaseContextEnablementChanged => {
-                    ctx.notify();
-                }
-                _ => {}
+                    | UserWorkspacesEvent::CurrentWorkspaceChanged
+                    | UserWorkspacesEvent::CodebaseContextEnablementChanged
+            ) {
+                ctx.notify();
             }
         });
 
@@ -320,7 +309,6 @@ impl CodeIndexingPageView {
         let workspace_count = PersistedWorkspace::as_ref(ctx).workspaces().count();
 
         Self {
-            self_handle: ctx.handle(),
             page: Self::build_page(ctx),
             codebase_manual_resync_mouse_states: (0..codebase_count)
                 .map(|_| Default::default())
@@ -372,21 +360,15 @@ impl CodeIndexingPageView {
     fn open_directory_picker(&mut self, ctx: &mut ViewContext<Self>) {
         let file_picker_config = FilePickerConfiguration::new().folders_only();
         let window_id = ctx.window_id();
-        // Captured before the picker's async round-trip so the eventual index request is
-        // scoped to the team this window had when the user asked to index a folder, not
-        // whatever team the window has selected once the picker resolves.
-        let indexing_context = UserWorkspaces::as_ref(ctx).team_context_for_view(ctx);
 
         ctx.open_file_picker(
             move |result, ctx| match result {
                 Ok(paths) => {
                     if let Some(directory_path) = paths.first() {
-                        if !UserWorkspaces::as_ref(ctx)
-                            .code_indexing_enabled_for_context(indexing_context.as_ref(), ctx)
-                        {
+                        if !UserWorkspaces::as_ref(ctx).is_codebase_context_enabled(ctx) {
                             log::warn!(
                                 "Ignoring manual add-directory request: codebase indexing is \
-                                 disabled for this window's team"
+                                 disabled"
                             );
                             return;
                         }
@@ -412,12 +394,8 @@ impl CodeIndexingPageView {
         );
     }
 
-    /// Whether the operation starting now may create, sync, delete, or retrieve from a
-    /// codebase index, based on the team captured from this action's window when it
-    /// starts. Callers must not re-resolve the window's team afterward.
     fn code_indexing_action_allowed(ctx: &ViewContext<Self>) -> bool {
-        let context = UserWorkspaces::as_ref(ctx).team_context_for_view(ctx);
-        UserWorkspaces::as_ref(ctx).code_indexing_enabled_for_context(context.as_ref(), ctx)
+        UserWorkspaces::as_ref(ctx).is_codebase_context_enabled(ctx)
     }
 }
 
@@ -491,9 +469,7 @@ impl TypedActionView for CodeIndexingPageView {
         match action {
             CodeIndexingPageAction::ToggleCodebaseContext => {
                 // If the organization has an explicit setting (on or off), ignore user toggles.
-                let context = UserWorkspaces::as_ref(ctx).team_context_for_view(ctx);
-                let setting = UserWorkspaces::as_ref(ctx)
-                    .code_indexing_admin_setting_for_context(context.as_ref());
+                let setting = UserWorkspaces::as_ref(ctx).codebase_context_admin_setting();
                 match setting {
                     AdminEnablementSetting::Enable | AdminEnablementSetting::Disable => {
                         return;
@@ -523,10 +499,7 @@ impl TypedActionView for CodeIndexingPageView {
             }
             CodeIndexingPageAction::ToggleAutoIndexing => {
                 if !Self::code_indexing_action_allowed(ctx) {
-                    log::warn!(
-                        "Ignoring auto-indexing toggle: codebase indexing is disabled for this \
-                         window's team"
-                    );
+                    log::warn!("Ignoring auto-indexing toggle: codebase indexing is disabled");
                     return;
                 }
 
@@ -550,10 +523,7 @@ impl TypedActionView for CodeIndexingPageView {
             }
             CodeIndexingPageAction::ManualResync(repo_path) => {
                 if !Self::code_indexing_action_allowed(ctx) {
-                    log::warn!(
-                        "Ignoring manual resync request: codebase indexing is disabled for this \
-                         window's team"
-                    );
+                    log::warn!("Ignoring manual resync request: codebase indexing is disabled");
                     return;
                 }
                 CodebaseIndexManager::handle(ctx).update(ctx, |manager, ctx| {
@@ -562,10 +532,7 @@ impl TypedActionView for CodeIndexingPageView {
             }
             CodeIndexingPageAction::DeleteIndex(repo_path) => {
                 if !Self::code_indexing_action_allowed(ctx) {
-                    log::warn!(
-                        "Ignoring delete-index request: codebase indexing is disabled for this \
-                         window's team"
-                    );
+                    log::warn!("Ignoring delete-index request: codebase indexing is disabled");
                     return;
                 }
                 CodebaseIndexManager::handle(ctx).update(ctx, |manager, ctx| {
@@ -575,10 +542,7 @@ impl TypedActionView for CodeIndexingPageView {
             #[cfg(not(target_family = "wasm"))]
             CodeIndexingPageAction::RequestRemoteIndex(remote_path) => {
                 if !Self::code_indexing_action_allowed(ctx) {
-                    log::warn!(
-                        "Ignoring remote index request: codebase indexing is disabled for this \
-                         window's team"
-                    );
+                    log::warn!("Ignoring remote index request: codebase indexing is disabled");
                     return;
                 }
                 RemoteCodebaseIndexModel::handle(ctx).update(ctx, |model, ctx| {
@@ -588,10 +552,7 @@ impl TypedActionView for CodeIndexingPageView {
             #[cfg(not(target_family = "wasm"))]
             CodeIndexingPageAction::ManualResyncRemote(remote_path) => {
                 if !Self::code_indexing_action_allowed(ctx) {
-                    log::warn!(
-                        "Ignoring remote resync request: codebase indexing is disabled for this \
-                         window's team"
-                    );
+                    log::warn!("Ignoring remote resync request: codebase indexing is disabled");
                     return;
                 }
                 RemoteCodebaseIndexModel::handle(ctx).update(ctx, |model, ctx| {
@@ -602,8 +563,7 @@ impl TypedActionView for CodeIndexingPageView {
             CodeIndexingPageAction::DeleteRemoteIndex(remote_path) => {
                 if !Self::code_indexing_action_allowed(ctx) {
                     log::warn!(
-                        "Ignoring remote delete-index request: codebase indexing is disabled for \
-                         this window's team"
+                        "Ignoring remote delete-index request: codebase indexing is disabled"
                     );
                     return;
                 }
@@ -1025,7 +985,7 @@ impl CodePageWidget {
     ) -> Box<dyn Element> {
         let ui_builder = appearance.ui_builder();
         let theme = appearance.theme();
-        let admin_setting = UserWorkspaces::as_ref(app).team_allows_codebase_context();
+        let admin_setting = UserWorkspaces::as_ref(app).codebase_context_admin_setting();
 
         let label = ui_builder
             .span(CODEBASE_INDEXING_LABEL)
@@ -1086,11 +1046,7 @@ impl CodePageWidget {
         .finish()
     }
 
-    /// Renders the "Initialized / indexed folders" section. `indexing_available` reflects
-    /// this window's own team scope: when `false`, codebase-index status, controls, and the
-    /// "Index new folder" action are omitted entirely rather than shown disabled, so a denied
-    /// scope cannot see or reach an index that a different, allowed team scope created for the
-    /// same repository. LSP server rows are unaffected, since LSP is not codebase indexing.
+    /// Renders the "Initialized / indexed folders" section.
     #[allow(clippy::too_many_arguments)]
     fn render_initialized_folders(
         &self,
@@ -1116,8 +1072,7 @@ impl CodePageWidget {
 
         let mut content = Flex::column();
 
-        // Section header, with the "Index folder" button only when this window's team
-        // scope allows creating an index.
+        // Section header
         let mut header_row = Flex::row()
             .with_main_axis_size(MainAxisSize::Max)
             .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
@@ -1165,7 +1120,7 @@ impl CodePageWidget {
         for (workspace_idx, workspace) in workspaces.iter().enumerate() {
             let workspace_path = &workspace.path;
 
-            // Get codebase index status if it exists and this window's team may see it.
+            // Get codebase index status if it exists and indexing is available.
             let index_status = indexing_available
                 .then(|| codebase_manager.get_codebase_index_status_for_path(workspace_path, app))
                 .flatten();
@@ -1353,8 +1308,6 @@ impl CodePageWidget {
             appearance,
         ));
 
-        // Indexing section: omitted for a window whose team scope disallows indexing, so
-        // it cannot see or reach an index another allowed team scope created.
         if indexing_available {
             workspace_content.add_child(self.render_indexing_subsection(
                 workspace_path,
@@ -2263,16 +2216,12 @@ impl SettingsWidget for CodeIndexingPageWidget {
         let ui_builder = appearance.ui_builder();
         let global_ai_enabled = AISettings::as_ref(app).is_any_ai_enabled(app);
         let user_workspaces = UserWorkspaces::as_ref(app);
-        let render_context =
-            user_workspaces.team_render_context_for_view_handle(&view.self_handle, app);
-        let codebase_context_enabled =
-            user_workspaces.code_indexing_enabled_for_render(render_context.as_ref(), app);
+        let codebase_context_enabled = user_workspaces.is_codebase_context_enabled(app);
 
         let mut content = Flex::column();
 
         // Codebase indexing toggle using render_body_item for consistent styling
-        let admin_setting =
-            user_workspaces.code_indexing_admin_setting_for_render(render_context.as_ref());
+        let admin_setting = user_workspaces.codebase_context_admin_setting();
         let switch = ui_builder
             .switch(self.inner.switch_state.clone())
             .check(codebase_context_enabled);

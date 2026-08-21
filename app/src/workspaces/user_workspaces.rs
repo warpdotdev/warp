@@ -1902,18 +1902,10 @@ impl UserWorkspaces {
             .unwrap_or(false)
     }
 
-    /// Returns the codebase context settings, taking into account the organization,
-    /// global AI settings, and codebase-specific settings.
-    /// Prefer this function to determine whether to show indexing-related functionality.
+    /// Returns whether codebase context is enabled across all of the user's teams.
     pub fn is_codebase_context_enabled(&self, app: &AppContext) -> bool {
-        // If the organization has an explicit setting, respect it and make user toggle irrelevant.
-        // - Enable: forced ON by org, regardless of user preference.
-        // - Disable: forced OFF by org.
-        // - RespectUserSetting: respect the user setting.
-        let org_setting = self.team_allows_codebase_context();
         let ai_globally_enabled = AISettings::as_ref(app).is_any_ai_enabled(app);
-
-        match org_setting {
+        match self.codebase_context_admin_setting() {
             AdminEnablementSetting::Enable => ai_globally_enabled,
             AdminEnablementSetting::Disable => false,
             AdminEnablementSetting::RespectUserSetting => {
@@ -1937,86 +1929,36 @@ impl UserWorkspaces {
             .unwrap_or_default()
     }
 
-    /// Returns only the organization-specific codebase context enablement setting.
-    /// Do not use this function to determine whether codebase context is generally enabled --
-    /// use `is_codebase_context_enabled` instead.
-    pub fn team_allows_codebase_context(&self) -> AdminEnablementSetting {
-        self.current_workspace()
-            .map(|workspace| workspace.settings.codebase_context_settings.setting.clone())
-            .unwrap_or_default()
-    }
+    pub fn codebase_context_admin_setting(&self) -> AdminEnablementSetting {
+        let mut team_settings = self
+            .workspaces
+            .iter()
+            .flat_map(|workspace| workspace.teams.iter())
+            .map(|team| &team.settings.codebase_context.value)
+            .peekable();
 
-    /// The codebase-indexing admin policy for `team`, or the no-team default when
-    /// `team` is `None`: a window with no selected team, or a captured
-    /// [`TeamContext`] whose team no longer resolves.
-    fn code_indexing_admin_setting_for_team(team: Option<&Team>) -> AdminEnablementSetting {
-        team.map(|team| team.settings.codebase_context.value.clone())
-            .unwrap_or_default()
-    }
+        if team_settings.peek().is_none() {
+            return self
+                .current_workspace()
+                .map(|workspace| workspace.settings.codebase_context_settings.setting.clone())
+                .unwrap_or_default();
+        }
 
-    /// Whether codebase indexing is available for `team`, or the no-team default
-    /// when `team` is `None`. See [`Self::code_indexing_admin_setting_for_team`].
-    fn code_indexing_enabled_for_team(team: Option<&Team>, app: &AppContext) -> bool {
-        let ai_globally_enabled = AISettings::as_ref(app).is_any_ai_enabled(app);
-        match Self::code_indexing_admin_setting_for_team(team) {
-            AdminEnablementSetting::Enable => ai_globally_enabled,
-            AdminEnablementSetting::Disable => false,
-            AdminEnablementSetting::RespectUserSetting => {
-                ai_globally_enabled && *CodeSettings::as_ref(app).codebase_context_enabled.value()
+        // TODO(isaiah): Enforce codebase-indexing policy per team and window.
+        let mut respects_user_setting = false;
+        for setting in team_settings {
+            match setting {
+                AdminEnablementSetting::Enable => {}
+                AdminEnablementSetting::Disable => return AdminEnablementSetting::Disable,
+                AdminEnablementSetting::RespectUserSetting => respects_user_setting = true,
             }
         }
-    }
 
-    /// The codebase-indexing admin policy for the window `render` presents, or the
-    /// no-team default when that window has no selected team. Rendering only; see
-    /// [`Self::code_indexing_enabled_for_context`] for the check an action must
-    /// pass before it creates, syncs, deletes, or retrieves from an index.
-    pub(crate) fn code_indexing_admin_setting_for_render(
-        &self,
-        render: Option<&TeamRenderContext<'_>>,
-    ) -> AdminEnablementSetting {
-        Self::code_indexing_admin_setting_for_team(render.map(|render| render.team))
-    }
-
-    /// Whether codebase indexing is available to present for the window `render`
-    /// presents, or the no-team default when that window has no selected team.
-    /// Rendering only; see [`Self::code_indexing_enabled_for_context`] for the
-    /// check an action must pass before it creates, syncs, deletes, or retrieves
-    /// from an index.
-    pub(crate) fn code_indexing_enabled_for_render(
-        &self,
-        render: Option<&TeamRenderContext<'_>>,
-        app: &AppContext,
-    ) -> bool {
-        Self::code_indexing_enabled_for_team(render.map(|render| render.team), app)
-    }
-
-    /// The codebase-indexing admin policy for `context`'s captured team, or the
-    /// no-team default when `context` is `None`. See
-    /// [`Self::code_indexing_enabled_for_context`] for the combined availability
-    /// check an action should use before it creates, syncs, deletes, or retrieves
-    /// from an index.
-    pub(crate) fn code_indexing_admin_setting_for_context(
-        &self,
-        context: Option<&TeamContext>,
-    ) -> AdminEnablementSetting {
-        let team = context.and_then(|context| self.team_for_context(context));
-        Self::code_indexing_admin_setting_for_team(team)
-    }
-
-    /// Whether `context`'s captured team allows codebase indexing, or the no-team
-    /// default when `context` is `None`. An action that creates, syncs, deletes,
-    /// or retrieves from an index must mint `TeamContext` when it starts and pass
-    /// it here instead of re-resolving a team from the window: a denied scope
-    /// stays denied even when another team allows indexing and has already
-    /// created a shared local index for the same repository.
-    pub(crate) fn code_indexing_enabled_for_context(
-        &self,
-        context: Option<&TeamContext>,
-        app: &AppContext,
-    ) -> bool {
-        let team = context.and_then(|context| self.team_for_context(context));
-        Self::code_indexing_enabled_for_team(team, app)
+        if respects_user_setting {
+            AdminEnablementSetting::RespectUserSetting
+        } else {
+            AdminEnablementSetting::Enable
+        }
     }
 
     /// Updates whether or not session sharing is enabled based on the current team's tier policy.

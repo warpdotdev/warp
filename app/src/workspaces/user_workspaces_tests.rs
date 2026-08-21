@@ -71,8 +71,8 @@ use crate::workspaces::team_tester::TeamTesterStatus;
 use crate::workspaces::update_manager::TeamUpdateManager;
 use crate::workspaces::user_workspaces::UserWorkspaces;
 use crate::workspaces::workspace::{
-    AdminEnablementSetting, CodebaseContextSettings, HostEnablementSetting, LlmHostSettings,
-    MultiAdminPolicy, PurchaseAddOnCreditsPolicy, Workspace,
+    AdminEnablementSetting, HostEnablementSetting, LlmHostSettings, MultiAdminPolicy,
+    PurchaseAddOnCreditsPolicy, Workspace,
 };
 
 #[derive(Default)]
@@ -1193,229 +1193,6 @@ fn test_team_context_and_render_context_return_none_without_a_team() {
     })
 }
 
-/// A window's own team scope governs codebase-indexing availability, both for rendering
-/// (`code_indexing_enabled_for_render`) and for minted operation scope
-/// (`code_indexing_enabled_for_context`) -- team A disabled, team B enabled, each in its
-/// own window.
-#[test]
-fn test_code_indexing_enabled_for_render_and_context_resolve_each_windows_own_team() {
-    let (mut team_a, mut team_b) = two_teams();
-    team_a.settings.codebase_context.value = AdminEnablementSetting::Disable;
-    team_b.settings.codebase_context.value = AdminEnablementSetting::Enable;
-    let mut workspace = workspace_for_test(&team_a);
-    workspace.teams.push(team_b.clone());
-
-    App::test((), |mut app| async move {
-        initialize_app(
-            &mut app,
-            CachedResources {
-                workspaces: vec![workspace],
-            },
-            Arc::new(MockTeamClient::new()),
-            Arc::new(MockWorkspaceClient::new()),
-        );
-
-        let (window_a, view_a) = create_test_window(&mut app);
-        let (window_b, view_b) = create_test_window(&mut app);
-        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
-            user_workspaces.set_team_for_window(window_a, team_a.uid, ctx);
-            user_workspaces.set_team_for_window(window_b, team_b.uid, ctx);
-        });
-
-        let context_a = view_a.update(&mut app, |_, ctx| {
-            UserWorkspaces::as_ref(ctx).team_context_for_view(ctx)
-        });
-        let context_b = view_b.update(&mut app, |_, ctx| {
-            UserWorkspaces::as_ref(ctx).team_context_for_view(ctx)
-        });
-        let weak_view_a = view_a.downgrade();
-        let weak_view_b = view_b.downgrade();
-
-        app.read(|ctx| {
-            let user_workspaces = UserWorkspaces::as_ref(ctx);
-            let render_a = user_workspaces.team_render_context_for_view_handle(&weak_view_a, ctx);
-            let render_b = user_workspaces.team_render_context_for_view_handle(&weak_view_b, ctx);
-
-            assert!(
-                !user_workspaces.code_indexing_enabled_for_render(render_a.as_ref(), ctx),
-                "team A disabled codebase indexing, so window A should present it as unavailable"
-            );
-            assert!(
-                user_workspaces.code_indexing_enabled_for_render(render_b.as_ref(), ctx),
-                "team B enabled codebase indexing, so window B should present it as available"
-            );
-            assert!(
-                !user_workspaces.code_indexing_enabled_for_context(context_a.as_ref(), ctx),
-                "an operation scoped to team A's context must stay denied"
-            );
-            assert!(
-                user_workspaces.code_indexing_enabled_for_context(context_b.as_ref(), ctx),
-                "an operation scoped to team B's context must be allowed"
-            );
-        });
-    })
-}
-
-/// A window whose own team scope disables codebase indexing must resolve as unavailable
-/// for both rendering and minted operation scope, even though another team in the same
-/// workspace -- here, the first/default team a naive "pick a team" fallback might reach
-/// for -- has indexing enabled and could have a shared local index for the same
-/// repository. This covers the settings-page availability check only, not every path
-/// that reads or creates an index.
-#[test]
-fn test_code_indexing_denied_window_ignores_a_default_or_other_allowed_team() {
-    let (mut default_team, mut denied_team) = two_teams();
-    // The allowed team is listed first, so `inherited_or_default_team_uid` and any
-    // similar "pick a team" fallback would resolve to it rather than to the denied
-    // window's own team.
-    default_team.settings.codebase_context.value = AdminEnablementSetting::Enable;
-    denied_team.settings.codebase_context.value = AdminEnablementSetting::Disable;
-    let mut workspace = workspace_for_test(&default_team);
-    workspace.teams.push(denied_team.clone());
-
-    App::test((), |mut app| async move {
-        initialize_app(
-            &mut app,
-            CachedResources {
-                workspaces: vec![workspace],
-            },
-            Arc::new(MockTeamClient::new()),
-            Arc::new(MockWorkspaceClient::new()),
-        );
-
-        let (denied_window, denied_view) = create_test_window(&mut app);
-        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
-            user_workspaces.set_team_for_window(denied_window, denied_team.uid, ctx);
-        });
-
-        let denied_context = denied_view.update(&mut app, |_, ctx| {
-            UserWorkspaces::as_ref(ctx).team_context_for_view(ctx)
-        });
-        let weak_denied_view = denied_view.downgrade();
-
-        app.read(|ctx| {
-            let user_workspaces = UserWorkspaces::as_ref(ctx);
-
-            // Sanity check: the workspace's default team really does allow indexing, so a
-            // fallback to it would incorrectly read as available.
-            assert_eq!(
-                user_workspaces.inherited_or_default_team_uid(None),
-                Some(default_team.uid)
-            );
-
-            let denied_render =
-                user_workspaces.team_render_context_for_view_handle(&weak_denied_view, ctx);
-            assert!(
-                !user_workspaces.code_indexing_enabled_for_render(denied_render.as_ref(), ctx),
-                "a window on the denied team must present indexing as unavailable, not fall \
-                 back to another team's allowed policy"
-            );
-            assert!(
-                !user_workspaces.code_indexing_enabled_for_context(denied_context.as_ref(), ctx),
-                "an operation scoped to the denied team's context must stay denied regardless \
-                 of any other team's policy"
-            );
-        });
-    })
-}
-
-/// A `TeamContext` captured while a window's team disabled indexing must not silently
-/// adopt a different team's enabled policy after the window's team assignment
-/// reconciles away (the only way an existing window's team changes today).
-#[test]
-fn test_code_indexing_context_does_not_retarget_after_window_team_reconciliation() {
-    let (mut team_a, mut team_b) = two_teams();
-    team_a.settings.codebase_context.value = AdminEnablementSetting::Disable;
-    team_b.settings.codebase_context.value = AdminEnablementSetting::Enable;
-    let mut workspace = workspace_for_test(&team_a);
-    workspace.teams.push(team_b.clone());
-
-    App::test((), |mut app| async move {
-        initialize_app(
-            &mut app,
-            CachedResources {
-                workspaces: vec![workspace],
-            },
-            Arc::new(MockTeamClient::new()),
-            Arc::new(MockWorkspaceClient::new()),
-        );
-
-        let (window_id, view) = create_test_window(&mut app);
-        let weak_view = view.downgrade();
-        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
-            user_workspaces.set_team_for_window(window_id, team_a.uid, ctx);
-        });
-
-        let context_a = view
-            .update(&mut app, |_, ctx| {
-                UserWorkspaces::as_ref(ctx).team_context_for_view(ctx)
-            })
-            .expect("a window assigned to team A should mint a context");
-
-        // Team A leaves the workspace, forcing the window to reconcile onto team B.
-        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
-            user_workspaces.update_workspaces(vec![workspace_for_test(&team_b)], ctx);
-        });
-
-        app.read(|ctx| {
-            let user_workspaces = UserWorkspaces::as_ref(ctx);
-            let render_after_reconciliation =
-                user_workspaces.team_render_context_for_view_handle(&weak_view, ctx);
-            assert!(
-                user_workspaces
-                    .code_indexing_enabled_for_render(render_after_reconciliation.as_ref(), ctx),
-                "a freshly resolved render context should follow the window to team B's \
-                 enabled policy"
-            );
-            assert_ne!(
-                user_workspaces.code_indexing_admin_setting_for_context(Some(&context_a)),
-                AdminEnablementSetting::Enable,
-                "a context captured for team A must not silently read as team B's enabled \
-                 policy"
-            );
-        });
-    })
-}
-
-/// A window with no selected team follows no-team behavior for codebase indexing: no
-/// team-admin restriction applies, matching `is_codebase_context_enabled`'s existing
-/// no-workspace default.
-#[test]
-fn test_code_indexing_uses_no_team_default_for_windows_without_a_team() {
-    App::test((), |mut app| async move {
-        initialize_app(
-            &mut app,
-            CachedResources { workspaces: vec![] },
-            Arc::new(MockTeamClient::new()),
-            Arc::new(MockWorkspaceClient::new()),
-        );
-
-        let (window_id, view) = create_test_window(&mut app);
-        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
-            user_workspaces.register_window(window_id, None, ctx);
-        });
-
-        let context = view.update(&mut app, |_, ctx| {
-            UserWorkspaces::as_ref(ctx).team_context_for_view(ctx)
-        });
-        assert!(context.is_none());
-        let weak_view = view.downgrade();
-
-        app.read(|ctx| {
-            let user_workspaces = UserWorkspaces::as_ref(ctx);
-            let render = user_workspaces.team_render_context_for_view_handle(&weak_view, ctx);
-            assert!(
-                user_workspaces.code_indexing_enabled_for_render(render.as_ref(), ctx),
-                "a window with no team should follow the same default as no-workspace users"
-            );
-            assert!(
-                user_workspaces.code_indexing_enabled_for_context(context.as_ref(), ctx),
-                "an operation with no captured context should follow the no-team default"
-            );
-        });
-    })
-}
-
 #[test]
 fn test_spaces_for_window_orders_selected_team_shared_and_personal() {
     let _flag = FeatureFlag::SharedWithMe.override_enabled(true);
@@ -1513,14 +1290,12 @@ fn test_unassigned_window_is_initialized_after_workspace_metadata_loads() {
 }
 
 #[test]
-fn test_codebase_context_enabled_by_team_disabled_by_user() {
-    let team = team_for_test();
-
-    // Codebase context is governed by the workspace-level effective settings.
-    let mut workspace = workspace_for_test(&team);
-    workspace.settings.codebase_context_settings = CodebaseContextSettings {
-        setting: AdminEnablementSetting::Enable,
-    };
+fn test_codebase_context_enabled_when_all_teams_enable_it() {
+    let (mut team_a, mut team_b) = two_teams();
+    team_a.settings.codebase_context.value = AdminEnablementSetting::Enable;
+    team_b.settings.codebase_context.value = AdminEnablementSetting::Enable;
+    let mut workspace = workspace_for_test(&team_a);
+    workspace.teams.push(team_b);
 
     App::test((), |mut app| async move {
         initialize_app(
@@ -1533,110 +1308,98 @@ fn test_codebase_context_enabled_by_team_disabled_by_user() {
         );
 
         app.read(|ctx| {
-            let codebase_context_enabled = UserWorkspaces::as_ref(ctx)
-                .is_codebase_context_enabled(ctx);
-            assert!(codebase_context_enabled,
-            "codebase context should be on when it's enabled by the team, regardless of user setting");
-        });
-    })
-}
-
-#[test]
-fn test_codebase_context_enabled_by_team_and_user() {
-    let team = team_for_test();
-
-    let mut workspace = workspace_for_test(&team);
-    workspace.settings.codebase_context_settings = CodebaseContextSettings {
-        setting: AdminEnablementSetting::Enable,
-    };
-
-    App::test((), |mut app| async move {
-        initialize_app(
-            &mut app,
-            CachedResources {
-                workspaces: vec![workspace],
-            },
-            Arc::new(MockTeamClient::new()),
-            Arc::new(MockWorkspaceClient::new()),
-        );
-
-        app.read(|ctx| {
-            let codebase_context_enabled =
-                UserWorkspaces::as_ref(ctx).is_codebase_context_enabled(ctx);
-            assert!(
-                codebase_context_enabled,
-                "codebase context should be on when it's enabled by the team"
-            );
-        });
-    })
-}
-
-#[test]
-fn test_codebase_context_disabled_by_workspace() {
-    let team = team_for_test();
-
-    let mut workspace = workspace_for_test(&team);
-    workspace.settings.codebase_context_settings = CodebaseContextSettings {
-        setting: AdminEnablementSetting::Disable,
-    };
-
-    App::test((), |mut app| async move {
-        initialize_app(
-            &mut app,
-            CachedResources {
-                workspaces: vec![workspace],
-            },
-            Arc::new(MockTeamClient::new()),
-            Arc::new(MockWorkspaceClient::new()),
-        );
-
-        app.read(|ctx| {
-            let codebase_context_enabled =
-                UserWorkspaces::as_ref(ctx).is_codebase_context_enabled(ctx);
-            assert!(
-                !codebase_context_enabled,
-                "codebase context should be off when it's disabled by the workspace"
-            );
-        });
-    })
-}
-
-#[test]
-fn test_codebase_context_respect_user_setting() {
-    let team = team_for_test();
-
-    // Workspace defers codebase context to the user setting.
-    let mut workspace = workspace_for_test(&team);
-    workspace.settings.codebase_context_settings.setting =
-        AdminEnablementSetting::RespectUserSetting;
-
-    App::test((), |mut app| async move {
-        initialize_app(
-            &mut app,
-            CachedResources {
-                workspaces: vec![workspace],
-            },
-            Arc::new(MockTeamClient::new()),
-            Arc::new(MockWorkspaceClient::new()),
-        );
-
-        app.read(|ctx| {
-            let codebase_context_enabled = UserWorkspaces::as_ref(ctx)
-                .is_codebase_context_enabled(ctx);
-            // Should respect user setting, which defaults to true when AI is enabled
-            assert!(
-                codebase_context_enabled,
-                "codebase context should respect user setting when team setting is RespectUserSetting"
-            );
-
-            // Test that team_allows_codebase_context returns the correct setting
-            let team_setting = UserWorkspaces::as_ref(ctx)
-                .team_allows_codebase_context();
+            let user_workspaces = UserWorkspaces::as_ref(ctx);
             assert_eq!(
-                team_setting,
-                AdminEnablementSetting::RespectUserSetting,
-                "team_allows_codebase_context should return RespectUserSetting"
+                user_workspaces.codebase_context_admin_setting(),
+                AdminEnablementSetting::Enable
             );
+            assert!(user_workspaces.is_codebase_context_enabled(ctx));
+        });
+    })
+}
+
+#[test]
+fn test_codebase_context_disabled_when_any_team_disables_it() {
+    let (mut team_a, mut team_b) = two_teams();
+    team_a.settings.codebase_context.value = AdminEnablementSetting::Enable;
+    team_b.settings.codebase_context.value = AdminEnablementSetting::Disable;
+    let mut workspace = workspace_for_test(&team_a);
+    workspace.teams.push(team_b);
+
+    App::test((), |mut app| async move {
+        initialize_app(
+            &mut app,
+            CachedResources {
+                workspaces: vec![workspace],
+            },
+            Arc::new(MockTeamClient::new()),
+            Arc::new(MockWorkspaceClient::new()),
+        );
+
+        app.read(|ctx| {
+            let user_workspaces = UserWorkspaces::as_ref(ctx);
+            assert_eq!(
+                user_workspaces.codebase_context_admin_setting(),
+                AdminEnablementSetting::Disable
+            );
+            assert!(!user_workspaces.is_codebase_context_enabled(ctx));
+        });
+    })
+}
+
+#[test]
+fn test_codebase_context_respects_user_setting_when_any_team_does() {
+    let (mut team_a, mut team_b) = two_teams();
+    team_a.settings.codebase_context.value = AdminEnablementSetting::Enable;
+    team_b.settings.codebase_context.value = AdminEnablementSetting::RespectUserSetting;
+    let mut workspace = workspace_for_test(&team_a);
+    workspace.teams.push(team_b);
+
+    App::test((), |mut app| async move {
+        initialize_app(
+            &mut app,
+            CachedResources {
+                workspaces: vec![workspace],
+            },
+            Arc::new(MockTeamClient::new()),
+            Arc::new(MockWorkspaceClient::new()),
+        );
+
+        app.read(|ctx| {
+            let user_workspaces = UserWorkspaces::as_ref(ctx);
+            assert_eq!(
+                user_workspaces.codebase_context_admin_setting(),
+                AdminEnablementSetting::RespectUserSetting
+            );
+            assert!(user_workspaces.is_codebase_context_enabled(ctx));
+        });
+    })
+}
+
+#[test]
+fn test_codebase_context_uses_workspace_setting_without_teams() {
+    let team = team_for_test();
+    let mut workspace = workspace_for_test(&team);
+    workspace.teams.clear();
+    workspace.settings.codebase_context_settings.setting = AdminEnablementSetting::Disable;
+
+    App::test((), |mut app| async move {
+        initialize_app(
+            &mut app,
+            CachedResources {
+                workspaces: vec![workspace],
+            },
+            Arc::new(MockTeamClient::new()),
+            Arc::new(MockWorkspaceClient::new()),
+        );
+
+        app.read(|ctx| {
+            let user_workspaces = UserWorkspaces::as_ref(ctx);
+            assert_eq!(
+                user_workspaces.codebase_context_admin_setting(),
+                AdminEnablementSetting::Disable
+            );
+            assert!(!user_workspaces.is_codebase_context_enabled(ctx));
         });
     })
 }
