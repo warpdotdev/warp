@@ -123,7 +123,14 @@ pub async fn issue_workload_token(
             docker_sandbox::issue_workload_token(duration).await
         }
         #[cfg(not(target_family = "wasm"))]
-        Some(IsolationPlatformType::Namespace) => namespace::issue_workload_token(duration).await,
+        Some(IsolationPlatformType::Namespace) => {
+            match namespace::issue_workload_token(duration).await {
+                Ok(token) => Ok(token),
+                Err(err) => {
+                    fall_back_to_generic_workload_token(IsolationPlatformType::Namespace, err)
+                }
+            }
+        }
         #[cfg(not(target_family = "wasm"))]
         // Check for a platform-agnostic workload token if there's no
         // isolation platform or if the detected platform doesn't have
@@ -133,6 +140,39 @@ pub async fn issue_workload_token(
             .map_err(|_| IsolationPlatformError::NoIsolationPlatformDetected),
         #[cfg(target_family = "wasm")]
         _ => Err(IsolationPlatformError::NoIsolationPlatformDetected),
+    }
+}
+
+/// Fall back to the server-supplied generic workload token after a platform-native token
+/// request failed.
+///
+/// Detection is heuristic and can fire on a host that only looks like the platform — an Oz
+/// agent sandbox ships the `nsc` binary and a token file without being a Namespace workload,
+/// so `nsc` exits non-zero there while the server still supplies `WARP_WORKLOAD_TOKEN`. That
+/// variable is an explicit statement from the server that this workload may authenticate with
+/// it, so it is the right credential whenever the platform-native path is unusable, whatever
+/// the reason it failed.
+///
+/// The fallback is deliberately not silent: the platform error is logged, and it — not the
+/// generic "token missing" error — is what callers see when no fallback token exists, so a
+/// genuinely misconfigured platform stays diagnosable.
+#[cfg(not(target_family = "wasm"))]
+fn fall_back_to_generic_workload_token(
+    platform: IsolationPlatformType,
+    platform_error: IsolationPlatformError,
+) -> Result<WorkloadToken, IsolationPlatformError> {
+    match read_generic_workload_token() {
+        Ok(token) => {
+            log::warn!(
+                "Failed to issue a {platform:?} workload token ({platform_error}); \
+                 falling back to {WARP_WORKLOAD_TOKEN_ENV}"
+            );
+            Ok(token)
+        }
+        Err(err) => {
+            log::debug!("No platform-agnostic workload token: {err}");
+            Err(platform_error)
+        }
     }
 }
 
@@ -166,6 +206,10 @@ fn platform_from_env() -> Option<IsolationPlatformType> {
         }
     }
 }
+
+#[cfg(all(test, not(target_family = "wasm")))]
+#[path = "lib_tests.rs"]
+mod tests;
 
 #[derive(Debug, thiserror::Error)]
 pub enum IsolationPlatformError {
