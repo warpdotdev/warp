@@ -303,7 +303,7 @@ impl MainSettingsPageView {
 
         widgets.push(Box::new(LogoutWidget::default()));
 
-        let page = PageType::new_uncategorized(widgets, Some("Account"));
+        let page = PageType::new_uncategorized(widgets, Some("Profile"));
 
         MainSettingsPageView {
             self_handle: ctx.handle(),
@@ -633,7 +633,7 @@ impl SettingsWidget for AccountWidget {
     type View = MainSettingsPageView;
 
     fn search_terms(&self) -> &str {
-        "account sign up"
+        "account profile sign up"
     }
 
     fn render(

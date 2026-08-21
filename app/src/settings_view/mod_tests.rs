@@ -207,13 +207,33 @@ fn slugs_were_seeded_from_the_display_labels_they_replaced() {
     // persistence key, so no data migration was needed. Display is now free to
     // diverge; if it does, update this test rather than the slugs, which are a
     // stored contract.
+    //
+    // `Account` is the one section that has already diverged: it was renamed
+    // to "Profile" in the UI while its slug stayed "Account" for session
+    // restore and warpctrl compatibility. See `account_display_renamed_to_profile_but_slug_unchanged`.
     for section in ALL_SECTIONS {
+        if *section == SettingsSection::Account {
+            continue;
+        }
         assert_eq!(
             section.slug(),
             section.to_string(),
             "{section:?} slug diverged from the Display label it was seeded from"
         );
     }
+}
+
+#[test]
+fn account_display_renamed_to_profile_but_slug_unchanged() {
+    // The page's visible title/sidebar label moved from "Account" to
+    // "Profile", but the slug is a stored compatibility contract (session
+    // restore, warpctrl) and must not change.
+    assert_eq!(SettingsSection::Account.slug(), "Account");
+    assert_eq!(
+        SettingsSection::from_slug("Account"),
+        Some(SettingsSection::Account)
+    );
+    assert_eq!(SettingsSection::Account.to_string(), "Profile");
 }
 
 #[test]
