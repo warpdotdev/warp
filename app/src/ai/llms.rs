@@ -171,6 +171,34 @@ pub struct ModelIconFlags {
     pub is_auto: bool,
     pub is_using_bedrock: bool,
     pub is_using_gemini_enterprise: bool,
+    /// Whether `llm` is a user-configured custom endpoint (BYOK) model. Its
+    /// display name / alias is entirely user-controlled, so it must never be
+    /// eligible for id/name-based provider-logo heuristics like
+    /// [`is_kimi_model`] — otherwise a user could alias a proxy model
+    /// "Kimi Proxy" and have it impersonate a third-party provider's mark.
+    pub is_custom_endpoint: bool,
+}
+
+/// Returns `true` when `llm` is a Kimi (Moonshot AI) model.
+///
+/// The server has no `LLMProvider` variant for Kimi yet, so these models
+/// arrive as `LLMProvider::Unknown` and would otherwise fall back to the
+/// generic agent glyph. We detect them from the id / base model name
+/// instead, matching only a leading `kimi` token (e.g. `kimi-k26-fireworks`)
+/// rather than a loose substring, so a model whose name merely *contains*
+/// "kimi" elsewhere isn't misclassified. The check is case-insensitive.
+///
+/// Callers must only apply this to server-provided ids/base names — see
+/// [`ModelIconFlags::is_custom_endpoint`], which gates this out for
+/// user-controlled custom endpoint models in [`model_leading_icon`].
+fn is_kimi_model(llm: &LLMInfo) -> bool {
+    fn starts_with_kimi_token(value: &str) -> bool {
+        value
+            .split(|c: char| !c.is_ascii_alphanumeric())
+            .next()
+            .is_some_and(|token| token.eq_ignore_ascii_case("kimi"))
+    }
+    starts_with_kimi_token(llm.id.as_str()) || starts_with_kimi_token(&llm.base_model_name)
 }
 
 /// The leading icon shown next to a model in the model picker and model menus.
@@ -186,6 +214,13 @@ pub fn model_leading_icon(llm: &LLMInfo, flags: ModelIconFlags) -> Icon {
         Icon::Aws
     } else if flags.is_using_gemini_enterprise {
         Icon::GeminiEnterpriseAgentPlatform
+    } else if !flags.is_custom_endpoint && is_kimi_model(llm) {
+        // The server reports Kimi models with an `Unknown` provider (no
+        // dedicated `LLMProvider` variant exists yet), so `llm.provider.icon()`
+        // would otherwise fall back to the generic agent glyph below. Gated on
+        // `!is_custom_endpoint` so a user-aliased custom endpoint model can't
+        // impersonate Kimi's mark by naming itself e.g. "Kimi Proxy".
+        Icon::KimiLogo
     } else {
         llm.provider.icon().unwrap_or(Icon::Agent)
     }
