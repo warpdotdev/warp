@@ -3811,6 +3811,7 @@ fn build_vertical_tabs_summary_data(
                     working_directory_text.as_str(),
                     terminal_title_fallback_font(&agent_text),
                     terminal_view.last_completed_command_text(),
+                    agent_text.cli_agent,
                 );
                 let status = summary_conversation_status_for_terminal(terminal_view, app);
                 push_normalized_unique_summary_label(
@@ -4114,6 +4115,7 @@ fn terminal_pane_search_text_fragments(
                 working_directory.as_str(),
                 terminal_title_fallback_font(&agent_text),
                 terminal_view.last_completed_command_text(),
+                agent_text.cli_agent,
             )
             .text()
             .to_string()
@@ -4154,6 +4156,7 @@ fn terminal_search_text_fragments(
     fragments
 }
 
+#[allow(clippy::too_many_arguments)]
 fn terminal_primary_line_data(
     is_long_running: bool,
     conversation_display_title: Option<String>,
@@ -4162,6 +4165,7 @@ fn terminal_primary_line_data(
     working_directory: &str,
     terminal_title_font: TerminalPrimaryLineFont,
     last_completed_command: Option<String>,
+    cli_agent: Option<CLIAgent>,
 ) -> TerminalPrimaryLineData {
     let trimmed_title = terminal_title.trim();
     let trimmed_working_directory = working_directory.trim();
@@ -4191,6 +4195,23 @@ fn terminal_primary_line_data(
     }
 
     if let Some(last_completed_command) = last_completed_command {
+        // Agents that advertise a title (Claude Code) show their product name here,
+        // while an agent that advertises none would fall through to echoing the bare
+        // command it was launched with ("grok"). Prefer the agent's display name so
+        // the list reads consistently regardless of what the agent reports.
+        let launched_agent = cli_agent.filter(|agent| {
+            let command_name = last_completed_command
+                .split_whitespace()
+                .next()
+                .unwrap_or_default();
+            agent.command_prefixes().contains(&command_name)
+        });
+        if let Some(agent) = launched_agent {
+            return TerminalPrimaryLineData::Text {
+                text: agent.display_name().to_string(),
+                font: TerminalPrimaryLineFont::Ui,
+            };
+        }
         return TerminalPrimaryLineData::Text {
             text: last_completed_command,
             font: TerminalPrimaryLineFont::Monospace,
@@ -5295,6 +5316,7 @@ fn render_terminal_primary_line_for_view(
             working_directory.as_str(),
             terminal_title_fallback_font(&agent_text),
             terminal_view.last_completed_command_text(),
+            agent_text.cli_agent,
         ),
         terminal_view,
         appearance,
@@ -6846,6 +6868,7 @@ fn render_terminal_detail_section(
         working_directory.as_deref().unwrap_or(title_text.as_str()),
         terminal_title_fallback_font(&agent_text),
         terminal_view.last_completed_command_text(),
+        agent_text.cli_agent,
     );
 
     let mut section = Flex::column()
@@ -7359,6 +7382,7 @@ fn render_compact_pane_row(props: PaneProps<'_>, app: &AppContext) -> Box<dyn El
                         working_directory_text.as_str(),
                         terminal_title_fallback_font(&agent_text),
                         terminal_view.last_completed_command_text(),
+                        agent_text.cli_agent,
                     );
                     Some(
                         Text::new_inline(line_data.text().to_string(), font_family, 10.)
