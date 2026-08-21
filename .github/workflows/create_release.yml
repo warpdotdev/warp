@@ -2042,7 +2042,7 @@ jobs:
       # daily dev cuts and preview RCs.
       - name: Generate changelog via Oz (stable only)
         if: inputs.channel == 'stable'
-        uses: warpdotdev/oz-agent-action@ce1621abf6a8ed8afdd4e4cc994545ede8fe1c6f # main
+        uses: warpdotdev/oz-agent-action@851b4af8e23dbc2c9558ab0e240c589b0f59e490 # main
         with:
           prompt: |
             Generate a changelog draft for the ${{ inputs.channel }} channel, release tag ${{ needs.prepare_release.outputs.release_tag }}.
