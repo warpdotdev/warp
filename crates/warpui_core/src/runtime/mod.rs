@@ -41,6 +41,7 @@ use crate::r#async::executor::ForegroundTask;
 use crate::r#async::{Timer, block_on};
 use crate::elements::tui::{TuiEvent, TuiEventContext, TuiPoint, TuiRect, TuiSize};
 use crate::event::ModifiersState;
+use crate::platform::TerminationMode;
 use crate::presenter::tui::TuiPresenter;
 use crate::{App, AppContext, TuiView, ViewHandle, WindowId};
 
@@ -79,6 +80,92 @@ pub enum TuiFocusPolicy {
     Unrestricted,
     /// Return focus to the root when the focused view is outside the presented tree.
     PresentedTree,
+}
+#[derive(Debug, thiserror::Error)]
+pub enum TuiDriverStartupError {
+    #[error("host terminal disconnected while starting the TUI driver: {0}")]
+    TerminalDisconnected(#[source] io::Error),
+    #[error("failed to start the TUI driver: {0}")]
+    Unexpected(#[source] io::Error),
+}
+
+impl From<io::Error> for TuiDriverStartupError {
+    fn from(error: io::Error) -> Self {
+        if is_terminal_disconnect(&error) {
+            Self::TerminalDisconnected(error)
+        } else {
+            Self::Unexpected(error)
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum TuiDriverIoOperation {
+    DrawFrame,
+    ReadEvent,
+}
+
+impl TuiDriverIoOperation {
+    fn error_context(self) -> &'static str {
+        match self {
+            Self::DrawFrame => "failed to draw a TUI frame",
+            Self::ReadEvent => "failed to read a terminal event",
+        }
+    }
+}
+
+enum TuiDriverEvent {
+    Terminal(CrosstermEvent),
+    InputFailed(io::Error),
+}
+
+fn is_terminal_disconnect(error: &io::Error) -> bool {
+    if matches!(
+        error.kind(),
+        io::ErrorKind::BrokenPipe
+            | io::ErrorKind::ConnectionAborted
+            | io::ErrorKind::ConnectionReset
+            | io::ErrorKind::NotConnected
+            | io::ErrorKind::UnexpectedEof
+    ) {
+        return true;
+    }
+
+    #[cfg(unix)]
+    if matches!(error.raw_os_error(), Some(libc::EIO | libc::ENXIO)) {
+        return true;
+    }
+
+    #[cfg(windows)]
+    if error.raw_os_error() == Some(233) {
+        return true;
+    }
+
+    false
+}
+
+fn fail_tui_driver(
+    error: io::Error,
+    operation: TuiDriverIoOperation,
+    failed: &Rc<Cell<bool>>,
+    repaint_timer: &Rc<RefCell<Option<ForegroundTask>>>,
+    ctx: &mut AppContext,
+) {
+    if failed.replace(true) {
+        return;
+    }
+    repaint_timer.borrow_mut().take();
+
+    let error_context = operation.error_context();
+    if is_terminal_disconnect(&error) {
+        log::error!("{error_context}: {error}");
+        ctx.terminate_app(TerminationMode::ForceTerminate, None);
+        return;
+    }
+
+    let error = anyhow::Error::new(error).context(error_context);
+    report_error!(&error);
+    ctx.terminate_app(TerminationMode::ForceTerminate, Some(Err(error)));
 }
 
 /// The rendering half of the TUI: owns the presenter, renderer, and host
@@ -632,7 +719,7 @@ pub fn spawn_tui_driver<T: TuiView>(
     focus_policy: TuiFocusPolicy,
     report_modifier_key_lifecycle: bool,
     freeze_repaints_when_unfocused: bool,
-) -> io::Result<TuiDriverHandle> {
+) -> Result<TuiDriverHandle, TuiDriverStartupError> {
     let guard = TuiTerminalGuard::enter(report_modifier_key_lifecycle)?;
 
     // The presenter + renderer + terminal live behind an `Rc<RefCell<_>>` owned
@@ -650,6 +737,7 @@ pub fn spawn_tui_driver<T: TuiView>(
     let repaint_timer: Rc<RefCell<Option<ForegroundTask>>> = Rc::default();
     let focused = Rc::new(Cell::new(true));
     let freeze_repaints_when_unfocused = Rc::new(Cell::new(freeze_repaints_when_unfocused));
+    let failed = Rc::new(Cell::new(false));
 
     // Redraw whenever the window is invalidated. `update_windows` invokes this at
     // the end of every `flush_effects`, so any `notify()` repaints. (The callback
@@ -660,17 +748,22 @@ pub fn spawn_tui_driver<T: TuiView>(
         let repaint_timer = repaint_timer.clone();
         let focused = focused.clone();
         let freeze_repaints_when_unfocused = freeze_repaints_when_unfocused.clone();
+        let failed = failed.clone();
         ctx.on_window_invalidated(window_id, move |_, ctx| {
             if let Err(error) = draw_and_schedule_repaint(
                 &screen,
                 &repaint_timer,
                 &focused,
                 &freeze_repaints_when_unfocused,
+                &failed,
                 ctx,
             ) {
-                report_error!(
-                    anyhow::Error::new(error).context("failed to draw a TUI frame"),
-                    warp_errors::ReportErrorLogMode::OncePerRun
+                fail_tui_driver(
+                    error,
+                    TuiDriverIoOperation::DrawFrame,
+                    &failed,
+                    &repaint_timer,
+                    ctx,
                 );
             }
         });
@@ -683,16 +776,20 @@ pub fn spawn_tui_driver<T: TuiView>(
     // returning `Err` here drops `guard` (restoring the terminal) and lets the
     // caller surface the error, rather than leaving a live raw-mode session with
     // no usable frame.
-    draw_and_schedule_repaint(
+    if let Err(error) = draw_and_schedule_repaint(
         &screen,
         &repaint_timer,
         &focused,
         &freeze_repaints_when_unfocused,
+        &failed,
         ctx,
-    )?;
+    ) {
+        failed.set(true);
+        return Err(error.into());
+    }
 
     let weak_app = ctx.weak_app();
-    let (sender, receiver) = async_channel::unbounded::<CrosstermEvent>();
+    let (sender, receiver) = async_channel::unbounded::<TuiDriverEvent>();
 
     // Blocking terminal reads run off the main thread and are forwarded to the
     // foreground executor through the channel, so the main thread's event loop is
@@ -705,14 +802,13 @@ pub fn spawn_tui_driver<T: TuiView>(
                     Ok(event) => {
                         // The reader runs on a dedicated thread, so blocking on the
                         // send is fine; an error means the receiver was dropped.
-                        if block_on(sender.send(event)).is_err() {
+                        if block_on(sender.send(TuiDriverEvent::Terminal(event))).is_err() {
                             break;
                         }
                     }
+                    Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
                     Err(error) => {
-                        report_error!(
-                            anyhow::Error::new(error).context("failed to read a terminal event")
-                        );
+                        let _ = block_on(sender.send(TuiDriverEvent::InputFailed(error)));
                         break;
                     }
                 }
@@ -723,8 +819,9 @@ pub fn spawn_tui_driver<T: TuiView>(
     let dispatch_repaint_timer = repaint_timer.clone();
     let dispatch_focused = focused.clone();
     let dispatch_freeze_repaints_when_unfocused = freeze_repaints_when_unfocused.clone();
+    let dispatch_failed = failed.clone();
     let task = ctx.foreground_executor().spawn(async move {
-        while let Ok(event) = receiver.recv().await {
+        while let Ok(driver_event) = receiver.recv().await {
             let Some(mut app) = weak_app.upgrade() else {
                 break;
             };
@@ -732,6 +829,22 @@ pub fn spawn_tui_driver<T: TuiView>(
             let repaint_timer = dispatch_repaint_timer.clone();
             let focused = dispatch_focused.clone();
             let freeze_repaints_when_unfocused = dispatch_freeze_repaints_when_unfocused.clone();
+            let failed = dispatch_failed.clone();
+            let event = match driver_event {
+                TuiDriverEvent::Terminal(event) => event,
+                TuiDriverEvent::InputFailed(error) => {
+                    app.update(move |ctx| {
+                        fail_tui_driver(
+                            error,
+                            TuiDriverIoOperation::ReadEvent,
+                            &failed,
+                            &repaint_timer,
+                            ctx,
+                        );
+                    });
+                    break;
+                }
+            };
             // Dispatch reuses the shared screen's cached element tree (so embedded
             // child views resolve their elements). Edits queue effects that flush
             // when this `update` returns — firing the invalidation callback to
@@ -784,8 +897,12 @@ fn draw_and_schedule_repaint<T: TuiView, R: TuiTerminal + 'static>(
     timer_slot: &Rc<RefCell<Option<ForegroundTask>>>,
     focused: &Rc<Cell<bool>>,
     freeze_repaints_when_unfocused: &Rc<Cell<bool>>,
+    failed: &Rc<Cell<bool>>,
     ctx: &mut AppContext,
 ) -> io::Result<()> {
+    if failed.get() {
+        return Ok(());
+    }
     let deadline = screen.borrow_mut().draw(ctx)?;
     let timer = deadline
         .filter(|_| should_schedule_repaints(focused.get(), freeze_repaints_when_unfocused.get()))
@@ -793,6 +910,7 @@ fn draw_and_schedule_repaint<T: TuiView, R: TuiTerminal + 'static>(
             let screen = screen.clone();
             let focused = Rc::clone(focused);
             let freeze_repaints_when_unfocused = Rc::clone(freeze_repaints_when_unfocused);
+            let failed = failed.clone();
             // Weak, or the slot (held by the task) and the task (held by the slot)
             // would keep each other alive.
             let weak_slot = Rc::downgrade(timer_slot);
@@ -815,11 +933,15 @@ fn draw_and_schedule_repaint<T: TuiView, R: TuiTerminal + 'static>(
                         &timer_slot,
                         &focused,
                         &freeze_repaints_when_unfocused,
+                        &failed,
                         ctx,
                     ) {
-                        report_error!(
-                            anyhow::Error::new(error).context("failed to draw a TUI frame"),
-                            warp_errors::ReportErrorLogMode::OncePerRun
+                        fail_tui_driver(
+                            error,
+                            TuiDriverIoOperation::DrawFrame,
+                            &failed,
+                            &timer_slot,
+                            ctx,
                         );
                     }
                 });
