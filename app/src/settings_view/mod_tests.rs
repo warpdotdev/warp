@@ -113,7 +113,10 @@ fn subpage_display_names_are_correct() {
         SettingsSection::CloudEnvironments.to_string(),
         "Environments"
     );
-    assert_eq!(SettingsSection::CloudAPIKeys.to_string(), "API keys");
+    assert_eq!(
+        SettingsSection::WarpCloudAgentAPIKeys.to_string(),
+        "API keys"
+    );
 }
 
 // ── slug / from_slug ───────────────────────────────────────────────
@@ -144,13 +147,14 @@ const ALL_SECTIONS: &[SettingsSection] = &[
     SettingsSection::CodeIndexing,
     SettingsSection::EditorAndCodeReview,
     SettingsSection::CloudEnvironments,
-    SettingsSection::CloudAPIKeys,
+    SettingsSection::WarpCloudAgentAPIKeys,
 ];
 
 /// Sections whose user-facing Display label has deliberately diverged from the
 /// slug it was seeded from, because the slug is a stored contract that the
 /// rename must not follow.
-const SECTIONS_WITH_RENAMED_DISPLAY_LABELS: &[SettingsSection] = &[SettingsSection::CloudAPIKeys];
+const SECTIONS_WITH_RENAMED_DISPLAY_LABELS: &[SettingsSection] =
+    &[SettingsSection::WarpCloudAgentAPIKeys];
 
 #[test]
 fn all_sections_list_is_exhaustive() {
@@ -177,7 +181,7 @@ fn all_sections_list_is_exhaustive() {
             | SettingsSection::CodeIndexing
             | SettingsSection::EditorAndCodeReview
             | SettingsSection::CloudEnvironments
-            | SettingsSection::CloudAPIKeys => section,
+            | SettingsSection::WarpCloudAgentAPIKeys => section,
         };
         ALL_SECTIONS.contains(&known)
     }
@@ -230,8 +234,14 @@ fn slugs_were_seeded_from_the_display_labels_they_replaced() {
 fn renamed_sections_keep_the_slug_they_were_seeded_with() {
     // The section dropped "Oz" from what the user reads, but persisted sessions
     // and `surface.settings.open --page` still speak the original slug.
-    assert_eq!(SettingsSection::CloudAPIKeys.to_string(), "API keys");
-    assert_eq!(SettingsSection::CloudAPIKeys.slug(), "Oz Cloud API Keys");
+    assert_eq!(
+        SettingsSection::WarpCloudAgentAPIKeys.to_string(),
+        "API keys"
+    );
+    assert_eq!(
+        SettingsSection::WarpCloudAgentAPIKeys.slug(),
+        "Oz Cloud API Keys"
+    );
 }
 
 #[test]
@@ -274,11 +284,11 @@ fn from_slug_accepts_legacy_spellings() {
     );
     assert_eq!(
         SettingsSection::from_slug("OzCloudAPIKeys"),
-        Some(SettingsSection::CloudAPIKeys)
+        Some(SettingsSection::WarpCloudAgentAPIKeys)
     );
     assert_eq!(
         SettingsSection::from_slug("Oz Cloud API Keys"),
-        Some(SettingsSection::CloudAPIKeys)
+        Some(SettingsSection::WarpCloudAgentAPIKeys)
     );
 }
 
@@ -344,7 +354,7 @@ fn realistic_nav_items() -> Vec<SettingsNavItem> {
             "Cloud platform",
             vec![
                 SettingsSection::CloudEnvironments,
-                SettingsSection::CloudAPIKeys,
+                SettingsSection::WarpCloudAgentAPIKeys,
             ],
         )),
         SettingsNavItem::Page(SettingsSection::Teams),
@@ -398,7 +408,7 @@ fn collapsed_umbrella_is_a_single_nav_stop() {
         NavStop::CollapsedUmbrella {
             nav_index: 4,
             first_subpage: SettingsSection::CloudEnvironments,
-            last_subpage: SettingsSection::CloudAPIKeys,
+            last_subpage: SettingsSection::WarpCloudAgentAPIKeys,
         }
     ));
     assert!(matches!(stops[5], NavStop::Section(SettingsSection::Teams)));

@@ -908,7 +908,7 @@ impl PlatformPageWidget {
 
 impl SettingsPageMeta for PlatformPageView {
     fn section() -> SettingsSection {
-        SettingsSection::CloudAPIKeys
+        SettingsSection::WarpCloudAgentAPIKeys
     }
 
     fn should_render(&self, ctx: &AppContext) -> bool {
@@ -939,7 +939,7 @@ impl SettingsPageMeta for PlatformPageView {
 
 impl From<ViewHandle<PlatformPageView>> for SettingsPageViewHandle {
     fn from(view_handle: ViewHandle<PlatformPageView>) -> Self {
-        SettingsPageViewHandle::CloudAPIKeys(view_handle)
+        SettingsPageViewHandle::WarpCloudAgentAPIKeys(view_handle)
     }
 }
 
