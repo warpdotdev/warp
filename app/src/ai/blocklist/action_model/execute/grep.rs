@@ -545,10 +545,19 @@ async fn run_grep_command(
         }),
         // Not every `grep` on a remote session supports `--null` (e.g.
         // BusyBox). Fall back to a single command (see
-        // run_grep_per_file_fallback) that's unambiguous without it: list
-        // the matching files, then grep each one individually within the
-        // same script, so the per-match output only ever needs to carry
-        // `{line_number}:{content}` for a path we already know.
+        // run_grep_per_file_fallback): list the matching files (one
+        // recursive invocation), then grep each one individually within
+        // that same command and round trip. That's N+1 process spawns on
+        // the remote host for N matches -- not ideal for performance, but
+        // N is the match count, not the tree size, and this path is rare
+        // (only a remote `grep` that rejects `--null` reaches it). No
+        // cheaper option keeps the guarantee: greping the matches in one
+        // invocation and disambiguating `path:line:` against the file
+        // list reintroduces the exact ambiguity this fallback exists to
+        // remove, since two candidate paths can share the same prefix; a
+        // single-pass `awk` swaps in a different regex engine with its
+        // own cross-backend correctness risk. We're deliberately buying
+        // correctness over speed here.
         Err(null_delimited_error) => {
             run_grep_per_file_fallback(
                 queries,
