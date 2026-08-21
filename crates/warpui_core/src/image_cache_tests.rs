@@ -733,7 +733,10 @@ fn animated_image_get_current_frame_advances_with_elapsed_time() {
     };
 
     // The numbers-1000ms.gif has multiple frames with various delays
-    assert!(animated.frames.len() >= 2, "Expected at least 2 frames for testing");
+    assert!(
+        animated.frames.len() >= 2,
+        "Expected at least 2 frames for testing"
+    );
     assert!(animated.duration > 0, "Expected positive total duration");
 
     let (_frame_0, remaining_0) = animated
@@ -928,7 +931,10 @@ fn animated_webp_also_advances_frames() {
         panic!("Expected animated image");
     };
 
-    assert!(animated.frames.len() > 1, "WebP should have multiple frames");
+    assert!(
+        animated.frames.len() > 1,
+        "WebP should have multiple frames"
+    );
 
     let (frame_0, _) = animated
         .get_current_frame(0)
