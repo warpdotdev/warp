@@ -94,12 +94,34 @@ impl Span {
         self.end
     }
 
+    /// Slices `source` at this span's byte offsets. Never panics, even if the offsets are out
+    /// of bounds or land inside a multi-byte character, by clamping each one to the nearest
+    /// valid char boundary at or before it -- a defensive fallback, not a correctness
+    /// guarantee: a caller with genuinely wrong offsets (e.g. a shell reporting offsets in a
+    /// unit other than UTF-8 bytes, as PowerShell's own .NET UTF-16 code-unit offsets did
+    /// before the shell-side conversion in `pwsh.ps1`) gets a wrong slice instead of a crash.
+    /// A wrong menu is recoverable; a panicked window is not.
     pub fn slice<'a>(&self, source: &'a str) -> &'a str {
-        let start = self.start;
-        let end = self.end;
+        let len = source.len();
+        let start = floor_char_boundary(source, self.start.min(len));
+        let end = floor_char_boundary(source, self.end.min(len)).max(start);
 
         &source[start..end]
     }
+}
+
+/// Returns the largest byte index `<= index` that lies on a UTF-8 char boundary in `source`.
+/// `index` may exceed `source.len()`, in which case this returns `source.len()`. Equivalent to
+/// the standard library's still-unstable `str::floor_char_boundary`.
+fn floor_char_boundary(source: &str, index: usize) -> usize {
+    if index >= source.len() {
+        return source.len();
+    }
+    let mut index = index;
+    while index > 0 && !source.is_char_boundary(index) {
+        index -= 1;
+    }
+    index
 }
 
 impl PartialOrd<usize> for Span {
