@@ -374,3 +374,7 @@ fn load_script(file_path: &str, assets: &dyn AssetProvider) -> String {
 #[cfg(test)]
 #[path = "bootstrap_tests.rs"]
 mod tests;
+
+#[cfg(all(test, unix))]
+#[path = "bootstrap_zsh_pty_tests.rs"]
+mod zsh_pty_tests;
