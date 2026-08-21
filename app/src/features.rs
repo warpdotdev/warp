@@ -313,8 +313,6 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::WellKnownMcpIds,
         #[cfg(feature = "factory_mcp")]
         FeatureFlag::FactoryMcp,
-        #[cfg(feature = "web_search_ui")]
-        FeatureFlag::WebSearchUI,
         #[cfg(feature = "web_fetch_ui")]
         FeatureFlag::WebFetchUI,
         #[cfg(feature = "fork_from_command")]

@@ -368,17 +368,15 @@ impl View for ExecutionProfileView {
                             }
                         }
 
-                        if FeatureFlag::WebSearchUI.is_enabled() {
-                            permissions_column.add_child(with_standard_vertical_margin(
-                                render_bool_permission_line_with_icon(
-                                    Icon::Globe,
-                                    "Call web tools:",
-                                    profile.web_search_enabled,
-                                    appearance,
-                                    is_any_ai_enabled,
-                                ),
-                            ));
-                        }
+                        permissions_column.add_child(with_standard_vertical_margin(
+                            render_bool_permission_line_with_icon(
+                                Icon::Globe,
+                                "Call web tools:",
+                                profile.web_search_enabled,
+                                appearance,
+                                is_any_ai_enabled,
+                            ),
+                        ));
 
                         permissions_column.add_child(with_standard_vertical_margin(
                             render_bool_permission_line_with_icon(

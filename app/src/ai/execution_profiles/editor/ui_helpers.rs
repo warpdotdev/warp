@@ -608,13 +608,11 @@ pub fn render_permissions_section(
         }
     }
 
-    if FeatureFlag::WebSearchUI.is_enabled() {
-        column.add_child(
-            Container::new(render_web_search_toggle(appearance, view, profile_data))
-                .with_margin_top(16.)
-                .finish(),
-        );
-    }
+    column.add_child(
+        Container::new(render_web_search_toggle(appearance, view, profile_data))
+            .with_margin_top(16.)
+            .finish(),
+    );
 
     column.add_child(
         Container::new(render_plan_auto_sync_toggle(appearance, view, profile_data))
