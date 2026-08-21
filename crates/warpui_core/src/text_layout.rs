@@ -2,7 +2,7 @@ use std::borrow::Borrow;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::ops::Range;
-use std::sync::Arc;
+use std::sync::{Arc, Once};
 
 use itertools::Itertools;
 use ordered_float::OrderedFloat;
@@ -11,6 +11,7 @@ use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::Vector2F;
 use rangemap::RangeMap;
 use smallvec::SmallVec;
+use unicode_segmentation::UnicodeSegmentation;
 use vec1::{Vec1, vec1};
 
 use crate::Scene;
@@ -50,6 +51,25 @@ const DEFAULT_FONT_SIZE: f32 = 13.;
 
 // The offset for where on the text glyph the strikethrough should be drawn.
 const STRIKETHROUGH_FONT_OFFSET: f32 = 2.5;
+
+/// The maximum number of characters laid out by a single [`LayoutCache::layout_line`] or
+/// [`LayoutCache::layout_text`] call. Text past this point never reaches the platform text
+/// layout backend, and so is not rendered and has no caret positions.
+///
+/// Laying out a line costs memory linear in its character count on every backend: each cluster
+/// contributes a retained [`CaretPosition`] and [`Glyph`] (~56 bytes together) plus transient
+/// per-cluster bookkeeping of a comparable size (Core Text, for instance, enumerates a leading
+/// and a trailing caret edge for every cluster). None of that is bounded by the viewport, and
+/// blocks are laid out in parallel, so without a cap a handful of degenerate lines - minified
+/// JavaScript, a base64 blob - can exhaust memory. At this cap one line costs roughly 6 MB of
+/// retained layout state instead of growing without bound.
+///
+/// Two things this cap is not. It is applied by [`LayoutCache`], not by the backends, so a caller
+/// reaching [`crate::platform::TextLayoutSystem`] directly is still unbounded. And it is not what
+/// limits a long line everywhere: the winit backend's shaper independently returns no glyphs at
+/// all for an unbroken run longer than 16,384 characters, so for a single very long line this cap
+/// is only ever reached on Core Text, while winit renders that line blank rather than truncated.
+pub const MAX_LAYOUT_CHARS: usize = 100_000;
 
 #[derive(Default, Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub enum TextAlignment {
@@ -153,6 +173,10 @@ impl LayoutCache {
         let styles = adjusted_styles
             .as_ref()
             .map_or(styles, |adjusted_styles| adjusted_styles.as_slice());
+        let (text, truncated_styles) = truncate_text_for_layout(text, styles);
+        let styles = truncated_styles
+            .as_ref()
+            .map_or(styles, |truncated_styles| truncated_styles.as_slice());
         let key = &CacheKeyRef {
             text,
             font_size: OrderedFloat(line_style.font_size),
@@ -218,6 +242,12 @@ impl LayoutCache {
             .as_ref()
             .map_or(style_runs, |adjusted_style_runs| {
                 adjusted_style_runs.as_slice()
+            });
+        let (text, truncated_style_runs) = truncate_text_for_layout(text, style_runs);
+        let style_runs = truncated_style_runs
+            .as_ref()
+            .map_or(style_runs, |truncated_style_runs| {
+                truncated_style_runs.as_slice()
             });
         let key = &CacheKeyRef {
             text,
@@ -292,6 +322,53 @@ fn strip_leading_unicode_bom<'a>(
         log::warn!("Unable to get the a substring of the text without a leading BOM");
         text
     });
+    (text, Some(style_runs))
+}
+
+static LAYOUT_TRUNCATION_ONCE: Once = Once::new();
+
+/// Truncates `text` to at most [`MAX_LAYOUT_CHARS`] characters, without splitting a grapheme
+/// cluster, and clamps the character ranges of `style_runs` to the truncated text. Returns `None`
+/// for the style runs when the text already fits, which is the overwhelmingly common case.
+fn truncate_text_for_layout<'a>(
+    text: &'a str,
+    style_runs: &[StyleRun],
+) -> (&'a str, Option<Vec<StyleRun>>) {
+    // Stops after MAX_LAYOUT_CHARS characters, so this does not walk a pathologically long string.
+    let Some((cap_byte_index, _)) = text.char_indices().nth(MAX_LAYOUT_CHARS) else {
+        return (text, None);
+    };
+
+    // This runs ahead of the layout cache lookup, so a single degenerate line on screen reaches
+    // it every frame. Warn once per run rather than flooding the log and the breadcrumb buffer.
+    LAYOUT_TRUNCATION_ONCE.call_once(|| {
+        let text_bytes = text.len();
+        log::warn!(
+            "[Text layout] Truncating text longer than {MAX_LAYOUT_CHARS} characters; the \
+             remainder will not be rendered. text_bytes={text_bytes}"
+        );
+    });
+
+    // Cutting mid-cluster would strip a base character's combining marks or split a ZWJ emoji
+    // sequence, leaving a mangled cluster at the visible end of the content, so back up to the
+    // last cluster boundary at or before the cap. This is also lazy, so it stops at the cap
+    // rather than walking the whole string.
+    let truncate_at = text
+        .grapheme_indices(true)
+        .find_map(|(start, grapheme)| (start + grapheme.len() > cap_byte_index).then_some(start))
+        // A single cluster longer than the entire cap would leave nothing at all to render, so
+        // for that absurd input prefer splitting it over dropping the line.
+        .filter(|&boundary| boundary > 0)
+        .unwrap_or(cap_byte_index);
+    let text = &text[..truncate_at];
+    let truncated_char_count = text.chars().count();
+
+    let style_runs = style_runs
+        .iter()
+        .filter(|(range, _)| range.start < truncated_char_count)
+        .map(|(range, style)| (range.start..range.end.min(truncated_char_count), *style))
+        .collect();
+
     (text, Some(style_runs))
 }
 
