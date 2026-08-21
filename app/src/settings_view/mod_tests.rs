@@ -911,6 +911,71 @@ fn reapply_handles_multi_word_and_case() {
     });
 }
 
+// ── Shared-session inactivity widget split (APP-5313 review finding 4) ──────
+// Verifies that the three inactivity-duration rows are registered as three separate
+// SettingsWidgets with row-scoped search terms (not one widget with a shared blob), so a
+// term unique to one row filters out the other two. Uses StubWidgets with the exact
+// search_terms assigned to SharedSessionRevokeEditAccessWidget / SharedSessionWarningWidget /
+// SharedSessionEndSessionWidget in features_page.rs.
+
+fn shared_session_inactivity_stub_page() -> PageType<TestSettingsView> {
+    let widgets: Vec<Box<dyn SettingsWidget<View = TestSettingsView>>> = vec![
+        Box::new(StubWidget {
+            terms: "shared session sharing remote control inactivity idle timeout revoke edit access read-only",
+        }),
+        Box::new(StubWidget {
+            terms: "shared session sharing remote control inactivity idle timeout warn warning ending",
+        }),
+        Box::new(StubWidget {
+            terms: "shared session sharing remote control inactivity idle timeout end disconnect",
+        }),
+    ];
+    PageType::new_uncategorized(widgets, None)
+}
+
+#[test]
+fn shared_session_inactivity_rows_are_independently_filterable() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            // A term unique to the revoke row.
+            let mut page = shared_session_inactivity_stub_page();
+            page.update_filter("revoke", ctx);
+            assert_eq!(
+                visible_widget_count(&page),
+                1,
+                "searching 'revoke' should show only the revoke-edit-access row"
+            );
+
+            // A term unique to the warning row.
+            let mut page = shared_session_inactivity_stub_page();
+            page.update_filter("warn", ctx);
+            assert_eq!(
+                visible_widget_count(&page),
+                1,
+                "searching 'warn' should show only the warning row"
+            );
+
+            // A term unique to the end-session row.
+            let mut page = shared_session_inactivity_stub_page();
+            page.update_filter("disconnect", ctx);
+            assert_eq!(
+                visible_widget_count(&page),
+                1,
+                "searching 'disconnect' should show only the end-session row"
+            );
+
+            // A term shared by all three still matches all three.
+            let mut page = shared_session_inactivity_stub_page();
+            page.update_filter("inactivity", ctx);
+            assert_eq!(
+                visible_widget_count(&page),
+                3,
+                "a shared term should still match every row"
+            );
+        });
+    });
+}
+
 #[test]
 fn empty_query_after_reapply_shows_all_widgets() {
     // When the search is cleared, the subpage shows all widgets again.

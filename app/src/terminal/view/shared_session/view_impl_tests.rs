@@ -678,6 +678,178 @@ fn test_on_session_share_ended_skips_cloud_continuation_for_user_share_with_task
     });
 }
 
+/// Creates a terminal view that is a live sharer (not a viewer), with the inactivity
+/// ladder already armed per whatever `SharedSessionSettings` are in effect at call time.
+/// Callers must call `initialize_app_for_terminal_view` (which registers
+/// `SharedSessionSettings`) before configuring settings and calling this.
+fn start_sharer_session(app: &mut App) -> ViewHandle<TerminalView> {
+    let terminal = add_window_with_terminal(app, None);
+    terminal.update(app, |view, ctx| {
+        view.on_session_share_started(
+            ParticipantId::new(),
+            UserUid::new("mock_sharer_firebase_uid"),
+            SharedSessionScrollbackType::None,
+            SessionId::new(),
+            SessionSourceType::User,
+            ctx,
+        );
+    });
+    terminal
+}
+
+// REMOTE(APP-5313 follow-up): the zero-disables-a-phase semantics only held at the moment a
+// timer was armed, not for the rest of a live session -- changing the duration settings while
+// a sharer session is already running left an in-flight timer (or an already-open warning
+// modal) running on stale durations, and left a newly-re-enabled phase unarmed until the next
+// activity event happened to reset it. These three tests cover the transition cases the fix
+// addresses.
+
+#[test]
+fn test_disabling_end_while_warning_timer_armed_cancels_it() {
+    let _flag = FeatureFlag::CreatingSharedSessions.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+
+        // Revoke disabled, warning and end both enabled: reset arms the warning phase
+        // directly (skipping revoke).
+        SharedSessionSettings::handle(&app).update(&mut app, |settings, ctx| {
+            let _ = settings
+                .inactivity_period_before_revoking_roles
+                .set_value(Duration::ZERO, ctx);
+            let _ = settings
+                .inactivity_period_before_warning
+                .set_value(Duration::from_secs(300), ctx);
+            let _ = settings
+                .inactivity_period_before_ending_session
+                .set_value(Duration::from_secs(600), ctx);
+        });
+
+        let terminal = start_sharer_session(&mut app);
+        terminal.read(&app, |view, _| {
+            let sharer = view.shared_session_sharer().expect("sharer");
+            assert!(
+                sharer.inactivity_timer_abort_handle.is_some(),
+                "the warning phase should have armed directly since revoke is disabled"
+            );
+        });
+
+        // Disabling `end` also disables the warning phase (it depends on end being
+        // enabled), so the in-flight warning timer must be cancelled, and nothing should
+        // replace it since every phase is now disabled.
+        SharedSessionSettings::handle(&app).update(&mut app, |settings, ctx| {
+            let _ = settings
+                .inactivity_period_before_ending_session
+                .set_value(Duration::ZERO, ctx);
+        });
+
+        terminal.read(&app, |view, _| {
+            let sharer = view.shared_session_sharer().expect("sharer");
+            assert!(
+                sharer.inactivity_timer_abort_handle.is_none(),
+                "the now-disabled warning phase's timer must be cancelled with nothing to \
+                 replace it"
+            );
+            assert!(!sharer.is_inactivity_warning_modal_open());
+        });
+    });
+}
+
+#[test]
+fn test_disabling_end_while_end_timer_armed_cancels_it() {
+    let _flag = FeatureFlag::CreatingSharedSessions.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+
+        // Revoke and warning both disabled, end enabled: reset arms the end phase directly.
+        SharedSessionSettings::handle(&app).update(&mut app, |settings, ctx| {
+            let _ = settings
+                .inactivity_period_before_revoking_roles
+                .set_value(Duration::ZERO, ctx);
+            let _ = settings
+                .inactivity_period_before_warning
+                .set_value(Duration::ZERO, ctx);
+            let _ = settings
+                .inactivity_period_before_ending_session
+                .set_value(Duration::from_secs(600), ctx);
+        });
+
+        let terminal = start_sharer_session(&mut app);
+        terminal.read(&app, |view, _| {
+            let sharer = view.shared_session_sharer().expect("sharer");
+            assert!(
+                sharer.inactivity_timer_abort_handle.is_some(),
+                "the end phase should have armed directly since revoke and warning are both \
+                 disabled"
+            );
+        });
+
+        // Disabling `end` while its own timer is the one currently armed must cancel that
+        // timer rather than let it fire on the stale duration.
+        SharedSessionSettings::handle(&app).update(&mut app, |settings, ctx| {
+            let _ = settings
+                .inactivity_period_before_ending_session
+                .set_value(Duration::ZERO, ctx);
+        });
+
+        terminal.read(&app, |view, _| {
+            let sharer = view.shared_session_sharer().expect("sharer");
+            assert!(
+                sharer.inactivity_timer_abort_handle.is_none(),
+                "the now-disabled end phase's timer must be cancelled with nothing to \
+                 replace it"
+            );
+        });
+    });
+}
+
+#[test]
+fn test_enabling_a_phase_mid_session_from_an_all_off_ladder_arms_it_immediately() {
+    let _flag = FeatureFlag::CreatingSharedSessions.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+
+        SharedSessionSettings::handle(&app).update(&mut app, |settings, ctx| {
+            let _ = settings
+                .inactivity_period_before_revoking_roles
+                .set_value(Duration::ZERO, ctx);
+            let _ = settings
+                .inactivity_period_before_warning
+                .set_value(Duration::ZERO, ctx);
+            let _ = settings
+                .inactivity_period_before_ending_session
+                .set_value(Duration::ZERO, ctx);
+        });
+
+        let terminal = start_sharer_session(&mut app);
+        terminal.read(&app, |view, _| {
+            let sharer = view.shared_session_sharer().expect("sharer");
+            assert!(
+                sharer.inactivity_timer_abort_handle.is_none(),
+                "an all-off ladder should arm nothing"
+            );
+        });
+
+        // Re-enabling a phase mid-session must arm it immediately via the settings-change
+        // subscription, not wait for the next throttled activity event.
+        SharedSessionSettings::handle(&app).update(&mut app, |settings, ctx| {
+            let _ = settings
+                .inactivity_period_before_ending_session
+                .set_value(Duration::from_secs(600), ctx);
+        });
+
+        terminal.read(&app, |view, _| {
+            let sharer = view.shared_session_sharer().expect("sharer");
+            assert!(
+                sharer.inactivity_timer_abort_handle.is_some(),
+                "re-enabling a phase mid-session must arm it immediately"
+            );
+        });
+    });
+}
+
 fn create_cloud_mode_task_for_user(creator_uid: &str) -> AmbientAgentTask {
     let now = chrono::Utc::now();
     AmbientAgentTask {

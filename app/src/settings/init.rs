@@ -98,7 +98,7 @@ pub fn register_all_settings(ctx: &mut AppContext) {
     SshSettings::register(ctx);
     VimBannerSettings::register(ctx);
     SharedObjectLimitBannerSettings::register(ctx);
-    SharedSessionSettings::register(ctx);
+    SharedSessionSettings::register_and_enforce_inactivity_ordering(ctx);
     WarpDriveSettings::register(ctx);
     WorkflowAliases::register(ctx);
     EmacsBindingsSettings::register(ctx);
