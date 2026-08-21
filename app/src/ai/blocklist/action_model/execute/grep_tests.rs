@@ -77,23 +77,11 @@ fn test_create_redacted_grep_error_event() {
 fn build_git_grep_command_single_quotes_shell_substitution() {
     let queries = vec!["$(touch /tmp/warp-poc); `id`".to_string()];
 
-    let command = build_git_grep_command(&queries, "/tmp/repo path", ShellType::Bash, false);
+    let command = build_git_grep_command(&queries, "/tmp/repo path", ShellType::Bash);
 
     assert_eq!(
         command,
-        "git --no-pager grep --color=never --untracked -nIE -e '$(touch /tmp/warp-poc); `id`' '/tmp/repo path'"
-    );
-}
-
-#[test]
-fn build_git_grep_command_null_delimited_adds_z_flag() {
-    let queries = vec!["needle".to_string()];
-
-    let command = build_git_grep_command(&queries, "/tmp/repo", ShellType::Bash, true);
-
-    assert_eq!(
-        command,
-        "git --no-pager grep --color=never --untracked -nIE -z -e 'needle' '/tmp/repo'"
+        "git --no-pager grep --color=never --untracked -nIEz -e '$(touch /tmp/warp-poc); `id`' '/tmp/repo path'"
     );
 }
 
@@ -101,23 +89,39 @@ fn build_git_grep_command_null_delimited_adds_z_flag() {
 fn build_grep_command_escapes_single_quotes() {
     let queries = vec!["owner's code".to_string()];
 
-    let command = build_grep_command(&queries, "/tmp/repo", ShellType::Bash, false);
+    let command = build_grep_command(&queries, "/tmp/repo", ShellType::Bash);
 
     assert_eq!(
         command,
-        r#"grep --color=never -nrIHE --devices=skip -e 'owner'"'"'s code' '/tmp/repo'"#
+        r#"grep --color=never -nrIHEZ --devices=skip -e 'owner'"'"'s code' '/tmp/repo'"#
     );
 }
 
 #[test]
-fn build_grep_command_null_delimited_adds_capital_z_flag() {
+fn build_grep_list_files_command_lists_recursively() {
     let queries = vec!["needle".to_string()];
 
-    let command = build_grep_command(&queries, "/tmp/repo", ShellType::Bash, true);
+    let command = build_grep_list_files_command(&queries, "/tmp/repo", ShellType::Bash);
 
     assert_eq!(
         command,
-        "grep --color=never -nrIHE --devices=skip -Z -e 'needle' '/tmp/repo'"
+        "grep --color=never -rlIE --devices=skip -e 'needle' '/tmp/repo'"
+    );
+}
+
+#[test]
+fn build_grep_single_file_command_targets_one_file() {
+    let queries = vec!["needle".to_string()];
+
+    // The path here is deliberately one that would be ambiguous in a
+    // `{path}:{line}:{content}` record; that's fine, since this command
+    // takes the path as an argument rather than parsing it back out of
+    // the output.
+    let command = build_grep_single_file_command(&queries, "src/a:123:part.rs", ShellType::Bash);
+
+    assert_eq!(
+        command,
+        "grep --color=never -nIE --devices=skip -e 'needle' 'src/a:123:part.rs'"
     );
 }
 
@@ -168,9 +172,9 @@ fn parse_null_delimited_grep_output_handles_gnu_grep_capital_z_style() {
 
 #[test]
 fn parse_null_delimited_grep_output_handles_path_that_looks_like_a_record_boundary() {
-    // Regression test: `parse_legacy_grep_output`'s `:<digits>:` heuristic
-    // misparses this path, since the path itself contains that exact
-    // sequence. The NUL-delimited format has no such ambiguity.
+    // Regression test: a naive `:<digits>:` heuristic would misparse this
+    // path, since the path itself contains that exact sequence. The
+    // NUL-delimited format has no such ambiguity.
     let output = "src/a:123:part.rs\x007\0needle\n";
 
     let matched_files =
@@ -283,101 +287,28 @@ fn take_null_delimited_record_rejects_missing_line_number() {
 }
 
 #[test]
-fn parse_legacy_grep_output_handles_colon_in_windows_path() {
-    let output = r#"C:\repo\file.rs:42:some content"#;
+fn parse_single_file_grep_output_handles_line_with_colon_in_content() {
+    // The caller already knows the path (see build_grep_single_file_command),
+    // so a colon-bearing path like `src/a:123:part.rs` never has to appear
+    // in this output at all -- there's nothing here for it to be confused
+    // with.
+    let output = "7:needle: found here\n";
 
-    let matched_files =
-        parse_legacy_grep_output(output, None, None).expect("Should parse successfully");
+    let line_numbers = parse_single_file_grep_output(output);
 
-    assert_eq!(matched_files.len(), 1);
-    assert_eq!(matched_files[0].file_path, r#"C:\repo\file.rs"#);
-    assert_eq!(
-        matched_files[0].matched_lines,
-        vec![GrepLineMatch { line_number: 42 }]
-    );
+    assert_eq!(line_numbers, vec![7]);
 }
 
 #[test]
-fn parse_legacy_grep_output_handles_colon_in_relative_path() {
-    let output = "path/with:colon/file.go:7:content";
+fn parse_single_file_grep_output_skips_lines_without_a_leading_line_number() {
+    let output = "10:foo\nno line number here\n20:bar\n";
 
-    let matched_files =
-        parse_legacy_grep_output(output, None, None).expect("Should parse successfully");
+    let line_numbers = parse_single_file_grep_output(output);
 
-    assert_eq!(matched_files.len(), 1);
-    assert_eq!(matched_files[0].file_path, "path/with:colon/file.go");
-    assert_eq!(
-        matched_files[0].matched_lines,
-        vec![GrepLineMatch { line_number: 7 }]
-    );
+    assert_eq!(line_numbers, vec![10, 20]);
 }
 
 #[test]
-fn parse_legacy_grep_output_handles_colon_in_go_module_path() {
-    let output = "vendor/github.com/foo/bar:v1/pkg/x.go:42:return nil";
-
-    let matched_files =
-        parse_legacy_grep_output(output, None, None).expect("Should parse successfully");
-
-    assert_eq!(matched_files.len(), 1);
-    assert_eq!(
-        matched_files[0].file_path,
-        "vendor/github.com/foo/bar:v1/pkg/x.go"
-    );
-    assert_eq!(
-        matched_files[0].matched_lines,
-        vec![GrepLineMatch { line_number: 42 }]
-    );
-}
-
-#[test]
-fn parse_legacy_grep_output_skips_unparseable_lines_but_keeps_valid_matches() {
-    let output = "src/main.rs:10:foo\nthis line has no line number\nsrc/lib.rs:20:bar";
-
-    let mut matched_files =
-        parse_legacy_grep_output(output, None, None).expect("Should parse successfully");
-    matched_files.sort_by(|a, b| a.file_path.cmp(&b.file_path));
-    assert_eq!(
-        matched_files,
-        vec![
-            GrepFileMatch {
-                file_path: "src/lib.rs".to_string(),
-                matched_lines: vec![GrepLineMatch { line_number: 20 }],
-            },
-            GrepFileMatch {
-                file_path: "src/main.rs".to_string(),
-                matched_lines: vec![GrepLineMatch { line_number: 10 }],
-            },
-        ]
-    );
-}
-
-#[test]
-fn parse_legacy_grep_output_errors_when_every_line_is_unparseable() {
-    let output = "not a grep line\nneither is this one";
-
-    let result = parse_legacy_grep_output(output, None, None);
-
-    assert!(result.is_err());
-}
-
-#[test]
-fn parse_legacy_grep_output_returns_empty_for_empty_output() {
-    let matched_files =
-        parse_legacy_grep_output("", None, None).expect("Should parse successfully");
-
-    assert!(matched_files.is_empty());
-}
-
-#[test]
-fn split_grep_line_ignores_leading_colon() {
-    assert_eq!(split_grep_line(":10:content"), None);
-}
-
-#[test]
-fn split_grep_line_finds_boundary_after_colon_in_path() {
-    assert_eq!(
-        split_grep_line("path/with:colon/file.go:7:content"),
-        Some(("path/with:colon/file.go", 7))
-    );
+fn parse_single_file_grep_output_returns_empty_for_empty_output() {
+    assert_eq!(parse_single_file_grep_output(""), Vec::<usize>::new());
 }
