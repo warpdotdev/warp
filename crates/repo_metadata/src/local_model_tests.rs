@@ -1419,6 +1419,128 @@ fn test_update_file_tree_entry_respects_gitignore() {
     });
 }
 
+/// Regression test for APP-5355: a single batch of mutations applied against
+/// a tree that is currently shared with another `Arc` holder (e.g. a UI
+/// view's cached snapshot) must trigger at most one `Arc::make_mut` deep
+/// clone of the underlying map, not one per mutation.
+#[test]
+fn apply_file_tree_mutations_clones_state_map_at_most_once_per_batch() {
+    let root_std = StandardizedPath::try_new("/repo").unwrap();
+    let mut tree = FileTreeEntry::from(Entry::Directory(DirectoryEntry {
+        path: root_std,
+        children: Vec::new(),
+        ignored: false,
+        loaded: true,
+    }));
+
+    // A cheap `Arc` clone (no deep copy) simulating a concurrent reader.
+    let reader_snapshot = tree.clone();
+
+    // `DEEP_CLONE_COUNT` is process-global; serialize against other tests
+    // that read it so parallel test execution can't cross-contaminate counts.
+    let _clone_count_guard = crate::file_tree_store::deep_clone_count_test_lock()
+        .lock()
+        .unwrap();
+    crate::file_tree_store::reset_deep_clone_count();
+
+    let mutations: Vec<FileTreeMutation> = (0..25)
+        .map(|i| FileTreeMutation::AddFile {
+            path: PathBuf::from(format!("/repo/file{i}.txt")),
+            is_ignored: false,
+            extension: Some("txt".to_string()),
+        })
+        .collect();
+
+    LocalRepoMetadataModel::apply_file_tree_mutations(&mut tree, mutations, false, false);
+
+    assert_eq!(
+        crate::file_tree_store::deep_clone_count(),
+        1,
+        "a batch of N mutations against a shared tree should trigger exactly one deep clone, \
+         not one per mutation"
+    );
+
+    // Copy-on-write correctness: the reader's old snapshot must be unaffected.
+    let first_new_file = StandardizedPath::try_new("/repo/file0.txt").unwrap();
+    assert!(reader_snapshot.get(&first_new_file).is_none());
+    assert!(tree.get(&first_new_file).is_some());
+}
+
+/// Regression test for APP-5355: reproduces the actual fix's mechanism. A
+/// reader that re-clones the model's tree after every watcher-driven batch
+/// (the old `FileTreeView` behavior) keeps re-sharing the model's `Arc`,
+/// forcing one full deep clone per batch. A reader that instead applies the
+/// emitted delta to its own independently-held tree (the fixed behavior)
+/// only shares the model's `Arc` once, up front, and never forces another
+/// deep clone no matter how many small batches follow.
+#[test]
+fn delta_application_avoids_repeated_deep_clones_across_a_burst() {
+    let root_std = StandardizedPath::try_new("/repo").unwrap();
+    let mut model_tree = FileTreeEntry::from(Entry::Directory(DirectoryEntry {
+        path: root_std,
+        children: Vec::new(),
+        ignored: false,
+        loaded: true,
+    }));
+
+    // Mimics a `FileTreeView`-like reader syncing from an initial full
+    // snapshot: a cheap `Arc` clone that shares storage with the model.
+    let mut delta_reader = model_tree.clone();
+
+    // `DEEP_CLONE_COUNT` is process-global; serialize against other tests
+    // that read it so parallel test execution can't cross-contaminate counts.
+    let _clone_count_guard = crate::file_tree_store::deep_clone_count_test_lock()
+        .lock()
+        .unwrap();
+    crate::file_tree_store::reset_deep_clone_count();
+
+    // A burst of many separate watcher-driven batches — the worst case for
+    // the old "clone every batch" behavior, since each one used to pay a
+    // full-tree clone.
+    const BATCHES: usize = 20;
+    for batch in 0..BATCHES {
+        let mutations = vec![FileTreeMutation::AddFile {
+            path: PathBuf::from(format!("/repo/burst_file{batch}.txt")),
+            is_ignored: false,
+            extension: Some("txt".to_string()),
+        }];
+        let update = LocalRepoMetadataModel::apply_file_tree_mutations(
+            &mut model_tree,
+            mutations,
+            false,
+            true,
+        )
+        .expect("update tracking was enabled");
+
+        // The fix: apply the delta directly to the reader's own tree
+        // instead of re-cloning the model's.
+        assert!(
+            delta_reader.apply_repo_metadata_update(&update),
+            "delta should apply cleanly to the reader's independently-held tree"
+        );
+    }
+
+    // The model's tree is cloned exactly once for the whole burst — the
+    // first time it diverges from the reader's still-shared `Arc` — instead
+    // of once per batch (`BATCHES` clones), which is what re-cloning the
+    // model's tree into the reader on every batch would have produced.
+    assert_eq!(
+        crate::file_tree_store::deep_clone_count(),
+        1,
+        "a delta-applying reader should force at most one deep clone for the whole burst, \
+         not one per batch"
+    );
+
+    for batch in 0..BATCHES {
+        let path = StandardizedPath::try_new(&format!("/repo/burst_file{batch}.txt")).unwrap();
+        assert!(model_tree.get(&path).is_some());
+        assert!(
+            delta_reader.get(&path).is_some(),
+            "the delta-applying reader should stay in sync with the model"
+        );
+    }
+}
+
 #[test]
 fn test_gitignore_patterns_comprehensive() {
     VirtualFS::test("comprehensive_test", |dirs, mut fs| {
