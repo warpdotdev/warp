@@ -443,8 +443,6 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::InlineMenuHeaders,
         #[cfg(feature = "restore_prompt_on_inline_model_selector_search")]
         FeatureFlag::RestorePromptOnInlineModelSelectorSearch,
-        #[cfg(feature = "directory_tab_colors")]
-        FeatureFlag::DirectoryTabColors,
         #[cfg(feature = "open_warp_new_settings_modes")]
         FeatureFlag::OpenWarpNewSettingsModes,
         #[cfg(feature = "hoa_code_review")]

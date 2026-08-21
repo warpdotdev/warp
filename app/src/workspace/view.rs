@@ -3835,10 +3835,8 @@ impl Workspace {
                 ctx.notify();
             }
             TabSettingsChangedEvent::DirectoryTabColors { .. } => {
-                if FeatureFlag::DirectoryTabColors.is_enabled() {
-                    for tab in &mut self.tabs {
-                        Self::sync_codebase_tab_color(tab, ctx);
-                    }
+                for tab in &mut self.tabs {
+                    Self::sync_codebase_tab_color(tab, ctx);
                 }
                 ctx.notify();
             }
@@ -5620,11 +5618,7 @@ impl Workspace {
             return;
         }
         let next = if self.tabs[index].color() == Some(color) {
-            if FeatureFlag::DirectoryTabColors.is_enabled() {
-                SelectedTabColor::Cleared
-            } else {
-                SelectedTabColor::Unset
-            }
+            SelectedTabColor::Cleared
         } else {
             SelectedTabColor::Color(color)
         };
@@ -12877,7 +12871,7 @@ impl Workspace {
 
             // preserve the current tab's default directory color when the new tab inherits the working directory
             // (otherwise the new tab's color flashes from no-color to default color during bootstrapping).
-            if FeatureFlag::DirectoryTabColors.is_enabled() && is_new_terminal {
+            if is_new_terminal {
                 let wd_config = &SessionSettings::as_ref(ctx).working_directory_config;
                 let inherits_cwd = wd_config.config_for_source(NewSessionSource::Tab).mode
                     == WorkingDirectoryMode::PreviousDir
@@ -16003,11 +15997,10 @@ impl Workspace {
                 self.update_resource_center_action_target(ctx);
                 self.update_active_session(ctx);
 
-                if FeatureFlag::DirectoryTabColors.is_enabled()
-                    && let Some(tab) = self
-                        .tabs
-                        .iter_mut()
-                        .find(|t| t.pane_group.id() == pane_group.id())
+                if let Some(tab) = self
+                    .tabs
+                    .iter_mut()
+                    .find(|t| t.pane_group.id() == pane_group.id())
                 {
                     Self::sync_codebase_tab_color(tab, ctx);
                 }
@@ -16521,11 +16514,10 @@ impl Workspace {
                 // setup_code_review_panel here would race with refresh and
                 // re-create models that were just dropped.
 
-                if FeatureFlag::DirectoryTabColors.is_enabled()
-                    && let Some(tab) = self
-                        .tabs
-                        .iter_mut()
-                        .find(|t| t.pane_group.id() == pane_group.id())
+                if let Some(tab) = self
+                    .tabs
+                    .iter_mut()
+                    .find(|t| t.pane_group.id() == pane_group.id())
                 {
                     Self::sync_codebase_tab_color(tab, ctx);
                 }
