@@ -38,6 +38,7 @@ impl DispatchedEvent {
             Event::ModifierStateChanged { .. } => Some(&self.event),
             Event::ModifierKeyChanged { .. } => Some(&self.event),
             Event::TypedCharacters { .. } => Some(&self.event),
+            Event::ReplacePrecedingCharacters { .. } => Some(&self.event),
             Event::DragAndDropFiles { .. } => Some(&self.event),
             Event::DragFiles { .. } => Some(&self.event),
             Event::DragFileExit => Some(&self.event),
@@ -191,6 +192,20 @@ pub enum Event {
     TypedCharacters {
         chars: String,
     },
+    /// Gets fired when the text input system commits characters that are meant to
+    /// replace text it has already committed, rather than extend it. The macOS
+    /// press-and-hold accent popup is the only producer today: holding `o` commits a
+    /// literal `o`, and picking `ò` from the popup then commits a replacement for it.
+    ///
+    /// Handlers should drop the grapheme preceding the caret before inserting `chars`.
+    /// The count is fixed at one because the platform layer cannot recover a usable
+    /// length — see the comment in `insertText:replacementRange:` in `host_view.m`.
+    ///
+    /// Surfaces that cannot delete backwards need not handle it: an unhandled event
+    /// is redispatched as [`Event::TypedCharacters`], see [`Event::unhandled_fallback`].
+    ReplacePrecedingCharacters {
+        chars: String,
+    },
     /// Gets fired when user drags a file or folder into Warp. Note that there could exist
     /// multiple file paths in one event as user could drag and drop multiple targets.
     DragAndDropFiles {
@@ -246,6 +261,22 @@ impl Event {
             None
         }
     }
+
+    /// The event a surface should be given instead when it does not handle `self`.
+    ///
+    /// [`Event::ReplacePrecedingCharacters`] only means something to a surface that
+    /// can delete the grapheme before the caret. A focused terminal, the alt screen
+    /// and the code editor cannot, and silently dropping a committed character there
+    /// would be worse than the doubled character the replacement exists to avoid, so
+    /// the commit degrades to the plain append those surfaces have always received.
+    pub fn unhandled_fallback(&self) -> Option<Self> {
+        match self {
+            Event::ReplacePrecedingCharacters { chars } => Some(Event::TypedCharacters {
+                chars: chars.clone(),
+            }),
+            _ => None,
+        }
+    }
 }
 
 pub trait InBoundsExt {
@@ -277,6 +308,7 @@ impl InBoundsExt for Event {
             Event::KeyDown { .. }
             | Event::ModifierKeyChanged { .. }
             | Event::TypedCharacters { .. }
+            | Event::ReplacePrecedingCharacters { .. }
             | Event::DragFileExit
             | Event::SetMarkedText { .. }
             | Event::ClearMarkedText => true,
@@ -410,6 +442,9 @@ impl Scale for Event {
                 Event::ModifierKeyChanged { key_code, state }
             }
             Event::TypedCharacters { chars } => Event::TypedCharacters { chars },
+            Event::ReplacePrecedingCharacters { chars } => {
+                Event::ReplacePrecedingCharacters { chars }
+            }
             Event::SetMarkedText {
                 marked_text,
                 selected_range,
@@ -421,3 +456,7 @@ impl Scale for Event {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "event_tests.rs"]
+mod tests;

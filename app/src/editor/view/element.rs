@@ -625,6 +625,24 @@ impl EditorElement {
         false
     }
 
+    /// Handles a text-input commit that replaces the grapheme before the caret, rather
+    /// than extending the input. See [`Event::ReplacePrecedingCharacters`].
+    fn replace_preceding_characters(&self, chars: &str, ctx: &mut EventContext) -> bool {
+        if self.view_snapshot.is_focused {
+            if self.vim_mode.is_some() {
+                // Vim owns its own insertion state machine, so we leave that path on the
+                // plain insert it has always used rather than reaching around it.
+                ctx.dispatch_typed_action(EditorAction::VimUserInsert(UserInput::new(chars)));
+            } else {
+                ctx.dispatch_typed_action(EditorAction::ReplacePrecedingCharacters(
+                    UserInput::new(chars),
+                ));
+            }
+            return true;
+        }
+        false
+    }
+
     fn set_marked_text(
         &mut self,
         marked_text: &str,
@@ -2176,6 +2194,9 @@ impl Element for EditorElement {
                 key_code, state, ..
             } => self.modifier_key_change(key_code, state, ctx),
             Event::TypedCharacters { chars } => self.typed_characters(chars, ctx),
+            Event::ReplacePrecedingCharacters { chars } => {
+                self.replace_preceding_characters(chars, ctx)
+            }
             Event::DragAndDropFiles { paths, location } => {
                 self.drag_and_drop_file(paths.clone(), *location, ctx)
             }

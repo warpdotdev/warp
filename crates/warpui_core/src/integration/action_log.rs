@@ -22,6 +22,9 @@ pub fn event_description(event: &Event) -> String {
     match event {
         Event::KeyDown { chars, .. } => format!("KeyDown '{chars}'"),
         Event::TypedCharacters { chars } => format!("TypedCharacters '{chars}'"),
+        Event::ReplacePrecedingCharacters { chars } => {
+            format!("ReplacePrecedingCharacters '{chars}'")
+        }
         Event::LeftMouseDown { .. } => "LeftMouseDown".to_string(),
         Event::LeftMouseUp { .. } => "LeftMouseUp".to_string(),
         Event::LeftMouseDragged { .. } => "LeftMouseDragged".to_string(),
