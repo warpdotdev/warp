@@ -216,8 +216,9 @@ impl TeamScope for TeamContextForOperation {
 
 #[cfg(test)]
 impl TeamContextForOperation {
-    // Nothing constructs a test context yet; remove this `#[allow(dead_code)]` once a Group 1
-    // migration PR has a real call site.
+    // Currently unused: tests that need an operation scope mint a real one from a test window
+    // through `team_context_for_operation`, which exercises the production path as well. Kept
+    // for a test that needs a scope with no window to mint it from.
     #[allow(dead_code)]
     pub(crate) fn new_for_test(team_uid: ServerId) -> Self {
         Self {
@@ -2030,10 +2031,8 @@ impl UserWorkspaces {
     ///
     /// **Not a team-neutral read**, despite reading workspace settings: see
     /// [`Self::teamless_workspace_settings`] for why. Sole remaining caller is
-    /// `ai::orchestration::resolve_default_host_slug`, which feeds the plan card, the
-    /// confirmation card, the TUI orchestration block and the handoff pipeline. That chain
-    /// still needs both a windowless accessor the TUI can reach and a pinned scope for the
-    /// handoff's chosen destination, so it moves as one follow-up rather than piecemeal.
+    /// `ai::orchestration::resolve_default_host_slug`, whose consumers have to migrate as one
+    /// unit and are blocked on decisions this getter cannot make.
     /// Do not add callers: windowed code uses [`Self::default_host_slug_for_scope`], and a
     /// windowless availability check uses [`Self::any_team_has_default_host_slug`].
     pub fn unscoped_default_host_slug(&self) -> Option<&str> {

@@ -2412,17 +2412,21 @@ impl Input {
             if !affects_this_window {
                 return;
             }
+            // `None` has to be applied, not skipped: it means the window's team configures no
+            // self-hosted default, and leaving the previous value in place would keep the
+            // selector and the run config pointed at another team's worker.
             let effective_host = effective_default_host(ctx);
-            if let Some(slug) = &effective_host {
-                view_for_ws.update(ctx, |selector, ctx| {
-                    selector.set_default_host(slug.clone(), ctx);
-                });
+            match effective_host.clone() {
+                Some(slug) => view_for_ws.update(ctx, |selector, ctx| {
+                    selector.set_default_host(slug, ctx);
+                }),
+                None => view_for_ws.update(ctx, |selector, ctx| {
+                    selector.clear_default_host(ctx);
+                }),
             }
-            if let Some(slug) = effective_host {
-                vm_for_ws.update(ctx, |model, _ctx| {
-                    model.set_worker_host(Some(slug));
-                });
-            }
+            vm_for_ws.update(ctx, |model, _ctx| {
+                model.set_worker_host(effective_host);
+            });
         });
         view
     }

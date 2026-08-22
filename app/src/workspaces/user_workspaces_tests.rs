@@ -1056,6 +1056,86 @@ fn create_test_window(app: &mut App) -> (WindowId, ViewHandle<TeamContextTestVie
     app.add_window(WindowStyle::NotStealFocus, |_| TeamContextTestView)
 }
 
+/// Records what a view can resolve about its own team *during its own construction*, which is
+/// where the cloud-mode host selector's first read happens.
+struct ConstructionTimeScopeProbe {
+    host_slug_from_view_context: Option<String>,
+    team_uid_from_own_handle: Option<ServerId>,
+}
+
+impl ConstructionTimeScopeProbe {
+    fn new(ctx: &mut ViewContext<Self>) -> Self {
+        let user_workspaces = UserWorkspaces::as_ref(ctx);
+        let scope = user_workspaces.team_context_for_operation(ctx);
+        Self {
+            host_slug_from_view_context: user_workspaces
+                .default_host_slug_for_scope(&scope)
+                .map(str::to_string),
+            team_uid_from_own_handle: user_workspaces
+                .team_context(&ctx.handle(), ctx)
+                .and_then(|context| context.team_uid()),
+        }
+    }
+}
+
+impl Entity for ConstructionTimeScopeProbe {
+    type Event = ();
+}
+
+impl View for ConstructionTimeScopeProbe {
+    fn ui_name() -> &'static str {
+        "ConstructionTimeScopeProbe"
+    }
+
+    fn render(&self, _: &AppContext) -> Box<dyn Element> {
+        Empty::new().finish()
+    }
+}
+
+impl TypedActionView for ConstructionTimeScopeProbe {
+    type Action = ();
+}
+
+/// A view is not in `view_to_window` until its build closure returns, so during its own
+/// construction it can resolve its team through its `ViewContext` but *not* through a handle to
+/// itself. Both halves are asserted: the shape the host selector uses works, and the shape it
+/// would be tempting to refactor to silently resolves nothing. Every other test here resolves
+/// post-construction, where the difference is invisible.
+#[test]
+fn test_a_view_can_only_resolve_its_own_team_through_its_view_context_while_constructing() {
+    let mut team = team_for_test();
+    team.settings.default_host_slug = Some("team-host".to_string());
+    let workspace = workspace_for_test(&team);
+
+    App::test((), |mut app| async move {
+        initialize_window_team_test_app(&mut app, vec![workspace]);
+
+        let (window_id, view) = create_test_window(&mut app);
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.set_team_for_window(window_id, team.uid, ctx);
+        });
+
+        let probe = view.update(&mut app, |_, ctx| {
+            ctx.add_typed_action_view(ConstructionTimeScopeProbe::new)
+        });
+
+        app.read(|ctx| {
+            let probe = probe.as_ref(ctx);
+            assert_eq!(
+                probe.host_slug_from_view_context.as_deref(),
+                Some("team-host"),
+                "a view under construction still resolves its window's team through its \
+                 ViewContext, whose window id is a plain field"
+            );
+            assert_eq!(
+                probe.team_uid_from_own_handle, None,
+                "a handle to a view still being constructed resolves no window, so reading the \
+                 host through one would silently drop the team's configured host"
+            );
+        });
+    })
+}
+
 fn two_teams() -> (Team, Team) {
     let team_a = team_for_test();
     let mut team_b = team_for_test();

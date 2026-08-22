@@ -622,7 +622,13 @@ impl WarpAgentPageView {
 
         let workspace = UserWorkspaces::handle(ctx);
         ctx.subscribe_to_model(&workspace, |me, _workspace, event, ctx| {
-            if let UserWorkspacesEvent::TeamsChanged = event {
+            // A window moving between teams changes what this page renders (the agent
+            // attribution toggle resolves its policy from the window's team), and
+            // `window_team_uids` is not `Tracked`, so autotracking will not repaint it.
+            if matches!(
+                event,
+                UserWorkspacesEvent::TeamsChanged | UserWorkspacesEvent::WindowTeamChanged { .. }
+            ) {
                 me.sync_custom_endpoint_buttons(ctx);
                 ctx.notify();
             }
