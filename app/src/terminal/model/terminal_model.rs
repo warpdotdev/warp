@@ -1898,7 +1898,9 @@ impl TerminalModel {
     ) -> String {
         let text = self.string_at_range(item, respect_obfuscated_secrets);
         text.trim_matches(['\u{200B}', ' ', '\n', '\r', '\t'])
-            .to_owned()
+            .chars()
+            .filter(|c| !matches!(c, '\n' | '\r'))
+            .collect()
     }
 
     /// Return all possible file paths containing the grid point ordered from longest to shortest.

@@ -558,6 +558,14 @@ impl GridHandler {
             PerformResetGridChecks::No,
         )
     }
+    pub(super) fn row_is_full_width_hard_wrap_candidate(&self, row: usize) -> bool {
+        if row + 1 >= self.total_rows() || self.columns() == 0 || self.row_wraps(row) {
+            return false;
+        }
+
+        self.row(row)
+            .is_some_and(|grid_line| grid_line.line_length() >= self.columns())
+    }
 
     pub(in crate::terminal::model) fn ansi_handler(&mut self) -> &mut (impl ansi::Handler + use<>) {
         self
@@ -765,8 +773,12 @@ impl GridHandler {
             return None;
         }
 
-        // Scan backward until fragment boundary.
-        let mut cursor = self.grapheme_cursor_from(original_point, grapheme_cursor::Wrap::Soft);
+        // Scan backward until fragment boundary. In addition to terminal
+        // soft-wrap metadata, allow scanning through full-width hard line
+        // breaks. Some TUIs wrap long text by writing a full row followed by a
+        // CRLF, which visually splits URLs without setting WRAPLINE.
+        let mut cursor =
+            self.grapheme_cursor_from(original_point, grapheme_cursor::Wrap::SoftOrFullWidth);
         cursor.move_backward();
 
         let mut starting_point = original_point;
@@ -792,7 +804,8 @@ impl GridHandler {
             cursor.move_backward();
         }
 
-        let mut cursor = self.grapheme_cursor_from(starting_point, grapheme_cursor::Wrap::Soft);
+        let mut cursor =
+            self.grapheme_cursor_from(starting_point, grapheme_cursor::Wrap::SoftOrFullWidth);
         let mut locator = UrlLocator::new();
         let mut state = UrlLocation::Reset;
         let mut scheme_buffer = Vec::new();
