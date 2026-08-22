@@ -1152,6 +1152,179 @@ fn test_window_team_reconciliation_moves_rendering_but_not_a_captured_context() 
     })
 }
 
+fn team_named(uid: i64, name: &str) -> Team {
+    let mut team = team_for_test();
+    team.uid = uid.into();
+    team.name = name.to_owned();
+    team
+}
+
+/// The two teams every ambiguity test below is built from, in workspace order.
+fn platform_and_security() -> (Team, Team, Workspace) {
+    let platform = team_named(123, "Platform");
+    let security = team_named(456, "Security");
+    let mut workspace = workspace_for_test(&platform);
+    workspace.teams.push(security.clone());
+    (platform, security, workspace)
+}
+
+#[test]
+fn resolve_requested_team_uses_the_sole_team_when_none_is_requested() {
+    let team = team_for_test();
+    let workspace = workspace_for_test(&team);
+
+    App::test((), |mut app| async move {
+        initialize_window_team_test_app(&mut app, vec![workspace]);
+
+        app.read(|ctx| {
+            assert_eq!(
+                UserWorkspaces::as_ref(ctx).resolve_requested_team(None),
+                Ok(Some(team.uid))
+            );
+        });
+    })
+}
+
+#[test]
+fn resolve_requested_team_is_teamless_when_the_user_is_on_no_team() {
+    App::test((), |mut app| async move {
+        initialize_window_team_test_app(&mut app, vec![]);
+
+        app.read(|ctx| {
+            assert_eq!(
+                UserWorkspaces::as_ref(ctx).resolve_requested_team(None),
+                Ok(None),
+                "a user with no teams is genuinely teamless, not ambiguous"
+            );
+        });
+    })
+}
+
+#[test]
+fn resolve_requested_team_refuses_to_choose_between_two_teams() {
+    let (platform, security, workspace) = platform_and_security();
+
+    App::test((), |mut app| async move {
+        initialize_window_team_test_app(&mut app, vec![workspace]);
+
+        app.read(|ctx| {
+            let error = UserWorkspaces::as_ref(ctx)
+                .resolve_requested_team(None)
+                .expect_err("two teams and no requested team is ambiguous");
+            let TeamResolutionError::NoTeamSelected { available, .. } = &error else {
+                panic!("expected NoTeamSelected, got {error:?}");
+            };
+            assert_eq!(
+                available,
+                &vec![
+                    TeamChoice {
+                        name: platform.name.clone(),
+                        uid: platform.uid,
+                    },
+                    TeamChoice {
+                        name: security.name.clone(),
+                        uid: security.uid,
+                    },
+                ]
+            );
+
+            // Refusing is only acceptable because the refusal says how to proceed, so the
+            // message's content is part of the contract rather than presentation.
+            let message = error.to_string();
+            assert!(message.contains("--team"), "{message}");
+            assert!(message.contains("WARP_TEAM"), "{message}");
+            for team in [&platform, &security] {
+                assert!(message.contains(&team.name), "{message}");
+                assert!(message.contains(&team.uid.to_string()), "{message}");
+            }
+        });
+    })
+}
+
+#[test]
+fn resolve_requested_team_matches_a_name_ignoring_case_and_surrounding_space() {
+    let (_, security, workspace) = platform_and_security();
+
+    App::test((), |mut app| async move {
+        initialize_window_team_test_app(&mut app, vec![workspace]);
+
+        app.read(|ctx| {
+            assert_eq!(
+                UserWorkspaces::as_ref(ctx).resolve_requested_team(Some("  sEcUrItY ")),
+                Ok(Some(security.uid))
+            );
+        });
+    })
+}
+
+#[test]
+fn resolve_requested_team_matches_a_team_uid() {
+    let (_, security, workspace) = platform_and_security();
+
+    App::test((), |mut app| async move {
+        initialize_window_team_test_app(&mut app, vec![workspace]);
+
+        app.read(|ctx| {
+            assert_eq!(
+                UserWorkspaces::as_ref(ctx).resolve_requested_team(Some(&security.uid.to_string())),
+                Ok(Some(security.uid))
+            );
+        });
+    })
+}
+
+#[test]
+fn resolve_requested_team_rejects_a_team_the_user_is_not_on() {
+    let (platform, security, workspace) = platform_and_security();
+
+    App::test((), |mut app| async move {
+        initialize_window_team_test_app(&mut app, vec![workspace]);
+
+        app.read(|ctx| {
+            let error = UserWorkspaces::as_ref(ctx)
+                .resolve_requested_team(Some("Growth"))
+                .expect_err("naming a team the user is not on must not fall back to another");
+            let TeamResolutionError::UnknownTeam { requested, .. } = &error else {
+                panic!("expected UnknownTeam, got {error:?}");
+            };
+            assert_eq!(requested, "Growth");
+
+            let message = error.to_string();
+            for team in [&platform, &security] {
+                assert!(message.contains(&team.name), "{message}");
+            }
+        });
+    })
+}
+
+#[test]
+fn resolve_requested_team_rejects_a_name_two_teams_share() {
+    let first = team_named(123, "Platform");
+    let second = team_named(456, "Platform");
+    let mut workspace = workspace_for_test(&first);
+    workspace.teams.push(second.clone());
+
+    App::test((), |mut app| async move {
+        initialize_window_team_test_app(&mut app, vec![workspace]);
+
+        app.read(|ctx| {
+            let error = UserWorkspaces::as_ref(ctx)
+                .resolve_requested_team(Some("Platform"))
+                .expect_err("a shared name names two teams, so it names neither");
+            let TeamResolutionError::AmbiguousTeamName { matches, .. } = &error else {
+                panic!("expected AmbiguousTeamName, got {error:?}");
+            };
+            assert_eq!(matches.len(), 2);
+
+            // A uid is the only thing that can disambiguate, so both must be offered.
+            let message = error.to_string();
+            for team in [&first, &second] {
+                assert!(message.contains(&team.uid.to_string()), "{message}");
+            }
+        });
+    })
+}
+
 #[test]
 fn test_team_contexts_represent_a_registered_teamless_window() {
     App::test((), |mut app| async move {

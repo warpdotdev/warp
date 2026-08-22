@@ -16,7 +16,10 @@ use inquire::{InquireError, Password, PasswordDisplayMode};
 use warp::settings::{TuiThemeSettings, TuiZeroStateSettings, TuiZeroStateSettingsChangedEvent};
 #[cfg(feature = "voice_input")]
 use warp::settings::{TuiVoiceSettings, TuiVoiceSettingsChangedEvent};
-use warp::tui_export::{AIConversationAutoexecuteMode, Appearance, ServerConversationToken};
+use warp::tui_export::{
+    AIConversationAutoexecuteMode, Appearance, ServerConversationToken, TuiTeamScope,
+    TuiTeamScopeEvent,
+};
 use warp::{TuiLoginEvent, TuiLoginModel, TuiLoginPhase};
 use warp_core::channel::ChannelState;
 use warp_core::settings::Setting as _;
@@ -61,6 +64,14 @@ struct TuiArgs {
     /// API key for non-interactive authentication.
     #[arg(long, env = "WARP_API_KEY")]
     api_key: Option<String>,
+
+    /// Team whose settings and admin policy this session runs under, named by team name or
+    /// team id.
+    ///
+    /// Required when you belong to more than one team: this front-end has no team switcher,
+    /// so it will not pick one for you.
+    #[arg(long, env = "WARP_TEAM", value_name = "NAME_OR_ID")]
+    team: Option<String>,
 
     /// Securely store a model-provider API key for Warp Agent CLI.
     #[arg(
@@ -197,12 +208,14 @@ pub fn run() -> Result<()> {
     };
     let exit_summary = TuiExitSummaryHandle::default();
     let exit_summary_for_app = exit_summary.clone();
+    let requested_team = args.team;
     let result = warp::run_tui(
         args.api_key,
         Box::new(move |ctx| {
             init(
                 resume_token,
                 default_autoexecute_mode,
+                requested_team,
                 exit_summary_for_app,
                 ctx,
             )
@@ -223,6 +236,7 @@ pub fn run() -> Result<()> {
 fn init(
     resume_token: Option<ServerConversationToken>,
     default_autoexecute_mode: AIConversationAutoexecuteMode,
+    requested_team: Option<String>,
     exit_summary: TuiExitSummaryHandle,
     ctx: &mut AppContext,
 ) {
@@ -254,6 +268,20 @@ fn init(
         },
         |_| RootTuiView::new(),
     );
+    // Scope this window to a team so per-window settings reads resolve for it. The answer
+    // only arrives once the server names the user's teams, which is after the terminal is
+    // already on screen; a session that cannot be scoped is stopped at that point rather
+    // than continuing under some other team's admin policy.
+    let team_scope = TuiTeamScope::register(requested_team, window_id, ctx);
+    ctx.subscribe_to_model(&team_scope, |_, event, ctx| match event {
+        TuiTeamScopeEvent::Resolved { .. } => {}
+        TuiTeamScopeEvent::Failed(error) => {
+            ctx.terminate_app(
+                TerminationMode::ForceTerminate,
+                Some(Err(anyhow!("{error}"))),
+            );
+        }
+    });
     #[cfg(feature = "voice_input")]
     let modifier_key_lifecycle_enabled = requires_modifier_key_reporting(ctx);
     #[cfg(not(feature = "voice_input"))]

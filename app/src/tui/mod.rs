@@ -6,6 +6,7 @@
 //! leaves device authorization behind an explicit welcome-screen action. The
 //! authentication gate remains visible until the browser flow completes.
 mod mcp;
+mod team_scope;
 mod telemetry;
 mod user_info;
 
@@ -15,6 +16,7 @@ pub use mcp::{
     TuiMcpServerStatus, TuiMcpSnapshot, TuiMcpSyncedTemplateProvenance, TuiMcpTemplateVariable,
     TuiMcpTransport, TuiMcpVariableValue,
 };
+pub use team_scope::{TuiTeamScope, TuiTeamScopeEvent};
 use telemetry::{
     AbandonmentPhase, AuthenticationEntrypoint, TuiOnboardingTelemetry, TuiOnboardingTelemetryEvent,
 };

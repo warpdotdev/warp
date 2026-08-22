@@ -253,8 +253,8 @@ pub use crate::tui::{
     TuiMcpAction, TuiMcpConfigDiagnostic, TuiMcpFileScope, TuiMcpFileSource, TuiMcpInstallRequest,
     TuiMcpManager, TuiMcpManagerEvent, TuiMcpServerId, TuiMcpServerSnapshot, TuiMcpServerSource,
     TuiMcpServerStatus, TuiMcpSnapshot, TuiMcpSyncedTemplateProvenance, TuiMcpTemplateVariable,
-    TuiMcpTransport, TuiMcpVariableValue, TuiUserInfoManager, TuiUserInfoManagerEvent,
-    TuiUserInfoSnapshot, log_out_tui,
+    TuiMcpTransport, TuiMcpVariableValue, TuiTeamScope, TuiTeamScopeEvent, TuiUserInfoManager,
+    TuiUserInfoManagerEvent, TuiUserInfoSnapshot, log_out_tui,
 };
 pub use crate::tui_onboarding_markers::{
     TuiOnboardingMarker, TuiOnboardingMarkers, TuiOnboardingMarkersEvent,
@@ -275,7 +275,9 @@ pub use crate::util::repo_detection::{RepoDetectionSessionType, detect_possible_
 pub use crate::util::time_format::format_elapsed_seconds;
 #[cfg(feature = "voice_input")]
 pub use crate::voice::transcriber::{Transcriber, VoiceTranscriber};
-pub use crate::workspaces::user_workspaces::{UserWorkspaces, UserWorkspacesEvent};
+pub use crate::workspaces::user_workspaces::{
+    TeamChoice, TeamResolutionError, UserWorkspaces, UserWorkspacesEvent,
+};
 pub use crate::workspaces::workspace::{AiCreditsUsageAndCostType, UsageVisibilityGranularity};
 
 pub fn format_usage_cost_cents(cents: i64) -> String {

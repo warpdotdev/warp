@@ -86,6 +86,23 @@ fn parses_resume_server_token() {
 }
 
 #[test]
+fn parses_the_requested_team() {
+    let args = TuiArgs::try_parse_from(["warp", "--team", "Platform"])
+        .expect("a requested team should parse");
+
+    assert_eq!(args.team.as_deref(), Some("Platform"));
+}
+
+#[test]
+fn team_flag_is_documented_in_help() {
+    let error = TuiArgs::try_parse_from(["warp", "--help"])
+        .expect_err("--help should short-circuit clap parsing");
+
+    let help = error.to_string();
+    assert!(help.contains("--team <NAME_OR_ID>"), "{help}");
+}
+
+#[test]
 fn terminal_bootstrap_is_idempotent_after_background_terminal_exists() {
     App::test((), |mut app| async move {
         register_tui_session_view_test_singletons(&mut app);
