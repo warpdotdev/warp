@@ -5,6 +5,16 @@ use warp_errors::{ErrorExt, register_error};
 
 use crate::base_client::{AmbientHeaderPolicy, BaseClient};
 
+/// Maximum number of bytes we will buffer from a public API JSON response before
+/// giving up.
+///
+/// Public API endpoints return small, structured JSON payloads. A body larger
+/// than this is a sign of a malformed or pathological response, and blindly
+/// deserializing it can balloon into multiple gigabytes of heap as serde_json
+/// expands the bytes into nested maps/values. Capping the raw body bounds that
+/// blow-up (see Sentry issue 7259255054 / "Excessive memory usage detected").
+const MAX_PUBLIC_API_RESPONSE_BYTES: usize = 64 * 1024 * 1024;
+
 /// Typed error for HTTP operations so retry classifiers can inspect status failures.
 #[derive(Debug, thiserror::Error)]
 #[error("HTTP request failed with status {status}: {body}")]
@@ -83,11 +93,74 @@ impl BaseClient {
     {
         let response = self.get_public_api_response(path).await?;
         let response_url = response.url().clone();
-        response
-            .json::<R>()
+        let body = read_body_bounded(response, MAX_PUBLIC_API_RESPONSE_BYTES)
             .await
+            .with_context(|| format!("Failed to read response from {response_url}"))?;
+        serde_json::from_slice::<R>(&body)
             .with_context(|| format!("Failed to deserialize response from {response_url}"))
     }
+}
+
+/// Returns the response's advertised body length from its `Content-Length` header,
+/// if present and parseable.
+fn advertised_content_length(response: &http_client::Response) -> Option<u64> {
+    response
+        .headers()
+        .get(http::header::CONTENT_LENGTH)?
+        .to_str()
+        .ok()?
+        .parse::<u64>()
+        .ok()
+}
+
+/// Reads a response body into memory, failing fast if it exceeds `max_bytes`.
+///
+/// The advertised `Content-Length` is checked up front so an oversized response
+/// is rejected before any large allocation. On native targets the body is then
+/// streamed and accumulated with the same cap, so a chunked response that omits
+/// (or lies about) its length still cannot grow the buffer past `max_bytes`.
+async fn read_body_bounded(
+    response: http_client::Response,
+    max_bytes: usize,
+) -> Result<Vec<u8>> {
+    if let Some(len) = advertised_content_length(&response) {
+        anyhow::ensure!(
+            len <= max_bytes as u64,
+            "public API response body of {len} bytes exceeds maximum of {max_bytes} bytes"
+        );
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    let body = {
+        use futures::StreamExt as _;
+
+        let mut stream = response.bytes_stream();
+        let mut buf: Vec<u8> = Vec::new();
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk.context("Failed to read public API response chunk")?;
+            anyhow::ensure!(
+                buf.len() + chunk.len() <= max_bytes,
+                "public API response body exceeds maximum of {max_bytes} bytes"
+            );
+            buf.extend_from_slice(&chunk);
+        }
+        buf
+    };
+
+    #[cfg(target_family = "wasm")]
+    let body = {
+        let bytes = response
+            .bytes()
+            .await
+            .context("Failed to read public API response body")?;
+        anyhow::ensure!(
+            bytes.len() <= max_bytes,
+            "public API response body exceeds maximum of {max_bytes} bytes"
+        );
+        bytes.to_vec()
+    };
+
+    Ok(body)
 }
 
 #[cfg(test)]
