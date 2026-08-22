@@ -60,7 +60,7 @@ use crate::word_block_editor::{
     WordBlockStyles,
 };
 use crate::workspace::{ToastStack, WorkspaceAction};
-use crate::workspaces::user_workspaces::{TeamContext, UserWorkspaces};
+use crate::workspaces::user_workspaces::{TeamContext, UserWorkspaces, UserWorkspacesEvent};
 use crate::{TelemetryEvent, send_telemetry_from_ctx};
 
 mod inheritance;
@@ -262,6 +262,10 @@ impl SharingDialog {
             },
         );
 
+        ctx.subscribe_to_model(&UserWorkspaces::handle(ctx), |me, _, event, ctx| {
+            me.handle_user_workspaces_event(event, ctx);
+        });
+
         let invite_form = EmailInviteForm {
             email_editor: ctx.add_typed_action_view(|ctx| {
                 let mut view = WordBlockEditorView::new(
@@ -299,6 +303,26 @@ impl SharingDialog {
             ui_state_handles: Default::default(),
             open_menu_state: Default::default(),
             mode: Default::default(),
+        }
+    }
+
+    /// The link-sharing controls are drawn from this window's team policy, so a team change has
+    /// to redraw: the invite form and the link-sharing row appear and disappear with it, and a
+    /// control left on screen under the old team's policy is one the action guards now refuse.
+    fn handle_user_workspaces_event(
+        &mut self,
+        event: &UserWorkspacesEvent,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let changes_this_windows_policy = match event {
+            UserWorkspacesEvent::TeamsChanged => true,
+            UserWorkspacesEvent::WindowTeamChanged { window_id } => *window_id == ctx.window_id(),
+            // Everything else this model emits is workspace administration, which does not
+            // change which team this window shares as.
+            _ => false,
+        };
+        if changes_this_windows_policy {
+            ctx.notify();
         }
     }
 
@@ -478,15 +502,19 @@ impl SharingDialog {
     /// The team this dialog's window is sharing as, resolved afresh on every read so a window
     /// that moves to another team is never governed by the team it opened with.
     ///
-    /// `None` when the dialog's window cannot be located, which for a live dialog means its
-    /// window is gone: `RootView::new` registers every window as it is created.
+    /// `None` only when no scope can be resolved at all: this view is no longer in a window,
+    /// its window was never registered with `UserWorkspaces`, or its window names a team that
+    /// has since left the current workspace. A window that simply *has* no team is a different
+    /// thing — it resolves a scope, whose `team_uid()` is then `None`.
     fn team_scope<'a>(&self, app: &'a AppContext) -> Option<TeamContext<'a>> {
         UserWorkspaces::as_ref(app).team_context(&self.self_handle, app)
     }
 
     /// Whether this window's team permits sharing the target with anyone who holds its link.
-    /// A window whose team cannot be resolved denies: offering a sharing channel whose
-    /// governing policy is unknown is the unsafe direction to guess in.
+    ///
+    /// A window with no team permits it, per `TeamScope`'s contract. Only a window with no
+    /// resolvable scope denies, because offering a sharing channel when we cannot say which
+    /// policy governs it is the unsafe direction to guess in.
     fn can_anyone_with_link_share(&self, app: &AppContext) -> bool {
         self.team_scope(app).is_some_and(|scope| {
             UserWorkspaces::as_ref(app).is_anyone_with_link_sharing_enabled(&scope)
@@ -494,7 +522,7 @@ impl SharingDialog {
     }
 
     /// Whether this window's team permits sharing the target directly with named people. See
-    /// [`Self::can_anyone_with_link_share`] for why an unresolvable team denies.
+    /// [`Self::can_anyone_with_link_share`] for what an unresolvable scope means.
     fn can_direct_link_share(&self, app: &AppContext) -> bool {
         self.team_scope(app)
             .is_some_and(|scope| UserWorkspaces::as_ref(app).is_direct_link_sharing_enabled(&scope))
@@ -1634,8 +1662,10 @@ impl SharingDialog {
     fn send_invitations(&mut self, ctx: &mut ViewContext<Self>) {
         // Re-read the policy instead of trusting the render that put the form on screen: an
         // open dialog whose window moved to a team that forbids direct sharing must not send
-        // the invitations that team now disallows.
+        // the invitations that team now disallows. Redraw on the way out so the form the user
+        // just submitted disappears rather than sitting there as a dead control.
         if !self.can_direct_link_share(ctx) {
+            ctx.notify();
             return;
         }
 
@@ -2956,8 +2986,10 @@ impl TypedActionView for SharingDialog {
                 self.set_open_menu(OpenMenuState::None, ctx);
                 // The menu's items were built when it opened. Re-read the policy so a window
                 // that has since moved to a team forbidding link sharing cannot act on the
-                // permission it was offered under the old one.
-                if !self.can_anyone_with_link_share(ctx) {
+                // permission it was offered under the old one. Only granting is blocked:
+                // `None` revokes link access, and a user tightening an over-shared object must
+                // not be turned away by the very policy that wants it tightened.
+                if access_level.is_some() && !self.can_anyone_with_link_share(ctx) {
                     ctx.notify();
                     return;
                 }

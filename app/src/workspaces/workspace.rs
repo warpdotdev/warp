@@ -979,9 +979,8 @@ pub struct LinkSharingSettings {
 
 impl LinkSharingSettings {
     /// The policy in force when neither a team nor a workspace governs link sharing: both
-    /// channels are permitted. Distinct from `Default`, whose all-`false` shape is the
-    /// starting point for decoding a policy that *is* governed.
-    pub const UNRESTRICTED: Self = Self {
+    /// channels are permitted. Deliberately not `Default`, which is all-`false`.
+    pub(crate) const UNRESTRICTED: Self = Self {
         anyone_with_link_sharing_enabled: true,
         direct_link_sharing_enabled: true,
     };

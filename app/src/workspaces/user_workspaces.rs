@@ -1950,6 +1950,10 @@ impl UserWorkspaces {
             };
         }
 
+        // No window reaches this today: one is only registered teamless while the user has no
+        // teams, and `reconcile_window_team_assignments` moves it onto a team the moment any
+        // appear. It stops being dead the first time a caller reads a
+        // [`TeamContextForOperation`] captured before its window had a team.
         if self.has_teams() {
             return LinkSharingSettings::UNRESTRICTED;
         }

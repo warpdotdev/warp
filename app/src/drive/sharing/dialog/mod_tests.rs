@@ -1,9 +1,13 @@
 use chrono::Local;
 use session_sharing_protocol::common::SessionId;
-use warpui::{App, SingletonEntity, ViewHandle};
+use warpui::{App, SingletonEntity, TypedActionView, ViewHandle};
 
-use super::{SharingDialog, SharingDialogMode};
-use crate::drive::sharing::ShareableObject;
+use super::{SharingDialog, SharingDialogAction, SharingDialogMode};
+use crate::auth::UserUid;
+use crate::cloud_object::model::persistence::CloudModel;
+use crate::cloud_object::{CloudObject, Owner};
+use crate::drive::sharing::{ShareableObject, SharingAccessLevel};
+use crate::server::ids::{ClientId, ServerId, SyncId};
 use crate::terminal::TerminalView;
 use crate::terminal::shared_session::manager::Manager;
 use crate::terminal::shared_session::{SharedSessionSource, SharedSessionStatus};
@@ -11,6 +15,8 @@ use crate::test_util::add_window_with_terminal;
 use crate::test_util::terminal::{
     add_window_with_id_and_terminal, initialize_app_for_terminal_view,
 };
+use crate::workflows::workflow::Workflow;
+use crate::workflows::{CloudWorkflow, CloudWorkflowModel};
 use crate::workspaces::team::{Team, TeamVisibility};
 use crate::workspaces::user_workspaces::UserWorkspaces;
 use crate::workspaces::workspace::{
@@ -310,24 +316,139 @@ fn link_sharing_gates_follow_a_window_onto_its_new_team() {
     });
 }
 
+/// Distinct from a window that has no team, which resolves a scope and is *permitted* to share.
+/// A window `UserWorkspaces` has never seen resolves no scope at all, and there is then no
+/// policy to consult.
 #[test]
-fn link_sharing_gates_deny_when_the_dialogs_window_has_no_team() {
+fn link_sharing_gates_deny_when_the_dialogs_window_cannot_be_resolved() {
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);
 
         let (window_id, _terminal) = add_window_with_id_and_terminal(&mut app, None);
         install_workspace_with_teams(&mut app, vec![team_with_link_sharing(123, "team", true)]);
 
-        // Deliberately left unregistered: no window team can be resolved for this dialog.
+        // Deliberately never registered: `add_window_with_id_and_terminal` roots the window in
+        // a `TerminalView`, so nothing calls `UserWorkspaces::register_window` for it.
         let dialog = app.add_typed_action_view(window_id, |ctx| SharingDialog::new(None, ctx));
 
         dialog.read(&app, |dialog, ctx| {
             assert!(
                 !dialog.can_anyone_with_link_share(ctx),
-                "a dialog whose window team cannot be resolved must not offer a sharing channel \
-                 governed by an unknown policy"
+                "a dialog with no resolvable scope must not offer a sharing channel governed by \
+                 an unknown policy"
             );
             assert!(!dialog.can_direct_link_share(ctx));
         });
+    });
+}
+
+/// Puts a Warp Drive object in the cloud model under a server id, so the sharing dialog can
+/// target it and `UpdateManager` can find it.
+fn add_shareable_object(app: &mut App) -> ServerId {
+    let object_uid: ServerId = 789.into();
+    let mut object = CloudWorkflow::new_local(
+        CloudWorkflowModel {
+            data: Workflow::new("shared workflow", "echo shared"),
+        },
+        Owner::User {
+            user_uid: UserUid::new("owner"),
+        },
+        None,
+        ClientId::default(),
+    );
+    object.id = SyncId::ServerId(object_uid);
+
+    let cloud_model = CloudModel::handle(&*app);
+    cloud_model.update(app, |cloud_model, _| {
+        cloud_model.add_object(object.id, object);
+    });
+    object_uid
+}
+
+/// Whether a permissions change reached the object. `UpdateManager` marks the object
+/// synchronously, before it issues any request, so a dispatch the dialog refused leaves this
+/// clear.
+fn permissions_change_reached_object(app: &App, object_uid: ServerId) -> bool {
+    app.read(|ctx| {
+        CloudModel::as_ref(ctx)
+            .get_by_uid(&object_uid.uid())
+            .expect("the targeted object should be in the cloud model")
+            .metadata()
+            .pending_changes_statuses
+            .has_pending_permissions_change
+    })
+}
+
+fn set_link_permissions(
+    dialog: &ViewHandle<SharingDialog>,
+    access_level: Option<SharingAccessLevel>,
+    app: &mut App,
+) {
+    dialog.update(app, |dialog, ctx| {
+        dialog.handle_action(&SharingDialogAction::SetLinkPermissions(access_level), ctx);
+    });
+}
+
+/// The link-sharing menu builds its items once, when it opens, so acting on one has to re-read
+/// the policy. Deleting the guard in the `SetLinkPermissions` handler must fail this test.
+#[test]
+fn set_link_permissions_refuses_to_grant_under_a_forbidding_team() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+
+        let (window_id, _terminal) = add_window_with_id_and_terminal(&mut app, None);
+        let forbidden_team = team_with_link_sharing(456, "forbids-sharing", false);
+        install_workspace_with_teams(&mut app, vec![forbidden_team.clone()]);
+
+        let user_workspaces = UserWorkspaces::handle(&app);
+        user_workspaces.update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.set_team_for_window(window_id, forbidden_team.uid, ctx);
+        });
+
+        let object_uid = add_shareable_object(&mut app);
+        let dialog = app.add_typed_action_view(window_id, |ctx| {
+            SharingDialog::new(Some(ShareableObject::WarpDriveObject(object_uid)), ctx)
+        });
+
+        set_link_permissions(&dialog, Some(SharingAccessLevel::View), &mut app);
+        assert!(
+            !permissions_change_reached_object(&app, object_uid),
+            "granting link access under a team that forbids it must not reach the object"
+        );
+
+        // Revoking is how a user tightens an over-shared object, so the guard must let it
+        // through: the forbidding policy is the reason to allow this, not to block it.
+        set_link_permissions(&dialog, None, &mut app);
+        assert!(
+            permissions_change_reached_object(&app, object_uid),
+            "revoking link access must go through even under a team that forbids granting it"
+        );
+    });
+}
+
+#[test]
+fn set_link_permissions_grants_under_a_permitting_team() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+
+        let (window_id, _terminal) = add_window_with_id_and_terminal(&mut app, None);
+        let permitted_team = team_with_link_sharing(123, "permits-sharing", true);
+        install_workspace_with_teams(&mut app, vec![permitted_team.clone()]);
+
+        let user_workspaces = UserWorkspaces::handle(&app);
+        user_workspaces.update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.set_team_for_window(window_id, permitted_team.uid, ctx);
+        });
+
+        let object_uid = add_shareable_object(&mut app);
+        let dialog = app.add_typed_action_view(window_id, |ctx| {
+            SharingDialog::new(Some(ShareableObject::WarpDriveObject(object_uid)), ctx)
+        });
+
+        set_link_permissions(&dialog, Some(SharingAccessLevel::View), &mut app);
+        assert!(
+            permissions_change_reached_object(&app, object_uid),
+            "the guard must let a grant through when the window's team permits link sharing"
+        );
     });
 }
