@@ -721,6 +721,11 @@ fn emit_parse_outcome(
     }
 }
 
+/// MCP config files (`.mcp.json`, Claude/Codex/Agents configs) are small, hand-written server
+/// lists; 1 MiB comfortably covers any real-world config while still rejecting the pathological
+/// on-disk sizes that motivated APP-4801.
+const MAX_MCP_CONFIG_FILE_BYTES: u64 = 1024 * 1024;
+
 /// Asynchronously reads and parses an MCP config file.
 ///
 /// Missing files, valid snapshots, and invalid snapshots are distinct so
@@ -729,29 +734,32 @@ async fn parse_mcp_config_file(
     file_path: &Path,
     provider: MCPProvider,
 ) -> FileMCPConfigParseOutcome {
-    let file_contents = match async_fs::read_to_string(file_path).await {
-        Ok(contents) => contents,
-        Err(err) if err.kind() == ErrorKind::NotFound => return FileMCPConfigParseOutcome::Missing,
-        Err(err) => {
-            safe_warn!(
-                safe: (
-                    "Failed to read MCP config file: {}",
-                    err
-                ),
-                full: (
-                    "Failed to read MCP config file {}: {}",
-                    file_path.display(),
-                    err
-                )
-            );
-            return FileMCPConfigParseOutcome::Error(FileMCPConfigDiagnostic {
-                config_path: file_path.to_path_buf(),
-                provider,
-                kind: FileMCPConfigDiagnosticKind::Read,
-                message: format!("Failed to read MCP config: {err}"),
-            });
-        }
-    };
+    let file_contents =
+        match warp_util::file::read_to_string_capped(file_path, MAX_MCP_CONFIG_FILE_BYTES).await {
+            Ok(contents) => contents,
+            Err(err) if err.kind() == ErrorKind::NotFound => {
+                return FileMCPConfigParseOutcome::Missing;
+            }
+            Err(err) => {
+                safe_warn!(
+                    safe: (
+                        "Failed to read MCP config file: {}",
+                        err
+                    ),
+                    full: (
+                        "Failed to read MCP config file {}: {}",
+                        file_path.display(),
+                        err
+                    )
+                );
+                return FileMCPConfigParseOutcome::Error(FileMCPConfigDiagnostic {
+                    config_path: file_path.to_path_buf(),
+                    provider,
+                    kind: FileMCPConfigDiagnosticKind::Read,
+                    message: format!("Failed to read MCP config: {err}"),
+                });
+            }
+        };
 
     let json = match provider {
         MCPProvider::Codex => match normalize_codex_toml_to_json(&file_contents) {

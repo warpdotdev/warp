@@ -4,9 +4,10 @@ use warp_core::ui::color::hex_color::coloru_from_hex_string;
 use warp_core::ui::theme::AnsiColor;
 
 use super::{
-    AlacrittyColors, AlacrittyConfig, AlacrittyTheme, PrimaryAlacrittyColors, RecursivelyParseable,
+    AlacrittyColors, AlacrittyConfig, AlacrittyTheme, MAX_ALACRITTY_CONFIG_FILE_BYTES,
+    PrimaryAlacrittyColors, RecursivelyParseable,
 };
-use crate::settings::import::config::{ParseableConfig, ThemeType};
+use crate::settings::import::config::{ConfigError, ParseableConfig, ThemeType};
 
 #[test]
 fn test_parse_cobalt2() {
@@ -354,6 +355,31 @@ fn test_merge_left() {
 
     // Check that None values are preserved.
     assert!(colors.bright.is_none());
+}
+
+#[test]
+fn test_oversized_config_reports_io_error_not_missing() {
+    // Regression for APP-4801: an oversized config file must not be reported as missing.
+    VirtualFS::test("test_oversized_alacritty_config", |dirs, mut sandbox| {
+        let oversized_content = "a".repeat((MAX_ALACRITTY_CONFIG_FILE_BYTES + 1) as usize);
+        sandbox.with_files(vec![Stub::FileWithContent(
+            "config.toml",
+            oversized_content.as_str(),
+        )]);
+
+        let path = dirs.tests().join("config.toml");
+        let result = block_on(AlacrittyConfig::from_file(path));
+        match result {
+            Err(ConfigError::FileIOError(_)) => {}
+            Err(ConfigError::FileNotFoundError) => {
+                panic!("an oversized config must not be reported as missing")
+            }
+            Err(ConfigError::MalformattedFileError(_)) => {
+                panic!("an oversized config must be rejected before it is parsed")
+            }
+            Ok(_) => panic!("expected an oversized config read to be rejected"),
+        }
+    });
 }
 
 /// This is a unit test that tests reading from the default config location with one import.

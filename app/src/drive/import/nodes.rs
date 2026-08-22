@@ -891,11 +891,20 @@ impl FileUploadState {
     }
 }
 
+/// Caps imported notebook/workflow file reads. Drive import files are user-authored
+/// markdown/YAML content, not arbitrary blobs, so this is generous relative to realistic
+/// file sizes; no server-side Drive upload size limit was found in this repo to align with
+/// instead. This still bounds the pathological case that motivated APP-4801 (a file whose
+/// on-disk size triggers an unbounded up-front memory reservation).
+const MAX_IMPORT_FILE_BYTES: u64 = 25 * 1024 * 1024;
+
 pub(super) async fn parse_file(path: PathBuf, file_type: FileType) -> Result<FileContent> {
     match file_type {
-        FileType::Notebook => Ok(FileContent::Notebook(async_fs::read_to_string(path).await?)),
+        FileType::Notebook => Ok(FileContent::Notebook(
+            warp_util::file::read_to_string_capped(&path, MAX_IMPORT_FILE_BYTES).await?,
+        )),
         FileType::Workflow => {
-            let file = async_fs::read(path).await?;
+            let file = warp_util::file::read_capped(&path, MAX_IMPORT_FILE_BYTES).await?;
             let mut workflow_enums: HashMap<ClientId, WorkflowEnum> = HashMap::new();
             let mut workflows = vec![];
 
