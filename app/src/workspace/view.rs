@@ -5731,14 +5731,7 @@ impl Workspace {
             return;
         };
         pane_group_view.update(ctx, |pane_group, ctx| {
-            let Some(pane) = pane_group.pane_by_id(locator.pane_id) else {
-                log::warn!("Tried to rename a missing pane");
-                return;
-            };
-            pane.pane_configuration().update(ctx, |configuration, ctx| {
-                configuration.set_custom_vertical_tabs_title(title, ctx);
-            });
-            ctx.emit(pane_group::Event::AppStateChanged);
+            pane_group.set_custom_pane_name(locator.pane_id, title, ctx);
         });
     }
 
