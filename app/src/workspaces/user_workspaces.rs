@@ -158,8 +158,8 @@ pub struct CreateTeamResponse {
 
 /// The team an operation is scoped to, captured once from the window that started it.
 ///
-/// A logical operation carries its `TeamContext` from start to finish instead of asking a
-/// window which team is selected now, so concurrent windows on different teams stay
+/// A logical operation carries its `TeamContextForOperation` from start to finish instead of
+/// asking a window which team is selected now, so concurrent windows on different teams stay
 /// independent and a later team switch cannot retarget work already in flight.
 ///
 /// Deliberately neither `Clone` nor `Copy`. Moves make the handoff between the parts of an
@@ -169,7 +169,11 @@ pub struct CreateTeamResponse {
 /// share a lifetime, restructure so they share the single owner instead.
 ///
 /// This is scope, not authority: the server still authorizes every request made under it.
-pub struct TeamContextForOperation {
+// Nothing constructs or consumes one outside this module's own tests yet; remove this
+// `#[allow(dead_code)]`, and widen visibility to `pub`, once a Group 1 migration PR has a real
+// call site.
+#[allow(dead_code)]
+pub(crate) struct TeamContextForOperation {
     team_uid: Option<ServerId>,
 }
 
@@ -187,7 +191,7 @@ impl TeamScope for TeamContextForOperation {
 }
 
 impl TeamContextForOperation {
-    // Only tests construct a teamless context today; remove this `#[allow(dead_code)]` once a
+    // Nothing constructs a teamless context yet; remove this `#[allow(dead_code)]` once a
     // Group 1 migration PR has a real call site.
     #[allow(dead_code)]
     pub(crate) fn teamless() -> Self {
@@ -197,15 +201,19 @@ impl TeamContextForOperation {
 
 #[cfg(any(test, feature = "test-util"))]
 impl TeamContextForOperation {
-    pub fn teamless_for_test() -> Self {
+    // `crates/warp_tui`'s tests cannot reach this yet: nothing in this crate re-exports
+    // `TeamContextForOperation` to it. Widen this back to `pub` once the PR that adds that
+    // re-export needs it.
+    #[allow(dead_code)]
+    pub(crate) fn teamless_for_test() -> Self {
         Self::teamless()
     }
 }
 
 #[cfg(test)]
 impl TeamContextForOperation {
-    // Only tests for the mint/render APIs use `teamless_for_test` today; this constructs a
-    // team-bound context, which no test needs until a Group 1 migration PR has one.
+    // Nothing constructs a team-bound test context yet; remove this `#[allow(dead_code)]` once
+    // a Group 1 migration PR has a real call site.
     #[allow(dead_code)]
     pub(crate) fn new_for_test(team_uid: ServerId) -> Self {
         Self {
@@ -430,7 +438,9 @@ impl UserWorkspaces {
 
     /// Captures the team selected in `ctx`'s window as an operation's
     /// [`TeamContextForOperation`]. This is the only way application code mints one.
-    pub fn team_context_for_operation<T: Entity>(
+    // Only tests call this today; remove once a Group 1 migration PR has a real call site.
+    #[allow(dead_code)]
+    pub(crate) fn team_context_for_operation<T: Entity>(
         &self,
         ctx: &ViewContext<T>,
     ) -> TeamContextForOperation {
@@ -456,11 +466,12 @@ impl UserWorkspaces {
         Some(TeamContext { team_uid })
     }
 
-    /// Reads a captured team's metadata. Returns `None` once that team is gone from the
-    /// current workspace, e.g. after the user leaves it, or when `context` carries no team.
+    /// Reads a `TeamScope`'s team, whether captured (a [`TeamContextForOperation`]) or freshly
+    /// resolved (a [`TeamContext`]). Returns `None` once that team is gone from the current
+    /// workspace, e.g. after the user leaves it, or when `context` carries no team.
     // Only tests call this today; remove once a Group 1 migration PR has a real call site.
     #[allow(dead_code)]
-    pub(crate) fn team_for_context<S: TeamScope + ?Sized>(&self, context: &S) -> Option<&Team> {
+    pub(crate) fn team_for_context<S: TeamScope>(&self, context: &S) -> Option<&Team> {
         context
             .team_uid()
             .and_then(|team_uid| self.team_from_uid(team_uid))

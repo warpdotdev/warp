@@ -1065,7 +1065,7 @@ fn two_teams() -> (Team, Team) {
 }
 
 #[test]
-fn test_team_context_for_view_resolves_each_windows_own_team() {
+fn test_team_context_for_operation_resolves_each_windows_own_team() {
     let (team_a, team_b) = two_teams();
     let mut workspace = workspace_for_test(&team_a);
     workspace.teams.push(team_b.clone());
