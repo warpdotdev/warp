@@ -168,7 +168,7 @@ pub fn classify_driver_error(error: &AgentDriverError) -> (AgentTaskState, TaskS
             AgentTaskState::Failed,
             TaskStatusUpdate::with_error_code(
                 format!(
-                    "Environment setup failed: {msg}. Check your repository URLs and setup commands."
+                    "Environment setup failed: {msg}. Edit your environment's setup commands in Warp settings to fix the issue, then retry."
                 ),
                 PlatformErrorCode::EnvironmentSetupFailed,
             ),
