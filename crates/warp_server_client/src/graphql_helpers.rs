@@ -1,6 +1,7 @@
 use std::borrow::Cow;
 
 use anyhow::{Result, anyhow};
+use cynic::{GraphQlError as GraphQlResponseError, GraphQlErrorPathSegment};
 use http::StatusCode;
 use instant::Duration;
 use warp_errors::report_error;
@@ -77,31 +78,62 @@ where
         }
 
         response.data.ok_or_else(|| {
-            let operation_label = operation_name
-                .as_deref()
-                .unwrap_or("unknown GraphQL operation");
-            let error_messages = response
-                .errors
-                .as_ref()
-                .map(|errors| {
-                    errors
-                        .iter()
-                        .filter_map(|error| {
-                            let message = error.message.trim();
-                            (!message.is_empty()).then(|| message.to_string())
-                        })
-                        .collect::<Vec<_>>()
-                        .join("; ")
-                })
-                .filter(|messages| !messages.is_empty());
-            match error_messages {
-                Some(messages) => {
-                    anyhow!("missing response data for {operation_label}: {messages}")
-                }
-                None => anyhow!("missing response data for {operation_label}"),
-            }
+            missing_response_data_error(operation_name.as_deref(), response.errors.as_deref())
         })
     })
+}
+
+/// Builds the error returned when a GraphQL response carries no `data`.
+///
+/// The response's `errors` entries describe why the server could not produce
+/// data, so they are surfaced in the error message (with their response paths
+/// when the server provides them) instead of being dropped in favor of a
+/// generic "missing data" message.
+pub fn missing_response_data_error(
+    operation_name: Option<&str>,
+    errors: Option<&[GraphQlResponseError]>,
+) -> anyhow::Error {
+    let operation_label = operation_name.unwrap_or("unknown GraphQL operation");
+    let error_messages = errors
+        .map(|errors| {
+            errors
+                .iter()
+                .filter_map(format_response_error)
+                .collect::<Vec<_>>()
+                .join("; ")
+        })
+        .filter(|messages| !messages.is_empty());
+    match error_messages {
+        Some(messages) => anyhow!("missing response data for {operation_label}: {messages}"),
+        None => anyhow!("missing response data for {operation_label}"),
+    }
+}
+
+/// Formats a single GraphQL response error as `message (at path)`, or `None`
+/// when the error carries no message to report.
+fn format_response_error(error: &GraphQlResponseError) -> Option<String> {
+    let message = error.message.trim();
+    if message.is_empty() {
+        return None;
+    }
+    let path = error
+        .path
+        .as_ref()
+        .map(|segments| {
+            segments
+                .iter()
+                .map(|segment| match segment {
+                    GraphQlErrorPathSegment::Field(field) => field.clone(),
+                    GraphQlErrorPathSegment::Index(index) => index.to_string(),
+                })
+                .collect::<Vec<_>>()
+                .join(".")
+        })
+        .filter(|path| !path.is_empty());
+    match path {
+        Some(path) => Some(format!("{message} (at {path})")),
+        None => Some(message.to_string()),
+    }
 }
 
 #[cfg(test)]
