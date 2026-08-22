@@ -5938,7 +5938,7 @@ impl SettingsWidget for CodeEditorLineNumberModeWidget {
     type View = FeaturesPageView;
 
     fn search_terms(&self) -> &str {
-        "line number relative line vim gutter code editor"
+        "line number numbers relative line vim gutter code editor"
     }
 
     fn render(
