@@ -43,9 +43,9 @@ use warp::tui_export::{
     TuiOnboardingMarker, TuiOnboardingMarkers, TuiOnboardingMarkersEvent,
     TuiSlashCommandDataSource, TuiSlashCommandDataSourceArgs, TuiTeamScope,
     TuiUpArrowHistoryItemKind, TuiUserInfoManager, TuiUserInfoManagerEvent, TuiZeroStateDataSource,
-    UserTakeOverReason, WAKEUP_THROTTLE_PERIOD, WarpConfig, WarpConfigUpdateEvent,
-    block_context_from_terminal_model, build_slash_command_mixer, detect_possible_git_repo,
-    export_conversation_markdown, loaded_subtree_rollup, log_out_tui,
+    UserTakeOverReason, UserWorkspaces, UserWorkspacesEvent, WAKEUP_THROTTLE_PERIOD, WarpConfig,
+    WarpConfigUpdateEvent, block_context_from_terminal_model, build_slash_command_mixer,
+    detect_possible_git_repo, export_conversation_markdown, loaded_subtree_rollup, log_out_tui,
     maybe_build_ai_query_upsert_event, prepare_conversation_block_restoration,
     record_autodetection_toggle_from_slash_command, record_saved_prompt_accepted,
     record_static_slash_command_accepted, saved_prompt_text_for_id,
@@ -2163,6 +2163,22 @@ impl TuiTerminalSessionView {
                 LLMPreferencesEvent::UpdatedAvailableLLMs
                     | LLMPreferencesEvent::UpdatedActiveAgentModeLLM
             ) {
+                ctx.notify();
+            }
+        });
+        // The statusline's team item is a live value like the model label, so it needs the
+        // same treatment. `TeamsChanged` covers gaining or losing a team — which is what makes
+        // the item appear or disappear at all — and renames; `WindowTeamChanged` covers `/team`
+        // and reconcile moving this window.
+        ctx.subscribe_to_model(&UserWorkspaces::handle(ctx), move |view, _, event, ctx| {
+            let is_this_window = match event {
+                UserWorkspacesEvent::TeamsChanged => true,
+                UserWorkspacesEvent::WindowTeamChanged { window_id } => {
+                    *window_id == view.window_id
+                }
+                _ => false,
+            };
+            if is_this_window {
                 ctx.notify();
             }
         });

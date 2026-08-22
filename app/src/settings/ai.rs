@@ -774,7 +774,6 @@ impl Default for TuiStatuslineConfig {
                 TuiStatuslineItem::AutoApprove,
                 TuiStatuslineItem::VimModeIndicator,
                 TuiStatuslineItem::Model,
-                TuiStatuslineItem::Team,
                 TuiStatuslineItem::WorkingDirectory,
                 TuiStatuslineItem::GitBranch,
                 TuiStatuslineItem::GitDiffStatus,

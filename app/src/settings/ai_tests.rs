@@ -140,9 +140,15 @@ fn tui_statusline_normalization_adds_the_team_item_to_an_older_config() {
     );
 }
 
+/// The team item ships available but off, so `tui_statusline_default_matches_figma` stays the
+/// single authority on the default set. Turning it on by default is a design question, not a
+/// consequence of adding the item, and would need that Figma expectation changed deliberately.
 #[test]
-fn tui_statusline_default_shows_the_active_team() {
-    assert!(TuiStatuslineConfig::default().is_enabled(TuiStatuslineItem::Team));
+fn tui_statusline_default_offers_the_team_item_without_enabling_it() {
+    let config = TuiStatuslineConfig::default();
+
+    assert!(config.order.contains(&TuiStatuslineItem::Team));
+    assert!(!config.is_enabled(TuiStatuslineItem::Team));
 }
 
 #[test]

@@ -38,6 +38,7 @@ use crate::code_review::git_repo_model::GitRepoModels;
 use crate::network::NetworkStatus;
 use crate::persistence::PersistenceWriter;
 use crate::server::experiments::ServerExperiments;
+use crate::server::ids::ServerId;
 use crate::server::server_api::ServerApiProvider;
 use crate::server::sync_queue::SyncQueue;
 #[cfg(feature = "voice_input")]
@@ -286,6 +287,48 @@ pub fn set_tui_default_team_admin_for_test(ctx: &mut AppContext) {
         workspaces.update_workspaces(vec![workspace], ctx);
         workspaces.set_current_workspace_uid(workspace_uid, ctx);
     });
+}
+
+/// Seeds the current workspace with a team per name and returns their uids in order.
+///
+/// [`set_tui_default_team_admin_for_test`] covers the single-team case; this exists for tests
+/// that need the multi-team behaviour, which is the only state in which the statusline's team
+/// item renders at all.
+pub fn set_tui_teams_for_test(names: &[&str], ctx: &mut AppContext) -> Vec<ServerId> {
+    let auth = AuthStateProvider::as_ref(ctx).get();
+    let user_uid = auth.user_id().expect("test user should have an id");
+    let user_email = auth.user_email().expect("test user should have an email");
+    let teams = names
+        .iter()
+        .enumerate()
+        .map(|(index, name)| {
+            let mut team = Team::from_local_cache(
+                ((index + 1) as i64).into(),
+                (*name).to_owned(),
+                None,
+                None,
+                None,
+            );
+            team.members.push(TeamMember {
+                uid: user_uid,
+                email: user_email.clone(),
+                role: MembershipRole::Owner,
+            });
+            team
+        })
+        .collect::<Vec<_>>();
+    let team_uids = teams.iter().map(|team| team.uid).collect();
+    let workspace = Workspace::from_local_cache(
+        "workspace_uid123456789".to_owned().into(),
+        "test workspace".to_owned(),
+        Some(teams),
+    );
+    let workspace_uid = workspace.uid;
+    UserWorkspaces::handle(ctx).update(ctx, |workspaces, ctx| {
+        workspaces.update_workspaces(vec![workspace], ctx);
+        workspaces.set_current_workspace_uid(workspace_uid, ctx);
+    });
+    team_uids
 }
 
 /// Queues an action as the active confirmation request for a TUI view test.
