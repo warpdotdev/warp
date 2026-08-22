@@ -582,21 +582,21 @@ clone_repo() {
       git init --quiet "$target" || return 1
       git -C "$target" remote add origin "$repo_url" || return 1
     fi
-    git -C "$target" fetch --filter=tree:0 origin "$checkout_ref" && git -C "$target" checkout --detach FETCH_HEAD
+    git -C "$target" fetch --filter=blob:none origin "$checkout_ref" && git -C "$target" checkout --detach FETCH_HEAD
     return
   fi
   if [ -d "$target" ]; then
     printf '%s\n' "Repository directory $target already exists, skipping clone..."
   else
     printf '%s\n' "Cloning repository $repo_name..."
-    git clone --filter=tree:0 "$repo_url" "$target" || return 1
+    git clone --filter=blob:none "$repo_url" "$target" || return 1
   fi
   # Pin after clone or reuse: a reused directory may still be on an old ref.
   if [ -n "$checkout_ref" ]; then
     printf '%s\n' "Checking out $checkout_ref in $repo_name..."
     # Fetch leaves the object in FETCH_HEAD; check that out detached so we
     # never prefer a stale local branch with the same name.
-    git -C "$target" fetch --filter=tree:0 origin "$checkout_ref" && git -C "$target" checkout --detach FETCH_HEAD
+    git -C "$target" fetch --filter=blob:none origin "$checkout_ref" && git -C "$target" checkout --detach FETCH_HEAD
   fi
 }
 "#,
@@ -772,8 +772,11 @@ async fn clone_repo(
             full: ("Cloning repository via terminal: {repo_name}")
         );
 
-        // We do a partial clone here to speed up environment setup time.
-        let command = format!("git clone --filter=tree:0 '{escaped_url}'");
+        // We do a blobless partial clone here to speed up environment setup
+        // time while still keeping trees local, so path-limited history and
+        // blame stay fully local instead of lazily refetching from the
+        // promisor remote.
+        let command = format!("git clone --filter=blob:none '{escaped_url}'");
         let exit_code = execute_command(command, spawner).await?;
         if exit_code != 0.into() {
             return Err(PrepareEnvironmentError::CloneRepo {
@@ -788,8 +791,9 @@ async fn clone_repo(
     }
 
     // Pin after clone or reuse when a ref was requested. A reused directory may
-    // still be on an old default-branch tip, and a fresh partial clone only
-    // fetched the default branch — fetch the ref, then detach to FETCH_HEAD.
+    // still be on an old default-branch tip, and a checkout_ref (SHA, branch,
+    // or tag) may not have existed yet, or may have moved, by the time the
+    // clone ran — fetch the ref, then detach to FETCH_HEAD.
     // When checkout_ref is unset, leave an existing directory untouched.
     if let Some(command) = checkout_command_for(request, working_dir, shell_type) {
         let checkout_ref = request
@@ -816,12 +820,11 @@ async fn clone_repo(
 /// Build the `git fetch` + `git checkout` command that pins `request`'s clone at
 /// its checkout, or `None` when the repo has no ref to pin.
 ///
-/// A extra clone (`--filter=tree:0`) only fetches the default branch, so an
-/// arbitrary ref (commit SHA, branch, or tag) may not be present yet: fetch it
-/// first, then check out the resulting `FETCH_HEAD` detached. Checking out the
-/// original ref name can prefer a stale local branch or fail when the object
-/// only landed in `FETCH_HEAD`. Detached HEAD is expected and fine — trials
-/// never merge.
+/// The requested ref (commit SHA, branch, or tag) may not have existed yet,
+/// or may have moved, by the time the clone ran: fetch it first, then check
+/// out the resulting `FETCH_HEAD` detached. Checking out the original ref
+/// name can prefer a stale local branch or fail when the object only landed
+/// in `FETCH_HEAD`. Detached HEAD is expected and fine — trials never merge.
 fn checkout_command_for(
     request: &RepositoryCloneRequest,
     working_dir: &Path,
@@ -832,7 +835,7 @@ fn checkout_command_for(
     let escaped_dir = shell_escape_single_quotes(&repo_dir.to_string_lossy(), shell_type);
     let escaped_ref = shell_escape_single_quotes(checkout_ref, shell_type);
     Some(format!(
-        "git -C '{escaped_dir}' fetch --filter=tree:0 origin '{escaped_ref}' && \
+        "git -C '{escaped_dir}' fetch --filter=blob:none origin '{escaped_ref}' && \
          git -C '{escaped_dir}' checkout --detach FETCH_HEAD"
     ))
 }
