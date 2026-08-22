@@ -18,7 +18,7 @@ use warpui::{
 
 use super::ai_shared::{render_ai_setting_description, render_ai_setting_toggle, styles};
 use super::settings_page::{
-    CONTENT_FONT_SIZE, MatchData, PageType, SettingsPageMeta, SettingsPageViewHandle,
+    CONTENT_FONT_SIZE, MatchData, PageTitle, PageType, SettingsPageMeta, SettingsPageViewHandle,
     SettingsWidget, render_full_pane_width_ai_button,
 };
 use super::{SettingsAction, SettingsSection, ToggleSettingActionPair, flags};
@@ -55,7 +55,7 @@ impl KnowledgePageView {
                 Box::new(WarpDriveContextWidget::default()),
             ]);
         }
-        PageType::new_uncategorized(widgets, Some(PAGE_TITLE))
+        PageType::new_uncategorized(widgets, Some(PageTitle::new(PAGE_TITLE)))
     }
 }
 

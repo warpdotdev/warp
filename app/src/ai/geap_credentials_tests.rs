@@ -133,12 +133,6 @@ fn timer_delay_clamps_to_floor_when_near_or_past_expiry() {
     );
 }
 
-// The structured `LoadGeapCredentialsError` is intentionally not user-facing
-// (no `Display` prose, no truncation) — the UI layer owns turning a leg + HTTP
-// `status` + raw `detail` into actionable copy. Coverage that the structured
-// error round-trips into `Failed { error }` lives in the mint-completion tests
-// below.
-
 // ── refresh guard / safety net (app harness) ───────────────────
 
 fn team_for_test() -> Team {

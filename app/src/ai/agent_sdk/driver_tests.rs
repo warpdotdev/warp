@@ -3,11 +3,13 @@ use std::ffi::OsString;
 use std::fs;
 use std::path::Path;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use cloud_object_models::CodeForge;
 use futures::channel::oneshot;
 use futures::executor::block_on;
+use http::StatusCode;
 use repo_metadata::{DirectoryWatcher, RepoMetadataEvent, RepoMetadataModel, RepositoryIdentifier};
 use tempfile::TempDir;
 use warp_cli::agent::Harness;
@@ -30,8 +32,9 @@ use warpui::{App, SingletonEntity as _};
 use super::{
     AgentDriver, AgentDriverError, CLIAgentSessionStatus, IdleTimeoutSender,
     LEGACY_OZ_PARENT_LISTENER_MANAGED_EXTERNALLY_ENV, LEGACY_OZ_PARENT_STATE_ROOT_ENV,
-    OZ_MESSAGE_LISTENER_MANAGED_EXTERNALLY_ENV, OZ_MESSAGE_LISTENER_STATE_ROOT_ENV,
-    PlatformErrorCode, SDKConversationOutputStatus, build_secret_env_vars,
+    MANAGED_MCP_RESOLVE_MAX_ATTEMPTS, OZ_MESSAGE_LISTENER_MANAGED_EXTERNALLY_ENV,
+    OZ_MESSAGE_LISTENER_STATE_ROOT_ENV, PlatformErrorCode, SDKConversationOutputStatus,
+    WARP_MESSAGE_LISTENER_STATE_ROOT_ENV, build_secret_env_vars,
     idle_window_for_cli_session_status, idle_window_for_terminal_status,
     setup_failure_status_update, terminal_status_log_outcome,
 };
@@ -49,6 +52,7 @@ use crate::ai::mcp::builtin::{FACTORY_MCP_INSTALLATION_UUID, FACTORY_MCP_SERVER_
 use crate::ai::mcp::parsing::normalize_mcp_json;
 use crate::ai::skills::SkillManager;
 use crate::auth::credentials::Credentials;
+use crate::server::graphql::GraphQLError;
 use crate::server::server_api::managed_mcp::MockManagedMcpClient;
 use crate::test_util::terminal::{add_window_with_terminal, initialize_app_for_terminal_view};
 
@@ -646,6 +650,140 @@ fn managed_resolution_failure_includes_uid_and_message() {
     }
 }
 
+fn transient_managed_mcp_error() -> anyhow::Error {
+    // A transport-level 503 with no GraphQL user-facing payload, matching what
+    // `send_graphql_request` produces for a genuinely transient backend failure (as opposed
+    // to a `UserFacingError`, which `ManagedMcpClient::create_managed_mcp_client_config`
+    // converts into a plain, untyped `anyhow!(message)`).
+    anyhow::Error::new(GraphQLError::HttpError {
+        status: StatusCode::SERVICE_UNAVAILABLE,
+        body: "unavailable".to_string(),
+    })
+}
+
+#[test]
+fn managed_resolution_retries_transient_error_then_succeeds() {
+    let uuid = uuid::Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
+    let config_json =
+        r#"{"mcpServers":{"GitHub MCP":{"command":"npx","env":{"API_TOKEN":"{{API_TOKEN}}"}}}}"#;
+    let calls = Arc::new(AtomicUsize::new(0));
+    let calls_clone = Arc::clone(&calls);
+    let mut mock = MockManagedMcpClient::new();
+    mock.expect_create_managed_mcp_client_config()
+        .times(2)
+        .returning(move |_| {
+            if calls_clone.fetch_add(1, Ordering::SeqCst) == 0 {
+                Err(transient_managed_mcp_error())
+            } else {
+                Ok(managed_client_config_output(config_json))
+            }
+        });
+
+    let resolved = block_on(AgentDriver::resolve_mcp_specs_with_local_uuids(
+        &[MCPSpec::Uuid(uuid)],
+        &HashSet::new(),
+        Arc::new(mock),
+        None,
+    ))
+    .unwrap();
+
+    assert_eq!(resolved.ephemeral_installations.len(), 1);
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
+}
+
+#[test]
+fn managed_resolution_does_not_retry_permanent_typed_http_error() {
+    // A typed but permanent (403) transport error must fail fast, same as the untyped
+    // user-facing error covered by `managed_resolution_failure_includes_uid_and_message`.
+    let uuid = uuid::Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
+    let mut mock = MockManagedMcpClient::new();
+    mock.expect_create_managed_mcp_client_config()
+        .times(1)
+        .returning(|_| {
+            Err(anyhow::Error::new(GraphQLError::HttpError {
+                status: StatusCode::FORBIDDEN,
+                body: "forbidden".to_string(),
+            }))
+        });
+
+    let err = block_on(AgentDriver::resolve_mcp_specs_with_local_uuids(
+        &[MCPSpec::Uuid(uuid)],
+        &HashSet::new(),
+        Arc::new(mock),
+        None,
+    ))
+    .unwrap_err();
+
+    assert!(matches!(
+        err,
+        AgentDriverError::ManagedMcpResolutionFailed { uid, .. } if uid == uuid
+    ));
+}
+
+#[test]
+fn managed_resolution_exhausts_retry_budget_on_persistent_transient_error() {
+    let uuid = uuid::Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
+    let calls = Arc::new(AtomicUsize::new(0));
+    let calls_clone = Arc::clone(&calls);
+    let mut mock = MockManagedMcpClient::new();
+    mock.expect_create_managed_mcp_client_config()
+        .times(MANAGED_MCP_RESOLVE_MAX_ATTEMPTS)
+        .returning(move |_| {
+            calls_clone.fetch_add(1, Ordering::SeqCst);
+            Err(transient_managed_mcp_error())
+        });
+
+    let err = block_on(AgentDriver::resolve_mcp_specs_with_local_uuids(
+        &[MCPSpec::Uuid(uuid)],
+        &HashSet::new(),
+        Arc::new(mock),
+        None,
+    ))
+    .unwrap_err();
+
+    assert!(matches!(
+        err,
+        AgentDriverError::ManagedMcpResolutionFailed { uid, .. } if uid == uuid
+    ));
+    // A persistently transient error must still exhaust the full retry budget rather than
+    // giving up early, and must not retry beyond it.
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        MANAGED_MCP_RESOLVE_MAX_ATTEMPTS
+    );
+}
+
+#[test]
+fn well_known_resolution_retries_transient_error_then_succeeds() {
+    let _flag = FeatureFlag::WellKnownMcpIds.override_enabled(true);
+    let config_json = r#"{"mcpServers":{"linear":{"url":"https://app.warp.dev/mcp/integration-proxy/linear","headers":{"Authorization":"Bearer tok"}}}}"#;
+    let calls = Arc::new(AtomicUsize::new(0));
+    let calls_clone = Arc::clone(&calls);
+    let mut mock = MockManagedMcpClient::new();
+    mock.expect_create_managed_mcp_client_config()
+        .times(2)
+        .returning(move |_| {
+            if calls_clone.fetch_add(1, Ordering::SeqCst) == 0 {
+                Err(transient_managed_mcp_error())
+            } else {
+                Ok(managed_client_config_output(config_json))
+            }
+        });
+
+    // A transient failure must not silently skip the server the way a permanent one does
+    // (see `well_known_resolution_failure_skips_server`): it should retry and still resolve.
+    let resolved = block_on(AgentDriver::resolve_mcp_specs_with_local_uuids(
+        &[MCPSpec::WellKnown("linear".to_string())],
+        &HashSet::new(),
+        Arc::new(mock),
+        None,
+    ))
+    .unwrap();
+
+    assert_eq!(resolved.ephemeral_installations.len(), 1);
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
+}
+
 // ── IdleTimeoutSender tests ──────────────────────────────────────────────────────
 
 #[test]
@@ -1097,9 +1235,54 @@ fn task_env_vars_propagate_message_listener_state_root_with_legacy_alias() {
         env_vars.get(&OsString::from(OZ_MESSAGE_LISTENER_STATE_ROOT_ENV)),
         Some(&OsString::from("/tmp/message-listener-root"))
     );
+    // The WARP_ twin is only reachable when the state root is actually set, which is why it is
+    // asserted here rather than in the pairing test: that test does not populate the process
+    // env, and making it do so would need `#[serial_test::serial]` to stay race-free.
+    assert_eq!(
+        env_vars.get(&OsString::from(WARP_MESSAGE_LISTENER_STATE_ROOT_ENV)),
+        Some(&OsString::from("/tmp/message-listener-root"))
+    );
     assert_eq!(
         env_vars.get(&OsString::from(LEGACY_OZ_PARENT_STATE_ROOT_ENV)),
         Some(&OsString::from("/tmp/message-listener-root"))
+    );
+}
+
+/// Every `OZ_` variable reaching a harness subprocess has a `WARP_` twin carrying the same
+/// value. This guard fails when one of a pair is injected without the other.
+///
+/// The legacy `OZ_PARENT_*` listener names are exempt: they exist only to keep an external
+/// Claude plugin working through its migration and are deliberately not given `WARP_` twins.
+#[test]
+fn task_env_vars_mirror_every_oz_var_to_a_warp_name() {
+    const LEGACY_ONLY: [&str; 2] = [
+        LEGACY_OZ_PARENT_LISTENER_MANAGED_EXTERNALLY_ENV,
+        LEGACY_OZ_PARENT_STATE_ROOT_ENV,
+    ];
+
+    let task_id: AmbientAgentTaskId = "550e8400-e29b-41d4-a716-446655440005".parse().unwrap();
+    let env_vars = task_env_vars(Some(&task_id), Some("parent-run-789"), Harness::Claude);
+
+    let mut paired = 0;
+    for (name, value) in &env_vars {
+        let Some(name) = name.to_str() else { continue };
+        let Some(suffix) = name.strip_prefix("OZ_") else {
+            continue;
+        };
+        if LEGACY_ONLY.contains(&name) {
+            continue;
+        }
+        paired += 1;
+        let warp_name = OsString::from(format!("WARP_{suffix}"));
+        assert_eq!(
+            env_vars.get(&warp_name),
+            Some(value),
+            "{name} is injected without a matching WARP_{suffix} carrying the same value"
+        );
+    }
+    assert!(
+        paired > 0,
+        "no OZ_ variables were injected, so the assertions above would prove nothing"
     );
 }
 
