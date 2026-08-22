@@ -114,6 +114,7 @@ impl BlocklistAIController {
         ctx: &mut ModelContext<Self>,
     ) {
         let stream_id = ResponseStreamId::for_shared_session(&init_event);
+        self.finalize_superseded_response_stream(ctx);
         self.shared_session_state.current_response_id = None;
         self.shared_session_state
             .should_skip_current_replayed_response = false;
@@ -242,6 +243,62 @@ impl BlocklistAIController {
                 AgentViewEntryOrigin::SharedSessionSelection,
                 ctx,
             );
+        });
+    }
+
+    /// Closes out the stream that a newly-arrived `StreamInit` is about to replace.
+    ///
+    /// Only `StreamInit` carries a conversation id, so a viewer attributes every subsequent
+    /// `ClientActions` / `Finished` event to the single most recently initialized stream. A stream
+    /// replaced before its `Finished` arrives is therefore unreachable: nothing can move its
+    /// conversation out of [`ConversationStatus::InProgress`], so the status bar shimmers
+    /// "Warping..." for the rest of the session. Multi-agent runs hit this routinely, because the
+    /// sharer interleaves orchestrator and subagent streams and scrollback replay omits the
+    /// synthetic `Finished` for any exchange that was still in flight when the snapshot was built.
+    fn finalize_superseded_response_stream(&mut self, ctx: &mut ModelContext<Self>) {
+        let Some(stream_id) = self.shared_session_state.current_response_id.take() else {
+            return;
+        };
+        // A skipped replay never registered an exchange, so there is nothing to close out.
+        if self
+            .shared_session_state
+            .should_skip_current_replayed_response
+        {
+            return;
+        }
+        let history = BlocklistAIHistoryModel::handle(ctx);
+        let Some(conversation_id) = history
+            .as_ref(ctx)
+            .conversation_for_response_stream(&stream_id)
+        else {
+            return;
+        };
+        log::info!(
+            "Finalizing superseded shared session response stream \
+             (stream_id={stream_id:?}, conversation_id={conversation_id:?})"
+        );
+        let terminal_surface_id = self.terminal_surface_id;
+        history.update(ctx, |history, ctx| {
+            history.mark_response_stream_completed_successfully(
+                &stream_id,
+                conversation_id,
+                terminal_surface_id,
+                ctx,
+            );
+            // A stream whose exchanges left actions outstanding stays in progress so a follow-up
+            // exchange can continue it. No follow-up can ever reach this superseded stream, so
+            // settle the conversation instead of leaving it shimmering indefinitely.
+            if history
+                .conversation_status(&conversation_id)
+                .is_some_and(ConversationStatus::is_in_progress)
+            {
+                history.update_conversation_status(
+                    terminal_surface_id,
+                    conversation_id,
+                    ConversationStatus::Success,
+                    ctx,
+                );
+            }
         });
     }
 
