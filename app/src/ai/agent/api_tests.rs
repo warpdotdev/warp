@@ -15,6 +15,7 @@ use crate::ai::llms::{LLMModelHost, LLMProvider};
 use crate::auth::AuthStateProvider;
 use crate::server::server_api::team::MockTeamClient;
 use crate::server::server_api::workspace::MockWorkspaceClient;
+use crate::settings::PrivacySettings;
 use crate::workspaces::team::Team;
 use crate::workspaces::user_workspaces::UserWorkspaces;
 use crate::workspaces::workspace::{
@@ -152,6 +153,9 @@ fn register_workspace_and_api_key_manager(app: &mut App, workspace: Workspace) {
         warp_core::telemetry::testing::MockTelemetryContextProvider::register(ctx);
     });
     app.add_singleton_model(|_| AuthStateProvider::new_for_test());
+    // `UserWorkspaces::update_workspaces` pushes telemetry and secret-redaction settings into
+    // `PrivacySettings`, which panics if the singleton was never registered.
+    app.add_singleton_model(PrivacySettings::mock);
     app.add_singleton_model(|ctx| {
         UserWorkspaces::mock(
             Arc::new(MockTeamClient::new()),
