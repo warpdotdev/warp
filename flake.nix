@@ -187,8 +187,7 @@
 
                 SETTINGS_SCHEMA_EXECUTABLE="${installDir}/warp-oss" ./script/prepare_bundled_resources \
                   "${resourcesDir}" \
-                  "${releaseChannel}" \
-                  release
+                  "${releaseChannel}"
 
                 install -Dm644 \
                   "${resourcesDir}/THIRD_PARTY_LICENSES.txt" \

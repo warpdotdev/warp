@@ -100,8 +100,7 @@ mkdir -p "$LOCAL_BUNDLE_DIR"
 cp "$BUILT_BINARY" "$LOCAL_BUNDLE_DIR/$BUNDLE_BINARY_NAME"
 SKIP_SETTINGS_SCHEMA=1 "$WORKSPACE_ROOT/script/prepare_bundled_resources" \
   "$LOCAL_BUNDLE_DIR/resources" \
-  integration \
-  "$CARGO_PROFILE"
+  integration
 tar -czf "$LOCAL_BUNDLE_TARBALL" -C "$LOCAL_BUNDLE_DIR" .
 
 # ── Upload via SCP through GCP IAP tunnel ─────────────────────────

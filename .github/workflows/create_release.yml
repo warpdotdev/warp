@@ -435,11 +435,6 @@ jobs:
           name: release-macos-universal-${{ steps.get-config.outputs.channel }}
           path: ${{ steps.bundle_app.outputs.dmg_path }}
 
-  # Builds the CLI binary only. Packaging in release_macos_cli below adds the
-  # canonical schema and performs the actual signing and notarization;
-  # splitting the build out lets it run in parallel with the app build
-  # instead of serializing behind it, mirroring the build_macos_tui_binaries
-  # / release_macos_tui split.
   build_macos_cli_binaries:
     name: Build Release Binary (macOS CLI ${{ matrix.arch }})
     runs-on: macos-26-xlarge
@@ -521,6 +516,8 @@ jobs:
           compression-level: 0
           path: build-artifacts.tar.gz
 
+  # Packages the CLI binary build_macos_cli_binaries built separately (in
+  # parallel), then adds the canonical schema and signs/notarizes.
   release_macos_cli:
     name: Build Release (macOS CLI ${{ matrix.arch }})
     runs-on: macos-26-xlarge
@@ -637,11 +634,6 @@ jobs:
         env:
           DEBUG_FILE_OR_FOLDER_PATH: ${{ steps.bundle_cli.outputs.dsym_path }}
 
-  # Builds the TUI binary only. Packaging in release_macos_tui below adds the
-  # canonical schema and performs the actual signing and notarization;
-  # splitting the build out lets it run in parallel with the app build
-  # instead of serializing behind it, mirroring the build_windows_binaries /
-  # release_windows split.
   build_macos_tui_binaries:
     name: Build Release Binary (macOS TUI ${{ matrix.arch }})
     runs-on: macos-26-xlarge
@@ -723,6 +715,8 @@ jobs:
           compression-level: 0
           path: build-artifacts.tar.gz
 
+  # Packages the TUI binary build_macos_tui_binaries built separately (in
+  # parallel), then adds the canonical schema and signs/notarizes.
   release_macos_tui:
     name: Build Release (macOS TUI ${{ matrix.arch }})
     runs-on: macos-26-xlarge
@@ -850,10 +844,6 @@ jobs:
           name: release-macos-tui-${{ matrix.arch }}-${{ steps.get-config.outputs.channel }}
           path: warp-tui-${{ steps.get-config.outputs.channel }}-macos-${{ matrix.arch }}.tar.gz
 
-  # Builds the TUI binary only. Packaging in release_linux_tui below adds the
-  # canonical schema; splitting the build out lets this native, per-arch
-  # build run in parallel with the app build instead of serializing behind
-  # it, mirroring the build_windows_binaries / release_windows split.
   build_linux_tui_binaries:
     name: Build Release Binary (Linux TUI ${{ matrix.arch }})
     runs-on: ${{ matrix.runner }}
@@ -938,11 +928,8 @@ jobs:
           retention-days: 1
           path: build-artifacts.tar.gz
 
-  # Packaging step for the binary build_linux_tui_binaries builds above: it
-  # downloads that build output, adds the canonical schema release_linux_x86
-  # produces, and does the actual bundling and upload. Kept separate so the
-  # (slow) native per-arch build isn't stuck waiting on that schema before it
-  # can start.
+  # Packages the TUI binary build_linux_tui_binaries built separately (in
+  # parallel), then adds the canonical schema.
   release_linux_tui:
     name: Build Release (Linux TUI ${{ matrix.arch }})
     runs-on: ${{ matrix.runner }}
@@ -1234,10 +1221,6 @@ jobs:
           name: release-linux-x86_64-${{ steps.get-config.outputs.channel }}
           path: ${{ steps.bundle_app.outputs.packages_dir }}
 
-  # Builds the CLI binary only. Packaging in release_linux_cli_x86 below adds
-  # the canonical schema; splitting the build out lets it run in parallel
-  # with the app build instead of serializing behind it, mirroring the
-  # build_linux_tui_binaries / release_linux_tui split.
   build_linux_cli_x86_binaries:
     name: Build Release Binary (Linux CLI x86_64)
     runs-on: namespace-profile-ubuntu-22-04
@@ -1316,6 +1299,8 @@ jobs:
           retention-days: 1
           path: build-artifacts.tar.gz
 
+  # Packages the CLI binary build_linux_cli_x86_binaries built separately (in
+  # parallel), then adds the canonical schema.
   release_linux_cli_x86:
     name: Build Release (Linux CLI x86_64)
     runs-on: namespace-profile-ubuntu-22-04
@@ -2066,11 +2051,6 @@ jobs:
           name: release-web-${{ steps.get-config.outputs.channel }}
           path: ${{ steps.bundle_app.outputs.packages_dir }}
 
-  # Builds the TUI binary only. Packaging in release_windows_tui below adds
-  # the canonical schema and performs the actual signing; splitting the
-  # build out lets it run in parallel with the app build instead of
-  # serializing behind it, following the same split build_windows_binaries
-  # already uses for release_windows.
   build_windows_tui_binaries:
     name: Build Release Binary (Windows TUI ${{ matrix.arch }})
     runs-on: windows-latest-large
@@ -2124,6 +2104,8 @@ jobs:
             ${{ steps.build_tui.outputs.binary_path }}
             ${{ steps.build_tui.outputs.pdb_file_path }}
 
+  # Packages the TUI binary build_windows_tui_binaries built separately (in
+  # parallel), then adds the canonical schema and signs it.
   release_windows_tui:
     name: Build Release (Windows TUI ${{ matrix.arch }})
     runs-on: windows-latest-large
