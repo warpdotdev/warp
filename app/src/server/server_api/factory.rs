@@ -9,6 +9,9 @@ use warp_graphql::mutations::delete_runner::{
 use warp_graphql::mutations::upsert_runner::{
     UpsertRunner, UpsertRunnerInput, UpsertRunnerResult, UpsertRunnerVariables,
 };
+use warp_graphql::queries::get_runner::{
+    GetRunner, GetRunnerResult, GetRunnerVariables, RunnerSelector,
+};
 use warp_graphql::queries::get_runners::{
     GetRunners, GetRunnersResult, GetRunnersVariables, Runner, RunnerSortBy,
 };
@@ -34,6 +37,12 @@ pub trait FactoryClient: 'static + Send + Sync {
     /// Fetch all runners visible to the caller, optionally sorted.
     async fn get_runners(&self, sort_by: Option<RunnerSortBy>) -> Result<Vec<Runner>>;
 
+    /// Resolve a single runner by UID or name, without fetching every
+    /// accessible runner. `selector.uid` takes precedence; `selector.name` is
+    /// used as a fallback if no runner matches the uid.
+    #[cfg_attr(target_family = "wasm", allow(dead_code))]
+    async fn get_runner(&self, selector: RunnerSelector) -> Result<Runner>;
+
     /// Create or update a runner. `input.uid` is `None` for a create and
     /// `Some(_)` for an update; this single method backs both CLI commands.
     #[cfg_attr(target_family = "wasm", allow(dead_code))]
@@ -57,6 +66,19 @@ impl FactoryClient for ServerApi {
             GetRunnersResult::GetRunnersOutput(output) => Ok(output.runners),
             GetRunnersResult::UserFacingError(e) => Err(anyhow!(get_user_facing_error_message(e))),
             GetRunnersResult::Unknown => Err(anyhow!("failed to list runners")),
+        }
+    }
+
+    async fn get_runner(&self, selector: RunnerSelector) -> Result<Runner> {
+        let operation = GetRunner::build(GetRunnerVariables {
+            request_context: get_request_context(),
+            selector,
+        });
+        let response = self.send_graphql_request(operation, None).await?;
+        match response.get_runner {
+            GetRunnerResult::GetRunnerOutput(output) => Ok(output.runner),
+            GetRunnerResult::UserFacingError(e) => Err(anyhow!(get_user_facing_error_message(e))),
+            GetRunnerResult::Unknown => Err(anyhow!("failed to resolve runner")),
         }
     }
 

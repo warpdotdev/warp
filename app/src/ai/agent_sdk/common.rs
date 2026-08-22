@@ -214,8 +214,6 @@ pub enum ResolveConfigurationError {
     /// The user canceled the operation, and we should exit.
     #[error("Operation canceled")]
     Canceled,
-    #[error("{id} is not a valid {kind} identifier")]
-    InvalidId { id: String, kind: &'static str },
     #[error("{kind} {id} not found")]
     ObjectNotFound { id: String, kind: &'static str },
     #[error(transparent)]
@@ -313,25 +311,52 @@ Without an environment, the agent will not be able to access private repositorie
     }
 
     fn get_by_id(id: String, ctx: &AppContext) -> Result<Self, ResolveConfigurationError> {
-        let sync_id = SyncId::ServerId(ServerId::try_from(id.as_str()).map_err(|_| {
-            ResolveConfigurationError::InvalidId {
-                id: id.clone(),
-                kind: "environment",
-            }
-        })?);
-
-        let environment =
-            CloudAmbientAgentEnvironment::get_by_id(&sync_id, ctx).ok_or_else(|| {
-                ResolveConfigurationError::ObjectNotFound {
-                    id: id.clone(),
-                    kind: "environment",
-                }
-            })?;
+        let environment = resolve_environment(&id, ctx)?;
+        let resolved_id = match environment.sync_id() {
+            SyncId::ServerId(server_id) => server_id.to_string(),
+            SyncId::ClientId(_) => id,
+        };
 
         Ok(EnvironmentChoice::Environment {
-            id,
+            id: resolved_id,
             name: environment.model().string_model.name.clone(),
         })
+    }
+}
+
+/// Resolve a synced [`CloudAmbientAgentEnvironment`] by ID or name
+pub(super) fn resolve_environment(
+    identifier: &str,
+    ctx: &AppContext,
+) -> Result<CloudAmbientAgentEnvironment, ResolveConfigurationError> {
+    if let Ok(server_id) = ServerId::try_from(identifier) {
+        let sync_id = SyncId::ServerId(server_id);
+        if let Some(environment) = CloudAmbientAgentEnvironment::get_by_id(&sync_id, ctx) {
+            return Ok(environment.clone());
+        }
+    }
+
+    resolve_environment_by_name(&CloudAmbientAgentEnvironment::get_all(ctx), identifier)
+}
+
+/// Find an unambiguous name match among a list of environments.
+fn resolve_environment_by_name(
+    environments: &[CloudAmbientAgentEnvironment],
+    name: &str,
+) -> Result<CloudAmbientAgentEnvironment, ResolveConfigurationError> {
+    let matches: Vec<&CloudAmbientAgentEnvironment> = environments
+        .iter()
+        .filter(|env| env.model().string_model.name == name)
+        .collect();
+    match matches.as_slice() {
+        [] => Err(ResolveConfigurationError::ObjectNotFound {
+            id: name.to_string(),
+            kind: "environment",
+        }),
+        [environment] => Ok((*environment).clone()),
+        _ => Err(ResolveConfigurationError::Other(anyhow::anyhow!(
+            "Multiple environments match '{name}'; specify the environment by ID"
+        ))),
     }
 }
 

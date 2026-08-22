@@ -139,17 +139,20 @@ pub struct CreateRunnerArgs {
 }
 
 #[derive(Debug, Clone, Args)]
-// At least one of UID or --name is required. They are NOT mutually exclusive:
-// when a UID is given, --name sets the runner's new name (rename); when no UID
-// is given, --name is required and identifies the runner to update.
-#[command(group(ArgGroup::new("runner_identifier").required(true).multiple(true).args(["id", "name"])))]
+// At least one of the positional identifier or --name is required. They are NOT
+// mutually exclusive: when an identifier is given, --name sets the runner's new
+// name (rename); when no identifier is given, --name is required and identifies
+// the runner to update.
+#[command(group(ArgGroup::new("runner_identifier").required(true).multiple(true).args(["identifier", "name"])))]
 pub struct UpdateRunnerArgs {
-    /// UID of the runner to update.
-    #[arg(value_name = "UID")]
-    pub id: Option<String>,
+    /// UID or name of the runner to update.
+    #[arg(value_name = "UID|NAME")]
+    pub identifier: Option<String>,
 
-    /// New name for the runner when a UID is given (renames it). When no UID is
-    /// given, this is required and used to locate the runner to update.
+    /// New name for the runner when a positional identifier is also given (renames it).
+    /// If the positional identifier is omitted, this flag is required and is used
+    /// instead to locate the runner by its current name (the name itself is left
+    /// unchanged in that case).
     #[arg(long = "name", short = 'n')]
     pub name: Option<String>,
 
@@ -188,9 +191,9 @@ pub struct UpdateRunnerArgs {
 
 #[derive(Debug, Clone, Args)]
 pub struct DeleteRunnerArgs {
-    /// UID of the runner to delete.
-    #[arg(value_name = "UID")]
-    pub id: String,
+    /// UID or name of the runner to delete.
+    #[arg(value_name = "UID|NAME")]
+    pub identifier: String,
 
     /// Delete without asking for confirmation.
     #[arg(long, default_value_t = false)]

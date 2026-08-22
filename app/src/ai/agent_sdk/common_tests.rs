@@ -3,25 +3,107 @@ use std::collections::HashMap;
 use warpui::App;
 
 use super::{
-    classify_agent_mode_base_model_id, parse_ambient_task_id, validate_agent_mode_base_model_id,
+    ResolveConfigurationError, classify_agent_mode_base_model_id, parse_ambient_task_id,
+    resolve_environment_by_name, validate_agent_mode_base_model_id,
 };
 use crate::LaunchMode;
+use crate::ai::cloud_environments::{
+    AmbientAgentEnvironment, CloudAmbientAgentEnvironment, CloudAmbientAgentEnvironmentModel,
+};
 use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
 use crate::ai::llms::{
     AvailableLLMs, LLMContextWindow, LLMId, LLMInfo, LLMPreferences, LLMProvider, LLMUsageMetadata,
     ModelsByFeature,
 };
 use crate::ai::mcp::TemplatableMCPServerManager;
-use crate::auth::AuthStateProvider;
 use crate::auth::auth_manager::AuthManager;
+use crate::auth::{AuthStateProvider, UserUid};
 use crate::cloud_object::model::persistence::CloudModel;
+use crate::cloud_object::{
+    CloudObjectMetadata, CloudObjectPermissions, CloudObjectStatuses, CloudObjectSyncStatus, Owner,
+};
 use crate::network::NetworkStatus;
 use crate::server::cloud_objects::update_manager::UpdateManager;
+use crate::server::ids::{ServerId, SyncId};
 use crate::server::server_api::ServerApiProvider;
 use crate::server::sync_queue::SyncQueue;
 use crate::test_util::settings::initialize_settings_for_tests;
 use crate::workspaces::team_tester::TeamTesterStatus;
 use crate::workspaces::user_workspaces::UserWorkspaces;
+
+/// Builds a deterministic, valid-length [`ServerId`] for tests (`ServerId` requires
+/// exactly 22 characters).
+fn test_server_id(seed: u32) -> ServerId {
+    ServerId::try_from(format!("test-server-id-{seed:07}").as_str())
+        .expect("seeded string is exactly 22 characters")
+}
+
+fn make_environment(seed: u32, name: &str) -> CloudAmbientAgentEnvironment {
+    let metadata = CloudObjectMetadata {
+        revision: None,
+        metadata_last_updated_ts: None,
+        current_editor_uid: None,
+        pending_changes_statuses: CloudObjectStatuses {
+            content_sync_status: CloudObjectSyncStatus::NoLocalChanges,
+            has_pending_permissions_change: false,
+            has_pending_metadata_change: false,
+            pending_untrash: false,
+            pending_delete: false,
+        },
+        trashed_ts: None,
+        folder_id: None,
+        is_welcome_object: false,
+        last_editor_uid: None,
+        creator_uid: None,
+        last_task_run_ts: None,
+    };
+    let permissions = CloudObjectPermissions {
+        owner: Owner::User {
+            user_uid: UserUid::new("test-user"),
+        },
+        permissions_last_updated_ts: None,
+        anyone_with_link: None,
+        guests: Vec::new(),
+    };
+    let model = CloudAmbientAgentEnvironmentModel::new(AmbientAgentEnvironment::new(
+        name.to_string(),
+        None,
+        Vec::new(),
+        "docker-image".to_string(),
+        Vec::new(),
+    ));
+    CloudAmbientAgentEnvironment::new(
+        SyncId::ServerId(test_server_id(seed)),
+        model,
+        metadata,
+        permissions,
+    )
+}
+
+#[test]
+fn resolve_environment_by_name_matches_unambiguous_name() {
+    let environments = vec![make_environment(1, "alpha"), make_environment(2, "beta")];
+    let resolved = resolve_environment_by_name(&environments, "beta").unwrap();
+    assert_eq!(resolved.model().string_model.name, "beta");
+}
+
+#[test]
+fn resolve_environment_by_name_errors_when_not_found() {
+    let environments = vec![make_environment(1, "alpha")];
+    let err = resolve_environment_by_name(&environments, "missing").unwrap_err();
+    assert!(matches!(
+        err,
+        ResolveConfigurationError::ObjectNotFound { .. }
+    ));
+}
+
+#[test]
+fn resolve_environment_by_name_errors_when_ambiguous() {
+    let environments = vec![make_environment(1, "dup"), make_environment(2, "dup")];
+    let err = resolve_environment_by_name(&environments, "dup").unwrap_err();
+    let msg = err.to_string();
+    assert!(msg.contains("Multiple environments match"), "got: {msg}");
+}
 
 #[test]
 fn parse_ambient_task_id_accepts_valid_ids() {

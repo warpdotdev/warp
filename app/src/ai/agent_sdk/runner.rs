@@ -13,6 +13,7 @@ use warp_graphql::mutations::upsert_runner::{
 };
 use warp_graphql::object::SpaceType;
 use warp_graphql::object_permissions::Owner as GqlOwner;
+use warp_graphql::queries::get_runner::RunnerSelector;
 use warp_graphql::queries::get_runners::{
     Runner, RunnerArch, RunnerConfig, RunnerMacOsVersion, RunnerOs, RunnerSortBy,
 };
@@ -141,12 +142,11 @@ impl RunnerCommandRunner {
 
         ctx.spawn(
             async move {
-                // Fetch existing runners so we can resolve the target and preserve
-                // any fields that aren't being changed (the server upsert takes a
-                // full runner config).
-                let runners = factory.get_runners(None).await?;
-
-                let existing = resolve_runner(&runners, args.id.as_deref(), args.name.as_deref())?;
+                // Resolve the target runner server-side, preserving any fields
+                // that aren't being changed (the server upsert takes a full
+                // runner config).
+                let selector = update_selector(&args);
+                let existing = factory.get_runner(selector).await?;
                 let uid = existing.uid.inner().to_string();
 
                 let runner = build_update_input(&args, &existing.config)?;
@@ -168,7 +168,7 @@ impl RunnerCommandRunner {
         use std::io::IsTerminal as _;
 
         if !args.force {
-            match confirm_delete(&args.id, std::io::stdin().is_terminal()) {
+            match confirm_delete(&args.identifier, std::io::stdin().is_terminal()) {
                 Ok(true) => {}
                 Ok(false) => {
                     // Interactive decline: not an error, exit cleanly.
@@ -185,10 +185,15 @@ impl RunnerCommandRunner {
         }
 
         let factory = ServerApiProvider::as_ref(ctx).get_factory_client();
-        let uid = args.id;
+        let identifier = args.identifier;
 
         ctx.spawn(
             async move {
+                let selector = RunnerSelector {
+                    uid: Some(cynic::Id::new(&identifier)),
+                    name: Some(identifier),
+                };
+                let uid = factory.get_runner(selector).await?.uid.inner().to_string();
                 let deleted_uid = factory.delete_runner(uid).await?;
                 println!("Runner deleted successfully: {deleted_uid}");
                 Ok(())
@@ -221,30 +226,22 @@ fn confirm_delete(uid: &str, is_terminal: bool) -> Result<bool> {
         .unwrap_or_default())
 }
 
-/// Resolve a runner by UID or (unambiguous) name from a fetched list.
-fn resolve_runner<'a>(
-    runners: &'a [Runner],
-    id: Option<&str>,
-    name: Option<&str>,
-) -> Result<&'a Runner> {
-    if let Some(id) = id {
-        return runners
-            .iter()
-            .find(|runner| runner.uid.inner() == id)
-            .ok_or_else(|| anyhow!("Runner '{id}' not found"));
-    }
-
-    let name = name.ok_or_else(|| anyhow!("A runner UID or --name is required"))?;
-    let matches: Vec<&Runner> = runners
-        .iter()
-        .filter(|runner| runner.config.name == name)
-        .collect();
-    match matches.as_slice() {
-        [] => Err(anyhow!("Runner '{name}' not found")),
-        [runner] => Ok(runner),
-        _ => Err(anyhow!(
-            "Multiple runners match '{name}'; specify the runner by UID"
-        )),
+/// Build the [`RunnerSelector`] for an `update` call from the CLI args:
+/// the positional identifier (if given) feeds both `uid` and `name`
+/// The server tries uid first and
+/// falls back to name. When no identifier is given, `--name` is required and
+/// becomes the sole (name-only) selector, matching `resolve_updated_name`'s
+/// treatment of that case as a lookup key rather than a rename.
+fn update_selector(args: &UpdateRunnerArgs) -> RunnerSelector {
+    match &args.identifier {
+        Some(identifier) => RunnerSelector {
+            uid: Some(cynic::Id::new(identifier)),
+            name: Some(identifier.clone()),
+        },
+        None => RunnerSelector {
+            uid: None,
+            name: args.name.clone(),
+        },
     }
 }
 
@@ -350,7 +347,11 @@ fn build_update_input(args: &UpdateRunnerArgs, existing: &RunnerConfig) -> Resul
         .or_else(|| existing.description.clone());
 
     Ok(RunnerInput {
-        name: resolve_updated_name(args.id.is_some(), args.name.as_deref(), &existing.name),
+        name: resolve_updated_name(
+            args.identifier.is_some(),
+            args.name.as_deref(),
+            &existing.name,
+        ),
         description,
         setup_commands,
         instance_shape,

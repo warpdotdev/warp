@@ -1,7 +1,24 @@
+use warp_cli::runner::UpdateRunnerArgs;
+
 use super::{
     RunnerArch, RunnerArchArg, RunnerOsArg, confirm_delete, merge_instance_shape, resolve_arch,
-    resolve_updated_name,
+    resolve_updated_name, update_selector,
 };
+
+fn update_args(identifier: Option<&str>, name: Option<&str>) -> UpdateRunnerArgs {
+    UpdateRunnerArgs {
+        identifier: identifier.map(str::to_string),
+        name: name.map(str::to_string),
+        description: None,
+        setup_command: Vec::new(),
+        os: None,
+        arch: None,
+        docker_image: None,
+        macos_version: None,
+        vcpus: None,
+        memory_gb: None,
+    }
+}
 
 #[test]
 fn confirm_delete_refuses_non_interactive_without_force() {
@@ -77,4 +94,38 @@ fn resolve_updated_name_renames_only_with_uid() {
     assert_eq!(resolve_updated_name(true, None, "old"), "old");
     // No UID: --name is the selector, so the name is unchanged.
     assert_eq!(resolve_updated_name(false, Some("old"), "old"), "old");
+}
+
+#[test]
+fn update_selector_uses_identifier_for_both_uid_and_name() {
+    // identifier is ambiguous (uid or name), so it feeds both fields; the
+    // server tries uid first and falls back to name.
+    let args = update_args(Some("uid-or-name"), None);
+    let selector = update_selector(&args);
+    assert_eq!(
+        selector.uid.map(|id| id.inner().to_string()),
+        Some("uid-or-name".to_string())
+    );
+    assert_eq!(selector.name.as_deref(), Some("uid-or-name"));
+}
+
+#[test]
+fn update_selector_ignores_rename_value_when_identifier_is_given() {
+    // --name alongside a positional identifier is a rename instruction, not a
+    // lookup key, so it must not leak into the selector's name field.
+    let args = update_args(Some("uid-1"), Some("renamed"));
+    let selector = update_selector(&args);
+    assert_eq!(
+        selector.uid.map(|id| id.inner().to_string()),
+        Some("uid-1".to_string())
+    );
+    assert_eq!(selector.name.as_deref(), Some("uid-1"));
+}
+
+#[test]
+fn update_selector_uses_name_flag_as_sole_selector_when_identifier_is_absent() {
+    let args = update_args(None, Some("by-name"));
+    let selector = update_selector(&args);
+    assert_eq!(selector.uid, None);
+    assert_eq!(selector.name.as_deref(), Some("by-name"));
 }
