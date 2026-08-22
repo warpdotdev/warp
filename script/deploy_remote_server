@@ -149,8 +149,7 @@ echo "==> Build complete ($BINARY_SIZE)"
 rm -rf "$LOCAL_RESOURCES_DIR"
 SKIP_SETTINGS_SCHEMA=1 "$WORKSPACE_ROOT/script/prepare_bundled_resources" \
   "$LOCAL_RESOURCES_DIR" \
-  local \
-  "$CARGO_PROFILE"
+  local
 
 # Resolve $HOME on the remote so our upload lands in the same directory the
 # Warp client checks. The client runs `test -x ~/.warp-local/...` and lets
