@@ -527,7 +527,9 @@ impl AIRequestUsageModel {
         if user_workspaces.is_byo_api_key_enabled(ctx) && api_keys.has_any_key() {
             return true;
         }
-        user_workspaces.is_aws_bedrock_credentials_enabled(ctx)
+        // A windowless singleton answering "does this user have any usable BYO path at all",
+        // so the Bedrock half is the union over their teams rather than one window's team.
+        user_workspaces.is_aws_bedrock_credentials_enabled_for_any_team(ctx)
             && matches!(
                 api_keys.aws_credentials_state(),
                 AwsCredentialsState::Loaded { .. }

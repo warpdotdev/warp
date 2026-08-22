@@ -314,9 +314,12 @@ impl RequestParams {
         let geap_binding = crate::ai::geap_credentials::current_geap_policy(app).mint_binding();
         #[cfg(target_family = "wasm")]
         let geap_binding: Option<::ai::api_keys::GeapMintBinding> = None;
+        // `RequestParams` is built from a bare `AppContext` with no window behind it, so the
+        // host policies below are the union over the user's teams. Resolving them against the
+        // originating window's team needs an operation scope threaded through the send paths.
         let api_keys = api_key_manager.api_keys_for_request(
             is_byo_enabled,
-            user_workspaces.is_aws_bedrock_credentials_enabled(app),
+            user_workspaces.is_aws_bedrock_credentials_enabled_for_any_team(app),
             geap_binding,
         );
         let is_custom_inference_enabled = user_workspaces.is_custom_inference_enabled(app);

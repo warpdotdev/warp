@@ -128,10 +128,6 @@ impl Workspace {
                 .is_some_and(|m| m.email == current_user_email)
     }
 
-    pub fn is_custom_llm_enabled(&self) -> bool {
-        self.settings.llm_settings.enabled
-    }
-
     pub fn are_overages_toggleable(&self) -> bool {
         self.billing_metadata
             .tier

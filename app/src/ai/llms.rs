@@ -146,14 +146,18 @@ fn should_show_host_icon_for_model(
             .is_some_and(|config| config.enabled)
 }
 
+/// The model pickers render in both front-ends and the TUI registers no window with
+/// [`UserWorkspaces`], so these host icons read the union over the user's teams rather than one
+/// window's team. Giving the pickers real per-window scope belongs with the model-catalog work.
 pub fn should_show_bedrock_icon_for_model(llm: &LLMInfo, app: &AppContext) -> bool {
     should_show_host_icon_for_model(
         llm,
         &LLMModelHost::AwsBedrock,
-        UserWorkspaces::as_ref(app).is_aws_bedrock_credentials_enabled(app),
+        UserWorkspaces::as_ref(app).is_aws_bedrock_credentials_enabled_for_any_team(app),
     )
 }
 
+/// See [`should_show_bedrock_icon_for_model`] for why this is a cross-team read.
 pub fn should_show_gemini_enterprise_agent_platform_icon_for_model(
     llm: &LLMInfo,
     app: &AppContext,
@@ -161,7 +165,7 @@ pub fn should_show_gemini_enterprise_agent_platform_icon_for_model(
     should_show_host_icon_for_model(
         llm,
         &LLMModelHost::GeminiEnterprise,
-        UserWorkspaces::as_ref(app).is_gemini_enterprise_credentials_enabled(app),
+        UserWorkspaces::as_ref(app).is_gemini_enterprise_credentials_enabled_for_any_team(app),
     )
 }
 

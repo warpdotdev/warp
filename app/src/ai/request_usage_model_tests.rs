@@ -1413,6 +1413,8 @@ fn test_out_of_credits_refined_by_local_bedrock_credentials() {
     App::test((), |mut app| async move {
         // Bedrock via the local AWS chain: the org enables the host, but the
         // credentials live on this machine.
+        // The fixture workspace has no teams, which is the one case in which the windowless
+        // BYO-path check reads the workspace's own settings.
         let (_uid, mut workspace) = create_test_workspace();
         workspace.settings.llm_settings.enabled = true;
         workspace.settings.llm_settings.host_configs.insert(

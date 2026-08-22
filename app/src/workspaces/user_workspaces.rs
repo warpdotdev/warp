@@ -19,7 +19,8 @@ use super::team::{DiscoverableTeam, MembershipRole, Team};
 use super::workspace::WorkspaceMemberUsageInfo;
 use super::workspace::{
     AdminEnablementSetting, BillingMetadata, CustomerType, EnterpriseSecretRegex,
-    HostEnablementSetting, UgcCollectionEnablementSetting, Workspace, WorkspaceUid,
+    HostEnablementSetting, LlmHostSettings, LlmSettings, UgcCollectionEnablementSetting, Workspace,
+    WorkspaceUid,
 };
 use crate::ai::credit_availability::AICreditAvailability;
 use crate::ai::llms::LLMModelHost;
@@ -208,9 +209,6 @@ pub(crate) struct TeamContextForOperation {
 /// workspace-level data. Code with no window at all must not construct a scope to route around
 /// this; it should read across every team explicitly, the way
 /// `UserWorkspaces::teams_allow_codebase_context` does.
-// Only tests call `team_uid()` today; remove this `#[allow(dead_code)]` once a Group 1
-// migration PR has a real getter generic over this trait.
-#[allow(dead_code)]
 pub(crate) trait TeamScope {
     fn team_uid(&self) -> Option<ServerId>;
 }
@@ -241,9 +239,6 @@ impl TeamContextForOperation {
 /// a [`TeamContextForOperation`]. A [`WeakViewHandle`] locates a window to read from; it is
 /// not evidence that the holder is running in that window, which is what minting operation
 /// scope requires.
-// Only tests construct one today; remove this once a Group 1 migration PR resolves one from a
-// real render.
-#[allow(dead_code)]
 pub(crate) struct TeamContext<'a> {
     team_uid: Option<&'a ServerId>,
 }
@@ -463,14 +458,29 @@ impl UserWorkspaces {
     }
 
     /// Resolves `view`'s window team for one render. See [`TeamContext`].
-    // Only tests call this today; remove once a Group 1 migration PR has a real call site.
-    #[allow(dead_code)]
     pub(crate) fn team_context<'a, T: Entity>(
         &'a self,
         view: &WeakViewHandle<T>,
         app: &AppContext,
     ) -> Option<TeamContext<'a>> {
-        let window_id = view.window_id(app)?;
+        self.team_context_for_window(view.window_id(app)?)
+    }
+
+    /// [`Self::team_context`] for a view that is still being constructed.
+    ///
+    /// A view is not attached to its window until construction finishes, so its own
+    /// [`WeakViewHandle`] cannot locate a window yet and [`Self::team_context`] would report no
+    /// scope. A `ViewContext` already names the window, and it is the same one the handle
+    /// resolves to from the first render onward. Use this only for a read taken during
+    /// construction; anything later should resolve from the handle so it follows the window.
+    pub(crate) fn team_context_for_view<T: Entity>(
+        &self,
+        ctx: &ViewContext<T>,
+    ) -> Option<TeamContext<'_>> {
+        self.team_context_for_window(ctx.window_id())
+    }
+
+    fn team_context_for_window(&self, window_id: WindowId) -> Option<TeamContext<'_>> {
         let team_uid = self.window_team_uids.get(&window_id)?;
         let team_uid = match team_uid {
             Some(team_uid) => Some(&self.team_from_uid(*team_uid)?.uid),
@@ -678,13 +688,60 @@ impl UserWorkspaces {
             .or_else(|| self.current_workspace_billing_metadata())
     }
 
-    pub fn is_custom_llm_enabled_for_team(&self, team: Option<&Team>) -> bool {
-        team.map(Team::is_custom_llm_enabled)
-            .or_else(|| {
-                self.current_workspace()
-                    .map(Workspace::is_custom_llm_enabled)
-            })
-            .unwrap_or(false)
+    /// Every team the user belongs to, across all of their workspaces. "The user belongs to no
+    /// team at all" -- the one case in which workspace settings are team-neutral rather than
+    /// one arbitrarily-chosen team's -- means this yields nothing.
+    fn all_teams(&self) -> impl Iterator<Item = &Team> {
+        self.workspaces
+            .iter()
+            .flat_map(|workspace| workspace.teams.iter())
+    }
+
+    /// The LLM settings that apply to `scope`'s team.
+    ///
+    /// `None` when the scope has no team while the user does belong to teams: there is no
+    /// team-neutral LLM policy to read in that case, and another team's is not a substitute.
+    /// See [`Self::teamless_llm_settings`] for the one case the workspace's own settings
+    /// stand in.
+    fn llm_settings<S: TeamScope + ?Sized>(&self, scope: &S) -> Option<&LlmSettings> {
+        match scope.team_uid() {
+            Some(team_uid) => self
+                .team_from_uid(team_uid)
+                .map(|team| &team.settings.llm_settings),
+            None => self.teamless_llm_settings(),
+        }
+    }
+
+    /// The current workspace's own LLM settings, and only for a user who belongs to no team at
+    /// all. That is the only case in which the server derives them from tier defaults; as soon
+    /// as the user has a team they are one arbitrarily-chosen team's effective settings, which
+    /// no scoped read may fall back to.
+    fn teamless_llm_settings(&self) -> Option<&LlmSettings> {
+        if self.all_teams().next().is_some() {
+            return None;
+        }
+        self.current_workspace()
+            .map(|workspace| &workspace.settings.llm_settings)
+    }
+
+    /// Every LLM settings object that could apply to the user: one per team, or the current
+    /// workspace's own when they belong to no team. The basis of the windowless aggregates
+    /// below, guarded the way [`Self::teams_allow_codebase_context`] guards its own fallback.
+    fn every_applicable_llm_settings(&self) -> Vec<&LlmSettings> {
+        let team_settings: Vec<&LlmSettings> = self
+            .all_teams()
+            .map(|team| &team.settings.llm_settings)
+            .collect();
+        if team_settings.is_empty() {
+            return self.teamless_llm_settings().into_iter().collect();
+        }
+        team_settings
+    }
+
+    /// Whether enterprise custom LLM routing is enabled for `scope`'s team.
+    pub(crate) fn is_custom_llm_enabled<S: TeamScope + ?Sized>(&self, scope: &S) -> bool {
+        self.llm_settings(scope)
+            .is_some_and(|llm_settings| llm_settings.enabled)
     }
 
     /// The add-on credits purchase policy for the current viewer context: the
@@ -904,110 +961,221 @@ impl UserWorkspaces {
         })
     }
 
-    pub fn aws_bedrock_host_settings(&self) -> Option<&super::workspace::LlmHostSettings> {
-        self.current_workspace().and_then(|workspace| {
-            workspace
-                .settings
-                .llm_settings
-                .host_configs
-                .get(&LLMModelHost::AwsBedrock)
+    fn host_settings<'a>(
+        llm_settings: Option<&'a LlmSettings>,
+        host: &LLMModelHost,
+    ) -> Option<&'a LlmHostSettings> {
+        llm_settings?.host_configs.get(host)
+    }
+
+    /// Did the admin turn this host on? Both the custom-LLM routing switch and the host's own
+    /// entry have to be enabled.
+    fn host_is_available(llm_settings: Option<&LlmSettings>, host: &LLMModelHost) -> bool {
+        llm_settings.is_some_and(|llm_settings| {
+            llm_settings.enabled
+                && Self::host_settings(Some(llm_settings), host)
+                    .is_some_and(|host_settings| host_settings.enabled)
         })
     }
 
-    /// Did the admin enable AWS Bedrock for the current workspace?
-    pub fn is_aws_bedrock_available_from_workspace(&self) -> bool {
-        self.current_workspace().is_some_and(|workspace| {
-            workspace.settings.llm_settings.enabled
-                && self
-                    .aws_bedrock_host_settings()
-                    .is_some_and(|settings| settings.enabled)
-        })
-    }
-    pub fn aws_bedrock_host_enablement_setting(&self) -> HostEnablementSetting {
-        self.aws_bedrock_host_settings()
-            .map(|settings| settings.enablement_setting.clone())
+    fn host_enablement_setting(
+        llm_settings: Option<&LlmSettings>,
+        host: &LLMModelHost,
+    ) -> HostEnablementSetting {
+        Self::host_settings(llm_settings, host)
+            .map(|host_settings| host_settings.enablement_setting.clone())
             .unwrap_or_default()
     }
 
-    pub fn is_aws_bedrock_credentials_toggleable(&self) -> bool {
+    /// Resolves the admin's host policy against the member's own toggle.
+    fn host_credentials_enabled(
+        llm_settings: Option<&LlmSettings>,
+        host: &LLMModelHost,
+        user_setting_enabled: bool,
+    ) -> bool {
+        if !Self::host_is_available(llm_settings, host) {
+            return false;
+        }
+        match Self::host_enablement_setting(llm_settings, host) {
+            HostEnablementSetting::Enforce => true,
+            HostEnablementSetting::RespectUserSetting => user_setting_enabled,
+        }
+    }
+
+    /// Did the admin enable AWS Bedrock for `scope`'s team?
+    pub(crate) fn is_aws_bedrock_available<S: TeamScope + ?Sized>(&self, scope: &S) -> bool {
+        Self::host_is_available(self.llm_settings(scope), &LLMModelHost::AwsBedrock)
+    }
+
+    pub(crate) fn aws_bedrock_host_enablement_setting<S: TeamScope + ?Sized>(
+        &self,
+        scope: &S,
+    ) -> HostEnablementSetting {
+        Self::host_enablement_setting(self.llm_settings(scope), &LLMModelHost::AwsBedrock)
+    }
+
+    pub(crate) fn is_aws_bedrock_credentials_toggleable<S: TeamScope + ?Sized>(
+        &self,
+        scope: &S,
+    ) -> bool {
         matches!(
-            self.aws_bedrock_host_enablement_setting(),
+            self.aws_bedrock_host_enablement_setting(scope),
             HostEnablementSetting::RespectUserSetting
         )
     }
 
-    pub fn is_aws_bedrock_credentials_enabled(&self, app: &AppContext) -> bool {
-        // i.e. did the admin go and toggle on aws bedrock in the admin panel?
-        if !self.is_aws_bedrock_available_from_workspace() {
-            return false;
-        }
-
-        match self.aws_bedrock_host_enablement_setting() {
-            HostEnablementSetting::Enforce => true,
-            HostEnablementSetting::RespectUserSetting => *AISettings::as_ref(app)
+    pub(crate) fn is_aws_bedrock_credentials_enabled<S: TeamScope + ?Sized>(
+        &self,
+        scope: &S,
+        app: &AppContext,
+    ) -> bool {
+        Self::host_credentials_enabled(
+            self.llm_settings(scope),
+            &LLMModelHost::AwsBedrock,
+            *AISettings::as_ref(app)
                 .aws_bedrock_credentials_enabled
                 .value(),
-        }
+        )
     }
 
-    pub fn gemini_enterprise_host_settings(&self) -> Option<&super::workspace::LlmHostSettings> {
-        self.current_workspace().and_then(|workspace| {
-            workspace
-                .settings
-                .llm_settings
-                .host_configs
-                .get(&LLMModelHost::GeminiEnterprise)
-        })
+    /// Whether *any* of the user's teams has AWS Bedrock credentials enabled, for work that
+    /// belongs to no window: loading the local AWS credential chain, deciding whether a
+    /// request may carry those credentials, and the model pickers' host icons (which the TUI
+    /// also renders, and the TUI registers no window to scope by).
+    ///
+    /// Any-team-enables-wins, the mirror of [`Self::teams_allow_codebase_context`]'s
+    /// any-team-disables direction, and guarded the same way: the workspace's own settings are
+    /// read only when the user belongs to no team at all. A caller that has a window must use
+    /// [`Self::is_aws_bedrock_credentials_enabled`] instead -- this deliberately answers for
+    /// the union of the user's teams, not for the team a window points at.
+    pub(crate) fn is_aws_bedrock_credentials_enabled_for_any_team(&self, app: &AppContext) -> bool {
+        let user_setting_enabled = *AISettings::as_ref(app)
+            .aws_bedrock_credentials_enabled
+            .value();
+        self.every_applicable_llm_settings()
+            .into_iter()
+            .any(|llm_settings| {
+                Self::host_credentials_enabled(
+                    Some(llm_settings),
+                    &LLMModelHost::AwsBedrock,
+                    user_setting_enabled,
+                )
+            })
     }
 
-    /// Did the admin enable Gemini Enterprise (GEAP) for the current workspace?
-    pub fn is_gemini_enterprise_available_from_workspace(&self) -> bool {
-        self.current_workspace().is_some_and(|workspace| {
-            workspace.settings.llm_settings.enabled
-                && self
-                    .gemini_enterprise_host_settings()
-                    .is_some_and(|settings| settings.enabled)
-        })
+    /// Did the admin enable Gemini Enterprise (GEAP) for `scope`'s team?
+    pub(crate) fn is_gemini_enterprise_available<S: TeamScope + ?Sized>(&self, scope: &S) -> bool {
+        Self::host_is_available(self.llm_settings(scope), &LLMModelHost::GeminiEnterprise)
     }
 
-    pub fn gemini_enterprise_host_enablement_setting(&self) -> HostEnablementSetting {
-        self.gemini_enterprise_host_settings()
-            .map(|settings| settings.enablement_setting.clone())
-            .unwrap_or_default()
+    pub(crate) fn gemini_enterprise_host_enablement_setting<S: TeamScope + ?Sized>(
+        &self,
+        scope: &S,
+    ) -> HostEnablementSetting {
+        Self::host_enablement_setting(self.llm_settings(scope), &LLMModelHost::GeminiEnterprise)
     }
 
-    pub fn is_gemini_enterprise_credentials_toggleable(&self) -> bool {
+    pub(crate) fn is_gemini_enterprise_credentials_toggleable<S: TeamScope + ?Sized>(
+        &self,
+        scope: &S,
+    ) -> bool {
         matches!(
-            self.gemini_enterprise_host_enablement_setting(),
+            self.gemini_enterprise_host_enablement_setting(scope),
             HostEnablementSetting::RespectUserSetting
         )
     }
 
-    /// Whether Gemini Enterprise (GEAP) credentials should be minted and attached for the
-    /// current user. Anonymous/logged-out guard from [`Self::is_byo_api_key_enabled`]:
-    /// a GEAP credential mint is rooted in the user's Warp session, so without one
-    /// there is nothing to mint from.
-    pub fn is_gemini_enterprise_credentials_enabled(&self, app: &AppContext) -> bool {
-        if !FeatureFlag::GeminiEnterprise.is_enabled() {
+    /// Whether Gemini Enterprise (GEAP) credentials should be minted and attached under
+    /// `scope`. Anonymous/logged-out guard from [`Self::is_byo_api_key_enabled`]: a GEAP
+    /// credential mint is rooted in the user's Warp session, so without one there is nothing
+    /// to mint from.
+    pub(crate) fn is_gemini_enterprise_credentials_enabled<S: TeamScope + ?Sized>(
+        &self,
+        scope: &S,
+        app: &AppContext,
+    ) -> bool {
+        if !self.is_gemini_enterprise_mintable(app) {
             return false;
         }
-        if AuthStateProvider::as_ref(app)
-            .get()
-            .is_anonymous_or_logged_out()
-        {
-            return false;
-        }
-        // i.e. did the admin toggle on Gemini Enterprise in the admin panel?
-        if !self.is_gemini_enterprise_available_from_workspace() {
-            return false;
-        }
-
-        match self.gemini_enterprise_host_enablement_setting() {
-            HostEnablementSetting::Enforce => true,
-            HostEnablementSetting::RespectUserSetting => *AISettings::as_ref(app)
+        Self::host_credentials_enabled(
+            self.llm_settings(scope),
+            &LLMModelHost::GeminiEnterprise,
+            *AISettings::as_ref(app)
                 .gemini_enterprise_credentials_enabled
                 .value(),
+        )
+    }
+
+    /// The user-level preconditions for minting a GEAP credential at all, independent of any
+    /// team's host policy.
+    fn is_gemini_enterprise_mintable(&self, app: &AppContext) -> bool {
+        FeatureFlag::GeminiEnterprise.is_enabled()
+            && !AuthStateProvider::as_ref(app)
+                .get()
+                .is_anonymous_or_logged_out()
+    }
+
+    /// The Gemini Enterprise host configuration that background, windowless credential minting
+    /// should mint from, or `None` when it should not mint.
+    ///
+    /// Any-team-enables-wins, the same aggregate as
+    /// [`Self::is_aws_bedrock_credentials_enabled_for_any_team`]: background GEAP work
+    /// succeeds if any one of the user's teams enables it. Windowed callers must use
+    /// [`Self::is_gemini_enterprise_credentials_enabled`] instead.
+    ///
+    /// Unlike a boolean aggregate this yields a *value* -- a Google Cloud project to federate
+    /// against -- and there is no defensible ordering over projects. So two enabling teams
+    /// that disagree on the audience or service account yield `None` rather than an arbitrary
+    /// pick: there is one credential store and no window to disambiguate with, and which
+    /// project should win is a product decision. Enabling teams that agree (every
+    /// configuration in production today) mint exactly as before.
+    pub(crate) fn gemini_enterprise_host_settings_for_any_enabling_team(
+        &self,
+        app: &AppContext,
+    ) -> Option<&LlmHostSettings> {
+        if !self.is_gemini_enterprise_mintable(app) {
+            return None;
         }
+        let user_setting_enabled = *AISettings::as_ref(app)
+            .gemini_enterprise_credentials_enabled
+            .value();
+        let mut enabling = self
+            .every_applicable_llm_settings()
+            .into_iter()
+            .filter(|&llm_settings| {
+                Self::host_credentials_enabled(
+                    Some(llm_settings),
+                    &LLMModelHost::GeminiEnterprise,
+                    user_setting_enabled,
+                )
+            })
+            .filter_map(|llm_settings| {
+                Self::host_settings(Some(llm_settings), &LLMModelHost::GeminiEnterprise)
+            });
+
+        let first = enabling.next()?;
+        let agree = enabling.all(|other| {
+            other.gcp_audience == first.gcp_audience && other.gcp_sa_email == first.gcp_sa_email
+        });
+        if !agree {
+            log::warn!(
+                "GEAP: the user's teams enable Gemini Enterprise against different Google Cloud \
+                 projects; background minting has no window to choose between them"
+            );
+            return None;
+        }
+        Some(first)
+    }
+
+    /// Whether background, windowless GEAP credential minting should run at all. See
+    /// [`Self::gemini_enterprise_host_settings_for_any_enabling_team`], whose configuration
+    /// this reports the presence of.
+    pub(crate) fn is_gemini_enterprise_credentials_enabled_for_any_team(
+        &self,
+        app: &AppContext,
+    ) -> bool {
+        self.gemini_enterprise_host_settings_for_any_enabling_team(app)
+            .is_some()
     }
 
     /// Returns the AI autonomy settings that are enforced by the workspace for all its members.

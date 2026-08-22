@@ -7,7 +7,6 @@ use ai::api_keys::{
 use futures::channel::oneshot;
 use serde::{Deserialize, Serialize};
 use vec1::vec1;
-use warp_core::features::FeatureFlag;
 use warp_errors::report_error;
 use warp_managed_secrets::ManagedSecretManager;
 use warp_managed_secrets::client::{IdentityTokenOptions, TaskIdentityToken};
@@ -75,19 +74,22 @@ fn geap_mint_binding_from_parts(
     })
 }
 
+/// The GEAP gate for the single, app-wide credential store.
+///
+/// Every trigger for a mint is background work on `ApiKeyManager` with no window behind it --
+/// a settings poll, a token nearing expiry, a request-time safety net -- so this deliberately
+/// takes no team scope and instead reads across all of the user's teams: background GEAP work
+/// succeeds if any one of them enables it. See
+/// [`UserWorkspaces::gemini_enterprise_host_settings_for_any_enabling_team`], which also
+/// covers what happens when two enabling teams name different Google Cloud projects.
 pub(crate) fn current_geap_policy(app: &AppContext) -> GeapPolicy {
-    if !FeatureFlag::GeminiEnterprise.is_enabled() {
-        return GeapPolicy::Disabled;
-    }
     let user_workspaces = UserWorkspaces::as_ref(app);
-    if !user_workspaces.is_gemini_enterprise_credentials_enabled(app) {
-        return GeapPolicy::Disabled;
-    }
-    let Some(user_id) = AuthStateProvider::as_ref(app).get().user_id() else {
+    let Some(settings) = user_workspaces.gemini_enterprise_host_settings_for_any_enabling_team(app)
+    else {
         return GeapPolicy::Disabled;
     };
-    let Some(settings) = user_workspaces.gemini_enterprise_host_settings() else {
-        return GeapPolicy::Unconfigured;
+    let Some(user_id) = AuthStateProvider::as_ref(app).get().user_id() else {
+        return GeapPolicy::Disabled;
     };
     match geap_mint_binding_from_parts(
         user_id.as_string(),
