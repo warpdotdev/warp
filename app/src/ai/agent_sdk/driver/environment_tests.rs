@@ -344,7 +344,7 @@ fn head_overrides_replace_checkout_ref_only_for_matching_repos() {
         branch_head_override(RepositoryForge::GitHub, "warpdotdev", "unused", "develop"),
     ];
 
-    let prepared = repository_clone_requests(&repos, &overrides);
+    let prepared = repository_clone_requests(&repos, &overrides).unwrap();
 
     assert_eq!(
         prepared[0].checkout,
@@ -356,6 +356,84 @@ fn head_overrides_replace_checkout_ref_only_for_matching_repos() {
         prepared[1].checkout,
         Some(RepositoryHeadRef::Branch("old-pin".to_string()))
     );
+}
+
+#[test]
+fn clone_requests_reject_a_repository_with_an_unrecognized_forge() {
+    // An environment forge value newer than this client build (see
+    // CodeForge::Unknown) can still be assigned to a real repository by a
+    // newer server. Building clone requests for it must fail clearly rather
+    // than panic or silently attempt a clone with no host.
+    let repos = vec![SourceRepo::new(
+        CodeForge::Unknown,
+        "warpdotdev".to_string(),
+        "warp".to_string(),
+    )];
+
+    let error = repository_clone_requests(&repos, &[]).unwrap_err();
+
+    assert!(matches!(
+        error,
+        PrepareEnvironmentError::UnsupportedRepositoryForge { repo_name }
+            if repo_name == "warpdotdev/warp"
+    ));
+}
+
+#[test]
+fn clone_requests_reject_an_unrecognized_forge_repository_even_with_unrelated_overrides() {
+    // A head override targeting a different, supported-forge repository must
+    // not mask the unsupported repository elsewhere in the same environment:
+    // every repository is checked, not just the ones an override names.
+    let repos = vec![
+        SourceRepo::new(
+            CodeForge::GitHub,
+            "warpdotdev".to_string(),
+            "warp".to_string(),
+        ),
+        SourceRepo::new(
+            CodeForge::Unknown,
+            "warpdotdev".to_string(),
+            "warp-server".to_string(),
+        ),
+    ];
+    let overrides = vec![commit_head_override(
+        RepositoryForge::GitHub,
+        "warpdotdev",
+        "warp",
+        "0123456789abcdef0123456789abcdef01234567",
+    )];
+
+    let error = repository_clone_requests(&repos, &overrides).unwrap_err();
+
+    assert!(matches!(
+        error,
+        PrepareEnvironmentError::UnsupportedRepositoryForge { repo_name }
+            if repo_name == "warpdotdev/warp-server"
+    ));
+}
+
+#[test]
+fn head_override_validation_treats_an_unrecognized_forge_repository_as_never_matching() {
+    // No head override can target a repository whose forge this client can't
+    // represent; validation must reject it as "not declared" (an override
+    // that names a repository the environment doesn't have) rather than
+    // panicking while checking whether it matches.
+    let environment = environment_with_repos(vec![SourceRepo::new(
+        CodeForge::Unknown,
+        "warpdotdev".to_string(),
+        "warp".to_string(),
+    )]);
+    let override_for_it = commit_head_override(
+        RepositoryForge::GitHub,
+        "warpdotdev",
+        "warp",
+        "0123456789abcdef0123456789abcdef01234567",
+    );
+
+    let error =
+        validate_repository_head_overrides(&environment.effective_repos(), &[override_for_it])
+            .expect_err("an unrecognized-forge repository can never match an override");
+    assert!(error.to_string().contains("not declared"));
 }
 
 #[test]
@@ -439,7 +517,7 @@ fn applied_head_overrides_are_threaded_through_the_existing_clone_command() {
         "develop",
     )];
     let command = build_parallel_clone_command(
-        &repository_clone_requests(&repos, &overrides),
+        &repository_clone_requests(&repos, &overrides).unwrap(),
         ShellType::Bash,
     );
 
@@ -468,7 +546,7 @@ fn applied_commit_override_uses_sha_only_fetch() {
         "0123456789abcdef0123456789abcdef01234567",
     )];
     let command = build_parallel_clone_command(
-        &repository_clone_requests(&repos, &overrides),
+        &repository_clone_requests(&repos, &overrides).unwrap(),
         ShellType::Bash,
     );
 
