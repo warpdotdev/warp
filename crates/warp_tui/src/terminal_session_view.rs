@@ -2169,10 +2169,6 @@ impl TuiTerminalSessionView {
                 ctx.notify();
             }
         });
-        // The statusline's team item is a live value like the model label, so it needs the
-        // same treatment. `TeamsChanged` covers gaining or losing a team — which is what makes
-        // the item appear or disappear at all — and renames; `WindowTeamChanged` covers `/team`
-        // and reconcile moving this window.
         ctx.subscribe_to_model(&UserWorkspaces::handle(ctx), move |view, _, event, ctx| {
             let is_this_window = match event {
                 UserWorkspacesEvent::TeamsChanged => true,
@@ -3897,8 +3893,6 @@ impl TuiTerminalSessionView {
         });
     }
 
-    /// Toggles the team switcher from the footer's active-team label — the same menu `/team`
-    /// surfaces.
     fn toggle_team_menu(&mut self, ctx: &mut ViewContext<Self>) {
         self.team_menu.update(ctx, |menu, ctx| {
             if menu.is_open(ctx) {

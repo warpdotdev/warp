@@ -2,24 +2,17 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use warp::settings::{TuiStatuslineConfig, TuiStatuslineItem};
-use warp::tui_export::{Appearance, register_tui_input_mode_test_settings};
+use warp::tui_export::Appearance;
 use warpui::platform::WindowStyle;
 use warpui::{AddWindowOptions, App};
 use warpui_core::TypedActionView as _;
 
 use super::{TuiStatuslineConfigAction, TuiStatuslineConfigEvent, TuiStatuslineConfigView};
 
-/// The picker asks `UserWorkspaces` whether to offer the active-team row, so the singleton has
-/// to exist. This registers it with no teams, which is the case where the row is not offered.
-fn register_workspaces(app: &mut App) {
-    app.update(register_tui_input_mode_test_settings);
-}
-
 #[test]
 fn default_picker_preserves_figma_selection_and_full_catalog_order() {
     App::test((), |mut app| async move {
         app.add_singleton_model(|_| Appearance::mock());
-        register_workspaces(&mut app);
         let view = app.update(|ctx| {
             ctx.add_tui_window(
                 AddWindowOptions {
@@ -42,7 +35,6 @@ fn default_picker_preserves_figma_selection_and_full_catalog_order() {
 fn toggle_and_reorder_are_reflected_in_saved_config() {
     App::test((), |mut app| async move {
         app.add_singleton_model(|_| Appearance::mock());
-        register_workspaces(&mut app);
         let view = app.update(|ctx| {
             ctx.add_tui_window(
                 AddWindowOptions {

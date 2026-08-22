@@ -402,10 +402,6 @@ impl TuiTerminalSessionView {
         None
     }
 
-    /// The window's active team, shown only when the user is on more than one.
-    ///
-    /// Reuses `can_switch_teams` rather than testing the team count here, so the TUI and the
-    /// GUI's title-bar pill cannot drift apart on who counts as multi-team.
     fn render_active_team_statusline(
         &self,
         builder: &TuiUiBuilder,
@@ -522,7 +518,6 @@ impl TuiTerminalSessionView {
                         .finish(),
                     )
                 }),
-                // `config.is_enabled` already consulted the team tri-state for this item.
                 TuiStatuslineItem::Team => (!shell_mode)
                     .then(|| self.render_active_team_statusline(&builder, ctx))
                     .flatten()
