@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use std::mem;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use anyhow::{Result, anyhow};
 use itertools::Itertools;
@@ -52,8 +53,9 @@ pub(crate) fn layout_mermaid_block_for_test(
     layout_options: RenderLayoutOptions,
     app: &AppContext,
 ) -> Result<(BlockItem, bool)> {
+    let block = StyledBufferBlock::Text(text_block);
     let task = LayoutTask::from_styled_block(
-        StyledBufferBlock::Text(text_block),
+        &block,
         layout,
         &layout_options,
         CharOffset::from(1),
@@ -182,7 +184,7 @@ impl PreciseDelta {
 /// Delta after an edit operation recording the old range of rows that got replaced
 /// and the content of new rows changed after the edit. This is necessary for the rendering
 /// model to know what block objects need a re-layout.
-#[derive(Clone, Debug, PartialEq, Eq, Default)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct EditDelta {
     /// The exact replacement charoffset range where content was changed.
     pub precise_deltas: Vec<PreciseDelta>,
@@ -191,7 +193,13 @@ pub struct EditDelta {
     /// the first character after it.
     pub old_offset: Range<CharOffset>,
     /// Content of the lines that have been changed.
-    pub new_lines: Vec<StyledBufferBlock>,
+    ///
+    /// Wrapped in `Arc` so that `EditDelta::clone` is O(1). The render pipeline
+    /// often clones a delta (e.g. when storing it in `DelayRendering::edits`)
+    /// before consuming it in `layout_delta`. Without `Arc`, cloning an entire
+    /// file's worth of styled blocks can add several gigabytes of transient
+    /// allocation for large files.
+    pub new_lines: Arc<Vec<StyledBufferBlock>>,
 }
 
 /// Render Delta that has its content laid out into TextFrames.
@@ -510,8 +518,14 @@ impl LayOutArgs {
 impl EditDelta {
     /// Lay out the given EditDelta into TextFrames.
     /// If hidden_lines is provided, lines within hidden ranges will be laid out as BlockItem::Hidden.
+    ///
+    /// Takes `&self` rather than consuming `self` so that laying out a delta never depends on
+    /// `new_lines` having a single owner. `EditDelta` can be cloned by multiple editors sharing
+    /// the same underlying buffer (each clone only bumps the `Arc` refcount), so unconditionally
+    /// borrowing here guarantees the whole `new_lines` vector is never duplicated at layout time,
+    /// regardless of how many clones of the delta are alive.
     pub fn layout_delta(
-        self,
+        &self,
         layout: &TextLayout,
         document_path: Option<&Path>,
         layout_options: &RenderLayoutOptions,
@@ -523,10 +537,12 @@ impl EditDelta {
         // old_offset is in the same 1-indexed coordinate system as hidden ranges.
         let mut current_offset = (self.old_offset.start).max(CharOffset::from(1));
 
-        // First, build a Vec of layout tasks with information about whether they're hidden
+        // First, build a Vec of layout tasks with information about whether they're hidden.
+        // Each task borrows its source block from `self.new_lines` rather than taking
+        // ownership, so this never clones the (potentially file-sized) block list.
         let layout_tasks: Vec<_> = self
             .new_lines
-            .into_iter()
+            .iter()
             .filter_map(|block| {
                 let content_length = block.content_length();
                 if content_length == CharOffset::zero() {
@@ -663,14 +679,18 @@ pub fn layout_temporary_blocks(
 }
 
 /// A unit of work for parallel layout of an edit.
-enum LayoutTask {
+///
+/// Borrows its source text blocks (`'a`) from the `EditDelta::new_lines` they were built from,
+/// rather than owning them, so building the set of layout tasks for a delta never requires
+/// cloning the (potentially file-sized) block list.
+enum LayoutTask<'a> {
     /// An embedded item, which is laid out on the main thread so that it can access
     /// [`AppContext`].
     Embed(Box<dyn LaidOutEmbeddedItem>),
     /// A text block, which will be laid out in parallel.
-    Text(StyledTextBlock),
+    Text(&'a StyledTextBlock),
     MermaidDiagram {
-        text_block: StyledTextBlock,
+        text_block: &'a StyledTextBlock,
         asset_source: AssetSource,
         config: ImageBlockConfig,
     },
@@ -679,7 +699,7 @@ enum LayoutTask {
     /// to [`Self::Text`] but carries the Mermaid asset source so that the view layer can watch
     /// for the asset to finish loading and re-run layout if it becomes parseable.
     MermaidCodeFallback {
-        text_block: StyledTextBlock,
+        text_block: &'a StyledTextBlock,
         pending_mermaid_asset: Option<AssetSource>,
     },
     /// A horizontal rule, which requires no layout.
@@ -699,10 +719,10 @@ enum LayoutTask {
     },
 }
 
-impl LayoutTask {
+impl<'a> LayoutTask<'a> {
     /// Convert a block of styled content to the possibly-parallelizable layout work it requires.
     fn from_styled_block(
-        content: StyledBufferBlock,
+        content: &'a StyledBufferBlock,
         layout: &TextLayout,
         layout_options: &RenderLayoutOptions,
         block_start: CharOffset,
@@ -972,7 +992,7 @@ fn calculate_hidden_block_line_count(
 /// were no paragraphs. So a `Result` is returned for now so that we can bubble
 /// up the error and add appropriate logging. See CLD-2093.
 fn layout_text_block(
-    text_block: StyledTextBlock,
+    text_block: &StyledTextBlock,
     layout: &TextLayout,
     location: BlockLocation,
     is_hidden: bool,
@@ -980,7 +1000,7 @@ fn layout_text_block(
     if is_hidden {
         // If all text is hidden, return a BlockItem::Hidden without doing any layout
         let content_length = text_block.content_length;
-        let line_count = calculate_hidden_block_line_count(&text_block, location);
+        let line_count = calculate_hidden_block_line_count(text_block, location);
         return Ok((
             BlockItem::Hidden(HiddenBlockConfig::new(
                 line_count.into(),
@@ -1005,7 +1025,7 @@ fn layout_text_block(
     // Accumulator for the current line (paragraph) of text.
     let mut active_line = LayOutArgs::new();
     // Accumulator for fully laid-out paragraphs.
-    let mut paragraphs = Vec::with_capacity(estimate_paragraph_count(&text_block));
+    let mut paragraphs = Vec::with_capacity(estimate_paragraph_count(text_block));
 
     let rich_text_styles = layout.rich_text_styles();
     let spacing = rich_text_styles
@@ -1067,22 +1087,27 @@ fn layout_text_block(
         true
     };
 
-    let block_item = match text_block.style.clone() {
-        BufferBlockStyle::CodeBlock { code_block_type } => Vec1::try_from_vec(paragraphs)
-            .ok()
-            .map(|p| {
-                let paragraph_block = ParagraphBlock::new(p);
-                BlockItem::RunnableCodeBlock {
-                    paragraph_block,
-                    code_block_type,
-                    pending_mermaid_asset: None,
-                }
-            })
-            .ok_or_else(|| anyhow!("Code block should have at least one paragraph")),
+    let block_item = match &text_block.style {
+        BufferBlockStyle::CodeBlock { code_block_type } => {
+            let code_block_type = code_block_type.clone();
+            Vec1::try_from_vec(paragraphs)
+                .ok()
+                .map(|p| {
+                    let paragraph_block = ParagraphBlock::new(p);
+                    BlockItem::RunnableCodeBlock {
+                        paragraph_block,
+                        code_block_type,
+                        pending_mermaid_asset: None,
+                    }
+                })
+                .ok_or_else(|| anyhow!("Code block should have at least one paragraph"))
+        }
         BufferBlockStyle::TaskList {
             indent_level,
             complete,
         } => {
+            let indent_level = *indent_level;
+            let complete = *complete;
             debug_assert_eq!(
                 paragraphs.len(),
                 1,
@@ -1099,6 +1124,7 @@ fn layout_text_block(
                 .ok_or_else(|| anyhow!("Task list item should have one paragraph"))
         }
         BufferBlockStyle::UnorderedList { indent_level } => {
+            let indent_level = *indent_level;
             debug_assert_eq!(
                 paragraphs.len(),
                 1,
@@ -1116,6 +1142,8 @@ fn layout_text_block(
             indent_level,
             number,
         } => {
+            let indent_level = *indent_level;
+            let number = *number;
             debug_assert_eq!(
                 paragraphs.len(),
                 1,
@@ -1131,6 +1159,7 @@ fn layout_text_block(
                 .ok_or_else(|| anyhow!("Ordered list item should have one paragraph"))
         }
         BufferBlockStyle::Header { header_size } => {
+            let header_size = *header_size;
             debug_assert_eq!(
                 paragraphs.len(),
                 1,
@@ -1166,14 +1195,14 @@ fn layout_text_block(
 }
 
 fn layout_mermaid_diagram_block(
-    text_block: StyledTextBlock,
+    text_block: &StyledTextBlock,
     asset_source: AssetSource,
     config: ImageBlockConfig,
     location: BlockLocation,
     is_hidden: bool,
 ) -> Result<(BlockItem, bool)> {
     if is_hidden {
-        let line_count = calculate_hidden_block_line_count(&text_block, location);
+        let line_count = calculate_hidden_block_line_count(text_block, location);
         return Ok((
             BlockItem::Hidden(HiddenBlockConfig::new(
                 line_count.into(),
@@ -1200,7 +1229,7 @@ fn layout_mermaid_diagram_block(
 }
 
 fn layout_table_block(
-    text_block: StyledTextBlock,
+    text_block: &StyledTextBlock,
     layout: &TextLayout,
     spacing: BlockSpacing,
 ) -> Result<BlockItem> {
