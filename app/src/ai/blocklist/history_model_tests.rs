@@ -708,6 +708,7 @@ fn test_initialize_historical_conversations_resolves_parent_agent_id_children_vi
                     autoexecute_override: None,
                     last_event_sequence: None,
                     pinned: false,
+                    cloud_handoff_task_id: None,
                 },
                 now,
                 None,
@@ -730,6 +731,7 @@ fn test_initialize_historical_conversations_resolves_parent_agent_id_children_vi
                     autoexecute_override: None,
                     last_event_sequence: None,
                     pinned: false,
+                    cloud_handoff_task_id: None,
                 },
                 now - chrono::Duration::seconds(1),
                 Some("Parent query"),
@@ -780,6 +782,7 @@ fn test_initialize_historical_conversations_uses_root_task_description_title() {
                     autoexecute_override: None,
                     last_event_sequence: None,
                     pinned: false,
+                    cloud_handoff_task_id: None,
                 })
                 .expect("conversation data should serialize"),
                 last_modified_at: now,
@@ -946,6 +949,7 @@ fn test_initialize_historical_conversations_eagerly_hydrates_orchestration_child
                     autoexecute_override: None,
                     last_event_sequence: None,
                     pinned: false,
+                    cloud_handoff_task_id: None,
                 },
                 now,
                 // Child needs at least one root task so `AIConversation::new_restored` succeeds.
@@ -969,6 +973,7 @@ fn test_initialize_historical_conversations_eagerly_hydrates_orchestration_child
                     autoexecute_override: None,
                     last_event_sequence: None,
                     pinned: false,
+                    cloud_handoff_task_id: None,
                 },
                 now - chrono::Duration::seconds(1),
                 Some("Parent query"),
@@ -2383,6 +2388,56 @@ fn test_start_new_child_conversation_persists_child_metadata_for_restore() {
     });
 }
 
+/// A local-to-cloud handoff marks the moved conversation a shared-session viewer of the cloud run
+/// before it records the run against it, and the ordinary save path refuses to persist a viewer.
+/// The binding still has to reach disk, or a follow-up after a client restart has nothing naming
+/// the cloud run and falls back to the local agent.
+#[test]
+fn test_record_cloud_handoff_task_persists_binding_for_shared_session_viewer() {
+    App::test((), |mut app| async move {
+        initialize_settings_for_tests(&mut app);
+
+        let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+        let mut global_resource_handles = GlobalResourceHandles::mock(&mut app);
+        global_resource_handles.model_event_sender = Some(sender);
+        app.add_singleton_model(|_| GlobalResourceHandlesProvider::new(global_resource_handles));
+
+        let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new_for_test());
+        let terminal_view_id = EntityId::new();
+        let server_token = ServerConversationToken::new("moved-conversation-token".to_string());
+        let task_id: AmbientAgentTaskId = "550e8400-e29b-41d4-a716-446655440000"
+            .parse()
+            .expect("task id should parse");
+
+        let conversation_id = history_model.update(&mut app, |history_model, ctx| {
+            let conversation_id =
+                history_model.start_new_conversation(terminal_view_id, false, false, false, ctx);
+            history_model.set_server_conversation_token_for_conversation(
+                conversation_id,
+                server_token.as_str().to_string(),
+            );
+            history_model.set_viewing_shared_session_for_conversation(conversation_id, true);
+            conversation_id
+        });
+
+        history_model.update(&mut app, |history_model, ctx| {
+            history_model.record_cloud_handoff_task(&server_token, task_id, ctx);
+        });
+
+        let persisted_conversation = persisted_agent_conversation_from_update_event(
+            receiver
+                .recv_timeout(Duration::from_secs(1))
+                .expect("recording the handoff's run should persist conversation state"),
+        );
+        let restored =
+            convert_persisted_conversation_to_ai_conversation_with_metadata(persisted_conversation)
+                .expect("persisted moved conversation should be restorable");
+
+        assert_eq!(restored.id(), conversation_id);
+        assert_eq!(restored.cloud_handoff_task_id(), Some(task_id));
+    });
+}
+
 #[test]
 fn test_mark_conversation_as_remote_child_persists_updated_conversation_state() {
     App::test((), |mut app| async move {
@@ -3348,6 +3403,7 @@ fn test_find_by_token_after_insert_forked_conversation_from_tasks() {
             autoexecute_override: None,
             last_event_sequence: None,
             pinned: false,
+            cloud_handoff_task_id: None,
         };
         let tasks = vec![warp_multi_agent_api::Task {
             id: "root-task".to_string(),
@@ -3565,6 +3621,7 @@ fn test_fork_then_bind_handoff_token_resolves_to_forked_conversation() {
                 autoexecute_override: None,
                 last_event_sequence: None,
                 pinned: false,
+                cloud_handoff_task_id: None,
             }),
         )
         .expect("restored source conversation should build");
@@ -3653,6 +3710,7 @@ fn test_fork_then_bind_handoff_token_persists_to_restored_conversation() {
                 autoexecute_override: None,
                 last_event_sequence: None,
                 pinned: false,
+                cloud_handoff_task_id: None,
             }),
         )
         .expect("restored source conversation should build");
@@ -3766,6 +3824,7 @@ fn test_fork_then_bind_handoff_token_updates_cached_metadata_and_emits_refresh_e
                 autoexecute_override: None,
                 last_event_sequence: None,
                 pinned: false,
+                cloud_handoff_task_id: None,
             }),
         )
         .expect("restored source conversation should build");
@@ -3895,6 +3954,7 @@ fn test_fork_conversation_preserves_task_ids_when_requested() {
                 autoexecute_override: None,
                 last_event_sequence: None,
                 pinned: false,
+                cloud_handoff_task_id: None,
             }),
         )
         .expect("restored source conversation should build");
@@ -4046,6 +4106,7 @@ fn test_fork_conversation_title_override_replaces_prefix() {
                 autoexecute_override: None,
                 last_event_sequence: None,
                 pinned: false,
+                cloud_handoff_task_id: None,
             }),
         )
         .expect("restored source conversation should build");
@@ -4139,6 +4200,7 @@ fn hydrate_remote_child_placeholder_with_cloud_transcript_preserves_placeholder_
                 autoexecute_override: None,
                 last_event_sequence: None,
                 pinned: false,
+                cloud_handoff_task_id: None,
             }),
         )
         .expect("placeholder conversation should build");
@@ -4185,6 +4247,7 @@ fn hydrate_remote_child_placeholder_with_cloud_transcript_preserves_placeholder_
                 autoexecute_override: None,
                 last_event_sequence: None,
                 pinned: false,
+                cloud_handoff_task_id: None,
             }),
         )
         .expect("cloud conversation should build");
@@ -4941,6 +5004,7 @@ fn straddle_rewind_followup_requests_are_clean_and_durable() {
                 autoexecute_override: None,
                 last_event_sequence: None,
                 pinned: false,
+                cloud_handoff_task_id: None,
             }),
         )
         .expect("conversation should build");

@@ -171,6 +171,7 @@ fn pill_bar_data_layer_finds_restored_children_before_pane_creation() {
                         autoexecute_override: None,
                         last_event_sequence: None,
                         pinned: false,
+                        cloud_handoff_task_id: None,
                     })
                     .expect("child conversation data should serialize"),
                     last_modified_at: now,
@@ -222,6 +223,7 @@ fn pill_bar_data_layer_finds_restored_children_before_pane_creation() {
                         autoexecute_override: None,
                         last_event_sequence: None,
                         pinned: false,
+                        cloud_handoff_task_id: None,
                     })
                     .expect("parent conversation data should serialize"),
                     last_modified_at: now - chrono::Duration::seconds(1),

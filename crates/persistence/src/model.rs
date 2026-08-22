@@ -1210,6 +1210,14 @@ pub struct AgentConversationData {
     /// come from SpawnAgentResponse once the local→cloud spawn path is wired.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub run_id: Option<String>,
+    /// The cloud run a local-to-cloud handoff moved this conversation to.
+    ///
+    /// Deliberately separate from [`Self::run_id`]: every local conversation
+    /// carries a `run_id`, so only a field written exclusively by the handoff
+    /// can say that a restored conversation's continuation belongs in the
+    /// cloud.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cloud_handoff_task_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub autoexecute_override: Option<PersistedAutoexecuteMode>,
     /// The last event sequence number from the v2 orchestration event log

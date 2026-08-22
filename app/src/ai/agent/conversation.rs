@@ -306,6 +306,15 @@ pub struct AIConversation {
     /// `run_id()` which calls `.to_string()` on this field.
     task_id: Option<AmbientAgentTaskId>,
 
+    /// The cloud run this conversation's continuation belongs to, recorded when a local-to-cloud
+    /// handoff creates that run.
+    ///
+    /// Distinct from [`Self::task_id`], which every local conversation also carries (parsed from
+    /// `StreamInit.run_id`) and so cannot say where a follow-up should execute. This field is
+    /// written only by the handoff, so its presence means the conversation was moved to the cloud
+    /// and must not silently continue on the local agent.
+    cloud_handoff_task_id: Option<AmbientAgentTaskId>,
+
     /// The server conversation ID of the source conversation if this conversation was forked.
     forked_from_server_conversation_token: Option<ServerConversationToken>,
 
@@ -429,6 +438,7 @@ impl AIConversation {
             conversation_usage_metadata: ConversationUsageMetadata::default(),
             server_conversation_token: None,
             task_id: None,
+            cloud_handoff_task_id: None,
             forked_from_server_conversation_token: None,
             server_metadata: None,
             transaction: None,
@@ -572,6 +582,14 @@ impl AIConversation {
             (task_store, todo_lists, status)
         };
 
+        // Read out of the overlay before it is consumed below. Unlike `run_id`, this is written
+        // only by a local-to-cloud handoff, so its presence on a restored conversation means the
+        // continuation belongs in the cloud even though the pane looks like an ordinary local one.
+        let cloud_handoff_task_id = conversation_data
+            .as_ref()
+            .and_then(|data| data.cloud_handoff_task_id.as_deref())
+            .and_then(|id| id.parse().ok());
+
         let (
             server_conversation_token,
             forked_from_server_conversation_token,
@@ -680,6 +698,7 @@ impl AIConversation {
             conversation_usage_metadata,
             server_conversation_token,
             task_id: run_id.as_deref().and_then(|id| id.parse().ok()),
+            cloud_handoff_task_id,
             forked_from_server_conversation_token,
             server_metadata: None,
             transaction: None,
@@ -1134,6 +1153,16 @@ impl AIConversation {
     /// Sets the task ID directly (used for child agents spawned via `SpawnAgentResponse`).
     pub fn set_task_id(&mut self, id: AmbientAgentTaskId) {
         self.task_id = Some(id);
+    }
+
+    /// Returns the cloud run a local-to-cloud handoff moved this conversation to, if any.
+    pub fn cloud_handoff_task_id(&self) -> Option<AmbientAgentTaskId> {
+        self.cloud_handoff_task_id
+    }
+
+    /// Records the cloud run a local-to-cloud handoff created for this conversation.
+    pub fn set_cloud_handoff_task_id(&mut self, id: AmbientAgentTaskId) {
+        self.cloud_handoff_task_id = Some(id);
     }
 
     /// Returns the server-side agent identifier for orchestration.
@@ -3635,7 +3664,25 @@ impl AIConversation {
         {
             return;
         }
+        self.write_conversation_state(ctx);
+    }
 
+    /// Persists this conversation even though it is displaying a remote shared session.
+    ///
+    /// [`Self::write_updated_conversation_state`] skips a shared-session viewer because a session
+    /// somebody else is running is not this client's to store. A conversation a local-to-cloud
+    /// handoff moved is the exception: it is this client's own conversation, already on disk before
+    /// the handoff marked its pane a viewer of the cloud run. Its cloud binding has to reach disk
+    /// at that moment, because the pane produces no further local writes once the run owns the
+    /// conversation.
+    pub(crate) fn write_cloud_handoff_conversation_state(
+        &mut self,
+        ctx: &mut ModelContext<BlocklistAIHistoryModel>,
+    ) {
+        self.write_conversation_state(ctx);
+    }
+
+    fn write_conversation_state(&mut self, ctx: &mut ModelContext<BlocklistAIHistoryModel>) {
         // Check if session restoration is enabled before writing any state.
         if !*GeneralSettings::as_ref(ctx).restore_session
             || !AppExecutionMode::as_ref(ctx).can_save_session()
@@ -3707,6 +3754,7 @@ impl AIConversation {
                 // (returns `None`) and `new_restored_synthesizing_on_empty`.
                 root_task_is_optimistic: None,
                 run_id: self.task_id.map(|id| id.to_string()),
+                cloud_handoff_task_id: self.cloud_handoff_task_id.map(|id| id.to_string()),
                 autoexecute_override: Some(self.autoexecute_override.into()),
                 last_event_sequence: self.last_event_sequence,
                 pinned: self.pinned,

@@ -38,6 +38,7 @@ use crate::ai::agent::{
     AIAgentTodoId, CancellationReason, FinishedAIAgentOutput, MessageId, RenderableAIError,
     RequestCost, Suggestions,
 };
+use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::artifacts::Artifact;
 use crate::ai::document::ai_document_model::AIDocumentModel;
 use crate::input_suggestions::HistoryOrder;
@@ -1004,6 +1005,38 @@ impl BlocklistAIHistoryModel {
         }
     }
 
+    /// Records the cloud run that a local-to-cloud handoff created for the conversation behind
+    /// `server_token`, so a follow-up in that pane keeps routing to the cloud once the handoff's
+    /// shared session ends and the pane's own ambient association is gone.
+    ///
+    /// The handoff rebinds the forked conversation to the cloud run's token before the run is
+    /// created, so the token resolves here even though no metadata snapshot for it exists yet.
+    ///
+    /// The binding is written to disk immediately rather than waiting for the conversation's next
+    /// save: the run owns the conversation from here on, so the pane produces no further local
+    /// writes. It goes through [`AIConversation::write_cloud_handoff_conversation_state`] because
+    /// materialization has already marked the moved conversation a shared-session viewer of the
+    /// cloud run, and the ordinary save path refuses to persist those.
+    pub fn record_cloud_handoff_task(
+        &mut self,
+        server_token: &ServerConversationToken,
+        task_id: AmbientAgentTaskId,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let Some(conversation_id) = self.find_conversation_id_by_server_token(server_token) else {
+            log::warn!(
+                "record_cloud_handoff_task: no conversation for the handoff's forked token; \
+                 a follow-up on that pane will fail closed rather than route to the cloud run"
+            );
+            return;
+        };
+        let Some(conversation) = self.conversations_by_id.get_mut(&conversation_id) else {
+            return;
+        };
+        conversation.set_cloud_handoff_task_id(task_id);
+        conversation.write_cloud_handoff_conversation_state(ctx);
+    }
+
     /// Sets server metadata for a conversation and emits the ConversationMetadataUpdated event.
     /// This helper ensures we don't forget to emit the event when updating metadata.
     /// Updates in-memory conversations, or historical metadata if the conversation isn't loaded.
@@ -1739,6 +1772,7 @@ impl BlocklistAIHistoryModel {
             autoexecute_override: Some(source_conversation.autoexecute_override().into()),
             last_event_sequence: None,
             pinned: false,
+            cloud_handoff_task_id: None,
         };
         let forked_conversation_id = AIConversationId::new();
         if let Err(e) = sqlite_sender.send(ModelEvent::UpdateMultiAgentConversation {
@@ -1917,6 +1951,7 @@ impl BlocklistAIHistoryModel {
             autoexecute_override: Some(conversation.autoexecute_override().into()),
             last_event_sequence: None,
             pinned: false,
+            cloud_handoff_task_id: None,
         };
 
         let forked_conversation_id = AIConversationId::new();
@@ -2972,6 +3007,7 @@ fn merged_remote_child_placeholder_conversation_data(
         reverted_action_ids: None,
         root_task_is_optimistic: None,
         autoexecute_override: None,
+        cloud_handoff_task_id: None,
     }
 }
 

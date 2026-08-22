@@ -192,9 +192,10 @@ use crate::ai::blocklist::agent_view::editor::{AgentToolbarEditorEvent, AgentToo
 use crate::ai::blocklist::handoff;
 #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
 use crate::ai::blocklist::handoff::{
-    HandoffCommitOutcome, HandoffLaunchAttachments, HandoffPrepareError, HandoffPrepareInput,
-    HandoffPresentationSnapshot, HandoffRestoration, HandoffTargetMaterialization,
-    MaterializeHandoffTarget, PendingCloudLaunch, execute_handoff, prepare_handoff,
+    HandoffCommitOutcome, HandoffCreated, HandoffLaunchAttachments, HandoffPrepareError,
+    HandoffPrepareInput, HandoffPresentationSnapshot, HandoffRestoration,
+    HandoffTargetMaterialization, MaterializeHandoffTarget, PendingCloudLaunch, execute_handoff,
+    prepare_handoff,
 };
 use crate::ai::blocklist::history_model::{CloudConversationData, load_conversation_from_server};
 use crate::ai::blocklist::inline_action::code_diff_view::CodeDiffView;
@@ -15779,6 +15780,7 @@ impl Workspace {
             }
             HandoffCommitOutcome::Cancelled => {}
             HandoffCommitOutcome::Created(created) => {
+                Self::record_cloud_handoff_task(&created, ctx);
                 let model = model_slot.lock().ok().and_then(|slot| slot.clone());
                 if let Some(model) = model {
                     model.update(ctx, |model, ctx| {
@@ -15786,6 +15788,22 @@ impl Workspace {
                     });
                 }
             }
+        });
+    }
+
+    /// Binds the moved conversation to the cloud run the handoff just created, so a follow-up in
+    /// that pane still routes to the cloud once the run ends and the pane stops looking ambient.
+    ///
+    /// `request.conversation_id` is the forked cloud conversation id, which materialization has
+    /// already installed as the local fork's server token, so it resolves back to that fork.
+    #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
+    fn record_cloud_handoff_task(created: &HandoffCreated, ctx: &mut ViewContext<Self>) {
+        let Some(forked_conversation_id) = created.request.conversation_id.as_ref() else {
+            return;
+        };
+        let server_token = ServerConversationToken::new(forked_conversation_id.clone());
+        BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
+            history.record_cloud_handoff_task(&server_token, created.task_id, ctx);
         });
     }
 
