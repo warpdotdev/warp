@@ -24964,6 +24964,12 @@ impl TypedActionView for Workspace {
             OpenFilePath { path } => {
                 ctx.open_file_path(path);
             }
+            OpenCustomRouterFile(path) => {
+                #[cfg(feature = "local_fs")]
+                self.open_custom_router_file(path, ctx);
+                #[cfg(not(feature = "local_fs"))]
+                let _ = path;
+            }
             NewTabInAgentMode {
                 entrypoint,
                 zero_state_prompt_suggestion_type,

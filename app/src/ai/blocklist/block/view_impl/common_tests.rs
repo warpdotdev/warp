@@ -12,9 +12,9 @@ use warpui::elements::{Empty, MouseStateHandle};
 use warpui::{App, Element};
 
 use super::{
-    CollapsibleElementState, CollapsibleExpansionState, VisualMarkdownLightboxCollection,
-    collect_visual_markdown_lightbox_collection, compute_visual_section_width,
-    image_tooltip_handles_for_group, inline_image_source_label,
+    CollapsibleElementState, CollapsibleExpansionState, STATUS_FOOTER_VERTICAL_PADDING,
+    VisualMarkdownLightboxCollection, collect_visual_markdown_lightbox_collection,
+    compute_visual_section_width, image_tooltip_handles_for_group, inline_image_source_label,
     is_supported_blocklist_image_source, lightbox_trigger_for_section, query_prefix_highlight_len,
     render_scrollable_collapsible_content, text_sections_with_indices, warping_footer_height,
 };
@@ -179,6 +179,25 @@ fn warping_footer_height_reserves_a_line_for_the_secondary_element() {
     // The extra room must cover the secondary line: its font size
     // (monospace_font_size - 3) plus the 1px top margin on the tip container.
     assert_eq!(with_tip - without_tip, (font_size - 3.) + 1.);
+}
+
+#[test]
+fn warping_footer_height_does_not_reserve_a_line_for_the_inline_router_link() {
+    // Spec criterion 6: the inline "Configure router" link is rendered inside
+    // `text_content`'s `Flex::row` (the primary warping line), not as a new
+    // line, so the footer height must not reserve room for it. The height
+    // function takes only `has_secondary_element`; the router link never adds
+    // height. Assert the concrete single-line height to lock down that no third
+    // line is reserved for the link (the only second line is the secondary
+    // element: an agent tip or fallback explanation).
+    let font_size = 13.;
+    let single_line = warping_footer_height(font_size, false);
+    // The primary line is the vertical padding (top + bottom) plus the
+    // monospace font size — nothing more. A router link shares this line.
+    assert_eq!(single_line, STATUS_FOOTER_VERTICAL_PADDING * 2. + font_size);
+    // Only the secondary element adds a line, never the inline router link.
+    let with_secondary = warping_footer_height(font_size, true);
+    assert_eq!(with_secondary - single_line, (font_size - 3.) + 1.);
 }
 
 #[test]

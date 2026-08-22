@@ -344,6 +344,11 @@ pub enum FeatureFlag {
     ExpandEditToPane,
     /// Enables fallback model load output messaging in the warping indicator.
     FallbackModelLoadOutputMessaging,
+    /// Shows the concrete model a model router resolved to (and, for custom
+    /// routers, a link to its configuration) in the GUI warping indicator while
+    /// an agent is responding. Independent of `FallbackModelLoadOutputMessaging`:
+    /// disabling this flag leaves all fallback messaging unchanged.
+    RouterWarpingIndicator,
 
     /// Enables close button on left side of tabs
     TabCloseButtonOnLeft,
