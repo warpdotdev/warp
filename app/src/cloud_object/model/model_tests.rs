@@ -632,7 +632,14 @@ fn test_update_object_server_id_for_folder() {
 }
 
 fn base_mock_cloud_object_server_api() -> MockObjectClient {
-    MockObjectClient::new()
+    let mut mock_object_client = MockObjectClient::new();
+    // `UpdateManager::handle_initial_load_response` unconditionally spawns a fetch for
+    // environment "last used" timestamps after every initial load. Without this expectation
+    // the mock panics on that detached background task.
+    mock_object_client
+        .expect_fetch_environment_last_task_run_timestamps()
+        .returning(|| Ok(HashMap::new()));
+    mock_object_client
 }
 
 fn check_cloud_folders(app: &mut App, number_of_folders: usize) {
@@ -957,6 +964,13 @@ fn test_force_refresh_correctly_resets_timestamp() {
                 })
             });
 
+        // Capture the reference instant before the app (and thus the refresh timestamp) is
+        // computed. `mark_cloud_objects_refresh_as_completed` calls `Utc::now()` strictly after
+        // this point, so anchoring the lower bound here - rather than on a fresh `Utc::now()`
+        // taken at assertion time - leaves it sound for every draw in the half-open
+        // `[MIN, MAX)` range, including exactly `MIN`.
+        let before_refresh = Utc::now();
+
         // Initialize app with pending refresh = true!
         initialize_app(&mut app, Vec::new(), Arc::new(cloud_object_server_api_mock));
 
@@ -968,13 +982,17 @@ fn test_force_refresh_correctly_resets_timestamp() {
             let time_option = model.time_of_next_force_refresh;
             assert!(time_option.is_some());
             let time = time_option.unwrap();
+            let upper_bound =
+                Utc::now() + chrono::Duration::minutes(MAX_MINUTES_UNTIL_NEXT_FORCE_REFRESH);
+            let lower_bound =
+                before_refresh + chrono::Duration::minutes(MIN_MINUTES_UNTIL_NEXT_FORCE_REFRESH);
             assert!(
-                time <= (Utc::now()
-                    + chrono::Duration::minutes(MAX_MINUTES_UNTIL_NEXT_FORCE_REFRESH))
+                time <= upper_bound,
+                "expected next refresh time {time} to be <= upper bound {upper_bound}"
             );
             assert!(
-                time >= (Utc::now()
-                    + chrono::Duration::minutes(MIN_MINUTES_UNTIL_NEXT_FORCE_REFRESH))
+                time >= lower_bound,
+                "expected next refresh time {time} to be >= lower bound {lower_bound}"
             );
         });
     })
