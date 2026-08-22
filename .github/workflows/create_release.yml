@@ -2507,8 +2507,18 @@ jobs:
           name: release-windows-${{ matrix.arch }}-${{ steps.get-config.outputs.channel }}
           path: ${{ steps.bundle_app.outputs.installer_path }}
 
-  send_slack_notif_if_unsuccessful:
-    name: Send Slack notification if any release jobs were unsuccessful
+  # Aggregates the result of every build/release job into a single place, so
+  # downstream jobs don't each need their own copy of the same "which
+  # platforms actually matter, and did they succeed" logic. A platform whose
+  # build was deliberately disabled via a workflow input (build_macos,
+  # build_linux, build_web, or web-on-preview) is excluded entirely, rather
+  # than being treated as a failure. Anything else that isn't a plain
+  # `success` -- a genuine failure, a cancellation, or a job skipped because
+  # one of ITS OWN dependencies failed (e.g. a build-only job) -- counts as a
+  # failure. `if: always()` is required so this job still runs, and still
+  # reports failures, even when one of the jobs it depends on did not succeed.
+  collect_results:
+    name: Collect release job results
     runs-on: ubuntu-latest
     needs:
       - prepare_release
@@ -2523,55 +2533,92 @@ jobs:
       - release_web
       - release_windows_tui
       - release_windows
-    if: ${{ always() && needs.prepare_release.outputs.should_publish == 'true' }}
+    if: always()
+    outputs:
+      failed: ${{ steps.collect.outputs.failed }}
     steps:
-      - name: Figure out which releases failed, if any
-        id: failed_releases
+      # This job intentionally fails (after recording `failed` as an output)
+      # when any non-disabled platform did not succeed. That failure is the
+      # publish gate: generate_changelogs needs this job with default
+      # (success-required) semantics, so it is skipped whenever this step
+      # fails, exactly like any other failed dependency. Jobs that only need
+      # to observe the failure list regardless of outcome (e.g. the Slack
+      # notification below) declare `if: always()` on themselves instead.
+      - name: Determine which release jobs genuinely failed
+        id: collect
         shell: bash
+        env:
+          BUILD_MACOS: ${{ inputs.build_macos }}
+          BUILD_LINUX: ${{ inputs.build_linux }}
+          BUILD_WEB: ${{ inputs.build_web }}
+          CHANNEL: ${{ inputs.channel }}
+          MACOS_SINGLE_ARCH_RESULT: ${{ needs.release_macos_single_arch.result }}
+          MACOS_UNIVERSAL_RESULT: ${{ needs.release_macos_universal.result }}
+          MACOS_CLI_RESULT: ${{ needs.release_macos_cli.result }}
+          MACOS_TUI_RESULT: ${{ needs.release_macos_tui.result }}
+          LINUX_TUI_RESULT: ${{ needs.release_linux_tui.result }}
+          LINUX_X86_RESULT: ${{ needs.release_linux_x86.result }}
+          LINUX_ARM_RESULT: ${{ needs.release_linux_arm.result }}
+          LINUX_CLI_X86_RESULT: ${{ needs.release_linux_cli_x86.result }}
+          WEB_RESULT: ${{ needs.release_web.result }}
+          WINDOWS_TUI_RESULT: ${{ needs.release_windows_tui.result }}
+          WINDOWS_RESULT: ${{ needs.release_windows.result }}
         run: |
           FAILED=()
-          if [[ ${{ needs.release_macos_single_arch.result }} != 'success' ]]; then
-              FAILED+=("MacOS Single Arch")
-          fi
-          if [[ ${{ needs.release_macos_universal.result }} != 'success' ]]; then
-              FAILED+=("MacOS Universal")
-          fi
-          if [[ ${{ needs.release_macos_cli.result }} != 'success' ]]; then
-            FAILED+=('MacOS CLI')
-          fi
-          if [[ ${{ needs.release_macos_tui.result }} != 'success' ]]; then
-            FAILED+=('MacOS TUI')
-          fi
-          if [[ ${{ needs.release_linux_tui.result }} != 'success' ]]; then
-            FAILED+=('Linux TUI')
-          fi
-          if [[ ${{ needs.release_linux_x86.result }} != 'success' ]]; then
-              FAILED+=("Linux x86_64")
-          fi
-          if [[ ${{ needs.release_linux_arm.result }} != 'success' ]]; then
-              FAILED+=("Linux ARM64")
-          fi
-          if [[ ${{ needs.release_linux_cli_x86.result }} != 'success' ]]; then
-              FAILED+=("Linux CLI x86_64")
-          fi
-          if [[ ${{ needs.release_web.result }} != 'success' && ${{ inputs.channel }} != 'preview' ]]; then
-              FAILED+=("WASM")
-          fi
-          if [[ ${{ needs.release_windows.result }} != 'success' ]]; then
-              FAILED+=("Windows")
-          fi
-          if [[ ${{ needs.release_windows_tui.result }} != 'success' ]]; then
-              FAILED+=("Windows TUI")
-          fi
+
+          # A disabled platform is excluded outright, regardless of its
+          # result (which will be "skipped" anyway, since that's what a
+          # false job-level `if:` produces). Otherwise, anything other than
+          # "success" -- including "skipped", which for a non-disabled
+          # platform only happens because one of its own dependencies
+          # failed -- is a genuine failure.
+          check() {
+            local name="$1" result="$2" disabled="$3"
+            if [[ "$disabled" == "true" ]]; then
+              return
+            fi
+            if [[ "$result" != "success" ]]; then
+              FAILED+=("$name")
+            fi
+          }
+
+          MACOS_DISABLED=false
+          [[ "$BUILD_MACOS" == "false" ]] && MACOS_DISABLED=true
+          LINUX_DISABLED=false
+          [[ "$BUILD_LINUX" == "false" ]] && LINUX_DISABLED=true
+          WEB_DISABLED=false
+          [[ "$BUILD_WEB" == "false" || "$CHANNEL" == "preview" ]] && WEB_DISABLED=true
+
+          check "MacOS Single Arch" "$MACOS_SINGLE_ARCH_RESULT" "$MACOS_DISABLED"
+          check "MacOS Universal" "$MACOS_UNIVERSAL_RESULT" "$MACOS_DISABLED"
+          check "MacOS CLI" "$MACOS_CLI_RESULT" "$MACOS_DISABLED"
+          check "MacOS TUI" "$MACOS_TUI_RESULT" "$MACOS_DISABLED"
+          check "Linux TUI" "$LINUX_TUI_RESULT" "$LINUX_DISABLED"
+          check "Linux x86_64" "$LINUX_X86_RESULT" "$LINUX_DISABLED"
+          check "Linux ARM64" "$LINUX_ARM_RESULT" "$LINUX_DISABLED"
+          check "Linux CLI x86_64" "$LINUX_CLI_X86_RESULT" "$LINUX_DISABLED"
+          check "WASM" "$WEB_RESULT" "$WEB_DISABLED"
+          check "Windows TUI" "$WINDOWS_TUI_RESULT" "false"
+          check "Windows" "$WINDOWS_RESULT" "false"
 
           if (( ${#FAILED[@]} )); then
             printf -v FORMATTED "%s, " "${FAILED[@]}"
-            echo "failed=$(echo "{${FORMATTED%, }}")" >> $GITHUB_OUTPUT
+            echo "failed=$(echo "{${FORMATTED%, }}")" >> "$GITHUB_OUTPUT"
+            echo "::error::The following release jobs did not succeed: ${FAILED[*]}"
+            exit 1
           fi
 
+  send_slack_notif_if_unsuccessful:
+    name: Send Slack notification if any release jobs were unsuccessful
+    runs-on: ubuntu-latest
+    needs:
+      - prepare_release
+      - collect_results
+    if: ${{ always() && needs.prepare_release.outputs.should_publish == 'true' }}
+    steps:
       - name: Send Slack notification if unsuccessful
         uses: slackapi/slack-github-action@0d95c9a7becc1e6e297d76df9bc735c44f4cbcbc # v3.0.5
-        if: ${{ steps.failed_releases.outputs.failed != '' }}
+        if: ${{ needs.collect_results.outputs.failed != '' }}
         with:
           # Fail the step when Slack rejects the message.
           errors: true
@@ -2581,35 +2628,7 @@ jobs:
             channel: "#oncall-client"
             # Follows https://api.slack.com/reference/surfaces/formatting#mentioning-users.
             # S06N82RS7FA is the user group ID for @oncall-client-eng.
-            text: "Failed to create ${{ steps.failed_releases.outputs.failed }} release artifacts for ${{ inputs.channel }}. See https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}. cc: <!subteam^S06N82RS7FA>"
-
-  gate_tui_release_artifacts:
-    name: Gate changelog publication on TUI release artifacts
-    runs-on: ubuntu-latest
-    needs:
-      - prepare_release
-      - release_macos_tui
-      - release_linux_tui
-      - release_windows_tui
-    if: ${{ always() }}
-    steps:
-      - name: Verify TUI release artifacts
-        shell: bash
-        env:
-          SHOULD_PUBLISH: ${{ needs.prepare_release.outputs.should_publish }}
-          MACOS_TUI_RESULT: ${{ needs.release_macos_tui.result }}
-          LINUX_TUI_RESULT: ${{ needs.release_linux_tui.result }}
-          WINDOWS_TUI_RESULT: ${{ needs.release_windows_tui.result }}
-        run: |
-          if [[ "$SHOULD_PUBLISH" != "true" ]]; then
-            exit 0
-          fi
-          if [[ "$MACOS_TUI_RESULT" != "success" ||
-                "$LINUX_TUI_RESULT" != "success" ||
-                "$WINDOWS_TUI_RESULT" != "success" ]]; then
-            echo "::error::TUI release artifacts were not published successfully (macOS: $MACOS_TUI_RESULT, Linux: $LINUX_TUI_RESULT, Windows: $WINDOWS_TUI_RESULT)"
-            exit 1
-          fi
+            text: "Failed to create ${{ needs.collect_results.outputs.failed }} release artifacts for ${{ inputs.channel }}. See https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}. cc: <!subteam^S06N82RS7FA>"
 
   generate_changelogs:
     name: Generate Changelogs
@@ -2617,15 +2636,7 @@ jobs:
     runs-on: ubuntu-latest
     needs:
       - prepare_release
-      - release_macos_single_arch
-      - release_macos_universal
-      - release_macos_cli
-      - release_linux_x86
-      - release_linux_arm
-      - release_linux_cli_x86
-      - release_web
-      - release_windows
-      - gate_tui_release_artifacts
+      - collect_results
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         name: Checkout sources
