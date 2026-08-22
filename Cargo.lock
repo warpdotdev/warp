@@ -384,6 +384,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "ai_types"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.17",
+ "uuid",
+]
+
+[[package]]
 name = "aliasable"
 version = "0.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -9992,6 +10003,7 @@ dependencies = [
 name = "persistence"
 version = "0.0.0"
 dependencies = [
+ "ai_types",
  "chrono",
  "diesel",
  "diesel_migrations",
@@ -15123,6 +15135,7 @@ dependencies = [
  "aha-reqwest-eventsource",
  "aho-corasick",
  "ai",
+ "ai_types",
  "alphanumeric-sort",
  "anyhow",
  "app-installation-detection",

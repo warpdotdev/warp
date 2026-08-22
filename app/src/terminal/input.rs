@@ -207,7 +207,7 @@ use crate::ai::predict::prompt_suggestions::{
     is_accept_prompt_suggestion_bound_to_ctrl_enter,
 };
 use crate::ai::skills::{SkillOpenOrigin, SkillTelemetryEvent};
-use crate::ai_assistant::execution_context::WarpAiExecutionContext;
+use crate::ai_assistant::execution_context::execution_context_for_session;
 use crate::appearance::{Appearance, AppearanceEvent};
 use crate::channel::{Channel, ChannelState};
 use crate::cloud_object::model::actions::ObjectActionType;
@@ -7033,7 +7033,7 @@ impl Input {
         let Some(session) = self.active_session(ctx) else {
             return;
         };
-        let context = WarpAiExecutionContext::new(&session);
+        let context = execution_context_for_session(&session);
         let completer_data = self.completer_data();
         let block_context = Some(BlockContext::from_completed_block(
             &block_completed,
@@ -9755,7 +9755,7 @@ impl Input {
             let Some(session) = self.active_session(ctx) else {
                 return;
             };
-            let context = WarpAiExecutionContext::new(&session);
+            let context = execution_context_for_session(&session);
             if let Some(last_user_block_completed) =
                 completer_data.last_user_block_completed.clone()
             {
@@ -13911,7 +13911,7 @@ impl Input {
         let Some(session) = self.active_session(ctx) else {
             return;
         };
-        let context = WarpAiExecutionContext::new(&session);
+        let context = execution_context_for_session(&session);
 
         let request = PredictAMQueriesRequest {
             context_messages: vec![json_message.to_string()],
