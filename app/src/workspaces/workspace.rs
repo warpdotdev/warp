@@ -1122,9 +1122,8 @@ impl TeamAiAutonomySettings {
     /// Whether an admin configured any of the policies that count as evidence autonomy is
     /// in use — the same fields the lowered [`AiAutonomySettings`] is inspected for.
     ///
-    /// Answers without lowering on purpose. Lowering compiles every allow- and denylist
-    /// entry into a regex, and the callers asking this question are on render and
-    /// per-action paths that would pay for that on every frame and then discard it.
+    /// Answers without lowering on purpose: lowering compiles every allow- and denylist
+    /// entry into a regex, and this question does not need one.
     pub fn configures_any_policy(&self) -> bool {
         self.apply_code_diffs.value.is_some()
             || self.read_files.value.is_some()
