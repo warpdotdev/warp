@@ -169,6 +169,15 @@ pub struct CreateTeamResponse {
 /// share a lifetime, restructure so they share the single owner instead.
 ///
 /// This is scope, not authority: the server still authorizes every request made under it.
+///
+/// Only [`UserWorkspaces::team_context_for_operation`] mints one, always from a real window;
+/// there is no way to fabricate one without a window (there is deliberately no `teamless()`
+/// constructor). Its `team_uid` can still be `None` -- that means the minting window itself
+/// has no team selected, and a getter that accepts this scope should act as if the operation
+/// is not on a team. It must not read some other team's settings as a substitute: see
+/// [`TeamScope`]'s contract. Code with no window at all (e.g. background GEAP token refresh)
+/// is not this type's job -- it needs its own accessor that reads across every one of the
+/// user's teams explicitly, in the shape of `UserWorkspaces::teams_allow_codebase_context`.
 // Nothing constructs or consumes one outside this module's own tests yet; remove this
 // `#[allow(dead_code)]`, and widen visibility to `pub`, once a Group 1 migration PR has a real
 // call site.
@@ -180,6 +189,18 @@ pub(crate) struct TeamContextForOperation {
 /// Reads a [`TeamContextForOperation`] or [`TeamContext`]'s team, regardless of which one a
 /// caller was handed. Implemented only by those two types — see their docs for what each one
 /// promises about when it was resolved and what it can be used for.
+///
+/// The contract every settings getter built on this trait must follow: take a scope directly
+/// (`&impl TeamScope` or `&dyn TeamScope`), never an optional one (`Option<&dyn TeamScope>`).
+/// A caller with no scope to give has to confront that rather than pass `None` and inherit
+/// some fallback. `team_uid() == None` means the scope's own window/operation has no team, and
+/// the getter must act as if the operation is not on a team -- not substitute another team's
+/// settings. `current_workspace().settings` is a safe fallback only when the user belongs to
+/// no team at all: whenever the user has one or more teams, it is one arbitrarily-chosen
+/// team's effective settings (`GetEffectiveWorkspaceSettingsForWorkspace` server-side), not
+/// workspace-level data. Code with no window at all must not construct a scope to route around
+/// this; it should read across every team explicitly, the way
+/// `UserWorkspaces::teams_allow_codebase_context` does.
 pub(crate) trait TeamScope {
     fn team_uid(&self) -> Option<ServerId>;
 }
@@ -190,30 +211,10 @@ impl TeamScope for TeamContextForOperation {
     }
 }
 
-impl TeamContextForOperation {
-    // Nothing constructs a teamless context yet; remove this `#[allow(dead_code)]` once a
-    // Group 1 migration PR has a real call site.
-    #[allow(dead_code)]
-    pub(crate) fn teamless() -> Self {
-        Self { team_uid: None }
-    }
-}
-
-#[cfg(any(test, feature = "test-util"))]
-impl TeamContextForOperation {
-    // `crates/warp_tui`'s tests cannot reach this yet: nothing in this crate re-exports
-    // `TeamContextForOperation` to it. Widen this back to `pub` once the PR that adds that
-    // re-export needs it.
-    #[allow(dead_code)]
-    pub(crate) fn teamless_for_test() -> Self {
-        Self::teamless()
-    }
-}
-
 #[cfg(test)]
 impl TeamContextForOperation {
-    // Nothing constructs a team-bound test context yet; remove this `#[allow(dead_code)]` once
-    // a Group 1 migration PR has a real call site.
+    // Nothing constructs a test context yet; remove this `#[allow(dead_code)]` once a Group 1
+    // migration PR has a real call site.
     #[allow(dead_code)]
     pub(crate) fn new_for_test(team_uid: ServerId) -> Self {
         Self {
@@ -437,7 +438,9 @@ impl UserWorkspaces {
     }
 
     /// Captures the team selected in `ctx`'s window as an operation's
-    /// [`TeamContextForOperation`]. This is the only way application code mints one.
+    /// [`TeamContextForOperation`]. This is the only way application code mints one. Always
+    /// succeeds -- a window with no team selected still yields a scope, just one whose
+    /// `team_uid()` is `None`; see [`TeamScope`]'s contract for what that means to a getter.
     // Only tests call this today; remove once a Group 1 migration PR has a real call site.
     #[allow(dead_code)]
     pub(crate) fn team_context_for_operation<T: Entity>(
@@ -471,7 +474,7 @@ impl UserWorkspaces {
     /// workspace, e.g. after the user leaves it, or when `context` carries no team.
     // Only tests call this today; remove once a Group 1 migration PR has a real call site.
     #[allow(dead_code)]
-    pub(crate) fn team_for_context<S: TeamScope>(&self, context: &S) -> Option<&Team> {
+    pub(crate) fn team_for_context<S: TeamScope + ?Sized>(&self, context: &S) -> Option<&Team> {
         context
             .team_uid()
             .and_then(|team_uid| self.team_from_uid(team_uid))
