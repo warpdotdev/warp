@@ -163,11 +163,15 @@ fn a_stored_team_is_preferred_over_the_default() {
     })
 }
 
-/// A stored team survives leaving it or signing in as somebody else. It is registered without
-/// validation, and reconcile corrects it on the same response — so the window must never come
-/// to rest on a team the user is not in.
+/// A stored team survives leaving it, being removed from it, and signing in as somebody else,
+/// so it is checked against the user's current teams before use.
+///
+/// Reconcile does not cover this. It runs *before* `TeamsChanged` is emitted, so a team
+/// registered from that handler lands after the sweep that would have corrected it and waits
+/// for the next poll — leaving the session on no team meanwhile. This test failed before the
+/// check existed, which is how that ordering was found.
 #[test]
-fn a_stale_stored_team_is_reconciled_onto_the_default() {
+fn a_stale_stored_team_falls_back_to_the_default() {
     let platform = team(123, "Platform");
     let workspace = workspace(vec![platform.clone()]);
     let departed_team = team(999, "Departed");

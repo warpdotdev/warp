@@ -253,7 +253,7 @@ pub use crate::tui::{
     TuiMcpAction, TuiMcpConfigDiagnostic, TuiMcpFileScope, TuiMcpFileSource, TuiMcpInstallRequest,
     TuiMcpManager, TuiMcpManagerEvent, TuiMcpServerId, TuiMcpServerSnapshot, TuiMcpServerSource,
     TuiMcpServerStatus, TuiMcpSnapshot, TuiMcpSyncedTemplateProvenance, TuiMcpTemplateVariable,
-    TuiMcpTransport, TuiMcpVariableValue, TuiTeamScope, TuiTeamScopeEvent, TuiUserInfoManager,
+    TuiMcpTransport, TuiMcpVariableValue, TuiTeamScope, TuiUserInfoManager,
     TuiUserInfoManagerEvent, TuiUserInfoSnapshot, log_out_tui,
 };
 pub use crate::tui_onboarding_markers::{
