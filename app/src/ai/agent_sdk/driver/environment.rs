@@ -469,6 +469,12 @@ fn repository_forge_for_repo(repo: &SourceRepo) -> RepositoryForge {
     match repo.code_forge.unwrap_or_default() {
         CodeForge::GitHub => RepositoryForge::GitHub,
         CodeForge::GitLab => RepositoryForge::GitLab,
+        // The server never assigns an individual repository to a repo-less
+        // or unrecognized forge; only a container (environment) carries one.
+        CodeForge::None | CodeForge::Unknown => unreachable!(
+            "repository {:?}/{} has no valid code forge",
+            repo.code_forge, repo.repo
+        ),
     }
 }
 fn head_override_matches_repo(head_override: &RepositoryHeadOverride, repo: &SourceRepo) -> bool {
