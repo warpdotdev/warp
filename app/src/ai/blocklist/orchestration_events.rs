@@ -74,6 +74,9 @@ pub struct OrchestrationEventService {
     pending_events: HashMap<AIConversationId, Vec<PendingEvent>>,
     awaiting_server_echo_events: HashMap<AIConversationId, Vec<PendingEvent>>,
     conversation_statuses: HashMap<AIConversationId, ConversationStatus>,
+    /// Conversations whose ambient run has begun a terminal exit with no
+    /// further idle window to cancel it (see `mark_conversation_exiting`).
+    exiting_conversations: HashSet<AIConversationId>,
 }
 
 impl OrchestrationEventService {
@@ -90,7 +93,33 @@ impl OrchestrationEventService {
             pending_events: HashMap::new(),
             awaiting_server_echo_events: HashMap::new(),
             conversation_statuses: HashMap::new(),
+            exiting_conversations: HashSet::new(),
         }
+    }
+
+    /// Marks `conversation_id`'s ambient run as having begun a terminal exit
+    /// that nothing can now cancel (see `AgentDriver`'s `idle_window_for_terminal_status`
+    /// branch that has no idle window). From this point, pending orchestration events for
+    /// this conversation must not start a new MAA request: such a request would only race
+    /// the teardown already underway and get cancelled, leaving the run stuck `InProgress`
+    /// (QUALITY-1801). Any events still queued for the conversation can no longer be
+    /// delivered, so they are dropped here with a warning rather than left to leak.
+    pub fn mark_conversation_exiting(&mut self, conversation_id: AIConversationId) {
+        self.exiting_conversations.insert(conversation_id);
+        if let Some(dropped) = self.pending_events.remove(&conversation_id)
+            && !dropped.is_empty()
+        {
+            log::warn!(
+                "Dropping {} orchestration event(s) for conversation {conversation_id:?}: \
+                 its ambient run began terminal exit before they could be delivered",
+                dropped.len()
+            );
+        }
+    }
+
+    /// True once `mark_conversation_exiting` has been called for `conversation_id`.
+    pub fn is_conversation_exiting(&self, conversation_id: AIConversationId) -> bool {
+        self.exiting_conversations.contains(&conversation_id)
     }
 
     pub fn handle_history_event(
@@ -132,6 +161,7 @@ impl OrchestrationEventService {
                 self.pending_events.remove(conversation_id);
                 self.awaiting_server_echo_events.remove(conversation_id);
                 self.conversation_statuses.remove(conversation_id);
+                self.exiting_conversations.remove(conversation_id);
             }
             _ => {}
         }

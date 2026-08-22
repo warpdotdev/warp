@@ -14,6 +14,9 @@ use crate::ai::agent::{
     PassiveSuggestionTrigger, UserQueryMode,
 };
 use crate::ai::ambient_agents::AmbientAgentTaskId;
+use crate::ai::blocklist::orchestration_events::{
+    OrchestrationEventService, PendingEvent, PendingEventDetail,
+};
 use crate::ai::blocklist::{
     BlocklistAIHistoryEvent, BlocklistAIHistoryModel, PendingAttachment, PendingFile, RequestInput,
     ResponseStream, ResponseStreamId,
@@ -493,6 +496,51 @@ fn optimistic_cli_subagent_completion_with_in_flight_stream_reports_success() {
                 history.conversation(&conversation_id).map(|c| c.status()),
                 Some(&crate::ai::agent::conversation::ConversationStatus::Success)
             );
+        });
+    });
+}
+
+/// `mark_conversation_exiting` drops any orchestration events still queued for the
+/// conversation at the moment it's called, since they arrived too late to ever be
+/// delivered once the run is exiting. Complements the controller-level guard above.
+#[test]
+fn mark_conversation_exiting_drops_pending_events() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+
+        let conversation_id = terminal.update(&mut app, |view, ctx| {
+            let conversation_id = BlocklistAIHistoryModel::handle(ctx)
+                .update(ctx, |history, ctx| {
+                    history.start_new_conversation(view.id(), false, false, false, ctx)
+                });
+            OrchestrationEventService::handle(ctx).update(ctx, |service, ctx| {
+                service.enqueue_event_batch(
+                    conversation_id,
+                    vec![PendingEvent {
+                        event_id: "event-1".to_string(),
+                        source_agent_id: "child".to_string(),
+                        attempt_count: 0,
+                        detail: PendingEventDetail::Message {
+                            message_id: "message-1".to_string(),
+                            addresses: vec!["target".to_string()],
+                            subject: "subject".to_string(),
+                            message_body: "body".to_string(),
+                        },
+                    }],
+                    ctx,
+                );
+            });
+            conversation_id
+        });
+
+        terminal.update(&mut app, |_, ctx| {
+            OrchestrationEventService::handle(ctx).update(ctx, |service, _| {
+                assert!(service.has_pending_events(conversation_id));
+                service.mark_conversation_exiting(conversation_id);
+                assert!(!service.has_pending_events(conversation_id));
+                assert!(service.is_conversation_exiting(conversation_id));
+            });
         });
     });
 }

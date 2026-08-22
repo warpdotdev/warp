@@ -309,6 +309,16 @@ impl ResponseStream {
             event,
         ))));
     }
+
+    /// Emits the natural-completion `AfterStreamFinished` event (no cancellation) through
+    /// the normal controller subscription, mirroring what `on_response_stream_complete`
+    /// emits once the real network stream ends. Lets a test drive the controller's
+    /// post-stream-cleanup pending-events re-check without a real stream.
+    #[cfg(test)]
+    pub fn emit_after_stream_finished_for_test(&mut self, ctx: &mut ModelContext<Self>) {
+        ctx.emit(ResponseStreamEvent::AfterStreamFinished { cancellation: None });
+    }
+
     #[cfg(test)]
     pub fn new_for_test(id: ResponseStreamId) -> Self {
         let (cancellation_tx, _rx) = oneshot::channel();

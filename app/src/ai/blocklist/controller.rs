@@ -1677,11 +1677,16 @@ impl BlocklistAIController {
         let has_active_stream = self
             .in_flight_response_streams
             .has_active_stream_for_conversation(conversation_id, ctx);
+        // Once the conversation's ambient run has begun a terminal exit with no idle
+        // window left to cancel it, starting a new request here would only race that
+        // teardown and get cancelled, leaving the run stuck `InProgress` (QUALITY-1801).
+        let is_exiting =
+            OrchestrationEventService::as_ref(ctx).is_conversation_exiting(conversation_id);
         let Some(conversation) =
             BlocklistAIHistoryModel::as_ref(ctx).conversation(&conversation_id)
         else {
             log::info!(
-                "Pending events are not ready: conversation_id={conversation_id:?} reason=conversation_missing owns_conversation={owns} has_active_stream={has_active_stream}"
+                "Pending events are not ready: conversation_id={conversation_id:?} reason=conversation_missing owns_conversation={owns} has_active_stream={has_active_stream} is_exiting={is_exiting}"
             );
             return false;
         };
@@ -1692,9 +1697,9 @@ impl BlocklistAIController {
             conversation.status(),
             ConversationStatus::Success | ConversationStatus::WaitingForEvents,
         );
-        if !owns || has_active_stream || !is_ready_status {
+        if !owns || has_active_stream || !is_ready_status || is_exiting {
             log::info!(
-                "Pending events are not ready: conversation_id={conversation_id:?} owns_conversation={owns} has_active_stream={has_active_stream} status={:?}",
+                "Pending events are not ready: conversation_id={conversation_id:?} owns_conversation={owns} has_active_stream={has_active_stream} status={:?} is_exiting={is_exiting}",
                 conversation.status()
             );
             return false;
