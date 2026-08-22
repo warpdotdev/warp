@@ -298,9 +298,6 @@ pub enum FeatureFlag {
     /// Persist codebase indices to disk.
     CodebaseIndexPersistence,
 
-    /// Enables the AI context menu, or at-menu.
-    AIContextMenuEnabled,
-
     /// Enables the AI context menu outside of AI input mode.
     AtMenuOutsideOfAIMode,
 
