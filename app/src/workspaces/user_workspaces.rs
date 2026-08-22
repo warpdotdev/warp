@@ -201,6 +201,9 @@ pub(crate) struct TeamContextForOperation {
 /// workspace-level data. Code with no window at all must not construct a scope to route around
 /// this; it should read across every team explicitly, the way
 /// `UserWorkspaces::teams_allow_codebase_context` does.
+// Only tests call `team_uid()` today; remove this `#[allow(dead_code)]` once a Group 1
+// migration PR has a real getter generic over this trait.
+#[allow(dead_code)]
 pub(crate) trait TeamScope {
     fn team_uid(&self) -> Option<ServerId>;
 }
@@ -467,17 +470,6 @@ impl UserWorkspaces {
             None => None,
         };
         Some(TeamContext { team_uid })
-    }
-
-    /// Reads a `TeamScope`'s team, whether captured (a [`TeamContextForOperation`]) or freshly
-    /// resolved (a [`TeamContext`]). Returns `None` once that team is gone from the current
-    /// workspace, e.g. after the user leaves it, or when `context` carries no team.
-    // Only tests call this today; remove once a Group 1 migration PR has a real call site.
-    #[allow(dead_code)]
-    pub(crate) fn team_for_context<S: TeamScope + ?Sized>(&self, context: &S) -> Option<&Team> {
-        context
-            .team_uid()
-            .and_then(|team_uid| self.team_from_uid(team_uid))
     }
 
     /// Returns the windows whose team assignment changed.

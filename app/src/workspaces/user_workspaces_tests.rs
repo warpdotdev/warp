@@ -1087,23 +1087,16 @@ fn test_team_context_for_operation_resolves_each_windows_own_team() {
             UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx)
         });
 
-        app.read(|ctx| {
-            let user_workspaces = UserWorkspaces::as_ref(ctx);
-            assert_eq!(
-                user_workspaces
-                    .team_for_context(&context_a)
-                    .map(|team| team.uid),
-                Some(team_a.uid),
-                "the view in window A should mint a context resolving to team A"
-            );
-            assert_eq!(
-                user_workspaces
-                    .team_for_context(&context_b)
-                    .map(|team| team.uid),
-                Some(team_b.uid),
-                "the view in window B should mint a context resolving to team B"
-            );
-        });
+        assert_eq!(
+            context_a.team_uid(),
+            Some(team_a.uid),
+            "the view in window A should mint a context resolving to team A"
+        );
+        assert_eq!(
+            context_b.team_uid(),
+            Some(team_b.uid),
+            "the view in window B should mint a context resolving to team B"
+        );
     })
 }
 
@@ -1142,20 +1135,20 @@ fn test_window_team_reconciliation_moves_rendering_but_not_a_captured_context() 
         });
 
         app.read(|ctx| {
-            let user_workspaces = UserWorkspaces::as_ref(ctx);
             assert_eq!(
-                user_workspaces
+                UserWorkspaces::as_ref(ctx)
                     .team_context(&weak_view, ctx)
                     .and_then(|context| context.team_uid()),
                 Some(team_b.uid),
                 "a freshly resolved render context should follow the window to team B"
             );
-            assert!(
-                user_workspaces.team_for_context(&context_a).is_none(),
-                "a context captured for team A should stop resolving rather than follow the \
-                 window onto team B"
-            );
         });
+        assert_eq!(
+            context_a.team_uid(),
+            Some(team_a.uid),
+            "a context captured for team A should keep pointing at team A rather than follow \
+             the window onto team B"
+        );
     })
 }
 
