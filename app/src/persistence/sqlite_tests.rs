@@ -419,6 +419,154 @@ fn test_terminal_window_snapshot(vertical_tabs_panel_open: bool) -> WindowSnapsh
     }
 }
 
+/// Builds a single-tab terminal window snapshot with the given pane uuid and cwd, for tests
+/// that exercise how a specific pane's cwd is saved and restored.
+fn test_terminal_window_snapshot_with_cwd(uuid: Vec<u8>, cwd: Option<String>) -> WindowSnapshot {
+    WindowSnapshot {
+        tabs: vec![TabSnapshot {
+            custom_title: None,
+            root: PaneNodeSnapshot::Leaf(LeafSnapshot {
+                is_focused: true,
+                custom_vertical_tabs_title: None,
+                contents: LeafContents::Terminal(TerminalPaneSnapshot {
+                    uuid,
+                    cwd,
+                    shell_launch_data: Some(ShellLaunchData::Executable {
+                        executable_path: PathBuf::from("/bin/zsh"),
+                        shell_type: crate::terminal::shell::ShellType::Zsh,
+                    }),
+                    is_active: true,
+                    is_read_only: false,
+                    input_config: None,
+                    llm_model_override: None,
+                    active_profile_id: None,
+                    conversation_ids_to_restore: vec![],
+                    active_conversation_id: None,
+                }),
+            }),
+            default_directory_color: None,
+            selected_color: SelectedTabColor::default(),
+            left_panel: None,
+            right_panel: None,
+            group_id: None,
+            pinned: false,
+        }],
+        active_tab_index: 0,
+        team_uid: None,
+        bounds: None,
+        fullscreen_state: Default::default(),
+        quake_mode: false,
+        universal_search_width: None,
+        warp_ai_width: None,
+        voltron_width: None,
+        warp_drive_index_width: None,
+        left_panel_open: false,
+        vertical_tabs_panel_open: false,
+        left_panel_width: None,
+        right_panel_width: None,
+        agent_management_filters: None,
+        tab_groups: vec![],
+    }
+}
+
+fn terminal_snapshot_cwd(app_state: &AppState) -> Option<String> {
+    let PaneNodeSnapshot::Leaf(leaf) = &app_state.windows[0].tabs[0].root else {
+        panic!("Expected a leaf pane");
+    };
+    let LeafContents::Terminal(terminal_snapshot) = &leaf.contents else {
+        panic!("Expected a terminal pane");
+    };
+    terminal_snapshot.cwd.clone()
+}
+
+/// A `save_app` snapshot taken before a restored pane's shell has reattached has no live cwd to
+/// report. Regression test for GH#15404: such a snapshot must preserve the cwd already on disk
+/// for that pane instead of nulling it out, since the whole `terminal_panes` table is rewritten
+/// on every save.
+#[test]
+fn test_sqlite_preserves_terminal_cwd_when_live_cwd_is_unavailable() {
+    let tempdir = tempfile::tempdir().expect("tempdir should be created");
+    let database_path = tempdir.path().join("warp.sqlite");
+    let mut conn = setup_database(&database_path).expect("database should initialize");
+
+    let uuid = vec![7];
+
+    // The pane's shell is live and reports a non-home cwd.
+    let app_state_with_cwd = AppState {
+        windows: vec![test_terminal_window_snapshot_with_cwd(
+            uuid.clone(),
+            Some("/tmp/project".to_string()),
+        )],
+        active_window_index: Some(0),
+        block_lists: Default::default(),
+        running_mcp_servers: Default::default(),
+    };
+    save_app_state(&mut conn, &app_state_with_cwd).expect("app state should save");
+
+    // The same pane is snapshotted again before its restored shell has attached, so this
+    // snapshot has no live cwd.
+    let app_state_without_cwd = AppState {
+        windows: vec![test_terminal_window_snapshot_with_cwd(uuid, None)],
+        active_window_index: Some(0),
+        block_lists: Default::default(),
+        running_mcp_servers: Default::default(),
+    };
+    save_app_state(&mut conn, &app_state_without_cwd).expect("app state should save");
+
+    let restored = read_sqlite_data(&mut conn, None, PersistedDataScope::Full)
+        .expect("app state should load")
+        .app_state
+        .expect("app state should be present for the full scope");
+
+    assert_eq!(
+        terminal_snapshot_cwd(&restored),
+        Some("/tmp/project".to_string())
+    );
+}
+
+/// Once a live cwd is reported again, it should overwrite the previously persisted value rather
+/// than being stuck on the old one forever.
+#[test]
+fn test_sqlite_round_trips_updated_terminal_cwd() {
+    let tempdir = tempfile::tempdir().expect("tempdir should be created");
+    let database_path = tempdir.path().join("warp.sqlite");
+    let mut conn = setup_database(&database_path).expect("database should initialize");
+
+    let uuid = vec![7];
+
+    let app_state_first_cwd = AppState {
+        windows: vec![test_terminal_window_snapshot_with_cwd(
+            uuid.clone(),
+            Some("/tmp/project".to_string()),
+        )],
+        active_window_index: Some(0),
+        block_lists: Default::default(),
+        running_mcp_servers: Default::default(),
+    };
+    save_app_state(&mut conn, &app_state_first_cwd).expect("app state should save");
+
+    let app_state_second_cwd = AppState {
+        windows: vec![test_terminal_window_snapshot_with_cwd(
+            uuid,
+            Some("/tmp/other-project".to_string()),
+        )],
+        active_window_index: Some(0),
+        block_lists: Default::default(),
+        running_mcp_servers: Default::default(),
+    };
+    save_app_state(&mut conn, &app_state_second_cwd).expect("app state should save");
+
+    let restored = read_sqlite_data(&mut conn, None, PersistedDataScope::Full)
+        .expect("app state should load")
+        .app_state
+        .expect("app state should be present for the full scope");
+
+    assert_eq!(
+        terminal_snapshot_cwd(&restored),
+        Some("/tmp/other-project".to_string())
+    );
+}
+
 #[test]
 fn test_sqlite_round_trips_vertical_tabs_panel_open() {
     let tempdir = tempfile::tempdir().expect("tempdir should be created");
