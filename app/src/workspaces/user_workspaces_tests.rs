@@ -1297,6 +1297,76 @@ fn resolve_requested_team_rejects_a_team_the_user_is_not_on() {
     })
 }
 
+/// `WARP_TEAM= warp` clears the variable for one command and `--team "$TEAM"` expands to a
+/// blank value when the variable is unset; clap surfaces both as `Some("")`. Reading either
+/// as a team that matches nothing would turn a no-op into a refusal to start.
+#[test]
+fn resolve_requested_team_treats_a_blank_value_as_absent() {
+    let team = team_for_test();
+    let workspace = workspace_for_test(&team);
+
+    App::test((), |mut app| async move {
+        initialize_window_team_test_app(&mut app, vec![workspace]);
+
+        app.read(|ctx| {
+            for blank in ["", "   "] {
+                assert_eq!(
+                    UserWorkspaces::as_ref(ctx).resolve_requested_team(Some(blank)),
+                    Ok(Some(team.uid)),
+                    "{blank:?} should behave as if --team were not passed at all"
+                );
+            }
+        });
+    })
+}
+
+#[test]
+fn resolve_requested_team_treats_a_blank_value_as_absent_when_ambiguous() {
+    let (_, _, workspace) = platform_and_security();
+
+    App::test((), |mut app| async move {
+        initialize_window_team_test_app(&mut app, vec![workspace]);
+
+        app.read(|ctx| {
+            for blank in ["", "   "] {
+                let error = UserWorkspaces::as_ref(ctx)
+                    .resolve_requested_team(Some(blank))
+                    .expect_err("two teams and no requested team is ambiguous");
+                assert!(
+                    matches!(error, TeamResolutionError::NoTeamSelected { .. }),
+                    "{blank:?} should be ambiguous rather than unknown, got {error:?}"
+                );
+            }
+        });
+    })
+}
+
+/// A user whose teams all live in another workspace has a named current workspace and no
+/// teams in it, so the message must say which set it searched rather than claiming the user
+/// is on no team at all.
+#[test]
+fn unknown_team_message_names_the_current_workspace_restriction() {
+    let mut workspace = workspace_for_test(&team_for_test());
+    workspace.teams.clear();
+
+    App::test((), |mut app| async move {
+        initialize_window_team_test_app(&mut app, vec![workspace]);
+
+        app.read(|ctx| {
+            let message = UserWorkspaces::as_ref(ctx)
+                .resolve_requested_team(Some("Platform"))
+                .expect_err("a workspace with no teams can match no requested team")
+                .to_string();
+
+            assert!(message.contains("current workspace"), "{message}");
+            assert!(
+                !message.contains("You are not on any team."),
+                "the message must not claim the user has no teams anywhere: {message}"
+            );
+        });
+    })
+}
+
 #[test]
 fn resolve_requested_team_rejects_a_name_two_teams_share() {
     let first = team_named(123, "Platform");

@@ -313,12 +313,20 @@ impl std::fmt::Display for TeamResolutionError {
                 match workspace {
                     Some(workspace) => writeln!(
                         f,
-                        "No team matching \"{requested}\" in workspace \"{workspace}\"."
+                        "No team matching \"{requested}\" in your current workspace \
+                         (\"{workspace}\")."
                     )?,
                     None => writeln!(f, "No team matching \"{requested}\".")?,
                 }
                 if available.is_empty() {
-                    return write!(f, "You are not on any team.");
+                    return match workspace {
+                        Some(_) => write!(
+                            f,
+                            "You are not on any team in it, and only teams in your current \
+                             workspace can be named with --team."
+                        ),
+                        None => write!(f, "You are not on any team."),
+                    };
                 }
                 writeln!(f, "\nTeams you can name with --team:")?;
                 Self::write_choices(f, available)
@@ -535,9 +543,10 @@ impl UserWorkspaces {
     /// so it can [`Self::register_window`] with the answer.
     ///
     /// `requested` is a team name or team uid, typically from a command-line flag; it matches
-    /// a uid exactly, otherwise a name ignoring case and surrounding whitespace. When it is
-    /// absent, the user's teams decide: none means the session is genuinely teamless, exactly
-    /// one is unambiguous, and more than one is [`TeamResolutionError::NoTeamSelected`].
+    /// a uid exactly, otherwise a name ignoring case and surrounding whitespace. Blank counts
+    /// as absent rather than as a team nothing matches. When it is absent, the user's teams
+    /// decide: none means the session is genuinely teamless, exactly one is unambiguous, and
+    /// more than one is [`TeamResolutionError::NoTeamSelected`].
     ///
     /// Only the current workspace's teams are considered, since that is the only place a
     /// window's team can live: [`Self::team_from_uid`] looks nowhere else, and
@@ -554,6 +563,14 @@ impl UserWorkspaces {
             .map(|workspace| workspace.teams.as_slice())
             .unwrap_or_default();
 
+        // `WARP_TEAM= warp` is the ordinary way to clear an exported variable for one
+        // command, and `--team "$TEAM"` expands to a blank value when the variable is unset.
+        // Both mean "no team requested", so neither may be read as a team that happens to
+        // match nothing -- that would turn a no-op into a refusal to start.
+        let requested = requested
+            .map(str::trim)
+            .filter(|requested| !requested.is_empty());
+
         let Some(requested) = requested else {
             return match teams {
                 [] => Ok(None),
@@ -565,7 +582,6 @@ impl UserWorkspaces {
             };
         };
 
-        let requested = requested.trim();
         if let Some(team) = teams.iter().find(|team| team.uid.to_string() == requested) {
             return Ok(Some(team.uid));
         }

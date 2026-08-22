@@ -2,17 +2,45 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use warpui::{AddSingletonModel, App, SingletonEntity, WindowId};
+use warpui::elements::Empty;
+use warpui::platform::WindowStyle;
+use warpui::{
+    AddSingletonModel, App, AppContext, Element, Entity, SingletonEntity, TypedActionView, View,
+    WeakViewHandle, WindowId,
+};
 
 use super::{TuiTeamScope, TuiTeamScopeEvent};
+use crate::server::ids::ServerId;
 use crate::server::server_api::team::MockTeamClient;
 use crate::server::server_api::workspace::MockWorkspaceClient;
 use crate::settings::PrivacySettings;
 use crate::workspaces::team::Team;
-use crate::workspaces::user_workspaces::{TeamResolutionError, UserWorkspaces};
+use crate::workspaces::user_workspaces::{TeamResolutionError, TeamScope, UserWorkspaces};
 use crate::workspaces::workspace::Workspace;
 
 type ObservedEvents = Rc<RefCell<Vec<TuiTeamScopeEvent>>>;
+
+/// Stands in for the TUI's root view: `team_context` needs a view to locate a window from.
+#[derive(Default)]
+struct TeamScopeTestView;
+
+impl Entity for TeamScopeTestView {
+    type Event = ();
+}
+
+impl View for TeamScopeTestView {
+    fn ui_name() -> &'static str {
+        "TeamScopeTestView"
+    }
+
+    fn render(&self, _: &AppContext) -> Box<dyn Element> {
+        Empty::new().finish()
+    }
+}
+
+impl TypedActionView for TeamScopeTestView {
+    type Action = ();
+}
 
 fn team(uid: i64, name: &str) -> Team {
     Team::from_local_cache(uid.into(), name.to_owned(), None, None, None)
@@ -40,6 +68,11 @@ fn register_singletons(app: &mut App, workspaces: Vec<Workspace>) {
     });
 }
 
+fn create_window(app: &mut App) -> (WindowId, WeakViewHandle<TeamScopeTestView>) {
+    let (window_id, view) = app.add_window(WindowStyle::NotStealFocus, |_| TeamScopeTestView);
+    (window_id, view.downgrade())
+}
+
 fn register_scope(
     app: &mut App,
     requested_team: Option<&str>,
@@ -55,6 +88,19 @@ fn register_scope(
         });
     });
     events
+}
+
+/// The window's scope as a settings getter would see it. `team_uid_for_window` returns `None`
+/// both for a window that was never registered and for one registered with no team, so it
+/// cannot witness registration; `team_context` distinguishes them. `None` here means the
+/// window is absent from `UserWorkspaces` entirely, `Some(None)` means registered and
+/// teamless.
+fn resolved_scope(app: &App, view: &WeakViewHandle<TeamScopeTestView>) -> Option<Option<ServerId>> {
+    app.read(|ctx| {
+        UserWorkspaces::as_ref(ctx)
+            .team_context(view, ctx)
+            .map(|context| context.team_uid())
+    })
 }
 
 /// Stands in for a workspaces-metadata response landing, which is the only thing that tells
@@ -73,7 +119,7 @@ fn resolves_the_sole_team_only_once_the_server_names_it() {
 
     App::test((), |mut app| async move {
         register_singletons(&mut app, vec![workspace.clone()]);
-        let window_id = WindowId::new();
+        let (window_id, view) = create_window(&mut app);
         let events = register_scope(&mut app, None, window_id);
 
         assert!(
@@ -81,12 +127,11 @@ fn resolves_the_sole_team_only_once_the_server_names_it() {
             "the cached workspace list can name a team the user has since left, so nothing \
              should resolve before a response lands"
         );
-        app.read(|ctx| {
-            assert_eq!(
-                UserWorkspaces::as_ref(ctx).team_uid_for_window(window_id),
-                None
-            );
-        });
+        assert_eq!(
+            resolved_scope(&app, &view),
+            None,
+            "the window should still be unregistered"
+        );
 
         deliver_workspaces_response(&mut app, vec![workspace]);
 
@@ -94,13 +139,11 @@ fn resolves_the_sole_team_only_once_the_server_names_it() {
             events.borrow().as_slice(),
             [TuiTeamScopeEvent::Resolved { team_uid: Some(uid) }] if *uid == only_team.uid
         ));
-        app.read(|ctx| {
-            assert_eq!(
-                UserWorkspaces::as_ref(ctx).team_uid_for_window(window_id),
-                Some(only_team.uid),
-                "the window must be registered so per-window scope can answer for it"
-            );
-        });
+        assert_eq!(
+            resolved_scope(&app, &view),
+            Some(Some(only_team.uid)),
+            "the window must be registered so per-window scope can answer for it"
+        );
     })
 }
 
@@ -110,7 +153,7 @@ fn resolves_teamless_when_the_user_is_on_no_team() {
 
     App::test((), |mut app| async move {
         register_singletons(&mut app, vec![workspace.clone()]);
-        let window_id = WindowId::new();
+        let (window_id, view) = create_window(&mut app);
         let events = register_scope(&mut app, None, window_id);
 
         deliver_workspaces_response(&mut app, vec![workspace]);
@@ -119,6 +162,12 @@ fn resolves_teamless_when_the_user_is_on_no_team() {
             events.borrow().as_slice(),
             [TuiTeamScopeEvent::Resolved { team_uid: None }]
         ));
+        assert_eq!(
+            resolved_scope(&app, &view),
+            Some(None),
+            "a teamless session must still register, so scope reads resolve to a teamless \
+             answer rather than to an absent window"
+        );
     })
 }
 
@@ -128,7 +177,7 @@ fn refuses_to_resolve_when_the_user_is_on_more_than_one_team() {
 
     App::test((), |mut app| async move {
         register_singletons(&mut app, vec![workspace.clone()]);
-        let window_id = WindowId::new();
+        let (window_id, view) = create_window(&mut app);
         let events = register_scope(&mut app, None, window_id);
 
         deliver_workspaces_response(&mut app, vec![workspace]);
@@ -139,14 +188,12 @@ fn refuses_to_resolve_when_the_user_is_on_more_than_one_team() {
                 TeamResolutionError::NoTeamSelected { .. }
             )]
         ));
-        app.read(|ctx| {
-            assert_eq!(
-                UserWorkspaces::as_ref(ctx).team_uid_for_window(window_id),
-                None,
-                "a refused resolution must leave the window unregistered rather than land it \
-                 on an arbitrary team"
-            );
-        });
+        assert_eq!(
+            resolved_scope(&app, &view),
+            None,
+            "a refused resolution must leave the window unregistered rather than land it on \
+             an arbitrary team"
+        );
     })
 }
 
@@ -158,7 +205,7 @@ fn a_requested_team_settles_an_otherwise_ambiguous_session() {
 
     App::test((), |mut app| async move {
         register_singletons(&mut app, vec![workspace.clone()]);
-        let window_id = WindowId::new();
+        let (window_id, view) = create_window(&mut app);
         let events = register_scope(&mut app, Some("Security"), window_id);
 
         deliver_workspaces_response(&mut app, vec![workspace]);
@@ -167,13 +214,33 @@ fn a_requested_team_settles_an_otherwise_ambiguous_session() {
             events.borrow().as_slice(),
             [TuiTeamScopeEvent::Resolved { team_uid: Some(uid) }] if *uid == security.uid
         ));
-        app.read(|ctx| {
-            assert_eq!(
-                UserWorkspaces::as_ref(ctx).team_uid_for_window(window_id),
-                Some(security.uid),
-                "the requested team wins over the first team in the workspace"
-            );
-        });
+        assert_eq!(
+            resolved_scope(&app, &view),
+            Some(Some(security.uid)),
+            "the requested team wins over the first team in the workspace"
+        );
+    })
+}
+
+/// `WARP_TEAM=` and `--team "$TEAM"` with an unset variable both reach the flag as `Some("")`,
+/// so the whole path has to treat blank as "not requested" rather than refuse to start.
+#[test]
+fn a_blank_requested_team_starts_the_session() {
+    let only_team = team(123, "Platform");
+    let workspace = workspace(vec![only_team.clone()]);
+
+    App::test((), |mut app| async move {
+        register_singletons(&mut app, vec![workspace.clone()]);
+        let (window_id, view) = create_window(&mut app);
+        let events = register_scope(&mut app, Some(""), window_id);
+
+        deliver_workspaces_response(&mut app, vec![workspace]);
+
+        assert!(matches!(
+            events.borrow().as_slice(),
+            [TuiTeamScopeEvent::Resolved { team_uid: Some(uid) }] if *uid == only_team.uid
+        ));
+        assert_eq!(resolved_scope(&app, &view), Some(Some(only_team.uid)));
     })
 }
 
@@ -183,7 +250,7 @@ fn refuses_to_resolve_a_team_the_user_is_not_on() {
 
     App::test((), |mut app| async move {
         register_singletons(&mut app, vec![workspace.clone()]);
-        let window_id = WindowId::new();
+        let (window_id, view) = create_window(&mut app);
         let events = register_scope(&mut app, Some("Growth"), window_id);
 
         deliver_workspaces_response(&mut app, vec![workspace]);
@@ -194,13 +261,11 @@ fn refuses_to_resolve_a_team_the_user_is_not_on() {
                 TeamResolutionError::UnknownTeam { .. }
             )]
         ));
-        app.read(|ctx| {
-            assert_eq!(
-                UserWorkspaces::as_ref(ctx).team_uid_for_window(window_id),
-                None,
-                "an unknown team must not silently fall back to the workspace's only team"
-            );
-        });
+        assert_eq!(
+            resolved_scope(&app, &view),
+            None,
+            "an unknown team must not silently fall back to the workspace's only team"
+        );
     })
 }
 
@@ -215,7 +280,7 @@ fn later_responses_do_not_re_resolve_the_session() {
 
     App::test((), |mut app| async move {
         register_singletons(&mut app, vec![single_team_workspace.clone()]);
-        let window_id = WindowId::new();
+        let (window_id, view) = create_window(&mut app);
         let events = register_scope(&mut app, None, window_id);
 
         deliver_workspaces_response(&mut app, vec![single_team_workspace]);
@@ -226,11 +291,6 @@ fn later_responses_do_not_re_resolve_the_session() {
             1,
             "gaining a second team mid-session must not retroactively refuse the session"
         );
-        app.read(|ctx| {
-            assert_eq!(
-                UserWorkspaces::as_ref(ctx).team_uid_for_window(window_id),
-                Some(platform.uid)
-            );
-        });
+        assert_eq!(resolved_scope(&app, &view), Some(Some(platform.uid)));
     })
 }
