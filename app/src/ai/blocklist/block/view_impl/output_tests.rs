@@ -15,14 +15,16 @@ use watcher::HomeDirectoryWatcher;
 use super::{
     RecordingCardText, format_upload_artifact_text, parsed_skill_for_common_locations,
     read_skill_display_text, should_decorate_recorded_use_computer, start_recording_card_text,
-    stop_recording_card_text,
+    stop_recording_card_text, turn_cost_breakdown_text, turn_cost_label,
 };
+use crate::ai::agent::conversation::TurnCost;
 use crate::ai::agent::{
     RecordingStarted, RecordingStopped, StartRecordingResult, StopRecordingResult,
     UploadArtifactResult,
 };
 use crate::ai::skills::SkillManager;
-use crate::settings::AISettings;
+use crate::persistence::model::ExchangeModelTokenUsage;
+use crate::settings::{AISettings, TuiUsageDisplayMode};
 use crate::warp_managed_paths_watcher::WarpManagedPathsWatcher;
 
 #[test]
@@ -184,6 +186,116 @@ fn use_computer_decoration_skips_screenshot_only_rows() {
 
     request.actions = vec![TargetedAction::screen(Action::Wait(Duration::from_secs(1)))];
     assert!(should_decorate_recorded_use_computer(&request));
+}
+
+#[test]
+fn turn_cost_label_credits_mode_formats_via_format_credits() {
+    let turn_cost = TurnCost {
+        credits: 2.5,
+        cost_in_cents: Some(3.0),
+        token_usage: vec![],
+    };
+
+    assert_eq!(
+        turn_cost_label(&turn_cost, TuiUsageDisplayMode::Credits),
+        "2.5 credits"
+    );
+}
+
+#[test]
+fn turn_cost_label_cost_mode_formats_known_cost_via_format_cost() {
+    let turn_cost = TurnCost {
+        credits: 2.5,
+        cost_in_cents: Some(3.0),
+        token_usage: vec![],
+    };
+
+    assert_eq!(
+        turn_cost_label(&turn_cost, TuiUsageDisplayMode::Cost),
+        "$0.03"
+    );
+}
+
+#[test]
+fn turn_cost_label_cost_mode_reports_unavailable_when_cost_unknown() {
+    // A conversation restored before this surface's cost-in-cents persistence
+    // existed must not fabricate a $0.00 total.
+    let turn_cost = TurnCost {
+        credits: 2.5,
+        cost_in_cents: None,
+        token_usage: vec![],
+    };
+
+    assert_eq!(
+        turn_cost_label(&turn_cost, TuiUsageDisplayMode::Cost),
+        "Cost unavailable"
+    );
+}
+
+#[test]
+fn turn_cost_breakdown_text_falls_back_to_label_when_no_token_usage_recorded() {
+    let turn_cost = TurnCost {
+        credits: 1.0,
+        cost_in_cents: Some(1.0),
+        token_usage: vec![],
+    };
+
+    assert_eq!(
+        turn_cost_breakdown_text(&turn_cost, TuiUsageDisplayMode::Credits),
+        turn_cost_label(&turn_cost, TuiUsageDisplayMode::Credits)
+    );
+}
+
+#[test]
+fn turn_cost_breakdown_text_lists_per_model_token_counts_in_credits_mode() {
+    let turn_cost = TurnCost {
+        credits: 3.5,
+        cost_in_cents: Some(2.3),
+        token_usage: vec![
+            ExchangeModelTokenUsage {
+                model_id: "model-a".to_string(),
+                total_input: 10,
+                output: 5,
+                input_cache_read: 2,
+                input_cache_write: 1,
+                cost_in_cents: 1.0,
+            },
+            ExchangeModelTokenUsage {
+                model_id: "model-b".to_string(),
+                total_input: 20,
+                output: 8,
+                input_cache_read: 0,
+                input_cache_write: 0,
+                cost_in_cents: 1.3,
+            },
+        ],
+    };
+
+    assert_eq!(
+        turn_cost_breakdown_text(&turn_cost, TuiUsageDisplayMode::Credits),
+        "model-a: 18 tokens\nmodel-b: 28 tokens"
+    );
+}
+
+#[test]
+fn turn_cost_breakdown_text_lists_per_model_cost_and_tokens_in_cost_mode() {
+    let turn_cost = TurnCost {
+        credits: 3.5,
+        cost_in_cents: Some(2.3),
+        token_usage: vec![ExchangeModelTokenUsage {
+            model_id: "model-a".to_string(),
+            total_input: 10,
+            output: 5,
+            input_cache_read: 0,
+            input_cache_write: 0,
+            cost_in_cents: 1.0,
+        }],
+    };
+
+    assert_eq!(
+        turn_cost_breakdown_text(&turn_cost, TuiUsageDisplayMode::Cost),
+        "model-a: $0.01 (15 tokens)"
+    );
 }
 
 fn make_skill(name: &str) -> ParsedSkill {
