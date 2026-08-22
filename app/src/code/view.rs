@@ -127,6 +127,43 @@ pub fn init(app: &mut AppContext) {
 
 const PADDING: f32 = 4.;
 
+/// Renders a byte count in human-readable binary units (e.g. `8.0 GiB`), used for the "file
+/// too large to open" toast message. Uses `GiB`/`MiB`/etc. (1024-based), matching the divisor
+/// below and [`warp_util::file::MAX_LOADABLE_FILE_SIZE_BYTES`], which is itself defined as a
+/// binary multiple (`100 * 1024 * 1024`).
+fn format_file_size(bytes: u64) -> String {
+    const UNITS: [&str; 5] = ["B", "KiB", "MiB", "GiB", "TiB"];
+    let mut size = bytes as f64;
+    let mut unit_index = 0;
+    while size >= 1024.0 && unit_index < UNITS.len() - 1 {
+        size /= 1024.0;
+        unit_index += 1;
+    }
+    if unit_index == 0 {
+        format!("{bytes} {}", UNITS[unit_index])
+    } else {
+        format!("{size:.1} {}", UNITS[unit_index])
+    }
+}
+
+/// Renders the "file too large to open" toast message for a [`FileLoadError::TooLarge`].
+///
+/// `size_estimate` (from `stat`) is never authoritative -- a regular file's on-disk size can
+/// change between the `stat` and the read that rejected it finishing, and it's altogether
+/// absent for a device, FIFO, or other non-regular file. It is therefore surfaced only as a
+/// rough, explicitly-labeled estimate, never as a fact and never as one side of a comparison
+/// against `limit_bytes` (which would present both as if they were measured the same way).
+fn format_too_large_message(size_estimate: Option<u64>, limit_bytes: u64) -> String {
+    let limit = format_file_size(limit_bytes);
+    match size_estimate {
+        Some(size_bytes) => format!(
+            "File is larger than the {limit} limit (reported size ~{}).",
+            format_file_size(size_bytes)
+        ),
+        None => format!("File is larger than the {limit} limit."),
+    }
+}
+
 pub use crate::util::openable_file_type::is_binary_file;
 /// Determines the `SavePosition` ID for a draggable tab based on its index.
 pub fn tab_position_id(index: usize) -> String {
@@ -516,7 +553,7 @@ impl CodeView {
                     return;
                 }
                 log::warn!("Failed to load file. {err:?}");
-                CodeView::display_load_failure(ctx.window_id(), ctx);
+                CodeView::display_load_failure(ctx.window_id(), err, ctx);
             }
             LocalCodeEditorEvent::SelectionAddedAsContext {
                 relative_file_path,
@@ -943,10 +980,22 @@ impl CodeView {
         }
     }
 
-    fn display_load_failure(window_id: WindowId, ctx: &mut ViewContext<Self>) {
+    fn display_load_failure(
+        window_id: WindowId,
+        error: &warp_util::file::FileLoadError,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let message = match error {
+            warp_util::file::FileLoadError::TooLarge {
+                size_estimate,
+                limit_bytes,
+            } => format_too_large_message(*size_estimate, *limit_bytes),
+            warp_util::file::FileLoadError::DoesNotExist
+            | warp_util::file::FileLoadError::IOError(_) => "Failed to load file.".to_string(),
+        };
         ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
-            let toast = DismissibleToast::error(String::from("Failed to load file."))
-                .with_object_id("failed_to_load_file".to_string());
+            let toast =
+                DismissibleToast::error(message).with_object_id("failed_to_load_file".to_string());
             toast_stack.add_ephemeral_toast(toast, window_id, ctx);
         });
     }

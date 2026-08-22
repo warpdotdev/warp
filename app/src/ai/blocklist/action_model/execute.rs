@@ -1333,6 +1333,11 @@ async fn read_binary_file_context(
         Ok(content) => content,
         Err(FileLoadError::DoesNotExist) => return Ok(BinaryFileReadResult::NotFound),
         Err(FileLoadError::IOError(e)) => return Err(anyhow::anyhow!(e)),
+        // `read_file_as_binary` never checks against `MAX_LOADABLE_FILE_SIZE_BYTES`
+        // itself (this function already enforces its own `max_bytes` limit
+        // above), so this arm should be unreachable in practice. Handled
+        // explicitly so the match stays exhaustive as `FileLoadError` grows.
+        Err(err @ FileLoadError::TooLarge { .. }) => return Err(anyhow::anyhow!(err)),
     };
 
     let mime_type = from_path(path).first_or_octet_stream().to_string();
