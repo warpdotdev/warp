@@ -61,9 +61,8 @@ enum PtyWrite {
         mode: AIAgentPtyWriteMode,
     },
     RunNativeShellCompletions {
-        /// The generator-command line to write to the PTY, computed by
-        /// `ShellType::native_completions_generator_command`. Run as an in-band foreground command
-        /// for all four shells.
+        /// The generator-command line (from `ShellType::native_completions_generator_command`),
+        /// run as an in-band foreground command.
         command: String,
         shell_type: ShellType,
         results_tx: async_channel::Sender<(Vec<ShellCompletion>, Option<Span>)>,
@@ -313,11 +312,9 @@ impl<T: EventLoopSender> PtyController<T> {
         }
 
         if let Some(write) = self.pending_writes.pop_front() {
-            // `RunNativeShellCompletions` must be treated like `Command` here: it runs the
-            // generator command as a foreground in-band command (for all four shells, PowerShell
-            // included), which puts the shell into a state -- e.g. zsh's `select`, or simply a
-            // running command -- where draining the next queued write immediately would deliver it
-            // before the shell is back at a prompt, where it can be consumed and lost.
+            // `RunNativeShellCompletions` must be treated like `Command`: it runs the generator as
+            // a foreground in-band command, which puts the shell into a state (zsh's `select`, or a
+            // running command) where draining the next queued write immediately could lose it.
             let is_command = matches!(
                 &write,
                 PtyWrite::Command { .. } | PtyWrite::RunNativeShellCompletions { .. }
@@ -651,10 +648,9 @@ impl<T: EventLoopSender> PtyController<T> {
             } => {
                 self.in_flight_native_completions_results_tx = Some(results_tx);
 
-                // Write the generator command exactly as any other in-band command: the shell's
-                // own bootstrap logic (matched by name -- see
-                // `ShellType::native_completions_generator_command`) hides it from history and
-                // treats its output as in-band rather than a new block.
+                // Write the generator command like any other in-band command: the shell's bootstrap
+                // (matched by name, see `ShellType::native_completions_generator_command`) hides it
+                // from history and treats its output as in-band.
                 let terminal_model = self.terminal_model.clone();
                 (
                     Cow::Owned(bytes_to_execute_command(
@@ -690,15 +686,6 @@ impl<T: EventLoopSender> PtyController<T> {
                 });
         }
 
-        // PowerShell's kill-buffer chord (`Alt+2`, an ESC-prefixed two-byte sequence -- see
-        // `ShellType::kill_buffer_bytes`) is not reliably disambiguated by PSReadLine when it
-        // arrives concatenated with the command text that follows it in a single write/read:
-        // empirically, PSReadLine sometimes fails to recognize the chord at all in that case,
-        // leaving the existing buffer untouched and the command text typed literally on top of
-        // it. Splitting the chord into its own pty write -- even with no explicit delay before
-        // the second write -- reliably avoids this. The other three shells use a single,
-        // unambiguous control byte for this (no escape-sequence parsing involved), so no split
-        // is needed for them.
         if let Some(shell_type) = shell_type_for_split
             && let Some((kill_buffer, rest)) = split_kill_buffer_write(&bytes_to_write, shell_type)
         {
@@ -741,9 +728,8 @@ impl<T: EventLoopSender> PtyController<T> {
             let _ = results_tx.try_send((Vec::new(), None));
             return;
         };
-        // Hex-encode the buffer text here -- the single place that turns buffer text into a
-        // generator payload -- so `ShellType`'s builder stays a pure command-string builder with
-        // no encoding (or `hex`) dependency of its own.
+        // Hex-encode the buffer text here -- the single place that turns buffer text into a payload
+        // -- so `ShellType`'s builder stays a pure command-string builder with no `hex` dependency.
         let command =
             shell_type.native_completions_generator_command(&hex::encode(buffer_text.as_bytes()));
 
@@ -771,18 +757,16 @@ impl<T: EventLoopSender> Entity for PtyController<T> {
     type Event = PtyControllerEvent;
 }
 
-/// If `shell_type`'s kill-buffer bytes are the prefix of `bytes` (the full output of
-/// `bytes_to_execute_command`, which prepends them) and something follows them, returns
-/// `Some((kill_buffer_bytes, rest))` so the chord can be written to the pty as its own write,
-/// separate from the rest. Returns `None` when no split is needed or possible, in which case
-/// `bytes` should be sent as a single write. See the call site in `send_write_to_event_loop` for
-/// why this is currently only needed for PowerShell.
+/// Splits `shell_type`'s kill-buffer chord off the front of `bytes` (the output of
+/// `bytes_to_execute_command`, which prepends it), returning `Some((kill_buffer_bytes, rest))`, or
+/// `None` when there is nothing to split.
 ///
-/// The kill-buffer prefix is validated, not assumed: `bytes` is expected to start with the chord,
-/// but splitting at the chord length without checking would miscut unrelated data if a caller ever
-/// handed this something else -- a silent, hard-to-trace error. A non-matching prefix returns
-/// `None` and the write goes out whole: an unsplit write is a known, survivable failure mode; a
-/// mis-split is not.
+/// Only PowerShell needs this. Its kill-buffer chord is an ESC-prefixed sequence that PSReadLine
+/// can fail to disambiguate when it arrives in the same read as the command text, leaving the
+/// command typed on top of the buffer; writing the chord separately avoids it. The other three
+/// shells use a single unambiguous control byte. The prefix is validated rather than assumed: a
+/// non-matching prefix returns `None` (write whole) so a caller that passes something else is
+/// never mis-cut.
 fn split_kill_buffer_write(bytes: &[u8], shell_type: ShellType) -> Option<(&[u8], &[u8])> {
     if shell_type != ShellType::PowerShell {
         return None;

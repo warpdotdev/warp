@@ -571,9 +571,8 @@ if [[ -z $WARP_BOOTSTRAPPED ]]; then
     printf '%s' "$1" | command -p od -An -v -tx1 | command -p tr -d ' \n'
   }
 
-  # Reverses warp_hex_encode_string: decodes a hex-encoded string back to its original bytes.
-  # Lets the Rust app pass arbitrary argument text (e.g. the in-progress command line) as a
-  # plain, unquoted hex string, without needing any shell quoting.
+  # Reverses warp_hex_encode_string: decodes a hex-encoded string back to its original bytes,
+  # letting the Rust app pass arbitrary argument text without shell quoting.
   warp_hex_decode_string () {
     if command -pv xxd >/dev/null 2>&1; then
       printf '%s' "$1" | command -p xxd -p -r
@@ -632,13 +631,10 @@ if [[ -z $WARP_BOOTSTRAPPED ]]; then
     # set the WARP_DISABLE_AUTO_TITLE flag.
     [[ "${WARP_DISABLE_AUTO_TITLE:-}" != true ]] || return
 
-    # This hook is registered before the user's RC files are sourced (so it runs before
-    # `warp_preexec`, which is registered after them), so it fires for every command
-    # including generator commands -- `_WARP_GENERATOR_COMMAND` isn't set yet at this point
-    # (that happens inside the generator function itself, which hasn't started running),
-    # so check the command text directly, the same way `warp_preexec`/`_warp_zshaddhistory`
-    # already do via `_is_warp_generator_command`. Without this, a native-completions
-    # request briefly sets the tab title to "warp_run_generator_comma...".
+    # Registered before the user's RC files, so it runs before `warp_preexec` and fires for
+    # generator commands too, before `_WARP_GENERATOR_COMMAND` is set -- check the command text
+    # directly (like `warp_preexec`). Without this, a native-completions request briefly sets
+    # the tab title to "warp_run_generator_comma...".
     _is_warp_generator_command "$1" || return
 
     emulate -L zsh
@@ -1402,14 +1398,10 @@ esac
     # note we don''t use zparseopts here because of combined option parameters
     # with arguments like -default- confuse it.
     #
-    # -d can be passed on its own (e.g. from _arguments) or clustered with other short
-    # flags (e.g. -ld from _describe). Match any flag token consisting of a leading -,
-    # zero or more letters, and a trailing d, rather than requiring an exact "-d". Use
-    # (I), not (i): (i) returns one past the end (not 0) when nothing matches, which
-    # would make the presence test below true on every call. Restrict the search to the
-    # same leading flags-only prefix the -O/-A/-D check above uses (everything before the
-    # first bare "-"/"--"), so a completion candidate that happens to look like a flag
-    # (a literal "-d"/"-ld" match, e.g. for ls or find) is never mistaken for the flag.
+    # -d can be passed alone (from _arguments) or clustered (e.g. -ld from _describe), so match
+    # any flag token of the form -<letters>d, not an exact "-d". Use (I) not (i): (i) returns
+    # one-past-the-end on no match, making the presence test below always true. Restrict to the
+    # leading flags-only prefix so a candidate that looks like a flag isn't mistaken for it.
     setopt localoptions extendedglob
     local -a __flags
     __flags=(${@[1,(i)(-|--)]})
@@ -1449,82 +1441,50 @@ esac
     # this is the point where we have all matches in $__hits and all
     # descriptions in $__dscr!
 
-    # $PREFIX is the part of the current word these matches replace -- everything before it
-    # ($IPREFIX, a literal quote in $QIPREFIX, other already-typed words) is left untouched --
-    # *except* when the completion function has already reported part of $PREFIX itself as a
-    # hint via `-p`/`-P` (parsed above into $hpre/$apre). `_path_files` does exactly this for a
-    # multi-component path: it restores $PREFIX to the *entire* remaining path (e.g. `/et` for
-    # `cd /et`, not just `et`) before calling compadd, and reports the directory portion
-    # (`/`) separately via `-p` for *display* -- the real, narrower text these particular
-    # matches replace is only what's left of $PREFIX after that hint prefix (`et`), since the
-    # match strings themselves are bare basenames (`etc`), never the full path. Using the whole
-    # $PREFIX here would report a span no real candidate starts with, which the client's own
-    # filter then discards entirely -- Tab silently doing nothing for any multi-component path
-    # (confirmed empirically for `cd /tmp/somedir/et`: $PREFIX measured as the full
-    # `/tmp/somedir/et`, `hpre` as `/tmp/somedir/`, and the real matches as bare `etc`/
-    # `etcetera`). $hpre/$apre are otherwise unused here (unlike $asuf below) specifically
-    # because of this: they only matter for narrowing the replaced substring, never for the
-    # inserted text.
+    # $PREFIX is the part of the current word these matches replace, except when the completion
+    # function reported part of it as a display-only hint via `-p`/`-P` (parsed into $hpre/$apre).
+    # `_path_files` does this for a multi-component path: it sets $PREFIX to the whole remaining
+    # path (`/et` for `cd /et`) but the matches are bare basenames (`etc`), so the real replaced
+    # text is $PREFIX minus that hint prefix (`et`). Reporting the whole $PREFIX would name a span
+    # no candidate starts with, which the client filters out -- Tab silently doing nothing.
     local __hint_prefix="${(v)apre}${(v)hpre}"
     local __replaced_prefix="$PREFIX"
     if [[ -n $__hint_prefix && $PREFIX == "${__hint_prefix}"* ]]; then
         __replaced_prefix="${PREFIX#$__hint_prefix}"
     fi
 
-    # Since native completions only ever complete up to the cursor (see generator_command_for's
-    # doc comment), there's no $SUFFIX, so $__replaced_prefix is always a trailing substring of
-    # the full line: its start is simply the line's length minus its own. This holds however it
-    # got there -- a bare path segment, one following a literal `/` or `$`/`${` IPREFIX, one
-    # inside an open quote, or one with a literal (unexpanded) `~` or backslash-escape -- because
-    # it always carries the exact characters typed for that segment, not an expanded or
-    # dequoted form (verified against each of these shapes empirically; see the PR description).
+    # Native completions only complete up to the cursor (see native_completions_generator_command
+    # in the Rust ShellType), so there's no $SUFFIX and $__replaced_prefix is a trailing substring
+    # of the line, in the exact characters typed: its start is the line length minus its own.
     #
-    # The OSC wire format is byte offsets (matching every other shell's own span, and the
-    # client's own buffer indexing), but zsh's `${#...}` counts *characters*, not bytes, once
-    # any non-ASCII text appears in the line -- measured: any accented or CJK character before
-    # the completed token shifts the reported start left by exactly the extra UTF-8 byte count
-    # (e.g. `ls /tmp/café/xy` off by 1, `ls /tmp/日本/ni` off by 4), the same class of bug as
-    # PowerShell's UTF-16-code-unit offsets. `LC_ALL=C` makes `${#...}` count bytes instead
-    # (confirmed empirically). `local` scopes it to the rest of this call (not just this
-    # computation), which is fine: nothing later in this function does character counting --
-    # `$#__hits`/`$#__dscr`/`${#dirsuf}` below are array element counts, unaffected by locale,
-    # and the description prefix-strip (`##$__hits[$i] #`) is a literal byte-for-byte match.
+    # The wire format is byte offsets, but zsh's `${#...}` counts characters, not bytes, once the
+    # line has non-ASCII text (the same class of bug as PowerShell's UTF-16 offsets). `LC_ALL=C`
+    # makes it count bytes; nothing later in this function counts characters, so scoping it here is fine.
     local LC_ALL=C
     warp_mark_replacement_span_for_compadd_override $(( ${#_WARP_NATIVE_COMPLETIONS_LINE} - ${#__replaced_prefix} )) ${#__replaced_prefix}
 
     # display all matches
     #
-    # $asuf (from compadd's -S) is the string it adds after every match and is meant to
-    # actually be inserted -- e.g. `_arguments`'s '--color=-(never auto always)' spec passes
-    # -S '=' so the option and its value are joined correctly. $hsuf (from -s) is its
-    # display-only counterpart (a "hint" shown but never inserted, mirroring $hpre for -p),
-    # so only $asuf belongs in the inserted text. Without it, accepting a match like
-    # `--color` for `ls --col` inserted `--color` with no `=`, silently turning the next
-    # accepted value into a separate positional argument instead of the option's value.
+    # $asuf (compadd's -S) is inserted after every match -- e.g. `_arguments` passes -S '=' for
+    # `--color=` so the option and value join. $hsuf (-s) is its display-only counterpart, so
+    # only $asuf belongs in the inserted text. Without it, `--color` for `ls --col` loses its `=`.
     local asuf_str="${(v)asuf}"
     local dsuf dscr
     for i in {1..$#__hits}; do
-        # add a dir suffix? Test the real path the match names, not the bare basename alone:
-        # $__hits[$i] is only ever a basename when $__hint_prefix is non-empty (see its own
-        # comment above), so testing it alone resolves relative to $PWD instead of the directory
-        # the completion is actually in -- giving a wrong answer (missing or spurious `/`) any
-        # time $PWD doesn't happen to also contain a same-named entry. When $__hint_prefix is
-        # empty, this is unchanged from before (matches are already relative to $PWD). $__hint_prefix
-        # can itself carry a literal, unexpanded `~` (see its own comment above -- hpre/apre
-        # preserve exactly what was typed); the `${~...}` flag forces tilde/glob expansion on its
-        # value, since a `~` arriving via parameter substitution is otherwise never expanded by
-        # the shell (confirmed empirically: plain `${__hint_prefix}$__hits[$i]`, quoted or not,
-        # leaves `~` literal and the -d test silently fails for a `~`-relative directory).
+        # Add a dir suffix? Test the real path, not the bare basename: $__hits[$i] is a basename
+        # only when $__hint_prefix is non-empty, so testing it alone resolves against $PWD and
+        # gives a wrong `/` whenever $PWD differs. The `${~...}` flag forces tilde/glob expansion,
+        # since a `~` from parameter substitution is otherwise left literal and the -d test would
+        # fail for a `~`-relative directory.
         (( dirsuf )) && [[ -d ${~__hint_prefix}$__hits[$i] ]] && dsuf=/ || dsuf=
         # description to be displayed afterwards
         (( $#__dscr >= $i )) && dscr="${${__dscr[$i]}##$__hits[$i] #}" || dscr=""
 
         local match="$__hits[$i]$dsuf$asuf_str"
 
-        # Hex-encode both fields: OSC params are semicolon-delimited and only the third one
-        # is read (see decode_hex_completions_payload in ansi/mod.rs), so a literal `;` in a
-        # match or description (e.g. a filename, or a zstyle-formatted description) would
-        # otherwise truncate everything after it; a BEL or ESC byte would end the OSC itself.
+        # Hex-encode both fields: OSC params are semicolon-delimited and only the third is
+        # read (see decode_hex_completions_payload in ansi/mod.rs), so a literal `;`, BEL, or
+        # ESC in a match or description would otherwise corrupt the sequence.
         print -n "\e]9280;C"$OSC_PARAM_SEPARATOR$(warp_hex_encode_string $match)$OSC_END
         print -n "\e]9280;D?description"$OSC_PARAM_SEPARATOR$(warp_hex_encode_string $dscr)$OSC_END
     done
@@ -1539,13 +1499,10 @@ esac
     warp_mark_start_of_completions
   }
 
-  # Reports the range of the buffer (byte offsets into the line passed to
-  # warp_run_generator_command_native_completions) that the matches about to be emitted
-  # replace, so the client can use it instead of its own whitespace-derived guess -- see
-  # native_shell_completions.rs's PowerShell equivalent for why this matters: without it, a
-  # completion that only replaces part of the current word (anything after a literal `/`, a
-  # `$`/`${` sigil, or inside an open quote) gets filtered out entirely, because the shell's
-  # actual candidate doesn't start with the client's whitespace-derived guess at the typed token.
+  # Reports the byte-offset range of the line (passed to
+  # warp_run_generator_command_native_completions) that the matches replace, so the client uses
+  # it instead of its whitespace-derived guess. Without it, a completion that replaces only part
+  # of the current word (after a `/`, a `$`/`${` sigil, or inside a quote) gets filtered out.
   function warp_mark_replacement_span_for_compadd_override () {
     printf '\e]9280;S;%s,%s\a' $1 $2
   }
@@ -1570,19 +1527,12 @@ esac
   # Registers the custom completion widget and hooks it up to the main logic for completing.
   zle -C warp_complete_via_compadd_override_internal list-choices warp_main_completer
 
-  # Avoid grouping. Under certain conditions, grouping can cause options to be printed
-  # after the compostfunc hook is called.
+  # Avoid grouping, which can print options after the compostfunc hook runs.
   #
-  # These zstyle patterns must match on 'zle-line-init', not the widget name
-  # ('warp_complete_via_compadd_override_internal') the earlier version of this code used:
-  # since this completion is driven from inside the zle-line-init hook (see the comment above
-  # `_warp_native_completions_zle_line_init`), $curcontext's leading component is always
-  # literally "zle-line-init" (measured, e.g. "zle-line-init:complete:atuin:argument-1"),
-  # regardless of which command is being completed -- not the widget name. The mismatched
-  # pattern meant none of these styles were ever actually applied: verified this was silently
-  # suppressing every description for _describe-driven completions (e.g. `atuin `, `uvx --p`)
-  # that only show descriptions when the 'verbose' style is on for their real context; _arguments
-  # is unaffected only because it hits its own separate, unrelated code path for the same data.
+  # These zstyle patterns must match on 'zle-line-init', not the widget name: this completion is
+  # driven from inside the zle-line-init hook, so $curcontext's leading component is always
+  # literally "zle-line-init" regardless of the command being completed. The earlier widget-name
+  # pattern matched nothing, silently suppressing descriptions for _describe-driven completions.
   zstyle ':completion:zle-line-init:*' list-grouped false
   zstyle ':completion:zle-line-init:*' insert-tab false
   zstyle ':completion:zle-line-init:*' verbose yes
@@ -1592,45 +1542,21 @@ esac
 
   # Native shell completions: foreground generator.
   #
-  # `select` is the only builtin that lets an ordinary (non-ZLE) command reach a real
-  # ZLE completion context: entering a subshell, `$( )`, `( )`, a pipeline segment, or a
-  # backgrounded job all clear `USEZLE` and null `shout` (Src/exec.c), so `zleread` (and
-  # therefore the completion widgets, which are only reachable from inside it) never runs.
-  # This means the request has to be a foreground command in the main shell with no command
-  # substitution around the `select` -- it cannot go through `warp_run_generator_command`,
-  # and unlike other generator commands it cannot be cancelled by PID.
+  # `select` is the only builtin that lets an ordinary (non-ZLE) command reach a real ZLE
+  # completion context: a subshell, `$( )`, `( )`, a pipeline, or a backgrounded job all clear
+  # `USEZLE` so the completion widgets never run. So the request must be a foreground command in
+  # the main shell with no command substitution around the `select`, and cannot be cancelled by PID.
   #
-  # `zle-line-init` fires once per `select` iteration, exactly as it would for a real prompt
-  # read. p10k, zsh-syntax-highlighting, and zsh-autosuggestions all install their own
-  # `zle-line-init` via `add-zle-hook-widget`, which binds the *widget* named `zle-line-init`
-  # to a differently-named function; only the widget binding (not `functions[zle-line-init]`,
-  # which stays empty for such a binding) reflects what actually runs. So the capture below
-  # goes entirely through widget names (`zle -A`/`zle -N`/`$widgets`), not `functions[...]`.
+  # `zle-line-init` fires once per `select` iteration. Plugins (p10k, zsh-syntax-highlighting,
+  # zsh-autosuggestions) install their own via `add-zle-hook-widget`, which binds the *widget*
+  # named `zle-line-init` to a differently-named function, so the capture below works entirely
+  # through widget names (`zle -A`/`zle -N`/`$widgets`), not `functions[...]`.
   #
-  # Once captured, our widget stays permanently bound to `zle-line-init` for the rest of the
-  # session rather than being restored/deleted after each `select` -- doing that per-request
-  # has proven fragile in both directions: deleting it can race a chained hook that itself
-  # rebinds `zle-line-init` during the chain call ("No such widget `zle-line-init'"), and
-  # simply leaving it bound without a self-check aliases the saved-widget name to itself on
-  # the *next* request (see the self-check below), which recurses into itself indefinitely
-  # (measured: "maximum nested function level reached"). A permanently-installed capture
-  # widget avoids both: it always chains to whatever was bound before we ever took over (see
-  # below), so it is functionally transparent to that original binding on every ordinary
-  # prompt read, and it is only ever captured/rebound once. `zle-line-finish` needs no such
-  # capture: nothing in the completion path uses it.
-  #
-  # The self-check in the takeover logic below only closes the case where `zle-line-init` is
-  # bound directly to us. A deferred plugin loader (zinit's turbo mode, `zsh-defer`,
-  # `zvm_after_init`) that registers its own hook via `add-zle-hook-widget` *after* our
-  # takeover preserves our widget as the previous binding rather than the reverse, so
-  # `zle-line-init` ends up bound to that plugin's own dispatcher, which itself still calls
-  # us -- the self-check doesn't see that as "already us", saves the dispatcher, and rebinds
-  # to us again. Chaining to that saved dispatcher then invokes us a second time: the same
-  # "maximum nested function level reached" recursion as the case the self-check handles,
-  # just reached from the opposite bind order and on the *unarmed* path, so it wedges the
-  # shell on every ordinary prompt read rather than failing one completions request. The
-  # reentrancy guard below closes this and the self-check's case the same way, without
-  # needing to reason about which binding order caused it.
+  # Our widget stays permanently bound to `zle-line-init` for the session rather than being torn
+  # down per request: tearing down races chained hooks that rebind it, and leaving it bound
+  # without a guard can alias it to itself and recurse. It always chains to whatever was bound
+  # before, so it is transparent on ordinary prompt reads. The reentrancy guard below makes this
+  # safe regardless of the order in which deferred plugin loaders rebind the hook.
   function _warp_native_completions_zle_line_init () {
     if (( _WARP_NATIVE_COMPLETIONS_ZLE_LINE_INIT_RUNNING )); then
       return 0
@@ -1668,17 +1594,12 @@ esac
     }
   }
 
-  # Native shell completions generator command for zsh, where the only argument is the
-  # hex-encoded command line to complete (see native_shell_completions.rs on the Rust side).
-  # Emits the same OSC 9280 completions protocol as the compadd shim above.
-  #
-  # Shares the `warp_run_generator_command_native_completions` name with bash and fish, but unlike
-  # `warp_run_generator_command` (and unlike what that shared name might suggest) this must run in
-  # the foreground in the main shell -- never backgrounded or wrapped in command substitution --
-  # because only a foreground `select` there can reach a real ZLE completion context. As a
-  # consequence it also cannot be cancelled by PID the way other generators are. See the "Native
-  # shell completions: foreground generator" comment above `_warp_native_completions_zle_line_init`
-  # for the full explanation.
+  # Native shell completions generator command for zsh; the only argument is the hex-encoded
+  # command line to complete. Emits the same OSC 9280 protocol as the compadd shim above. Unlike
+  # `warp_run_generator_command`, this must run in the foreground in the main shell (never
+  # backgrounded or in command substitution) so a `select` can reach a real ZLE completion
+  # context, and so it cannot be cancelled by PID. See the "Native shell completions: foreground
+  # generator" comment above `_warp_native_completions_zle_line_init`.
   #
   # Usage:
   #   warp_run_generator_command_native_completions <hex-encoded line>
@@ -1691,14 +1612,9 @@ esac
 
     local line=$(warp_hex_decode_string "$1")
 
-    # Probe ZLE capability before use: a non-interactive shell, `unsetopt zle`, or
-    # `TERM=emacs` all mean there's no ZLE and therefore no zsh native completions here.
-    # An empty or whitespace-only line (the input editor was empty, or held only spaces, when
-    # the request fired) has no useful completions either -- completing a blank command word
-    # would otherwise list every command on $PATH, so trim before checking rather than testing
-    # for a truly empty string. Report zero matches in both cases so the client falls back to
-    # the bundled completer instead of hanging or erroring, and so we never pay the cost
-    # of listing every top-level command/file synchronously in the user's own shell.
+    # Report zero matches (and let the client fall back to the bundled completer) when there's no
+    # usable ZLE -- a non-interactive shell, `unsetopt zle`, or `TERM=emacs` -- or when the line
+    # is empty or whitespace-only, which would otherwise list every command on $PATH synchronously.
     if [[ -z ${line//[[:space:]]/} ]] || ! { [[ -o zle ]] && [[ -o interactive ]] && [[ "$TERM" != emacs ]] }; then
       printf '\e]9280;A\a'
       printf '\e]9280;B\a'
@@ -1708,12 +1624,9 @@ esac
     _WARP_NATIVE_COMPLETIONS_LINE=$line
     _WARP_NATIVE_COMPLETIONS_ARMED=1
 
-    # Take over zle-line-init for this select, saving whatever was bound to it (if anything
-    # genuinely different) under a private widget name so it can be chained. Skip the
-    # takeover entirely when zle-line-init is already our own capture widget -- left over
-    # from a prior request in this same session, since it is deliberately never torn down
-    # (see the comment above this function) -- there is nothing new to save, and aliasing
-    # _warp_saved_zle_line_init to our own widget here would alias the saved name to itself.
+    # Take over zle-line-init for this select, saving whatever was bound to it under a private
+    # widget name so it can be chained. Skip if it's already our own capture widget (left from a
+    # prior request, since it is never torn down) -- there'd be nothing new to save.
     if [[ "${widgets[zle-line-init]:-}" != user:_warp_native_completions_zle_line_init ]]; then
       if (( ${+widgets[zle-line-init]} )); then
         zle -A zle-line-init _warp_saved_zle_line_init
@@ -1722,10 +1635,9 @@ esac
     fi
 
     local PS3='' REPLY
-    # Swallow the line editor redraw the `select` causes (measured at ~31 bytes with a
-    # single-space throwaway buffer and stderr dropped) with the same DCS bracketing
-    # `warp_read_completion_buffer` uses above, though a byte sequence starting with ESC
-    # ends DCS passthrough, so this only swallows what precedes the first one.
+    # Swallow the line editor redraw the `select` causes with the same DCS bracketing
+    # `warp_read_completion_buffer` uses above. A byte sequence starting with ESC ends DCS
+    # passthrough, so this only swallows what precedes the first one.
     echo -n "${DCS_START}a"
     { select _ in 1; do break; done } 2>/dev/null
     echo -n "$DCS_END"
@@ -1733,10 +1645,9 @@ esac
     # zle-line-init is deliberately left bound to our capture widget -- see the comment
     # above this function for why restoring/deleting it per-request is not done here.
 
-    # Fail safe independently of the above: if the capture widget never ran (e.g. some
-    # other zle-line-init fired instead, or `select` returned without entering ZLE at all),
-    # the flag would otherwise stay armed and hijack the next real prompt read. Clear it
-    # and answer with zero matches so the client always gets a response either way.
+    # Fail safe: if the capture widget never ran (some other zle-line-init fired, or `select`
+    # never entered ZLE), the armed flag would hijack the next real prompt read. Clear it and
+    # answer with zero matches so the client always gets a response.
     if (( _WARP_NATIVE_COMPLETIONS_ARMED )); then
       _WARP_NATIVE_COMPLETIONS_ARMED=0
       printf '\e]9280;A\a'

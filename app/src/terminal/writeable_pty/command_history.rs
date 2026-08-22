@@ -17,9 +17,8 @@ pub fn update_command_history(
     sessions: &ModelHandle<Sessions>,
     ctx: &mut AppContext,
 ) {
-    // Defensive: in-band/generator commands are always written directly to the pty rather than
-    // through `ExecuteCommandEvent`, so this should never actually see one. If it ever does,
-    // don't let it leak into the client-side history overlay.
+    // Defensive: in-band/generator commands are written directly to the pty, not through
+    // `ExecuteCommandEvent`, so this should never see one -- but don't let it leak into history.
     if is_in_band_command(&event.command) {
         return;
     }

@@ -63,36 +63,17 @@ function warp_maybe_send_reset_grid_osc
 end
 
 
-# warp_hex_encode_string hex-encodes the given string with `od`.
-#
-# Uses `printf '%s'` rather than `echo`: fish's builtin `echo`, like bash's, treats an
-# argument that looks like one of its own flags (`-n`, `-e`, `-E`) as that flag instead of
-# literal text -- measured, `kubectl -`/`ssh -`/`npm -` all offer exactly such a candidate as
-# a real completion -- so `-n` encoded to nothing and `-e`/`-E` encoded to just `echo`'s own
-# trailing newline; `echo` itself also appended that trailing newline to every payload
-# (latent until now, since a JSON parser or this OSC protocol's own consumers happened to
-# tolerate it). `printf '%s'` has neither problem.
-#
-# Only forks `od`, not `od | tr`: fish has no byte-safe equivalent of bash's `LC_ALL=C`
-# string-indexing trick (fish strings are Unicode codepoints internally, not raw bytes), so
-# a true no-fork encoder isn't available here the way it was for bash -- but stripping od's
-# spaces/newlines with fish's own builtin `string replace` instead of forking `tr` still
-# halves the per-call fork count, which matters since this runs once per match and once per
-# description in the native-completions loop below. `od`'s output is captured as a fish list
-# split on newlines (it wraps every 16 bytes by default for longer text), so join before
-# stripping spaces.
+# warp_hex_encode_string hex-encodes the given string with `od`, producing a hex string that
+# Rust decodes and parses. od's output arrives as a fish list split on newlines, so join it
+# before stripping the spaces `od` inserts.
 function warp_hex_encode_string
   set -l od_output (printf '%s' "$argv" | od -An -v -tx1)
   string replace -a -- ' ' '' (string join '' $od_output)
 end
 
-# Reverses warp_hex_encode_string: decodes a hex-encoded string back to its original bytes.
-# Lets the Rust app pass arbitrary argument text (e.g. the in-progress command line) as a
-# plain, unquoted hex string, without needing any shell quoting.
+# Reverses warp_hex_encode_string: decodes a hex-encoded string back to its original bytes,
+# letting the Rust app pass arbitrary argument text without shell quoting.
 function warp_hex_decode_string
-    # No argument, or an empty one, decodes to nothing -- guard explicitly rather than
-    # letting `string length -- $hex` expand to nothing and leave the loop condition below
-    # with a missing operand.
     if test (count $argv) -eq 0 -o -z "$argv[1]"
         return
     end
@@ -104,12 +85,9 @@ function warp_hex_decode_string
         set escaped "$escaped\\x$pair"
         set i (math $i + 2)
     end
-    # Use fish's own builtin printf, not `command printf`: BSD/macOS's external printf(1)
-    # only documents octal \nnn escapes for %b, not \xNN, so `command printf` would decode
-    # every native fish completion to literal "\x67..." text on macOS. Fish's builtin printf
-    # doesn't treat a leading "--" as an end-of-options marker the way external printf(1)
-    # does -- it prints the two literal characters instead -- so it's omitted here; the
-    # format string is our own fixed literal, never user input, so it's safe to skip.
+    # Use fish's builtin printf, not `command printf`: BSD/macOS's external printf(1) doesn't
+    # support \xNN escapes for %b, so it would decode every completion to literal "\x67..."
+    # text on macOS.
     printf '%b' $escaped
 end
 
@@ -202,11 +180,7 @@ function warp_run_generator_command
 end
 
 # Computes native shell completions for the given (hex-encoded) command line and emits
-# them via the completions OSC protocol (see zsh_body.sh's compadd shim for the wire
-# format: "\e]9280;A\a", then "\e]9280;C;<match>\a" and optionally
-# "\e]9280;D?description;<description>\a" per match, then "\e]9280;B\a"). Runs
-# synchronously in the foreground -- like native completions in the other shells, there
-# is no async cancel-by-PID for this request.
+# them over the completions OSC protocol.
 #
 # Usage:
 #   warp_run_generator_command_native_completions <hex-encoded line>
@@ -218,20 +192,16 @@ function warp_run_generator_command_native_completions
     end
 
     printf '\e]9280;A\a'
-    # An empty or whitespace-only line (the input editor was empty, or held only spaces, when
-    # the request fired) has no useful completions, and `complete -C "<whitespace>"` would
-    # otherwise list every command on $PATH synchronously in the user's own shell -- trim
-    # before checking so a whitespace-only line is caught the same as a truly empty one.
+    # A whitespace-only or empty line has no useful completions, and `complete -C` on it would
+    # synchronously list every command on $PATH; trim before checking to catch both.
     if test -n "$(string trim -- "$line")"
-        # `complete -C "<line>"` computes completions for an arbitrary line -- the same
-        # entry point already used elsewhere in Warp's bootstrap for executable discovery --
-        # returning one "match\tdescription" pair per line.
+        # `complete -C "<line>"` computes completions for an arbitrary line, returning one
+        # "match\tdescription" pair per line.
         for entry in (complete -C "$line")
             set -l parts (string split -m 1 \t -- $entry)
-            # Hex-encode both fields: OSC params are semicolon-delimited and only the third
-            # one is read (see decode_hex_completions_payload in ansi/mod.rs), so a literal
-            # `;` in a match or description (e.g. a filename) would otherwise truncate
-            # everything after it; a BEL or ESC byte would end the OSC itself.
+            # Hex-encode both fields: OSC params are semicolon-delimited and only the third is
+            # read (see decode_hex_completions_payload in ansi/mod.rs), so a literal `;`, BEL,
+            # or ESC in a match or description would otherwise corrupt the sequence.
             printf '\e]9280;C;%s\a' (warp_hex_encode_string $parts[1])
             if test (count $parts) -gt 1 -a -n "$parts[2]"
                 printf '\e]9280;D?description;%s\a' (warp_hex_encode_string $parts[2])
@@ -248,13 +218,6 @@ function warp_preexec --on-event fish_preexec
     warp_maybe_send_reset_grid_osc
 
     # If this preexec is called for user command, kill ongoing generator command jobs.
-    # Trim before matching because generator commands carry a leading space for fish's history
-    # exclusion, which would otherwise defeat this match and leave stale generator jobs running
-    # (and un-killed) during a real user command.
-    # Also: `test (! cmd)` always evaluates false regardless of cmd's exit status here, since
-    # `string match -q` prints nothing for `!`'s command substitution to capture and `test`
-    # with no arguments is false -- this branch never ran for any command before this fix.
-    # Use fish's own `not`, which negates a command's exit status directly.
     if not string match -q "warp_run_generator_command*" -- (string trim -- $argv[1])
         for pid in $_warp_generator_pids
             # Suppress stderr output; kill writes to stderr if the given PID is not running

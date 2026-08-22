@@ -268,10 +268,7 @@ if [ -z "$WARP_BOOTSTRAPPED" ]; then
     }
 
     # Computes native shell completions for the given (hex-encoded) command line and emits
-    # them via the completions OSC protocol (see zsh_body.sh's compadd shim for the wire
-    # format: "\e]9280;A\a", then "\e]9280;C;<match>\a" per match, then
-    # "\e]9280;B\a"). Runs synchronously in the foreground -- like native completions in the
-    # other shells, there is no async cancel-by-PID for this request.
+    # them over the completions OSC protocol.
     #
     # Usage:
     #   warp_run_generator_command_native_completions <hex-encoded line>
@@ -291,18 +288,11 @@ if [ -z "$WARP_BOOTSTRAPPED" ]; then
     }
 
     # Populates COMPREPLY for the given line using bash's own completion machinery
-    # (resolved via `complete -p`), then prints each entry via the completions OSC.
-    #
-    # Word-splitting here deliberately avoids `eval`, so a partially-typed, unbalanced
-    # quote or an embedded `$( )` in the line under completion can never be executed;
-    # the tradeoff is that quoted arguments containing spaces won't split the way bash's
-    # own tokenizer would.
+    # (resolved via `complete -p`), then prints each entry via the completions OSC. Splits
+    # without `eval` so an unbalanced quote or `$( )` in the line can't execute.
     _warp_native_bash_completions() {
       local line="$1"
-      # `read -ra` splits on $IFS, which is the session's value, not necessarily the
-      # default whitespace set (a plugin or the user's own script can have changed it);
-      # force the default explicitly so a quoted argument containing a space still
-      # yields zero matches consistently rather than splitting on whatever $IFS is.
+      # Force the default IFS; the session's may have been changed by a plugin or the user.
       local IFS=$' \t\n'
       local -a words
       read -ra words <<< "$line"
@@ -318,9 +308,8 @@ if [ -z "$WARP_BOOTSTRAPPED" ]; then
       local compspec
       compspec="$(complete -p "$cmd" 2>/dev/null)"
       if [[ -z "$compspec" ]]; then
-        # Lazily load the completion for $cmd (bash-completion's dynamic loader), then
-        # retry once. Different bash-completion versions expose this under different
-        # names, so try each one we know about.
+        # Lazily load $cmd's completion (bash-completion's dynamic loader) and retry once.
+        # Different bash-completion versions expose the loader under different names.
         if declare -F _comp_complete_load >/dev/null 2>&1; then
           _comp_complete_load "$cmd" >/dev/null 2>&1
         elif declare -F _comp_load >/dev/null 2>&1; then
@@ -347,13 +336,9 @@ if [ -z "$WARP_BOOTSTRAPPED" ]; then
       [[ -z "$func" ]] && return
       declare -F "$func" >/dev/null 2>&1 || return
 
-      # These must be visible to $func exactly as bash's own real completion machinery
-      # presents them: as the ambient globals COMP_WORDS/COMP_CWORD/etc., not as arguments.
-      # Declaring them `local` here rather than as plain (implicitly global) assignments
-      # gets both properties at once -- bash's dynamic scoping makes a `local` visible by
-      # name to any function called from this scope, including $func below, and it is
-      # automatically unset again once this function returns, so a completion request
-      # never leaves stale values sitting in the user's own session.
+      # $func expects COMP_WORDS/COMP_CWORD/etc. as ambient globals, the way bash's real
+      # completion machinery presents them. `local` makes them visible to $func via bash's
+      # dynamic scoping and auto-unsets them on return, leaving no stale values in the session.
       local COMPREPLY=()
       local -a COMP_WORDS=("${words[@]}")
       local COMP_CWORD=$cword
@@ -361,50 +346,28 @@ if [ -z "$WARP_BOOTSTRAPPED" ]; then
       # COMP_POINT is a byte offset into COMP_LINE, not a character count: ${#line} counts
       # characters under the session's locale, which undercounts for multibyte text.
       local COMP_POINT=$(( $(LC_ALL=C printf '%s' "$line" | LC_ALL=C command wc -c) ))
-      # 9 (plain Tab), matching real interactive completion. cobra-generated "bash completion
-      # V2" scripts (kubectl, gh, and most modern Go CLIs) bake a padded "name  (description)"
-      # string into the COMPREPLY entry under this COMP_TYPE when there's more than one match --
-      # safe for real readline, which only ever inserts an entry when it's unique, but not for
-      # us, since we display every entry in a menu and insert whichever one is picked. Switching
-      # to 37 (menu-complete) avoids that padding -- cobra's own case statement guarantees bare
-      # names under 37/42 regardless of match count, see
-      # https://github.com/spf13/cobra/issues/1508 -- but was reverted: bash-completion's own
-      # `make` completion (the one script out of 841 in a stock bash-completion install that
-      # reads $COMP_TYPE at all) branches on it to choose between a full relative path (9) and
-      # just the next path component (37/anything else), so 37 silently broke completing a
-      # prefixed target (`make sub/dir/` -> `deploy` instead of `sub/dir/deploy`; the bare
-      # component doesn't contain the typed prefix, so the client's own filter discards it and
-      # no menu appears at all). 9 is faithful to real readline for all 841 stock scripts;
-      # nothing else reads $COMP_TYPE, confirmed by grepping the installed bash-completion
-      # tree. The cobra padding is instead split back apart below, after the call, which gets
-      # bare names *and* real descriptions -- something neither COMP_TYPE value alone can.
+      # COMP_TYPE=9 (plain Tab), faithful to real interactive completion. cobra-generated
+      # "bash completion V2" scripts (kubectl, gh, most modern Go CLIs) bake a padded
+      # "name  (description)" string into each entry under this type when there's more than
+      # one match; that padding is split apart after the call below. 37 (menu-complete) would
+      # avoid it, but bash-completion's `make` completion branches on $COMP_TYPE and breaks
+      # prefixed-target completion under anything but 9.
       local COMP_TYPE=9
       local COMP_KEY=9
 
-      # compopt is only meaningful while bash's own readline machinery is driving a
-      # completion; calling it here from a plain function call fails loudly to stderr, so
-      # swallow it along with the rest of the completion function's stderr.
+      # compopt only works while readline is driving a completion; called here it fails to
+      # stderr, so swallow it along with the completion function's other stderr.
       "$func" "$cmd" "${words[$cword]}" "${words[$((cword > 0 ? cword - 1 : 0))]}" 2>/dev/null
 
-      # cobra's own padded shape: a name, two or more spaces (real readline's own column
-      # alignment, never used by a real completion candidate on its own), then a
-      # parenthesised description running to the very end of the entry. The first capture
-      # group is restricted to single-space-separated tokens (never containing a 2+-space
-      # run itself), so it always stops at the *first* such run rather than backtracking to
-      # the last one -- otherwise a description that itself contains a parenthesised,
-      # multi-space-padded aside (e.g. "cmd    (outer  (inner) tail)") would greedily fold
-      # part of the description into the name (measured: split as name "cmd    (outer",
-      # description "inner) tail" -- both wrong).
+      # cobra's padded shape: a name, a 2+-space run (readline's column alignment, never used
+      # by a real candidate alone), then a parenthesised description to the end. The first
+      # group matches single-space-separated tokens so it stops at the *first* 2+-space run
+      # rather than folding a description's own parenthesised aside into the name.
       local cobra_padded_shape='^([^[:space:]]+([[:space:]][^[:space:]]+)*)[[:space:]]{2,}\((.*)\)$'
 
-      # Structural guard: cobra only emits this padding when a reply has more than one
-      # match (see the COMP_TYPE=9 comment above), and pads *every* entry in such a reply,
-      # not just some. A real candidate that happens to look padded (e.g. a file named
-      # "Backup  (copy)") is therefore only mistakeable for this shape when it is the *sole*
-      # match (cobra would never have padded it alone), or when everything else in the same
-      # reply also happens to look padded (accepted as a rare, unavoidable coincidence, not
-      # chased further). Decide once for the whole reply, rather than per entry, so a
-      # genuine cobra reply isn't left half-split and a non-cobra one never is.
+      # cobra pads every entry of a multi-match reply or none, so decide once for the whole
+      # reply rather than per entry: a real candidate that happens to look padded is only
+      # mistakeable when it's the sole match, or when every other entry looks padded too.
       local reply cobra_shaped_count=0 non_empty_count=0
       for reply in "${COMPREPLY[@]}"; do
         reply="${reply% }"
@@ -429,10 +392,9 @@ if [ -z "$WARP_BOOTSTRAPPED" ]; then
           reply="${BASH_REMATCH[1]}"
         fi
 
-        # Hex-encode both fields: OSC params are semicolon-delimited and only the third one
-        # is read (see decode_hex_completions_payload in ansi/mod.rs), so a literal `;` in a
-        # match or description (e.g. a filename) would otherwise truncate everything after
-        # it; a BEL or ESC byte would end the OSC itself.
+        # Hex-encode both fields: OSC params are semicolon-delimited and only the third is
+        # read (see decode_hex_completions_payload in ansi/mod.rs), so a literal `;`, BEL, or
+        # ESC in a match or description would otherwise corrupt the sequence.
         printf '\e]9280;C;%s\a' "$(warp_hex_encode_string "$reply")"
         if [[ -n "$reply_description" ]]; then
           printf '\e]9280;D?description;%s\a' "$(warp_hex_encode_string "$reply_description")"
@@ -559,10 +521,8 @@ if [ -z "$WARP_BOOTSTRAPPED" ]; then
         return
       fi
 
-      # Generator commands (including native-completions requests) are never user-facing --
-      # `warp_preexec` above already excludes them from PID-killing for the same reason.
-      # Without this, a native-completions request briefly sets the tab title to
-      # "warp_run_generator_comma...".
+      # Generator commands (including native-completions requests) are never user-facing;
+      # without this, one briefly sets the tab title to "warp_run_generator_comma...".
       if [[ "$1" == warp_run_generator_command* ]]; then
         return
       fi
@@ -926,22 +886,10 @@ if [ -z "$WARP_BOOTSTRAPPED" ]; then
        command -p tr '\n\n' ' ' <<< "$*" | command -p od -An -v -tx1 | command -p tr -d ' \n'
     }
 
-    # warp_hex_encode_string hex-encodes its argument entirely with bash builtins (no external
-    # process forks), so it's essentially a very long hexadecimal string. Afterwards it's
-    # decoded in rust and parsed as usual.
+    # warp_hex_encode_string hex-encodes its argument with bash builtins (no external forks),
+    # producing a long hex string that Rust decodes and parses. `LC_ALL=C` makes the loop
+    # index by byte rather than by locale character, keeping it correct for UTF-8 text.
     # Accepts one argument: the string to encode.
-    #
-    # Previously piped through `echo "$1" | od | tr`: `echo` treats an argument that looks
-    # like one of its own flags (`-n`, `-e`, `-E`) as that flag instead of literal text --
-    # measured, `kubectl -`/`ssh -`/`npm -` all offer exactly such a candidate as a real
-    # completion -- so `-n` encoded to nothing and `-e`/`-E` encoded to just `echo`'s own
-    # trailing newline; `echo` itself also appended that trailing newline to every payload
-    # (latent until now, since a JSON parser or this OSC protocol's own consumers happened to
-    # tolerate it). Also, forking two processes per call was measured to cost ~4x on a large
-    # completions result set (thousands of matches, each hex-encoded twice for match +
-    # description) versus this builtin loop. `LC_ALL=C` makes `${#input}`/`${input:i:1}`
-    # index by byte rather than by locale-aware multi-byte character, so this stays correct
-    # for UTF-8 text (confirmed against café/日本).
     warp_hex_encode_string () {
       local LC_ALL=C
       local input="$1"
@@ -954,8 +902,7 @@ if [ -z "$WARP_BOOTSTRAPPED" ]; then
     }
 
     # Reverses warp_hex_encode_string: decodes a hex-encoded string back to its original
-    # bytes. Lets the Rust app pass arbitrary argument text (e.g. the in-progress command
-    # line) as a plain, unquoted hex string, without needing any shell quoting.
+    # bytes, letting the Rust app pass arbitrary argument text without shell quoting.
     warp_hex_decode_string () {
       if command -pv xxd >/dev/null 2>&1; then
         printf '%s' "$1" | command -p xxd -p -r

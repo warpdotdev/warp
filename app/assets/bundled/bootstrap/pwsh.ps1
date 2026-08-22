@@ -72,14 +72,10 @@ $null = New-Module -Name Warp-Module -ScriptBlock {
             [BitConverter]::ToString([System.Text.Encoding]::UTF8.GetBytes($str)).Replace('-', '')
         }
 
-        # Reverses Warp-Encode-HexString: decodes a hex-encoded string back to its original
-        # UTF-8 text. Lets the Rust app pass arbitrary argument text (e.g. the in-progress
-        # command line) as a plain, unquoted hex string, without needing any shell quoting.
+        # Reverses Warp-Encode-HexString: decodes a hex-encoded string back to its original UTF-8
+        # text, letting the Rust app pass arbitrary argument text without shell quoting.
         function Warp-Decode-HexString([string]$hex) {
-            # An empty (or missing, which binds to an empty string for an unmandated [string]
-            # parameter) argument decodes to nothing. Guard explicitly: the `for` loop below
-            # never executing leaves $bytes as $null rather than an empty array, and
-            # GetString($null) throws.
+            # Guard empty/missing input: otherwise the loop leaves $bytes null and GetString throws.
             if ([string]::IsNullOrEmpty($hex)) {
                 return ''
             }
@@ -821,17 +817,12 @@ $null = New-Module -Name Warp-Module -ScriptBlock {
 
     }
 
-    # Computes native shell completions for an arbitrary command line and emits them over the OSC
-    # 9280 wire protocol, exactly like the other three shells' generator functions. Run as an
-    # ordinary in-band foreground command (the client types the
-    # `Warp-Run-GeneratorCommand-NativeCompletions <hex>` line and submits it, same as
-    # zsh/bash/fish) rather than a PSReadLine key handler: `CompleteInput` takes the line as a
-    # plain string and never needed the interactive buffer, and
-    # the shared `Warp-Run-GeneratorCommand` prefix is what gets this recognized as a generator
-    # command (excluded from history via `AddToHistoryHandler`/`Clear-History`, unpopulated precmd
-    # via `$script:generatorCommand`). The line to complete arrives hex-encoded so it needs no
-    # PowerShell quoting; nothing is ever typed into the real buffer, so there is no kill-buffer
-    # chord to race, no fused/self-executing command text, and nothing to restore afterward.
+    # Computes native shell completions for a command line and emits them over the OSC 9280 wire
+    # protocol, like the other three shells. Run as an ordinary in-band foreground command (the
+    # `Warp-Run-GeneratorCommand` prefix marks it as a generator command, excluded from history and
+    # prompt) rather than a PSReadLine key handler: `CompleteInput` takes the line as a plain string,
+    # and since nothing is ever typed into the real buffer there is no kill-buffer chord to race and
+    # nothing to restore.
     function Warp-Run-GeneratorCommand-NativeCompletions {
         [CmdletBinding()]
         param([string]$hexEncodedLine)
@@ -839,40 +830,27 @@ $null = New-Module -Name Warp-Module -ScriptBlock {
         $status = $?
         $code = $global:LASTEXITCODE
 
-        # Prevents Warp-Precmd from emitting the 'Block started' hook / re-rendering the prompt,
-        # the same way Warp-Run-GeneratorCommand does -- this is a generator command, not a real
-        # user command.
+        # Prevents Warp-Precmd from emitting the 'Block started' hook, like Warp-Run-GeneratorCommand;
+        # this is a generator command, not a real user command.
         $script:generatorCommand = $true
 
         Write-Host -NoNewline "$([char]0x1b)]9280;A$oscEnd"
         try {
             $line = Warp-Decode-HexString $hexEncodedLine
 
-            # An empty line (the input editor was empty when the request fired) has no useful
-            # completions, and CompleteInput('') would otherwise enumerate every command on $PATH
-            # synchronously in the user's own shell.
+            # An empty line has no useful completions, and CompleteInput('') would enumerate every
+            # command on $PATH synchronously.
             if (-not [string]::IsNullOrEmpty($line)) {
                 $completion = [System.Management.Automation.CommandCompletion]::CompleteInput(
                     $line, $line.Length, $null)
-                # PowerShell already knows the exact range of $line these matches replace -- e.g. a
-                # zero-length span right after the `.` in `$_.`, or just the `Na` in `$_.Na` --
-                # which is narrower than (and can disagree with) the client's own whitespace-derived
-                # guess. Report it so the client uses it instead: without this, filtering the
-                # shell's own already-correct candidates against the client's wrong guess discards
-                # them.
+                # PowerShell knows the exact range these matches replace (e.g. the zero-length span
+                # after the `.` in `$_.`), narrower than the client's whitespace-derived guess; report
+                # it so the client doesn't filter the shell's correct candidates against a wrong guess.
                 #
-                # ReplacementIndex/ReplacementLength are .NET string (UTF-16 code unit) offsets, but
-                # the client's buffer is UTF-8 bytes and slices it directly at these offsets --
-                # sending them as-is panicked the app whenever a multi-byte character (an accented
-                # letter, a CJK character, an emoji) appeared to the left of the completed token,
-                # since the index then lands inside that character's UTF-8 encoding rather than on a
-                # boundary. Convert to UTF-8 byte offsets here, where the exact string is known,
-                # using .NET's own encoder rather than hand-rolled surrogate-pair math.
-                #
-                # A whitespace-only line (measured: e.g. "   ") reports a negative
-                # ReplacementIndex/ReplacementLength -- skip the OSC rather than send a negative pair
-                # the client would just reject and warn about; its whitespace-derived fallback span
-                # is exactly as good as anything a negative index could have conveyed anyway.
+                # ReplacementIndex/ReplacementLength are UTF-16 code-unit offsets, but the client
+                # slices a UTF-8 buffer, so convert to byte offsets here (a multi-byte char left of
+                # the token otherwise lands mid-character and panicked the app). A negative index (a
+                # whitespace-only line) is skipped in favor of the client's fallback span.
                 if ($completion.ReplacementIndex -ge 0) {
                     $utf8 = [System.Text.Encoding]::UTF8
                     $replacementStartBytes = $utf8.GetByteCount($line.Substring(0, $completion.ReplacementIndex))
@@ -884,9 +862,8 @@ $null = New-Module -Name Warp-Module -ScriptBlock {
                 }
                 foreach ($match in $completion.CompletionMatches) {
                     # Hex-encode both fields: OSC params are semicolon-delimited and only the third
-                    # is read, so a literal `;` in a match or description (e.g. a .NET tooltip like
-                    # "int Count { get; }") would truncate everything after it; a BEL or ESC would
-                    # end the OSC itself.
+                    # is read, so a literal `;`, BEL, or ESC in a match or description would
+                    # otherwise corrupt the sequence.
                     Write-Host -NoNewline "$([char]0x1b)]9280;C;$(Warp-Encode-HexString $match.CompletionText)$oscEnd"
                     if (-not [string]::IsNullOrEmpty($match.ToolTip) -and $match.ToolTip -ne $match.CompletionText) {
                         # Cmdlet/parameter tooltips can span multiple lines; collapse to one line.
