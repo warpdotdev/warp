@@ -884,7 +884,7 @@ fn convert_gql_computer_use_autonomy_value_to_computer_use_permission(
     }
 }
 
-trait ToAgentModeCommandExecutionPredicates {
+pub(crate) trait ToAgentModeCommandExecutionPredicates {
     fn to_predicates(self) -> Vec<AgentModeCommandExecutionPredicate>;
 }
 
@@ -906,7 +906,7 @@ impl ToAgentModeCommandExecutionPredicates for Vec<String> {
     }
 }
 
-trait ToPathBufs {
+pub(crate) trait ToPathBufs {
     fn to_path_bufs(self) -> Vec<PathBuf>;
 }
 

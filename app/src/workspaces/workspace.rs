@@ -10,6 +10,7 @@ pub use warp_graphql::billing::{
     AiCreditsUsageSource,
 };
 
+use super::gql_convert::{ToAgentModeCommandExecutionPredicates, ToPathBufs};
 use super::team::{MembershipRole, Team};
 use crate::ai::execution_profiles::{
     ActionPermission, ComputerUsePermission, WriteToPtyPermission,
@@ -915,6 +916,16 @@ pub struct AiPermissionsSettings {
     pub remote_session_regex_list: Vec<Regex>,
 }
 
+/// The AI autonomy policy an admin has imposed, in the shape the enforcement paths
+/// consume: `None` on a field means no admin override, so the user's execution profile
+/// decides.
+///
+/// Both admin layers lower into this one type. The workspace layer stores it directly on
+/// [`WorkspaceSettings`]; a team's effective policy arrives as [`TeamAiAutonomySettings`]
+/// and converts via its `From` impl. The team shape's extra structure —
+/// [`EnforceableSetting`]'s `is_enforced_by_workspace` and [`SplitListSetting`]'s
+/// per-layer entries — records which admin layer contributed a value, which is an admin-UI
+/// concern rather than part of the policy, so it does not survive the conversion.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct AiAutonomySettings {
     pub apply_code_diffs_setting: Option<ActionPermission>,
@@ -1085,6 +1096,55 @@ pub struct TeamAiAutonomySettings {
     pub read_files_allowlist: SplitListSetting<String>,
     pub execute_commands_allowlist: SplitListSetting<String>,
     pub execute_commands_denylist: SplitListSetting<String>,
+}
+
+impl From<&TeamAiAutonomySettings> for AiAutonomySettings {
+    /// Lowers a team's effective autonomy policy into the shape enforcement reads.
+    ///
+    /// Two asymmetries between the layers are resolved here:
+    ///
+    /// An empty list becomes "no override". The team wire shape has no null list, so it
+    /// cannot distinguish an admin enforcing an empty allowlist — which the workspace
+    /// shape expresses as `Some(vec![])`, overriding whatever the user's profile lists —
+    /// from an admin configuring no list at all. Nothing can recover the difference on
+    /// this side, and reading it as "no override" is what an admin who has configured
+    /// nothing means.
+    ///
+    /// `create_plans` is dropped. It exists only on the team side; `AIExecutionProfile`
+    /// carries no create-plans permission for it to override, so there is nothing to
+    /// lower it into.
+    fn from(team: &TeamAiAutonomySettings) -> Self {
+        fn override_list<T>(
+            list: &SplitListSetting<String>,
+            convert: impl FnOnce(Vec<String>) -> Vec<T>,
+        ) -> Option<Vec<T>> {
+            if list.values.is_empty() {
+                None
+            } else {
+                Some(convert(list.values.clone()))
+            }
+        }
+
+        Self {
+            apply_code_diffs_setting: team.apply_code_diffs.value,
+            read_files_setting: team.read_files.value,
+            read_files_allowlist: override_list(
+                &team.read_files_allowlist,
+                ToPathBufs::to_path_bufs,
+            ),
+            execute_commands_setting: team.execute_commands.value,
+            execute_commands_allowlist: override_list(
+                &team.execute_commands_allowlist,
+                ToAgentModeCommandExecutionPredicates::to_predicates,
+            ),
+            execute_commands_denylist: override_list(
+                &team.execute_commands_denylist,
+                ToAgentModeCommandExecutionPredicates::to_predicates,
+            ),
+            write_to_pty_setting: team.write_to_pty.value,
+            computer_use_setting: team.computer_use.value,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]

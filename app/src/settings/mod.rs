@@ -64,7 +64,7 @@ pub use input_mode::*;
 pub use linux::*;
 pub use local_control::*;
 pub use native_preference::*;
-pub use onboarding::*;
+pub(crate) use onboarding::*;
 pub use pane::*;
 pub use privacy::*;
 pub use same_line_prompt_block::*;
