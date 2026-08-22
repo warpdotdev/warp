@@ -976,6 +976,10 @@ impl TeamsPageView {
                 // A workspace selection change always emits `TeamsChanged` too,
                 // which already refreshes this page.
             }
+            UserWorkspacesEvent::SurfaceWindowChanged { .. } => {
+                // Another surface moving between windows says nothing about which team this
+                // page's own window is on.
+            }
             UserWorkspacesEvent::ToggleInviteLinksSuccess => {
                 self.show_success("Toggled invite links", ctx);
                 ctx.notify();

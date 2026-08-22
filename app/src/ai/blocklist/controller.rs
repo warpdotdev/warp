@@ -82,7 +82,7 @@ use crate::terminal::model::terminal_model::TerminalModel;
 use crate::terminal::view::inline_banner::ZeroStatePromptSuggestionType;
 use crate::workspace::OneTimeModalModel;
 use crate::workspaces::update_manager::TeamUpdateManager;
-use crate::workspaces::user_workspaces::UserWorkspaces;
+use crate::workspaces::user_workspaces::{TeamContext, UserWorkspaces};
 
 #[derive(Debug, Clone)]
 pub struct SessionContext {
@@ -420,6 +420,17 @@ impl BlocklistAIController {
     /// Returns the bundled-skill catalog origin for this controller's active session.
     pub fn skill_path_origin(&self, ctx: &AppContext) -> SkillPathOrigin {
         SessionContext::from_session(self.active_session.as_ref(ctx), ctx).skill_path_origin()
+    }
+
+    /// The team whose settings govern this surface's AI work, as of now.
+    ///
+    /// The blocklist follows its window: switching the window's team, or dragging this tab into
+    /// a window on another team, changes which team's policy applies to what the user sends
+    /// next, mid-conversation included. Every team-scoped read goes through this, including the
+    /// continuations -- a follow-up once actions finish, an auto-resume after an error -- since
+    /// those propose new work now.
+    pub fn team_context<'a>(&self, app: &'a AppContext) -> TeamContext<'a> {
+        UserWorkspaces::as_ref(app).team_context_for_surface(self.terminal_surface_id, app)
     }
 
     /// Creates a controller for a terminal surface.

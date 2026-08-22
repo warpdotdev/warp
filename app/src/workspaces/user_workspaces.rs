@@ -8,8 +8,8 @@ use warp_core::settings::{ChangeEventReason, Setting};
 use warp_errors::report_error;
 use warp_graphql::workspace::FeatureModelChoice;
 use warpui::{
-    AppContext, Entity, ModelContext, SingletonEntity, Tracked, ViewContext, WeakViewHandle,
-    WindowId,
+    AppContext, Entity, EntityId, ModelContext, SingletonEntity, Tracked, ViewContext,
+    WeakViewHandle, WindowId,
 };
 
 #[cfg(test)]
@@ -95,6 +95,17 @@ pub enum UserWorkspacesEvent {
     /// Fired when a single window's team assignment changes. Windows are independent, so
     /// subscribers that hold per-window state must only react to their own window.
     WindowTeamChanged {
+        window_id: WindowId,
+    },
+    /// Fired when a surface moved to a different window, e.g. its tab was dragged into another
+    /// window. No window changed teams; the *surface* changed which window's team applies to it.
+    /// Subscribers that hold per-surface state must only react to their own surface.
+    ///
+    /// Only fires for surfaces that report themselves; see
+    /// [`UserWorkspaces::surface_moved_to_window`]. Subscribers should match on it through
+    /// [`UserWorkspaces::team_policy_may_have_changed_for_surface`] rather than alone.
+    SurfaceWindowChanged {
+        view_id: EntityId,
         window_id: WindowId,
     },
     CodebaseContextEnablementChanged,
@@ -208,10 +219,11 @@ pub(crate) struct TeamContextForOperation {
 /// workspace-level data. Code with no window at all must not construct a scope to route around
 /// this; it should read across every team explicitly, the way
 /// `UserWorkspaces::teams_allow_codebase_context` does.
-// Only tests call `team_uid()` today; remove this `#[allow(dead_code)]` once a Group 1
-// migration PR has a real getter generic over this trait.
+// The seam ships ahead of its first setting read: `BlocklistAIController::team_context`
+// resolves a scope, but every getter that will take one -- BYO, LLM hosts, autonomy -- is a
+// separate migration PR. Remove this `#[allow(dead_code)]` once one of them lands.
 #[allow(dead_code)]
-pub(crate) trait TeamScope {
+pub trait TeamScope {
     fn team_uid(&self) -> Option<ServerId>;
 }
 
@@ -233,18 +245,21 @@ impl TeamContextForOperation {
     }
 }
 
-/// The team a view renders as, borrowed for the duration of a single render.
+/// The team a window is on, borrowed for the duration of a single render or a single read.
 ///
-/// Current-team UI must reflect the window's team as of this frame, so this is resolved
-/// per render rather than cached. The borrow is what enforces that: it cannot be stored in
-/// view state or moved into a `'static` future, and it deliberately offers no conversion to
-/// a [`TeamContextForOperation`]. A [`WeakViewHandle`] locates a window to read from; it is
-/// not evidence that the holder is running in that window, which is what minting operation
-/// scope requires.
-// Only tests construct one today; remove this once a Group 1 migration PR resolves one from a
-// real render.
-#[allow(dead_code)]
-pub(crate) struct TeamContext<'a> {
+/// This is the default scope. Current-team UI must reflect the window's team as of this frame,
+/// and a policy read must reflect it as of this read, so it is resolved at the point of use
+/// rather than cached. The borrow is what enforces that: it cannot be stored in view state or
+/// moved into a `'static` future, and it deliberately offers no conversion to a
+/// [`TeamContextForOperation`]. Hold a [`WeakViewHandle`] or a surface's view id across the
+/// callbacks and futures in between, and mint one of these where the answer is needed.
+///
+/// A [`WeakViewHandle`] locates a window to read from; it is not evidence that the holder is
+/// running in that window, which is what minting operation scope requires.
+pub struct TeamContext<'a> {
+    // Read only through [`TeamScope::team_uid`], which has no production caller yet; see the
+    // note there.
+    #[allow(dead_code)]
     team_uid: Option<&'a ServerId>,
 }
 
@@ -462,8 +477,85 @@ impl UserWorkspaces {
         }
     }
 
+    /// Resolves the team of the window that the surface identified by `view_id` is in *right
+    /// now*, for one read. See [`TeamContext`].
+    ///
+    /// This is the model layer's way in, which neither of the other two resolvers can serve: a
+    /// model owned by a terminal surface holds that surface's view id and runs on a
+    /// `ModelContext`, so it has neither the [`ViewContext`] that mints operation scope nor a
+    /// [`WeakViewHandle`] (`WeakViewHandle::new` is private to `warpui_core`). The view id is
+    /// enough — the model belongs to that surface, and [`AppContext::window_id_for_view`] is
+    /// authoritative about which window the surface is in, including after a cross-window tab
+    /// drag, which updates that mapping and nothing else.
+    ///
+    /// Resolve one where the answer is needed. Callers that must instead cache a value derived
+    /// from it (a compiled policy, say) can re-read on
+    /// [`Self::team_policy_may_have_changed_for_surface`].
+    ///
+    /// A view id in no window -- a model outliving its surface, or one constructed before its
+    /// view is attached to a window -- resolves to no team, which [`TeamScope`]'s contract reads
+    /// as "not on a team" rather than as any other team. So does a window whose team has left
+    /// the current workspace.
+    ///
+    /// A surface adopting this **must** override `View::on_window_transferred` and call
+    /// [`Self::surface_moved_to_window`]. Resolution here follows a drag on its own, but nothing
+    /// tells a *cached* value to re-read unless the surface reports the move itself.
+    pub fn team_context_for_surface(&self, view_id: EntityId, app: &AppContext) -> TeamContext<'_> {
+        let team_uid = app
+            .window_id_for_view(view_id)
+            .and_then(|window_id| self.team_uid_for_window(window_id))
+            .and_then(|team_uid| self.team_from_uid(team_uid))
+            .map(|team| &team.uid);
+        TeamContext { team_uid }
+    }
+
+    /// Reports that the surface identified by `view_id` now lives in `window_id`, so subscribers
+    /// can re-read anything scoped to its team.
+    ///
+    /// A cross-window tab drag moves views without touching this model, so the moved view has to
+    /// say so from `View::on_window_transferred` — the only hook that fires at drag time. Every
+    /// surface whose state is team-scoped is therefore required to override that hook and call
+    /// this; a surface that does not will silently keep its old team's cached policy after a
+    /// drag. Emitting this centrally from the view transfer itself would remove the requirement,
+    /// and should replace this once there is a second kind of surface to serve.
+    pub fn surface_moved_to_window(
+        &mut self,
+        view_id: EntityId,
+        window_id: WindowId,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        ctx.emit(UserWorkspacesEvent::SurfaceWindowChanged { view_id, window_id });
+    }
+
+    /// Whether `event` may have changed the team policy applying to the surface identified by
+    /// `view_id`: its own window switched teams, the surface moved to another window, or the
+    /// team data itself was refreshed.
+    ///
+    /// For subscribers that cache a value derived from team settings, which goes stale on all
+    /// three -- the last one because *which* team applies can stay the same while what that team
+    /// enforces changes. Over-invalidating costs a recompute, so this errs that way. Code that
+    /// resolves through [`Self::team_context_for_surface`] at the point of use needs no
+    /// subscription at all.
+    pub fn team_policy_may_have_changed_for_surface(
+        event: &UserWorkspacesEvent,
+        view_id: EntityId,
+        app: &AppContext,
+    ) -> bool {
+        match event {
+            UserWorkspacesEvent::WindowTeamChanged { window_id } => {
+                app.window_id_for_view(view_id) == Some(*window_id)
+            }
+            UserWorkspacesEvent::SurfaceWindowChanged {
+                view_id: moved_view_id,
+                ..
+            } => *moved_view_id == view_id,
+            UserWorkspacesEvent::TeamsChanged => true,
+            _ => false,
+        }
+    }
+
     /// Resolves `view`'s window team for one render. See [`TeamContext`].
-    // Only tests call this today; remove once a Group 1 migration PR has a real call site.
+    // Only tests call this today; remove once a migration PR has a real call site.
     #[allow(dead_code)]
     pub(crate) fn team_context<'a, T: Entity>(
         &'a self,

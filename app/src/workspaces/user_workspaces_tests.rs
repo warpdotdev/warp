@@ -1178,6 +1178,184 @@ fn test_team_contexts_represent_a_registered_teamless_window() {
 }
 
 #[test]
+fn test_team_context_for_surface_resolves_each_surfaces_own_window_team() {
+    let (team_a, team_b) = two_teams();
+    let mut workspace = workspace_for_test(&team_a);
+    workspace.teams.push(team_b.clone());
+
+    App::test((), |mut app| async move {
+        initialize_window_team_test_app(&mut app, vec![workspace]);
+
+        let (window_a, view_a) = create_test_window(&mut app);
+        let (window_b, view_b) = create_test_window(&mut app);
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.set_team_for_window(window_a, team_a.uid, ctx);
+            user_workspaces.set_team_for_window(window_b, team_b.uid, ctx);
+        });
+
+        app.read(|ctx| {
+            let user_workspaces = UserWorkspaces::as_ref(ctx);
+            assert_eq!(
+                user_workspaces
+                    .team_context_for_surface(view_a.id(), ctx)
+                    .team_uid(),
+                Some(team_a.uid),
+                "a surface in window A resolves team A from its view id alone"
+            );
+            assert_eq!(
+                user_workspaces
+                    .team_context_for_surface(view_b.id(), ctx)
+                    .team_uid(),
+                Some(team_b.uid),
+                "a surface in window B resolves team B, concurrently with A"
+            );
+        });
+    })
+}
+
+/// Dragging a tab between windows updates the view-to-window mapping and nothing else -- no
+/// window changes teams -- so resolving from the view id is what makes the surface's scope
+/// follow the drag.
+#[test]
+fn test_team_context_for_surface_follows_a_surface_dragged_to_another_window() {
+    let (team_a, team_b) = two_teams();
+    let mut workspace = workspace_for_test(&team_a);
+    workspace.teams.push(team_b.clone());
+
+    App::test((), |mut app| async move {
+        initialize_window_team_test_app(&mut app, vec![workspace]);
+
+        let (window_a, dragged_view) = create_test_window(&mut app);
+        let (window_b, _view_b) = create_test_window(&mut app);
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.set_team_for_window(window_a, team_a.uid, ctx);
+            user_workspaces.set_team_for_window(window_b, team_b.uid, ctx);
+        });
+
+        let dragged_view_id = dragged_view.id();
+        app.update(|ctx| {
+            ctx.transfer_view_tree_to_window(dragged_view_id, window_a, window_b);
+        });
+
+        app.read(|ctx| {
+            assert_eq!(
+                UserWorkspaces::as_ref(ctx)
+                    .team_context_for_surface(dragged_view_id, ctx)
+                    .team_uid(),
+                Some(team_b.uid),
+                "after the drag the surface reads its destination window's team"
+            );
+        });
+    })
+}
+
+#[test]
+fn test_team_context_for_surface_has_no_team_without_one() {
+    let team = team_for_test();
+
+    App::test((), |mut app| async move {
+        initialize_window_team_test_app(&mut app, vec![workspace_for_test(&team)]);
+
+        let (window_id, view) = create_test_window(&mut app);
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.register_window(window_id, None, ctx);
+        });
+
+        app.read(|ctx| {
+            let user_workspaces = UserWorkspaces::as_ref(ctx);
+            assert_eq!(
+                user_workspaces
+                    .team_context_for_surface(view.id(), ctx)
+                    .team_uid(),
+                None,
+                "a surface in a window with no team must not inherit the workspace's only team"
+            );
+            assert_eq!(
+                user_workspaces
+                    .team_context_for_surface(EntityId::new(), ctx)
+                    .team_uid(),
+                None,
+                "a view id that is in no window at all resolves to no team"
+            );
+        });
+    })
+}
+
+#[test]
+fn test_team_policy_may_have_changed_for_surface_isolates_each_surface() {
+    let (team_a, team_b) = two_teams();
+    let mut workspace = workspace_for_test(&team_a);
+    workspace.teams.push(team_b.clone());
+
+    App::test((), |mut app| async move {
+        initialize_window_team_test_app(&mut app, vec![workspace]);
+
+        let (window_a, view_a) = create_test_window(&mut app);
+        let (window_b, view_b) = create_test_window(&mut app);
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.set_team_for_window(window_a, team_a.uid, ctx);
+            user_workspaces.set_team_for_window(window_b, team_b.uid, ctx);
+        });
+
+        app.read(|ctx| {
+            let window_a_switched = UserWorkspacesEvent::WindowTeamChanged {
+                window_id: window_a,
+            };
+            assert!(UserWorkspaces::team_policy_may_have_changed_for_surface(
+                &window_a_switched,
+                view_a.id(),
+                ctx
+            ));
+            assert!(
+                !UserWorkspaces::team_policy_may_have_changed_for_surface(
+                    &window_a_switched,
+                    view_b.id(),
+                    ctx
+                ),
+                "window B's surface is unaffected by window A switching teams"
+            );
+
+            let view_a_moved = UserWorkspacesEvent::SurfaceWindowChanged {
+                view_id: view_a.id(),
+                window_id: window_b,
+            };
+            assert!(UserWorkspaces::team_policy_may_have_changed_for_surface(
+                &view_a_moved,
+                view_a.id(),
+                ctx
+            ));
+            assert!(
+                !UserWorkspaces::team_policy_may_have_changed_for_surface(
+                    &view_a_moved,
+                    view_b.id(),
+                    ctx
+                ),
+                "a surface that did not move is unaffected by another one moving"
+            );
+
+            // Refreshed team data leaves every surface on the same team but can change what
+            // that team enforces, so a cached value has to re-read regardless of surface.
+            for view in [&view_a, &view_b] {
+                assert!(UserWorkspaces::team_policy_may_have_changed_for_surface(
+                    &UserWorkspacesEvent::TeamsChanged,
+                    view.id(),
+                    ctx
+                ));
+            }
+
+            assert!(
+                !UserWorkspaces::team_policy_may_have_changed_for_surface(
+                    &UserWorkspacesEvent::SunsettedToBuildDataUpdated,
+                    view_a.id(),
+                    ctx
+                ),
+                "an unrelated event does not invalidate anything"
+            );
+        });
+    })
+}
+
+#[test]
 fn test_spaces_for_window_orders_selected_team_shared_and_personal() {
     let _flag = FeatureFlag::SharedWithMe.override_enabled(true);
     let first_team = team_for_test();

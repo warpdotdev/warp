@@ -1546,6 +1546,17 @@ impl AppContext {
             .collect()
     }
 
+    /// The window `view_id` currently lives in, or `None` when it is not a live view.
+    ///
+    /// This is the authoritative mapping, which [`Self::transfer_view_tree_to_window`] updates
+    /// when a view moves between windows, so it follows a cross-window tab drag. The same lookup
+    /// as [`WeakViewHandle::window_id`], but without needing a handle, which
+    /// [`WeakViewHandle::new`] does not hand out. An id that is not a view's -- a model's, say --
+    /// is indistinguishable from a view that has gone, and yields `None`.
+    pub fn window_id_for_view(&self, view_id: EntityId) -> Option<WindowId> {
+        self.view_to_window.get(&view_id).copied()
+    }
+
     pub fn dispatch_action_for_view(
         &mut self,
         window_id: WindowId,
