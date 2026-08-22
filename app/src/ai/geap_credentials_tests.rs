@@ -3,6 +3,7 @@ use std::time::{Duration, SystemTime};
 
 use ai::api_keys::ApiKeyManager;
 use settings::{PrivatePreferences, PublicPreferences};
+use warp_core::features::FeatureFlag;
 use warp_managed_secrets::ManagedSecretManager;
 use warpui::{AddSingletonModel, App};
 use warpui_extras::user_preferences;
