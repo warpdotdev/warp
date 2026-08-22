@@ -218,6 +218,7 @@
                 done
 
                 wrapProgram "${installDir}/warp-oss" \
+                  --run 'if [ -z "''${WARP_ORIGINAL_LD_LIBRARY_PATH+x}" ]; then export WARP_ORIGINAL_LD_LIBRARY_PATH="''${LD_LIBRARY_PATH-}"; fi' \
                   --prefix LD_LIBRARY_PATH : "${libraryPath}" \
                   --prefix PATH : "${executablePath}"
 
