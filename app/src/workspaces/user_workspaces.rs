@@ -1090,8 +1090,9 @@ impl UserWorkspaces {
     /// The tier policy is billing entitlement, which belongs to the paying workspace rather
     /// than to any team, so it is read from the workspace either way.
     ///
-    /// Callers are on render and per-action paths, so this asks each team's settings the
-    /// question directly rather than lowering them into [`AiAutonomySettings`] first.
+    /// Asks each team's settings the question directly rather than lowering them into
+    /// [`AiAutonomySettings`] first, which would compile every list entry into a regex to
+    /// answer something that needs none.
     pub fn all_teams_allow_ai_autonomy(&self) -> bool {
         let tier_allows_autonomy = self.current_workspace().is_none_or(|workspace| {
             workspace

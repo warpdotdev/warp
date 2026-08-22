@@ -50,7 +50,9 @@ use warpui::{AddSingletonModel, App, Element, TypedActionView, View, ViewHandle,
 use warpui_extras::user_preferences;
 
 use super::*;
-use crate::ai::execution_profiles::{ActionPermission, WriteToPtyPermission};
+use crate::ai::execution_profiles::{
+    ActionPermission, ComputerUsePermission, WriteToPtyPermission,
+};
 use crate::ai::llms::LLMModelHost;
 use crate::auth::AuthManager;
 use crate::cloud_object::model::persistence::CloudModel;
@@ -1665,13 +1667,25 @@ fn test_team_autonomy_configuration_agrees_with_the_lowered_policy() {
                 ..Default::default()
             },
         ),
-        // Neither of the next two counts as evidence of autonomy in the lowered check, so
-        // both implementations must ignore them.
+        // None of the next three counts as evidence of autonomy in the lowered check, so
+        // both implementations must ignore them. `write_to_pty` and `computer_use` are the
+        // likeliest to drift: the lowering does carry them into `AiAutonomySettings`, so
+        // they read as omissions from the check rather than as fields it has no view of.
         (
             "write_to_pty only",
             TeamAiAutonomySettings {
                 write_to_pty: EnforceableSetting {
                     value: Some(WriteToPtyPermission::AlwaysAsk),
+                    is_enforced_by_workspace: false,
+                },
+                ..Default::default()
+            },
+        ),
+        (
+            "computer_use only",
+            TeamAiAutonomySettings {
+                computer_use: EnforceableSetting {
+                    value: Some(ComputerUsePermission::AlwaysAsk),
                     is_enforced_by_workspace: false,
                 },
                 ..Default::default()
