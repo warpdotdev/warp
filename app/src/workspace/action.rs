@@ -236,6 +236,8 @@ pub enum WorkspaceAction {
     },
     UngroupTabs(TabGroupId),
     NewTabInGroup(TabGroupId),
+    NewTabInGroupWithDirectoryPicker(TabGroupId),
+    NewTabInGroupWithDirectory(TabGroupId, std::path::PathBuf),
     MoveTabGroupUp(TabGroupId),
     MoveTabGroupDown(TabGroupId),
     CloseTabsOutsideGroup(TabGroupId),
@@ -261,6 +263,8 @@ pub enum WorkspaceAction {
     /// Unpins the active tab's group.
     UnpinActiveTabGroup,
     AddDefaultTab,
+    AddProjectFolder,
+    AddProjectFolderConfirmed(std::path::PathBuf),
     AddTerminalTab {
         hide_homepage: bool,
     },
@@ -978,6 +982,8 @@ impl WorkspaceAction {
             | RemoveActiveOrSelectedTabsFromGroup
             | UngroupTabs(_)
             | NewTabInGroup(_)
+            | NewTabInGroupWithDirectoryPicker(_)
+            | NewTabInGroupWithDirectory(_, _)
             | MoveTabGroupUp(_)
             | MoveTabGroupDown(_)
             | CloseTabsOutsideGroup(_)
@@ -994,6 +1000,8 @@ impl WorkspaceAction {
             | ToggleTabColor { .. }
             | ToggleTabGroupColor { .. }
             | AddDefaultTab
+            | AddProjectFolder
+            | AddProjectFolderConfirmed(_)
             | AddTerminalTab { .. }
             | AddTabWithShell { .. }
             | AddGetStartedTab

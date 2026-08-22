@@ -318,6 +318,8 @@ pub enum NewSessionMenuItem {
     CreateNewTabConfig,
     /// Creates a new tab group. Gated by `FeatureFlag::GroupedTabs`.
     CreateNewTabGroup,
+    /// Creates a new Project Folder. Gated by `FeatureFlag::GroupedTabs`.
+    CreateProjectFolder,
 }
 
 #[derive(Clone, Copy)]
