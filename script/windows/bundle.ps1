@@ -60,6 +60,31 @@ if ($ARCH -eq 'arm64') {
     $PLATFORM_TARGET = 'x86_64-pc-windows-msvc'
 }
 
+# Windows-on-ARM64 hosts can run x64 binaries via built-in emulation, but x64
+# hosts cannot run arm64 binaries at all, so only that direction is unsafe.
+# Resolve it once so the settings-schema default below (which assumes the
+# just-built binary is executable) can fail clearly instead of the process
+# simply failing to start.
+#
+# PROCESSOR_ARCHITECTURE reports the architecture of the running process, not
+# the host: an x64 PowerShell process running under WOW64 on a Windows-on-ARM
+# machine reports AMD64 even though the host is natively ARM64.
+# PROCESSOR_ARCHITEW6432 carries the true native host architecture in that
+# case, so prefer it when present.
+$NATIVE_PROCESSOR_ARCHITECTURE = if ($env:PROCESSOR_ARCHITEW6432) {
+    $env:PROCESSOR_ARCHITEW6432
+} else {
+    $env:PROCESSOR_ARCHITECTURE
+}
+$HOST_ARCH = if ($NATIVE_PROCESSOR_ARCHITECTURE -eq 'AMD64') {
+    'x64'
+} elseif ($NATIVE_PROCESSOR_ARCHITECTURE -eq 'ARM64') {
+    'arm64'
+} else {
+    throw "Unsupported host architecture: $NATIVE_PROCESSOR_ARCHITECTURE"
+}
+$CAN_EXECUTE_ARCH = -not ($ARCH -eq 'arm64' -and $HOST_ARCH -eq 'x64')
+
 $ErrorActionPreference = 'Stop'
 
 function Assert-ValidSignature {
@@ -249,9 +274,22 @@ if ($SKIP_BUILD_INSTALLER) {
 Write-Output "Built for $ARCH with executable at $BINARY_PATH"
 
 # Prepare bundled resources
+if ($env:SKIP_SETTINGS_SCHEMA -ne '1' -and -not $env:SETTINGS_SCHEMA_EXECUTABLE -and -not $env:SETTINGS_SCHEMA_SOURCE) {
+    if ($IS_TUI) {
+        Write-Error 'TUI bundles require SETTINGS_SCHEMA_SOURCE or SETTINGS_SCHEMA_EXECUTABLE.'
+        exit 1
+    } elseif ($SKIP_BUILD_BINARY) {
+        Write-Error '-skip_build_binary requires SETTINGS_SCHEMA_SOURCE or SETTINGS_SCHEMA_EXECUTABLE.'
+        exit 1
+    } elseif (-not $CAN_EXECUTE_ARCH) {
+        Write-Error "Cannot execute the just-built $ARCH binary on this $HOST_ARCH host to generate a settings schema; pass SETTINGS_SCHEMA_SOURCE or SETTINGS_SCHEMA_EXECUTABLE."
+        exit 1
+    }
+    $env:SETTINGS_SCHEMA_EXECUTABLE = $BINARY_PATH
+}
 $BUNDLED_RESOURCES_DIR = "$CARGO_TARGET_OUTPUT_DIR\resources"
 Write-Output 'Preparing bundled resources...'
-& "$WINDOWS_INSTALLER_DIR\prepare_bundled_resources.ps1" -DestinationDir "$BUNDLED_RESOURCES_DIR" -Channel "$CHANNEL" -CargoProfile "$CARGO_PROFILE"
+& "$WINDOWS_INSTALLER_DIR\prepare_bundled_resources.ps1" -DestinationDir "$BUNDLED_RESOURCES_DIR" -Channel "$CHANNEL"
 if (-Not $?) {
     Write-Error 'Failed to prepare bundled resources'
     exit 1
