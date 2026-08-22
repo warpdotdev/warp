@@ -13,6 +13,7 @@ use warp_cli::agent::Harness;
 use warp_terminal::model::escape_sequences::{BRACKETED_PASTE_END, BRACKETED_PASTE_START, C0};
 use warpui::notification::UserNotification;
 use warpui::platform::WindowStyle;
+use warpui::windowing::state::ApplicationStage;
 use warpui::{App, EntityIdSet, Presenter, ReadModel, WindowInvalidation};
 
 use super::*;
@@ -72,7 +73,7 @@ use crate::terminal::model::ansi::{self, BootstrappedValue, InitShellValue, Pree
 use crate::terminal::model::block::AgentViewVisibility;
 use crate::terminal::model::blocks::{TotalIndex, insert_block};
 use crate::terminal::model::grid::Dimensions as _;
-use crate::terminal::model::terminal_model::WithinBlock;
+use crate::terminal::model::terminal_model::{ExitReason, WithinBlock};
 use crate::terminal::session_settings::AgentToolbarChipSelection;
 use crate::terminal::shared_session::shared_handlers::{
     RemoteUpdateGuard, apply_cli_agent_state_update,
@@ -10016,5 +10017,46 @@ fn back_button_label_resolves_token_only_parent_linkage() {
                 "for Orchestrator",
             );
         });
+    });
+}
+
+#[test]
+fn bell_badge_tracks_only_unviewed_terminal_until_shell_exit() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let (window_id, terminal) = add_window_with_id_and_terminal(&mut app, None);
+
+        app.update(|ctx| {
+            WindowManager::handle(ctx).update(ctx, |state, _| {
+                state.overwrite_for_test(ApplicationStage::Active, Some(window_id));
+            });
+        });
+        terminal.update(&mut app, |view, ctx| {
+            view.focus_terminal(ctx);
+            view.handle_terminal_event(&ModelEvent::Bell, ctx);
+        });
+        assert_eq!(app.dock_badge_count(), 0);
+
+        app.update(|ctx| {
+            WindowManager::handle(ctx).update(ctx, |state, _| {
+                state.overwrite_for_test(ApplicationStage::Inactive, Some(window_id));
+            });
+        });
+        terminal.update(&mut app, |view, ctx| {
+            view.handle_terminal_event(&ModelEvent::Bell, ctx);
+            view.handle_terminal_event(&ModelEvent::Bell, ctx);
+        });
+        assert_eq!(app.dock_badge_count(), 1);
+
+        terminal.update(&mut app, |view, ctx| {
+            view.is_login_shell_bootstrapped = true;
+            view.handle_terminal_event(
+                &ModelEvent::Exit {
+                    reason: ExitReason::ShellProcessExited,
+                },
+                ctx,
+            );
+        });
+        assert_eq!(app.dock_badge_count(), 0);
     });
 }

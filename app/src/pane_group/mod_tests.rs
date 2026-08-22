@@ -2819,6 +2819,85 @@ fn test_active_session_id_reset_on_last_pane_close() {
 }
 
 #[test]
+fn closing_terminal_pane_clears_its_dock_badge() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let pane_group = mock_pane_group(&mut app, Default::default());
+
+        let terminal_id = pane_group.update(&mut app, |panes, ctx| {
+            let terminal_id = get_newly_created_pane_id(panes, &[]);
+            let terminal_view_id = panes
+                .terminal_view_from_pane_id(terminal_id, ctx)
+                .unwrap()
+                .id();
+            AgentNotificationsModel::handle(ctx).update(ctx, |model, ctx| {
+                model.record_terminal_bell(terminal_view_id, ctx);
+            });
+            panes.add_pane_with_direction(
+                Direction::Right,
+                NotebookPane::new(new_notebook(ctx), ctx),
+                false,
+                ctx,
+            );
+            terminal_id
+        });
+        assert_eq!(app.dock_badge_count(), 1);
+
+        pane_group.update(&mut app, |panes, ctx| {
+            panes.close_pane(terminal_id, ctx);
+        });
+        assert_eq!(app.dock_badge_count(), 0);
+    });
+}
+
+#[test]
+fn popping_terminal_stack_clears_exposed_terminal_dock_badge() {
+    App::test((), |mut app| async move {
+        crate::workspace::view::tests::initialize_app(&mut app);
+        let workspace = crate::workspace::view::tests::mock_workspace(&mut app);
+        let pane_group = workspace.read(&app, |workspace, _| {
+            workspace.active_tab_pane_group().clone()
+        });
+
+        let pane_stack = pane_group.update(&mut app, |panes, ctx| {
+            let terminal_pane = panes.terminal_session_by_pane_index(0).unwrap();
+            let terminal_pane_id = terminal_pane.terminal_pane_id();
+            let underlying_view = terminal_pane.terminal_view(ctx);
+            let pane_stack = terminal_pane.pane_view().as_ref(ctx).pane_stack().clone();
+            let (top_pane, top_view) = panes.create_terminal_pane_data(
+                None,
+                HashMap::new(),
+                IsSharedSessionCreator::No,
+                None,
+                None,
+                ctx,
+            );
+            pane_stack.update(ctx, |stack, ctx| {
+                stack.push(top_pane.terminal_manager(ctx), top_view.clone(), ctx);
+            });
+            panes.add_terminal_pane(Direction::Right, None, ctx);
+            assert_ne!(panes.focused_pane_id(ctx), terminal_pane_id.into());
+            assert!(panes.visible_terminal_views(ctx).contains(&top_view));
+            AgentNotificationsModel::handle(ctx).update(ctx, |model, ctx| {
+                model.record_terminal_bell(underlying_view.id(), ctx);
+            });
+            let window_id = ctx.window_id();
+            WindowManager::handle(ctx).update(ctx, |state, ctx| {
+                state.overwrite_for_test(ApplicationStage::Active, Some(window_id));
+                ctx.notify();
+            });
+            pane_stack
+        });
+        assert_eq!(app.dock_badge_count(), 1);
+
+        pane_stack.update(&mut app, |stack, ctx| {
+            stack.pop(ctx).unwrap();
+        });
+        assert_eq!(app.dock_badge_count(), 0);
+    });
+}
+
+#[test]
 fn test_add_pane_aborts_cleanly_when_pre_attach_returns_false() {
     App::test((), |mut app| async move {
         initialize_app(&mut app);

@@ -439,3 +439,38 @@ fn in_progress_resume_clears_stale_notification_and_adds_none() {
         });
     });
 }
+
+#[test]
+fn marking_notifications_read_preserves_terminal_bell_badge() {
+    App::test((), |mut app| async move {
+        let _guard = FeatureFlag::HOANotifications.override_enabled(true);
+        let (_history, notifications) = setup_app(&mut app);
+        disable_telemetry_path(&mut app);
+
+        let conversation_id = AIConversationId::new();
+        let terminal_view_id = EntityId::new();
+        seed_stale_notification(&notifications, &mut app, conversation_id, terminal_view_id);
+        assert_eq!(app.dock_badge_count(), 0);
+        notifications.update(&mut app, |model, ctx| {
+            model.record_terminal_bell(terminal_view_id, ctx);
+        });
+        assert_eq!(app.dock_badge_count(), 1);
+
+        notifications.update(&mut app, |model, ctx| {
+            model.mark_all_items_read(ctx);
+        });
+        notifications.read(&app, |model, _| {
+            assert!(
+                !model
+                    .notifications()
+                    .has_unread_for_terminal_view(terminal_view_id)
+            );
+        });
+        assert_eq!(app.dock_badge_count(), 1);
+
+        notifications.update(&mut app, |model, ctx| {
+            model.mark_items_from_terminal_view_read(terminal_view_id, ctx);
+        });
+        assert_eq!(app.dock_badge_count(), 0);
+    });
+}

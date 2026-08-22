@@ -5310,6 +5310,27 @@ impl Workspace {
             .expect("Active tab index entry should exist")
     }
 
+    pub(crate) fn visible_terminal_views(&self, ctx: &AppContext) -> Vec<ViewHandle<TerminalView>> {
+        let pane_group_handle = self.active_tab_pane_group();
+        let pane_group_is_visible = self.is_pane_group_visible(pane_group_handle.id());
+        let pane_group = pane_group_handle.as_ref(ctx);
+        if !pane_group_is_visible
+            || pane_group.right_panel_open && pane_group.is_right_panel_maximized
+        {
+            Vec::new()
+        } else if pane_group.is_focused_pane_maximized(ctx) {
+            pane_group.focused_session_view(ctx).into_iter().collect()
+        } else {
+            pane_group.visible_terminal_views(ctx)
+        }
+    }
+
+    pub(crate) fn is_pane_group_visible(&self, pane_group_id: EntityId) -> bool {
+        self.active_tab_pane_group().id() == pane_group_id
+            && !(FeatureFlag::AgentManagementView.is_enabled()
+                && self.current_workspace_state.is_agent_management_view_open)
+    }
+
     /// Attempts to get selected text from the focused pane.
     /// Returns None if there is no selection, multiple selections, or an empty selection.
     /// Supports code, notebook, AI document, and terminal panes.
@@ -5402,13 +5423,19 @@ impl Workspace {
                 ctx,
             );
         });
-        if let Some(terminal_view_id) = focused_terminal_view_id {
-            let is_active_window = ctx.windows().active_window() == Some(ctx.window_id());
-            if is_active_window {
-                AgentNotificationsModel::handle(ctx).update(ctx, |model, ctx| {
+        let window_state = ctx.windows().state();
+        let is_active_window = window_state.stage == ApplicationStage::Active
+            && window_state.active_window == Some(ctx.window_id());
+        if is_active_window {
+            let visible_terminal_views = self.visible_terminal_views(ctx);
+            AgentNotificationsModel::handle(ctx).update(ctx, |model, ctx| {
+                if let Some(terminal_view_id) = focused_terminal_view_id {
                     model.mark_items_from_terminal_view_read(terminal_view_id, ctx);
-                });
-            }
+                }
+                for terminal_view in visible_terminal_views {
+                    model.clear_terminal_bell(terminal_view.id(), ctx);
+                }
+            });
         }
     }
 
@@ -16348,6 +16375,18 @@ impl Workspace {
                 }
             }
             pane_group::Event::MaximizePaneToggled => {
+                let focused_terminal_view_id = self
+                    .active_tab_pane_group()
+                    .as_ref(ctx)
+                    .focused_session_view(ctx)
+                    .map(|view| view.id());
+                let ambient_agent_task_id =
+                    self.ambient_agent_task_id_for_focused_terminal_view(ctx);
+                self.notify_terminal_focus_change(
+                    focused_terminal_view_id,
+                    ambient_agent_task_id,
+                    ctx,
+                );
                 ctx.notify();
             }
             pane_group::Event::FocusPaneGroup => {
@@ -18929,16 +18968,16 @@ impl Workspace {
                 // reactivation also verifies the live platform window.
                 if cached_window_is_active
                     && (did_window_change_focus || (app_became_active && platform_window_is_active))
-                    && let Some(terminal_view) = self
+                {
+                    let focused_terminal_view_id = self
                         .active_tab_pane_group()
                         .as_ref(ctx)
                         .focused_session_view(ctx)
-                {
-                    let ambient_agent_task_id = terminal_view
-                        .as_ref(ctx)
-                        .ambient_agent_task_id_for_details_panel(ctx);
+                        .map(|view| view.id());
+                    let ambient_agent_task_id =
+                        self.ambient_agent_task_id_for_focused_terminal_view(ctx);
                     self.notify_terminal_focus_change(
-                        Some(terminal_view.id()),
+                        focused_terminal_view_id,
                         ambient_agent_task_id,
                         ctx,
                     );

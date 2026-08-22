@@ -92,6 +92,7 @@ objc2-app-kit = { workspace = true, features = [
     "NSCell",
     "NSControl",
     "NSCursor",
+    "NSDockTile",
     "NSEvent",
     "NSImage",
     "NSMenu",
