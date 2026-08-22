@@ -8400,31 +8400,28 @@ impl TerminalView {
             .all(|block| block.restored_block_was_local().unwrap_or(true))
     }
 
-    // This logic is only needed if the user has disabled AI in remote sessions.
-    // It has potential performance implications if called on every focus change,
-    // so we limit it to only when the user disables AI in remote sessions.
+    /// Publishes this pane's remote-block state to [`FocusedTerminalInfo`], which the app-global
+    /// AI switch reads (see `AISettings::is_ai_disabled_due_to_remote_session_org_policy`).
+    ///
+    /// Publishes whatever the pane contains rather than only while the org forbids AI in remote
+    /// sessions. Gating the publish on that permission meant a pane that filled with remote
+    /// blocks under a permissive policy never reported them, so an admin revoking the permission
+    /// afterwards judged the pane against state that had never been written and left AI enabled.
+    /// What is published here is a fact about the pane; the permission is applied where the
+    /// decision is made.
     fn update_focused_terminal_info(&mut self, ctx: &mut ViewContext<Self>) {
         if !ctx.is_self_or_child_focused() {
             return;
         }
 
-        let is_ai_allowed_in_remote_sessions =
-            UserWorkspaces::as_ref(ctx).is_ai_allowed_in_remote_sessions();
-
-        // Only update the FocusedTerminalInfo model if the user has disabled AI in remote sessions
-        // because it's a potentially expensive operation.
-        if !is_ai_allowed_in_remote_sessions {
-            let contains_remote_blocks = self.any_session_contains_remote_blocks;
-            let contains_restored_remote_blocks = self.any_session_contains_restored_remote_blocks;
-            let updated = FocusedTerminalInfo::handle(ctx).update(
-                ctx,
-                |model: &mut FocusedTerminalInfo, ctx| {
-                    model.update(contains_remote_blocks, contains_restored_remote_blocks, ctx)
-                },
-            );
-            if updated {
-                ctx.notify();
-            }
+        let contains_remote_blocks = self.any_session_contains_remote_blocks;
+        let contains_restored_remote_blocks = self.any_session_contains_restored_remote_blocks;
+        let updated =
+            FocusedTerminalInfo::handle(ctx).update(ctx, |model: &mut FocusedTerminalInfo, ctx| {
+                model.update(contains_remote_blocks, contains_restored_remote_blocks, ctx)
+            });
+        if updated {
+            ctx.notify();
         }
     }
 
@@ -11296,19 +11293,23 @@ impl TerminalView {
             return true;
         }
 
-        // If there's a command present and this user is subject to the regex list policy from their
-        // organization, check the command against the regex list.
-
+        // If there's a command present, check it against the remote-session command patterns
+        // configured by the user's organization.
         let Some(command) = command else {
             return false;
         };
 
-        if UserWorkspaces::as_ref(app).is_ai_allowed_in_remote_sessions() {
-            // We don't check any regexes if the user is allowed to run AI in remote sessions.
+        let remote_session_regex_list =
+            UserWorkspaces::as_ref(app).remote_session_regexes_union_across_teams();
+
+        // Almost nobody has org patterns at all, so there is nothing further to check. This
+        // stands in for an earlier short-circuit on the remote-session AI permission: whether a
+        // block is remote is a question of fact, and answering it from a permission that can be
+        // revoked later left blocks -- including the `is_local` flag persisted with them --
+        // classified against a policy no longer in force.
+        if remote_session_regex_list.is_empty() {
             return false;
         }
-
-        let remote_session_regex_list = UserWorkspaces::as_ref(app).get_remote_session_regex_list();
 
         // First check if the command matches any of the regexes in the list.
         if remote_session_regex_list

@@ -1152,6 +1152,241 @@ fn test_window_team_reconciliation_moves_rendering_but_not_a_captured_context() 
     })
 }
 
+fn set_team_remote_session_policy(team: &mut Team, allow_ai: bool, patterns: &[&str]) {
+    team.settings
+        .ai_permissions
+        .allow_ai_in_remote_sessions
+        .value = allow_ai;
+    team.settings
+        .ai_permissions
+        .remote_session_regex_list
+        .values = patterns.iter().map(|pattern| pattern.to_string()).collect();
+}
+
+fn set_workspace_remote_session_policy(
+    workspace: &mut Workspace,
+    allow_ai: bool,
+    patterns: &[&str],
+) {
+    workspace
+        .settings
+        .ai_permissions_settings
+        .allow_ai_in_remote_sessions = allow_ai;
+    workspace
+        .settings
+        .ai_permissions_settings
+        .remote_session_regex_list = patterns
+        .iter()
+        .map(|pattern| Regex::new(pattern).expect("test pattern should compile"))
+        .collect();
+}
+
+fn remote_session_patterns(user_workspaces: &UserWorkspaces) -> Vec<String> {
+    user_workspaces
+        .remote_session_regexes_union_across_teams()
+        .iter()
+        .map(|regex| regex.as_str().to_string())
+        .collect()
+}
+
+/// Unlike the settings a window renders, this permission gates an app-global switch, so it
+/// deliberately does not follow the window's team.
+#[test]
+fn remote_session_ai_permission_does_not_follow_the_windows_team() {
+    let (mut team_a, mut team_b) = two_teams();
+    set_team_remote_session_policy(&mut team_a, true, &[]);
+    set_team_remote_session_policy(&mut team_b, false, &[]);
+    let mut workspace = workspace_for_test(&team_a);
+    workspace.teams = vec![team_a.clone(), team_b.clone()];
+
+    App::test((), |mut app| async move {
+        initialize_window_team_test_app(&mut app, vec![workspace]);
+
+        let (window_a, _view_a) = create_test_window(&mut app);
+        let (window_b, _view_b) = create_test_window(&mut app);
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.set_team_for_window(window_a, team_a.uid, ctx);
+            user_workspaces.set_team_for_window(window_b, team_b.uid, ctx);
+        });
+
+        app.read(|ctx| {
+            let user_workspaces = UserWorkspaces::as_ref(ctx);
+            assert_eq!(
+                user_workspaces.team_uid_for_window(window_a),
+                Some(team_a.uid)
+            );
+            assert_eq!(
+                user_workspaces.team_uid_for_window(window_b),
+                Some(team_b.uid)
+            );
+            assert!(
+                !user_workspaces.all_teams_allow_ai_in_remote_sessions(),
+                "team B forbidding AI in remote sessions has to win for the whole app, \
+                 including for the window sitting on the permissive team A"
+            );
+        });
+    })
+}
+
+#[test]
+fn remote_session_ai_permission_is_allowed_only_when_every_team_allows_it() {
+    let (mut team_a, mut team_b) = two_teams();
+    set_team_remote_session_policy(&mut team_a, true, &[]);
+    set_team_remote_session_policy(&mut team_b, true, &[]);
+    let mut workspace = workspace_for_test(&team_a);
+    workspace.teams = vec![team_a, team_b];
+
+    App::test((), |mut app| async move {
+        initialize_window_team_test_app(&mut app, vec![workspace]);
+
+        app.read(|ctx| {
+            assert!(
+                UserWorkspaces::as_ref(ctx).all_teams_allow_ai_in_remote_sessions(),
+                "no team forbids AI in remote sessions, so the aggregate allows it"
+            );
+        });
+    })
+}
+
+#[test]
+fn remote_session_policy_ignores_workspace_settings_once_the_user_has_a_team() {
+    let mut team = team_for_test();
+    set_team_remote_session_policy(&mut team, true, &["^team-only"]);
+    let mut workspace = workspace_for_test(&team);
+    set_workspace_remote_session_policy(&mut workspace, false, &["^workspace-only"]);
+
+    App::test((), |mut app| async move {
+        initialize_window_team_test_app(&mut app, vec![workspace]);
+
+        app.read(|ctx| {
+            let user_workspaces = UserWorkspaces::as_ref(ctx);
+            assert!(
+                user_workspaces.all_teams_allow_ai_in_remote_sessions(),
+                "workspace settings are one arbitrarily-chosen team's effective settings once \
+                 the user has a team, so they must not override the team's own value"
+            );
+            assert_eq!(
+                remote_session_patterns(user_workspaces),
+                vec!["^team-only".to_string()]
+            );
+        });
+    })
+}
+
+#[test]
+fn remote_session_policy_falls_back_to_the_workspace_for_a_user_with_no_teams() {
+    let team = team_for_test();
+    let mut workspace = workspace_for_test(&team);
+    workspace.teams.clear();
+    set_workspace_remote_session_policy(&mut workspace, false, &["^workspace-only"]);
+
+    App::test((), |mut app| async move {
+        initialize_window_team_test_app(&mut app, vec![workspace]);
+
+        app.read(|ctx| {
+            let user_workspaces = UserWorkspaces::as_ref(ctx);
+            assert!(
+                !user_workspaces.all_teams_allow_ai_in_remote_sessions(),
+                "the workspace value is genuinely team-neutral for a user with no teams, so it \
+                 is the one to read"
+            );
+            assert_eq!(
+                remote_session_patterns(user_workspaces),
+                vec!["^workspace-only".to_string()]
+            );
+        });
+    })
+}
+
+#[test]
+fn remote_session_ai_permission_is_allowed_for_a_user_with_no_workspace_at_all() {
+    App::test((), |mut app| async move {
+        initialize_window_team_test_app(&mut app, vec![]);
+
+        app.read(|ctx| {
+            let user_workspaces = UserWorkspaces::as_ref(ctx);
+            assert!(user_workspaces.all_teams_allow_ai_in_remote_sessions());
+            assert!(
+                user_workspaces
+                    .remote_session_regexes_union_across_teams()
+                    .is_empty()
+            );
+        });
+    })
+}
+
+#[test]
+fn remote_session_patterns_union_every_teams_patterns() {
+    let (mut team_a, mut team_b) = two_teams();
+    set_team_remote_session_policy(&mut team_a, true, &["^kubectl", "^shared"]);
+    set_team_remote_session_policy(&mut team_b, false, &["^ssh", "^shared"]);
+    let mut workspace = workspace_for_test(&team_a);
+    workspace.teams = vec![team_a, team_b];
+
+    App::test((), |mut app| async move {
+        initialize_window_team_test_app(&mut app, vec![workspace]);
+
+        app.read(|ctx| {
+            assert_eq!(
+                remote_session_patterns(UserWorkspaces::as_ref(ctx)),
+                vec![
+                    "^kubectl".to_string(),
+                    "^shared".to_string(),
+                    "^ssh".to_string()
+                ],
+                "a wider list classifies more commands as remote, which is the restrictive \
+                 direction, and a pattern shared by two teams appears once"
+            );
+        });
+    })
+}
+
+/// The permission is re-read on every decision, so revoking it takes effect immediately rather
+/// than waiting for the terminal to start a new session or republish its state.
+#[test]
+fn revoking_remote_session_ai_takes_effect_without_a_new_terminal_session() {
+    let mut team = team_for_test();
+    set_team_remote_session_policy(&mut team, true, &[]);
+    let workspace = workspace_for_test(&team);
+    let mut revoked_workspace = workspace.clone();
+    set_team_remote_session_policy(&mut revoked_workspace.teams[0], false, &[]);
+
+    App::test((), |mut app| async move {
+        initialize_app(
+            &mut app,
+            CachedResources {
+                workspaces: vec![workspace],
+            },
+            Arc::new(MockTeamClient::new()),
+            Arc::new(MockWorkspaceClient::new()),
+        );
+
+        // Stand in for a focused terminal that has already reported remote content.
+        FocusedTerminalInfo::handle(&app).update(&mut app, |focused_terminal, ctx| {
+            focused_terminal.update(true, false, ctx);
+        });
+
+        app.read(|ctx| {
+            assert!(
+                !AISettings::as_ref(ctx).is_ai_disabled_due_to_remote_session_org_policy(ctx),
+                "AI stays available while the team still permits it in remote sessions"
+            );
+        });
+
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.update_workspaces(vec![revoked_workspace], ctx);
+        });
+
+        app.read(|ctx| {
+            assert!(
+                AISettings::as_ref(ctx).is_ai_disabled_due_to_remote_session_org_policy(ctx),
+                "revoking the permission has to take effect on the next read, with no new \
+                 terminal session and no fresh publish from the focused terminal"
+            );
+        });
+    })
+}
+
 #[test]
 fn test_team_contexts_represent_a_registered_teamless_window() {
     App::test((), |mut app| async move {

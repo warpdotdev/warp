@@ -1899,27 +1899,102 @@ impl UserWorkspaces {
             .unwrap_or_default()
     }
 
-    pub fn is_ai_allowed_in_remote_sessions(&self) -> bool {
-        self.current_workspace()
-            .map(|workspace| {
-                workspace
-                    .settings
-                    .ai_permissions_settings
-                    .allow_ai_in_remote_sessions
-            })
-            .unwrap_or(true)
+    /// Every team the user belongs to, across all of their workspaces.
+    fn all_teams(&self) -> impl Iterator<Item = &Team> {
+        self.workspaces
+            .iter()
+            .flat_map(|workspace| workspace.teams.iter())
     }
 
-    pub fn get_remote_session_regex_list(&self) -> Vec<Regex> {
-        self.current_workspace()
-            .map(|workspace| {
-                workspace
-                    .settings
-                    .ai_permissions_settings
+    /// Whether *every* team the user belongs to allows AI in remote sessions, so a single team
+    /// forbidding it wins.
+    ///
+    /// Deliberately an all-teams aggregate rather than a team-scoped read. The only thing this
+    /// policy gates is [`crate::settings::AISettings::is_any_ai_enabled`], which is app-global
+    /// and has no window to resolve a team from, so there is no scope to take. Aggregating in
+    /// the restrictive direction is the right default for a permission covering an environment
+    /// the user may not control.
+    ///
+    /// Falls back to the current workspace's value only when the team iterator is empty: with
+    /// any team present, that value is one arbitrarily-chosen team's effective settings rather
+    /// than workspace-level data.
+    pub fn all_teams_allow_ai_in_remote_sessions(&self) -> bool {
+        let mut teams = self.all_teams().peekable();
+
+        if teams.peek().is_none() {
+            return self
+                .current_workspace()
+                .map(|workspace| {
+                    workspace
+                        .settings
+                        .ai_permissions_settings
+                        .allow_ai_in_remote_sessions
+                })
+                .unwrap_or(true);
+        }
+
+        teams.all(|team| {
+            team.settings
+                .ai_permissions
+                .allow_ai_in_remote_sessions
+                .value
+        })
+    }
+
+    /// The union of the remote-session command patterns configured by every team the user
+    /// belongs to.
+    ///
+    /// Union rather than intersection, for the same reason
+    /// [`Self::all_teams_allow_ai_in_remote_sessions`] is an all-teams aggregate: a wider list
+    /// classifies more commands as remote, which is the restrictive direction, and the consumer
+    /// is the same windowless AI switch.
+    ///
+    /// Team settings carry these patterns as strings rather than compiled regexes, so they are
+    /// compiled per read. Callers check the result for emptiness before doing any per-command
+    /// work, and it is empty for every team without an explicit org policy.
+    pub fn remote_session_regexes_union_across_teams(&self) -> Vec<Regex> {
+        let mut teams = self.all_teams().peekable();
+
+        if teams.peek().is_none() {
+            return self
+                .current_workspace()
+                .map(|workspace| {
+                    workspace
+                        .settings
+                        .ai_permissions_settings
+                        .remote_session_regex_list
+                        .clone()
+                })
+                .unwrap_or_default();
+        }
+
+        let mut patterns: Vec<&str> = teams
+            .flat_map(|team| {
+                team.settings
+                    .ai_permissions
                     .remote_session_regex_list
-                    .clone()
+                    .values
+                    .iter()
+                    .map(String::as_str)
             })
-            .unwrap_or_default()
+            .collect();
+        patterns.sort_unstable();
+        patterns.dedup();
+
+        patterns
+            .into_iter()
+            .filter_map(|pattern| match Regex::new(pattern) {
+                Ok(regex) => Some(regex),
+                Err(_) => {
+                    report_error!(
+                        "Invalid regex pattern for remote session detection",
+                        extra: { "pattern" => %pattern },
+                        warp_errors::ReportErrorLogMode::OncePerRun
+                    );
+                    None
+                }
+            })
+            .collect()
     }
 
     pub fn is_anyone_with_link_sharing_enabled(&self) -> bool {

@@ -4033,6 +4033,48 @@ fn test_clear_session_flag_state() {
     })
 }
 
+/// The focused terminal has to report the remote content it holds even while the org still
+/// permits AI in remote sessions. Publishing only under a forbidding policy meant a later
+/// revocation found nothing published and left AI enabled mid-remote-session.
+#[test]
+fn focused_terminal_publishes_remote_blocks_while_remote_session_ai_is_still_permitted() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+
+        app.read(|ctx| {
+            assert!(
+                UserWorkspaces::as_ref(ctx).all_teams_allow_ai_in_remote_sessions(),
+                "this test only means anything under the permissive policy that used to \
+                 suppress publishing"
+            );
+            assert!(
+                !FocusedTerminalInfo::as_ref(ctx).contains_any_remote_blocks(),
+                "nothing has been published yet"
+            );
+        });
+
+        terminal.update(&mut app, |_view, ctx| ctx.focus_self());
+
+        terminal.update(&mut app, |view, ctx| {
+            assert!(
+                ctx.is_self_or_child_focused(),
+                "only the focused terminal publishes"
+            );
+            view.any_session_contains_remote_blocks = true;
+            view.update_focused_terminal_info(ctx);
+        });
+
+        app.read(|ctx| {
+            assert!(
+                FocusedTerminalInfo::as_ref(ctx).contains_any_remote_blocks(),
+                "the focused terminal should publish its remote blocks whatever the \
+                 remote-session AI permission currently says"
+            );
+        });
+    })
+}
+
 fn assert_block_has_find_match(find_model: &TerminalFindModel, block_index: BlockIndex) {
     assert!(
         find_model

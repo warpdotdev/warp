@@ -2163,20 +2163,21 @@ impl AISettings {
         });
     }
 
+    /// Whether the org forbids AI given what the focused terminal contains.
+    ///
+    /// This switch is app-global and has no window, so the permission is read as an all-teams
+    /// aggregate rather than scoped to a team; see
+    /// [`UserWorkspaces::all_teams_allow_ai_in_remote_sessions`]. It is re-read on every call so
+    /// that an admin revoking the permission takes effect on the next request rather than only
+    /// on the next session.
     pub fn is_ai_disabled_due_to_remote_session_org_policy(&self, app: &AppContext) -> bool {
-        let contains_remote_blocks = FocusedTerminalInfo::as_ref(app).contains_any_remote_blocks();
-
-        let contains_restored_remote_blocks =
-            FocusedTerminalInfo::as_ref(app).contains_any_restored_remote_blocks();
-
-        let is_ai_allowed_in_remote_sessions =
-            UserWorkspaces::as_ref(app).is_ai_allowed_in_remote_sessions();
-
-        if is_ai_allowed_in_remote_sessions {
+        if UserWorkspaces::as_ref(app).all_teams_allow_ai_in_remote_sessions() {
             return false;
         }
 
-        contains_remote_blocks || contains_restored_remote_blocks
+        let focused_terminal = FocusedTerminalInfo::as_ref(app);
+        focused_terminal.contains_any_remote_blocks()
+            || focused_terminal.contains_any_restored_remote_blocks()
     }
 
     pub fn is_any_ai_enabled(&self, app: &AppContext) -> bool {
