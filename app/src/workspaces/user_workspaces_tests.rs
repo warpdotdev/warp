@@ -1395,6 +1395,98 @@ fn test_codebase_context_uses_workspace_setting_without_teams() {
     })
 }
 
+/// Acceptance criterion for this Group 3 PR: two windows on different teams, evaluated
+/// concurrently against the same app state, must get independently correct authorization
+/// answers from `is_codebase_context_enabled_for_team` rather than both reading whatever the
+/// workspace-level settings blob (or one "current" team) happens to say.
+#[test]
+fn test_codebase_context_enabled_for_team_differs_per_window_concurrently() {
+    let (mut team_a, mut team_b) = two_teams();
+    team_a.settings.codebase_context.value = AdminEnablementSetting::Disable;
+    team_b.settings.codebase_context.value = AdminEnablementSetting::Enable;
+    let mut workspace = workspace_for_test(&team_a);
+    workspace.teams.push(team_b.clone());
+
+    App::test((), |mut app| async move {
+        initialize_app(
+            &mut app,
+            CachedResources {
+                workspaces: vec![workspace],
+            },
+            Arc::new(MockTeamClient::new()),
+            Arc::new(MockWorkspaceClient::new()),
+        );
+
+        let window_a = WindowId::new();
+        let window_b = WindowId::new();
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.register_window(window_a, Some(team_a.uid), ctx);
+            user_workspaces.register_window(window_b, Some(team_b.uid), ctx);
+        });
+
+        app.read(|ctx| {
+            let user_workspaces = UserWorkspaces::as_ref(ctx);
+            let resolved_team_a = user_workspaces.team_for_window(window_a);
+            let resolved_team_b = user_workspaces.team_for_window(window_b);
+            assert!(
+                !user_workspaces.is_codebase_context_enabled_for_team(resolved_team_a, ctx),
+                "window A's team disables codebase context and must stay denied even while \
+                 window B's team concurrently allows it"
+            );
+            assert!(
+                user_workspaces.is_codebase_context_enabled_for_team(resolved_team_b, ctx),
+                "window B's team allows codebase context independent of window A's denial"
+            );
+        });
+    })
+}
+
+/// The process-wide "should shared background indexing infra run at all" gate must be true as
+/// soon as one known team allows it, and only false once every known team denies it.
+#[test]
+fn test_codebase_context_enabled_for_any_known_team() {
+    let (mut team_a, mut team_b) = two_teams();
+    team_a.settings.codebase_context.value = AdminEnablementSetting::Disable;
+    team_b.settings.codebase_context.value = AdminEnablementSetting::Disable;
+    let mut workspace = workspace_for_test(&team_a);
+    workspace.teams.push(team_b.clone());
+
+    App::test((), |mut app| async move {
+        initialize_app(
+            &mut app,
+            CachedResources {
+                workspaces: vec![workspace],
+            },
+            Arc::new(MockTeamClient::new()),
+            Arc::new(MockWorkspaceClient::new()),
+        );
+
+        app.read(|ctx| {
+            assert!(
+                !UserWorkspaces::as_ref(ctx).is_codebase_context_enabled_for_any_known_team(ctx),
+                "background indexing should not run when every known team denies it"
+            );
+        });
+
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.update_current_workspace(
+                |workspace| {
+                    workspace.teams[1].settings.codebase_context.value =
+                        AdminEnablementSetting::Enable;
+                },
+                ctx,
+            );
+        });
+
+        app.read(|ctx| {
+            assert!(
+                UserWorkspaces::as_ref(ctx).is_codebase_context_enabled_for_any_known_team(ctx),
+                "background indexing should run once at least one known team allows it"
+            );
+        });
+    })
+}
+
 #[test]
 fn test_joining_team_moves_objects() {
     let _flag = FeatureFlag::SharedWithMe.override_enabled(true);

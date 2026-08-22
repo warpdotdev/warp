@@ -270,6 +270,11 @@ impl BlocklistAIContextModel {
         !self.pending_attachments.is_empty()
     }
 
+    /// The terminal surface (and thus window) this pending context belongs to.
+    pub fn terminal_surface_id(&self) -> EntityId {
+        self.terminal_surface_id
+    }
+
     /// Returns the set `BlockId`s corresponding to blocks to be included as context with the next
     /// query.
     pub fn pending_context_block_ids(&self) -> &HashSet<BlockId> {

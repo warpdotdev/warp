@@ -3004,6 +3004,18 @@ enum BlockMetadataUpdateSource {
     Osc7,
 }
 
+/// Finds the window that currently owns the terminal view identified by `terminal_surface_id`,
+/// if it is still live.
+pub(crate) fn window_id_for_terminal_surface(
+    app: &AppContext,
+    terminal_surface_id: EntityId,
+) -> Option<WindowId> {
+    app.window_ids().find(|&window_id| {
+        app.views_of_type::<TerminalView>(window_id)
+            .is_some_and(|views| views.iter().any(|view| view.id() == terminal_surface_id))
+    })
+}
+
 impl TerminalView {
     /// Returns the path to the current repository, if any.
     pub fn current_repo_path(&self) -> Option<&LocalOrRemotePath> {
@@ -3537,7 +3549,8 @@ impl TerminalView {
             model
         });
 
-        let get_relevant_files_controller = ctx.add_model(GetRelevantFilesController::new);
+        let get_relevant_files_controller =
+            ctx.add_model(|ctx| GetRelevantFilesController::new(terminal_view_id, ctx));
         let ai_action_model = ctx.add_model(|ctx| {
             BlocklistAIActionModel::new(
                 model.clone(),

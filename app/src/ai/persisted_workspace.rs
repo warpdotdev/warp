@@ -635,13 +635,18 @@ impl PersistedWorkspace {
     }
 
     /// Enables or disables codebase indexing according to the setting.
+    ///
+    /// This is a process-wide on/off switch for the shared indexing infrastructure, gated on
+    /// whether *any* known team scope allows codebase context; it must not be used to decide
+    /// whether a specific window/repo may be indexed (see `enable_codebase_indexing`, which
+    /// filters candidate roots per window's own team).
     fn maybe_enable_codebase_indexing(ctx: &mut ModelContext<Self>) {
         CodebaseIndexManager::handle(ctx).update(ctx, |manager, ctx| {
             if !manager.is_indexing_enabled() {
                 return;
             }
             let codebase_context_enabled =
-                UserWorkspaces::as_ref(ctx).is_codebase_context_enabled(ctx);
+                UserWorkspaces::as_ref(ctx).is_codebase_context_enabled_for_any_known_team(ctx);
             if codebase_context_enabled {
                 Self::enable_codebase_indexing(manager, ctx);
             } else {
@@ -676,6 +681,8 @@ impl PersistedWorkspace {
         }
     }
 
+    /// This authorizes creation with a process-wide check rather than the triggering window's
+    /// own team: repo detection and explicit navigation don't carry a window/team today.
     #[cfg_attr(not(feature = "local_fs"), allow(dead_code))]
     fn index_repo(&self, directory_path: PathBuf, ctx: &mut ModelContext<Self>) {
         ProjectContextModel::handle(ctx).update(ctx, |model, ctx| {
@@ -686,7 +693,7 @@ impl PersistedWorkspace {
             );
         });
         if FeatureFlag::FullSourceCodeEmbedding.is_enabled()
-            && UserWorkspaces::as_ref(ctx).is_codebase_context_enabled(ctx)
+            && UserWorkspaces::as_ref(ctx).is_codebase_context_enabled_for_any_known_team(ctx)
             && *CodeSettings::as_ref(ctx).auto_indexing_enabled
         {
             CodebaseIndexManager::handle(ctx).update(ctx, |manager, ctx| {
@@ -822,15 +829,14 @@ impl PersistedWorkspace {
 
     /// Triggers an incremental sync for the codebase context when a new conversation starts.
     /// This ensures that the codebase index is up-to-date before the conversation begins.
+    ///
+    /// Authorized against the team of the window that owns `terminal_view_id`: a denied team
+    /// must not sync a shared index even when another team's window is allowed to.
     fn trigger_incremental_sync_for_conversation(
         &mut self,
         terminal_view_id: warpui::EntityId,
         ctx: &mut ModelContext<Self>,
     ) {
-        if !UserWorkspaces::as_ref(ctx).is_codebase_context_enabled(ctx) {
-            return;
-        }
-
         // Get the current working directory for the terminal view that started the conversation
         // Collect window IDs first to avoid borrowing conflicts
         let window_ids: Vec<_> = ctx.window_ids().collect();
@@ -841,6 +847,13 @@ impl PersistedWorkspace {
             for terminal_view in terminal_views.into_iter().flatten() {
                 let terminal_view_ref = terminal_view.as_ref(ctx);
                 if terminal_view_ref.view_id() == terminal_view_id {
+                    let window_team = UserWorkspaces::as_ref(ctx).team_for_window(window_id);
+                    if !UserWorkspaces::as_ref(ctx)
+                        .is_codebase_context_enabled_for_team(window_team, ctx)
+                    {
+                        return;
+                    }
+
                     if terminal_view_ref.active_session_is_local(ctx) != Some(true) {
                         log::info!(
                             "Skipping local codebase incremental sync for non-local agent conversation"
@@ -1269,10 +1282,17 @@ impl PersistedWorkspace {
     }
 }
 
+/// Candidate roots for auto-indexing, restricted to windows whose own current team allows
+/// codebase context.
 #[cfg_attr(not(feature = "local_fs"), allow(dead_code))]
 pub fn all_working_directories(app: &AppContext) -> HashSet<PathBuf> {
+    let user_workspaces = UserWorkspaces::as_ref(app);
     let mut working_directories = HashSet::new();
     for window_id in app.window_ids() {
+        let window_team = user_workspaces.team_for_window(window_id);
+        if !user_workspaces.is_codebase_context_enabled_for_team(window_team, app) {
+            continue;
+        }
         for terminal_view in app
             .views_of_type::<TerminalView>(window_id)
             .into_iter()

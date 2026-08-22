@@ -12,7 +12,7 @@ use futures_util::stream::AbortHandle;
 use instant::Instant;
 use warp_core::features::FeatureFlag;
 use warp_errors::report_error;
-use warpui::{AppContext, Entity, ModelContext, ModelHandle, SingletonEntity};
+use warpui::{AppContext, Entity, EntityId, ModelContext, ModelHandle, SingletonEntity};
 
 #[cfg(not(target_family = "wasm"))]
 use crate::ai::agent::SearchCodebaseFailureReason;
@@ -21,6 +21,8 @@ use crate::ai::blocklist::SessionContext;
 use crate::ai::get_relevant_files::api::{FileContext as FileContextRequest, GetRelevantFiles};
 use crate::ai::outline::{OutlineStatus, RepoOutlines};
 use crate::server::server_api::{AIApiError, ServerApiProvider};
+use crate::terminal::view::window_id_for_terminal_surface;
+use crate::workspaces::user_workspaces::UserWorkspaces;
 use crate::{TelemetryEvent, send_telemetry_from_ctx};
 #[cfg_attr(not(target_family = "wasm"), path = "remote_search/native.rs")]
 #[cfg_attr(target_family = "wasm", path = "remote_search/wasm.rs")]
@@ -69,6 +71,8 @@ pub enum GetRelevantFilesError {
     CreateFailed,
     #[error("Failed to create outline.")]
     Missing,
+    #[error("Codebase search is not enabled for this window's team.")]
+    NotAuthorizedForTeam,
 }
 
 /// This enum allows us to use both the existing structure for outline-based indexing
@@ -108,19 +112,35 @@ impl RequestHandle {
 }
 
 /// Controller for GetRelevantFiles action. This is scoped per terminal session.
-#[derive(Default)]
 pub struct GetRelevantFilesController {
     /// Search requests currently in flight, keyed by the originating action ID.
     /// This allows several SearchCodebase actions to be active at once without newer requests
     /// cancelling unrelated older ones.
     pending_requests: std::collections::HashMap<AIAgentActionId, RequestHandle>,
+    /// The terminal surface this controller serves. Used to authorize each request against the
+    /// team currently assigned to that surface's window, since local retrieval and remote sync
+    /// are otherwise shared infrastructure with no team check of their own.
+    terminal_view_id: EntityId,
 }
 
 impl GetRelevantFilesController {
-    pub fn new(ctx: &mut ModelContext<Self>) -> Self {
+    pub fn new(terminal_view_id: EntityId, ctx: &mut ModelContext<Self>) -> Self {
         let codebase_manager = CodebaseIndexManager::handle(ctx);
         ctx.subscribe_to_model(&codebase_manager, Self::handle_codebase_manager_event);
-        Self::default()
+        Self {
+            pending_requests: Default::default(),
+            terminal_view_id,
+        }
+    }
+
+    /// Whether codebase search is authorized for the team currently assigned to this
+    /// controller's window. Must be checked before any local retrieval or remote sync/search:
+    /// a denied window must not reach indexed content through this shared, per-terminal
+    /// controller just because another window's team is allowed.
+    fn is_authorized_for_requesting_window(&self, app: &AppContext) -> bool {
+        let window_team = window_id_for_terminal_surface(app, self.terminal_view_id)
+            .and_then(|window_id| UserWorkspaces::as_ref(app).team_for_window(window_id));
+        UserWorkspaces::as_ref(app).is_codebase_context_enabled_for_team(window_team, app)
     }
 
     fn pending_request_details_for_retrieval_id(
@@ -213,6 +233,9 @@ impl GetRelevantFilesController {
         // Cancel any previous request for this action before dispatching to either the local or
         // remote implementation.
         self.cancel_request_for_action(&action_id, ctx);
+        if !self.is_authorized_for_requesting_window(ctx) {
+            return Err(GetRelevantFilesError::NotAuthorizedForTeam);
+        }
         match target {
             GetRelevantFilesRequestTarget::Local { directory } => {
                 self.send_local_request(&directory, query, partial_path_segments, action_id, ctx)
@@ -457,3 +480,7 @@ impl GetRelevantFilesController {
 impl Entity for GetRelevantFilesController {
     type Event = GetRelevantFilesControllerEvent;
 }
+
+#[cfg(test)]
+#[path = "controller_tests.rs"]
+mod controller_tests;

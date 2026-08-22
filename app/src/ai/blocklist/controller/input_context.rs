@@ -28,6 +28,8 @@ use crate::remote_server::codebase_index_model::RemoteCodebaseIndexModel;
 use crate::terminal::TerminalView;
 use crate::terminal::model::block::BlockId;
 use crate::terminal::model::session::active_session::ActiveSession;
+use crate::terminal::view::window_id_for_terminal_surface;
+use crate::workspaces::user_workspaces::UserWorkspaces;
 
 lazy_static! {
     // Regex to match <block:[block_id]> patterns
@@ -69,6 +71,7 @@ pub(super) fn input_context_for_request(
 
     if FeatureFlag::FullSourceCodeEmbedding.is_enabled()
         && FeatureFlag::CrossRepoContext.is_enabled()
+        && is_codebase_context_enabled_for_requesting_window(context_model, app)
     {
         let session_context = SessionContext::from_session(active_session, app);
         if session_context.is_remote() {
@@ -95,6 +98,18 @@ pub(super) fn input_context_for_request(
     context.extend(additional_context);
 
     context.into()
+}
+
+/// Shared local index artifacts may be reused across allowed scopes, but a scope whose team
+/// currently disables codebase context must not see any index, including one another team
+/// created. Evaluated against the requesting window's current team, not a cached scope.
+fn is_codebase_context_enabled_for_requesting_window(
+    context_model: &BlocklistAIContextModel,
+    app: &AppContext,
+) -> bool {
+    let requesting_team = window_id_for_terminal_surface(app, context_model.terminal_surface_id())
+        .and_then(|window_id| UserWorkspaces::as_ref(app).team_for_window(window_id));
+    UserWorkspaces::as_ref(app).is_codebase_context_enabled_for_team(requesting_team, app)
 }
 
 fn add_local_codebase_context(context: &mut Vec<AIAgentContext>, app: &AppContext) {
