@@ -4,6 +4,7 @@
 //! Generally, if a given function/abstraction is useful outside of a single warp-internal crate
 //! but isn't large/complex enough to warrant its own crate, it belongs here.
 pub mod assets;
+pub mod command_search_path;
 pub mod content_version;
 pub mod file;
 pub mod file_type;
