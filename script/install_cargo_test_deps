@@ -13,3 +13,9 @@ cargo install --git https://github.com/wgsl-analyzer/wgsl-analyzer --tag "2025-0
 
 # Install nextest, which we use as our test execution harness.
 cargo binstall --secure --no-confirm --no-discover-github-token cargo-nextest
+
+# Install cargo-dylint and dylint-link for running custom lint rules via `script/presubmit`.
+# Compiled with the nightly toolchain from lints/rust-toolchain.toml to satisfy rustc >= 1.93.
+# Keep this version in sync with .github/workflows/ci.yml.
+rustup toolchain install nightly-2025-12-10 --profile minimal
+cargo +nightly-2025-12-10 install --locked cargo-dylint@6.0.1 dylint-link@6.0.1

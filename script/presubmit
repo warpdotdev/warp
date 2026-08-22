@@ -34,6 +34,10 @@ cargo clippy -p warp --all-targets --tests -- -D warnings
 cargo clippy -p warp_completer --all-targets --tests -- -D warnings
 echo "clippy succeeded..."
 
+echo "Running dylint..."
+cargo dylint --path ./lints -p warp
+echo "dylint succeeded..."
+
 echo "Running clang-format..."
 ./script/run-clang-format.py -r --extensions 'c,h,cpp,m' ./crates/warpui/src/ ./app/src/
 echo "clang-format succeeded..."
