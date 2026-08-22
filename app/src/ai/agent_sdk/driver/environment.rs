@@ -21,6 +21,7 @@ use warpui::{ModelContext, ModelSpawner, SingletonEntity};
 use super::AgentDriverError;
 #[cfg(feature = "local_fs")]
 use super::cache_setup;
+use super::git_credentials;
 use super::terminal::TerminalDriver;
 use crate::ai::agent_sdk::setup_observability::{SetupClientEventReporter, SetupStep};
 use crate::ai::cloud_environments::SourceRepo;
@@ -307,6 +308,13 @@ async fn prepare_environment_impl(
             })
             .await?;
         for repo in source_repos {
+            // Each checkout authors its commits as its own forge's identity.
+            // Done here rather than in the clone script because it must also
+            // apply to a directory that already existed and was reused.
+            git_credentials::configure_repository_git_identity(
+                &working_dir.join(&repo.repo),
+                repo.code_forge.unwrap_or_default().host(),
+            );
             register_cloned_repo(repo, working_dir, is_sandbox, spawner).await?;
             if !is_sandbox && should_index_codebase {
                 let receiver = index_repo_codebase(

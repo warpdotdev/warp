@@ -3712,6 +3712,17 @@ type TaskGitCredential {
 
 """Input for the taskGitCredentials query."""
 input TaskGitCredentialsInput {
+  """
+  Whether the caller can handle a response in which one forge's credential is
+  fresh and another's failed. A caller that opts in must merge the fresh
+  credentials over its existing stores rather than rebuilding them from the
+  response, since a host absent from `credentials` may simply not have been
+  refreshed this cycle. Absent or false preserves the all-or-nothing
+  behavior, so a caller that rebuilds its stores wholesale never sees a
+  partial list.
+  """
+  acceptsPartialRefresh: Boolean
+
   """The ID of the task."""
   taskId: ID!
 
@@ -3720,7 +3731,20 @@ input TaskGitCredentialsInput {
 }
 
 type TaskGitCredentialsOutput implements Response {
+  """The credentials that were freshly issued this cycle, one per host."""
   credentials: [TaskGitCredential!]!
+
+  """
+  Hosts whose credential could not be issued this cycle because of a
+  transient failure. A host listed here is distinct from one that is simply
+  absent from `credentials`: absent means the run has no repository on that
+  forge and needs no credential there, while listed here means the caller
+  should keep whatever it already has for that host and retry.
+  
+  Only populated when the request set `acceptsPartialRefresh`; otherwise a
+  failure on any forge fails the whole request.
+  """
+  failedHosts: [String!]!
   responseContext: ResponseContext!
 }
 

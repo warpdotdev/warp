@@ -708,6 +708,19 @@ pub struct GitCredential {
     pub host: String,
 }
 
+/// One credential-retrieval cycle's outcome.
+///
+/// A host is in exactly one of three states, and telling them apart is the
+/// whole point of carrying `failed_hosts` beside the credentials: a host with
+/// a fresh credential, a host that failed and whose existing credential must
+/// be left alone until the retry succeeds, and a host in neither list, which
+/// the run needs no credential for.
+#[derive(Clone, Default)]
+pub struct TaskGitCredentialsResponse {
+    pub credentials: Vec<GitCredential>,
+    pub failed_hosts: Vec<String>,
+}
+
 /// Filter parameters for listing ambient agent tasks.
 #[derive(Clone, Debug, Default)]
 pub struct TaskListFilter {
@@ -1425,7 +1438,7 @@ pub trait AIClient: 'static + Send + Sync {
         &self,
         task_id: String,
         workload_token: String,
-    ) -> anyhow::Result<Vec<GitCredential>, anyhow::Error>;
+    ) -> anyhow::Result<TaskGitCredentialsResponse, anyhow::Error>;
 
     async fn get_task_attachments(
         &self,
@@ -2646,11 +2659,15 @@ impl AIClient for ServerApi {
         &self,
         task_id: String,
         workload_token: String,
-    ) -> anyhow::Result<Vec<GitCredential>, anyhow::Error> {
+    ) -> anyhow::Result<TaskGitCredentialsResponse, anyhow::Error> {
         let variables = TaskGitCredentialsVariables {
             input: TaskGitCredentialsInput {
                 task_id: cynic::Id::new(task_id),
                 workload_token,
+                // The driver merges each fresh credential over its existing
+                // stores instead of rebuilding them, so one forge's bad minute
+                // no longer has to cost the other its refresh.
+                accepts_partial_refresh: Some(true),
             },
             request_context: get_request_context(),
         };
@@ -2669,7 +2686,10 @@ impl AIClient for ServerApi {
                         host: c.host,
                     })
                     .collect();
-                Ok(credentials)
+                Ok(TaskGitCredentialsResponse {
+                    credentials,
+                    failed_hosts: output.failed_hosts,
+                })
             }
             TaskGitCredentialsResult::UserFacingError(error) => {
                 Err(anyhow!(get_user_facing_error_message(error)))

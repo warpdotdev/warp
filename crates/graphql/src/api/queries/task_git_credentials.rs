@@ -28,6 +28,10 @@ pub struct TaskGitCredentialsVariables {
 pub struct TaskGitCredentialsInput {
     pub task_id: cynic::Id,
     pub workload_token: String,
+    /// Opts into a response where one forge's credential is fresh and
+    /// another's failed. The driver merges rather than rebuilding its
+    /// credential stores, so it can accept a partial list.
+    pub accepts_partial_refresh: Option<bool>,
 }
 
 #[derive(cynic::InlineFragments, Debug)]
@@ -41,6 +45,9 @@ pub enum TaskGitCredentialsResult {
 #[derive(cynic::QueryFragment, Debug)]
 pub struct TaskGitCredentialsOutput {
     pub credentials: Vec<TaskGitCredential>,
+    /// Hosts whose credential could not be issued this cycle. Distinct from a
+    /// host that is merely absent from `credentials`, which needs none.
+    pub failed_hosts: Vec<String>,
 }
 
 #[derive(cynic::QueryFragment, Debug)]
