@@ -6,6 +6,7 @@ use super::{SharingDialog, SharingDialogAction, SharingDialogMode};
 use crate::auth::UserUid;
 use crate::cloud_object::Owner;
 use crate::cloud_object::model::persistence::CloudModel;
+use crate::cloud_object::model::view::CloudViewModel;
 use crate::drive::sharing::{ShareableObject, SharingAccessLevel};
 use crate::server::ids::{ClientId, ServerId, SyncId};
 use crate::terminal::TerminalView;
@@ -18,6 +19,7 @@ use crate::test_util::terminal::{
 use crate::workflows::workflow::Workflow;
 use crate::workflows::{CloudWorkflow, CloudWorkflowModel};
 use crate::workspaces::team::{Team, TeamVisibility};
+use crate::workspaces::user_profiles::UserProfiles;
 use crate::workspaces::user_workspaces::UserWorkspaces;
 use crate::workspaces::workspace::{
     EnforceableSetting, TeamLinkSharingSettings, TeamSettings, Workspace,
@@ -342,6 +344,14 @@ fn link_sharing_gates_deny_when_the_dialogs_window_cannot_be_resolved() {
     });
 }
 
+/// A dialog targeting a Warp Drive object renders its owner and reads its access level, which
+/// [`initialize_app_for_terminal_view`] alone does not provide models for.
+fn initialize_app_for_drive_object_dialog(app: &mut App) {
+    initialize_app_for_terminal_view(app);
+    app.add_singleton_model(CloudViewModel::mock);
+    app.add_singleton_model(|_| UserProfiles::new(Vec::new()));
+}
+
 /// Puts a Warp Drive object in the cloud model under a server id, so the sharing dialog can
 /// target it and `UpdateManager` can find it.
 fn add_shareable_object(app: &mut App) -> ServerId {
@@ -394,7 +404,7 @@ fn set_link_permissions(
 #[test]
 fn set_link_permissions_refuses_to_grant_under_a_forbidding_team() {
     App::test((), |mut app| async move {
-        initialize_app_for_terminal_view(&mut app);
+        initialize_app_for_drive_object_dialog(&mut app);
 
         let (window_id, _terminal) = add_window_with_id_and_terminal(&mut app, None);
         let forbidden_team = team_with_link_sharing(456, "forbids-sharing", false);
@@ -429,7 +439,7 @@ fn set_link_permissions_refuses_to_grant_under_a_forbidding_team() {
 #[test]
 fn set_link_permissions_grants_under_a_permitting_team() {
     App::test((), |mut app| async move {
-        initialize_app_for_terminal_view(&mut app);
+        initialize_app_for_drive_object_dialog(&mut app);
 
         let (window_id, _terminal) = add_window_with_id_and_terminal(&mut app, None);
         let permitted_team = team_with_link_sharing(123, "permits-sharing", true);
