@@ -342,8 +342,6 @@ pub enum FeatureFlag {
 
     /// Expands code diff edits to replace the current pane instead of opening in a new tab.
     ExpandEditToPane,
-    /// Enables fallback model load output messaging in the warping indicator.
-    FallbackModelLoadOutputMessaging,
 
     /// Enables close button on left side of tabs
     TabCloseButtonOnLeft,
