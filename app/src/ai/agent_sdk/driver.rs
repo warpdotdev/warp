@@ -645,6 +645,9 @@ pub struct Task {
     /// The prompt for the agent.
     pub prompt: AgentRunPrompt,
     pub model: Option<LLMId>,
+    /// Model for the computer use subagent, overriding the profile's selection.
+    /// Oz harness only.
+    pub computer_use_model: Option<LLMId>,
     /// ID of the profile to run as (SyncId string). If None, use the default profile.
     pub profile: Option<String>,
     /// MCP server specifications to start prior to execution.
@@ -2698,6 +2701,12 @@ impl AgentDriver {
                     .await??;
             }
 
+            if let Some(model_id) = task.computer_use_model.clone() {
+                foreground
+                    .spawn(move |me, ctx| me.set_computer_use_model_override(model_id, ctx))
+                    .await??;
+            }
+
             let profile_mcp_startup_result = setup_events
                 .record_result(SetupStep::ProfileMcpServerStartup, async {
                     foreground
@@ -3759,6 +3768,20 @@ impl AgentDriver {
 
         LLMPreferences::handle(ctx).update(ctx, |preferences, ctx| {
             preferences.update_preferred_agent_mode_llm(&model_id, terminal_view_id, ctx);
+        });
+        Ok(())
+    }
+
+    fn set_computer_use_model_override(
+        &self,
+        model_id: LLMId,
+        ctx: &mut ModelContext<Self>,
+    ) -> Result<(), AgentDriverError> {
+        let terminal_view_id = self.terminal_driver.as_ref(ctx).terminal_view().id();
+        log::info!("Selecting computer use model {model_id} (from agent driver)");
+
+        LLMPreferences::handle(ctx).update(ctx, |preferences, _| {
+            preferences.set_computer_use_llm_override(model_id, terminal_view_id);
         });
         Ok(())
     }

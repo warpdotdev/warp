@@ -16,6 +16,7 @@ pub async fn generate_multi_agent_output(
     mut params: RequestParams,
     cancellation_rx: futures::channel::oneshot::Receiver<()>,
 ) -> Result<ResponseStream, ConvertToAPITypeError> {
+    let model_config = build_model_config(&params);
     let supported_tools = params
         .supported_tools_override
         .take()
@@ -64,13 +65,7 @@ pub async fn generate_multi_agent_output(
         }),
         input: Some(convert_input(params.input)?),
         settings: Some(api::request::Settings {
-            model_config: Some(api::request::settings::ModelConfig {
-                base: params.model.into(),
-                cli_agent: params.cli_agent_model.into(),
-                computer_use_agent: params.computer_use_model.into(),
-                base_model_context_window_limit: params.context_window_limit.unwrap_or(0),
-                ..Default::default()
-            }),
+            model_config: Some(model_config),
             rules_enabled: params.is_memory_enabled,
             warp_drive_context_enabled: params.warp_drive_context_enabled,
             web_context_retrieval_enabled: true,
@@ -159,6 +154,19 @@ pub async fn generate_multi_agent_output(
                 .await;
             Ok(Box::pin(rx))
         }
+    }
+}
+
+/// Builds the per-role model selection sent with the request. Each role carries the
+/// id the client resolved for it, including `computer_use_agent`, which the server
+/// uses for the computer use subagent.
+fn build_model_config(params: &RequestParams) -> api::request::settings::ModelConfig {
+    api::request::settings::ModelConfig {
+        base: params.model.clone().into(),
+        cli_agent: params.cli_agent_model.clone().into(),
+        computer_use_agent: params.computer_use_model.clone().into(),
+        base_model_context_window_limit: params.context_window_limit.unwrap_or(0),
+        ..Default::default()
     }
 }
 

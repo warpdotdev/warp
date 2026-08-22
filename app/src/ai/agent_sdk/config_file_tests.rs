@@ -108,6 +108,7 @@ fn merge_precedence_cli_over_file_and_merges_mcp() {
         worker_host: None,
         skill_spec: None,
         computer_use_enabled: None,
+        computer_use_model_id: None,
         harness: None,
         harness_auth_secrets: None,
         additional_source_repos: None,

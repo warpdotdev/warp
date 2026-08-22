@@ -3,8 +3,8 @@ use warp_core::features::FeatureFlag;
 use warp_multi_agent_api as api;
 
 use super::{
-    api_keys_with_warp_credit_fallback_setting, get_supported_cli_agent_tools, get_supported_tools,
-    supports_orchestration_v2,
+    api_keys_with_warp_credit_fallback_setting, build_model_config, get_supported_cli_agent_tools,
+    get_supported_tools, supports_orchestration_v2,
 };
 use crate::ai::agent::api::RequestParams;
 use crate::ai::blocklist::SessionContext;
@@ -98,6 +98,17 @@ fn api_keys_with_warp_credit_fallback_setting_preserves_existing_keys() {
 
     assert_eq!(api_keys.anthropic, "anthropic-key");
     assert!(api_keys.allow_use_of_warp_credits);
+}
+
+#[test]
+fn model_config_sends_the_resolved_computer_use_model_as_the_computer_use_agent() {
+    let mut params = request_params_with_ask_user_question_enabled(false);
+    params.computer_use_model = LLMId::from("claude-4-5-sonnet");
+
+    let model_config = build_model_config(&params);
+
+    assert_eq!(model_config.computer_use_agent, "claude-4-5-sonnet");
+    assert_eq!(model_config.base, "test-model");
 }
 
 #[test]

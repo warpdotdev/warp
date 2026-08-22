@@ -726,6 +726,10 @@ pub struct LLMPreferences {
     // normalized against the GUI profile default, while explicit child-run
     // selections remain pinned even when they currently equal the fallback.
     base_llm_for_terminal_view: HashMap<EntityId, LLMId>,
+    /// Computer use model overrides for a given terminal view, set by an agent run
+    /// (`warp agent run --computer-use-model`) rather than by the user's execution
+    /// profile. Run-scoped, and never persisted or synced.
+    computer_use_llm_for_terminal_view: HashMap<EntityId, LLMId>,
     /// Synthetic `LLMInfo` entries built from the user's `ApiKeyManager.custom_endpoints` so
     /// custom models surface in the model picker and resolve through `info_for_id` lookups.
     /// Each entry's `id` is the model's `config_key` (UUID), which is also what flows out to
@@ -800,6 +804,7 @@ impl LLMPreferences {
             agent_mode_models_unavailable: false,
             last_update: None,
             base_llm_for_terminal_view,
+            computer_use_llm_for_terminal_view: HashMap::new(),
             custom_llms,
             custom_model_routers: Vec::new(),
         };
@@ -1054,6 +1059,35 @@ impl LLMPreferences {
             .clone()
             .and_then(|id| available.info_for_id(&id))
             .unwrap_or_else(|| self.get_default_computer_use_model(app))
+    }
+
+    /// Returns the computer use model id to send in a request's `ModelConfig`.
+    ///
+    /// An agent-run override (`warp agent run --computer-use-model`) wins over the
+    /// active execution profile and is forwarded verbatim, without resolving it
+    /// against the locally cached computer use choices: the run's configuration is
+    /// authoritative and the server validates the id, so resolving locally would
+    /// silently swap a misconfigured (or newly added) model for the default.
+    pub fn computer_use_model_id_for_request(
+        &self,
+        app: &AppContext,
+        terminal_view_id: Option<EntityId>,
+    ) -> LLMId {
+        terminal_view_id
+            .and_then(|id| self.computer_use_llm_for_terminal_view.get(&id))
+            .cloned()
+            .unwrap_or_else(|| {
+                self.get_active_computer_use_model(app, terminal_view_id)
+                    .id
+                    .clone()
+            })
+    }
+
+    /// Pins the computer use model for a terminal view, overriding the active
+    /// execution profile's selection for the rest of the process.
+    pub fn set_computer_use_llm_override(&mut self, llm_id: LLMId, terminal_view_id: EntityId) {
+        self.computer_use_llm_for_terminal_view
+            .insert(terminal_view_id, llm_id);
     }
 
     /// Returns the effective default computer use model as a fallback: the

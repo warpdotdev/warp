@@ -457,6 +457,10 @@ impl AmbientAgentRunner {
                     worker_host: args.worker_host.clone(),
                     skill_spec: None,
                     computer_use_enabled: args.computer_use.computer_use_override(),
+                    computer_use_model_id: args
+                        .computer_use
+                        .computer_use_model_override()
+                        .map(str::to_owned),
                     harness: harness_override,
                     harness_auth_secrets,
                     additional_source_repos: None,

@@ -1,18 +1,69 @@
+use clap::Parser as _;
 use serde_json::json;
-use warp_cli::CliCommand;
-use warp_cli::agent::Harness;
+use warp_cli::agent::{AgentCommand, Harness, RunAgentArgs};
 use warp_cli::artifact::{
     ArtifactCommand, DownloadArtifactArgs, GetArtifactArgs, UploadArtifactArgs,
 };
 use warp_cli::task::{MessageCommand, MessageSendArgs, MessageWatchArgs, TaskCommand};
+use warp_cli::{Args, CliCommand, Command};
 use warp_core::telemetry::TelemetryEvent;
 
 use super::{
     CommandAuthentication, command_authentication, command_requires_auth,
-    command_to_telemetry_event, reconcile_task_harness,
+    command_to_telemetry_event, computer_use_model_override, reconcile_task_harness,
 };
+use crate::ai::llms::LLMId;
 
 const TASK_ID: &str = "00000000-0000-0000-0000-000000000001";
+
+fn parse_run_args(extra_args: &[&str]) -> RunAgentArgs {
+    let args = Args::try_parse_from(
+        ["warp", "agent", "run", "--prompt", "hello"]
+            .iter()
+            .copied()
+            .chain(extra_args.iter().copied()),
+    )
+    .expect("`warp agent run` args should parse");
+
+    let Some(Command::CommandLine(command)) = args.command() else {
+        panic!("Expected `warp agent run` command");
+    };
+    let CliCommand::Agent(AgentCommand::Run(run_args)) = command.as_ref() else {
+        panic!("Expected `warp agent run` command");
+    };
+    run_args.clone()
+}
+
+#[test]
+fn computer_use_model_flag_becomes_the_task_override_for_the_oz_harness() {
+    let args = parse_run_args(&["--computer-use-model", "claude-4-5-sonnet"]);
+
+    assert_eq!(
+        computer_use_model_override(&args)
+            .as_ref()
+            .map(LLMId::as_str),
+        Some("claude-4-5-sonnet")
+    );
+}
+
+#[test]
+fn computer_use_model_flag_is_ignored_for_third_party_harnesses() {
+    let args = parse_run_args(&[
+        "--harness",
+        "claude",
+        "--computer-use-model",
+        "claude-4-5-sonnet",
+    ]);
+
+    assert_eq!(computer_use_model_override(&args), None);
+}
+
+#[test]
+fn task_has_no_computer_use_model_override_without_the_flag() {
+    let args = parse_run_args(&[]);
+
+    assert_eq!(computer_use_model_override(&args), None);
+}
 
 #[test]
 fn logout_does_not_require_auth() {
