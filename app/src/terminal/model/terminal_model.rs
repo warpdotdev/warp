@@ -96,6 +96,9 @@ const TITLE_STACK_MAX_DEPTH: usize = 4096;
 pub enum ConversationTranscriptViewerStatus {
     /// Loading conversation data from the server.
     Loading,
+    /// The conversation data failed to load. The viewer stays in this permanent state
+    /// rather than falling back to an indefinite loading spinner.
+    Failed,
     /// Viewing a local conversation (not from ambient agent).
     ViewingLocalConversation,
     /// Viewing an ambient agent conversation with the associated task ID.
@@ -1512,6 +1515,13 @@ impl TerminalModel {
         matches!(
             self.conversation_transcript_viewer_status,
             Some(ConversationTranscriptViewerStatus::Loading)
+        )
+    }
+
+    pub fn is_conversation_transcript_load_failed(&self) -> bool {
+        matches!(
+            self.conversation_transcript_viewer_status,
+            Some(ConversationTranscriptViewerStatus::Failed)
         )
     }
 

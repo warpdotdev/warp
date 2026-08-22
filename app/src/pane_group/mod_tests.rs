@@ -2004,6 +2004,35 @@ fn test_ambient_transcript_restore_uses_generic_viewer_when_handoff_disabled() {
     });
 }
 
+/// A conversation transcript load failure must leave the viewer in a persistent, read-only
+/// `Failed` state rather than an indefinite loading spinner.
+#[test]
+fn fail_conversation_transcript_viewer_sets_a_persistent_failed_status() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let pane_group = mock_pane_group(&mut app, Default::default());
+
+        pane_group.update(&mut app, |panes, ctx| {
+            panes.fail_conversation_transcript_viewer(ctx);
+        });
+
+        pane_group.read(&app, |panes, ctx| {
+            let terminal_view = panes
+                .active_session_view(ctx)
+                .expect("mock pane group should have an active terminal view");
+            let model = terminal_view.as_ref(ctx).model.lock();
+            assert!(model.is_conversation_transcript_viewer());
+            assert!(model.is_read_only());
+            assert!(model.is_conversation_transcript_load_failed());
+            assert!(!model.is_loading_conversation_transcript());
+            assert_eq!(
+                model.conversation_transcript_viewer_status(),
+                Some(&ConversationTranscriptViewerStatus::Failed)
+            );
+        });
+    });
+}
+
 /// REMOTE-2208: attaching a live execution session to a read-only conversation transcript
 /// viewer is impossible (it is backed by a mock manager with no network), so the attach must
 /// report failure. Reporting success left the caller focused on a transcript with no input box

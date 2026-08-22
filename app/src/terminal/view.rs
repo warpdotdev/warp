@@ -24558,6 +24558,43 @@ impl TerminalView {
         .finish()
     }
 
+    /// Renders a persistent error state for a conversation transcript viewer whose
+    /// conversation data failed to load, replacing the loading spinner.
+    fn render_viewer_load_failed(&self, app: &AppContext) -> Box<dyn Element> {
+        let appearance = Appearance::as_ref(app);
+        let color = appearance
+            .theme()
+            .sub_text_color(appearance.theme().background());
+
+        SavePosition::new(
+            Align::new(
+                Flex::column()
+                    .with_child(
+                        ConstrainedBox::new(
+                            Icon::new("bundled/svg/alert-circle.svg", color).finish(),
+                        )
+                        .with_height(16.)
+                        .with_width(16.)
+                        .finish(),
+                    )
+                    .with_child(
+                        Text::new_inline(
+                            "Couldn't load this session",
+                            appearance.ui_font_family(),
+                            14.,
+                        )
+                        .with_color(color.into())
+                        .finish(),
+                    )
+                    .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                    .finish(),
+            )
+            .finish(),
+            &self.content_element_position_id,
+        )
+        .finish()
+    }
+
     /// Returns true when cursor rendering should be suppressed because the
     /// CLI agent rich input is open.
     fn should_hide_cli_agent_cursor_cell(&self, app: &AppContext) -> bool {
@@ -28196,8 +28233,11 @@ impl View for TerminalView {
                         && !self.is_ambient_agent_session(app);
                     let is_loading_transcript = model.is_loading_conversation_transcript();
                     let should_show_loading = is_view_pending_clause || is_loading_transcript;
+                    let transcript_load_failed = model.is_conversation_transcript_load_failed();
                     let output_area = if self.orchestration_child_live_unavailable {
                         self.render_orchestration_child_live_unavailable(app)
+                    } else if transcript_load_failed {
+                        self.render_viewer_load_failed(app)
                     } else if should_show_loading {
                         self.render_viewer_loading(app)
                     } else if is_alt_screen_active {

@@ -3742,6 +3742,33 @@ impl PaneGroup {
         );
     }
 
+    /// Marks the active conversation transcript viewer as failed.
+    pub fn fail_conversation_transcript_viewer(&mut self, ctx: &mut ViewContext<Self>) {
+        let Some(terminal_view) = self.active_session_view(ctx) else {
+            report_error!("No active terminal view to mark as a failed conversation load");
+            return;
+        };
+        let terminal_manager = self
+            .find_pane_id_for_terminal_view(terminal_view.id(), ctx)
+            .and_then(|pid| pid.as_terminal_pane_id())
+            .and_then(|tpid| self.terminal_session_by_id(tpid))
+            .map(|session| session.terminal_manager(ctx));
+        let Some(terminal_manager) = terminal_manager else {
+            report_error!("No terminal manager for the failed conversation transcript viewer");
+            return;
+        };
+
+        terminal_manager.update(ctx, |terminal_manager, _ctx| {
+            terminal_manager
+                .model()
+                .lock()
+                .set_conversation_transcript_viewer_status(Some(
+                    ConversationTranscriptViewerStatus::Failed,
+                ));
+        });
+        ctx.notify();
+    }
+
     /// Load conversation data into a specific transcript viewer terminal view.
     fn load_data_into_transcript_viewer(
         &mut self,

@@ -14,6 +14,7 @@ use session_sharing_protocol::common::SessionId;
 use tempfile::TempDir;
 use terminal::shared_session::permissions_manager::SessionPermissionsManager;
 use terminal::view::ActiveSessionState;
+use warp_core::channel::ChannelState;
 use warp_editor::editor::NavigationKey;
 #[cfg(feature = "local_fs")]
 use warp_files::FileModel;
@@ -75,6 +76,7 @@ use crate::terminal::local_tty::spawner::PtySpawner;
 use crate::terminal::shared_session::{
     SharedSessionScrollbackType, SharedSessionSource, SharedSessionStatus,
 };
+use crate::test_util::assert_eventually;
 use crate::test_util::settings::initialize_settings_for_tests;
 use crate::undo_close::UndoCloseSettings;
 #[cfg(feature = "local_fs")]
@@ -1360,6 +1362,76 @@ fn restore_conversation_in_active_pane_enters_existing_live_conversation_without
         });
     });
 }
+
+/// Drives a real (mocked) failing GraphQL response through
+/// `load_cloud_conversation_into_new_transcript_viewer`'s async completion callback, the
+/// path that left the web session viewer spinning on "Loading session..." forever. This
+/// must reach the persistent `Failed` status: `TerminalView::render` picks between the
+/// loading and failed presentations based on exactly this status, so deleting the
+/// `fail_conversation_transcript_viewer` call in that callback would make this test fail.
+#[test]
+fn open_cloud_conversation_from_server_token_reaches_failed_state_on_load_failure() {
+    let _cloud_conversations = FeatureFlag::CloudConversations.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let workspace = mock_workspace(&mut app);
+
+        let _mock = {
+            let mut server = ChannelState::mock_server();
+            server
+                .mock("POST", "/graphql/v2")
+                .match_query(mockito::Matcher::UrlEncoded(
+                    "op".to_string(),
+                    "ListAIConversations".to_string(),
+                ))
+                .with_status(500)
+                .with_body(r#"{"error":"internal error"}"#)
+                .create()
+        };
+
+        workspace.update(&mut app, |workspace, ctx| {
+            workspace.open_cloud_conversation_from_server_token(
+                ServerConversationToken::new("failing-server-token".to_string()),
+                ctx,
+            );
+        });
+
+        assert_eventually!(
+            workspace.read(&app, |workspace, ctx| {
+                workspace
+                    .active_tab_pane_group()
+                    .as_ref(ctx)
+                    .active_session_view(ctx)
+                    .is_some_and(|terminal_view| {
+                        terminal_view
+                            .as_ref(ctx)
+                            .model
+                            .lock()
+                            .is_conversation_transcript_load_failed()
+                    })
+            }),
+            "a failed conversation load must reach the persistent Failed status instead of \
+             leaving the viewer stuck loading"
+        );
+
+        workspace.read(&app, |workspace, ctx| {
+            let terminal_view = workspace
+                .active_tab_pane_group()
+                .as_ref(ctx)
+                .active_session_view(ctx)
+                .expect("the failed transcript viewer should still have an active terminal view");
+            assert!(
+                !terminal_view
+                    .as_ref(ctx)
+                    .model
+                    .lock()
+                    .is_loading_conversation_transcript()
+            );
+        });
+    });
+}
+
 fn new_session_menu_label(item: &MenuItem<WorkspaceAction>) -> String {
     match item {
         MenuItem::Item(fields) => fields.label().to_string(),

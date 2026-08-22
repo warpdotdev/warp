@@ -4476,6 +4476,12 @@ impl Workspace {
                         );
                         view.add_ephemeral_toast(new_toast, ctx);
                     });
+                    // The toast above is ephemeral and disappears on its own; setting
+                    // the failed status is what keeps the failure visible instead of
+                    // leaving the tab spinning forever.
+                    new_pane_group.update(ctx, |pane_group, ctx| {
+                        pane_group.fail_conversation_transcript_viewer(ctx);
+                    });
                     return;
                 };
 

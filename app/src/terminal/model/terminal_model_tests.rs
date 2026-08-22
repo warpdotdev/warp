@@ -217,6 +217,32 @@ fn is_cloud_agent_conversation_only_true_for_genuine_ambient_sessions() {
     assert!(model.is_cloud_agent_conversation());
 }
 
+/// A transcript load failure must leave the viewer in a distinct, permanent `Failed`
+/// state rather than either the indefinite `Loading` spinner or a state that looks like
+/// a normal, writable session.
+#[test]
+fn failed_conversation_transcript_load_is_a_distinct_read_only_terminal_state() {
+    let mut model = TerminalModel::mock(None, None);
+    assert!(!model.is_conversation_transcript_viewer());
+    assert!(!model.is_loading_conversation_transcript());
+    assert!(!model.is_conversation_transcript_load_failed());
+    assert!(!model.is_read_only());
+
+    model.set_conversation_transcript_viewer_status(Some(
+        ConversationTranscriptViewerStatus::Loading,
+    ));
+    assert!(model.is_loading_conversation_transcript());
+    assert!(!model.is_conversation_transcript_load_failed());
+
+    model.set_conversation_transcript_viewer_status(Some(
+        ConversationTranscriptViewerStatus::Failed,
+    ));
+    assert!(model.is_conversation_transcript_viewer());
+    assert!(model.is_read_only());
+    assert!(model.is_conversation_transcript_load_failed());
+    assert!(!model.is_loading_conversation_transcript());
+}
+
 fn iterm_file_osc(name: &str, inline: bool, payload: &[u8]) -> String {
     let inline = if inline { "1" } else { "0" };
     format!(
