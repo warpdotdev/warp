@@ -32,6 +32,30 @@ const MAX_CHARACTERS_PER_LINE: usize = 5000;
 const DIFF_LINE_RENDER_LIMIT: usize = 10_000;
 
 /**
+ * Maximum number of changed-file entries retained from a single
+ * `git status`/`git diff --numstat` based metadata computation (see
+ * `diff_metadata_against_head`, APP-5462). A repository with more changed
+ * files than this still reports an accurate `files_changed` count, but the
+ * per-file entry list is capped here: there is no point retaining metadata
+ * for more files than the diff-loading path would ever materialize a diff
+ * for in one load.
+ */
+pub const MAX_STATUS_ENTRIES: usize = 2_000;
+
+/**
+ * Byte budget for a single `git status`/`git diff --numstat` invocation
+ * used to compute diff metadata (see `diff_metadata_against_head`,
+ * APP-5462). A repository with a huge non-gitignored directory tree (the
+ * APP-4827 shape) makes `--untracked-files=all`'s raw output balloon to
+ * multiple GB before a single byte is parsed; this budget is generous
+ * relative to any real repository's status/numstat output (comfortably
+ * covering tens of thousands of typical-length paths) while keeping the
+ * pathological case's transient memory bounded to a small, fixed amount
+ * instead.
+ */
+pub const METADATA_STATUS_BYTE_BUDGET: usize = 16 * 1024 * 1024; // 16MB
+
+/**
  * We have a lower deletion line limit since rendering deleted chunks are more
  * performance intensive.
  */
