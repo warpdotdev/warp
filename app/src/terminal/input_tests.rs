@@ -101,6 +101,7 @@ use crate::terminal::resizable_data::ResizableData;
 use crate::terminal::shared_session::permissions_manager::SessionPermissionsManager;
 use crate::terminal::shell::ShellType;
 use crate::terminal::universal_developer_input::UniversalDeveloperInputButtonBarEvent;
+use crate::terminal::view::Event as TerminalViewEvent;
 use crate::terminal::view::inline_banner::ByoLlmAuthBannerSessionState;
 use crate::terminal::writeable_pty::command_history::update_command_history;
 use crate::test_util::settings::initialize_settings_for_tests;
@@ -2916,6 +2917,162 @@ fn build_suggestion_results<S: Into<Span>>(
         suggestions,
         match_strategy: matcher,
     })
+}
+
+/// Phase two of the flag-only Tab path (`dispatch_native_shell_completions_after_empty_specs`)
+/// must bail on a stale request -- one whose buffer moved on while the (async) bundled spec pass
+/// was running -- without asking the shell or clobbering a newer request's abort handle. Native
+/// completions are Tab/keybinding-only, so this exercises a `Keybinding` trigger: a user who keeps
+/// typing between an explicit Tab and the spec pass resolving. The abort handle is only ever armed
+/// at the very end of the method, after the shell has been asked, so an untouched (`None`) handle
+/// after a stale call proves the method bailed before dispatching any generator.
+#[test]
+fn native_completions_after_empty_specs_bails_when_stale() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let terminal = add_window_with_bootstrapped_terminal(
+            &mut app, None, /* history_file_commands */
+            None,
+        )
+        .await;
+        let input = terminal.read(&app, |terminal, _| terminal.input().clone());
+
+        // Fresh dispatch: the buffer still matches what the request was computed from, so the
+        // shell is asked and the abort handle is armed.
+        input.update(&mut app, |input, ctx| {
+            input.clear_buffer_and_reset_undo_stack(ctx);
+            input.user_insert("git ", ctx);
+        });
+        let snapshot_git = input.update(&mut app, |input, ctx| editor_model_snapshot(input, ctx));
+        input.update(&mut app, |input, ctx| {
+            input.dispatch_native_shell_completions_after_empty_specs(
+                "git ".to_string(),
+                "git ".len(),
+                CompletionsTrigger::Keybinding,
+                snapshot_git.clone(),
+                ctx,
+            );
+            assert!(
+                input.completions_abort_handle.is_some(),
+                "a real dispatch arms the completions abort handle"
+            );
+        });
+
+        // Stale dispatch: the buffer moved on while the (async) spec pass was running, so this
+        // phase-two callback -- computed from the older snapshot -- must not ask the shell, and
+        // must leave the abort handle a newer request may already own untouched.
+        input.update(&mut app, |input, ctx| {
+            input.completions_abort_handle = None;
+            input.clear_buffer_and_reset_undo_stack(ctx);
+            input.user_insert("git checkout", ctx);
+            input.dispatch_native_shell_completions_after_empty_specs(
+                "git ".to_string(),
+                "git ".len(),
+                CompletionsTrigger::Keybinding,
+                snapshot_git.clone(),
+                ctx,
+            );
+            assert!(
+                input.completions_abort_handle.is_none(),
+                "a stale request must not ask the shell or arm/clobber the abort handle"
+            );
+        });
+    });
+}
+
+/// Counts `TerminalAction::RunNativeShellCompletions` dispatches -- the only call site that ever
+/// asks the shell for native completions -- observed via the `TerminalView`'s own emitted event,
+/// so tests can assert dispatch counts through the real production paths (`run_completions_async`
+/// via `input_tab`/`open_completion_suggestions`) instead of calling a private phase-two method
+/// directly.
+fn count_native_shell_completions_dispatches(
+    app: &mut App,
+    terminal: &ViewHandle<TerminalView>,
+) -> Rc<RefCell<u32>> {
+    let count = Rc::new(RefCell::new(0));
+    let count_clone = count.clone();
+    app.update(|ctx| {
+        ctx.subscribe_to_view(terminal, move |_, event: &TerminalViewEvent, _| {
+            if let TerminalViewEvent::RunNativeShellCompletions { .. } = event {
+                *count_clone.borrow_mut() += 1;
+            }
+        });
+    });
+    count
+}
+
+/// End-to-end coverage for the flag-only dispatch decision through the real production path
+/// (`input_tab` -> `open_completion_suggestions` -> `run_completions_async`), rather than calling
+/// a private phase-two method directly: a command with a real bundled spec must never reach the
+/// shell.
+#[test]
+fn input_tab_does_not_ask_the_shell_when_bundled_specs_are_non_empty() {
+    let _native_completions_flag = FeatureFlag::NativeShellCompletions.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let session_info = SessionInfo::new_for_test();
+        let session_id = session_info.session_id;
+        let terminal = add_window_with_bootstrapped_terminal(
+            &mut app,
+            None, /* history_file_commands */
+            Some(session_info),
+        )
+        .await;
+        simulate_directory_for_completion(session_id, &terminal, &mut app, "/usr/bin");
+        let input = terminal.read(&app, |terminal, _| terminal.input().clone());
+        let dispatch_count = count_native_shell_completions_dispatches(&mut app, &terminal);
+
+        input.update(&mut app, |input, ctx| {
+            input.clear_buffer_and_reset_undo_stack(ctx);
+            input.user_insert("git ", ctx);
+            input.input_tab(ctx);
+        });
+        warpui::r#async::Timer::after(Duration::from_millis(300)).await;
+
+        assert_eq!(
+            *dispatch_count.borrow(),
+            0,
+            "a command with a real bundled spec must never ask the shell"
+        );
+    });
+}
+
+/// The other half of the same decision: a command with no bundled spec, and no file-path fallback
+/// either (Tab with native completions in use turns off the usual keybinding file-path fallback --
+/// see `completions_fallback_strategy_for_trigger`), must still reach the shell exactly once.
+#[test]
+fn input_tab_asks_the_shell_once_when_bundled_specs_are_empty() {
+    let _native_completions_flag = FeatureFlag::NativeShellCompletions.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let session_info = SessionInfo::new_for_test();
+        let session_id = session_info.session_id;
+        let terminal = add_window_with_bootstrapped_terminal(
+            &mut app,
+            None, /* history_file_commands */
+            Some(session_info),
+        )
+        .await;
+        simulate_directory_for_completion(session_id, &terminal, &mut app, "/usr/bin");
+        let input = terminal.read(&app, |terminal, _| terminal.input().clone());
+        let dispatch_count = count_native_shell_completions_dispatches(&mut app, &terminal);
+
+        input.update(&mut app, |input, ctx| {
+            input.clear_buffer_and_reset_undo_stack(ctx);
+            input.user_insert("definitelynotarealcommand ", ctx);
+            input.input_tab(ctx);
+        });
+        warpui::r#async::Timer::after(Duration::from_millis(300)).await;
+
+        assert_eq!(
+            *dispatch_count.borrow(),
+            1,
+            "an unrecognized command must reach the shell exactly once, not fall back to \
+             file-path completions"
+        );
+    });
 }
 
 #[test]
@@ -9756,4 +9913,203 @@ fn hotkey_opens_ai_command_search_even_when_hash_trigger_disabled() {
             "the AI Command Search hotkey must still open the panel when the '#' trigger is disabled"
         );
     });
+}
+
+#[cfg(test)]
+mod native_shell_completions_eligibility_tests {
+    use warp_completer::completer::CompletionsFallbackStrategy;
+
+    use super::super::{
+        CompletionsTrigger, completions_fallback_strategy_for_trigger,
+        should_use_native_shell_completions,
+    };
+
+    #[test]
+    fn disabled_in_ai_input_mode_even_when_otherwise_eligible() {
+        // Every other condition says "use native shell completions" -- feature on,
+        // single-line buffer -- but AI input mode alone must still disable it.
+        assert!(!should_use_native_shell_completions(true, false, true));
+    }
+
+    #[test]
+    fn enabled_outside_ai_input_mode_when_otherwise_eligible() {
+        assert!(should_use_native_shell_completions(true, false, false));
+    }
+
+    #[test]
+    fn disabled_when_feature_is_off_regardless_of_ai_mode() {
+        assert!(!should_use_native_shell_completions(false, false, false));
+    }
+
+    #[test]
+    fn disabled_for_multiline_buffers() {
+        assert!(!should_use_native_shell_completions(true, true, false));
+    }
+
+    #[test]
+    fn ai_input_mode_keeps_the_file_path_fallback_for_keybinding_regardless_of_the_feature() {
+        // This is the exact regression: with native shell completions eligible in every other
+        // respect, AI input mode must still resolve to the same fallback it always did for an
+        // explicit Tab press -- file-path completions -- rather than losing its fallback because
+        // native shell completions would otherwise take priority.
+        let use_native_shell_completions = should_use_native_shell_completions(true, false, true);
+        assert!(matches!(
+            completions_fallback_strategy_for_trigger(
+                CompletionsTrigger::Keybinding,
+                use_native_shell_completions
+            ),
+            CompletionsFallbackStrategy::FilePaths
+        ));
+    }
+
+    #[test]
+    fn non_ai_keybinding_loses_the_file_path_fallback_once_native_shell_completions_is_eligible() {
+        // Contrast with the AI-mode case above: outside AI input mode, once native shell
+        // completions is eligible, the file-path fallback is deliberately not used for an
+        // explicit Tab press, since native shell completions themselves are the fallback there.
+        let use_native_shell_completions = should_use_native_shell_completions(true, false, false);
+        assert!(matches!(
+            completions_fallback_strategy_for_trigger(
+                CompletionsTrigger::Keybinding,
+                use_native_shell_completions
+            ),
+            CompletionsFallbackStrategy::None
+        ));
+    }
+
+    #[test]
+    fn as_you_type_fallback_is_unaffected_by_native_shell_completions_either_way() {
+        // AsYouType's fallback strategy was already None regardless of native shell completions
+        // before this function existed; confirm this refactor didn't change that.
+        for use_native_shell_completions in [true, false] {
+            assert!(matches!(
+                completions_fallback_strategy_for_trigger(
+                    CompletionsTrigger::AsYouType,
+                    use_native_shell_completions
+                ),
+                CompletionsFallbackStrategy::None
+            ));
+        }
+    }
+}
+
+#[cfg(test)]
+mod native_completions_dispatch_tests {
+    use warp_completer::completer::{MatchStrategy, SuggestionResults};
+
+    use super::super::{
+        NativeCompletionsDispatch, ShellCompletion, bundled_specs_are_empty,
+        native_completions_dispatch,
+    };
+
+    #[test]
+    fn skips_the_shell_when_native_completions_are_not_in_use() {
+        // Native shell completions off entirely -- the shell is never asked, regardless of the
+        // force pref.
+        assert_eq!(
+            native_completions_dispatch(false, false),
+            NativeCompletionsDispatch::Skip
+        );
+        assert_eq!(
+            native_completions_dispatch(false, true),
+            NativeCompletionsDispatch::Skip
+        );
+    }
+
+    #[test]
+    fn dispatches_up_front_under_the_force_pref() {
+        // The `ForceNativeShellCompletions` pref makes the shell's answer win unconditionally, so
+        // it's dispatched up front (before/without the bundled spec pass) for latency.
+        assert_eq!(
+            native_completions_dispatch(true, true),
+            NativeCompletionsDispatch::UpFront
+        );
+    }
+
+    #[test]
+    fn defers_to_the_shell_only_after_empty_specs_in_the_flag_only_configuration() {
+        // The shipping behavior: the shell is consulted conditionally (after the bundled specs
+        // come back empty), not up front on every keystroke.
+        assert_eq!(
+            native_completions_dispatch(true, false),
+            NativeCompletionsDispatch::OnlyIfSpecsEmpty
+        );
+    }
+
+    #[test]
+    fn a_bundled_spec_result_means_the_shell_is_not_asked() {
+        // The core of the fix: when a bundled spec produced suggestions, the flag-only path does
+        // not ask the shell at all (contrast with the old behavior, which dispatched the generator
+        // on every keystroke regardless of the specs).
+        let with_a_result = SuggestionResults {
+            replacement_span: (0usize, 0usize).into(),
+            suggestions: vec![ShellCompletion::new("checkout".to_string()).into()],
+            match_strategy: MatchStrategy::Fuzzy,
+        };
+        assert!(!bundled_specs_are_empty(Some(&with_a_result)));
+    }
+
+    #[test]
+    fn no_bundled_spec_results_means_the_shell_is_asked() {
+        // Both an empty suggestion list and no result at all count as empty, so the shell is
+        // asked in the flag-only path.
+        let empty = SuggestionResults {
+            replacement_span: (0usize, 0usize).into(),
+            suggestions: vec![],
+            match_strategy: MatchStrategy::Fuzzy,
+        };
+        assert!(bundled_specs_are_empty(Some(&empty)));
+        assert!(bundled_specs_are_empty(None));
+    }
+}
+
+#[cfg(test)]
+mod strip_control_characters_tests {
+    use super::super::strip_control_characters;
+
+    #[test]
+    fn leaves_ordinary_text_untouched() {
+        assert_eq!(&*strip_control_characters("checkout"), "checkout");
+    }
+
+    #[test]
+    fn strips_a_newline() {
+        // The class of bug this exists for: a completion candidate containing a real
+        // newline (e.g. a pathological but legal filename) previously put the editor into a
+        // stuck multi-row state and silently disabled native shell completions for the rest
+        // of the buffer.
+        assert_eq!(&*strip_control_characters("line1\nline2"), "line1line2");
+    }
+
+    #[test]
+    fn strips_a_carriage_return() {
+        assert_eq!(&*strip_control_characters("a\rb"), "ab");
+    }
+
+    #[test]
+    fn strips_a_bel() {
+        assert_eq!(&*strip_control_characters("a\u{7}b"), "ab");
+    }
+
+    #[test]
+    fn strips_an_esc() {
+        assert_eq!(&*strip_control_characters("a\u{1b}b"), "ab");
+    }
+
+    #[test]
+    fn strips_a_tab() {
+        assert_eq!(&*strip_control_characters("a\tb"), "ab");
+    }
+
+    #[test]
+    fn strips_del_and_a_c1_control() {
+        // DEL (0x7f) and the C1 range (0x80-0x9f) are both `char::is_control`, distinct from
+        // the C0 range the other cases cover.
+        assert_eq!(&*strip_control_characters("a\u{7f}b\u{85}c"), "abc");
+    }
+
+    #[test]
+    fn preserves_surrounding_multibyte_text() {
+        assert_eq!(&*strip_control_characters("café\nΓεια"), "caféΓεια");
+    }
 }

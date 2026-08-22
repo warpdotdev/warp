@@ -138,11 +138,6 @@ impl Shell {
         self.shell_type.force_in_band_command_executor()
     }
 
-    /// Returns whether the current shell supports native shell completions.
-    pub fn supports_native_shell_completions(&self) -> bool {
-        self.shell_type.supports_native_shell_completions()
-    }
-
     /// Whether the shell supports "autocd" (`cd`ing into a directory without specifying
     /// `cd`).
     pub fn supports_autocd(&self) -> bool {
@@ -387,16 +382,33 @@ impl ShellType {
         }
     }
 
-    /// Returns whether the current shell supports native shell completions.
-    fn supports_native_shell_completions(&self) -> bool {
-        matches!(self, ShellType::Zsh)
-    }
-
     /// Returns the syntax to run a second command regardless if the first one succeeds.
     pub fn or_combiner(self) -> &'static str {
         match self {
             ShellType::Bash | ShellType::Zsh | ShellType::PowerShell => " ; ",
             ShellType::Fish => "; or ",
+        }
+    }
+
+    /// Builds the native-completions generator-command line for this shell from an
+    /// already-hex-encoded line to complete. The caller encodes the payload (a hex string needs no
+    /// shell quoting), so this only supplies the per-shell function name and fish's leading-space
+    /// history exclusion. The function name matches each shell's `warp_run_generator_command` /
+    /// `Warp-Run-GeneratorCommand` convention so the shell's own bookkeeping hides it from history
+    /// and treats it as in-band.
+    pub fn native_completions_generator_command(self, hex_encoded_line: &str) -> String {
+        match self {
+            // zsh must run this in the foreground (no command substitution around the
+            // ZLE-activating `select` loop); bash shares the same entry point.
+            ShellType::Zsh | ShellType::Bash => {
+                format!("warp_run_generator_command_native_completions {hex_encoded_line}")
+            }
+            ShellType::Fish => {
+                format!(" warp_run_generator_command_native_completions {hex_encoded_line}")
+            }
+            ShellType::PowerShell => {
+                format!("Warp-Run-GeneratorCommand-NativeCompletion {hex_encoded_line}")
+            }
         }
     }
 

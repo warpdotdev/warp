@@ -436,15 +436,22 @@ impl CommandExecutor for InBandCommandExecutor {
     }
 }
 
-/// Returns `true` if `command` is an in-band command string, e.g. a command executed via
-/// `InBandCommandExecutor`.
+/// Returns `true` if `command` is an in-band command string -- either one executed via
+/// `InBandCommandExecutor` (`warp_run_generator_command`/`Warp-Run-GeneratorCommand`), or a
+/// native-shell-completions generator (`warp_run_generator_command_native_completions`, or
+/// PowerShell's `Warp-Run-GeneratorCommand-NativeCompletion`) that `PtyController` dispatches
+/// directly rather than through this executor.
 ///
 /// In-band commands are prefixed with a leading space for Fish, which is done to omit them from
 /// fish's command history.  Thus we strip leading whitespace before matching the `command`.
+///
+/// Matches on the prefix alone (not `"<name> "`), the same convention the shell scripts use for
+/// their own generator detection, so any generator function built on this prefix is recognized
+/// without a matching change on both sides.
 pub fn is_in_band_command(command: &str) -> bool {
     let trimmed = command.trim_start();
-    trimmed.starts_with("Warp-Run-GeneratorCommand ")
-        || trimmed.starts_with("warp_run_generator_command ")
+    trimmed.starts_with("Warp-Run-GeneratorCommand")
+        || trimmed.starts_with("warp_run_generator_command")
 }
 
 #[cfg(test)]

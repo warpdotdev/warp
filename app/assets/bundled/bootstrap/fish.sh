@@ -63,9 +63,32 @@ function warp_maybe_send_reset_grid_osc
 end
 
 
-# warp_hex_encode_string hex-encodes the given string with `od`.
-function warp_hex_encode_string 
-  printf '%s' "$argv" | od -An -v -tx1 | command tr -d ' \n'
+# warp_hex_encode_string hex-encodes the given string with `od`, producing a hex string that
+# Rust decodes and parses. od's output arrives as a fish list split on newlines, so join it
+# before stripping the spaces `od` inserts.
+function warp_hex_encode_string
+  set -l od_output (printf '%s' "$argv" | od -An -v -tx1)
+  string replace -a -- ' ' '' (string join '' $od_output)
+end
+
+# Reverses warp_hex_encode_string: decodes a hex-encoded string back to its original bytes,
+# letting the Rust app pass arbitrary argument text without shell quoting.
+function warp_hex_decode_string
+    if test (count $argv) -eq 0 -o -z "$argv[1]"
+        return
+    end
+    set -l hex $argv[1]
+    set -l escaped ''
+    set -l i 1
+    while test $i -le (string length -- $hex)
+        set -l pair (string sub -s $i -l 2 -- $hex)
+        set escaped "$escaped\\x$pair"
+        set i (math $i + 2)
+    end
+    # Use fish's builtin printf, not `command printf`: BSD/macOS's external printf(1) doesn't
+    # support \xNN escapes for %b, so it would decode every completion to literal "\x67..."
+    # text on macOS.
+    printf '%b' $escaped
 end
 
 # A list of PIDs for running in-band command(s). This is used to kill running
@@ -154,6 +177,38 @@ function warp_run_generator_command
     # command or a user command has just completed.
     set -g _WARP_GENERATOR_COMMAND 1
     _warp_run_generator_command_internal $argv
+end
+
+# Computes native shell completions for the given (hex-encoded) command line and emits
+# them over the completions OSC protocol.
+#
+# Usage:
+#   warp_run_generator_command_native_completions <hex-encoded line>
+function warp_run_generator_command_native_completions
+    set -g _WARP_GENERATOR_COMMAND 1
+    set -l line
+    if test (count $argv) -gt 0
+        set line (warp_hex_decode_string $argv[1] 2>/dev/null)
+    end
+
+    printf '\e]9280;A\a'
+    # A whitespace-only or empty line has no useful completions, and `complete -C` on it would
+    # synchronously list every command on $PATH; trim before checking to catch both.
+    if test -n "$(string trim -- "$line")"
+        # `complete -C "<line>"` computes completions for an arbitrary line, returning one
+        # "match\tdescription" pair per line.
+        for entry in (complete -C "$line")
+            set -l parts (string split -m 1 \t -- $entry)
+            # Hex-encode both fields: OSC params are semicolon-delimited and only the third is
+            # read (see decode_hex_completions_payload in ansi/mod.rs), so a literal `;`, BEL,
+            # or ESC in a match or description would otherwise corrupt the sequence.
+            printf '\e]9280;C;%s\a' (warp_hex_encode_string $parts[1])
+            if test (count $parts) -gt 1 -a -n "$parts[2]"
+                printf '\e]9280;D?description;%s\a' (warp_hex_encode_string $parts[2])
+            end
+        end
+    end
+    printf '\e]9280;B\a'
 end
 
 # Run before a command is executed.
