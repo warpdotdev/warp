@@ -204,9 +204,6 @@ pub(crate) struct TeamContextForOperation {
 /// workspace-level data. Code with no window at all must not construct a scope to route around
 /// this; it should read across every team explicitly, the way
 /// `UserWorkspaces::teams_allow_codebase_context` does.
-// Only tests call `team_uid()` today; remove this `#[allow(dead_code)]` once a Group 1
-// migration PR has a real getter generic over this trait.
-#[allow(dead_code)]
 pub(crate) trait TeamScope {
     fn team_uid(&self) -> Option<ServerId>;
 }
@@ -219,9 +216,6 @@ impl TeamScope for TeamContextForOperation {
 
 #[cfg(test)]
 impl TeamContextForOperation {
-    // Nothing constructs a test context yet; remove this `#[allow(dead_code)]` once a Group 1
-    // migration PR has a real call site.
-    #[allow(dead_code)]
     pub(crate) fn new_for_test(team_uid: ServerId) -> Self {
         Self {
             team_uid: Some(team_uid),
@@ -237,9 +231,6 @@ impl TeamContextForOperation {
 /// a [`TeamContextForOperation`]. A [`WeakViewHandle`] locates a window to read from; it is
 /// not evidence that the holder is running in that window, which is what minting operation
 /// scope requires.
-// Only tests construct one today; remove this once a Group 1 migration PR resolves one from a
-// real render.
-#[allow(dead_code)]
 pub(crate) struct TeamContext<'a> {
     team_uid: Option<&'a ServerId>,
 }
@@ -457,8 +448,6 @@ impl UserWorkspaces {
     }
 
     /// Resolves `view`'s window team for one render. See [`TeamContext`].
-    // Only tests call this today; remove once a Group 1 migration PR has a real call site.
-    #[allow(dead_code)]
     pub(crate) fn team_context<'a, T: Entity>(
         &'a self,
         view: &WeakViewHandle<T>,
