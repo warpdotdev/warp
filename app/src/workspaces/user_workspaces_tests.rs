@@ -1171,31 +1171,6 @@ fn platform_and_security() -> (Team, Team, Workspace) {
 }
 
 #[test]
-fn is_window_registered_distinguishes_absent_from_teamless() {
-    App::test((), |mut app| async move {
-        initialize_window_team_test_app(&mut app, vec![]);
-
-        let window_id = WindowId::new();
-        app.read(|ctx| {
-            assert!(!UserWorkspaces::as_ref(ctx).is_window_registered(window_id));
-        });
-
-        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
-            user_workspaces.register_window(window_id, None, ctx);
-        });
-
-        app.read(|ctx| {
-            let user_workspaces = UserWorkspaces::as_ref(ctx);
-            assert!(
-                user_workspaces.is_window_registered(window_id),
-                "a teamless window is registered even though it has no team uid"
-            );
-            assert_eq!(user_workspaces.team_uid_for_window(window_id), None);
-        });
-    })
-}
-
-#[test]
 fn switching_a_window_to_a_team_overwrites_and_announces_it() {
     let (platform, security, workspace) = platform_and_security();
 

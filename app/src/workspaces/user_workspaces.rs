@@ -421,15 +421,6 @@ impl UserWorkspaces {
         self.window_team_uids.get(&window_id).copied().flatten()
     }
 
-    /// Whether `window_id` has a team assignment at all, teamless included.
-    ///
-    /// [`Self::team_uid_for_window`] answers `None` both for a window that was never
-    /// registered and for one registered with no team, so it cannot be used to decide whether
-    /// a default still needs applying.
-    pub fn is_window_registered(&self, window_id: WindowId) -> bool {
-        self.window_team_uids.contains_key(&window_id)
-    }
-
     /// Puts `window_id` on `team_uid`, overwriting whatever it was on and registering it if it
     /// was not already.
     ///

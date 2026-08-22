@@ -46,30 +46,11 @@ fn root_registers_the_default_team_after_teams_arrive() {
     App::test((), |mut app| async move {
         register_tui_session_view_test_singletons(&mut app);
         let (window_id, _) = add_root(&mut app);
-
-        app.read(|ctx| {
-            assert!(!UserWorkspaces::as_ref(ctx).is_window_registered(window_id));
-        });
+        assert_eq!(window_team_uid(&app, window_id), None);
 
         set_teams(&mut app, &[(123, "Platform"), (456, "Security")]);
 
         assert_eq!(window_team_uid(&app, window_id), Some(123.into()));
-    });
-}
-
-#[test]
-fn root_registers_a_teamless_window() {
-    App::test((), |mut app| async move {
-        register_tui_session_view_test_singletons(&mut app);
-        let (window_id, _) = add_root(&mut app);
-
-        set_teams(&mut app, &[]);
-
-        app.read(|ctx| {
-            let workspaces = UserWorkspaces::as_ref(ctx);
-            assert!(workspaces.is_window_registered(window_id));
-            assert_eq!(workspaces.team_uid_for_window(window_id), None);
-        });
     });
 }
 
@@ -81,9 +62,19 @@ fn root_prefers_the_stored_team() {
         app.update(|ctx| RootTuiView::store_last_team_uid(456.into(), ctx));
         let (window_id, _) = add_root(&mut app);
 
+        assert_eq!(window_team_uid(&app, window_id), Some(456.into()));
+    });
+}
+
+#[test]
+fn root_registers_the_default_team_when_teams_are_already_loaded() {
+    App::test((), |mut app| async move {
+        register_tui_session_view_test_singletons(&mut app);
         set_teams(&mut app, &[(123, "Platform"), (456, "Security")]);
 
-        assert_eq!(window_team_uid(&app, window_id), Some(456.into()));
+        let (window_id, _) = add_root(&mut app);
+
+        assert_eq!(window_team_uid(&app, window_id), Some(123.into()));
     });
 }
 
@@ -107,7 +98,6 @@ fn switching_teams_moves_the_window_and_is_remembered() {
         register_tui_session_view_test_singletons(&mut app);
         set_teams(&mut app, &[(123, "Platform"), (456, "Security")]);
         let (window_id, _) = add_root(&mut app);
-        set_teams(&mut app, &[(123, "Platform"), (456, "Security")]);
 
         app.update(|ctx| {
             RootTuiView::switch_window_to_team(window_id, 456.into(), ctx);
@@ -134,8 +124,6 @@ fn an_unreadable_stored_team_degrades_to_the_default() {
                 .write_value(LAST_TEAM_STORAGE_KEY, "not-a-team-uid".to_owned());
         });
         let (window_id, _) = add_root(&mut app);
-
-        set_teams(&mut app, &[(123, "Platform")]);
 
         assert_eq!(window_team_uid(&app, window_id), Some(123.into()));
     });

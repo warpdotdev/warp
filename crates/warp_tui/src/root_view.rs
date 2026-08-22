@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
-use warp::tui_export::{ServerId, UserWorkspaces, UserWorkspacesEvent};
+use warp::tui_export::{ServerId, UserWorkspaces};
 use warp::{TuiLoginModel, TuiLoginPhase};
 use warp_core::user_preferences::GetUserPreferences as _;
 use warpui::SingletonEntity as _;
@@ -52,7 +52,6 @@ enum RootTuiState {
 
 /// The app-level TUI shell, projecting only the focused full session view.
 pub struct RootTuiView {
-    window_id: WindowId,
     state: RootTuiState,
     auth_animation_clock: AnimationClock,
     auth_animation_config: Arc<ZeroStateAnimationConfig>,
@@ -79,13 +78,13 @@ pub fn init(app: &mut AppContext) {
 impl RootTuiView {
     /// Creates the login-gated root view.
     pub(crate) fn new(ctx: &mut ViewContext<Self>) -> Self {
-        ctx.subscribe_to_model(&UserWorkspaces::handle(ctx), |view, _, event, ctx| {
-            if matches!(event, UserWorkspacesEvent::TeamsChanged) {
-                view.register_window_if_unset(ctx);
-            }
+        let window_id = ctx.window_id();
+        let team_uid = Self::restore_last_team_uid(ctx)
+            .or_else(|| UserWorkspaces::as_ref(ctx).inherited_or_default_team_uid(None));
+        UserWorkspaces::handle(ctx).update(ctx, |user_workspaces, ctx| {
+            user_workspaces.register_window(window_id, team_uid, ctx);
         });
         Self {
-            window_id: ctx.window_id(),
             state: RootTuiState::Auth,
             auth_animation_clock: AnimationClock::starting_at(Duration::ZERO),
             auth_animation_config: Arc::new(ZeroStateAnimationConfig::default()),
@@ -98,20 +97,6 @@ impl RootTuiView {
             copy_login_url_when_available: false,
             login_copy_hint: TransientHint::default(),
         }
-    }
-
-    fn register_window_if_unset(&self, ctx: &mut ViewContext<Self>) {
-        if UserWorkspaces::as_ref(ctx).is_window_registered(self.window_id) {
-            return;
-        }
-        let restored_team_uid = Self::restore_last_team_uid(ctx);
-        let user_workspaces = UserWorkspaces::as_ref(ctx);
-        let team_uid = restored_team_uid
-            .filter(|team_uid| user_workspaces.team_from_uid(*team_uid).is_some())
-            .or_else(|| user_workspaces.inherited_or_default_team_uid(None));
-        UserWorkspaces::handle(ctx).update(ctx, |user_workspaces, ctx| {
-            user_workspaces.register_window(self.window_id, team_uid, ctx);
-        });
     }
 
     pub(crate) fn switch_window_to_team(
