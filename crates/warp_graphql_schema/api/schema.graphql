@@ -2335,6 +2335,15 @@ type ManagedByokByoePolicy {
   enabled: Boolean!
 }
 
+"""
+A managed secret value representing a container registry credential. The password is
+never exposed here - only the host and username are readable back.
+"""
+type ManagedSecretDockerRegistryValue {
+  registryHost: String!
+  username: String!
+}
+
 """A managed secret value representing an OpenAI API key."""
 type ManagedSecretOpenAiApiKeyValue {
   apiKey: String!
@@ -2361,12 +2370,13 @@ enum ManagedSecretType {
   ANTHROPIC_API_KEY
   ANTHROPIC_BEDROCK_ACCESS_KEY
   ANTHROPIC_BEDROCK_API_KEY
+  DOCKER_REGISTRY
   DOTENVX
   OPENAI_API_KEY
   RAW_VALUE
 }
 
-union ManagedSecretValue = ManagedSecretAnthropicApiKeyValue | ManagedSecretAnthropicBedrockAccessKeyValue | ManagedSecretAnthropicBedrockApiKeyValue | ManagedSecretOpenAiApiKeyValue | ManagedSecretRawValue
+union ManagedSecretValue = ManagedSecretAnthropicApiKeyValue | ManagedSecretAnthropicBedrockAccessKeyValue | ManagedSecretAnthropicBedrockApiKeyValue | ManagedSecretDockerRegistryValue | ManagedSecretOpenAiApiKeyValue | ManagedSecretRawValue
 
 input ManagedSecretsInput {
   """Pagination cursor, currently unused."""

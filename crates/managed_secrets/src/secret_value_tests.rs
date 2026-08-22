@@ -315,3 +315,39 @@ fn test_debug_representation_no_secrets_anthropic_bedrock_api_key() {
         "debug representation contains aws_region: {debug_representation}"
     );
 }
+
+/// Test to ensure that `docker_registry` secrets are serialized in the format that the server expects.
+#[test]
+fn test_serialize_docker_registry() {
+    let secret =
+        ManagedSecretValue::docker_registry("us-docker.pkg.dev", "_json_key", "secret-pass");
+    let serialized = serde_json::to_string(&secret).expect("failed to serialize");
+    assert_eq!(
+        serialized,
+        "{\"registry_host\":\"us-docker.pkg.dev\",\"username\":\"_json_key\",\"password\":\"secret-pass\"}"
+    );
+}
+
+/// Test to ensure that the [`ManagedSecretValue::DockerRegistry`] debug representation does not leak the password.
+#[test]
+fn test_debug_representation_no_secrets_docker_registry() {
+    let secret =
+        ManagedSecretValue::docker_registry("us-docker.pkg.dev", "_json_key", "secret-pass");
+    let debug_representation = format!("{:?}", secret);
+    assert!(
+        !debug_representation.contains("secret-pass"),
+        "debug representation contains password: {debug_representation}"
+    );
+}
+
+/// A registry credential is never injected as an environment variable, so it has no
+/// field-size limit to enforce - unlike every other secret type, which does.
+#[test]
+fn test_docker_registry_field_sizes_never_rejected() {
+    let secret = ManagedSecretValue::docker_registry(
+        "us-docker.pkg.dev",
+        "_json_key",
+        "x".repeat(1024 * 1024),
+    );
+    assert!(secret.validate_field_sizes("my-secret").is_ok());
+}
