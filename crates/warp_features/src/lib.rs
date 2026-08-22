@@ -345,6 +345,11 @@ pub enum FeatureFlag {
     /// Enables fallback model load output messaging in the warping indicator.
     FallbackModelLoadOutputMessaging,
 
+    /// Names the model doing the work in the warping indicator (e.g. "Warping with
+    /// Claude Sonnet 4.5.") once the server reports which model a response is
+    /// running on, rather than only naming it when the model is a fallback.
+    WarpingModelName,
+
     /// Enables close button on left side of tabs
     TabCloseButtonOnLeft,
 
@@ -1050,6 +1055,7 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::PricingTransparency,
     FeatureFlag::PeriodicHandoffCheckpoints,
     FeatureFlag::CtrlCCancelsThirdPartyHarness,
+    FeatureFlag::WarpingModelName,
 ];
 
 /// Features enabled for feature preview build users (e.g.: Friends of Warp).
