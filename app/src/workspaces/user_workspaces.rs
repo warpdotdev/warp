@@ -19,7 +19,7 @@ use super::team::{DiscoverableTeam, MembershipRole, Team};
 use super::workspace::WorkspaceMemberUsageInfo;
 use super::workspace::{
     AdminEnablementSetting, BillingMetadata, CustomerType, EnterpriseSecretRegex,
-    HostEnablementSetting, UgcCollectionEnablementSetting, Workspace, WorkspaceUid,
+    HostEnablementSetting, TeamSettings, UgcCollectionEnablementSetting, Workspace, WorkspaceUid,
 };
 use crate::ai::credit_availability::AICreditAvailability;
 use crate::ai::llms::LLMModelHost;
@@ -109,6 +109,11 @@ pub enum UserWorkspacesEvent {
 pub struct UserWorkspaces {
     current_workspace_uid: Tracked<Option<WorkspaceUid>>,
     workspaces: Tracked<Vec<Workspace>>,
+    /// Each team's compiled remote-session command patterns, kept in step with `workspaces`.
+    /// Team settings carry these patterns as strings while the classification they drive runs on
+    /// every executed command, so compiling them on read would recompile a team's whole list per
+    /// command.
+    remote_session_regexes: HashMap<ServerId, Vec<Regex>>,
     window_team_uids: HashMap<WindowId, Option<ServerId>>,
     joinable_teams: Vec<DiscoverableTeam>,
     /// The user-level add-on credits purchase policy from the latest
@@ -259,6 +264,7 @@ impl UserWorkspaces {
         // for all tests that use [`UserWorkspaces`] (a lot of them do).
         Self {
             current_workspace_uid: cached_workspaces.first().map(|w| w.uid).into(),
+            remote_session_regexes: compile_remote_session_regexes(&cached_workspaces),
             workspaces: cached_workspaces.into(),
             window_team_uids: Default::default(),
             joinable_teams: Default::default(),
@@ -309,6 +315,7 @@ impl UserWorkspaces {
 
         Self {
             current_workspace_uid: current_workspace_uid.into(),
+            remote_session_regexes: compile_remote_session_regexes(&cached_workspaces),
             workspaces: cached_workspaces.into(),
             window_team_uids: Default::default(),
             joinable_teams: Default::default(),
@@ -1166,6 +1173,7 @@ impl UserWorkspaces {
         let sunsetted_to_build_changed = self.has_sunsetted_to_build_data_changed(&workspaces);
 
         *self.workspaces = workspaces;
+        self.remote_session_regexes = compile_remote_session_regexes(&self.workspaces);
         let reassigned_windows = self.reconcile_window_team_assignments();
         self.notify_and_emit_teams_changed(ctx);
         Self::emit_window_team_changed(reassigned_windows, ctx);
@@ -1899,27 +1907,87 @@ impl UserWorkspaces {
             .unwrap_or_default()
     }
 
-    pub fn is_ai_allowed_in_remote_sessions(&self) -> bool {
-        self.current_workspace()
-            .map(|workspace| {
-                workspace
-                    .settings
-                    .ai_permissions_settings
-                    .allow_ai_in_remote_sessions
-            })
-            .unwrap_or(true)
+    /// Every team the user belongs to, across all of their workspaces.
+    fn all_teams(&self) -> impl Iterator<Item = &Team> {
+        self.workspaces
+            .iter()
+            .flat_map(|workspace| workspace.teams.iter())
     }
 
-    pub fn get_remote_session_regex_list(&self) -> Vec<Regex> {
-        self.current_workspace()
-            .map(|workspace| {
-                workspace
-                    .settings
-                    .ai_permissions_settings
-                    .remote_session_regex_list
-                    .clone()
-            })
-            .unwrap_or_default()
+    /// The effective settings of `scope`'s team, or `None` when the scope has no team.
+    ///
+    /// Private on purpose: callers get the setting, never the team.
+    fn team_settings_for_scope(&self, scope: &impl TeamScope) -> Option<&TeamSettings> {
+        let team_uid = scope.team_uid()?;
+        self.team_from_uid(team_uid).map(|team| &team.settings)
+    }
+
+    /// Whether the user belongs to no team at all, which is the only case where the current
+    /// workspace's settings are genuinely team-neutral rather than one arbitrarily-chosen team's.
+    ///
+    /// Spans every workspace, matching [`Self::teams_allow_codebase_context`] rather than the
+    /// current-workspace-scoped [`Self::has_teams`]: a team in another workspace still makes the
+    /// current workspace's settings some team's rather than nobody's.
+    fn is_teamless(&self) -> bool {
+        self.all_teams().next().is_none()
+    }
+
+    /// Whether AI is allowed in remote sessions under `scope`'s team, which is the team of the
+    /// surface whose content the decision is about.
+    ///
+    /// A scope with no team is read as the workspace's value only when the user belongs to no
+    /// team at all. With teams present it means the surface's team could not be determined, and
+    /// this answers `false`: for a control gating AI in an environment the user may not control,
+    /// an unknown team must not quietly become "no policy".
+    ///
+    /// That is narrower than [`TeamScope`]'s general "act as if not on a team", which suits a
+    /// preference rather than a restriction. REV-2205 requires each migrated getter to decide
+    /// what an unknown team means for its own permission; this one fails closed.
+    pub(crate) fn is_ai_allowed_in_remote_sessions_for_scope(
+        &self,
+        scope: &impl TeamScope,
+    ) -> bool {
+        match self.team_settings_for_scope(scope) {
+            Some(settings) => settings.ai_permissions.allow_ai_in_remote_sessions.value,
+            None if self.is_teamless() => self
+                .current_workspace()
+                .map(|workspace| {
+                    workspace
+                        .settings
+                        .ai_permissions_settings
+                        .allow_ai_in_remote_sessions
+                })
+                .unwrap_or(true),
+            None => false,
+        }
+    }
+
+    /// The remote-session command patterns configured by `scope`'s team, empty for a team
+    /// without an explicit org policy.
+    ///
+    /// Falls back to the current workspace's patterns on the same terms as
+    /// [`Self::is_ai_allowed_in_remote_sessions_for_scope`]. Unlike the permission there is no
+    /// restrictive value an unknown team could resolve to, so a scope that resolves to no team
+    /// while the user has teams yields no patterns.
+    pub(crate) fn remote_session_regexes_for_scope(&self, scope: &impl TeamScope) -> &[Regex] {
+        match scope.team_uid() {
+            Some(team_uid) => self
+                .remote_session_regexes
+                .get(&team_uid)
+                .map(Vec::as_slice)
+                .unwrap_or_default(),
+            None if self.is_teamless() => self
+                .current_workspace()
+                .map(|workspace| {
+                    workspace
+                        .settings
+                        .ai_permissions_settings
+                        .remote_session_regex_list
+                        .as_slice()
+                })
+                .unwrap_or_default(),
+            None => &[],
+        }
     }
 
     pub fn is_anyone_with_link_sharing_enabled(&self) -> bool {
@@ -1991,9 +2059,7 @@ impl UserWorkspaces {
 
     pub fn teams_allow_codebase_context(&self) -> AdminEnablementSetting {
         let mut team_settings = self
-            .workspaces
-            .iter()
-            .flat_map(|workspace| workspace.teams.iter())
+            .all_teams()
             .map(|team| &team.settings.codebase_context.value)
             .peekable();
 
@@ -2022,9 +2088,7 @@ impl UserWorkspaces {
     }
 
     pub fn team_disabling_codebase_context(&self) -> Option<&Team> {
-        self.workspaces
-            .iter()
-            .flat_map(|workspace| workspace.teams.iter())
+        self.all_teams()
             .find(|team| team.settings.codebase_context.value == AdminEnablementSetting::Disable)
     }
 
@@ -2167,6 +2231,38 @@ impl UserWorkspaces {
             ctx,
         );
     }
+}
+
+/// Compiles each team's remote-session command patterns, keyed by team.
+///
+/// An unparseable pattern is dropped rather than failing its team's whole list, so one bad entry
+/// in an org's configuration cannot suppress the rest.
+fn compile_remote_session_regexes(workspaces: &[Workspace]) -> HashMap<ServerId, Vec<Regex>> {
+    workspaces
+        .iter()
+        .flat_map(|workspace| workspace.teams.iter())
+        .map(|team| {
+            let regexes = team
+                .settings
+                .ai_permissions
+                .remote_session_regex_list
+                .values
+                .iter()
+                .filter_map(|pattern| match Regex::new(pattern) {
+                    Ok(regex) => Some(regex),
+                    Err(_) => {
+                        report_error!(
+                            "Invalid regex pattern for remote session detection",
+                            extra: { "pattern" => %pattern },
+                            warp_errors::ReportErrorLogMode::OncePerRun
+                        );
+                        None
+                    }
+                })
+                .collect();
+            (team.uid, regexes)
+        })
+        .collect()
 }
 
 impl Entity for UserWorkspaces {

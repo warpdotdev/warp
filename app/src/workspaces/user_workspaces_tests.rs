@@ -1152,6 +1152,200 @@ fn test_window_team_reconciliation_moves_rendering_but_not_a_captured_context() 
     })
 }
 
+fn set_team_remote_session_policy(team: &mut Team, allow_ai: bool, patterns: &[&str]) {
+    team.settings
+        .ai_permissions
+        .allow_ai_in_remote_sessions
+        .value = allow_ai;
+    team.settings
+        .ai_permissions
+        .remote_session_regex_list
+        .values = patterns.iter().map(|pattern| pattern.to_string()).collect();
+}
+
+fn set_workspace_remote_session_policy(
+    workspace: &mut Workspace,
+    allow_ai: bool,
+    patterns: &[&str],
+) {
+    workspace
+        .settings
+        .ai_permissions_settings
+        .allow_ai_in_remote_sessions = allow_ai;
+    workspace
+        .settings
+        .ai_permissions_settings
+        .remote_session_regex_list = patterns
+        .iter()
+        .map(|pattern| Regex::new(pattern).expect("test pattern should compile"))
+        .collect();
+}
+
+fn remote_session_patterns_for_surface(
+    view: &ViewHandle<TeamContextTestView>,
+    app: &AppContext,
+) -> HashSet<String> {
+    let scope = UserWorkspaces::team_context_resolver(view.downgrade())(app);
+    UserWorkspaces::as_ref(app)
+        .remote_session_regexes_for_scope(&scope)
+        .iter()
+        .map(|regex| regex.as_str().to_string())
+        .collect()
+}
+
+fn remote_session_ai_allowed_for_surface(
+    view: &ViewHandle<TeamContextTestView>,
+    app: &AppContext,
+) -> bool {
+    let scope = UserWorkspaces::team_context_resolver(view.downgrade())(app);
+    UserWorkspaces::as_ref(app).is_ai_allowed_in_remote_sessions_for_scope(&scope)
+}
+
+/// Each surface is judged by the rules of the team whose window it is in, so two terminals on
+/// opposing teams get opposing answers at the same moment.
+#[test]
+fn remote_session_policy_follows_each_surfaces_own_team() {
+    let (mut team_a, mut team_b) = two_teams();
+    set_team_remote_session_policy(&mut team_a, true, &["^kubectl"]);
+    set_team_remote_session_policy(&mut team_b, false, &["^ssh"]);
+    let mut workspace = workspace_for_test(&team_a);
+    workspace.teams = vec![team_a.clone(), team_b.clone()];
+
+    App::test((), |mut app| async move {
+        initialize_window_team_test_app(&mut app, vec![workspace]);
+
+        let (window_a, view_a) = create_test_window(&mut app);
+        let (window_b, view_b) = create_test_window(&mut app);
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.set_team_for_window(window_a, team_a.uid, ctx);
+            user_workspaces.set_team_for_window(window_b, team_b.uid, ctx);
+        });
+
+        app.read(|ctx| {
+            assert!(
+                remote_session_ai_allowed_for_surface(&view_a, ctx),
+                "the surface in team A's window is governed by team A, which permits it"
+            );
+            assert!(
+                !remote_session_ai_allowed_for_surface(&view_b, ctx),
+                "the surface in team B's window is governed by team B, which forbids it"
+            );
+            assert_eq!(
+                remote_session_patterns_for_surface(&view_a, ctx),
+                HashSet::from(["^kubectl".to_string()])
+            );
+            assert_eq!(
+                remote_session_patterns_for_surface(&view_b, ctx),
+                HashSet::from(["^ssh".to_string()])
+            );
+        });
+    })
+}
+
+#[test]
+fn remote_session_policy_ignores_workspace_settings_once_the_user_has_a_team() {
+    let mut team = team_for_test();
+    set_team_remote_session_policy(&mut team, true, &["^team-only"]);
+    let mut workspace = workspace_for_test(&team);
+    set_workspace_remote_session_policy(&mut workspace, false, &["^workspace-only"]);
+
+    App::test((), |mut app| async move {
+        initialize_window_team_test_app(&mut app, vec![workspace]);
+
+        let (window_id, view) = create_test_window(&mut app);
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.set_team_for_window(window_id, team.uid, ctx);
+        });
+
+        app.read(|ctx| {
+            assert!(
+                remote_session_ai_allowed_for_surface(&view, ctx),
+                "workspace settings are one arbitrarily-chosen team's effective settings once \
+                 the user has a team, so they must not override the team's own value"
+            );
+            assert_eq!(
+                remote_session_patterns_for_surface(&view, ctx),
+                HashSet::from(["^team-only".to_string()])
+            );
+        });
+    })
+}
+
+#[test]
+fn remote_session_policy_falls_back_to_the_workspace_for_a_user_with_no_teams() {
+    let team = team_for_test();
+    let mut workspace = workspace_for_test(&team);
+    workspace.teams.clear();
+    set_workspace_remote_session_policy(&mut workspace, false, &["^workspace-only"]);
+
+    App::test((), |mut app| async move {
+        initialize_window_team_test_app(&mut app, vec![workspace]);
+
+        let (window_id, view) = create_test_window(&mut app);
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.register_window(window_id, None, ctx);
+        });
+
+        app.read(|ctx| {
+            assert!(
+                !remote_session_ai_allowed_for_surface(&view, ctx),
+                "the workspace value is genuinely team-neutral for a user with no teams, so it \
+                 is the one to read"
+            );
+            assert_eq!(
+                remote_session_patterns_for_surface(&view, ctx),
+                HashSet::from(["^workspace-only".to_string()])
+            );
+        });
+    })
+}
+
+/// A user with teams whose surface resolves to none has an unknown team, not an absent one. For
+/// a control that gates AI in an environment the user may not control, unknown fails closed.
+#[test]
+fn remote_session_ai_permission_is_denied_when_a_surfaces_team_is_unknown() {
+    let mut team = team_for_test();
+    set_team_remote_session_policy(&mut team, true, &["^kubectl"]);
+    let workspace = workspace_for_test(&team);
+
+    App::test((), |mut app| async move {
+        initialize_window_team_test_app(&mut app, vec![workspace]);
+
+        // A window that never registered a team, standing in for a surface whose window cannot
+        // be resolved.
+        let (_window_id, view) = create_test_window(&mut app);
+
+        app.read(|ctx| {
+            assert!(
+                !remote_session_ai_allowed_for_surface(&view, ctx),
+                "an unresolvable team must not be read as the absence of a policy"
+            );
+            assert!(
+                remote_session_patterns_for_surface(&view, ctx).is_empty(),
+                "there is no restrictive pattern list to fall back to, so an unknown team \
+                 contributes none"
+            );
+        });
+    })
+}
+
+#[test]
+fn remote_session_ai_permission_is_allowed_for_a_user_with_no_workspace_at_all() {
+    App::test((), |mut app| async move {
+        initialize_window_team_test_app(&mut app, vec![]);
+
+        let (window_id, view) = create_test_window(&mut app);
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.register_window(window_id, None, ctx);
+        });
+
+        app.read(|ctx| {
+            assert!(remote_session_ai_allowed_for_surface(&view, ctx));
+            assert!(remote_session_patterns_for_surface(&view, ctx).is_empty());
+        });
+    })
+}
+
 #[test]
 fn test_team_contexts_represent_a_registered_teamless_window() {
     App::test((), |mut app| async move {

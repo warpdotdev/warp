@@ -4033,6 +4033,180 @@ fn test_clear_session_flag_state() {
     })
 }
 
+/// The focused terminal has to report the remote content it holds even while the org still
+/// permits AI in remote sessions. Publishing only under a forbidding policy meant a later
+/// revocation found nothing published and left AI enabled mid-remote-session.
+#[test]
+fn focused_terminal_publishes_remote_blocks_while_remote_session_ai_is_still_permitted() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+
+        app.read(|ctx| {
+            let scope = UserWorkspaces::team_context_resolver(terminal.downgrade())(ctx);
+            assert!(
+                UserWorkspaces::as_ref(ctx).is_ai_allowed_in_remote_sessions_for_scope(&scope),
+                "this test only means anything under the permissive policy that used to \
+                 suppress publishing"
+            );
+            assert!(
+                !FocusedTerminalInfo::as_ref(ctx).contains_any_remote_blocks(),
+                "no remote blocks have been reported yet"
+            );
+        });
+
+        terminal.update(&mut app, |_view, ctx| ctx.focus_self());
+
+        terminal.update(&mut app, |view, ctx| {
+            assert!(
+                ctx.is_self_or_child_focused(),
+                "only the focused terminal publishes"
+            );
+            view.any_session_contains_remote_blocks = true;
+            view.update_focused_terminal_info(ctx);
+        });
+
+        app.read(|ctx| {
+            let focused_terminal = FocusedTerminalInfo::as_ref(ctx);
+            assert!(
+                focused_terminal.contains_any_remote_blocks(),
+                "the focused terminal should publish its remote blocks whatever the \
+                 remote-session AI permission currently says"
+            );
+            assert_eq!(
+                focused_terminal.terminal().map(|handle| handle.id()),
+                Some(terminal.id()),
+                "the flags name the surface they came from, so the reader resolves that \
+                 surface's team rather than some other terminal's"
+            );
+        });
+    })
+}
+
+/// The permission is re-minted on every decision from the focused terminal's handle, so an
+/// admin revoking it takes effect immediately rather than waiting for a new session or a fresh
+/// publish.
+#[test]
+fn revoking_remote_session_ai_takes_effect_without_a_new_terminal_session() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let (window_id, terminal) = add_window_with_id_and_terminal(&mut app, None);
+
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.setup_test_workspace(ctx);
+            user_workspaces.update_current_workspace(
+                |workspace| {
+                    workspace
+                        .teams
+                        .first_mut()
+                        .expect("the fixture workspace has a team")
+                        .settings
+                        .ai_permissions
+                        .allow_ai_in_remote_sessions
+                        .value = true;
+                },
+                ctx,
+            );
+            let team_uid = user_workspaces
+                .sole_team_uid()
+                .expect("the fixture workspace has exactly one team");
+            user_workspaces.set_team_for_window(window_id, team_uid, ctx);
+        });
+
+        terminal.update(&mut app, |_view, ctx| ctx.focus_self());
+        terminal.update(&mut app, |view, ctx| {
+            view.any_session_contains_remote_blocks = true;
+            view.update_focused_terminal_info(ctx);
+        });
+
+        app.read(|ctx| {
+            assert!(
+                !AISettings::as_ref(ctx).is_ai_disabled_due_to_remote_session_org_policy(ctx),
+                "AI stays available while this terminal's team still permits it in remote \
+                 sessions"
+            );
+        });
+
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.update_current_workspace(
+                |workspace| {
+                    workspace
+                        .teams
+                        .first_mut()
+                        .expect("the fixture workspace has a team")
+                        .settings
+                        .ai_permissions
+                        .allow_ai_in_remote_sessions
+                        .value = false;
+                },
+                ctx,
+            );
+        });
+
+        app.read(|ctx| {
+            assert!(
+                AISettings::as_ref(ctx).is_ai_disabled_due_to_remote_session_org_policy(ctx),
+                "revoking the permission has to take effect on the next read, with no new \
+                 terminal session and no fresh publish from the focused terminal"
+            );
+        });
+    })
+}
+
+/// Whether a block is remote is a question of fact, so the patterns of the team whose window
+/// this terminal is in decide it whether or not that team currently forbids AI in remote
+/// sessions. The `is_local` flag persisted with each block is derived from this and is never
+/// recomputed once written.
+#[test]
+fn org_command_patterns_classify_a_block_remote_even_when_remote_session_ai_is_permitted() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let (window_id, terminal) = add_window_with_id_and_terminal(&mut app, None);
+
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.setup_test_workspace(ctx);
+            user_workspaces.update_current_workspace(
+                |workspace| {
+                    let team = workspace
+                        .teams
+                        .first_mut()
+                        .expect("the fixture workspace has a team");
+                    team.settings
+                        .ai_permissions
+                        .allow_ai_in_remote_sessions
+                        .value = true;
+                    team.settings
+                        .ai_permissions
+                        .remote_session_regex_list
+                        .values = vec!["^kubectl".to_string()];
+                },
+                ctx,
+            );
+            let team_uid = user_workspaces
+                .sole_team_uid()
+                .expect("the fixture workspace has exactly one team");
+            user_workspaces.set_team_for_window(window_id, team_uid, ctx);
+        });
+
+        terminal.read(&app, |view, ctx| {
+            let scope = UserWorkspaces::team_context_resolver(terminal.downgrade())(ctx);
+            assert!(
+                UserWorkspaces::as_ref(ctx).is_ai_allowed_in_remote_sessions_for_scope(&scope),
+                "this terminal's team permits AI in remote sessions and only configures patterns"
+            );
+            assert!(
+                view.is_block_considered_remote(None, Some("kubectl get pods"), ctx),
+                "a command this team's patterns describe as remote is remote regardless of \
+                 whether the team currently permits AI in remote sessions"
+            );
+            assert!(
+                !view.is_block_considered_remote(None, Some("ls -la"), ctx),
+                "a command outside this team's patterns stays local"
+            );
+        });
+    })
+}
+
 fn assert_block_has_find_match(find_model: &TerminalFindModel, block_index: BlockIndex) {
     assert!(
         find_model

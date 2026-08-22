@@ -25,13 +25,13 @@ use warp_core::features::FeatureFlag;
 use warp_errors::report_if_error;
 use warpui::platform::OperatingSystem;
 use warpui::platform::keyboard::KeyCode;
-use warpui::{AppContext, Entity, ModelContext, SingletonEntity, UpdateModel};
+use warpui::{AppContext, Entity, ModelContext, SingletonEntity, UpdateModel, WeakViewHandle};
 
 use crate::ai::execution_profiles::ExecutionProfilesConfig;
 use crate::ai::request_usage_model::RequestLimitInfo;
 use crate::auth::AuthStateProvider;
 use crate::settings::PrivacySettings;
-use crate::terminal::CLIAgent;
+use crate::terminal::{CLIAgent, TerminalView};
 use crate::workspaces::user_workspaces::UserWorkspaces;
 
 pub enum FocusedTerminalInfoEvent {
@@ -43,16 +43,22 @@ pub enum FocusedTerminalInfoEvent {
 /// remote sessions.
 #[derive(Default, Clone, Debug)]
 pub struct FocusedTerminalInfo {
+    /// The terminal surface the flags below describe. A handle rather than an id, so the team
+    /// whose rules govern that surface resolves against whichever window it is in at read time
+    /// and follows it across a cross-window tab drag. `None` until a focused terminal has
+    /// published.
+    terminal: Option<WeakViewHandle<TerminalView>>,
     contains_any_remote_blocks: bool,
     contains_any_restored_remote_blocks: bool,
 }
 
 impl FocusedTerminalInfo {
     pub fn new(_: &mut ModelContext<Self>) -> Self {
-        Self {
-            contains_any_remote_blocks: false,
-            contains_any_restored_remote_blocks: false,
-        }
+        Self::default()
+    }
+
+    pub fn terminal(&self) -> Option<&WeakViewHandle<TerminalView>> {
+        self.terminal.as_ref()
     }
 
     pub fn contains_any_remote_blocks(&self) -> bool {
@@ -63,27 +69,31 @@ impl FocusedTerminalInfo {
         self.contains_any_restored_remote_blocks
     }
 
-    /// Updates both remote blocks and restored blocks status in a single atomic operation.
-    /// Only emits a TerminalInfoUpdated event if either value changes.
+    /// Records what the focused `terminal` contains, in a single atomic operation.
+    /// Only emits a TerminalInfoUpdated event if anything changes.
     /// Returns true if the event was emitted.
+    ///
+    /// The surface is written with its flags rather than tracked separately so a reader cannot
+    /// resolve one terminal's team for another terminal's content.
     pub fn update(
         &mut self,
+        terminal: WeakViewHandle<TerminalView>,
         contains_any_remote_blocks: bool,
         contains_any_restored_remote_blocks: bool,
         ctx: &mut ModelContext<Self>,
     ) -> bool {
-        let remote_changed = self.contains_any_remote_blocks != contains_any_remote_blocks;
-        let restored_changed =
-            self.contains_any_restored_remote_blocks != contains_any_restored_remote_blocks;
-
-        if remote_changed || restored_changed {
-            self.contains_any_remote_blocks = contains_any_remote_blocks;
-            self.contains_any_restored_remote_blocks = contains_any_restored_remote_blocks;
-            ctx.emit(FocusedTerminalInfoEvent::TerminalInfoUpdated);
-            return true;
+        let unchanged = self.terminal.as_ref().map(|held| held.id()) == Some(terminal.id())
+            && self.contains_any_remote_blocks == contains_any_remote_blocks
+            && self.contains_any_restored_remote_blocks == contains_any_restored_remote_blocks;
+        if unchanged {
+            return false;
         }
 
-        false
+        self.terminal = Some(terminal);
+        self.contains_any_remote_blocks = contains_any_remote_blocks;
+        self.contains_any_restored_remote_blocks = contains_any_restored_remote_blocks;
+        ctx.emit(FocusedTerminalInfoEvent::TerminalInfoUpdated);
+        true
     }
 }
 
@@ -2163,20 +2173,27 @@ impl AISettings {
         });
     }
 
+    /// Whether the org forbids AI given what the focused terminal contains.
+    ///
+    /// Both halves of the question are about that one terminal: what it contains, and whether
+    /// the team of the window it is in right now permits AI there. The permission is therefore
+    /// re-minted from the handle [`FocusedTerminalInfo`] holds, at the point of use, so it
+    /// tracks an admin revoking it and the terminal being dragged to another team's window
+    /// alike. The flags are checked first, so the resolution is skipped entirely unless the
+    /// focused terminal actually holds remote content.
     pub fn is_ai_disabled_due_to_remote_session_org_policy(&self, app: &AppContext) -> bool {
-        let contains_remote_blocks = FocusedTerminalInfo::as_ref(app).contains_any_remote_blocks();
-
-        let contains_restored_remote_blocks =
-            FocusedTerminalInfo::as_ref(app).contains_any_restored_remote_blocks();
-
-        let is_ai_allowed_in_remote_sessions =
-            UserWorkspaces::as_ref(app).is_ai_allowed_in_remote_sessions();
-
-        if is_ai_allowed_in_remote_sessions {
+        let focused_terminal = FocusedTerminalInfo::as_ref(app);
+        if !focused_terminal.contains_any_remote_blocks()
+            && !focused_terminal.contains_any_restored_remote_blocks()
+        {
             return false;
         }
+        let Some(terminal) = focused_terminal.terminal().cloned() else {
+            return false;
+        };
 
-        contains_remote_blocks || contains_restored_remote_blocks
+        let scope = UserWorkspaces::team_context_resolver(terminal)(app);
+        !UserWorkspaces::as_ref(app).is_ai_allowed_in_remote_sessions_for_scope(&scope)
     }
 
     pub fn is_any_ai_enabled(&self, app: &AppContext) -> bool {
