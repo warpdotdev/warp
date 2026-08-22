@@ -186,6 +186,16 @@ pub fn init(app: &mut AppContext) {
             CodeEditorViewAction::MoveForwardsByWord,
             text_entry.clone(),
         ),
+        FixedBinding::new(
+            "meta-backspace",
+            CodeEditorViewAction::CutWordLeft,
+            text_entry.clone(),
+        ),
+        FixedBinding::new(
+            "meta-delete",
+            CodeEditorViewAction::CutWordRight,
+            text_entry.clone(),
+        ),
         FixedBinding::new_per_platform(
             PerPlatformKeystroke {
                 mac: "shift-alt-left",
