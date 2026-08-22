@@ -376,9 +376,6 @@ pub enum FeatureFlag {
     /// Gates the bundled skill-based implementation of PR comment fetching.
     PRCommentsSkill,
 
-    /// A new first-time user experience which prioritizes choosing a coding repository.
-    GetStartedTab,
-
     /// Enables Projects and Project management
     Projects,
 
