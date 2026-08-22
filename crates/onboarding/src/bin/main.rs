@@ -233,6 +233,7 @@ impl OnboardingMainView {
                 ctx.notify();
             }
             AgentOnboardingEvent::SyncWithOsToggled { .. }
+            | AgentOnboardingEvent::OfferSetUpLaterSelected { .. }
             | AgentOnboardingEvent::UpgradeRequested
             | AgentOnboardingEvent::UpgradeCopyUrlRequested
             | AgentOnboardingEvent::UpgradePasteTokenFromClipboardRequested
