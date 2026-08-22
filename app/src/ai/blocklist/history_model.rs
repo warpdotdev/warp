@@ -1147,6 +1147,25 @@ impl BlocklistAIHistoryModel {
             .is_some_and(|c| c.is_exchange_hidden(exchange_id))
     }
 
+    /// Test-only, crate-visible wrapper around [`Self::update_conversation_for_new_request_input`]
+    /// so tests outside this module (e.g. `agent_sdk::driver_tests`) can attach an in-flight
+    /// request to a conversation without widening that method's production visibility.
+    #[cfg(test)]
+    pub(crate) fn update_conversation_for_new_request_input_for_test(
+        &mut self,
+        request_input: RequestInput,
+        stream_id: ResponseStreamId,
+        terminal_surface_id: EntityId,
+        ctx: &mut ModelContext<Self>,
+    ) -> Result<(), UpdateHistoryError> {
+        self.update_conversation_for_new_request_input(
+            request_input,
+            stream_id,
+            terminal_surface_id,
+            ctx,
+        )
+    }
+
     /// Add a new [`AIAgentExchange`] to the [`AIConversation`] with the given [`AIConversationId`].
     /// Emits an event with the new exchange.
     pub(super) fn update_conversation_for_new_request_input(

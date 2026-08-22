@@ -6,6 +6,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
+use chrono::Local;
 use cloud_object_models::CodeForge;
 use futures::channel::oneshot;
 use futures::executor::block_on;
@@ -26,11 +27,13 @@ use warp_graphql::mutations::create_managed_mcp_client_config::{
 };
 use warp_graphql::response_context::ResponseContext;
 use warp_managed_secrets::ManagedSecretValue;
+use warp_multi_agent_api::response_event;
 use warp_util::standardized_path::StandardizedPath;
+use warpui::r#async::Timer;
 use warpui::{App, SingletonEntity as _};
 
 use super::{
-    AgentDriver, AgentDriverError, CLIAgentSessionStatus, IdleTimeoutSender,
+    AgentDriver, AgentDriverError, AgentRunPrompt, CLIAgentSessionStatus, IdleTimeoutSender,
     LEGACY_OZ_PARENT_LISTENER_MANAGED_EXTERNALLY_ENV, LEGACY_OZ_PARENT_STATE_ROOT_ENV,
     MANAGED_MCP_RESOLVE_MAX_ATTEMPTS, OZ_MESSAGE_LISTENER_MANAGED_EXTERNALLY_ENV,
     OZ_MESSAGE_LISTENER_STATE_ROOT_ENV, PlatformErrorCode, SDKConversationOutputStatus,
@@ -38,6 +41,7 @@ use super::{
     idle_window_for_cli_session_status, idle_window_for_terminal_status,
     setup_failure_status_update, terminal_status_log_outcome,
 };
+use crate::ai::agent::conversation::ConversationStatus;
 use crate::ai::agent::task::TaskId;
 use crate::ai::agent::{
     AIAgentActionResult, AIAgentActionResultType, AIAgentInput, AIAgentOutput,
@@ -46,7 +50,14 @@ use crate::ai::agent::{
 };
 use crate::ai::agent_sdk::task_env_vars;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
+use crate::ai::blocklist::orchestration_events::{
+    OrchestrationEventService, PendingEvent, PendingEventDetail,
+};
+use crate::ai::blocklist::{
+    BlocklistAIHistoryModel, RequestInput, ResponseStream, ResponseStreamId,
+};
 use crate::ai::cloud_environments::{GithubRepo, SourceRepo};
+use crate::ai::llms::LLMId;
 use crate::ai::mcp::JSONTransportType;
 use crate::ai::mcp::builtin::{FACTORY_MCP_INSTALLATION_UUID, FACTORY_MCP_SERVER_NAME};
 use crate::ai::mcp::parsing::normalize_mcp_json;
@@ -1975,6 +1986,282 @@ fn warp_skill_dirs_env_relative_entries_resolve_against_working_dir() {
             skill_names.contains(&"env-skill-rel".to_string()),
             "'env-skill-rel' should load via a relative WARP_SKILL_DIRS entry resolved against the driver's working dir; got: {skill_names:?}"
         );
+    });
+}
+
+// ── QUALITY-1801: buffered child event vs. ambient-run teardown ─────────────
+
+/// Creates a conversation on `terminal_id` and attaches an in-flight mock response
+/// stream to it (mirroring an in-progress parent turn), registered through
+/// `ai_controller`. Returns the conversation and stream so the caller can drive the
+/// stream to completion.
+fn conversation_with_in_progress_mock_stream(
+    app: &mut App,
+    terminal_id: warpui::EntityId,
+    ai_controller: &warpui::ModelHandle<crate::ai::blocklist::BlocklistAIController>,
+) -> (
+    crate::ai::agent::conversation::AIConversationId,
+    warpui::ModelHandle<ResponseStream>,
+) {
+    let stream_id = ResponseStreamId::new_for_test();
+    let conversation_id = BlocklistAIHistoryModel::handle(app).update(app, |history, ctx| {
+        let conversation_id = history.start_new_conversation(terminal_id, false, false, false, ctx);
+        let task_id = history
+            .conversation(&conversation_id)
+            .unwrap()
+            .get_root_task_id()
+            .clone();
+        history
+            .update_conversation_for_new_request_input_for_test(
+                RequestInput {
+                    conversation_id,
+                    input_messages: HashMap::from([(task_id, vec![])]),
+                    working_directory: None,
+                    model_id: LLMId::from("test-model"),
+                    coding_model_id: LLMId::from("test-coding-model"),
+                    cli_agent_model_id: LLMId::from("test-cli-agent-model"),
+                    computer_use_model_id: LLMId::from("test-computer-use-model"),
+                    shared_session_response_initiator: None,
+                    request_start_ts: Local::now(),
+                    supported_tools_override: None,
+                },
+                stream_id.clone(),
+                terminal_id,
+                ctx,
+            )
+            .unwrap();
+        conversation_id
+    });
+    let stream = app.add_model(|_| ResponseStream::new_for_test(stream_id.clone()));
+    ai_controller.update(app, |controller, ctx| {
+        controller.register_mock_stream_for_test(stream_id, conversation_id, stream.clone(), ctx);
+    });
+    (conversation_id, stream)
+}
+
+/// Drives `stream` through a successful `Init` + `Finished(Done)` completion via the
+/// real controller subscription, matching a parent turn finishing normally.
+fn complete_mock_stream_successfully(app: &mut App, stream: &warpui::ModelHandle<ResponseStream>) {
+    stream.update(app, |stream, ctx| {
+        stream.emit_response_event_for_test(
+            warp_multi_agent_api::ResponseEvent {
+                r#type: Some(response_event::Type::Init(response_event::StreamInit {
+                    request_id: "test-request".to_string(),
+                    conversation_id: "test-server-conversation".to_string(),
+                    run_id: String::new(),
+                })),
+            },
+            ctx,
+        );
+        stream.emit_response_event_for_test(
+            warp_multi_agent_api::ResponseEvent {
+                r#type: Some(response_event::Type::Finished(
+                    response_event::StreamFinished {
+                        reason: Some(response_event::stream_finished::Reason::Done(
+                            response_event::stream_finished::Done {},
+                        )),
+                        conversation_usage_metadata: None,
+                        token_usage: vec![],
+                        should_refresh_model_config: false,
+                        #[allow(deprecated)]
+                        request_cost: None,
+                        request_charges: None,
+                    },
+                )),
+            },
+            ctx,
+        );
+    });
+}
+
+/// Enqueues a single buffered child message for `conversation_id`, as if a child
+/// agent's report had just arrived over the orchestration SSE stream.
+fn enqueue_buffered_child_message(
+    app: &mut App,
+    conversation_id: crate::ai::agent::conversation::AIConversationId,
+) {
+    OrchestrationEventService::handle(app).update(app, |service, ctx| {
+        service.enqueue_event_batch(
+            conversation_id,
+            vec![PendingEvent {
+                event_id: "child-message-1".to_string(),
+                source_agent_id: "child".to_string(),
+                attempt_count: 0,
+                detail: PendingEventDetail::Message {
+                    message_id: "message-1".to_string(),
+                    addresses: vec!["parent".to_string()],
+                    subject: "subject".to_string(),
+                    message_body: "child finished".to_string(),
+                },
+            }],
+            ctx,
+        );
+    });
+}
+
+/// Builds a driver wired up (via the real `execute_run`) to observe the given
+/// terminal's history but that never submits any query itself, so the caller can
+/// drive the conversation manually. `idle_on_complete` controls whether the driver
+/// commits to an immediate exit on `Success` (`None`) or defers it (`Some`).
+fn driver_wired_for_terminal(
+    app: &mut App,
+    terminal_view: warpui::ViewHandle<crate::terminal::TerminalView>,
+    idle_on_complete: Option<Duration>,
+) -> warpui::ModelHandle<AgentDriver> {
+    let temp = TempDir::new().unwrap();
+    let driver_handle = app.add_model(|ctx| {
+        let terminal_driver =
+            super::terminal::TerminalDriver::create_from_existing_view(terminal_view, ctx);
+        let mut driver = AgentDriver::new_for_test(temp.path().to_path_buf(), terminal_driver, ctx);
+        // No initial query is submitted; the conversation is driven manually.
+        driver.skip_initial_turn = true;
+        driver.idle_on_complete = idle_on_complete;
+        driver
+    });
+    // Installs the real history-model subscription under test (including
+    // `mark_conversation_exiting`), without submitting a query.
+    let _run_exit_rx = driver_handle.update(app, |driver, ctx| {
+        driver.execute_run(AgentRunPrompt::Local(String::new()), ctx)
+    });
+    driver_handle
+}
+
+/// QUALITY-1801 regression: a child agent's message, queued in
+/// `OrchestrationEventService` while the parent's own turn is still streaming, must
+/// not start a new MAA request once the parent's ambient run has committed to an
+/// immediate terminal exit (no `--idle-on-complete` window). This drives the real
+/// `AgentDriver` history-model subscription installed by `execute_run` (not just the
+/// `OrchestrationEventService` helper directly), so a regression that drops or
+/// mis-scopes that wiring is caught here.
+#[test]
+fn ambient_driver_immediate_exit_blocks_buffered_child_event_from_restarting_maa() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal_view = add_window_with_terminal(&mut app, None);
+        let (terminal_id, ai_controller) = terminal_view.update(&mut app, |view, _| {
+            (view.id(), view.ai_controller().clone())
+        });
+
+        // No idle window: `Success` commits the run to an immediate exit.
+        let _driver = driver_wired_for_terminal(&mut app, terminal_view, None);
+
+        let (conversation_id, stream) =
+            conversation_with_in_progress_mock_stream(&mut app, terminal_id, &ai_controller);
+
+        // A child agent's message arrives while the parent's own turn is still
+        // streaming: it is queued, not injected (the pre-existing active-stream guard).
+        enqueue_buffered_child_message(&mut app, conversation_id);
+        ai_controller.read(&app, |controller, ctx| {
+            assert!(
+                controller.has_active_stream_for_conversation(conversation_id, ctx),
+                "the parent's own stream must still be active while its event is buffered"
+            );
+        });
+
+        // The parent's own turn finishes successfully.
+        complete_mock_stream_successfully(&mut app, &stream);
+        BlocklistAIHistoryModel::handle(&app).read(&app, |history, _| {
+            assert_eq!(
+                history.conversation(&conversation_id).map(|c| c.status()),
+                Some(&ConversationStatus::Success)
+            );
+        });
+        // With no idle window, the driver committed to an immediate exit the instant
+        // it observed `Success` above, marking the conversation exiting before the
+        // controller's post-stream-cleanup re-check below runs.
+        OrchestrationEventService::handle(&app).read(&app, |service, _| {
+            assert!(
+                service.is_conversation_exiting(conversation_id),
+                "the driver should have marked the conversation exiting on immediate Success"
+            );
+        });
+
+        // The stream's natural completion propagates `AfterStreamFinished`, which is
+        // where the controller re-checks pending orchestration events. Since
+        // `conversation_ready_for_pending_events` already sees the conversation as
+        // exiting, this returns synchronously without going through the async
+        // dormant-Claude-wake eligibility check below.
+        stream.update(&mut app, |stream, ctx| {
+            stream.emit_after_stream_finished_for_test(ctx);
+        });
+
+        // The buffered child event must not have started a new request: the run
+        // already committed to exiting when the driver observed `Success` above.
+        BlocklistAIHistoryModel::handle(&app).read(&app, |history, _| {
+            assert_eq!(
+                history.conversation(&conversation_id).map(|c| c.status()),
+                Some(&ConversationStatus::Success),
+                "conversation must stay terminal, not flip back to InProgress"
+            );
+        });
+        ai_controller.read(&app, |controller, ctx| {
+            assert!(
+                !controller.has_active_stream_for_conversation(conversation_id, ctx),
+                "no follow-up request should have started"
+            );
+        });
+        OrchestrationEventService::handle(&app).read(&app, |service, _| {
+            assert!(
+                !service.has_pending_events(conversation_id),
+                "the buffered event should have been dropped, not left queued"
+            );
+        });
+    });
+}
+
+/// Counterpart to the immediate-exit test above: when the driver has an
+/// `--idle-on-complete` window (so it does *not* commit to an immediate exit on
+/// `Success`), the buffered child event must still be injected as a normal
+/// follow-up once the parent's stream completes — this is the `wait_for_events` /
+/// follow-up-turn path the fix must not break.
+#[test]
+fn ambient_driver_with_idle_window_still_injects_buffered_child_event() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal_view = add_window_with_terminal(&mut app, None);
+        let (terminal_id, ai_controller) = terminal_view.update(&mut app, |view, _| {
+            (view.id(), view.ai_controller().clone())
+        });
+
+        // A generous idle window: `Success` must not commit the run to an immediate
+        // exit, since it is deliberately staying alive for a follow-up.
+        let _driver =
+            driver_wired_for_terminal(&mut app, terminal_view, Some(Duration::from_secs(300)));
+
+        let (conversation_id, stream) =
+            conversation_with_in_progress_mock_stream(&mut app, terminal_id, &ai_controller);
+
+        enqueue_buffered_child_message(&mut app, conversation_id);
+        complete_mock_stream_successfully(&mut app, &stream);
+
+        OrchestrationEventService::handle(&app).read(&app, |service, _| {
+            assert!(
+                !service.is_conversation_exiting(conversation_id),
+                "an idle window means the driver must not have committed to exiting"
+            );
+        });
+
+        stream.update(&mut app, |stream, ctx| {
+            stream.emit_after_stream_finished_for_test(ctx);
+        });
+        // The re-check first goes through an async dormant-Claude-wake eligibility
+        // check (`maybe_prepare_local_claude_wake`) that resolves `Ok(None)` for a
+        // non-child conversation like this one and falls back to direct injection;
+        // yield so that spawned check resolves before asserting.
+        Timer::after(Duration::from_millis(20)).await;
+
+        // The buffered event should have been injected as a real follow-up: the
+        // conversation is back `InProgress` and the queue has been drained.
+        BlocklistAIHistoryModel::handle(&app).read(&app, |history, _| {
+            assert_eq!(
+                history.conversation(&conversation_id).map(|c| c.status()),
+                Some(&ConversationStatus::InProgress),
+                "the buffered event should have started a follow-up request"
+            );
+        });
+        OrchestrationEventService::handle(&app).read(&app, |service, _| {
+            assert!(!service.has_pending_events(conversation_id));
+        });
     });
 }
 
