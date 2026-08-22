@@ -17,10 +17,7 @@ Param(
     [String]$DestinationDir,
 
     [Parameter(Mandatory = $false)]
-    [String]$Channel = '',
-
-    [Parameter(Mandatory = $false)]
-    [String]$CargoProfile = ''
+    [String]$Channel = ''
 )
 
 $ErrorActionPreference = 'Stop'
