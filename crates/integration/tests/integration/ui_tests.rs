@@ -232,6 +232,7 @@ integration_tests! {
     test_detach_tab_to_new_window_with_drag,
     test_detach_tab_group_to_new_window_with_drag,
     test_attach_tab_group_to_other_window,
+    test_attach_tab_group_does_not_split_target_group,
     test_whole_window_tab_group_attaches_to_other_window,
     test_tab_group_drag_back_to_source_cancels,
     test_detach_tab_group_to_new_window_in_vertical_tabs,

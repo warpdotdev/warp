@@ -29314,6 +29314,15 @@ impl Workspace {
         self.tabs.iter().filter(|t| t.group_id.is_some()).count()
     }
 
+    /// Group id of the tab at `index`, or `None` when it is ungrouped. Used by
+    /// integration tests to assert a group's members occupy one contiguous run.
+    ///
+    /// Gated on `integration_tests` so it does not exist in shipped builds.
+    #[cfg(feature = "integration_tests")]
+    pub fn tab_group_id_at(&self, index: usize) -> Option<TabGroupId> {
+        self.tabs.get(index).and_then(|tab| tab.group_id)
+    }
+
     /// Read access to this window's tab groups, for integration testing.
     ///
     /// Gated on `integration_tests` so it does not exist in shipped builds.

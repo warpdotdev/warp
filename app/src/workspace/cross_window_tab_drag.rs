@@ -88,9 +88,9 @@ use warpui::{AppContext, Entity, EntityId, ModelContext, SingletonEntity, Window
 ///
 /// View transfers between windows are handled by `transfer_view_tree_to_window`.
 use crate::tab::tab_position_id;
-use crate::workspace::WorkspaceRegistry;
 use crate::workspace::tab_group::TabGroupId;
 use crate::workspace::view::{TAB_BAR_POSITION_ID, TransferredTab, tab_bar_rects_for_window};
+use crate::workspace::{Workspace, WorkspaceRegistry};
 
 /// Identifies a window and tab-bar index where a dragged tab can be attached.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -2312,6 +2312,7 @@ fn cross_window_attach_target(
                 window_id,
                 caller_window_id,
                 cursor_position_on_screen,
+                dragged_group_pinned,
                 ctx,
             );
 
@@ -2360,6 +2361,7 @@ fn cross_window_attach_target(
                 source_window_id,
                 caller_window_id,
                 cursor_position_on_screen,
+                dragged_group_pinned,
                 ctx,
             );
             update_best_target(
@@ -2370,7 +2372,7 @@ fn cross_window_attach_target(
         }
     }
 
-    for (window_id, workspace) in WorkspaceRegistry::as_ref(ctx).all_workspaces(ctx) {
+    for (window_id, _workspace) in WorkspaceRegistry::as_ref(ctx).all_workspaces(ctx) {
         if window_id == preview_window_id || window_id == source_window_id {
             continue;
         }
@@ -2393,20 +2395,13 @@ fn cross_window_attach_target(
                 continue;
             }
 
-            let insertion_index =
-                workspace.read(ctx, |workspace, ctx| match dragged_group_pinned {
-                    Some(group_pinned) => workspace.group_insertion_index_for_cursor(
-                        window_id,
-                        cursor_position_on_screen,
-                        group_pinned,
-                        ctx,
-                    ),
-                    None => workspace.tab_insertion_index_for_cursor(
-                        window_id,
-                        cursor_position_on_screen,
-                        ctx,
-                    ),
-                });
+            let insertion_index = compute_insertion_index_for_window(
+                window_id,
+                caller_window_id,
+                cursor_position_on_screen,
+                dragged_group_pinned,
+                ctx,
+            );
             update_best_target(window_id, insertion_index, tab_bar_position_on_screen);
         }
     }
@@ -2422,32 +2417,45 @@ fn expanded_rect(rect: RectF, margin: f32) -> RectF {
     )
 }
 
+/// Resolves the drop index in `target_window_id` for the cursor.
+///
+/// `dragged_group_pinned` carries the pinned state of the dragged GROUP when a
+/// whole group is in flight, and is `None` for a single tab. A group resolves
+/// through `group_insertion_index_for_cursor` (which applies the pinned-region
+/// and past-group clamps) so the ghost slot drawn during the drag matches where
+/// the commit re-resolves the index; a single tab uses the plain resolver.
+/// Taking the group state as a parameter is deliberate: every targeting path
+/// funnels through here, so a new call site cannot silently get the single-tab
+/// resolver for a group drag and draw a ghost that disagrees with the landing.
 fn compute_insertion_index_for_window(
     target_window_id: WindowId,
     caller_window_id: WindowId,
     cursor_position_on_screen: Vector2F,
+    dragged_group_pinned: Option<bool>,
     ctx: &AppContext,
 ) -> usize {
+    let resolve = |workspace: &Workspace, ctx: &AppContext| match dragged_group_pinned {
+        Some(group_pinned) => workspace.group_insertion_index_for_cursor(
+            target_window_id,
+            cursor_position_on_screen,
+            group_pinned,
+            ctx,
+        ),
+        None => workspace.tab_insertion_index_for_cursor(
+            target_window_id,
+            cursor_position_on_screen,
+            ctx,
+        ),
+    };
+
     if target_window_id == caller_window_id
         && let Some(ws) = WorkspaceRegistry::as_ref(ctx).get(caller_window_id, ctx)
     {
-        return ws.read(ctx, |workspace, ctx| {
-            workspace.tab_insertion_index_for_cursor(
-                target_window_id,
-                cursor_position_on_screen,
-                ctx,
-            )
-        });
+        return ws.read(ctx, resolve);
     }
 
     match WorkspaceRegistry::as_ref(ctx).get(target_window_id, ctx) {
-        Some(ws) => ws.read(ctx, |workspace, ctx| {
-            workspace.tab_insertion_index_for_cursor(
-                target_window_id,
-                cursor_position_on_screen,
-                ctx,
-            )
-        }),
+        Some(ws) => ws.read(ctx, resolve),
         _ => 0,
     }
 }
