@@ -8403,12 +8403,9 @@ impl TerminalView {
     /// Publishes this pane's remote-block state to [`FocusedTerminalInfo`], which the app-global
     /// AI switch reads (see `AISettings::is_ai_disabled_due_to_remote_session_org_policy`).
     ///
-    /// Publishes whatever the pane contains rather than only while the org forbids AI in remote
-    /// sessions. Gating the publish on that permission meant a pane that filled with remote
-    /// blocks under a permissive policy never reported them, so an admin revoking the permission
-    /// afterwards judged the pane against state that had never been written and left AI enabled.
-    /// What is published here is a fact about the pane; the permission is applied where the
-    /// decision is made.
+    /// What is published is a fact about the pane, independent of the remote-session AI
+    /// permission; that permission is applied where the decision is made, so it can be revoked
+    /// without anything here having to be republished.
     fn update_focused_terminal_info(&mut self, ctx: &mut ViewContext<Self>) {
         if !ctx.is_self_or_child_focused() {
             return;
@@ -11302,11 +11299,7 @@ impl TerminalView {
         let remote_session_regex_list =
             UserWorkspaces::as_ref(app).remote_session_regexes_union_across_teams();
 
-        // Almost nobody has org patterns at all, so there is nothing further to check. This
-        // stands in for an earlier short-circuit on the remote-session AI permission: whether a
-        // block is remote is a question of fact, and answering it from a permission that can be
-        // revoked later left blocks -- including the `is_local` flag persisted with them --
-        // classified against a policy no longer in force.
+        // Almost nobody has org patterns at all, so there is nothing further to check.
         if remote_session_regex_list.is_empty() {
             return false;
         }

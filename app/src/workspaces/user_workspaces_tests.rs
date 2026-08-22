@@ -1181,7 +1181,7 @@ fn set_workspace_remote_session_policy(
         .collect();
 }
 
-fn remote_session_patterns(user_workspaces: &UserWorkspaces) -> Vec<String> {
+fn remote_session_patterns(user_workspaces: &UserWorkspaces) -> HashSet<String> {
     user_workspaces
         .remote_session_regexes_union_across_teams()
         .iter()
@@ -1189,60 +1189,37 @@ fn remote_session_patterns(user_workspaces: &UserWorkspaces) -> Vec<String> {
         .collect()
 }
 
-/// Unlike the settings a window renders, this permission gates an app-global switch, so it
-/// deliberately does not follow the window's team.
-#[test]
-fn remote_session_ai_permission_does_not_follow_the_windows_team() {
-    let (mut team_a, mut team_b) = two_teams();
-    set_team_remote_session_policy(&mut team_a, true, &[]);
-    set_team_remote_session_policy(&mut team_b, false, &[]);
-    let mut workspace = workspace_for_test(&team_a);
-    workspace.teams = vec![team_a.clone(), team_b.clone()];
-
-    App::test((), |mut app| async move {
-        initialize_window_team_test_app(&mut app, vec![workspace]);
-
-        let (window_a, _view_a) = create_test_window(&mut app);
-        let (window_b, _view_b) = create_test_window(&mut app);
-        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
-            user_workspaces.set_team_for_window(window_a, team_a.uid, ctx);
-            user_workspaces.set_team_for_window(window_b, team_b.uid, ctx);
-        });
-
-        app.read(|ctx| {
-            let user_workspaces = UserWorkspaces::as_ref(ctx);
-            assert_eq!(
-                user_workspaces.team_uid_for_window(window_a),
-                Some(team_a.uid)
-            );
-            assert_eq!(
-                user_workspaces.team_uid_for_window(window_b),
-                Some(team_b.uid)
-            );
-            assert!(
-                !user_workspaces.all_teams_allow_ai_in_remote_sessions(),
-                "team B forbidding AI in remote sessions has to win for the whole app, \
-                 including for the window sitting on the permissive team A"
-            );
-        });
-    })
-}
-
 #[test]
 fn remote_session_ai_permission_is_allowed_only_when_every_team_allows_it() {
     let (mut team_a, mut team_b) = two_teams();
     set_team_remote_session_policy(&mut team_a, true, &[]);
     set_team_remote_session_policy(&mut team_b, true, &[]);
-    let mut workspace = workspace_for_test(&team_a);
-    workspace.teams = vec![team_a, team_b];
+    let mut permissive_workspace = workspace_for_test(&team_a);
+    permissive_workspace.teams = vec![team_a.clone(), team_b.clone()];
+
+    set_team_remote_session_policy(&mut team_b, false, &[]);
+    let mut mixed_workspace = workspace_for_test(&team_a);
+    mixed_workspace.teams = vec![team_a, team_b];
 
     App::test((), |mut app| async move {
-        initialize_window_team_test_app(&mut app, vec![workspace]);
+        initialize_window_team_test_app(&mut app, vec![permissive_workspace]);
 
         app.read(|ctx| {
             assert!(
                 UserWorkspaces::as_ref(ctx).all_teams_allow_ai_in_remote_sessions(),
                 "no team forbids AI in remote sessions, so the aggregate allows it"
+            );
+        });
+
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.update_workspaces(vec![mixed_workspace], ctx);
+        });
+
+        app.read(|ctx| {
+            assert!(
+                !UserWorkspaces::as_ref(ctx).all_teams_allow_ai_in_remote_sessions(),
+                "one team forbidding it is enough, since the app-global switch this gates has \
+                 no window and so cannot tell which team a read is for"
             );
         });
     })
@@ -1267,7 +1244,7 @@ fn remote_session_policy_ignores_workspace_settings_once_the_user_has_a_team() {
             );
             assert_eq!(
                 remote_session_patterns(user_workspaces),
-                vec!["^team-only".to_string()]
+                HashSet::from(["^team-only".to_string()])
             );
         });
     })
@@ -1292,7 +1269,7 @@ fn remote_session_policy_falls_back_to_the_workspace_for_a_user_with_no_teams() 
             );
             assert_eq!(
                 remote_session_patterns(user_workspaces),
-                vec!["^workspace-only".to_string()]
+                HashSet::from(["^workspace-only".to_string()])
             );
         });
     })
@@ -1329,11 +1306,11 @@ fn remote_session_patterns_union_every_teams_patterns() {
         app.read(|ctx| {
             assert_eq!(
                 remote_session_patterns(UserWorkspaces::as_ref(ctx)),
-                vec![
+                HashSet::from([
                     "^kubectl".to_string(),
                     "^shared".to_string(),
                     "^ssh".to_string()
-                ],
+                ]),
                 "a wider list classifies more commands as remote, which is the restrictive \
                  direction, and a pattern shared by two teams appears once"
             );

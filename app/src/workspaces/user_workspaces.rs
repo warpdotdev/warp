@@ -109,6 +109,11 @@ pub enum UserWorkspacesEvent {
 pub struct UserWorkspaces {
     current_workspace_uid: Tracked<Option<WorkspaceUid>>,
     workspaces: Tracked<Vec<Workspace>>,
+    /// The compiled union of every team's remote-session command patterns, kept in step with
+    /// `workspaces`. Team settings carry these patterns as strings while the classification they
+    /// drive runs on every executed command, so compiling them on read would recompile the whole
+    /// list per command.
+    remote_session_regexes: Vec<Regex>,
     window_team_uids: HashMap<WindowId, Option<ServerId>>,
     joinable_teams: Vec<DiscoverableTeam>,
     /// The user-level add-on credits purchase policy from the latest
@@ -259,6 +264,7 @@ impl UserWorkspaces {
         // for all tests that use [`UserWorkspaces`] (a lot of them do).
         Self {
             current_workspace_uid: cached_workspaces.first().map(|w| w.uid).into(),
+            remote_session_regexes: compile_remote_session_regexes(&cached_workspaces),
             workspaces: cached_workspaces.into(),
             window_team_uids: Default::default(),
             joinable_teams: Default::default(),
@@ -309,6 +315,7 @@ impl UserWorkspaces {
 
         Self {
             current_workspace_uid: current_workspace_uid.into(),
+            remote_session_regexes: compile_remote_session_regexes(&cached_workspaces),
             workspaces: cached_workspaces.into(),
             window_team_uids: Default::default(),
             joinable_teams: Default::default(),
@@ -1166,6 +1173,7 @@ impl UserWorkspaces {
         let sunsetted_to_build_changed = self.has_sunsetted_to_build_data_changed(&workspaces);
 
         *self.workspaces = workspaces;
+        self.remote_session_regexes = compile_remote_session_regexes(&self.workspaces);
         let reassigned_windows = self.reconcile_window_team_assignments();
         self.notify_and_emit_teams_changed(ctx);
         Self::emit_window_team_changed(reassigned_windows, ctx);
@@ -1909,11 +1917,9 @@ impl UserWorkspaces {
     /// Whether *every* team the user belongs to allows AI in remote sessions, so a single team
     /// forbidding it wins.
     ///
-    /// Deliberately an all-teams aggregate rather than a team-scoped read. The only thing this
-    /// policy gates is [`crate::settings::AISettings::is_any_ai_enabled`], which is app-global
-    /// and has no window to resolve a team from, so there is no scope to take. Aggregating in
-    /// the restrictive direction is the right default for a permission covering an environment
-    /// the user may not control.
+    /// An all-teams aggregate rather than a team-scoped read because no consumer that reads this
+    /// permission has a window to resolve a team from. Aggregating in the restrictive direction
+    /// is the right default for a permission covering an environment the user may not control.
     ///
     /// Falls back to the current workspace's value only when the team iterator is empty: with
     /// any team present, that value is one arbitrarily-chosen team's effective settings rather
@@ -1942,20 +1948,16 @@ impl UserWorkspaces {
     }
 
     /// The union of the remote-session command patterns configured by every team the user
-    /// belongs to.
+    /// belongs to. Empty for every team without an explicit org policy.
     ///
     /// Union rather than intersection, for the same reason
     /// [`Self::all_teams_allow_ai_in_remote_sessions`] is an all-teams aggregate: a wider list
-    /// classifies more commands as remote, which is the restrictive direction, and the consumer
-    /// is the same windowless AI switch.
+    /// classifies more commands as remote, which is the restrictive direction.
     ///
-    /// Team settings carry these patterns as strings rather than compiled regexes, so they are
-    /// compiled per read. Callers check the result for emptiness before doing any per-command
-    /// work, and it is empty for every team without an explicit org policy.
-    pub fn remote_session_regexes_union_across_teams(&self) -> Vec<Regex> {
-        let mut teams = self.all_teams().peekable();
-
-        if teams.peek().is_none() {
+    /// Falls back to the current workspace's patterns only when the team iterator is empty, on
+    /// the same grounds as [`Self::all_teams_allow_ai_in_remote_sessions`].
+    pub fn remote_session_regexes_union_across_teams(&self) -> &[Regex] {
+        if self.all_teams().next().is_none() {
             return self
                 .current_workspace()
                 .map(|workspace| {
@@ -1963,38 +1965,12 @@ impl UserWorkspaces {
                         .settings
                         .ai_permissions_settings
                         .remote_session_regex_list
-                        .clone()
+                        .as_slice()
                 })
                 .unwrap_or_default();
         }
 
-        let mut patterns: Vec<&str> = teams
-            .flat_map(|team| {
-                team.settings
-                    .ai_permissions
-                    .remote_session_regex_list
-                    .values
-                    .iter()
-                    .map(String::as_str)
-            })
-            .collect();
-        patterns.sort_unstable();
-        patterns.dedup();
-
-        patterns
-            .into_iter()
-            .filter_map(|pattern| match Regex::new(pattern) {
-                Ok(regex) => Some(regex),
-                Err(_) => {
-                    report_error!(
-                        "Invalid regex pattern for remote session detection",
-                        extra: { "pattern" => %pattern },
-                        warp_errors::ReportErrorLogMode::OncePerRun
-                    );
-                    None
-                }
-            })
-            .collect()
+        &self.remote_session_regexes
     }
 
     pub fn is_anyone_with_link_sharing_enabled(&self) -> bool {
@@ -2066,9 +2042,7 @@ impl UserWorkspaces {
 
     pub fn teams_allow_codebase_context(&self) -> AdminEnablementSetting {
         let mut team_settings = self
-            .workspaces
-            .iter()
-            .flat_map(|workspace| workspace.teams.iter())
+            .all_teams()
             .map(|team| &team.settings.codebase_context.value)
             .peekable();
 
@@ -2097,9 +2071,7 @@ impl UserWorkspaces {
     }
 
     pub fn team_disabling_codebase_context(&self) -> Option<&Team> {
-        self.workspaces
-            .iter()
-            .flat_map(|workspace| workspace.teams.iter())
+        self.all_teams()
             .find(|team| team.settings.codebase_context.value == AdminEnablementSetting::Disable)
     }
 
@@ -2242,6 +2214,42 @@ impl UserWorkspaces {
             ctx,
         );
     }
+}
+
+/// Compiles the deduplicated union of every team's remote-session command patterns.
+///
+/// An unparseable pattern is dropped rather than failing the whole list, so one bad entry in an
+/// org's configuration cannot suppress the rest.
+fn compile_remote_session_regexes(workspaces: &[Workspace]) -> Vec<Regex> {
+    let mut patterns: Vec<&str> = workspaces
+        .iter()
+        .flat_map(|workspace| workspace.teams.iter())
+        .flat_map(|team| {
+            team.settings
+                .ai_permissions
+                .remote_session_regex_list
+                .values
+                .iter()
+                .map(String::as_str)
+        })
+        .collect();
+    patterns.sort_unstable();
+    patterns.dedup();
+
+    patterns
+        .into_iter()
+        .filter_map(|pattern| match Regex::new(pattern) {
+            Ok(regex) => Some(regex),
+            Err(_) => {
+                report_error!(
+                    "Invalid regex pattern for remote session detection",
+                    extra: { "pattern" => %pattern },
+                    warp_errors::ReportErrorLogMode::OncePerRun
+                );
+                None
+            }
+        })
+        .collect()
 }
 
 impl Entity for UserWorkspaces {

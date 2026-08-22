@@ -4075,6 +4075,54 @@ fn focused_terminal_publishes_remote_blocks_while_remote_session_ai_is_still_per
     })
 }
 
+/// Whether a block is remote is a question of fact, so an org's command patterns decide it
+/// whether or not that org currently forbids AI in remote sessions. The `is_local` flag
+/// persisted with each block is derived from this and is never recomputed once written.
+#[test]
+fn org_command_patterns_classify_a_block_remote_even_when_remote_session_ai_is_permitted() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.setup_test_workspace(ctx);
+            user_workspaces.update_current_workspace(
+                |workspace| {
+                    let team = workspace
+                        .teams
+                        .first_mut()
+                        .expect("the fixture workspace has a team");
+                    team.settings
+                        .ai_permissions
+                        .allow_ai_in_remote_sessions
+                        .value = true;
+                    team.settings
+                        .ai_permissions
+                        .remote_session_regex_list
+                        .values = vec!["^kubectl".to_string()];
+                },
+                ctx,
+            );
+        });
+
+        terminal.read(&app, |view, ctx| {
+            assert!(
+                UserWorkspaces::as_ref(ctx).all_teams_allow_ai_in_remote_sessions(),
+                "the org permits AI in remote sessions and only configures patterns"
+            );
+            assert!(
+                view.is_block_considered_remote(None, Some("kubectl get pods"), ctx),
+                "a command the org's patterns describe as remote is remote regardless of \
+                 whether AI is currently permitted in remote sessions"
+            );
+            assert!(
+                !view.is_block_considered_remote(None, Some("ls -la"), ctx),
+                "a command outside the org's patterns stays local"
+            );
+        });
+    })
+}
+
 fn assert_block_has_find_match(find_model: &TerminalFindModel, block_index: BlockIndex) {
     assert!(
         find_model
