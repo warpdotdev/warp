@@ -29,6 +29,7 @@ use crate::content::text::{
 use crate::render::model::test_utils::{TEST_STYLES, laid_out_paragraph, mock_paragraph};
 use crate::render::model::{
     ColumnUnit, Height, LayoutSummary, LineCount, RenderedSelection, SoftWrapPoint, TEXT_SPACING,
+    WidthSetting,
 };
 
 #[test]
@@ -72,6 +73,24 @@ fn test_height() {
             item_count: 4,
         }
     );
+}
+
+#[test]
+fn test_set_width_setting() {
+    let mut render_state =
+        RenderState::new_for_test(TEST_STYLES.clone(), 40.0.into_pixels(), 60.0.into_pixels());
+
+    // The default width setting is `FitViewport`; setting the same value is a no-op.
+    assert!(!render_state.set_width_setting(WidthSetting::FitViewport));
+
+    // Changing to `InfiniteWidth` reports a change.
+    assert!(render_state.set_width_setting(WidthSetting::InfiniteWidth));
+
+    // Setting the same value again does not report a change.
+    assert!(!render_state.set_width_setting(WidthSetting::InfiniteWidth));
+
+    // Switching back reports a change again.
+    assert!(render_state.set_width_setting(WidthSetting::FitViewport));
 }
 
 #[test]

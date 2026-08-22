@@ -77,7 +77,7 @@ use crate::code_review::comments::{CommentId, CommentOrigin};
 use crate::editor::InteractionState;
 use crate::features::FeatureFlag;
 use crate::notebooks::editor::rich_text_styles;
-use crate::settings::{AppEditorSettings, CodeEditorLineNumberMode, FontSettings};
+use crate::settings::{AppEditorSettings, CodeEditorLineNumberMode, CodeSettings, FontSettings};
 use crate::view_components::find::FindDirection;
 
 mod actions;
@@ -311,6 +311,10 @@ impl CodeEditorView {
         let app_editor_settings_handle = AppEditorSettings::handle(ctx);
         ctx.subscribe_to_model(&app_editor_settings_handle, |_, _, _, ctx| {
             ctx.notify();
+        });
+        let code_settings_handle = CodeSettings::handle(ctx);
+        ctx.subscribe_to_model(&code_settings_handle, |me, _, _, ctx| {
+            me.handle_word_wrap_setting_change(ctx);
         });
 
         let model = ctx.add_model(|ctx| {
@@ -612,6 +616,7 @@ impl CodeEditorView {
 
         EditorWrapper::new(
             InnerEditor::Lens(lens),
+            self.model.as_ref(ctx).buffer().clone(),
             self.display_options.vertical_expansion_behavior,
             line_number_config,
             diff_status,
@@ -1383,6 +1388,15 @@ impl CodeEditorView {
         );
         self.model.update(ctx, move |model, ctx| {
             model.handle_appearance_or_font_change(new_styles, ctx);
+        });
+    }
+
+    /// Handles [`CodeSettings`] changes by propagating the current word-wrap value to the
+    /// render model. The model is responsible for no-op'ing when the value hasn't changed.
+    fn handle_word_wrap_setting_change(&mut self, ctx: &mut ViewContext<Self>) {
+        let word_wrap = *CodeSettings::as_ref(ctx).word_wrap;
+        self.model.update(ctx, move |model, ctx| {
+            model.handle_word_wrap_setting_change(word_wrap, ctx);
         });
     }
 
@@ -2207,6 +2221,7 @@ impl View for CodeEditorView {
 
         let focused = self.is_focused(app);
         let blink_cursors = AppEditorSettings::as_ref(app).cursor_blink_enabled();
+        let word_wrap_enabled = *CodeSettings::as_ref(app).word_wrap;
 
         let display_options = DisplayOptions {
             debug_bounds: false,
@@ -2250,6 +2265,7 @@ impl View for CodeEditorView {
 
         let mut code_editor = EditorWrapper::new(
             InnerEditor::FullEditor(editor_rich_content),
+            self.model.as_ref(app).buffer().clone(),
             self.display_options.vertical_expansion_behavior,
             line_number_config,
             diff_status,
@@ -2333,13 +2349,21 @@ impl View for CodeEditorView {
             child: NewScrollableElement::finish_scrollable(code_editor),
         };
 
+        // When word wrap is on, content never overflows horizontally, so hide the horizontal
+        // scrollbar regardless of the configured appearance.
+        let horizontal_scrollbar_appearance = if word_wrap_enabled {
+            ScrollableAppearance::new(warpui::elements::ScrollbarWidth::None, false)
+        } else {
+            self.display_options.horizontal_scrollbar_appearance
+        };
+
         let scrollable = NewScrollable::horizontal_and_vertical(
             config,
             theme.disabled_text_color(theme.background()).into(),
             theme.main_text_color(theme.background()).into(),
             Fill::None,
         )
-        .with_horizontal_scrollbar(self.display_options.horizontal_scrollbar_appearance)
+        .with_horizontal_scrollbar(horizontal_scrollbar_appearance)
         .with_vertical_scrollbar(self.display_options.vertical_scrollbar_appearance)
         .with_propagate_mousewheel_if_not_handled(true)
         .finish();

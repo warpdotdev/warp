@@ -73,6 +73,7 @@ impl EditorAndCodeReviewPageView {
             Box::new(ShowHiddenFilesToggleWidget::default()),
             Box::new(FormatOnSaveToggleWidget::default()),
             Box::new(AutoSaveToggleWidget::default()),
+            Box::new(WordWrapToggleWidget::default()),
         ]);
 
         PageType::new_uncategorized(widgets, Some(PageTitle::new(PAGE_TITLE)))
@@ -105,6 +106,7 @@ pub enum EditorAndCodeReviewPageAction {
     ToggleShowHiddenFiles,
     ToggleFormatOnSave,
     ToggleAutoSave,
+    ToggleWordWrap,
 }
 
 impl TypedActionView for EditorAndCodeReviewPageView {
@@ -155,6 +157,12 @@ impl TypedActionView for EditorAndCodeReviewPageView {
             EditorAndCodeReviewPageAction::ToggleAutoSave => {
                 CodeSettings::handle(ctx).update(ctx, |settings, ctx| {
                     report_if_error!(settings.auto_save.toggle_and_save_value(ctx));
+                });
+                ctx.notify();
+            }
+            EditorAndCodeReviewPageAction::ToggleWordWrap => {
+                CodeSettings::handle(ctx).update(ctx, |settings, ctx| {
+                    report_if_error!(settings.word_wrap.toggle_and_save_value(ctx));
                 });
                 ctx.notify();
             }
@@ -270,6 +278,14 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
                 )),
                 context,
                 flags::SHOW_HIDDEN_FILES,
+            ),
+            ToggleSettingActionPair::new(
+                "word wrap in the code editor and diff view",
+                builder(SettingsAction::EditorAndCodeReview(
+                    EditorAndCodeReviewPageAction::ToggleWordWrap,
+                )),
+                context,
+                flags::WORD_WRAP_FLAG,
             ),
         ],
         app,
@@ -632,6 +648,49 @@ impl SettingsWidget for AutoSaveToggleWidget {
                 .finish(),
             Some(
                 "Automatically saves changes in the Warp text editor as you type and when the editor loses focus."
+                    .into(),
+            ),
+        )
+    }
+}
+
+#[derive(Default)]
+struct WordWrapToggleWidget {
+    switch_state: SwitchStateHandle,
+}
+
+impl SettingsWidget for WordWrapToggleWidget {
+    type View = EditorAndCodeReviewPageView;
+
+    fn search_terms(&self) -> &str {
+        "word wrap soft wrap long lines code editor diff review markdown source view scroll"
+    }
+
+    fn render(
+        &self,
+        _view: &Self::View,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
+        let code_settings = CodeSettings::as_ref(app);
+
+        render_body_item::<EditorAndCodeReviewPageAction>(
+            "Word wrap".into(),
+            None,
+            LocalOnlyIconState::Hidden,
+            ToggleState::Enabled,
+            appearance,
+            appearance
+                .ui_builder()
+                .switch(self.switch_state.clone())
+                .check(*code_settings.word_wrap)
+                .build()
+                .on_click(move |ctx, _, _| {
+                    ctx.dispatch_typed_action(EditorAndCodeReviewPageAction::ToggleWordWrap);
+                })
+                .finish(),
+            Some(
+                "Wrap long lines in the code editor and diff view instead of scrolling horizontally."
                     .into(),
             ),
         )
