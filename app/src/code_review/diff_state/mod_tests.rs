@@ -3,7 +3,7 @@ use super::{DiffMode, DiffState, DiffStateModel};
 #[test]
 fn new_for_test_creates_local_variant() {
     warpui::App::test((), |mut app| async move {
-        let handle = app.add_model(DiffStateModel::new_for_test);
+        let handle = app.add_model(DiffStateModel::new_for_local_test);
         handle.read(&app, |model, _ctx| {
             assert!(matches!(model, DiffStateModel::Local(_)));
         });
@@ -13,7 +13,7 @@ fn new_for_test_creates_local_variant() {
 #[test]
 fn get_returns_not_in_repository_for_test_model() {
     warpui::App::test((), |mut app| async move {
-        let handle = app.add_model(DiffStateModel::new_for_test);
+        let handle = app.add_model(DiffStateModel::new_for_local_test);
         let state = handle.read(&app, |model, ctx| model.get(ctx));
         assert!(matches!(state, DiffState::NotInRepository));
     });
@@ -22,7 +22,7 @@ fn get_returns_not_in_repository_for_test_model() {
 #[test]
 fn diff_mode_defaults_to_head() {
     warpui::App::test((), |mut app| async move {
-        let handle = app.add_model(DiffStateModel::new_for_test);
+        let handle = app.add_model(DiffStateModel::new_for_local_test);
         let mode = handle.read(&app, |model, ctx| model.diff_mode(ctx));
         assert!(matches!(mode, DiffMode::Head));
     });
@@ -31,7 +31,7 @@ fn diff_mode_defaults_to_head() {
 #[test]
 fn has_head_false_for_test_model() {
     warpui::App::test((), |mut app| async move {
-        let handle = app.add_model(DiffStateModel::new_for_test);
+        let handle = app.add_model(DiffStateModel::new_for_local_test);
         let has_head = handle.read(&app, |model, ctx| model.has_head(ctx));
         assert!(!has_head);
     });
@@ -40,7 +40,7 @@ fn has_head_false_for_test_model() {
 #[test]
 fn branch_info_none_for_test_model() {
     warpui::App::test((), |mut app| async move {
-        let handle = app.add_model(DiffStateModel::new_for_test);
+        let handle = app.add_model(DiffStateModel::new_for_local_test);
         handle.read(&app, |model, ctx| {
             assert_eq!(model.get_main_branch_name(ctx), None);
             assert_eq!(model.get_current_branch_name(ctx), None);
@@ -56,7 +56,7 @@ fn branch_info_none_for_test_model() {
 #[test]
 fn uncommitted_stats_none_for_test_model() {
     warpui::App::test((), |mut app| async move {
-        let handle = app.add_model(DiffStateModel::new_for_test);
+        let handle = app.add_model(DiffStateModel::new_for_local_test);
         let stats = handle.read(&app, |model, ctx| model.get_uncommitted_stats(ctx));
         assert!(stats.is_none());
     });
