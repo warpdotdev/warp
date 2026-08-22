@@ -711,9 +711,10 @@ fn checkout_command_pins_head_to_commit_absent_from_default_branch() {
     let fixture = build_fixture();
     let repo_dir = partial_clone(&fixture);
 
-    // The partial clone (`--filter=blob:none`) only fetched `main`, so the
-    // pinned commit — which lives off the default branch — requires the
-    // fetch step baked into the command before it can be checked out.
+    // `git clone` only fetches `refs/heads/*` by default, and the pinned
+    // commit lives under a hidden non-heads ref (`refs/pinned/base`) instead
+    // of `main` — the fetch step baked into the command is what pulls it
+    // down before it can be checked out.
     let repo = SourceRepo::new(
         CodeForge::GitHub,
         "warpdotdev".to_string(),
