@@ -15,7 +15,9 @@ use warpui::r#async::Timer;
 use warpui::{AppContext, ModelContext, SingletonEntity};
 
 use crate::auth::AuthStateProvider;
+use crate::server::ids::ServerId;
 use crate::settings::{AISettings, AISettingsChangedEvent};
+use crate::workspaces::team::Team;
 use crate::workspaces::user_workspaces::{UserWorkspaces, UserWorkspacesEvent};
 
 const GEAP_IDENTITY_TOKEN_DURATION: Duration = Duration::from_secs(60 * 60);
@@ -52,6 +54,7 @@ impl GeapPolicy {
 
 fn geap_mint_binding_from_parts(
     user_uid: String,
+    team_uid: ServerId,
     gcp_audience: Option<&str>,
     gcp_sa_email: Option<&str>,
 ) -> Option<GeapMintBinding> {
@@ -70,33 +73,73 @@ fn geap_mint_binding_from_parts(
     };
     Some(GeapMintBinding {
         user_uid,
+        team_uid: team_uid.to_string(),
         audience: audience.to_string(),
         federation,
     })
 }
 
-pub(crate) fn current_geap_policy(app: &AppContext) -> GeapPolicy {
+/// The Gemini Enterprise policy for `team`, sourced from that team's own configuration
+/// rather than whichever workspace happens to be ambiently "current". Two windows on
+/// different teams calling this concurrently get independent, correct answers.
+pub(crate) fn current_geap_policy_for_team(app: &AppContext, team: &Team) -> GeapPolicy {
     if !FeatureFlag::GeminiEnterprise.is_enabled() {
         return GeapPolicy::Disabled;
     }
-    let user_workspaces = UserWorkspaces::as_ref(app);
-    if !user_workspaces.is_gemini_enterprise_credentials_enabled(app) {
+    if !UserWorkspaces::as_ref(app).is_gemini_enterprise_credentials_enabled_for_team(team, app) {
         return GeapPolicy::Disabled;
     }
     let Some(user_id) = AuthStateProvider::as_ref(app).get().user_id() else {
         return GeapPolicy::Disabled;
     };
-    let Some(settings) = user_workspaces.gemini_enterprise_host_settings() else {
+    let Some(settings) = UserWorkspaces::gemini_enterprise_host_settings_for_team(team) else {
         return GeapPolicy::Unconfigured;
     };
     match geap_mint_binding_from_parts(
         user_id.as_string(),
+        team.uid,
         settings.gcp_audience.as_deref(),
         settings.gcp_sa_email.as_deref(),
     ) {
         Some(binding) => GeapPolicy::Mintable(binding),
         None => GeapPolicy::Unconfigured,
     }
+}
+
+/// Resolves the Gemini Enterprise mint binding for `team_uid`, or `None` when there is no
+/// team (a window with no team selected, or a team that no longer resolves) or nothing
+/// mintable for it.
+pub(crate) fn geap_binding_for_team(
+    app: &AppContext,
+    team_uid: Option<ServerId>,
+) -> Option<GeapMintBinding> {
+    let team = UserWorkspaces::as_ref(app).team_from_uid(team_uid?)?;
+    current_geap_policy_for_team(app, team).mint_binding()
+}
+
+/// Attaches `team_uid`'s GEAP credential to `params`, if one is already loaded for it.
+///
+/// Deliberately not part of `RequestParams::new()`: that constructor never receives team
+/// scope (`RequestParams` is cloned for retries, so a capability embedded there could travel
+/// to a retry that never established it). The caller resolves `team_uid` itself and calls
+/// this once, right after construction, to fold in the one piece of team-scoped data that
+/// does belong in the request payload: the already-minted credential value.
+pub(crate) fn attach_geap_credentials_if_available(
+    params: &mut crate::ai::agent::api::RequestParams,
+    team_uid: ServerId,
+    app: &AppContext,
+) {
+    let Some(binding) = geap_binding_for_team(app, Some(team_uid)) else {
+        return;
+    };
+    let Some(credentials) = ApiKeyManager::as_ref(app).geap_credentials_for_request(&binding)
+    else {
+        return;
+    };
+    params
+        .api_keys
+        .get_or_insert_with(Default::default)
+        .google_cloud_credentials = Some(credentials);
 }
 
 pub trait GeapCredentialRefresher {
@@ -113,7 +156,7 @@ impl GeapCredentialRefresher for ApiKeyManager {
                 UserWorkspacesEvent::UpdateWorkspaceSettingsSuccess
                     | UserWorkspacesEvent::TeamsChanged
             ) {
-                refresh_geap_credentials(manager, ctx);
+                refresh_geap_credentials_for_teams_in_use(manager, ctx);
             }
         });
 
@@ -122,48 +165,88 @@ impl GeapCredentialRefresher for ApiKeyManager {
                 event,
                 AISettingsChangedEvent::GeminiEnterpriseCredentialsEnabled { .. }
             ) {
-                refresh_geap_credentials(manager, ctx);
+                refresh_geap_credentials_for_teams_in_use(manager, ctx);
             }
         });
     }
 }
 
-/// Standard (non-forced) refresh: the skip-if-valid guard decides whether a
-/// mint is actually needed.
-pub(crate) fn refresh_geap_credentials(
+/// Refreshes every team currently selected by an open window, each independently, so a
+/// policy change for one team can never enable, disable, or overwrite another team's state,
+/// and a team nobody has open never triggers an idle mint.
+fn refresh_geap_credentials_for_teams_in_use(
     manager: &mut ApiKeyManager,
     ctx: &mut ModelContext<ApiKeyManager>,
 ) {
-    refresh_geap_credentials_with_options(manager, false, None, ctx);
+    for team_uid in UserWorkspaces::as_ref(ctx).team_uids_in_use() {
+        refresh_geap_credentials(manager, team_uid, ctx);
+    }
 }
 
+/// Resolves `team_uid`'s policy, treating a team that no longer resolves (e.g. the user left
+/// it) the same as a disabled gate rather than resolving some other ambient team.
+fn geap_policy_for_team_uid(app: &AppContext, team_uid: ServerId) -> GeapPolicy {
+    match UserWorkspaces::as_ref(app).team_from_uid(team_uid) {
+        Some(team) => current_geap_policy_for_team(app, team),
+        None => GeapPolicy::Disabled,
+    }
+}
+
+/// Standard (non-forced) refresh for `team_uid`: the skip-if-valid guard decides whether a
+/// mint is actually needed.
+pub(crate) fn refresh_geap_credentials(
+    manager: &mut ApiKeyManager,
+    team_uid: ServerId,
+    ctx: &mut ModelContext<ApiKeyManager>,
+) {
+    refresh_geap_credentials_with_options(manager, team_uid, false, None, ctx);
+}
+
+pub(crate) fn force_refresh_geap_credentials_for_team(
+    manager: &mut ApiKeyManager,
+    team_uid: ServerId,
+    ctx: &mut ModelContext<ApiKeyManager>,
+) {
+    refresh_geap_credentials_with_options(manager, team_uid, true, None, ctx);
+}
+
+/// Back-compat, team-blind refresh for the one remaining caller that cannot supply a team
+/// scope (the Warp Agent settings page's "Refresh" button). Refreshes the account's sole
+/// team; does nothing for a multi-team account rather than guessing which team's credentials
+/// to force-refresh. Prefer [`force_refresh_geap_credentials_for_team`] wherever a team is
+/// known.
 pub(crate) fn force_refresh_geap_credentials(
     manager: &mut ApiKeyManager,
     ctx: &mut ModelContext<ApiKeyManager>,
 ) {
-    refresh_geap_credentials_with_options(manager, true, None, ctx);
+    let Some(team_uid) = UserWorkspaces::as_ref(ctx).sole_team_uid() else {
+        return;
+    };
+    force_refresh_geap_credentials_for_team(manager, team_uid, ctx);
 }
 
 /// Mint kickoff for a request blocked on an expired credential.
 pub(crate) fn start_geap_refresh_for_waiter(
     manager: &mut ApiKeyManager,
+    team_uid: ServerId,
     waiter: oneshot::Sender<GeapRefreshOutcome>,
     ctx: &mut ModelContext<ApiKeyManager>,
 ) {
-    refresh_geap_credentials_with_options(manager, false, Some(waiter), ctx);
+    refresh_geap_credentials_with_options(manager, team_uid, false, Some(waiter), ctx);
 }
 
-/// Request-time safety net. The triggering request is never delayed —
-/// it carries the currently stored token.
+/// Request-time safety net for `team_uid`. The triggering request is never
+/// delayed — it carries the currently stored token.
 pub(crate) fn refresh_geap_credentials_if_needed(
     manager: &mut ApiKeyManager,
+    team_uid: ServerId,
     ctx: &mut ModelContext<ApiKeyManager>,
 ) {
-    let binding = match current_geap_policy(ctx) {
+    let binding = match geap_policy_for_team_uid(ctx, team_uid) {
         GeapPolicy::Disabled | GeapPolicy::Unconfigured => return,
         GeapPolicy::Mintable(binding) => binding,
     };
-    let needs_mint = match manager.geap_credentials_state() {
+    let needs_mint = match manager.geap_credentials_state_for_team(&binding.team_uid) {
         GeapCredentialsState::Refreshing { .. } => false,
         GeapCredentialsState::Loaded {
             credentials,
@@ -173,34 +256,45 @@ pub(crate) fn refresh_geap_credentials_if_needed(
         GeapCredentialsState::Missing
         | GeapCredentialsState::Unconfigured
         | GeapCredentialsState::Disabled
+        | GeapCredentialsState::Indeterminate
         | GeapCredentialsState::Failed { .. } => true,
     };
     if needs_mint {
         log::info!("GEAP: request-time safety net arming a credential refresh");
-        refresh_geap_credentials(manager, ctx);
+        refresh_geap_credentials(manager, team_uid, ctx);
     }
 }
 
 /// The refresh guard + mint kickoff that all triggers funnel through.
 fn refresh_geap_credentials_with_options(
     manager: &mut ApiKeyManager,
+    team_uid: ServerId,
     force: bool,
     waiter: Option<oneshot::Sender<GeapRefreshOutcome>>,
     ctx: &mut ModelContext<ApiKeyManager>,
 ) {
-    let minted_for = match current_geap_policy(ctx) {
+    let minted_for = match geap_policy_for_team_uid(ctx, team_uid) {
         GeapPolicy::Disabled => {
-            manager.set_geap_credentials_state(GeapCredentialsState::Disabled, ctx);
+            manager.set_geap_credentials_state(
+                &team_uid.to_string(),
+                GeapCredentialsState::Disabled,
+                ctx,
+            );
             return;
         }
         GeapPolicy::Unconfigured => {
-            manager.set_geap_credentials_state(GeapCredentialsState::Unconfigured, ctx);
+            manager.set_geap_credentials_state(
+                &team_uid.to_string(),
+                GeapCredentialsState::Unconfigured,
+                ctx,
+            );
             return;
         }
         GeapPolicy::Mintable(binding) => binding,
     };
+    let team_key = minted_for.team_uid.clone();
     if matches!(
-        manager.geap_credentials_state(),
+        manager.geap_credentials_state_for_team(&team_key),
         GeapCredentialsState::Refreshing { .. }
     ) {
         return;
@@ -210,13 +304,13 @@ fn refresh_geap_credentials_with_options(
             credentials,
             minted_for: current_binding,
             ..
-        } = manager.geap_credentials_state()
+        } = manager.geap_credentials_state_for_team(&team_key)
         && *current_binding == minted_for
         && !credentials.needs_refresh()
     {
         return;
     }
-    let previous = match manager.geap_credentials_state() {
+    let previous = match manager.geap_credentials_state_for_team(&team_key) {
         GeapCredentialsState::Loaded {
             credentials,
             minted_for: current_binding,
@@ -225,11 +319,16 @@ fn refresh_geap_credentials_with_options(
         _ => None,
     };
     log::info!(
-        "GEAP: minting credentials (audience={}, force={force})",
+        "GEAP: minting credentials (team={}, audience={}, force={force})",
+        minted_for.team_uid,
         minted_for.audience
     );
-    manager.install_geap_refresh_waiter(waiter);
-    manager.set_geap_credentials_state(GeapCredentialsState::Refreshing { previous }, ctx);
+    manager.install_geap_refresh_waiter(&team_key, waiter);
+    manager.set_geap_credentials_state(
+        &team_key,
+        GeapCredentialsState::Refreshing { previous },
+        ctx,
+    );
 
     // Leg 1: every mint — initial or re-mint, timer/trigger/forced — starts
     // with a brand-new Warp OIDC JWT, consumed exactly once by the STS
@@ -252,19 +351,22 @@ fn refresh_geap_credentials_with_options(
                     })?;
             exchange_identity_token_for_geap_credentials(identity_token, &binding).await
         },
-        move |manager, result, ctx| apply_geap_mint_result(manager, result, minted_for, force, ctx),
+        move |manager, result, ctx| {
+            apply_geap_mint_result(manager, team_uid, result, minted_for, force, ctx)
+        },
     );
 }
 
 fn apply_geap_mint_result(
     manager: &mut ApiKeyManager,
+    team_uid: ServerId,
     result: Result<GeapCredentials, LoadGeapCredentialsError>,
     minted_for: GeapMintBinding,
     force: bool,
     ctx: &mut ModelContext<ApiKeyManager>,
 ) {
-    let waiters = manager.take_geap_refresh_waiters();
-    let outcome = apply_geap_mint_result_inner(manager, result, minted_for, force, ctx);
+    let waiters = manager.take_geap_refresh_waiters(&minted_for.team_uid);
+    let outcome = apply_geap_mint_result_inner(manager, team_uid, result, minted_for, force, ctx);
     for waiter in waiters {
         let _ = waiter.send(outcome);
     }
@@ -272,38 +374,41 @@ fn apply_geap_mint_result(
 
 fn apply_geap_mint_result_inner(
     manager: &mut ApiKeyManager,
+    team_uid: ServerId,
     result: Result<GeapCredentials, LoadGeapCredentialsError>,
     minted_for: GeapMintBinding,
     force: bool,
     ctx: &mut ModelContext<ApiKeyManager>,
 ) -> GeapRefreshOutcome {
-    let current_binding = match current_geap_policy(ctx) {
+    let team_key = minted_for.team_uid.clone();
+    let current_binding = match geap_policy_for_team_uid(ctx, team_uid) {
         GeapPolicy::Disabled => {
             log::info!("GEAP: gate flipped off mid-mint; discarding the mint result");
-            manager.set_geap_credentials_state(GeapCredentialsState::Disabled, ctx);
+            manager.set_geap_credentials_state(&team_key, GeapCredentialsState::Disabled, ctx);
             return GeapRefreshOutcome::Failed;
         }
         GeapPolicy::Unconfigured => {
             log::info!("GEAP: gate unconfigured mid-mint; discarding the mint result");
-            manager.set_geap_credentials_state(GeapCredentialsState::Unconfigured, ctx);
+            manager.set_geap_credentials_state(&team_key, GeapCredentialsState::Unconfigured, ctx);
             return GeapRefreshOutcome::Failed;
         }
         GeapPolicy::Mintable(binding) => binding,
     };
-    let previous = match manager.geap_credentials_state() {
+    let previous = match manager.geap_credentials_state_for_team(&team_key) {
         GeapCredentialsState::Refreshing {
             previous: Some((credentials, binding)),
         } if *binding == current_binding => Some((credentials.clone(), binding.clone())),
         _ => None,
     };
 
-    // The user/account or federation config changed while the mint was in
-    // flight. Discard it and immediately re-mint under the current binding.
+    // The team's config changed while the mint was in flight. Discard it and
+    // immediately re-mint under the current binding.
     if minted_for != current_binding {
         log::info!("GEAP: binding changed mid-mint; discarding the result and re-minting");
         match previous {
             Some((credentials, minted_for)) => {
                 manager.set_geap_credentials_state(
+                    &team_key,
                     GeapCredentialsState::Loaded {
                         credentials,
                         loaded_at: SystemTime::now(),
@@ -311,24 +416,26 @@ fn apply_geap_mint_result_inner(
                     },
                     ctx,
                 );
-                schedule_geap_token_refresh(manager, ctx);
+                schedule_geap_token_refresh(manager, team_uid, ctx);
             }
             None => {
-                manager.set_geap_credentials_state(GeapCredentialsState::Missing, ctx);
+                manager.set_geap_credentials_state(&team_key, GeapCredentialsState::Missing, ctx);
             }
         }
-        refresh_geap_credentials(manager, ctx);
+        refresh_geap_credentials(manager, team_uid, ctx);
         return GeapRefreshOutcome::Failed;
     }
 
     match result {
         Ok(credentials) => {
             log::info!(
-                "GEAP: credentials minted (audience={}, expires_at={:?})",
+                "GEAP: credentials minted (team={}, audience={}, expires_at={:?})",
+                minted_for.team_uid,
                 minted_for.audience,
                 credentials.expires_at()
             );
             manager.set_geap_credentials_state(
+                &team_key,
                 GeapCredentialsState::Loaded {
                     credentials,
                     loaded_at: SystemTime::now(),
@@ -338,8 +445,8 @@ fn apply_geap_mint_result_inner(
             );
             // Arm the next one-shot proactive refresh — this is what makes
             // the ~hourly loop self-sustaining.
-            schedule_geap_token_refresh(manager, ctx);
-            manager.clear_geap_mint_failure();
+            schedule_geap_token_refresh(manager, team_uid, ctx);
+            manager.clear_geap_mint_failure(&team_key);
             GeapRefreshOutcome::Refreshed
         }
         Err(err) => {
@@ -353,6 +460,7 @@ fn apply_geap_mint_result_inner(
                 // hard-down network cannot cause unbounded STS traffic.
                 Some((credentials, minted_for)) if !force => {
                     manager.set_geap_credentials_state(
+                        &team_key,
                         GeapCredentialsState::Loaded {
                             credentials,
                             loaded_at: SystemTime::now(),
@@ -365,23 +473,30 @@ fn apply_geap_mint_result_inner(
                 // where the user explicitly asked and needs visible feedback.
                 _ => {
                     manager.set_geap_credentials_state(
+                        &team_key,
                         GeapCredentialsState::Failed { error: err },
                         ctx,
                     );
                 }
             }
             // Start the cooldown.
-            manager.record_geap_mint_failure();
+            manager.record_geap_mint_failure(&team_key);
             GeapRefreshOutcome::Failed
         }
     }
 }
 
-/// A one-shot timer that re-mints [`GEAP_REFRESH_LEAD_TIME`] before the
-/// loaded token's expiry. The timer is armed once per token — no periodic
-/// polling; the process wakes exactly once per token lifetime.
-fn schedule_geap_token_refresh(manager: &mut ApiKeyManager, ctx: &mut ModelContext<ApiKeyManager>) {
-    let GeapCredentialsState::Loaded { credentials, .. } = manager.geap_credentials_state() else {
+/// A one-shot timer that re-mints [`GEAP_REFRESH_LEAD_TIME`] before `team_uid`'s loaded
+/// token's expiry. The timer is armed once per token — no periodic polling; the process
+/// wakes exactly once per token lifetime, per team.
+fn schedule_geap_token_refresh(
+    manager: &mut ApiKeyManager,
+    team_uid: ServerId,
+    ctx: &mut ModelContext<ApiKeyManager>,
+) {
+    let GeapCredentialsState::Loaded { credentials, .. } =
+        manager.geap_credentials_state_for_team(&team_uid.to_string())
+    else {
         return;
     };
     let Some(expires_at) = credentials.expires_at() else {
@@ -392,8 +507,8 @@ fn schedule_geap_token_refresh(manager: &mut ApiKeyManager, ctx: &mut ModelConte
         async move {
             Timer::after(delay).await;
         },
-        |manager, _output, ctx| {
-            refresh_geap_credentials(manager, ctx);
+        move |manager, _output, ctx| {
+            refresh_geap_credentials(manager, team_uid, ctx);
         },
     );
 }

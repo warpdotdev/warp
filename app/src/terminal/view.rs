@@ -3548,6 +3548,9 @@ impl TerminalView {
                 ctx,
             )
         });
+        // Captured before the closure so it reads this view's own window, not whatever
+        // `ModelContext` the new controller's constructor closure would otherwise see.
+        let terminal_window_id = ctx.window_id();
         let ai_controller = ctx.add_model(|ctx| {
             BlocklistAIController::new(
                 ai_input_model.clone(),
@@ -3557,6 +3560,7 @@ impl TerminalView {
                 active_session.clone(),
                 model.clone(),
                 terminal_view_id,
+                terminal_window_id,
                 ctx,
             )
         });
@@ -28677,6 +28681,21 @@ impl View for TerminalView {
             self.maybe_report_focus_out(ctx);
             ctx.notify();
         }
+    }
+
+    /// Cross-window tab drag transfers this view (and the models it owns) to a different
+    /// window without recreating them, so `self.window_id` and the AI controller's own copy
+    /// must be updated here rather than only set once at construction.
+    fn on_window_transferred(
+        &mut self,
+        _source_window_id: WindowId,
+        target_window_id: WindowId,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        self.window_id = target_window_id;
+        self.ai_controller.update(ctx, |ai_controller, _| {
+            ai_controller.set_window_id(target_window_id);
+        });
     }
 
     fn keymap_context(&self, app: &AppContext) -> warpui::keymap::Context {

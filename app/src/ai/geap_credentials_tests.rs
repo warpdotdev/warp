@@ -19,15 +19,21 @@ use crate::workspaces::workspace::{HostEnablementSetting, LlmHostSettings, Works
 const TEST_AUDIENCE: &str = "//iam.googleapis.com/projects/123456/locations/global/workloadIdentityPools/warp-pool/providers/warp-provider";
 const TEST_SA_EMAIL: &str = "warp-geap@test-project.iam.gserviceaccount.com";
 
+fn test_team_uid() -> ServerId {
+    123.into()
+}
+
 #[test]
 fn mint_binding_from_parts_trims_and_normalizes() {
     let binding = geap_mint_binding_from_parts(
         "user-1".into(),
+        test_team_uid(),
         Some(&format!("  {TEST_AUDIENCE} ")),
         Some(&format!(" {TEST_SA_EMAIL}  ")),
     )
     .expect("a configured audience yields a mintable binding");
     assert_eq!(binding.audience, TEST_AUDIENCE);
+    assert_eq!(binding.team_uid, test_team_uid().to_string());
     assert_eq!(
         binding.federation,
         GeapFederation::ServiceAccount {
@@ -40,11 +46,16 @@ fn mint_binding_from_parts_trims_and_normalizes() {
 fn mint_binding_from_parts_requires_an_audience() {
     // Missing or blank audience -> not mintable (rests at Unconfigured/Missing).
     assert_eq!(
-        geap_mint_binding_from_parts("user-1".into(), None, Some(TEST_SA_EMAIL)),
+        geap_mint_binding_from_parts("user-1".into(), test_team_uid(), None, Some(TEST_SA_EMAIL)),
         None
     );
     assert_eq!(
-        geap_mint_binding_from_parts("user-1".into(), Some("   "), Some(TEST_SA_EMAIL)),
+        geap_mint_binding_from_parts(
+            "user-1".into(),
+            test_team_uid(),
+            Some("   "),
+            Some(TEST_SA_EMAIL)
+        ),
         None
     );
 }
@@ -53,12 +64,18 @@ fn mint_binding_from_parts_requires_an_audience() {
 fn mint_binding_from_parts_uses_direct_wif_without_sa() {
     // A whitespace-only or missing SA email means "no impersonation"
     // (DirectWif), not an SA named "".
-    let binding = geap_mint_binding_from_parts("user-1".into(), Some(TEST_AUDIENCE), Some("   "))
-        .expect("audience present");
+    let binding = geap_mint_binding_from_parts(
+        "user-1".into(),
+        test_team_uid(),
+        Some(TEST_AUDIENCE),
+        Some("   "),
+    )
+    .expect("audience present");
     assert_eq!(binding.federation, GeapFederation::DirectWif);
 
-    let binding = geap_mint_binding_from_parts("user-1".into(), Some(TEST_AUDIENCE), None)
-        .expect("audience present");
+    let binding =
+        geap_mint_binding_from_parts("user-1".into(), test_team_uid(), Some(TEST_AUDIENCE), None)
+            .expect("audience present");
     assert_eq!(binding.federation, GeapFederation::DirectWif);
 }
 
@@ -135,9 +152,11 @@ fn timer_delay_clamps_to_floor_when_near_or_past_expiry() {
 
 // ── refresh guard / safety net (app harness) ───────────────────
 
-fn team_for_test() -> Team {
-    Team {
-        uid: 123.into(),
+// The policy source of truth is the *team's own* settings (`current_geap_policy_for_team`),
+// not the workspace's, so the harness configures GEAP on the team.
+fn team_for_test(enabled: bool) -> Team {
+    let mut team = Team {
+        uid: test_team_uid(),
         name: "test".to_string(),
         color: None,
         invite_link: None,
@@ -150,12 +169,23 @@ fn team_for_test() -> Team {
         is_eligible_for_discovery: false,
         has_billing_history: false,
         visibility: TeamVisibility::Open,
-    }
+    };
+    team.settings.llm_settings.enabled = true;
+    team.settings.llm_settings.host_configs.insert(
+        crate::ai::llms::LLMModelHost::GeminiEnterprise,
+        LlmHostSettings {
+            enabled,
+            enablement_setting: HostEnablementSetting::Enforce,
+            gcp_audience: Some(TEST_AUDIENCE.to_string()),
+            gcp_sa_email: Some(TEST_SA_EMAIL.to_string()),
+        },
+    );
+    team
 }
 
 fn workspace_with_geap_host(enabled: bool) -> Workspace {
-    let team = team_for_test();
-    let mut workspace = Workspace {
+    let team = team_for_test(enabled);
+    Workspace {
         uid: "workspace_uid123456789".to_string().into(),
         name: "test".to_string(),
         stripe_customer_id: None,
@@ -170,18 +200,7 @@ fn workspace_with_geap_host(enabled: bool) -> Workspace {
         is_eligible_for_discovery: false,
         members: vec![],
         total_requests_used_since_last_refresh: 0,
-    };
-    workspace.settings.llm_settings.enabled = true;
-    workspace.settings.llm_settings.host_configs.insert(
-        crate::ai::llms::LLMModelHost::GeminiEnterprise,
-        LlmHostSettings {
-            enabled,
-            enablement_setting: HostEnablementSetting::Enforce,
-            gcp_audience: Some(TEST_AUDIENCE.to_string()),
-            gcp_sa_email: Some(TEST_SA_EMAIL.to_string()),
-        },
-    );
-    workspace
+    }
 }
 
 /// Registers the minimal singleton set the refresh path touches: workspace
@@ -234,10 +253,12 @@ fn expired_credentials() -> GeapCredentials {
 }
 
 /// A binding that does not match the harness gate (minted before an account
-/// switch).
+/// switch). Same team, different user, so this specifically exercises a
+/// user-identity mismatch rather than a cross-team one.
 fn stale_binding() -> GeapMintBinding {
     GeapMintBinding {
         user_uid: "previous-user".into(),
+        team_uid: test_team_uid().to_string(),
         audience: TEST_AUDIENCE.into(),
         federation: GeapFederation::ServiceAccount {
             email: TEST_SA_EMAIL.into(),
@@ -248,7 +269,11 @@ fn stale_binding() -> GeapMintBinding {
 /// The mintable binding for the harness gate. The harness enables the GEAP
 /// host with a configured audience, so the policy is always `Mintable`.
 fn current_binding(ctx: &mut ModelContext<ApiKeyManager>) -> GeapMintBinding {
-    match current_geap_policy(ctx) {
+    let team = UserWorkspaces::as_ref(ctx)
+        .team_from_uid(test_team_uid())
+        .expect("test team exists")
+        .clone();
+    match current_geap_policy_for_team(ctx, &team) {
         GeapPolicy::Mintable(binding) => binding,
         other => panic!("expected a mintable GEAP policy, got {other:?}"),
     }
@@ -266,11 +291,13 @@ fn refresh_disables_and_drops_tokens_when_gate_is_off() {
         // while disabled.
         ApiKeyManager::handle(&app).update(&mut app, |manager, ctx| {
             manager.set_geap_credentials_state(
+                &test_team_uid().to_string(),
                 GeapCredentialsState::Loaded {
                     credentials: fresh_credentials(),
                     loaded_at: SystemTime::now(),
                     minted_for: GeapMintBinding {
                         user_uid: "user".into(),
+                        team_uid: test_team_uid().to_string(),
                         audience: TEST_AUDIENCE.into(),
                         federation: GeapFederation::ServiceAccount {
                             email: TEST_SA_EMAIL.into(),
@@ -279,7 +306,7 @@ fn refresh_disables_and_drops_tokens_when_gate_is_off() {
                 },
                 ctx,
             );
-            refresh_geap_credentials(manager, ctx);
+            refresh_geap_credentials(manager, test_team_uid(), ctx);
             assert_eq!(
                 *manager.geap_credentials_state(),
                 GeapCredentialsState::Disabled
@@ -292,7 +319,7 @@ fn refresh_disables_and_drops_tokens_when_gate_is_off() {
 fn refresh_rests_at_unconfigured_when_enabled_but_unconfigured() {
     let mut workspace = workspace_with_geap_host(true);
     // Enabled, but the admin has not configured an audience yet.
-    workspace
+    workspace.teams[0]
         .settings
         .llm_settings
         .host_configs
@@ -303,7 +330,7 @@ fn refresh_rests_at_unconfigured_when_enabled_but_unconfigured() {
         let _geap_flag = FeatureFlag::GeminiEnterprise.override_enabled(true);
         initialize_app(&mut app, vec![workspace]);
         ApiKeyManager::handle(&app).update(&mut app, |manager, ctx| {
-            refresh_geap_credentials(manager, ctx);
+            refresh_geap_credentials(manager, test_team_uid(), ctx);
             assert_eq!(
                 *manager.geap_credentials_state(),
                 GeapCredentialsState::Unconfigured
@@ -324,10 +351,10 @@ fn refresh_skips_when_token_is_fresh_and_binding_matches() {
                 loaded_at: SystemTime::now(),
                 minted_for: current_binding(ctx),
             };
-            manager.set_geap_credentials_state(loaded.clone(), ctx);
+            manager.set_geap_credentials_state(&test_team_uid().to_string(), loaded.clone(), ctx);
             // Skip-if-valid: a fresh token under the current binding means no
             // re-mint and no state change.
-            refresh_geap_credentials(manager, ctx);
+            refresh_geap_credentials(manager, test_team_uid(), ctx);
             assert_eq!(*manager.geap_credentials_state(), loaded);
         });
     })
@@ -343,10 +370,16 @@ fn refresh_noops_while_a_mint_is_in_flight() {
             let in_flight = GeapCredentialsState::Refreshing {
                 previous: Some((fresh_credentials(), current_binding(ctx))),
             };
-            manager.set_geap_credentials_state(in_flight.clone(), ctx);
+            manager.set_geap_credentials_state(
+                &test_team_uid().to_string(),
+                in_flight.clone(),
+                ctx,
+            );
             // One mint at a time — force included.
-            refresh_geap_credentials(manager, ctx);
+            refresh_geap_credentials(manager, test_team_uid(), ctx);
             assert_eq!(*manager.geap_credentials_state(), in_flight);
+            // The back-compat, team-blind entry point: the harness has exactly one team, so
+            // it resolves unambiguously to it.
             force_refresh_geap_credentials(manager, ctx);
             assert_eq!(*manager.geap_credentials_state(), in_flight);
         });
@@ -361,6 +394,7 @@ fn refresh_remints_when_token_needs_refresh() {
         initialize_app(&mut app, vec![workspace]);
         ApiKeyManager::handle(&app).update(&mut app, |manager, ctx| {
             manager.set_geap_credentials_state(
+                &test_team_uid().to_string(),
                 GeapCredentialsState::Loaded {
                     credentials: expired_credentials(),
                     loaded_at: SystemTime::now(),
@@ -368,7 +402,7 @@ fn refresh_remints_when_token_needs_refresh() {
                 },
                 ctx,
             );
-            refresh_geap_credentials(manager, ctx);
+            refresh_geap_credentials(manager, test_team_uid(), ctx);
             // The expired-but-still-serving token rides along as `previous`
             // while the re-mint is in flight: tokens stay until replaced.
             match manager.geap_credentials_state() {
@@ -389,6 +423,7 @@ fn refresh_remints_on_binding_mismatch() {
             // Fresh token, but minted for a different user (e.g. before an
             // account switch).
             manager.set_geap_credentials_state(
+                &test_team_uid().to_string(),
                 GeapCredentialsState::Loaded {
                     credentials: fresh_credentials(),
                     loaded_at: SystemTime::now(),
@@ -396,7 +431,7 @@ fn refresh_remints_on_binding_mismatch() {
                 },
                 ctx,
             );
-            refresh_geap_credentials(manager, ctx);
+            refresh_geap_credentials(manager, test_team_uid(), ctx);
             // The mismatched token must NOT ride along as `previous`: it is
             // unservable, and restoring it on a failed re-mint would mask the
             // failure behind a misleading `Loaded`.
@@ -418,6 +453,7 @@ fn mint_completion_discards_stale_binding_result_and_remints() {
         initialize_app(&mut app, vec![workspace]);
         ApiKeyManager::handle(&app).update(&mut app, |manager, ctx| {
             manager.set_geap_credentials_state(
+                &test_team_uid().to_string(),
                 GeapCredentialsState::Refreshing { previous: None },
                 ctx,
             );
@@ -427,6 +463,7 @@ fn mint_completion_discards_stale_binding_result_and_remints() {
             // token-less window).
             apply_geap_mint_result(
                 manager,
+                test_team_uid(),
                 Ok(fresh_credentials()),
                 stale_binding(),
                 false,
@@ -450,6 +487,7 @@ fn mint_completion_failure_restores_servable_previous() {
             let current = current_binding(ctx);
             let carried = fresh_credentials();
             manager.set_geap_credentials_state(
+                &test_team_uid().to_string(),
                 GeapCredentialsState::Refreshing {
                     previous: Some((carried.clone(), current.clone())),
                 },
@@ -459,6 +497,7 @@ fn mint_completion_failure_restores_servable_previous() {
             // previous token and parks the chain.
             apply_geap_mint_result(
                 manager,
+                test_team_uid(),
                 Err(LoadGeapCredentialsError::ExchangeToken {
                     status: None,
                     detail: "boom".into(),
@@ -488,6 +527,7 @@ fn mint_failure_starts_the_cooldown_that_suppresses_the_blocking_wait() {
         ApiKeyManager::handle(&app).update(&mut app, |manager, ctx| {
             let current = current_binding(ctx);
             manager.set_geap_credentials_state(
+                &test_team_uid().to_string(),
                 GeapCredentialsState::Refreshing {
                     previous: Some((expired_credentials(), current.clone())),
                 },
@@ -495,6 +535,7 @@ fn mint_failure_starts_the_cooldown_that_suppresses_the_blocking_wait() {
             );
             apply_geap_mint_result(
                 manager,
+                test_team_uid(),
                 Err(LoadGeapCredentialsError::ExchangeToken {
                     status: None,
                     detail: "boom".into(),
@@ -529,6 +570,7 @@ fn mint_completion_failure_with_unservable_previous_fails() {
             // would mask the failure behind a misleading `Loaded`, so the
             // failure must surface instead.
             manager.set_geap_credentials_state(
+                &test_team_uid().to_string(),
                 GeapCredentialsState::Refreshing {
                     previous: Some((fresh_credentials(), stale_binding())),
                 },
@@ -536,6 +578,7 @@ fn mint_completion_failure_with_unservable_previous_fails() {
             );
             apply_geap_mint_result(
                 manager,
+                test_team_uid(),
                 Err(LoadGeapCredentialsError::ExchangeToken {
                     status: None,
                     detail: "boom".into(),
@@ -569,13 +612,14 @@ fn safety_net_noops_on_fresh_token_and_rearms_parked_chain() {
                 minted_for: current_binding(ctx),
             };
             // Fresh token: the safety net must not touch anything.
-            manager.set_geap_credentials_state(fresh.clone(), ctx);
-            refresh_geap_credentials_if_needed(manager, ctx);
+            manager.set_geap_credentials_state(&test_team_uid().to_string(), fresh.clone(), ctx);
+            refresh_geap_credentials_if_needed(manager, test_team_uid(), ctx);
             assert_eq!(*manager.geap_credentials_state(), fresh);
 
             // Parked chain (an earlier mint failed with nothing to keep):
             // the next request re-arms it.
             manager.set_geap_credentials_state(
+                &test_team_uid().to_string(),
                 GeapCredentialsState::Failed {
                     error: LoadGeapCredentialsError::ExchangeToken {
                         status: None,
@@ -584,7 +628,7 @@ fn safety_net_noops_on_fresh_token_and_rearms_parked_chain() {
                 },
                 ctx,
             );
-            refresh_geap_credentials_if_needed(manager, ctx);
+            refresh_geap_credentials_if_needed(manager, test_team_uid(), ctx);
             match manager.geap_credentials_state() {
                 GeapCredentialsState::Refreshing { .. } => {}
                 other => panic!("expected the safety net to arm a refresh, got {other:?}"),
@@ -602,7 +646,7 @@ fn safety_net_is_a_pure_noop_when_gate_is_off() {
         ApiKeyManager::handle(&app).update(&mut app, |manager, ctx| {
             // The request path must not mutate state when the gate is off;
             // state transitions belong to the event-driven triggers.
-            refresh_geap_credentials_if_needed(manager, ctx);
+            refresh_geap_credentials_if_needed(manager, test_team_uid(), ctx);
             assert_eq!(
                 *manager.geap_credentials_state(),
                 GeapCredentialsState::Missing

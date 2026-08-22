@@ -19,7 +19,12 @@ use crate::ai::blocklist::{
     ResponseStream, ResponseStreamId,
 };
 use crate::ai::llms::LLMId;
-use crate::test_util::terminal::{add_window_with_terminal, initialize_app_for_terminal_view};
+use crate::test_util::terminal::{
+    add_window_with_id_and_terminal, add_window_with_terminal, initialize_app_for_terminal_view,
+};
+use crate::workspaces::team::Team;
+use crate::workspaces::user_workspaces::UserWorkspaces;
+use crate::workspaces::workspace::Workspace;
 
 fn new_ambient_agent_task_id() -> AmbientAgentTaskId {
     Uuid::new_v4().to_string().parse().unwrap()
@@ -214,6 +219,71 @@ fn cancelling_conversation_aborts_pending_auto_resume() {
                     !controller
                         .pending_auto_resume_handles
                         .contains_key(&conversation_id)
+                );
+            });
+        });
+    });
+}
+
+/// Regression test: `BlocklistAIController.window_id` is set once at construction and must be
+/// kept current by `TerminalView::on_window_transferred` on cross-window tab drag. Before that
+/// hook existed, dragging a terminal into another window left the controller resolving the
+/// *source* window's team indefinitely, so GEAP credentials and the `X-Warp-Team-Uid` header
+/// would attach the wrong team after a drag.
+#[test]
+fn window_transfer_updates_resolved_team_scope() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+
+        let team_a = Team::from_local_cache(123.into(), "team-a".to_owned(), None, None, None);
+        let team_b = Team::from_local_cache(456.into(), "team-b".to_owned(), None, None, None);
+        let workspace = Workspace::from_local_cache(
+            "workspace_uid123456789".to_owned().into(),
+            "workspace".to_owned(),
+            Some(vec![team_a.clone(), team_b.clone()]),
+        );
+        let workspace_uid = workspace.uid;
+
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.update_workspaces(vec![workspace], ctx);
+            user_workspaces.set_current_workspace_uid(workspace_uid, ctx);
+        });
+
+        let (window_a, terminal) = add_window_with_id_and_terminal(&mut app, None);
+        let (window_b, _terminal_b) = add_window_with_id_and_terminal(&mut app, None);
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.register_window(window_a, Some(team_a.uid), ctx);
+            user_workspaces.register_window(window_b, Some(team_b.uid), ctx);
+        });
+
+        terminal.update(&mut app, |terminal, ctx| {
+            terminal.ai_controller().update(ctx, |controller, ctx| {
+                assert_eq!(
+                    controller.team_uid(ctx),
+                    Some(team_a.uid),
+                    "should resolve the window it was created in before any transfer"
+                );
+            });
+        });
+
+        // Must run outside `terminal.update`: the view is temporarily removed from its
+        // window's registry for the duration of that closure, which would make
+        // `transfer_view_to_window`'s window lookup silently no-op.
+        let view_id = terminal.update(&mut app, |terminal, _ctx| terminal.view_id());
+        app.update(|ctx| {
+            assert!(
+                ctx.transfer_view_to_window(view_id, window_a, window_b),
+                "transfer should succeed"
+            );
+        });
+
+        terminal.update(&mut app, |terminal, ctx| {
+            terminal.ai_controller().update(ctx, |controller, ctx| {
+                assert_eq!(
+                    controller.team_uid(ctx),
+                    Some(team_b.uid),
+                    "a cross-window transfer must update the controller's resolved team, not \
+                     keep resolving the source window's team"
                 );
             });
         });

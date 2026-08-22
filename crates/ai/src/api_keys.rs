@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::time::{Duration, SystemTime};
 
 #[cfg(not(target_family = "wasm"))]
@@ -14,6 +15,7 @@ use crate::LLMProvider;
 pub use crate::aws_credentials::{AwsCredentials, AwsCredentialsState};
 #[cfg(not(target_family = "wasm"))]
 pub use crate::geap_credentials::GeapRefreshOutcome;
+use crate::geap_credentials::GeapTeamState;
 pub use crate::geap_credentials::{
     GEAP_MINT_FAILURE_COOLDOWN, GEAP_REFRESH_LEAD_TIME, GeapCredentials, GeapCredentialsState,
     GeapFederation, GeapMintBinding, LoadGeapCredentialsError,
@@ -255,22 +257,11 @@ pub struct ApiKeyManager {
     /// refresh is running. Always cleared when the refresh finishes.
     #[cfg(not(target_family = "wasm"))]
     pub(crate) grok_refresh_waiters: Option<Vec<oneshot::Sender<GrokRefreshOutcome>>>,
-    /// Coordinates request-time GEAP refreshes. Installed by the mint kickoff
-    /// itself (see `install_geap_refresh_waiter`) immediately before the state
-    /// transitions to `Refreshing`, and taken when the mint completes, so
-    /// `Some` means a mint is in flight *by construction* rather than by
-    /// convention. Holds the completion senders for requests blocked on it;
-    /// may be empty for a proactive mint with no waiters.
-    #[cfg(not(target_family = "wasm"))]
-    pub(crate) geap_refresh_waiters: Option<Vec<oneshot::Sender<GeapRefreshOutcome>>>,
-    /// When the last GEAP mint failed, if one has. The timestamp is what
-    /// suppresses repeated request-time waits.
-    #[cfg(not(target_family = "wasm"))]
-    pub(crate) geap_last_mint_failure: Option<SystemTime>,
     pub(crate) aws_credentials_state: AwsCredentialsState,
     aws_credentials_refresh_strategy: AwsCredentialsRefreshStrategy,
-    /// In-memory Gemini Enterprise (GEAP) credential state.
-    pub(crate) geap_credentials_state: GeapCredentialsState,
+    /// In-memory Gemini Enterprise (GEAP) credential state, keyed by team UID. See
+    /// [`GeapTeamState`] for why this is a map rather than one shared value.
+    pub(crate) geap_team_states: HashMap<String, GeapTeamState>,
     secure_storage_write_version: u64,
     grok_secure_storage_write_version: u64,
 }
@@ -332,13 +323,9 @@ impl ApiKeyManager {
             grok_refresh_allowed: false,
             #[cfg(not(target_family = "wasm"))]
             grok_refresh_waiters: None,
-            #[cfg(not(target_family = "wasm"))]
-            geap_refresh_waiters: None,
-            #[cfg(not(target_family = "wasm"))]
-            geap_last_mint_failure: None,
             aws_credentials_state: AwsCredentialsState::Missing,
             aws_credentials_refresh_strategy: AwsCredentialsRefreshStrategy::default(),
-            geap_credentials_state: GeapCredentialsState::Missing,
+            geap_team_states: HashMap::new(),
             secure_storage_write_version: 0,
             grok_secure_storage_write_version: 0,
         }

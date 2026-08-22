@@ -4191,15 +4191,25 @@ impl AIBlock {
             return;
         }
 
-        let view = ctx.add_typed_action_view(GeminiEnterpriseCredentialsErrorView::new);
-        ctx.subscribe_to_view(&view, |_me, _view, event, ctx| match event {
+        // Resolved once here via the compatibility `team_for_view` resolver (Constraints:
+        // "migration PRs may temporarily retain team_uid_for_window, team_for_window,
+        // team_for_view..."). Group 4 deletes this call once request-local team scope reaches
+        // this view instead.
+        let team_uid = UserWorkspaces::as_ref(ctx)
+            .team_for_view(ctx)
+            .map(|t| t.uid);
+        let view = ctx
+            .add_typed_action_view(|ctx| GeminiEnterpriseCredentialsErrorView::new(team_uid, ctx));
+        ctx.subscribe_to_view(&view, move |_me, _view, event, ctx| match event {
             GeminiEnterpriseCredentialsErrorEvent::RefreshCredentials => {
                 #[cfg(not(target_family = "wasm"))]
-                {
+                if let Some(team_uid) = team_uid {
                     use ai::api_keys::ApiKeyManager;
 
                     ApiKeyManager::handle(ctx).update(ctx, |manager, ctx| {
-                        crate::ai::geap_credentials::force_refresh_geap_credentials(manager, ctx);
+                        crate::ai::geap_credentials::force_refresh_geap_credentials_for_team(
+                            manager, team_uid, ctx,
+                        );
                     });
                 }
             }

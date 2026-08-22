@@ -5,6 +5,7 @@ use super::*;
 fn binding() -> GeapMintBinding {
     GeapMintBinding {
         user_uid: "user-123".to_string(),
+        team_uid: "team-a".to_string(),
         audience:
             "//iam.googleapis.com/projects/1/locations/global/workloadIdentityPools/p/providers/pr"
                 .to_string(),

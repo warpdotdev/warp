@@ -119,21 +119,24 @@ fn make_manager_with_grok(keys: ApiKeys, grok_tokens: Option<GrokTokens>) -> Api
         grok_refresh_allowed: false,
         #[cfg(not(target_family = "wasm"))]
         grok_refresh_waiters: None,
-        #[cfg(not(target_family = "wasm"))]
-        geap_refresh_waiters: None,
-        #[cfg(not(target_family = "wasm"))]
-        geap_last_mint_failure: None,
         aws_credentials_state: AwsCredentialsState::Missing,
         aws_credentials_refresh_strategy: AwsCredentialsRefreshStrategy::default(),
-        geap_credentials_state: GeapCredentialsState::Missing,
+        geap_team_states: HashMap::new(),
         secure_storage_write_version: 0,
         grok_secure_storage_write_version: 0,
     }
 }
 
+/// Seeds `geap_binding()`'s team with the given state, matching how a single-team account
+/// exercises the manager in most of the tests below. Tests that need to prove cross-team
+/// isolation seed a second team's entry explicitly instead of using this helper.
 fn make_manager_with_geap(geap_credentials_state: GeapCredentialsState) -> ApiKeyManager {
     let mut manager = make_manager(ApiKeys::default());
-    manager.geap_credentials_state = geap_credentials_state;
+    manager
+        .geap_team_states
+        .entry(geap_binding().team_uid)
+        .or_default()
+        .credentials = geap_credentials_state;
     manager
 }
 
@@ -156,6 +159,7 @@ fn geap_credentials(access_token: &str, expires_in: Option<u64>) -> GeapCredenti
 fn geap_binding() -> GeapMintBinding {
     GeapMintBinding {
         user_uid: "user-1".into(),
+        team_uid: "team-a".into(),
         audience:
             "//iam.googleapis.com/projects/1/locations/global/workloadIdentityPools/p/providers/q"
                 .into(),
@@ -852,11 +856,11 @@ fn begin_expired_geap_refresh_is_single_flight() {
             // is what installs the waiter and opens the single-flight window.
             let first = manager.begin_expired_geap_refresh(&binding, ctx, |manager, waiter, _| {
                 kickoff_count += 1;
-                manager.install_geap_refresh_waiter(Some(waiter));
+                manager.install_geap_refresh_waiter(&binding.team_uid, Some(waiter));
             });
             let second = manager.begin_expired_geap_refresh(&binding, ctx, |manager, waiter, _| {
                 kickoff_count += 1;
-                manager.install_geap_refresh_waiter(Some(waiter));
+                manager.install_geap_refresh_waiter(&binding.team_uid, Some(waiter));
             });
 
             assert!(first.is_some());
@@ -864,9 +868,74 @@ fn begin_expired_geap_refresh_is_single_flight() {
             // The second request attached to the in-flight mint instead of
             // starting its own.
             assert_eq!(kickoff_count, 1);
-            assert_eq!(manager.take_geap_refresh_waiters().len(), 2);
+            assert_eq!(
+                manager.take_geap_refresh_waiters(&binding.team_uid).len(),
+                2
+            );
             // Taking the waiters closes the window.
-            assert!(manager.geap_refresh_waiters.is_none());
+            assert!(
+                manager
+                    .take_geap_refresh_waiters(&binding.team_uid)
+                    .is_empty()
+            );
+        });
+    });
+}
+
+#[cfg(not(target_family = "wasm"))]
+#[test]
+fn begin_expired_geap_refresh_is_independent_across_teams() {
+    // Companion to `begin_expired_geap_refresh_is_single_flight`: that test proves
+    // same-team coalescing; this proves the opposite must NOT happen across teams. If the
+    // team-keyed waiter map ever regressed to one process-wide list, team B would coalesce
+    // behind team A's in-flight mint and resume with team A's credential — exactly the
+    // cross-team leak this PR exists to prevent — while every same-team test still passes.
+    App::test((), |mut app| async move {
+        let binding_a = geap_gate();
+        let mut binding_b = geap_gate();
+        binding_b.team_uid = "team-b".into();
+
+        let manager = app.add_model(|_| {
+            let mut manager = make_manager(ApiKeys::default());
+            manager
+                .geap_team_states
+                .entry(binding_a.team_uid.clone())
+                .or_default()
+                .credentials = geap_loaded("expired-a", Some(0));
+            manager
+                .geap_team_states
+                .entry(binding_b.team_uid.clone())
+                .or_default()
+                .credentials = GeapCredentialsState::Loaded {
+                credentials: geap_credentials("expired-b", Some(0)),
+                loaded_at: SystemTime::now(),
+                minted_for: binding_b.clone(),
+            };
+            manager
+        });
+        manager.update(&mut app, |manager, ctx| {
+            let mut kickoff_count = 0;
+            let rx_a = manager.begin_expired_geap_refresh(&binding_a, ctx, |manager, waiter, _| {
+                kickoff_count += 1;
+                manager.install_geap_refresh_waiter(&binding_a.team_uid, Some(waiter));
+            });
+            let rx_b = manager.begin_expired_geap_refresh(&binding_b, ctx, |manager, waiter, _| {
+                kickoff_count += 1;
+                manager.install_geap_refresh_waiter(&binding_b.team_uid, Some(waiter));
+            });
+
+            assert!(rx_a.is_some());
+            assert!(rx_b.is_some());
+            // Each team started its own mint instead of team B attaching to team A's.
+            assert_eq!(kickoff_count, 2);
+            assert_eq!(
+                manager.take_geap_refresh_waiters(&binding_a.team_uid).len(),
+                1
+            );
+            assert_eq!(
+                manager.take_geap_refresh_waiters(&binding_b.team_uid).len(),
+                1
+            );
         });
     });
 }
@@ -885,7 +954,11 @@ fn declined_geap_kickoff_leaves_no_in_flight_window() {
             // No window was opened, so a later request starts a fresh kickoff
             // instead of attaching to a mint that is not running. This is what
             // makes "waiters present" mean "mint in flight".
-            assert!(manager.geap_refresh_waiters.is_none());
+            assert!(
+                manager
+                    .take_geap_refresh_waiters(&binding.team_uid)
+                    .is_empty()
+            );
         });
     });
 }
@@ -899,12 +972,114 @@ fn geap_mint_failure_cooldown_suppresses_the_blocking_wait() {
 
     // A failed mint restores the expired credential, so without the cooldown
     // every following request would block on a mint that is failing.
-    manager.record_geap_mint_failure();
+    manager.record_geap_mint_failure(&binding.team_uid);
     assert!(!manager.geap_expired_refresh_eligibility(&binding));
 
     // A later success reopens the blocking path.
-    manager.clear_geap_mint_failure();
+    manager.clear_geap_mint_failure(&binding.team_uid);
     assert!(manager.geap_expired_refresh_eligibility(&binding));
+}
+
+#[cfg(not(target_family = "wasm"))]
+#[test]
+fn geap_mint_failure_cooldown_is_scoped_to_its_own_team() {
+    // Team B's cooldown must not suppress team A's blocking wait: the failure map is
+    // keyed by team, not shared process-wide state.
+    let binding_a = geap_gate();
+    let mut binding_b = geap_gate();
+    binding_b.team_uid = "team-b".into();
+
+    let mut manager = make_manager(ApiKeys::default());
+    manager
+        .geap_team_states
+        .entry(binding_a.team_uid.clone())
+        .or_default()
+        .credentials = geap_loaded("expired-a", Some(0));
+    manager
+        .geap_team_states
+        .entry(binding_b.team_uid.clone())
+        .or_default()
+        .credentials = GeapCredentialsState::Loaded {
+        credentials: geap_credentials("expired-b", Some(0)),
+        loaded_at: SystemTime::now(),
+        minted_for: binding_b.clone(),
+    };
+
+    manager.record_geap_mint_failure(&binding_a.team_uid);
+    assert!(!manager.geap_expired_refresh_eligibility(&binding_a));
+    assert!(manager.geap_expired_refresh_eligibility(&binding_b));
+}
+
+#[test]
+fn geap_credentials_for_team_a_never_leaks_to_team_b() {
+    // The crux of PR 3B: two teams' credentials must not collide in the shared
+    // `ApiKeyManager` singleton.
+    let binding_a = geap_gate();
+    let mut binding_b = geap_gate();
+    binding_b.team_uid = "team-b".into();
+
+    let mut manager = make_manager(ApiKeys::default());
+    manager
+        .geap_team_states
+        .entry(binding_a.team_uid.clone())
+        .or_default()
+        .credentials = geap_loaded("token-a", Some(3600));
+
+    // Team B has never minted, so it must see nothing — not team A's token.
+    assert!(
+        manager
+            .api_keys_for_request(false, false, Some(binding_b.clone()))
+            .is_none()
+    );
+    assert!(matches!(
+        manager.geap_credentials_state_for_team(&binding_b.team_uid),
+        GeapCredentialsState::Missing
+    ));
+
+    // Team A's own request still sees its own token.
+    let result = manager
+        .api_keys_for_request(false, false, Some(binding_a))
+        .unwrap();
+    assert_eq!(
+        result.google_cloud_credentials.unwrap().access_token,
+        "token-a"
+    );
+}
+
+#[test]
+fn geap_credentials_state_zero_arg_reports_indeterminate_across_two_teams() {
+    let binding_a = geap_gate();
+    let mut binding_b = geap_gate();
+    binding_b.team_uid = "team-b".into();
+
+    let mut manager = make_manager(ApiKeys::default());
+    assert!(matches!(
+        manager.geap_credentials_state(),
+        GeapCredentialsState::Missing
+    ));
+
+    manager
+        .geap_team_states
+        .entry(binding_a.team_uid.clone())
+        .or_default()
+        .credentials = geap_loaded("token-a", Some(3600));
+    // Exactly one team has minted: the zero-arg read can answer unambiguously.
+    assert!(matches!(
+        manager.geap_credentials_state(),
+        GeapCredentialsState::Loaded { .. }
+    ));
+
+    manager
+        .geap_team_states
+        .entry(binding_b.team_uid.clone())
+        .or_default()
+        .credentials = geap_loaded("token-b", Some(3600));
+    // A second team minted: the zero-arg read must not guess between them, and must
+    // never report `Missing` (both teams plainly have real credentials).
+    assert!(matches!(
+        manager.geap_credentials_state(),
+        GeapCredentialsState::Indeterminate
+    ));
 }
 
 // ── grok expiry + blocking-refresh eligibility ──────────────────

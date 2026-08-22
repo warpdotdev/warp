@@ -102,6 +102,10 @@ pub enum GeapFederation {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GeapMintBinding {
     pub user_uid: String,
+    /// The team this credential was minted for. Included (rather than relying on `audience`
+    /// alone) so two teams that happen to share the same GCP audience/service-account
+    /// configuration still key and compare as distinct credentials.
+    pub team_uid: String,
     pub audience: String,
     pub federation: GeapFederation,
 }
@@ -135,6 +139,11 @@ pub enum GeapCredentialsState {
     Failed {
         error: LoadGeapCredentialsError,
     },
+    /// More than one team's credential state exists and a caller asked for a single answer
+    /// without naming a team (see [`ApiKeyManager::geap_credentials_state`]). Distinct from
+    /// [`Self::Missing`]: the account has real, loaded credentials, but this API can't say
+    /// which team's they are without guessing.
+    Indeterminate,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -220,6 +229,13 @@ fn refresh_scheduled_at(expires_at: SystemTime) -> SystemTime {
 impl GeapCredentialsState {
     pub fn user_facing_components(&self) -> (String, String, Icon) {
         match self {
+            Self::Indeterminate => (
+                "Gemini Enterprise status is ambiguous".to_string(),
+                "More than one team's Gemini Enterprise credentials are active in this app. \
+                 Reopen this page from a window on the team you want to check."
+                    .to_string(),
+                Icon::AlertTriangle,
+            ),
             Self::Missing => (
                 "Gemini Enterprise credentials not loaded".to_string(),
                 "Warp hasn't loaded your Gemini Enterprise credentials yet.".to_string(),
@@ -273,7 +289,11 @@ impl GeapCredentialsState {
             // An incomplete admin setup can't be retried from the client, so it
             // routes to the same admin-guidance affordance as a config failure.
             Self::Unconfigured => Some(GeapRecoveryAction::ContactAdmin),
-            Self::Missing | Self::Disabled | Self::Refreshing { .. } | Self::Loaded { .. } => None,
+            Self::Missing
+            | Self::Disabled
+            | Self::Refreshing { .. }
+            | Self::Loaded { .. }
+            | Self::Indeterminate => None,
         }
     }
 
@@ -282,35 +302,80 @@ impl GeapCredentialsState {
     }
 }
 
+const MISSING_GEAP_CREDENTIALS_STATE: GeapCredentialsState = GeapCredentialsState::Missing;
+const INDETERMINATE_GEAP_CREDENTIALS_STATE: GeapCredentialsState =
+    GeapCredentialsState::Indeterminate;
+
+/// Per-team Gemini Enterprise (GEAP) credential state on [`ApiKeyManager`]. One team's mint,
+/// refresh coalescing, and failure cooldown never touches another's: each lives in its own
+/// entry, keyed by team UID, rather than a single value shared across every window.
+#[derive(Default)]
+pub(crate) struct GeapTeamState {
+    pub(crate) credentials: GeapCredentialsState,
+    #[cfg(not(target_family = "wasm"))]
+    refresh_waiters: Option<Vec<oneshot::Sender<GeapRefreshOutcome>>>,
+    #[cfg(not(target_family = "wasm"))]
+    last_mint_failure: Option<SystemTime>,
+}
+
 impl ApiKeyManager {
     pub fn set_geap_credentials_state(
         &mut self,
+        team_uid: &str,
         state: GeapCredentialsState,
         ctx: &mut ModelContext<Self>,
     ) {
-        if self.geap_credentials_state == state {
+        let entry = self
+            .geap_team_states
+            .entry(team_uid.to_string())
+            .or_default();
+        if entry.credentials == state {
             return;
         }
-        self.geap_credentials_state = state;
+        entry.credentials = state;
         ctx.emit(ApiKeyManagerEvent::KeysUpdated);
     }
 
+    /// The state for `team_uid`, or `Missing` if that team has never requested a mint.
+    pub fn geap_credentials_state_for_team(&self, team_uid: &str) -> &GeapCredentialsState {
+        self.geap_team_states
+            .get(team_uid)
+            .map(|state| &state.credentials)
+            .unwrap_or(&MISSING_GEAP_CREDENTIALS_STATE)
+    }
+
+    /// Back-compat, team-blind read for the one remaining caller that displays status without
+    /// a resolved team scope (the Warp Agent settings page). This is a lookup, not a
+    /// migration: it reports a team's state only while at most one team has ever requested a
+    /// mint, and reports [`GeapCredentialsState::Indeterminate`] — never [`GeapCredentialsState::Missing`] —
+    /// once a second team does, so "can't tell which team" is never mistaken for "no
+    /// credentials". Prefer [`Self::geap_credentials_state_for_team`] wherever a team is known.
     pub fn geap_credentials_state(&self) -> &GeapCredentialsState {
-        &self.geap_credentials_state
+        match self
+            .geap_team_states
+            .values()
+            .collect::<Vec<_>>()
+            .as_slice()
+        {
+            [] => &MISSING_GEAP_CREDENTIALS_STATE,
+            [state] => &state.credentials,
+            _ => &INDETERMINATE_GEAP_CREDENTIALS_STATE,
+        }
     }
 
     /// The Gemini Enterprise credential to attach to an outgoing request, or
     /// `None` when there is nothing attachable.
     ///
     /// A credential attaches only when it was minted for this same
-    /// (user, audience, service account). A re-mint in flight keeps
+    /// (user, team, audience, service account). A re-mint in flight keeps
     /// serving the previous credential, and possibly-expired credentials are
     /// still attached.
     pub fn geap_credentials_for_request(
         &self,
         binding: &GeapMintBinding,
     ) -> Option<api::request::settings::api_keys::GoogleCloudCredentials> {
-        match self.geap_credentials_state {
+        let state = self.geap_team_states.get(&binding.team_uid)?;
+        match state.credentials {
             GeapCredentialsState::Loaded {
                 ref credentials,
                 ref minted_for,
@@ -334,10 +399,13 @@ impl ApiKeyManager {
     /// and is at or past hard expiry, and no mint has failed recently.
     #[cfg(not(target_family = "wasm"))]
     pub fn geap_expired_refresh_eligibility(&self, binding: &GeapMintBinding) -> bool {
-        if self.geap_mint_recently_failed() {
+        if self.geap_mint_recently_failed(&binding.team_uid) {
             return false;
         }
-        match self.geap_credentials_state() {
+        let Some(state) = self.geap_team_states.get(&binding.team_uid) else {
+            return false;
+        };
+        match &state.credentials {
             GeapCredentialsState::Loaded {
                 credentials,
                 minted_for,
@@ -367,7 +435,13 @@ impl ApiKeyManager {
         }
 
         let (tx, rx) = oneshot::channel();
-        match self.geap_refresh_waiters.as_mut() {
+        match self
+            .geap_team_states
+            .entry(binding.team_uid.clone())
+            .or_default()
+            .refresh_waiters
+            .as_mut()
+        {
             // A mint is genuinely in flight, since the waiter list is installed
             // by the mint itself. Attach to it.
             Some(waiters) => waiters.push(tx),
@@ -380,33 +454,51 @@ impl ApiKeyManager {
     #[cfg(not(target_family = "wasm"))]
     pub fn install_geap_refresh_waiter(
         &mut self,
+        team_uid: &str,
         waiter: Option<oneshot::Sender<GeapRefreshOutcome>>,
     ) {
-        self.geap_refresh_waiters = Some(waiter.into_iter().collect());
+        self.geap_team_states
+            .entry(team_uid.to_string())
+            .or_default()
+            .refresh_waiters = Some(waiter.into_iter().collect());
     }
 
     #[cfg(not(target_family = "wasm"))]
-    pub fn take_geap_refresh_waiters(&mut self) -> Vec<oneshot::Sender<GeapRefreshOutcome>> {
-        self.geap_refresh_waiters.take().unwrap_or_default()
+    pub fn take_geap_refresh_waiters(
+        &mut self,
+        team_uid: &str,
+    ) -> Vec<oneshot::Sender<GeapRefreshOutcome>> {
+        self.geap_team_states
+            .get_mut(team_uid)
+            .and_then(|state| state.refresh_waiters.take())
+            .unwrap_or_default()
     }
 
     #[cfg(not(target_family = "wasm"))]
-    pub fn record_geap_mint_failure(&mut self) {
-        self.geap_last_mint_failure = Some(SystemTime::now());
+    pub fn record_geap_mint_failure(&mut self, team_uid: &str) {
+        self.geap_team_states
+            .entry(team_uid.to_string())
+            .or_default()
+            .last_mint_failure = Some(SystemTime::now());
     }
 
     #[cfg(not(target_family = "wasm"))]
-    pub fn clear_geap_mint_failure(&mut self) {
-        self.geap_last_mint_failure = None;
+    pub fn clear_geap_mint_failure(&mut self, team_uid: &str) {
+        if let Some(state) = self.geap_team_states.get_mut(team_uid) {
+            state.last_mint_failure = None;
+        }
     }
 
     #[cfg(not(target_family = "wasm"))]
-    fn geap_mint_recently_failed(&self) -> bool {
-        self.geap_last_mint_failure.is_some_and(|failed_at| {
-            SystemTime::now()
-                .duration_since(failed_at)
-                .is_ok_and(|elapsed| elapsed < GEAP_MINT_FAILURE_COOLDOWN)
-        })
+    fn geap_mint_recently_failed(&self, team_uid: &str) -> bool {
+        self.geap_team_states
+            .get(team_uid)
+            .and_then(|state| state.last_mint_failure)
+            .is_some_and(|failed_at| {
+                SystemTime::now()
+                    .duration_since(failed_at)
+                    .is_ok_and(|elapsed| elapsed < GEAP_MINT_FAILURE_COOLDOWN)
+            })
     }
 }
 

@@ -421,6 +421,21 @@ impl UserWorkspaces {
         self.window_team_uids.get(&window_id).copied().flatten()
     }
 
+    /// The distinct team UIDs currently selected by at least one open window.
+    ///
+    /// For scoping background, cross-window work (e.g. per-team credential refresh) to the
+    /// teams actually in use, instead of a single ambient "current" team. This aggregates the
+    /// private window registry rather than exposing it, so it cannot be used to mint a
+    /// `TeamContext` for a specific window.
+    pub(crate) fn team_uids_in_use(&self) -> Vec<ServerId> {
+        self.window_team_uids
+            .values()
+            .filter_map(|team_uid| *team_uid)
+            .collect::<HashSet<_>>()
+            .into_iter()
+            .collect()
+    }
+
     /// Returns `true` when the user belongs to more than one team in the current
     /// workspace, meaning the team-switcher pill and dropdown should be shown.
     /// Single-team and no-workspace users return `false` so their UI is unchanged.
@@ -1003,6 +1018,51 @@ impl UserWorkspaces {
         }
 
         match self.gemini_enterprise_host_enablement_setting() {
+            HostEnablementSetting::Enforce => true,
+            HostEnablementSetting::RespectUserSetting => *AISettings::as_ref(app)
+                .gemini_enterprise_credentials_enabled
+                .value(),
+        }
+    }
+
+    /// `team`'s own Gemini Enterprise (GEAP) host configuration, as opposed to
+    /// [`Self::gemini_enterprise_host_settings`]'s ambient current-workspace value. Use this
+    /// for an operation scoped to a specific team (e.g. a credential mint), so a concurrent
+    /// window on a different team can never source its GCP audience/service-account.
+    pub(crate) fn gemini_enterprise_host_settings_for_team(
+        team: &Team,
+    ) -> Option<&super::workspace::LlmHostSettings> {
+        team.settings
+            .llm_settings
+            .host_configs
+            .get(&LLMModelHost::GeminiEnterprise)
+    }
+
+    /// [`Self::is_gemini_enterprise_credentials_enabled`], scoped to `team` rather than the
+    /// ambient current workspace. The `AISettings` user toggle stays global by design (it is a
+    /// per-user, not per-team, preference); only the admin enablement and host configuration
+    /// are read from `team`.
+    pub(crate) fn is_gemini_enterprise_credentials_enabled_for_team(
+        &self,
+        team: &Team,
+        app: &AppContext,
+    ) -> bool {
+        if !FeatureFlag::GeminiEnterprise.is_enabled() {
+            return false;
+        }
+        if AuthStateProvider::as_ref(app)
+            .get()
+            .is_anonymous_or_logged_out()
+        {
+            return false;
+        }
+        let Some(settings) = Self::gemini_enterprise_host_settings_for_team(team) else {
+            return false;
+        };
+        if !(team.settings.llm_settings.enabled && settings.enabled) {
+            return false;
+        }
+        match &settings.enablement_setting {
             HostEnablementSetting::Enforce => true,
             HostEnablementSetting::RespectUserSetting => *AISettings::as_ref(app)
                 .gemini_enterprise_credentials_enabled

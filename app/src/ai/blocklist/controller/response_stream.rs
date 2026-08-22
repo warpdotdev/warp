@@ -18,6 +18,7 @@ use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent::{AIIdentifiers, CancellationReason};
 use crate::network::NetworkStatus;
 use crate::send_telemetry_from_ctx;
+use crate::server::ids::ServerId;
 use crate::server::retry_strategies::backoff_after_attempts;
 use crate::server::server_api::{AIApiError, ServerApiProvider};
 
@@ -295,6 +296,12 @@ pub struct ResponseStream {
     /// Note this is unique compared to `id`; this is unique across retry requests while the response
     /// stream id remains stable.
     current_request_id: Option<Uuid>,
+
+    /// The team this request's window was on when the stream started, captured once so a
+    /// retry, GEAP refresh, or completion callback never re-resolves "current team" from a
+    /// window that may have since switched teams. `None` when the window had no team
+    /// selected.
+    team_uid: Option<ServerId>,
 }
 
 impl ResponseStream {
@@ -328,6 +335,7 @@ impl ResponseStream {
             error_event_emitted: false,
             deferred_retry_pending: false,
             current_request_id: Some(Uuid::new_v4()),
+            team_uid: None,
         }
     }
 
@@ -335,13 +343,14 @@ impl ResponseStream {
         params: api::RequestParams,
         ai_identifiers: AIIdentifiers,
         recovery: RecoveryBudget,
+        team_uid: Option<ServerId>,
         ctx: &mut ModelContext<Self>,
     ) -> Self {
         let (cancellation_tx, cancellation_rx) = oneshot::channel();
         let start_time = Local::now();
 
         let request_id = Uuid::new_v4();
-        Self::spawn_request(request_id, params.clone(), cancellation_rx, ctx);
+        Self::spawn_request(request_id, params.clone(), team_uid, cancellation_rx, ctx);
         Self {
             id: ResponseStreamId(Uuid::new_v4().to_string()),
             params,
@@ -358,6 +367,7 @@ impl ResponseStream {
             error_event_emitted: false,
             deferred_retry_pending: false,
             current_request_id: Some(request_id),
+            team_uid,
         }
     }
 
@@ -428,7 +438,13 @@ impl ResponseStream {
 
         let request_id = Uuid::new_v4();
         self.current_request_id = Some(request_id);
-        Self::spawn_request(request_id, self.params.clone(), cancellation_rx, ctx);
+        Self::spawn_request(
+            request_id,
+            self.params.clone(),
+            self.team_uid,
+            cancellation_rx,
+            ctx,
+        );
     }
 
     /// Decides how to recover from `error` and starts the recovery, or reports the failure
@@ -515,6 +531,7 @@ impl ResponseStream {
     fn spawn_request(
         request_id: Uuid,
         params: api::RequestParams,
+        team_uid: Option<ServerId>,
         cancellation_rx: oneshot::Receiver<()>,
         ctx: &mut ModelContext<Self>,
     ) {
@@ -589,15 +606,20 @@ impl ResponseStream {
                         .get(&LLMModelHost::GeminiEnterprise)
                         .is_some_and(|host| host.enabled)
                 });
+            // Uses this request's own captured team (see `ResponseStream::team_uid`), never
+            // whichever team the window is on by the time this callback runs.
             if uses_geap
                 && let Some(binding) =
-                    crate::ai::geap_credentials::current_geap_policy(ctx).mint_binding()
+                    crate::ai::geap_credentials::geap_binding_for_team(ctx, team_uid)
             {
                 let refresh_binding = binding.clone();
                 let refresh_rx = ApiKeyManager::handle(ctx).update(ctx, |manager, ctx| {
                     manager.begin_expired_geap_refresh(&binding, ctx, |manager, waiter, ctx| {
                         crate::ai::geap_credentials::start_geap_refresh_for_waiter(
-                            manager, waiter, ctx,
+                            manager,
+                            team_uid.expect("a mintable binding implies a resolved team"),
+                            waiter,
+                            ctx,
                         );
                     })
                 });
@@ -636,6 +658,9 @@ impl ResponseStream {
                 }
             }
         }
+
+        #[cfg(target_family = "wasm")]
+        let _ = team_uid;
 
         Self::spawn_generate(request_id, params, cancellation_rx, ctx);
     }

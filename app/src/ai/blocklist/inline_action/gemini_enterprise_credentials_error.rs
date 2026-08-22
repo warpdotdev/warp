@@ -11,6 +11,7 @@ use warpui::{
 use super::inline_action_icons::icon_size;
 use crate::Appearance;
 use crate::ai::blocklist::view_util::error_color;
+use crate::server::ids::ServerId;
 use crate::ui_components::blended_colors;
 use crate::view_components::action_button::{ActionButton, ButtonSize, NakedTheme, PrimaryTheme};
 
@@ -34,7 +35,10 @@ pub struct GeminiEnterpriseCredentialsErrorView {
 }
 
 impl GeminiEnterpriseCredentialsErrorView {
-    pub fn new(ctx: &mut ViewContext<Self>) -> Self {
+    /// `team_uid` is the team whose window this error originated in, resolved once by the
+    /// caller in `block.rs`. `None` when that window had no team selected, in which case this
+    /// view has no team-scoped state to read.
+    pub fn new(team_uid: Option<ServerId>, ctx: &mut ViewContext<Self>) -> Self {
         let refresh_button = ctx.add_typed_action_view(|_| {
             ActionButton::new("Refresh credentials", PrimaryTheme)
                 .with_size(ButtonSize::InlineActionHeader)
@@ -44,33 +48,43 @@ impl GeminiEnterpriseCredentialsErrorView {
                     )
                 })
         });
-        ctx.subscribe_to_model(&ApiKeyManager::handle(ctx), |view, manager, _event, ctx| {
-            if !view.refresh_requested {
-                return;
-            }
+        ctx.subscribe_to_model(
+            &ApiKeyManager::handle(ctx),
+            move |view, manager, _event, ctx| {
+                if !view.refresh_requested {
+                    return;
+                }
 
-            match manager.as_ref(ctx).geap_credentials_state().clone() {
-                GeapCredentialsState::Refreshing { .. } => {
-                    view.update_refresh_button("Refreshing...", true, ctx);
+                let state = team_uid.map_or(GeapCredentialsState::Missing, |team_uid| {
+                    manager
+                        .as_ref(ctx)
+                        .geap_credentials_state_for_team(&team_uid.to_string())
+                        .clone()
+                });
+                match state {
+                    GeapCredentialsState::Refreshing { .. } => {
+                        view.update_refresh_button("Refreshing...", true, ctx);
+                    }
+                    GeapCredentialsState::Loaded {
+                        ref credentials, ..
+                    } if !credentials.needs_refresh() => {
+                        view.refresh_succeeded = true;
+                        view.update_refresh_button("Credentials refreshed", true, ctx);
+                    }
+                    GeapCredentialsState::Missing
+                    | GeapCredentialsState::Disabled
+                    | GeapCredentialsState::Unconfigured
+                    | GeapCredentialsState::Indeterminate
+                    | GeapCredentialsState::Loaded { .. }
+                    | GeapCredentialsState::Failed { .. } => {
+                        view.refresh_requested = false;
+                        view.refresh_succeeded = false;
+                        view.update_refresh_button("Try again", false, ctx);
+                    }
                 }
-                GeapCredentialsState::Loaded {
-                    ref credentials, ..
-                } if !credentials.needs_refresh() => {
-                    view.refresh_succeeded = true;
-                    view.update_refresh_button("Credentials refreshed", true, ctx);
-                }
-                GeapCredentialsState::Missing
-                | GeapCredentialsState::Disabled
-                | GeapCredentialsState::Unconfigured
-                | GeapCredentialsState::Loaded { .. }
-                | GeapCredentialsState::Failed { .. } => {
-                    view.refresh_requested = false;
-                    view.refresh_succeeded = false;
-                    view.update_refresh_button("Try again", false, ctx);
-                }
-            }
-            ctx.notify();
-        });
+                ctx.notify();
+            },
+        );
         let manage_button = ctx.add_typed_action_view(|_| {
             ActionButton::new("Manage", NakedTheme)
                 .with_size(ButtonSize::InlineActionHeader)
