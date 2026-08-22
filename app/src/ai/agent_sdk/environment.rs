@@ -957,15 +957,26 @@ impl EnvironmentCommandRunner {
             updated_env.base_image = Some(BaseImage::DockerImage(new_docker_image));
         }
 
+        // The server writes repos into *both* source_repos (authoritative) and
+        // github_repos (legacy mirror). When we clone the existing model and
+        // modify only github_repos, the serialized update still contains the
+        // original source_repos, which the server then treats as authoritative
+        // — silently dropping any github_repos changes. Fix: use
+        // effective_github_repos() to get the canonical repo list (from
+        // source_repos when present, falling back to github_repos), apply
+        // adds/removes on that list, write back into github_repos, and clear
+        // source_repos so the server falls back to github_repos.
+        let mut effective = updated_env.effective_github_repos();
+
         for repo in add_repos {
-            if !updated_env.github_repos.contains(&repo) {
-                updated_env.github_repos.push(repo);
+            if !effective.contains(&repo) {
+                effective.push(repo);
             }
         }
 
         for repo in &remove_repos {
-            if let Some(pos) = updated_env.github_repos.iter().position(|r| r == repo) {
-                updated_env.github_repos.remove(pos);
+            if let Some(pos) = effective.iter().position(|r| r == repo) {
+                effective.remove(pos);
             } else {
                 eprintln!(
                     "Warning: repository {}/{} not found in environment, skipping removal",
@@ -973,6 +984,10 @@ impl EnvironmentCommandRunner {
                 );
             }
         }
+
+        updated_env.github_repos = effective;
+        // Clear source_repos so the server falls back to github_repos.
+        updated_env.source_repos = None;
 
         for cmd in add_setup_commands {
             updated_env.setup_commands.push(cmd);
