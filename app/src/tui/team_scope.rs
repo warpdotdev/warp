@@ -36,15 +36,6 @@ use crate::workspaces::user_workspaces::{UserWorkspaces, UserWorkspacesEvent};
 /// alongside the rest of a window's local state.
 const LAST_TEAM_STORAGE_KEY: &str = "TuiLastTeamUid";
 
-/// Events emitted by [`TuiTeamScope`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TuiTeamScopeEvent {
-    /// The window was registered with a starting team, which is `None` when the user belongs
-    /// to no team. Scope questions about the window answer from here on, and `/team` may
-    /// change the answer afterwards.
-    Registered { team_uid: Option<ServerId> },
-}
-
 /// Singleton that gives the TUI window a team once the server names the user's teams, and
 /// records explicit `/team` choices for the next session.
 pub struct TuiTeamScope {
@@ -89,7 +80,6 @@ impl TuiTeamScope {
         UserWorkspaces::handle(ctx).update(ctx, |user_workspaces, ctx| {
             user_workspaces.register_window(window_id, team_uid, ctx);
         });
-        ctx.emit(TuiTeamScopeEvent::Registered { team_uid });
     }
 }
 
@@ -113,7 +103,10 @@ pub(crate) fn store_last_team_uid(team_uid: ServerId, ctx: &AppContext) {
 }
 
 impl Entity for TuiTeamScope {
-    type Event = TuiTeamScopeEvent;
+    /// Registration is observed through `UserWorkspaces`'s own `WindowTeamChanged`, which is
+    /// what scoped consumers already subscribe to, so this model has nothing of its own to
+    /// announce.
+    type Event = ();
 }
 
 impl SingletonEntity for TuiTeamScope {}

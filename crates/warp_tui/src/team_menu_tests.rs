@@ -22,3 +22,29 @@ fn the_active_team_is_marked_and_every_team_stays_selectable() {
     assert_eq!(inactive.state_suffix, None);
     assert!(inactive.is_selectable);
 }
+
+#[test]
+fn an_empty_query_preselects_the_active_team() {
+    let rows = [
+        row(123, "Platform", false),
+        row(456, "Security", true),
+        row(789, "Growth", false),
+    ];
+
+    assert_eq!(preferred_row_index(&rows), Some(1));
+}
+
+/// Searching filters the active team out, and the selection has to move with it. Without a
+/// fallback the list is left with nothing selected, so typing a name and pressing enter --
+/// the whole point of a searchable picker -- silently does nothing.
+#[test]
+fn filtering_out_the_active_team_still_preselects_a_row() {
+    let rows = [row(123, "Platform", false), row(789, "Growth", false)];
+
+    assert_eq!(preferred_row_index(&rows), Some(0));
+}
+
+#[test]
+fn no_rows_preselects_nothing() {
+    assert_eq!(preferred_row_index(&[]), None);
+}

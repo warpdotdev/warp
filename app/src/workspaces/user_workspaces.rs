@@ -430,7 +430,8 @@ impl UserWorkspaces {
         self.window_team_uids.contains_key(&window_id)
     }
 
-    /// Moves an already-registered window onto `team_uid`, overwriting whatever it was on.
+    /// Puts `window_id` on `team_uid`, overwriting whatever it was on and registering it if it
+    /// was not already.
     ///
     /// This is the only path that overwrites a window's team, and it exists for front-ends
     /// that switch teams in place. The GUI has no such path: its team switcher opens a *new*

@@ -183,7 +183,7 @@ impl TuiTeamMenuModel {
             status: list
                 .rows()
                 .is_empty()
-                .then(|| TuiInlineMenuStatus::Empty("You are not on any team".to_owned())),
+                .then(|| TuiInlineMenuStatus::Empty("No teams found".to_owned())),
         })
     }
 
@@ -206,7 +206,7 @@ impl TuiTeamMenuModel {
                 is_active: Some(team.uid) == active_uid,
             })
             .collect::<Vec<_>>();
-        let preferred_index = rows.iter().position(|row| row.is_active);
+        let preferred_index = preferred_row_index(&rows);
         let TuiTeamMenuState::Open { list } = &mut self.state else {
             return;
         };
@@ -223,6 +223,16 @@ impl TuiTeamMenuRow {
     fn is_selectable(&self) -> bool {
         true
     }
+}
+
+/// Prefers the active team, falling back to the first selectable row.
+///
+/// The fallback is what makes search work: a query that filters the active team out would
+/// otherwise leave nothing selected, so typing a name and pressing enter would do nothing.
+fn preferred_row_index(rows: &[TuiTeamMenuRow]) -> Option<usize> {
+    rows.iter()
+        .position(|row| row.is_active)
+        .or_else(|| rows.iter().position(|row| row.is_selectable()))
 }
 
 fn snapshot_row(row: &TuiTeamMenuRow) -> TuiInlineMenuRow {

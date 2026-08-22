@@ -16,7 +16,7 @@ pub use mcp::{
     TuiMcpServerStatus, TuiMcpSnapshot, TuiMcpSyncedTemplateProvenance, TuiMcpTemplateVariable,
     TuiMcpTransport, TuiMcpVariableValue,
 };
-pub use team_scope::{TuiTeamScope, TuiTeamScopeEvent};
+pub use team_scope::TuiTeamScope;
 use telemetry::{
     AbandonmentPhase, AuthenticationEntrypoint, TuiOnboardingTelemetry, TuiOnboardingTelemetryEvent,
 };
