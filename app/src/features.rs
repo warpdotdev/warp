@@ -267,8 +267,6 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::AllowOpeningFileLinksUsingEditorEnv,
         #[cfg(feature = "revert_diff_hunk")]
         FeatureFlag::RevertDiffHunk,
-        #[cfg(feature = "code_review_save_changes")]
-        FeatureFlag::CodeReviewSaveChanges,
         #[cfg(feature = "file_tree")]
         FeatureFlag::FileTree,
         #[cfg(feature = "allow_ignoring_input_suggestions")]
