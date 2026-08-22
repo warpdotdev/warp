@@ -852,6 +852,12 @@ impl TextFrame {
         self.lines.as_ref()
     }
 
+    /// Whether any line in this frame has a character that resolved to a fallback or missing
+    /// glyph.
+    pub fn has_missing_glyphs(&self) -> bool {
+        self.lines.iter().any(Line::has_missing_glyphs)
+    }
+
     pub fn max_width(&self) -> f32 {
         self.max_width
     }
@@ -1016,6 +1022,11 @@ impl Line {
 
     pub fn height(&self) -> f32 {
         self.line_height_ratio * self.font_size
+    }
+
+    /// Whether this line has any characters that resolved to a fallback or missing glyph.
+    pub fn has_missing_glyphs(&self) -> bool {
+        !self.chars_with_missing_glyphs.is_empty()
     }
 
     pub fn first_glyph(&self) -> Option<&Glyph> {

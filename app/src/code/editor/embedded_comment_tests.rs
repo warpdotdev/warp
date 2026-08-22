@@ -1,10 +1,12 @@
+use pathfinder_geometry::vector::vec2f;
 use serde_yaml::{Mapping, Value};
 use warp_editor::content::markdown::MarkdownStyle;
+use warp_editor::render::model::LaidOutEmbeddedItem;
 use warpui::{EntityId, WindowId};
 
 use super::{
     COMMENT_ID_MAPPING_KEY, ENTITY_ID_MAPPING_KEY, EmbeddedCommentSpace, EmbeddedItem as _,
-    WINDOW_ID_MAPPING_KEY, comment_embedded_item_conversion,
+    LaidOutEmbeddedCommentSpace, WINDOW_ID_MAPPING_KEY, comment_embedded_item_conversion,
 };
 use crate::code_review::comments::CommentId;
 
@@ -134,6 +136,16 @@ fn test_comment_embedded_item_conversion_invalid_entity_id() {
 
     let result = comment_embedded_item_conversion(mapping);
     assert!(result.is_none());
+}
+
+#[test]
+fn test_laid_out_embedded_comment_space_has_missing_glyphs_is_false() {
+    // The comment's own text is rendered by an independent `RichTextEditorView`, not by any
+    // `TextFrame` this struct holds, so it never has a missing glyph of its own to report.
+    let space = LaidOutEmbeddedCommentSpace {
+        size: vec2f(100., 24.),
+    };
+    assert!(!space.has_missing_glyphs());
 }
 
 #[test]

@@ -142,6 +142,14 @@ impl LaidOutEmbeddedItem for LaidOutEmbeddedCommentSpace {
     fn as_any(&self) -> &dyn Any {
         self
     }
+
+    fn has_missing_glyphs(&self) -> bool {
+        // Unlike a workflow embed, this holds no `TextFrame`s of its own: the comment text is
+        // rendered by its own independent `RichTextEditorView` (see `CommentEditor`), which
+        // subscribes to `FallbackFontModel` and rebuilds its own layout when it has a missing
+        // glyph.
+        false
+    }
 }
 
 pub struct RenderableEmbeddedCommentSpace {

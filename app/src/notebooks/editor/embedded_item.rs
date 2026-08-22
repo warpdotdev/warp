@@ -432,6 +432,18 @@ impl LaidOutEmbeddedItem for LaidOutEmbeddedWorkflow {
     fn as_any(&self) -> &dyn std::any::Any {
         self
     }
+
+    fn has_missing_glyphs(&self) -> bool {
+        // Unlike a comment embed, this holds its title/description/command `TextFrame`s directly
+        // (rendered straight into the parent document's render tree), and has no independent
+        // model of its own to catch a `FallbackFontEvent`, so check them here.
+        self.title.has_missing_glyphs()
+            || self
+                .description
+                .as_ref()
+                .is_some_and(|frame| frame.has_missing_glyphs())
+            || self.command.iter().any(|frame| frame.has_missing_glyphs())
+    }
 }
 
 pub struct RenderableEmbeddedWorkflow {
@@ -640,3 +652,7 @@ impl RenderableBlock for RenderableEmbeddedWorkflow {
         self.footer.dispatch_event(event, ctx, app)
     }
 }
+
+#[cfg(test)]
+#[path = "embedded_item_tests.rs"]
+mod tests;

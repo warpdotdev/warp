@@ -254,6 +254,13 @@ impl<'a> RenderContentTreeRef<'a> {
             Some(item)
         })
     }
+
+    /// Whether any currently laid-out block has a character that resolved to a fallback or
+    /// missing glyph. Used to skip a layout rebuild that a font becoming available cannot
+    /// possibly change.
+    pub fn has_missing_glyphs(&self) -> bool {
+        self.block_items().any(BlockItem::has_missing_glyphs)
+    }
     /// Iterator over items visible in the current viewport.
     ///
     /// This returns both the `ViewportItem` and the backing `BlockItem`, for identifying what kind
@@ -1594,6 +1601,13 @@ pub trait LaidOutEmbeddedItem: std::fmt::Debug + Send + Sync {
     fn spacing(&self) -> BlockSpacing;
     /// Returns this object as a ref to the Any type.  Needed for typecasts.
     fn as_any(&self) -> &dyn Any;
+    /// Whether this embed currently renders a character that resolved to a fallback or missing
+    /// glyph. Defaults to `true` (conservative: assume a fallback font could still be relevant)
+    /// since most implementors don't own any `TextFrame`s directly and can't answer this
+    /// precisely; override it when they do.
+    fn has_missing_glyphs(&self) -> bool {
+        true
+    }
 }
 
 #[derive(Default, Debug, Clone, Copy, PartialEq)]
@@ -1665,6 +1679,10 @@ impl ParagraphBlock {
             .fold(CharOffset::zero(), |sum, paragraph| {
                 sum + paragraph.content_length
             })
+    }
+
+    fn has_missing_glyphs(&self) -> bool {
+        self.paragraphs.iter().any(Paragraph::has_missing_glyphs)
     }
 
     pub fn width(&self) -> Pixels {
@@ -1772,6 +1790,10 @@ impl Paragraph {
 
     pub(super) fn frame(&self) -> &TextFrame {
         &self.frame
+    }
+
+    fn has_missing_glyphs(&self) -> bool {
+        self.frame.has_missing_glyphs()
     }
 
     /// Whether or not this paragraph is effectively empty.
@@ -2005,6 +2027,13 @@ impl LaidOutTable {
 
     pub fn content_length(&self) -> CharOffset {
         self.content_length
+    }
+
+    fn has_missing_glyphs(&self) -> bool {
+        self.cell_text_frames
+            .iter()
+            .flatten()
+            .any(|frame| frame.has_missing_glyphs())
     }
 
     pub fn viewport_width(&self, viewport_width: Pixels) -> Pixels {
@@ -4642,6 +4671,34 @@ impl BlockItem {
     pub fn is_trailing_newline(&self) -> bool {
         matches!(self, BlockItem::TrailingNewLine(_))
     }
+
+    /// Whether this block currently has a character that resolved to a fallback or missing
+    /// glyph. `Embedded` blocks delegate to [`LaidOutEmbeddedItem::has_missing_glyphs`], since
+    /// some embed kinds (e.g. workflow cards) render their own `TextFrame`s directly into this
+    /// document's render tree rather than through an independent subscriber.
+    pub fn has_missing_glyphs(&self) -> bool {
+        match self {
+            BlockItem::Paragraph(paragraph)
+            | BlockItem::Header { paragraph, .. }
+            | BlockItem::UnorderedList { paragraph, .. }
+            | BlockItem::OrderedList { paragraph, .. }
+            | BlockItem::TaskList { paragraph, .. } => paragraph.has_missing_glyphs(),
+            BlockItem::TextBlock { paragraph_block }
+            | BlockItem::RunnableCodeBlock {
+                paragraph_block, ..
+            }
+            | BlockItem::TemporaryBlock {
+                paragraph_block, ..
+            } => paragraph_block.has_missing_glyphs(),
+            BlockItem::Table(laid_out_table) => laid_out_table.has_missing_glyphs(),
+            BlockItem::Embedded(embedded_item) => embedded_item.has_missing_glyphs(),
+            BlockItem::MermaidDiagram { .. }
+            | BlockItem::HorizontalRule(_)
+            | BlockItem::Image { .. }
+            | BlockItem::TrailingNewLine(_)
+            | BlockItem::Hidden(_) => false,
+        }
+    }
 }
 
 impl Positioned<'_, BlockItem> {
@@ -5800,6 +5857,13 @@ impl LaidOutEmbeddedItem for BrokenBlockEmbedding {
 
     fn as_any(&self) -> &dyn Any {
         self
+    }
+
+    fn has_missing_glyphs(&self) -> bool {
+        // The placeholder's "Embed not found" label (see `RenderableBrokenEmbedding::new`) is
+        // fixed ASCII text, which the app's fallback font mapping never routes to an external
+        // family for (see `font_fallback::fallback_font_fn`'s char ranges).
+        false
     }
 }
 
