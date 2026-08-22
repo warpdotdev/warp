@@ -1994,7 +1994,7 @@ impl WarpAgentPageView {
 
         categories.push(Category::new(
             "Agent Attribution",
-            vec![Box::new(AgentAttributionWidget::default())],
+            vec![Box::new(AgentAttributionWidget::new(ctx))],
         ));
 
         #[cfg_attr(not(feature = "local_fs"), allow(unused_mut))]
@@ -4169,9 +4169,18 @@ pub(crate) fn derive_agent_attribution_toggle_state(
     }
 }
 
-#[derive(Default)]
 struct AgentAttributionWidget {
     toggle: SwitchStateHandle,
+    view_handle: WeakViewHandle<WarpAgentPageView>,
+}
+
+impl AgentAttributionWidget {
+    fn new(ctx: &ViewContext<WarpAgentPageView>) -> Self {
+        Self {
+            toggle: Default::default(),
+            view_handle: ctx.handle(),
+        }
+    }
 }
 
 impl SettingsWidget for AgentAttributionWidget {
@@ -4190,7 +4199,16 @@ impl SettingsWidget for AgentAttributionWidget {
         let ai_settings = AISettings::as_ref(app);
         let is_any_ai_enabled = ai_settings.is_any_ai_enabled(app);
 
-        let org_setting = UserWorkspaces::as_ref(app).get_agent_attribution_setting();
+        // Whether this toggle is locked is live policy, so it is resolved from the window
+        // being painted rather than captured when the page was built: moving the window to a
+        // team with a different attribution policy has to change the toggle on the next
+        // frame. A page rendered outside any window has no team to read, so the user keeps
+        // control of their own preference.
+        let workspaces = UserWorkspaces::as_ref(app);
+        let org_setting = workspaces
+            .team_context(&self.view_handle, app)
+            .map(|scope| workspaces.agent_attribution_setting_for_scope(&scope))
+            .unwrap_or_default();
         let state = derive_agent_attribution_toggle_state(
             &org_setting,
             *ai_settings.agent_attribution_enabled,

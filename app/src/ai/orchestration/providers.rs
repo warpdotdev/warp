@@ -87,6 +87,12 @@ pub fn first_filtered_model_id(harness_type: &str, ctx: &AppContext) -> Option<S
 /// Resolves the workspace-configured default host slug, honoring the
 /// `WARP_CLOUD_MODE_DEFAULT_HOST` env var override for developer
 /// testing. Mirrors the single-agent ambient flow.
+///
+/// Still reads ambient workspace settings rather than the window's team. Every consumer of
+/// this chain — the plan card, the confirmation card, the TUI orchestration block, and the
+/// handoff pipeline — has to move together, and two of them need decisions this function
+/// cannot make on its own: the TUI has no window to scope to, and the handoff bakes the host
+/// into a cloud run's config, which pins rather than resolves late.
 pub fn resolve_default_host_slug(ctx: &AppContext) -> Option<String> {
     if let Ok(slug) = std::env::var(DEFAULT_HOST_ENV_VAR) {
         let trimmed = slug.trim();
@@ -95,7 +101,7 @@ pub fn resolve_default_host_slug(ctx: &AppContext) -> Option<String> {
         }
     }
     UserWorkspaces::as_ref(ctx)
-        .default_host_slug()
+        .unscoped_default_host_slug()
         .map(str::to_string)
         .filter(|s| !s.trim().is_empty())
 }
