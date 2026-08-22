@@ -187,6 +187,79 @@ fn handle_onboarding_credit_purchase_event(
     }
 }
 
+/// Whether `event` can have changed the AI autonomy policy applying to `window_id`.
+///
+/// Matched exhaustively rather than with a wildcard so that a new event has to be
+/// considered here. Missing one leaves onboarding offering the user an autonomy choice
+/// their team's admins have already taken away.
+fn autonomy_enforcement_may_have_changed(event: &UserWorkspacesEvent, window_id: WindowId) -> bool {
+    match event {
+        // The teams and their settings were re-read from the server. This covers the first
+        // fetch after onboarding opened, and an admin changing the policy elsewhere.
+        UserWorkspacesEvent::TeamsChanged
+        | UserWorkspacesEvent::CurrentWorkspaceChanged
+        | UserWorkspacesEvent::UpdateWorkspaceSettingsSuccess => true,
+        // Windows are independent, so a team switch elsewhere leaves this one's policy alone.
+        UserWorkspacesEvent::WindowTeamChanged {
+            window_id: changed_window_id,
+        } => *changed_window_id == window_id,
+        UserWorkspacesEvent::AddDomainRestrictionsSuccess
+        | UserWorkspacesEvent::AddDomainRestrictionsRejected(_)
+        | UserWorkspacesEvent::DeleteDomainRestrictionSuccess
+        | UserWorkspacesEvent::DeleteDomainRestrictionRejected(_)
+        | UserWorkspacesEvent::EmailInviteSent
+        | UserWorkspacesEvent::EmailInviteRejected(_)
+        | UserWorkspacesEvent::ToggleInviteLinksSuccess
+        | UserWorkspacesEvent::ToggleInviteLinksRejected(_)
+        | UserWorkspacesEvent::ResetInviteLinks
+        | UserWorkspacesEvent::ResetInviteLinksRejected(_)
+        | UserWorkspacesEvent::DeleteTeamInvite
+        | UserWorkspacesEvent::DeleteTeamInviteRejected(_)
+        | UserWorkspacesEvent::GenerateUpgradeLink(_)
+        | UserWorkspacesEvent::GenerateUpgradeLinkRejected(_)
+        | UserWorkspacesEvent::GenerateStripeBillingPortalLink(_)
+        | UserWorkspacesEvent::GenerateStripeBillingPortalLinkRejected(_)
+        | UserWorkspacesEvent::ToggleTeamDiscoverabilitySuccess
+        | UserWorkspacesEvent::ToggleTeamDiscoverabilityRejected(_)
+        | UserWorkspacesEvent::JoinTeamWithTeamDiscoverySuccess
+        | UserWorkspacesEvent::JoinTeamWithTeamDiscoveryRejected(_)
+        | UserWorkspacesEvent::FetchDiscoverableTeamsSuccess(_)
+        | UserWorkspacesEvent::FetchDiscoverableTeamsRejected(_)
+        | UserWorkspacesEvent::TransferTeamOwnershipSuccess
+        | UserWorkspacesEvent::TransferTeamOwnershipRejected(_)
+        | UserWorkspacesEvent::SetTeamMemberRoleSuccess
+        | UserWorkspacesEvent::SetTeamMemberRoleRejected(_)
+        | UserWorkspacesEvent::RemoveUserFromTeamSuccess
+        | UserWorkspacesEvent::RemoveUserFromTeamRejected(_)
+        | UserWorkspacesEvent::UpdateWorkspaceSettingsRejected(_)
+        | UserWorkspacesEvent::AiOveragesUpdated
+        | UserWorkspacesEvent::PurchaseAddonCreditsSuccess
+        | UserWorkspacesEvent::PurchaseAddonCreditsCheckoutRequired { .. }
+        | UserWorkspacesEvent::PurchaseAddonCreditsRejected(_)
+        | UserWorkspacesEvent::CodebaseContextEnablementChanged
+        | UserWorkspacesEvent::SunsettedToBuildDataUpdated => false,
+    }
+}
+
+/// Whether the team selected in `ctx`'s window imposes any AI autonomy policy, which is
+/// what decides whether onboarding offers the user an autonomy choice at all.
+///
+/// Resolved from the view's handle at each call rather than captured once: this describes
+/// where the window is pointed now, and a window can be switched to another team while
+/// onboarding is up. A view that is no longer in a window reads as teamless, the same
+/// answer a genuinely teamless window gives.
+fn team_enforces_autonomy(ctx: &ViewContext<RootView>) -> bool {
+    let view = ctx.handle();
+    let user_workspaces = UserWorkspaces::as_ref(ctx);
+    user_workspaces
+        .team_context(&view, ctx)
+        .is_some_and(|scope| {
+            user_workspaces
+                .ai_autonomy_settings_for_scope(&scope)
+                .has_any_overrides()
+        })
+}
+
 /// Re-reads the account state onboarding decides on once the user has been out
 /// in the browser: whether they can now use AI, which models they may pick, and
 /// their billing plan. The AI availability read is what the offer slide
@@ -2188,13 +2261,12 @@ impl RootView {
         });
 
         let themes = onboarding_theme_picker_themes();
+        // Resolved against the root view rather than inside the closure below: the view being
+        // constructed there is not in a window yet, so it cannot resolve its own team.
+        let workspace_enforces_autonomy = team_enforces_autonomy(ctx);
         let onboarding_view = ctx.add_typed_action_view(move |ctx| {
             let (models, default_model_id) =
                 build_onboarding_models(LLMPreferences::as_ref(ctx), ctx);
-
-            let workspace_enforces_autonomy = UserWorkspaces::as_ref(ctx)
-                .ai_autonomy_settings()
-                .has_any_overrides();
 
             let auth_state = current_onboarding_auth_state(ctx);
 
@@ -2249,12 +2321,9 @@ impl RootView {
         let onboarding_view_for_workspaces = onboarding_view.clone();
         ctx.subscribe_to_model(
             &UserWorkspaces::handle(ctx),
-            move |_, user_workspaces, event, ctx| {
-                if matches!(event, UserWorkspacesEvent::UpdateWorkspaceSettingsSuccess) {
-                    let workspace_enforces_autonomy = user_workspaces
-                        .as_ref(ctx)
-                        .ai_autonomy_settings()
-                        .has_any_overrides();
+            move |_, _user_workspaces, event, ctx| {
+                if autonomy_enforcement_may_have_changed(event, ctx.window_id()) {
+                    let workspace_enforces_autonomy = team_enforces_autonomy(ctx);
                     onboarding_view_for_workspaces.update(ctx, |onboarding_view, ctx| {
                         onboarding_view
                             .set_workspace_enforces_autonomy(workspace_enforces_autonomy, ctx);
@@ -2546,7 +2615,13 @@ impl RootView {
         let settings_applied = if account_class.is_none() || cloud_ready {
             self.pending_account_first_settings_class = None;
             if let Some(selected_settings) = self.pending_post_auth_onboarding_settings.take() {
-                apply_account_first_onboarding_settings(&selected_settings, account_class, ctx);
+                let team_context = UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx);
+                apply_account_first_onboarding_settings(
+                    &selected_settings,
+                    account_class,
+                    team_context,
+                    ctx,
+                );
             }
             true
         } else {
@@ -2617,7 +2692,8 @@ impl RootView {
                 // User opted out of login: apply locally (no cloud race).
                 // Skipping leaves the user without an account, so AI is disabled.
                 if let Some(selected_settings) = self.pending_post_auth_onboarding_settings.take() {
-                    apply_onboarding_settings(&selected_settings, false, ctx);
+                    let team_context = UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx);
+                    apply_onboarding_settings(&selected_settings, false, team_context, ctx);
                 }
                 self.auth_onboarding_state = AuthOnboardingState::Terminal(workspace);
                 ctx.emit(RootViewEvent::AuthOnboardingStateChanged);
@@ -2772,7 +2848,8 @@ impl RootView {
                     return;
                 }
 
-                apply_onboarding_settings(selected_settings, is_logged_in, ctx);
+                let team_context = UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx);
+                apply_onboarding_settings(selected_settings, is_logged_in, team_context, ctx);
 
                 if is_logged_in {
                     AuthManager::handle(ctx)
@@ -3712,7 +3789,9 @@ impl RootView {
                         self.pending_post_auth_onboarding_settings.take()
                     {
                         // Skipped login → no account → AI disabled.
-                        apply_onboarding_settings(&selected_settings, false, ctx);
+                        let team_context =
+                            UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx);
+                        apply_onboarding_settings(&selected_settings, false, team_context, ctx);
                     }
                     self.auth_onboarding_state = AuthOnboardingState::Terminal(workspace);
                     ctx.emit(RootViewEvent::AuthOnboardingStateChanged);
@@ -3918,9 +3997,11 @@ impl RootView {
         }
         if let Some(account_class) = self.pending_account_first_settings_class.take() {
             if let Some(selected_settings) = self.pending_post_auth_onboarding_settings.take() {
+                let team_context = UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx);
                 apply_account_first_onboarding_settings(
                     &selected_settings,
                     Some(account_class),
+                    team_context,
                     ctx,
                 );
             }
@@ -3943,7 +4024,8 @@ impl RootView {
             return;
         };
         // Reached only after a successful login, so the user has an account.
-        apply_onboarding_settings(&selected_settings, true, ctx);
+        let team_context = UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx);
+        apply_onboarding_settings(&selected_settings, true, team_context, ctx);
     }
 
     /// If onboarding stored a pending tutorial (because login was required first),

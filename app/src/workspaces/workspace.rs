@@ -10,6 +10,7 @@ pub use warp_graphql::billing::{
     AiCreditsUsageSource,
 };
 
+use super::gql_convert::{ToAgentModeCommandExecutionPredicates, ToPathBufs};
 use super::team::{MembershipRole, Team};
 use crate::ai::execution_profiles::{
     ActionPermission, ComputerUsePermission, WriteToPtyPermission,
@@ -915,6 +916,16 @@ pub struct AiPermissionsSettings {
     pub remote_session_regex_list: Vec<Regex>,
 }
 
+/// The AI autonomy policy an admin has imposed, in the shape the enforcement paths
+/// consume: `None` on a field means no admin override, so the user's execution profile
+/// decides.
+///
+/// Both admin layers lower into this one type. The workspace layer stores it directly on
+/// [`WorkspaceSettings`]; a team's effective policy arrives as [`TeamAiAutonomySettings`]
+/// and converts via its `From` impl. The team shape's extra structure —
+/// [`EnforceableSetting`]'s `is_enforced_by_workspace` and [`SplitListSetting`]'s
+/// per-layer entries — records which admin layer contributed a value, which is an admin-UI
+/// concern rather than part of the policy, so it does not survive the conversion.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct AiAutonomySettings {
     pub apply_code_diffs_setting: Option<ActionPermission>,
@@ -1062,6 +1073,26 @@ pub struct SplitListSetting<T> {
     pub team_entries: Vec<T>,
 }
 
+impl<T> SplitListSetting<T> {
+    /// Whether an admin layer configured this list, as far as the client can tell.
+    ///
+    /// Empty `values` does not mean nobody configured one. Allowlists merge by
+    /// intersection server-side, so two layers with disjoint allowlists produce empty
+    /// `values` while both entry lists are populated — an override that permits nothing,
+    /// not an absent one. Reading only `values` there would drop a deny-by-default policy
+    /// and fall through to whatever the user's own profile allows.
+    ///
+    /// One case remains indistinguishable: a layer that explicitly configured an empty
+    /// list leaves all three empty and so reads as unconfigured. The server separates that
+    /// with `StringListSettingInfo.isConfigured`, which the client's vendored schema copy
+    /// predates.
+    pub fn is_configured(&self) -> bool {
+        !(self.values.is_empty()
+            && self.workspace_entries.is_empty()
+            && self.team_entries.is_empty())
+    }
+}
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct TeamAiPermissionsSettings {
     pub allow_ai_in_remote_sessions: EnforceableSetting<bool>,
@@ -1085,6 +1116,66 @@ pub struct TeamAiAutonomySettings {
     pub read_files_allowlist: SplitListSetting<String>,
     pub execute_commands_allowlist: SplitListSetting<String>,
     pub execute_commands_denylist: SplitListSetting<String>,
+}
+
+impl TeamAiAutonomySettings {
+    /// Whether an admin configured any of the policies that count as evidence autonomy is
+    /// in use — the same fields the lowered [`AiAutonomySettings`] is inspected for.
+    ///
+    /// Answers without lowering on purpose: lowering compiles every allow- and denylist
+    /// entry into a regex, and this question does not need one.
+    pub fn configures_any_policy(&self) -> bool {
+        self.apply_code_diffs.value.is_some()
+            || self.read_files.value.is_some()
+            || self.read_files_allowlist.is_configured()
+            || self.execute_commands.value.is_some()
+            || self.execute_commands_allowlist.is_configured()
+            || self.execute_commands_denylist.is_configured()
+    }
+}
+
+impl From<&TeamAiAutonomySettings> for AiAutonomySettings {
+    /// Lowers a team's effective autonomy policy into the shape enforcement reads.
+    ///
+    /// A list counts as an override when any admin layer configured it, which is not the
+    /// same question as whether the merged result is empty — see
+    /// [`SplitListSetting::is_configured`].
+    ///
+    /// `create_plans` is dropped. It exists only on the team side; `AIExecutionProfile`
+    /// carries no create-plans permission for it to override, so there is nothing to
+    /// lower it into.
+    fn from(team: &TeamAiAutonomySettings) -> Self {
+        fn override_list<T>(
+            list: &SplitListSetting<String>,
+            convert: impl FnOnce(Vec<String>) -> Vec<T>,
+        ) -> Option<Vec<T>> {
+            if list.is_configured() {
+                Some(convert(list.values.clone()))
+            } else {
+                None
+            }
+        }
+
+        Self {
+            apply_code_diffs_setting: team.apply_code_diffs.value,
+            read_files_setting: team.read_files.value,
+            read_files_allowlist: override_list(
+                &team.read_files_allowlist,
+                ToPathBufs::to_path_bufs,
+            ),
+            execute_commands_setting: team.execute_commands.value,
+            execute_commands_allowlist: override_list(
+                &team.execute_commands_allowlist,
+                ToAgentModeCommandExecutionPredicates::to_predicates,
+            ),
+            execute_commands_denylist: override_list(
+                &team.execute_commands_denylist,
+                ToAgentModeCommandExecutionPredicates::to_predicates,
+            ),
+            write_to_pty_setting: team.write_to_pty.value,
+            computer_use_setting: team.computer_use.value,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
