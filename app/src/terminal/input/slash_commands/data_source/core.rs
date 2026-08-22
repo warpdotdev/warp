@@ -420,12 +420,15 @@ pub trait SlashCommandDataSource {
 
     fn common_command_gates(&self, ctx: &AppContext) -> CommonCommandGates {
         let ai_settings = AISettings::as_ref(ctx);
-        // Hide /host when no default host is configured (env var or workspace setting).
+        // Hide /host when no default host is configured (env var or team setting). This data
+        // source is shared with the TUI and runs on a `ModelContext`, so it has no window to
+        // scope the read to; it asks the cross-team availability question instead, and the
+        // command itself resolves the window's own host when it runs.
         let has_default_host = std::env::var("WARP_CLOUD_MODE_DEFAULT_HOST")
             .ok()
             .filter(|s| !s.is_empty())
             .is_some()
-            || UserWorkspaces::as_ref(ctx).default_host_slug().is_some();
+            || UserWorkspaces::as_ref(ctx).any_team_has_default_host_slug();
         CommonCommandGates {
             is_orchestration_enabled: ai_settings.is_orchestration_enabled(ctx),
             is_cloud_handoff_enabled: ai_settings.is_cloud_handoff_enabled(ctx),

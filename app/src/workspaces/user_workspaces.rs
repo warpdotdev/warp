@@ -39,10 +39,10 @@ use crate::settings::{
     AISettings, AISettingsChangedEvent, CodeSettings, CodeSettingsChangedEvent, PrivacySettings,
 };
 #[cfg(test)]
-use crate::workspaces::workspace::{AIAutonomyPolicy, WorkspaceMember, WorkspaceSettings};
+use crate::workspaces::workspace::{AIAutonomyPolicy, WorkspaceMember};
 use crate::workspaces::workspace::{
     AiAutonomySettings, AiOverages, PurchaseAddOnCreditsPolicy, SandboxedAgentSettings,
-    UsageBasedPricingSettings,
+    UsageBasedPricingSettings, WorkspaceSettings,
 };
 
 const STRIPE_SUBSCRIPTION_INTERVAL_PAGE_PREFIX: &str = "/upgrade";
@@ -185,10 +185,6 @@ pub struct CreateTeamResponse {
 /// [`TeamScope`]'s contract. Code with no window at all (e.g. background GEAP token refresh)
 /// is not this type's job -- it needs its own accessor that reads across every one of the
 /// user's teams explicitly, in the shape of `UserWorkspaces::teams_allow_codebase_context`.
-// Nothing constructs or consumes one outside this module's own tests yet; remove this
-// `#[allow(dead_code)]`, and widen visibility to `pub`, once a Group 1 migration PR has a real
-// call site.
-#[allow(dead_code)]
 pub(crate) struct TeamContextForOperation {
     team_uid: Option<ServerId>,
 }
@@ -208,9 +204,6 @@ pub(crate) struct TeamContextForOperation {
 /// workspace-level data. Code with no window at all must not construct a scope to route around
 /// this; it should read across every team explicitly, the way
 /// `UserWorkspaces::teams_allow_codebase_context` does.
-// Only tests call `team_uid()` today; remove this `#[allow(dead_code)]` once a Group 1
-// migration PR has a real getter generic over this trait.
-#[allow(dead_code)]
 pub(crate) trait TeamScope {
     fn team_uid(&self) -> Option<ServerId>;
 }
@@ -223,8 +216,9 @@ impl TeamScope for TeamContextForOperation {
 
 #[cfg(test)]
 impl TeamContextForOperation {
-    // Nothing constructs a test context yet; remove this `#[allow(dead_code)]` once a Group 1
-    // migration PR has a real call site.
+    // Currently unused: tests that need an operation scope mint a real one from a test window
+    // through `team_context_for_operation`, which exercises the production path as well. Kept
+    // for a test that needs a scope with no window to mint it from.
     #[allow(dead_code)]
     pub(crate) fn new_for_test(team_uid: ServerId) -> Self {
         Self {
@@ -241,9 +235,6 @@ impl TeamContextForOperation {
 /// a [`TeamContextForOperation`]. A [`WeakViewHandle`] locates a window to read from; it is
 /// not evidence that the holder is running in that window, which is what minting operation
 /// scope requires.
-// Only tests construct one today; remove this once a Group 1 migration PR resolves one from a
-// real render.
-#[allow(dead_code)]
 pub(crate) struct TeamContext<'a> {
     team_uid: Option<&'a ServerId>,
 }
@@ -451,8 +442,6 @@ impl UserWorkspaces {
     /// [`TeamContextForOperation`]. This is the only way application code mints one. Always
     /// succeeds -- a window with no team selected still yields a scope, just one whose
     /// `team_uid()` is `None`; see [`TeamScope`]'s contract for what that means to a getter.
-    // Only tests call this today; remove once a Group 1 migration PR has a real call site.
-    #[allow(dead_code)]
     pub(crate) fn team_context_for_operation<T: Entity>(
         &self,
         ctx: &ViewContext<T>,
@@ -463,8 +452,6 @@ impl UserWorkspaces {
     }
 
     /// Resolves `view`'s window team for one render. See [`TeamContext`].
-    // Only tests call this today; remove once a Group 1 migration PR has a real call site.
-    #[allow(dead_code)]
     pub(crate) fn team_context<'a, T: Entity>(
         &'a self,
         view: &WeakViewHandle<T>,
@@ -1974,19 +1961,105 @@ impl UserWorkspaces {
         }
     }
 
-    pub fn default_host_slug(&self) -> Option<&str> {
+    /// The current workspace's settings, but only when the user belongs to no team at all.
+    ///
+    /// `WorkspaceSettings` is not team-neutral data. Whenever the user has any team,
+    /// `GetEffectiveWorkspaceSettingsForWorkspace` resolves one arbitrarily-chosen team
+    /// server-side and falls through to a literal `workspaceTeamIDs[0]`, so reading it as a
+    /// default hands back some other team's policy. It is trustworthy only for a genuinely
+    /// teamless user, whose settings the server computes from tier defaults. This applies the
+    /// same guard as [`Self::teams_allow_codebase_context`], which is the shape scoped getters
+    /// reuse for their no-team branch.
+    fn teamless_workspace_settings(&self) -> Option<&WorkspaceSettings> {
+        let is_on_a_team = self
+            .workspaces
+            .iter()
+            .any(|workspace| !workspace.teams.is_empty());
+        if is_on_a_team {
+            return None;
+        }
+        self.current_workspace()
+            .map(|workspace| &workspace.settings)
+    }
+
+    /// The default self-hosted worker host slug configured for `scope`'s team.
+    ///
+    /// Returns `None` when that team configures none, and also when the scope has no team
+    /// while the user is on some other team: another team's host is not a substitute. See
+    /// [`TeamScope`].
+    pub(crate) fn default_host_slug_for_scope(&self, scope: &impl TeamScope) -> Option<&str> {
+        match scope.team_uid() {
+            Some(team_uid) => self
+                .team_from_uid(team_uid)
+                .and_then(|team| team.settings.default_host_slug.as_deref()),
+            None => self
+                .teamless_workspace_settings()
+                .and_then(|settings| settings.default_host_slug.as_deref()),
+        }
+    }
+
+    /// Whether *some* team the user belongs to configures a default self-hosted worker host.
+    ///
+    /// This answers only the availability question a windowless surface can honestly ask: the
+    /// `/host` slash command is worth offering when a default host exists anywhere. It
+    /// deliberately does not choose *which* slug, because there is no defensible ordering over
+    /// host slugs the way [`AdminEnablementSetting`] has a most-restrictive direction — with
+    /// two teams configuring different hosts, any pick is arbitrary. Windowed callers must use
+    /// [`Self::default_host_slug_for_scope`] instead; picking a slug without a window is a
+    /// product decision that has not been made.
+    ///
+    /// Falls back to workspace settings only when the user is on no team, mirroring
+    /// [`Self::teams_allow_codebase_context`]'s empty-iterator guard.
+    pub fn any_team_has_default_host_slug(&self) -> bool {
+        let mut team_slugs = self
+            .workspaces
+            .iter()
+            .flat_map(|workspace| workspace.teams.iter())
+            .map(|team| &team.settings.default_host_slug)
+            .peekable();
+
+        if team_slugs.peek().is_none() {
+            return self
+                .teamless_workspace_settings()
+                .is_some_and(|settings| settings.default_host_slug.is_some());
+        }
+
+        team_slugs.any(Option::is_some)
+    }
+
+    /// The default self-hosted worker host slug from the current workspace's settings.
+    ///
+    /// **Not a team-neutral read**, despite reading workspace settings: see
+    /// [`Self::teamless_workspace_settings`] for why. Sole remaining caller is
+    /// `ai::orchestration::resolve_default_host_slug`, whose consumers have to migrate as one
+    /// unit and are blocked on decisions this getter cannot make.
+    /// Do not add callers: windowed code uses [`Self::default_host_slug_for_scope`], and a
+    /// windowless availability check uses [`Self::any_team_has_default_host_slug`].
+    pub fn unscoped_default_host_slug(&self) -> Option<&str> {
         self.current_workspace()
             .and_then(|workspace| workspace.settings.default_host_slug.as_deref())
     }
 
-    /// Returns the team-level agent attribution setting.
+    /// The agent attribution policy for `scope`'s team: `Enable` or `Disable` lock the user's
+    /// attribution toggle, `RespectUserSetting` leaves it editable.
     ///
-    /// Use this to decide whether the user's attribution toggle should be locked
-    /// (`Enable`/`Disable`) or editable (`RespectUserSetting`).
-    pub fn get_agent_attribution_setting(&self) -> AdminEnablementSetting {
-        self.current_workspace()
-            .map(|workspace| workspace.settings.enable_warp_attribution.clone())
-            .unwrap_or_default()
+    /// This is live UI state rather than a recorded fact, so resolve it from the rendering
+    /// window's [`TeamContext`] on each frame; a value captured when a surface opened goes
+    /// stale the moment that window switches team.
+    pub(crate) fn agent_attribution_setting_for_scope(
+        &self,
+        scope: &impl TeamScope,
+    ) -> AdminEnablementSetting {
+        match scope.team_uid() {
+            Some(team_uid) => self
+                .team_from_uid(team_uid)
+                .map(|team| team.settings.enable_warp_attribution.clone())
+                .unwrap_or_default(),
+            None => self
+                .teamless_workspace_settings()
+                .map(|settings| settings.enable_warp_attribution.clone())
+                .unwrap_or_default(),
+        }
     }
 
     pub fn teams_allow_codebase_context(&self) -> AdminEnablementSetting {

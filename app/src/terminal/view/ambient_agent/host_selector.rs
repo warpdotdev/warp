@@ -208,6 +208,31 @@ impl HostSelector {
         self.refresh_menu(ctx);
     }
 
+    /// Drops the default host, e.g. because the window moved to a team that configures none.
+    ///
+    /// The inverse of [`Self::set_default_host`] and it defers to a saved user selection the
+    /// same way. Without it, a selection that came only from the previous team's default would
+    /// survive the move and keep pointing at that team's self-hosted worker.
+    pub fn clear_default_host(&mut self, ctx: &mut ViewContext<Self>) {
+        if self.default_host.is_none() {
+            return;
+        }
+        self.default_host = None;
+
+        let has_saved_selection = CloudAgentSettings::as_ref(ctx)
+            .last_selected_host
+            .value()
+            .is_some();
+        if !has_saved_selection {
+            self.selected = Host::Warp;
+            let label = self.selected.display_name().to_string();
+            self.button.update(ctx, |button, ctx| {
+                button.set_label(label, ctx);
+            });
+        }
+        self.refresh_menu(ctx);
+    }
+
     /// Programmatically opens the host selector popover. No-op if already open.
     pub fn open_menu(&mut self, ctx: &mut ViewContext<Self>) {
         self.set_menu_visibility(true, ctx);
