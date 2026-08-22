@@ -9,10 +9,12 @@ use std::mem::MaybeUninit;
 use std::os::unix::fs::DirBuilderExt;
 use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 use std::{io, ptr};
 
 use anyhow::{Context as _, Error, Result};
 use command::blocking::Command;
+use instant::Instant;
 use itertools::Itertools;
 use libc::{self, TIOCSCTTY, c_int, winsize};
 use mio::Interest;
@@ -155,12 +157,46 @@ fn current_user_via_getpwuid(uid: nix::unistd::Uid) -> Option<CurrentUser> {
 /// `getent` is the host's own (typically glibc-dynamic) binary, so it consults
 /// the host's full NSS configuration — including SSSD/LDAP/AD — which a
 /// static/musl Warp binary cannot do in-process.
+///
+/// The subprocess is killed if it does not complete within a short deadline.
+/// `getent` is normally instantaneous for local `/etc/passwd` lookups, but can
+/// hang indefinitely when the NSS stack contacts a slow or unreachable network
+/// service (LDAP/SSSD/AD). Without the timeout the hang would propagate to the
+/// terminal server, leaving the oz CLI's UI thread blocked and the agent
+/// silently stalled (see REMOTE-2318).
 fn current_user_via_getent(uid: u32) -> Option<CurrentUser> {
-    let output = Command::new("getent")
+    // 5 seconds is generous for a local passwd lookup and still short enough
+    // to avoid a long-lived silent stall if the NSS backend is misconfigured.
+    const GETENT_TIMEOUT: Duration = Duration::from_secs(5);
+
+    let mut child = Command::new("getent")
         .arg("passwd")
         .arg(uid.to_string())
-        .output()
+        .stdout(std::process::Stdio::piped())
+        .spawn()
         .ok()?;
+
+    let start = Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => break,
+            Ok(None) => {
+                if start.elapsed() > GETENT_TIMEOUT {
+                    log::warn!(
+                        "getent timed out after {}s looking up uid {uid}; \
+                         skipping NSS-delegated user resolution",
+                        GETENT_TIMEOUT.as_secs()
+                    );
+                    let _ = child.kill();
+                    return None;
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            Err(_) => return None,
+        }
+    }
+
+    let output = child.wait_with_output().ok()?;
     if !output.status.success() {
         return None;
     }
