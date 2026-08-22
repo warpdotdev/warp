@@ -749,10 +749,6 @@ if [ -z "$WARP_BOOTSTRAPPED" ]; then
     # a very long hexadecimal string.
     # Afterwards it's decoded in rust and parsed as usual.
     # Accepts one argument: DCS JSON string
-    #
-    # Uses `printf '%s'` rather than `echo`: `echo` treats an argument that looks like one of its
-    # own flags (`-n`, `-e`, `-E`) as that flag instead of literal text, and appends a trailing
-    # newline to every payload. `printf '%s'` has neither problem.
     warp_hex_encode_string () {
       printf '%s' "$1" | command -p od -An -v -tx1 | command -p tr -d ' \n'
     }

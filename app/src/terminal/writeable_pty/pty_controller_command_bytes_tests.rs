@@ -88,17 +88,12 @@ fn split_kill_buffer_write_does_not_split_the_other_three_shells() {
 
 #[test]
 fn split_kill_buffer_write_handles_a_command_with_no_content_gracefully() {
-    // Defensive: even if bytes_to_execute_command somehow ever returned just the kill-buffer
-    // bytes and nothing else, splitting must not panic or produce an empty second write.
     let kill_buffer_only = ShellType::PowerShell.kill_buffer_bytes().to_vec();
     assert!(split_kill_buffer_write(&kill_buffer_only, ShellType::PowerShell).is_none());
 }
 
 #[test]
 fn split_kill_buffer_write_returns_none_when_the_kill_buffer_is_not_the_prefix() {
-    // The case nobody would notice breaking: if a caller ever hands PowerShell bytes that do not
-    // begin with the kill-buffer chord, splitting at the chord length would miscut unrelated data.
-    // Validate the prefix and decline to split (the write goes out whole) instead.
     let kill_buffer = ShellType::PowerShell.kill_buffer_bytes();
     let not_prefixed = b"Get-ChildItem (no leading chord)".to_vec();
     assert!(

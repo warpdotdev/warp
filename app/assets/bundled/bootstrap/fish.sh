@@ -64,10 +64,6 @@ end
 
 
 # warp_hex_encode_string hex-encodes the given string with `od`.
-#
-# Uses `printf '%s'` rather than `echo`: fish's builtin `echo`, like bash's, treats an argument
-# that looks like one of its own flags (`-n`, `-e`, `-E`) as that flag instead of literal text,
-# and `echo` also appends a trailing newline to every payload. `printf '%s'` has neither problem.
 function warp_hex_encode_string 
   printf '%s' "$argv" | od -An -v -tx1 | command tr -d ' \n'
 end
@@ -167,13 +163,6 @@ function warp_preexec --on-event fish_preexec
     warp_maybe_send_reset_grid_osc
 
     # If this preexec is called for user command, kill ongoing generator command jobs.
-    # Trim before matching because generator commands carry a leading space for fish's history
-    # exclusion, which would otherwise defeat this match and leave stale generator jobs running
-    # (and un-killed) during a real user command.
-    # Also: `test (! cmd)` always evaluates false regardless of cmd's exit status here, since
-    # `string match -q` prints nothing for `!`'s command substitution to capture and `test`
-    # with no arguments is false -- this branch never ran for any command before this fix.
-    # Use fish's own `not`, which negates a command's exit status directly.
     if not string match -q "warp_run_generator_command*" -- (string trim -- $argv[1])
         for pid in $_warp_generator_pids
             # Suppress stderr output; kill writes to stderr if the given PID is not running

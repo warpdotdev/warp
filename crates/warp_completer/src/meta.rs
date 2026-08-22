@@ -94,13 +94,6 @@ impl Span {
         self.end
     }
 
-    /// Slices `source` at this span's byte offsets. Never panics, even if the offsets are out
-    /// of bounds or land inside a multi-byte character, by clamping each one to the nearest
-    /// valid char boundary at or before it -- a defensive fallback, not a correctness
-    /// guarantee: a caller with genuinely wrong offsets (e.g. a shell reporting offsets in a
-    /// unit other than UTF-8 bytes, as PowerShell's own .NET UTF-16 code-unit offsets did
-    /// before the shell-side conversion in `pwsh.ps1`) gets a wrong slice instead of a crash.
-    /// A wrong menu is recoverable; a panicked window is not.
     pub fn slice<'a>(&self, source: &'a str) -> &'a str {
         let len = source.len();
         let start = floor_char_boundary(source, self.start.min(len));
