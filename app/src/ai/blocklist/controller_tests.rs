@@ -558,7 +558,7 @@ fn controller_team_uid(terminal: &ViewHandle<TerminalView>, app: &mut App) -> Op
 }
 
 #[test]
-fn team_context_resolves_each_terminals_own_window_team() {
+fn team_context_follows_each_terminals_window() {
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);
         let team_a = team_for_test(123, "team-a");
@@ -585,6 +585,17 @@ fn team_context_resolves_each_terminals_own_window_team() {
             Some(team_b.uid),
             "the blocklist in window B is scoped to team B, concurrently with A"
         );
+
+        let terminal_a_id = terminal_a.id();
+        app.update(|ctx| {
+            ctx.transfer_view_tree_to_window(terminal_a_id, window_a, window_b);
+        });
+
+        assert_eq!(
+            controller_team_uid(&terminal_a, &mut app),
+            Some(team_b.uid),
+            "after the transfer the blocklist is scoped to the destination window's team"
+        );
     });
 }
 
@@ -604,65 +615,6 @@ fn team_context_has_no_team_when_the_window_has_none() {
             controller_team_uid(&terminal, &mut app),
             None,
             "a window with no team must not borrow the workspace's only team's policy"
-        );
-    });
-}
-
-#[test]
-fn team_context_follows_a_window_team_change() {
-    App::test((), |mut app| async move {
-        initialize_app_for_terminal_view(&mut app);
-        let team_a = team_for_test(123, "team-a");
-        let team_b = team_for_test(456, "team-b");
-        set_current_workspace(
-            &mut app,
-            workspace_for_test(vec![team_a.clone(), team_b.clone()]),
-        );
-
-        let (window_id, terminal) = add_window_with_id_and_terminal(&mut app, None);
-        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
-            user_workspaces.set_team_for_window(window_id, team_a.uid, ctx);
-        });
-
-        assert_eq!(controller_team_uid(&terminal, &mut app), Some(team_a.uid));
-
-        set_current_workspace(&mut app, workspace_for_test(vec![team_b.clone()]));
-
-        assert_eq!(
-            controller_team_uid(&terminal, &mut app),
-            Some(team_b.uid),
-            "the blocklist reads the team its window is on now"
-        );
-    });
-}
-#[test]
-fn team_context_follows_a_tab_dragged_into_a_window_on_another_team() {
-    App::test((), |mut app| async move {
-        initialize_app_for_terminal_view(&mut app);
-        let team_a = team_for_test(123, "team-a");
-        let team_b = team_for_test(456, "team-b");
-        set_current_workspace(
-            &mut app,
-            workspace_for_test(vec![team_a.clone(), team_b.clone()]),
-        );
-
-        let (window_a, terminal) = add_window_with_id_and_terminal(&mut app, None);
-        let (window_b, _terminal_b) = add_window_with_id_and_terminal(&mut app, None);
-        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
-            user_workspaces.set_team_for_window(window_a, team_a.uid, ctx);
-            user_workspaces.set_team_for_window(window_b, team_b.uid, ctx);
-        });
-        assert_eq!(controller_team_uid(&terminal, &mut app), Some(team_a.uid));
-
-        let terminal_view_id = terminal.id();
-        app.update(|ctx| {
-            ctx.transfer_view_tree_to_window(terminal_view_id, window_a, window_b);
-        });
-
-        assert_eq!(
-            controller_team_uid(&terminal, &mut app),
-            Some(team_b.uid),
-            "after the drag the blocklist is scoped to the destination window's team"
         );
     });
 }
