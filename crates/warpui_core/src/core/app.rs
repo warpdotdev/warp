@@ -2809,7 +2809,19 @@ impl AppContext {
         result
     }
 
-    pub fn reopen_closed_window(&mut self, data: ClosedWindowData) {
+    /// Reopens a window that was previously closed via [`Self::handle_window_closed`].
+    ///
+    /// `background_blur_radius_pixels` and `background_blur_texture` are supplied by the caller
+    /// rather than read from `data`, since this crate has no access to the app-level window
+    /// settings that hold the user's configured values. Callers should pass the same values they
+    /// would use to open any other window (e.g. the current `WindowSettings`), so a reopened
+    /// window looks identical to a freshly opened one.
+    pub fn reopen_closed_window(
+        &mut self,
+        data: ClosedWindowData,
+        background_blur_radius_pixels: Option<u8>,
+        background_blur_texture: bool,
+    ) {
         let ClosedWindowData {
             window_id,
             window,
@@ -2836,9 +2848,8 @@ impl AppContext {
         }
 
         let add_window_options = AddWindowOptions {
-            // TODO(vorporeal): what's the right value here?
-            background_blur_radius_pixels: None,
-            background_blur_texture: false,
+            background_blur_radius_pixels,
+            background_blur_texture,
             window_bounds: WindowBounds::ExactPosition(bounds),
             // TODO(alokedesai): Determine if, and how, we want to pass the on_gpu_driver_reported
             // callback from the original window back to this window.
