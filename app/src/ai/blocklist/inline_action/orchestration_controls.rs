@@ -52,6 +52,7 @@ use crate::view_components::FilterableDropdown;
 use crate::view_components::dropdown::{
     Dropdown, DropdownAction, DropdownItemAction, DropdownStyle,
 };
+use crate::workspaces::user_workspaces::UserWorkspaces;
 
 // ── Shared constants ────────────────────────────────────────────────
 
@@ -268,8 +269,12 @@ fn oz_model_menu_items<A: OrchestrationControlAction, V: View>(
     rows: &[OptionRow],
     ctx: &mut ViewContext<V>,
 ) -> Vec<MenuItem<DropdownAction>> {
+    let handle = ctx.handle();
+    let team_context = UserWorkspaces::as_ref(ctx).team_context(&handle, ctx);
     let llm_prefs = LLMPreferences::as_ref(ctx);
-    let all_choices: Vec<_> = llm_prefs.get_base_llm_choices_for_agent_mode(ctx).collect();
+    let all_choices: Vec<_> = llm_prefs
+        .get_base_llm_choices_for_agent_mode_for_render_context(team_context.as_ref(), ctx)
+        .collect();
     let ordered_choices: Vec<_> = rows
         .iter()
         .filter_map(|row| {
@@ -286,6 +291,7 @@ fn oz_model_menu_items<A: OrchestrationControlAction, V: View>(
         None,
         false,
         false,
+        team_context.as_ref(),
         ctx,
     )
 }

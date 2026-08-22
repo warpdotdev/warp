@@ -59,6 +59,7 @@ impl SearchItem for UserQuerySearchItem {
         &self,
         _highlight_state: ItemHighlightState,
         appearance: &Appearance,
+        _app: &AppContext,
     ) -> Box<dyn Element> {
         let color = icon_color(appearance);
 

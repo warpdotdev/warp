@@ -39,6 +39,7 @@ pub trait SearchItem: Send + Sync {
         &self,
         highlight_state: ItemHighlightState,
         appearance: &Appearance,
+        app: &AppContext,
     ) -> Box<dyn Element>;
 
     /// Returns the location in which the icon should be rendered relative to the search item.
@@ -88,6 +89,9 @@ pub trait SearchItem: Send + Sync {
 
     /// Returns the text that describes this item for accessibility purposes.
     fn accessibility_label(&self) -> String;
+    fn accessibility_label_for_context(&self, _app: &AppContext) -> String {
+        self.accessibility_label()
+    }
 
     /// Returns the a11y help message, if any, that describes this item.
     fn accessibility_help_message(&self) -> Option<String> {
@@ -99,16 +103,25 @@ pub trait SearchItem: Send + Sync {
     fn is_static_separator(&self) -> bool {
         false
     }
+    fn is_visible_for_context(&self, _app: &AppContext) -> bool {
+        true
+    }
 
     /// Returns whether this item is disabled.
     /// Disabled items cannot be accepted or selected.
     fn is_disabled(&self) -> bool {
         false
     }
+    fn is_disabled_for_context(&self, _app: &AppContext) -> bool {
+        self.is_disabled()
+    }
 
     /// Returns an optional tooltip string to display when hovering over this item.
     fn tooltip(&self) -> Option<String> {
         None
+    }
+    fn tooltip_for_context(&self, _app: &AppContext) -> Option<String> {
+        self.tooltip()
     }
 
     fn detail_data(&self) -> Option<SearchItemDetail> {

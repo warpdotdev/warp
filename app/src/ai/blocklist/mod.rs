@@ -75,11 +75,20 @@ pub use action_model::{
 pub(crate) use block::model::testing::FakeAIBlockModel;
 pub(crate) use block::{AIBlock, AIBlockEvent, RequestedEditResolution, init, model};
 pub use block::{keyboard_navigable_buttons, toggleable_items};
+#[cfg(all(not(target_family = "wasm"), feature = "tui"))]
+pub use child_agent_launch::PreparedLocalOzChildLaunch;
+#[cfg(all(not(target_family = "wasm"), feature = "tui"))]
+pub use child_agent_launch::apply_child_agent_model_override;
+#[cfg(feature = "tui")]
 pub use child_agent_launch::inherit_child_agent_settings;
 #[cfg(not(target_family = "wasm"))]
-#[cfg_attr(not(feature = "tui"), allow(unused_imports))]
-pub use child_agent_launch::{
-    PreparedLocalOzChildLaunch, apply_child_agent_model_override, prepare_local_oz_child_launch,
+pub use child_agent_launch::prepare_local_oz_child_launch;
+pub(crate) use child_agent_launch::{
+    apply_inherited_child_agent_settings, inherited_child_agent_settings_for_team_context,
+};
+#[cfg(not(target_family = "wasm"))]
+pub(crate) use child_agent_launch::{
+    apply_prepared_child_agent_model_override, prepare_child_agent_model_override_for_team_context,
 };
 #[cfg(feature = "tui")]
 pub use context_model::PendingAttachmentSummary;

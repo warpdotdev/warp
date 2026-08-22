@@ -572,7 +572,11 @@ impl CLISubagentController {
                         .collect()
                 };
                 self.controller.update(ctx, |controller, ctx| {
-                    controller.resume_conversation(conversation_id, resume_context, ctx);
+                    controller.resume_conversation_with_stored_team_context(
+                        conversation_id,
+                        resume_context,
+                        ctx,
+                    );
                 });
             }
         }

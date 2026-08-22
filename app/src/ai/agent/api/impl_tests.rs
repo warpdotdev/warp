@@ -34,6 +34,7 @@ fn request_params_with_ask_user_question_enabled(ask_user_question_enabled: bool
         planning_enabled: true,
         should_redact_secrets: false,
         api_keys: None,
+        geap_mint_binding: None,
         custom_model_providers: None,
         custom_model_routers: None,
         allow_use_of_warp_credits: false,

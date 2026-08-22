@@ -1364,7 +1364,7 @@ impl AIExecutionProfilesModel {
                 .base_model
                 .as_ref()
                 .and_then(|id| llm_preferences.get_llm_info(id))
-                .unwrap_or_else(|| llm_preferences.get_default_base_model(ctx));
+                .unwrap_or_else(|| llm_preferences.get_raw_default_base_model());
             send_telemetry_from_ctx!(
                 TelemetryEvent::AIExecutionProfileContextWindowSelected {
                     tokens: limit,

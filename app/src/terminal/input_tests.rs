@@ -109,7 +109,7 @@ use crate::warp_managed_paths_watcher::WarpManagedPathsWatcher;
 use crate::workspace::{ActiveSession, OneTimeModalModel, ToastStack, WorkspaceRegistry};
 use crate::workspaces::team_tester::TeamTesterStatus;
 use crate::workspaces::update_manager::TeamUpdateManager;
-use crate::workspaces::user_workspaces::UserWorkspaces;
+use crate::workspaces::user_workspaces::{TeamContextForOperation, UserWorkspaces};
 use crate::{
     AgentNotificationsModel, GlobalResourceHandles, GlobalResourceHandlesProvider,
     ReferralThemeStatus, experiments,
@@ -4375,6 +4375,7 @@ fn test_new_conversation_keybinding_requires_double_press_in_non_empty_agent_vie
                     "hello".to_owned(),
                     conversation_id,
                     None,
+                    TeamContextForOperation::teamless(),
                     ctx,
                 );
             });
@@ -4610,6 +4611,7 @@ fn test_new_conversation_input_trigger_remains_single_step_in_non_empty_agent_vi
                     "hello".to_owned(),
                     conversation_id,
                     None,
+                    TeamContextForOperation::teamless(),
                     ctx,
                 );
             });

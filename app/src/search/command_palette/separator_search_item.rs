@@ -26,6 +26,7 @@ impl SearchItem for SeparatorSearchItem {
         &self,
         _highlight_state: ItemHighlightState,
         _appearance: &Appearance,
+        _app: &AppContext,
     ) -> Box<dyn Element> {
         Empty::new().finish()
     }

@@ -1,4 +1,4 @@
-use warp::tui_export::AttachmentType;
+use warp::tui_export::{AttachmentType, TeamContextForOperation};
 use warpui_core::elements::MouseStateHandle;
 use warpui_core::elements::tui::{TuiElement, TuiFlex, TuiHoverable, TuiText};
 use warpui_core::keymap::EditableBinding;
@@ -166,15 +166,22 @@ impl TuiAttachmentBar {
     pub(crate) fn try_attach_paste(
         &mut self,
         text: String,
+        team_context: TeamContextForOperation,
         ctx: &mut ViewContext<Self>,
     ) -> TuiAttachmentPasteDisposition {
-        self.model
-            .update(ctx, |model, ctx| model.try_attach_paste(text, ctx))
+        self.model.update(ctx, |model, ctx| {
+            model.try_attach_paste(text, team_context, ctx)
+        })
     }
 
-    pub(crate) fn paste_from_clipboard(&mut self, ctx: &mut ViewContext<Self>) {
-        self.model
-            .update(ctx, |model, ctx| model.paste_from_clipboard(ctx));
+    pub(crate) fn paste_from_clipboard(
+        &mut self,
+        team_context: TeamContextForOperation,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        self.model.update(ctx, |model, ctx| {
+            model.paste_from_clipboard(team_context, ctx)
+        });
     }
 
     #[cfg(test)]

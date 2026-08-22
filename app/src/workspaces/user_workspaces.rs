@@ -22,7 +22,7 @@ use super::workspace::{
     HostEnablementSetting, UgcCollectionEnablementSetting, Workspace, WorkspaceUid,
 };
 use crate::ai::credit_availability::AICreditAvailability;
-use crate::ai::llms::LLMModelHost;
+use crate::ai::llms::{LLMModelHost, LLMProvider};
 use crate::ai::request_usage_model::AIRequestUsageModel;
 use crate::auth::{AuthStateProvider, UserUid};
 use crate::channel::ChannelState;
@@ -41,8 +41,8 @@ use crate::settings::{
 #[cfg(test)]
 use crate::workspaces::workspace::{AIAutonomyPolicy, WorkspaceMember, WorkspaceSettings};
 use crate::workspaces::workspace::{
-    AiAutonomySettings, AiOverages, PurchaseAddOnCreditsPolicy, SandboxedAgentSettings,
-    UsageBasedPricingSettings,
+    AiAutonomySettings, AiOverages, LlmHostSettings, LlmSettings, PurchaseAddOnCreditsPolicy,
+    SandboxedAgentSettings, UsageBasedPricingSettings,
 };
 
 const STRIPE_SUBSCRIPTION_INTERVAL_PAGE_PREFIX: &str = "/upgrade";
@@ -169,11 +169,37 @@ pub struct CreateTeamResponse {
 /// share a lifetime, restructure so they share the single owner instead.
 ///
 /// This is scope, not authority: the server still authorizes every request made under it.
-// Only tests construct one today; remove this once a Group 1 migration PR mints one from a
-// real call site.
-#[allow(dead_code)]
-pub(crate) struct TeamContext {
-    team_uid: ServerId,
+pub struct TeamContextForOperation {
+    team_uid: Option<ServerId>,
+}
+pub(crate) trait TeamScope {
+    fn team_uid(&self) -> Option<ServerId>;
+}
+
+impl TeamScope for TeamContextForOperation {
+    fn team_uid(&self) -> Option<ServerId> {
+        self.team_uid
+    }
+}
+impl TeamContextForOperation {
+    pub(crate) fn teamless() -> Self {
+        Self { team_uid: None }
+    }
+}
+#[cfg(any(test, feature = "test-util"))]
+impl TeamContextForOperation {
+    pub fn teamless_for_test() -> Self {
+        Self::teamless()
+    }
+}
+
+#[cfg(test)]
+impl TeamContextForOperation {
+    pub(crate) fn new_for_test(team_uid: ServerId) -> Self {
+        Self {
+            team_uid: Some(team_uid),
+        }
+    }
 }
 
 /// The team a view renders as, borrowed for the duration of a single render.
@@ -181,14 +207,15 @@ pub(crate) struct TeamContext {
 /// Current-team UI must reflect the window's team as of this frame, so this is resolved
 /// per render rather than cached. The borrow is what enforces that: it cannot be stored in
 /// view state or moved into a `'static` future, and it deliberately offers no conversion to
-/// a team UID or to a [`TeamContext`]. A [`WeakViewHandle`] locates a window to read from;
-/// it is not evidence that the holder is running in that window, which is what minting
-/// operation scope requires.
-// Only tests construct one today; remove this once a Group 1 migration PR resolves one from a
-// real render.
-#[allow(dead_code)]
-pub(crate) struct TeamRenderContext<'a> {
-    team: &'a Team,
+/// a [`TeamContext`]. A [`WeakViewHandle`] locates a window to read from; it is not evidence
+/// that the holder is running in that window, which is what minting operation scope requires.
+pub(crate) struct TeamContext<'a> {
+    team_uid: Option<&'a ServerId>,
+}
+impl TeamScope for TeamContext<'_> {
+    fn team_uid(&self) -> Option<ServerId> {
+        self.team_uid.copied()
+    }
 }
 
 impl UserWorkspaces {
@@ -280,6 +307,15 @@ impl UserWorkspaces {
             STRIPE_SUBSCRIPTION_INTERVAL_PAGE_PREFIX,
             team_uid
         )
+    }
+
+    pub(crate) fn upgrade_link_for_render_context(
+        context: Option<&TeamContext<'_>>,
+        user_id: UserUid,
+    ) -> String {
+        context
+            .and_then(TeamScope::team_uid)
+            .map_or_else(|| Self::upgrade_link(user_id), Self::upgrade_link_for_team)
     }
 
     pub fn warp_agent_cli_upgrade_link(user_id: Option<UserUid>) -> String {
@@ -386,37 +422,36 @@ impl UserWorkspaces {
 
     /// Captures the team selected in `ctx`'s window as an operation's [`TeamContext`]. This
     /// is the only way application code mints one.
-    // Only tests call this today; remove once a Group 1 migration PR has a real call site.
-    #[allow(dead_code)]
-    pub(crate) fn team_context_for_view<T: Entity>(
+    pub fn team_context_for_operation<T: Entity>(
         &self,
         ctx: &ViewContext<T>,
-    ) -> Option<TeamContext> {
-        self.team_uid_for_window(ctx.window_id())
-            .map(|team_uid| TeamContext { team_uid })
+    ) -> TeamContextForOperation {
+        TeamContextForOperation {
+            team_uid: self.team_uid_for_window(ctx.window_id()),
+        }
     }
 
     /// Resolves `view`'s window team for one render. See [`TeamRenderContext`].
-    // Only tests call this today; remove once a Group 1 migration PR has a real call site.
-    #[allow(dead_code)]
-    pub(crate) fn team_render_context_for_view_handle<'a, T: Entity>(
+    pub(crate) fn team_context<'a, T: Entity>(
         &'a self,
         view: &WeakViewHandle<T>,
         app: &AppContext,
-    ) -> Option<TeamRenderContext<'a>> {
+    ) -> Option<TeamContext<'a>> {
         let window_id = view.window_id(app)?;
-        let team_uid = self.team_uid_for_window(window_id)?;
-        let team = self.team_from_uid(team_uid)?;
-
-        Some(TeamRenderContext { team })
+        let team_uid = self.window_team_uids.get(&window_id)?;
+        let team_uid = match team_uid {
+            Some(team_uid) => Some(&self.team_from_uid(*team_uid)?.uid),
+            None => None,
+        };
+        Some(TeamContext { team_uid })
     }
 
     /// Reads a captured team's metadata. Returns `None` once that team is gone from the
     /// current workspace, e.g. after the user leaves it.
-    // Only tests call this today; remove once a Group 1 migration PR has a real call site.
-    #[allow(dead_code)]
-    pub(crate) fn team_for_context(&self, context: &TeamContext) -> Option<&Team> {
-        self.team_from_uid(context.team_uid)
+    pub(crate) fn team_for_context<S: TeamScope + ?Sized>(&self, context: &S) -> Option<&Team> {
+        context
+            .team_uid()
+            .and_then(|team_uid| self.team_from_uid(team_uid))
     }
 
     /// Returns the windows whose team assignment changed.
@@ -618,13 +653,33 @@ impl UserWorkspaces {
             .or_else(|| self.current_workspace_billing_metadata())
     }
 
-    pub fn is_custom_llm_enabled_for_team(&self, team: Option<&Team>) -> bool {
-        team.map(Team::is_custom_llm_enabled)
-            .or_else(|| {
-                self.current_workspace()
-                    .map(Workspace::is_custom_llm_enabled)
-            })
-            .unwrap_or(false)
+    fn llm_settings_for_team<'a>(&'a self, team: Option<&'a Team>) -> Option<&'a LlmSettings> {
+        match team {
+            Some(team) => Some(&team.settings.llm_settings),
+            None => self
+                .current_workspace()
+                .map(|workspace| &workspace.settings.llm_settings),
+        }
+    }
+
+    pub(crate) fn llm_settings<S: TeamScope + ?Sized>(
+        &self,
+        context: Option<&S>,
+    ) -> Option<&LlmSettings> {
+        match context.and_then(TeamScope::team_uid) {
+            Some(team_uid) => self
+                .team_from_uid(team_uid)
+                .map(|team| &team.settings.llm_settings),
+            None => self.llm_settings_for_team(None),
+        }
+    }
+
+    pub(crate) fn is_custom_llm_enabled(
+        &self,
+        team_render_context: Option<TeamContext<'_>>,
+    ) -> bool {
+        self.llm_settings(team_render_context.as_ref())
+            .is_some_and(|settings| settings.enabled)
     }
 
     /// The add-on credits purchase policy for the current viewer context: the
@@ -778,6 +833,19 @@ impl UserWorkspaces {
                         .is_some_and(|policy| policy.is_voice_enabled)
                 })
     }
+    pub fn are_member_byo_keys_allowed_for_context(
+        &self,
+        context: &TeamContextForOperation,
+    ) -> bool {
+        self.are_member_byo_keys_allowed_for_scope(Some(context))
+    }
+
+    pub(crate) fn are_member_byo_endpoints_allowed_for_context(
+        &self,
+        context: &TeamContextForOperation,
+    ) -> bool {
+        self.are_member_byo_endpoints_allowed_for_scope(Some(context))
+    }
 
     /// Whether BYO API key is enabled for the current user, based on the active policies.
     /// Note that the value may be incorrect if called before the team's billing metadata has been fetched.
@@ -795,22 +863,6 @@ impl UserWorkspaces {
             .unwrap_or(FeatureFlag::SoloUserByok.is_enabled())
     }
 
-    /// Whether the current workspace's managed BYOK/BYOE policy allows members
-    /// to use their own provider API keys. Users with no workspace, or
-    /// workspaces without the managed BYOK/BYOE policy, have no team-level
-    /// restriction, so this returns true and the normal BYO entitlement applies.
-    pub fn are_member_byo_keys_allowed(&self) -> bool {
-        self.current_workspace().is_none_or(|workspace| {
-            !workspace.billing_metadata.is_managed_byok_byoe_enabled()
-                || workspace
-                    .settings
-                    .team_byo
-                    .as_ref()
-                    .is_some_and(|team_byo| {
-                        team_byo.first_party_enabled && team_byo.allow_user_keys
-                    })
-        })
-    }
     /// Whether custom inference endpoints are enabled for the current user.
     /// Anonymous or logged-out users are not allowed to use custom inference.
     /// Controlled by the BYO_ENDPOINT billing policy.
@@ -844,110 +896,312 @@ impl UserWorkspaces {
         })
     }
 
-    pub fn aws_bedrock_host_settings(&self) -> Option<&super::workspace::LlmHostSettings> {
-        self.current_workspace().and_then(|workspace| {
-            workspace
-                .settings
-                .llm_settings
-                .host_configs
-                .get(&LLMModelHost::AwsBedrock)
-        })
+    /// Whether the current workspace's plan manages BYOK/BYOE centrally. Billing metadata is
+    /// workspace-owned, so this is a plan entitlement independent of which team a window has
+    /// selected; it gates the team-scoped `team_byo` policy that
+    /// [`Self::agent_settings_are_member_byo_keys_allowed`],
+    /// [`Self::agent_settings_are_member_byo_endpoints_allowed`], and
+    /// [`Self::agent_settings_has_team_first_party_key`] read.
+    pub fn is_managed_byok_byoe_enabled(&self) -> bool {
+        self.current_workspace_billing_metadata()
+            .is_some_and(|billing| billing.is_managed_byok_byoe_enabled())
     }
 
-    /// Did the admin enable AWS Bedrock for the current workspace?
-    pub fn is_aws_bedrock_available_from_workspace(&self) -> bool {
-        self.current_workspace().is_some_and(|workspace| {
-            workspace.settings.llm_settings.enabled
-                && self
-                    .aws_bedrock_host_settings()
+    pub(crate) fn are_member_byo_keys_allowed_for_team(&self, team_uid: Option<ServerId>) -> bool {
+        !self.is_managed_byok_byoe_enabled()
+            || match team_uid {
+                Some(team_uid) => self.team_from_uid(team_uid).is_some_and(|team| {
+                    team.settings.team_byo.as_ref().is_some_and(|team_byo| {
+                        team_byo.first_party_enabled && team_byo.allow_user_keys
+                    })
+                }),
+                None => true,
+            }
+    }
+
+    pub(crate) fn are_member_byo_keys_allowed_for_scope<S: TeamScope + ?Sized>(
+        &self,
+        context: Option<&S>,
+    ) -> bool {
+        self.are_member_byo_keys_allowed_for_team(context.and_then(TeamScope::team_uid))
+    }
+
+    pub(crate) fn are_member_byo_endpoints_allowed_for_scope<S: TeamScope + ?Sized>(
+        &self,
+        context: Option<&S>,
+    ) -> bool {
+        self.are_member_byo_endpoints_allowed_for_team(context.and_then(TeamScope::team_uid))
+    }
+
+    /// [`Self::are_member_byo_endpoints_allowed`], but reading `team_uid`'s team's effective
+    /// `TeamSettings.team_byo` policy instead of the workspace-level settings.
+    pub(crate) fn are_member_byo_endpoints_allowed_for_team(
+        &self,
+        team_uid: Option<ServerId>,
+    ) -> bool {
+        !self.is_managed_byok_byoe_enabled()
+            || match team_uid {
+                Some(team_uid) => self.team_from_uid(team_uid).is_some_and(|team| {
+                    team.settings.team_byo.as_ref().is_some_and(|team_byo| {
+                        team_byo.endpoints_enabled && team_byo.allow_user_endpoints
+                    })
+                }),
+                None => true,
+            }
+    }
+
+    /// [`Self::are_member_byo_keys_allowed_for_team`], scoped to `context`'s team.
+    pub(crate) fn agent_settings_are_member_byo_keys_allowed(
+        &self,
+        context: Option<&TeamContext<'_>>,
+    ) -> bool {
+        self.are_member_byo_keys_allowed_for_scope(context)
+    }
+
+    /// [`Self::are_member_byo_endpoints_allowed_for_team`], scoped to `context`'s team.
+    pub(crate) fn agent_settings_are_member_byo_endpoints_allowed(
+        &self,
+        context: Option<&TeamContext<'_>>,
+    ) -> bool {
+        self.are_member_byo_endpoints_allowed_for_scope(context)
+    }
+
+    pub(crate) fn has_team_first_party_key<S: TeamScope + ?Sized>(
+        &self,
+        context: Option<&S>,
+        provider: LLMProvider,
+    ) -> bool {
+        self.is_managed_byok_byoe_enabled()
+            && context
+                .and_then(|context| self.team_for_context(context))
+                .is_some_and(|team| {
+                    team.settings.team_byo.as_ref().is_some_and(|team_byo| {
+                        team_byo.first_party_enabled
+                            && team_byo
+                                .first_party_keys
+                                .iter()
+                                .any(|key| key.provider == provider)
+                    })
+                })
+    }
+
+    pub(crate) fn has_team_byo_endpoint_for_model<S: TeamScope + ?Sized>(
+        &self,
+        context: Option<&S>,
+        model_config_key: &str,
+    ) -> bool {
+        self.is_managed_byok_byoe_enabled()
+            && context
+                .and_then(|context| self.team_for_context(context))
+                .is_some_and(|team| {
+                    team.settings.team_byo.as_ref().is_some_and(|team_byo| {
+                        team_byo.endpoints_enabled
+                            && team_byo.endpoints.iter().any(|endpoint| {
+                                endpoint.enabled
+                                    && endpoint.models.iter().any(|model| {
+                                        model.enabled && model.config_key == model_config_key
+                                    })
+                            })
+                    })
+                })
+    }
+
+    pub(crate) fn agent_settings_has_team_first_party_key(
+        &self,
+        context: Option<&TeamContext<'_>>,
+        provider: LLMProvider,
+    ) -> bool {
+        self.has_team_first_party_key(context, provider)
+    }
+
+    /// Whether `user_email` has admin permissions on `context`'s team.
+    pub(crate) fn agent_settings_team_has_admin_permissions(
+        &self,
+        context: &TeamContext<'_>,
+        user_email: &str,
+    ) -> bool {
+        self.team_for_context(context)
+            .is_some_and(|team| team.has_admin_permissions(user_email))
+    }
+
+    /// The Build-plan upgrade link for `context`'s team.
+    pub(crate) fn agent_settings_upgrade_link_for_team(
+        &self,
+        context: &TeamContext<'_>,
+    ) -> Option<String> {
+        context.team_uid().map(Self::upgrade_link_for_team)
+    }
+
+    fn host_settings(
+        llm_settings: Option<&LlmSettings>,
+        host: LLMModelHost,
+    ) -> Option<&LlmHostSettings> {
+        llm_settings?.host_configs.get(&host)
+    }
+
+    fn host_is_available(llm_settings: Option<&LlmSettings>, host: LLMModelHost) -> bool {
+        llm_settings.is_some_and(|llm_settings| {
+            llm_settings.enabled
+                && Self::host_settings(Some(llm_settings), host)
                     .is_some_and(|settings| settings.enabled)
         })
     }
-    pub fn aws_bedrock_host_enablement_setting(&self) -> HostEnablementSetting {
-        self.aws_bedrock_host_settings()
+
+    fn host_enablement_setting(
+        llm_settings: Option<&LlmSettings>,
+        host: LLMModelHost,
+    ) -> HostEnablementSetting {
+        Self::host_settings(llm_settings, host)
             .map(|settings| settings.enablement_setting.clone())
             .unwrap_or_default()
     }
 
-    pub fn is_aws_bedrock_credentials_toggleable(&self) -> bool {
-        matches!(
-            self.aws_bedrock_host_enablement_setting(),
-            HostEnablementSetting::RespectUserSetting
-        )
-    }
-
-    pub fn is_aws_bedrock_credentials_enabled(&self, app: &AppContext) -> bool {
-        // i.e. did the admin go and toggle on aws bedrock in the admin panel?
-        if !self.is_aws_bedrock_available_from_workspace() {
+    fn host_credentials_enabled(
+        llm_settings: Option<&LlmSettings>,
+        host: LLMModelHost,
+        user_setting_enabled: bool,
+    ) -> bool {
+        if !Self::host_is_available(llm_settings, host.clone()) {
             return false;
         }
 
-        match self.aws_bedrock_host_enablement_setting() {
+        match Self::host_enablement_setting(llm_settings, host) {
             HostEnablementSetting::Enforce => true,
-            HostEnablementSetting::RespectUserSetting => *AISettings::as_ref(app)
+            HostEnablementSetting::RespectUserSetting => user_setting_enabled,
+        }
+    }
+
+    pub(crate) fn is_aws_bedrock_credentials_enabled_for_context<S: TeamScope + ?Sized>(
+        &self,
+        context: Option<&S>,
+        app: &AppContext,
+    ) -> bool {
+        Self::host_credentials_enabled(
+            self.llm_settings(context),
+            LLMModelHost::AwsBedrock,
+            *AISettings::as_ref(app)
                 .aws_bedrock_credentials_enabled
                 .value(),
-        }
+        )
     }
 
-    pub fn gemini_enterprise_host_settings(&self) -> Option<&super::workspace::LlmHostSettings> {
-        self.current_workspace().and_then(|workspace| {
-            workspace
-                .settings
-                .llm_settings
-                .host_configs
-                .get(&LLMModelHost::GeminiEnterprise)
-        })
+    pub(crate) fn is_aws_bedrock_available_for_render_context(
+        &self,
+        context: Option<&TeamContext<'_>>,
+    ) -> bool {
+        Self::host_is_available(self.llm_settings(context), LLMModelHost::AwsBedrock)
     }
 
-    /// Did the admin enable Gemini Enterprise (GEAP) for the current workspace?
-    pub fn is_gemini_enterprise_available_from_workspace(&self) -> bool {
-        self.current_workspace().is_some_and(|workspace| {
-            workspace.settings.llm_settings.enabled
-                && self
-                    .gemini_enterprise_host_settings()
-                    .is_some_and(|settings| settings.enabled)
-        })
+    pub(crate) fn aws_bedrock_host_enablement_setting_for_render_context(
+        &self,
+        context: Option<&TeamContext<'_>>,
+    ) -> HostEnablementSetting {
+        Self::host_enablement_setting(self.llm_settings(context), LLMModelHost::AwsBedrock)
     }
 
-    pub fn gemini_enterprise_host_enablement_setting(&self) -> HostEnablementSetting {
-        self.gemini_enterprise_host_settings()
-            .map(|settings| settings.enablement_setting.clone())
-            .unwrap_or_default()
-    }
-
-    pub fn is_gemini_enterprise_credentials_toggleable(&self) -> bool {
+    pub(crate) fn is_aws_bedrock_credentials_toggleable_for_render_context(
+        &self,
+        context: Option<&TeamContext<'_>>,
+    ) -> bool {
         matches!(
-            self.gemini_enterprise_host_enablement_setting(),
+            self.aws_bedrock_host_enablement_setting_for_render_context(context),
             HostEnablementSetting::RespectUserSetting
         )
     }
 
-    /// Whether Gemini Enterprise (GEAP) credentials should be minted and attached for the
-    /// current user. Anonymous/logged-out guard from [`Self::is_byo_api_key_enabled`]:
-    /// a GEAP credential mint is rooted in the user's Warp session, so without one
-    /// there is nothing to mint from.
-    pub fn is_gemini_enterprise_credentials_enabled(&self, app: &AppContext) -> bool {
-        if !FeatureFlag::GeminiEnterprise.is_enabled() {
-            return false;
-        }
-        if AuthStateProvider::as_ref(app)
-            .get()
-            .is_anonymous_or_logged_out()
+    pub(crate) fn is_aws_bedrock_credentials_enabled_for_render_context(
+        &self,
+        context: Option<&TeamContext<'_>>,
+        app: &AppContext,
+    ) -> bool {
+        self.is_aws_bedrock_credentials_enabled_for_context(context, app)
+    }
+
+    pub(crate) fn gemini_enterprise_host_settings_for_context<S: TeamScope + ?Sized>(
+        &self,
+        context: Option<&S>,
+    ) -> Option<&LlmHostSettings> {
+        Self::host_settings(self.llm_settings(context), LLMModelHost::GeminiEnterprise)
+    }
+
+    pub(crate) fn is_gemini_enterprise_credentials_enabled_for_context<S: TeamScope + ?Sized>(
+        &self,
+        context: Option<&S>,
+        app: &AppContext,
+    ) -> bool {
+        if !FeatureFlag::GeminiEnterprise.is_enabled()
+            || AuthStateProvider::as_ref(app)
+                .get()
+                .is_anonymous_or_logged_out()
         {
             return false;
         }
-        // i.e. did the admin toggle on Gemini Enterprise in the admin panel?
-        if !self.is_gemini_enterprise_available_from_workspace() {
-            return false;
-        }
 
-        match self.gemini_enterprise_host_enablement_setting() {
-            HostEnablementSetting::Enforce => true,
-            HostEnablementSetting::RespectUserSetting => *AISettings::as_ref(app)
+        Self::host_credentials_enabled(
+            self.llm_settings(context),
+            LLMModelHost::GeminiEnterprise,
+            *AISettings::as_ref(app)
                 .gemini_enterprise_credentials_enabled
                 .value(),
+        )
+    }
+
+    pub(crate) fn is_gemini_enterprise_available_for_render_context(
+        &self,
+        context: Option<&TeamContext<'_>>,
+    ) -> bool {
+        Self::host_is_available(self.llm_settings(context), LLMModelHost::GeminiEnterprise)
+    }
+
+    pub(crate) fn gemini_enterprise_host_enablement_setting_for_render_context(
+        &self,
+        context: Option<&TeamContext<'_>>,
+    ) -> HostEnablementSetting {
+        Self::host_enablement_setting(self.llm_settings(context), LLMModelHost::GeminiEnterprise)
+    }
+
+    pub(crate) fn is_gemini_enterprise_credentials_toggleable_for_render_context(
+        &self,
+        context: Option<&TeamContext<'_>>,
+    ) -> bool {
+        matches!(
+            self.gemini_enterprise_host_enablement_setting_for_render_context(context),
+            HostEnablementSetting::RespectUserSetting
+        )
+    }
+
+    pub(crate) fn is_aws_bedrock_credentials_enabled_for_any_scope(
+        &self,
+        app: &AppContext,
+    ) -> bool {
+        let Some(workspace) = self.current_workspace() else {
+            return false;
+        };
+        let user_setting_enabled = *AISettings::as_ref(app)
+            .aws_bedrock_credentials_enabled
+            .value();
+        if workspace.teams.is_empty() {
+            return Self::host_credentials_enabled(
+                Some(&workspace.settings.llm_settings),
+                LLMModelHost::AwsBedrock,
+                user_setting_enabled,
+            );
         }
+        workspace.teams.iter().any(|team| {
+            Self::host_credentials_enabled(
+                Some(&team.settings.llm_settings),
+                LLMModelHost::AwsBedrock,
+                user_setting_enabled,
+            )
+        })
+    }
+
+    pub(crate) fn is_gemini_enterprise_credentials_enabled_for_render_context(
+        &self,
+        context: Option<&TeamContext<'_>>,
+        app: &AppContext,
+    ) -> bool {
+        self.is_gemini_enterprise_credentials_enabled_for_context(context, app)
     }
 
     /// Returns the AI autonomy settings that are enforced by the workspace for all its members.

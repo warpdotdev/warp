@@ -26,8 +26,7 @@ impl InlineMenuAction for SelectUserQuery {
 
         let mut items = Vec::new();
 
-        if let Some(item) = inline_menu_model.selected_item() {
-            let exchange_id = item.exchange_id;
+        if inline_menu_model.selected_item().is_some() {
             items.push(MessageItem::clickable(
                 vec![
                     MessageItem::keystroke(Keystroke {
@@ -37,10 +36,11 @@ impl InlineMenuAction for SelectUserQuery {
                     MessageItem::text(" new pane"),
                 ],
                 move |ctx| {
-                    ctx.dispatch_typed_action(InlineMenuRowAction::Accept {
-                        item: SelectUserQuery { exchange_id },
-                        cmd_or_ctrl_enter: false,
-                    });
+                    ctx.dispatch_typed_action(
+                        InlineMenuRowAction::<SelectUserQuery>::AcceptSelected {
+                            cmd_or_ctrl_enter: false,
+                        },
+                    );
                 },
                 inline_menu_model.mouse_states().accept.clone(),
             ));
@@ -66,10 +66,11 @@ impl InlineMenuAction for SelectUserQuery {
                     MessageItem::text(" new tab"),
                 ],
                 move |ctx| {
-                    ctx.dispatch_typed_action(InlineMenuRowAction::Accept {
-                        item: SelectUserQuery { exchange_id },
-                        cmd_or_ctrl_enter: true,
-                    });
+                    ctx.dispatch_typed_action(
+                        InlineMenuRowAction::<SelectUserQuery>::AcceptSelected {
+                            cmd_or_ctrl_enter: true,
+                        },
+                    );
                 },
                 inline_menu_model.mouse_states().accept_secondary.clone(),
             ));

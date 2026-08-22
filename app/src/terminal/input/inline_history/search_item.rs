@@ -115,6 +115,7 @@ impl SearchItem for InlineHistoryItem {
         &self,
         _highlight_state: ItemHighlightState,
         appearance: &Appearance,
+        _app: &AppContext,
     ) -> Box<dyn Element> {
         let icon_size = inline_styles::font_size(appearance);
         let icon = match &self.item_type {

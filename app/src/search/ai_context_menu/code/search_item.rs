@@ -29,6 +29,7 @@ impl SearchItem for CodeSearchItem {
         &self,
         _highlight_state: ItemHighlightState,
         appearance: &Appearance,
+        _app: &AppContext,
     ) -> Box<dyn Element> {
         Container::new(
             ConstrainedBox::new(

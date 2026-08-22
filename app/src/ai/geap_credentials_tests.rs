@@ -289,6 +289,26 @@ fn refresh_disables_and_drops_tokens_when_gate_is_off() {
 }
 
 #[test]
+fn automatic_teamless_refresh_preserves_team_credentials() {
+    let workspace = workspace_with_geap_host(false);
+    App::test((), |mut app| async move {
+        let _geap_flag = FeatureFlag::GeminiEnterprise.override_enabled(true);
+        initialize_app(&mut app, vec![workspace]);
+
+        ApiKeyManager::handle(&app).update(&mut app, |manager, ctx| {
+            let loaded = GeapCredentialsState::Loaded {
+                credentials: fresh_credentials(),
+                loaded_at: SystemTime::now(),
+                minted_for: stale_binding(),
+            };
+            manager.set_geap_credentials_state(loaded.clone(), ctx);
+            refresh_teamless_geap_credentials(manager, ctx);
+            assert_eq!(*manager.geap_credentials_state(), loaded);
+        });
+    })
+}
+
+#[test]
 fn refresh_rests_at_unconfigured_when_enabled_but_unconfigured() {
     let mut workspace = workspace_with_geap_host(true);
     // Enabled, but the admin has not configured an audience yet.
@@ -430,6 +450,7 @@ fn mint_completion_discards_stale_binding_result_and_remints() {
                 Ok(fresh_credentials()),
                 stale_binding(),
                 false,
+                true,
                 ctx,
             );
             match manager.geap_credentials_state() {
@@ -465,6 +486,7 @@ fn mint_completion_failure_restores_servable_previous() {
                 }),
                 current.clone(),
                 false,
+                true,
                 ctx,
             );
             match manager.geap_credentials_state() {
@@ -501,6 +523,7 @@ fn mint_failure_starts_the_cooldown_that_suppresses_the_blocking_wait() {
                 }),
                 current.clone(),
                 false,
+                true,
                 ctx,
             );
             // Restoring the previous token leaves an expired credential in
@@ -513,6 +536,7 @@ fn mint_failure_starts_the_cooldown_that_suppresses_the_blocking_wait() {
                 GeapCredentialsState::Loaded { .. }
             ));
             assert!(!manager.geap_expired_refresh_eligibility(&current));
+            assert!(manager.geap_request_refresh_eligibility(&stale_binding()));
         });
     })
 }
@@ -540,14 +564,16 @@ fn mint_completion_failure_with_unservable_previous_fails() {
                     status: None,
                     detail: "boom".into(),
                 }),
-                current,
+                current.clone(),
                 false,
+                true,
                 ctx,
             );
             match manager.geap_credentials_state() {
                 GeapCredentialsState::Failed {
                     error: LoadGeapCredentialsError::ExchangeToken { .. },
-                } => {}
+                    minted_for,
+                } if *minted_for == current => {}
                 other => {
                     panic!("expected Failed carrying the structured leg-2 error, got {other:?}")
                 }
@@ -570,7 +596,8 @@ fn safety_net_noops_on_fresh_token_and_rearms_parked_chain() {
             };
             // Fresh token: the safety net must not touch anything.
             manager.set_geap_credentials_state(fresh.clone(), ctx);
-            refresh_geap_credentials_if_needed(manager, ctx);
+            let binding = current_binding(ctx);
+            refresh_geap_credentials_if_needed_for_binding(manager, Some(&binding), ctx);
             assert_eq!(*manager.geap_credentials_state(), fresh);
 
             // Parked chain (an earlier mint failed with nothing to keep):
@@ -581,10 +608,11 @@ fn safety_net_noops_on_fresh_token_and_rearms_parked_chain() {
                         status: None,
                         detail: "boom".into(),
                     },
+                    minted_for: binding.clone(),
                 },
                 ctx,
             );
-            refresh_geap_credentials_if_needed(manager, ctx);
+            refresh_geap_credentials_if_needed_for_binding(manager, Some(&binding), ctx);
             match manager.geap_credentials_state() {
                 GeapCredentialsState::Refreshing { .. } => {}
                 other => panic!("expected the safety net to arm a refresh, got {other:?}"),
@@ -602,7 +630,7 @@ fn safety_net_is_a_pure_noop_when_gate_is_off() {
         ApiKeyManager::handle(&app).update(&mut app, |manager, ctx| {
             // The request path must not mutate state when the gate is off;
             // state transitions belong to the event-driven triggers.
-            refresh_geap_credentials_if_needed(manager, ctx);
+            refresh_geap_credentials_if_needed_for_binding(manager, None, ctx);
             assert_eq!(
                 *manager.geap_credentials_state(),
                 GeapCredentialsState::Missing

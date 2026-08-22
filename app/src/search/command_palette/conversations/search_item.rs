@@ -330,6 +330,7 @@ impl SearchItem for ConversationSearchItem {
         &self,
         highlight_state: ItemHighlightState,
         appearance: &Appearance,
+        _app: &AppContext,
     ) -> Box<dyn Element> {
         let (color, icon) = match &self.action_info {
             ConversationAction::Resume(..) => (

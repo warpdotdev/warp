@@ -70,6 +70,7 @@ use crate::terminal::view::{ConversationRestorationInNewPaneType, Event as Termi
 use crate::terminal::writeable_pty::terminal_manager_util::wire_up_remote_server_controller_with_view;
 use crate::terminal::{TerminalManager as TerminalManagerTrait, TerminalModel, TerminalView};
 use crate::view_components::ToastFlavor;
+use crate::workspaces::user_workspaces::UserWorkspaces;
 
 const ACL_UPDATE_FAILURE_RESPONSE: &str = "Something went wrong. Please try again.";
 
@@ -298,6 +299,7 @@ fn wire_up_terminal_view_session_sharing(
     // Send model selection updates during session sharing
     let session_sharer_for_models = session_sharer.clone();
     let terminal_view_id = view.id();
+    let weak_view_for_models = view.downgrade();
     let model_remote_update_guard = sharer_remote_update_guard.clone();
     ctx.subscribe_to_model(&LLMPreferences::handle(ctx), move |_prefs, event, ctx| {
         // Only react to agent mode LLM changes
@@ -310,9 +312,16 @@ fn wire_up_terminal_view_session_sharing(
         }
 
         if let Some(network) = session_sharer_for_models.borrow().as_ref() {
-            let llm_prefs = LLMPreferences::as_ref(ctx);
-            let selected_model_id: String = llm_prefs
-                .get_active_base_model(ctx, Some(terminal_view_id))
+            if weak_view_for_models.upgrade(ctx).is_none() {
+                return;
+            }
+            let team_context = UserWorkspaces::as_ref(ctx).team_context(&weak_view_for_models, ctx);
+            let selected_model_id: String = LLMPreferences::as_ref(ctx)
+                .get_active_base_model_for_team_context(
+                    Some(terminal_view_id),
+                    team_context.as_ref(),
+                    ctx,
+                )
                 .id
                 .clone()
                 .into();
@@ -843,19 +852,25 @@ impl TerminalManager<TerminalView> {
                     long_running_command_agent_interaction,
                     cli_agent_session,
                 };
+                let team_context = terminal_view.update(ctx, |_, ctx| {
+                    UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx)
+                });
+                let model_for_network = model.clone();
+                let source_for_network = source.clone();
 
-                let network = ctx.add_model(|ctx| {
+                let network = ctx.add_model(move |ctx| {
                     Network::new(
-                        model.clone(),
+                        model_for_network,
                         events_rx,
                         scrollback_type,
                         active_prompt,
                         selection,
                         input_replica_id,
-                        terminal_view.id(),
+                        terminal_view_id,
+                        team_context,
                         universal_developer_input_context,
                         lifetime,
-                        source.clone(),
+                        source_for_network,
                         max_session_size,
                         ctx,
                     )
@@ -1380,6 +1395,7 @@ impl TerminalManager<TerminalView> {
 
                 // Execute the agent prompt in the Oz-harness case
                 terminal_view.update(ctx, |view, ctx| {
+                    let team_context = UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx);
                     // Restore the sharer's frozen visual state. The buffer is cleared by
                     // system_clear_buffer when SentRequest fires from execute_agent_prompt_for_shared_session.
                     view.input().update(ctx, |input, ctx| {
@@ -1392,6 +1408,7 @@ impl TerminalManager<TerminalView> {
                             request.server_conversation_token,
                             request.attachments.clone(),
                             participant_id.clone(),
+                            team_context,
                             ctx,
                         );
                     });
@@ -1495,10 +1512,15 @@ impl TerminalManager<TerminalView> {
                 let active_remote_update = sharer_remote_update_guard.start_remote_update();
 
                 if let Some(ref model) = context_update.selected_model {
-                    let terminal_view_id = terminal_view.id();
+                    let weak_view_handle = terminal_view.downgrade();
 
                     // Update LLMPreferences to match the selected model received from the server.
-                    apply_selected_agent_model_update(terminal_view_id, model, &active_remote_update, ctx);
+                    apply_selected_agent_model_update(
+                        &weak_view_handle,
+                        model,
+                        &active_remote_update,
+                        ctx,
+                    );
                 }
                 if let Some(ref input_mode) = context_update.input_mode {
                     let weak_view_handle = terminal_view.downgrade();

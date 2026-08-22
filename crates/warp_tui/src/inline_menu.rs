@@ -631,10 +631,6 @@ impl TuiInlineMenuHandle for ModelHandle<TuiApiKeysMenuModel> {
         self.as_ref(ctx).input_ownership(ctx)
     }
 
-    fn open(&self, ctx: &mut AppContext) {
-        self.update(ctx, |model, ctx| model.open(ctx));
-    }
-
     fn input_highlight_range(&self, _ctx: &AppContext) -> Option<Range<CharOffset>> {
         None
     }
@@ -834,9 +830,6 @@ impl TuiInlineMenuHandle for ModelHandle<TuiModelMenuModel> {
     }
     fn is_open(&self, ctx: &AppContext) -> bool {
         self.as_ref(ctx).is_open(ctx)
-    }
-    fn open(&self, ctx: &mut AppContext) {
-        self.update(ctx, |model, ctx| model.open(ctx));
     }
     fn input_highlight_range(&self, _ctx: &AppContext) -> Option<Range<CharOffset>> {
         None

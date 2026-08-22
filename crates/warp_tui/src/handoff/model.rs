@@ -17,11 +17,11 @@ use warp::tui_export::{
     AIConversationId, AISettingsChangedEvent, AttachmentInput, BlocklistAIContextModel,
     BlocklistAIController, BlocklistAIHistoryModel, CloudAgentTelemetryEvent,
     CloudEnvironmentCatalog, HandoffCommitOutcome, HandoffEntryPoint, HandoffLaunchAttachments,
-    HandoffPrepareError, HandoffPrepareInput, HandoffRestoration, HandoffSurface, LLMId,
-    LLMPreferences, LLMPreferencesEvent, OptionRow, OptionSnapshot, OptionSourceStatus,
-    PendingCloudLaunch, PendingHandoff, ServerApiProvider, SnapshotUploadTarget, TerminalModel,
-    UserWorkspaces, UserWorkspacesEvent, execute_handoff, handoff_dispatch_error,
-    oz_model_snapshot, prepare_handoff, suggest_handoff_environment,
+    HandoffOrigin, HandoffPrepareError, HandoffPrepareInput, HandoffRestoration, HandoffSurface,
+    LLMId, LLMPreferences, LLMPreferencesEvent, OptionRow, OptionSnapshot, OptionSourceStatus,
+    PendingCloudLaunch, PendingHandoff, ServerApiProvider, SnapshotUploadTarget,
+    TeamContextForOperation, TerminalModel, UserWorkspaces, UserWorkspacesEvent, execute_handoff,
+    handoff_dispatch_error, oz_model_snapshot, prepare_handoff, suggest_handoff_environment,
 };
 use warpui::{AppContext, Entity, EntityId, ModelContext, ModelHandle, SingletonEntity as _};
 
@@ -117,6 +117,7 @@ impl TuiHandoffModel {
         context: ModelHandle<BlocklistAIContextModel>,
         current_working_directory: Option<String>,
         argument: Option<String>,
+        team_context: TeamContextForOperation,
         ctx: &mut AppContext,
     ) -> Result<ModelHandle<Self>, TuiHandoffPreparationFailure> {
         if !AISettings::as_ref(ctx).is_cloud_handoff_enabled(ctx) {
@@ -163,8 +164,8 @@ impl TuiHandoffModel {
                     ai_client: provider.get_ai_client(),
                     http: provider.get_http_client(),
                 },
-                HandoffEntryPoint::SlashCommand,
-                HandoffSurface::Tui,
+                HandoffOrigin::new(HandoffEntryPoint::SlashCommand, HandoffSurface::Tui),
+                team_context,
             )
             .with_expected_conversation_id(source_conversation_id)
             .with_current_working_directory(current_working_directory.clone())

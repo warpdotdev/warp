@@ -28,7 +28,7 @@ use crate::ai::cloud_environments::CloudEnvironmentCatalog;
 use crate::ai::connected_self_hosted_workers::ConnectedSelfHostedWorkersModel;
 use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
 use crate::ai::harness_availability::HarnessAvailabilityModel;
-use crate::ai::llms::{LLMId, LLMPreferences};
+use crate::ai::llms::{LLMId, LLMPreferences, LLMProvider};
 use crate::ai::mcp::templatable_manager::TemplatableMCPServerManager;
 use crate::ai::request_usage_model::AIRequestUsageModel;
 use crate::auth::AuthStateProvider;
@@ -65,7 +65,9 @@ use crate::user_config::WarpConfig;
 use crate::voice::transcriber::VoiceTranscriber;
 use crate::workspaces::team::{MembershipRole, Team, TeamMember};
 use crate::workspaces::user_workspaces::UserWorkspaces;
-use crate::workspaces::workspace::Workspace;
+use crate::workspaces::workspace::{
+    ByoApiKeyPolicy, ByoFirstPartyKey, ManagedByokByoePolicy, TeamByoSettings, Workspace,
+};
 
 /// Builds a history model with persisted AI queries for TUI tests.
 pub fn blocklist_ai_history_model_with_queries(queries: Vec<String>) -> BlocklistAIHistoryModel {
@@ -281,6 +283,48 @@ pub fn set_tui_default_team_admin_for_test(ctx: &mut AppContext) {
         "test workspace".to_owned(),
         Some(vec![team]),
     );
+    let workspace_uid = workspace.uid;
+    UserWorkspaces::handle(ctx).update(ctx, |workspaces, ctx| {
+        workspaces.update_workspaces(vec![workspace], ctx);
+        workspaces.set_current_workspace_uid(workspace_uid, ctx);
+    });
+}
+
+pub fn set_tui_managed_byok_team_for_test(
+    team_uid: i64,
+    first_party_provider: Option<LLMProvider>,
+    allow_user_keys: bool,
+    ctx: &mut AppContext,
+) {
+    let mut team = Team::from_local_cache(
+        team_uid.into(),
+        format!("test team {team_uid}"),
+        None,
+        None,
+        None,
+    );
+    team.settings.team_byo = Some(TeamByoSettings {
+        first_party_enabled: true,
+        endpoints_enabled: true,
+        allow_user_keys,
+        allow_user_endpoints: false,
+        first_party_keys: first_party_provider
+            .map(|provider| ByoFirstPartyKey {
+                provider,
+                credential_uid: format!("credential-{team_uid}"),
+            })
+            .into_iter()
+            .collect(),
+        endpoints: Vec::new(),
+    });
+    let mut workspace = Workspace::from_local_cache(
+        "workspace_uid123456789".to_owned().into(),
+        "test workspace".to_owned(),
+        Some(vec![team]),
+    );
+    workspace.billing_metadata.tier.managed_byok_byoe_policy =
+        Some(ManagedByokByoePolicy { enabled: true });
+    workspace.billing_metadata.tier.byo_api_key_policy = Some(ByoApiKeyPolicy { enabled: true });
     let workspace_uid = workspace.uid;
     UserWorkspaces::handle(ctx).update(ctx, |workspaces, ctx| {
         workspaces.update_workspaces(vec![workspace], ctx);

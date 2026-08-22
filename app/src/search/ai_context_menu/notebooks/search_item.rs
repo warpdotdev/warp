@@ -35,6 +35,7 @@ impl SearchItem for NotebookSearchItem {
         &self,
         highlight_state: ItemHighlightState,
         appearance: &Appearance,
+        _app: &AppContext,
     ) -> Box<dyn Element> {
         Container::new(
             ConstrainedBox::new(

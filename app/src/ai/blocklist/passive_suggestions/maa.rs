@@ -25,12 +25,12 @@ use crate::ai::paths::host_native_absolute_path;
 use crate::auth::auth_state::AuthStateProvider;
 use crate::server::server_api::ServerApiProvider;
 use crate::settings::AISettings;
-use crate::terminal::event::{BlockType, UserBlockCompleted};
+use crate::terminal::event::UserBlockCompleted;
 use crate::terminal::model::session::active_session::ActiveSession;
 use crate::terminal::model::terminal_model::TerminalModel;
 use crate::terminal::model_events::{ModelEvent, ModelEventDispatcher};
 use crate::terminal::view::ambient_agent::AmbientAgentViewModel;
-use crate::workspaces::user_workspaces::UserWorkspaces;
+use crate::workspaces::user_workspaces::{TeamContextForOperation, UserWorkspaces};
 
 cfg_if::cfg_if! {
     if #[cfg(feature = "local_fs")] {
@@ -175,6 +175,7 @@ impl PassiveSuggestionsModel {
         followup_conversation_id: Option<AIConversationId>,
         trigger: PassiveSuggestionTrigger,
         supported_tools: Vec<warp_multi_agent_api::ToolType>,
+        team_context: TeamContextForOperation,
         ctx: &mut ModelContext<Self>,
     ) {
         // Capture before the call — `Some` means there's a real conversation
@@ -186,6 +187,7 @@ impl PassiveSuggestionsModel {
                     followup_conversation_id,
                     trigger.clone(),
                     supported_tools,
+                    team_context,
                     ctx,
                 )
             })
@@ -369,16 +371,10 @@ impl PassiveSuggestionsModel {
             ModelEvent::AfterBlockStarted { .. } => {
                 self.abort_pending_requests(ctx);
             }
-            ModelEvent::AfterBlockCompleted(after_block_completed_event) => {
-                if !FeatureFlag::PromptSuggestionsViaMAA.is_enabled() {
-                    self.abort_pending_requests(ctx);
-                    return;
-                }
-                if let BlockType::User(block_completed) = &after_block_completed_event.block_type
-                    && !block_completed.was_part_of_agent_interaction
-                {
-                    self.handle_user_block_completed(block_completed, ctx);
-                }
+            ModelEvent::AfterBlockCompleted(_)
+                if !FeatureFlag::PromptSuggestionsViaMAA.is_enabled() =>
+            {
+                self.abort_pending_requests(ctx);
             }
             _ => {}
         }
@@ -394,22 +390,19 @@ impl PassiveSuggestionsModel {
                 // Once a non-passive request is sent, cancel any pending passive requests.
                 self.abort_pending_requests(ctx);
             }
-            BlocklistAIControllerEvent::FinishedReceivingOutput {
-                conversation_id, ..
-            } => {
-                if !FeatureFlag::PromptSuggestionsViaMAA.is_enabled() {
-                    self.abort_pending_requests(ctx);
-                    return;
-                }
-                self.handle_finished_stream(*conversation_id, ctx);
+            BlocklistAIControllerEvent::FinishedReceivingOutput { .. }
+                if !FeatureFlag::PromptSuggestionsViaMAA.is_enabled() =>
+            {
+                self.abort_pending_requests(ctx);
             }
             _ => {}
         }
     }
 
-    fn handle_finished_stream(
+    pub(crate) fn handle_finished_stream(
         &mut self,
         conversation_id: AIConversationId,
+        team_context: TeamContextForOperation,
         ctx: &mut ModelContext<Self>,
     ) {
         self.abort_pending_requests(ctx);
@@ -440,6 +433,7 @@ impl PassiveSuggestionsModel {
                     exchange_id: latest_exchange_id,
                 },
                 vec![warp_multi_agent_api::ToolType::SuggestPrompt],
+                team_context,
                 ctx,
             );
         }
@@ -451,6 +445,7 @@ impl PassiveSuggestionsModel {
         block_context: Box<BlockContext>,
         relevant_files: Vec<FileContext>,
         supported_tools: Vec<warp_multi_agent_api::ToolType>,
+        team_context: TeamContextForOperation,
         ctx: &mut ModelContext<Self>,
     ) {
         let trigger =
@@ -458,12 +453,12 @@ impl PassiveSuggestionsModel {
                 executed_shell_command: block_context,
                 relevant_files,
             });
-        self.send_request(conversation_id, trigger, supported_tools, ctx);
+        self.send_request(conversation_id, trigger, supported_tools, team_context, ctx);
     }
-
-    fn handle_user_block_completed(
+    pub(crate) fn handle_user_block_completed(
         &mut self,
         block_completed: &UserBlockCompleted,
+        team_context: TeamContextForOperation,
         ctx: &mut ModelContext<Self>,
     ) {
         self.abort_pending_requests(ctx);
@@ -559,6 +554,7 @@ impl PassiveSuggestionsModel {
                             block_context,
                             vec![],
                             supported_tools,
+                            team_context,
                             ctx,
                         );
                         return;
@@ -574,6 +570,7 @@ impl PassiveSuggestionsModel {
                                 block_context,
                                 relevant_files,
                                 supported_tools,
+                                team_context,
                                 ctx,
                             );
                         },
@@ -589,6 +586,7 @@ impl PassiveSuggestionsModel {
                 block_context,
                 vec![],
                 supported_tools,
+                team_context,
                 ctx,
             );
         }

@@ -2,7 +2,8 @@ use warp::tui_export::{
     AIConversationId, BlocklistAIHistoryModel, CloudAgentStartupBlocker, CloudAgentStartupFailure,
     CloudAgentStartupIssue, ConversationStatus, Harness, OrchestrationEventStreamerEvent,
     RenderableAIError, StartAgentExecutionMode, StartAgentExecutor, StartAgentExecutorEvent,
-    StartAgentOutcome, StartAgentRequest, register_tui_session_view_test_singletons,
+    StartAgentOutcome, StartAgentRequest, TeamContextForOperation,
+    register_tui_session_view_test_singletons,
 };
 use warp_core::features::FeatureFlag;
 use warpui::platform::WindowStyle;
@@ -183,6 +184,7 @@ fn add_relayed_executor(
                         parent_session_id,
                         (**request).clone(),
                         None,
+                        TeamContextForOperation::teamless_for_test(),
                         ctx,
                     );
                 }

@@ -1,31 +1,31 @@
 //! Searchable TUI model picker state.
+#[cfg(test)]
+use std::collections::HashMap;
 
 use warp::editor::{CodeEditorModel, CodeEditorModelEvent};
 use warp::settings::AISettings;
 use warp::tui_export::{
-    AISettingsChangedEvent, LLMId, LLMPreferences, LLMPreferencesEvent, ModelPickerChoice,
-    query_model_picker_choices, should_show_bedrock_icon_for_model,
-    should_show_gemini_enterprise_agent_platform_icon_for_model, should_show_key_icon_for_model,
+    AISettingsChangedEvent, LLMId, LLMPreferences, LLMPreferencesEvent, TuiModelPickerPresentation,
+    tui_active_model_id_for_view, tui_model_picker_catalog_ids,
+    tui_model_picker_presentation_for_view,
 };
 use warp_editor::model::CoreEditorModel;
-use warpui_core::{AppContext, Entity, EntityId, ModelContext, ModelHandle, SingletonEntity};
+use warpui_core::{
+    AppContext, Entity, EntityId, ModelContext, ModelHandle, SingletonEntity, WeakViewHandle,
+};
 
 use crate::inline_menu::{
     MAX_INLINE_MENU_ROWS, TuiInlineMenuHeader, TuiInlineMenuListState, TuiInlineMenuRow,
     TuiInlineMenuRowStyle, TuiInlineMenuSnapshot, TuiInlineMenuStatus, result_row_capacity,
 };
 use crate::input_suggestions_mode::{TuiInputSuggestionsMode, TuiInputSuggestionsModeModel};
+use crate::terminal_session_view::TuiTerminalSessionView;
 
 const MAX_VISIBLE_ROWS: usize = result_row_capacity(MAX_INLINE_MENU_ROWS, true, false);
 
 #[derive(Debug, Clone)]
 struct TuiModelMenuRow {
     id: LLMId,
-    title: String,
-    is_selectable: bool,
-    is_key_connected: bool,
-    is_profile_default: bool,
-    discount_percentage: Option<f32>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -44,6 +44,9 @@ pub(crate) struct TuiModelMenuModel {
     input_editor: ModelHandle<CodeEditorModel>,
     suggestions_mode: ModelHandle<TuiInputSuggestionsModeModel>,
     terminal_view_id: EntityId,
+    owner_view: Option<WeakViewHandle<TuiTerminalSessionView>>,
+    #[cfg(test)]
+    test_presentations: HashMap<LLMId, TuiModelPickerPresentation>,
     state: TuiModelMenuState,
 }
 
@@ -52,6 +55,7 @@ impl TuiModelMenuModel {
         input_editor: ModelHandle<CodeEditorModel>,
         suggestions_mode: ModelHandle<TuiInputSuggestionsModeModel>,
         terminal_view_id: EntityId,
+        owner_view: WeakViewHandle<TuiTerminalSessionView>,
         ctx: &mut ModelContext<Self>,
     ) -> Self {
         ctx.subscribe_to_model(&input_editor, |model, _, event, ctx| {
@@ -81,6 +85,9 @@ impl TuiModelMenuModel {
             input_editor,
             suggestions_mode,
             terminal_view_id,
+            owner_view: Some(owner_view),
+            #[cfg(test)]
+            test_presentations: HashMap::new(),
             state: TuiModelMenuState::Closed,
         }
     }
@@ -93,26 +100,41 @@ impl TuiModelMenuModel {
         selected_index: usize,
     ) -> Self {
         let mut list = TuiInlineMenuListState::default();
+        let test_presentations: HashMap<LLMId, TuiModelPickerPresentation> = rows
+            .iter()
+            .map(|(id, is_selectable)| {
+                (
+                    id.clone(),
+                    TuiModelPickerPresentation {
+                        id: id.clone(),
+                        title: id.to_string(),
+                        is_selectable: *is_selectable,
+                        is_key_connected: false,
+                        is_profile_default: false,
+                        discount_percentage: None,
+                    },
+                )
+            })
+            .collect();
         list.replace_rows(
             rows.into_iter()
-                .map(|(id, is_selectable)| TuiModelMenuRow {
-                    title: id.to_string(),
-                    id,
-                    is_selectable,
-                    is_key_connected: false,
-                    is_profile_default: false,
-                    discount_percentage: None,
-                })
+                .map(|(id, _)| TuiModelMenuRow { id })
                 .collect(),
             false,
             Some(selected_index),
             MAX_VISIBLE_ROWS,
-            |row| row.is_selectable,
+            |row| {
+                test_presentations
+                    .get(&row.id)
+                    .is_some_and(|presentation| presentation.is_selectable)
+            },
         );
         Self {
             input_editor,
             suggestions_mode,
             terminal_view_id: EntityId::new(),
+            owner_view: None,
+            test_presentations,
             state: TuiModelMenuState::Open { list },
         }
     }
@@ -158,18 +180,20 @@ impl TuiModelMenuModel {
     }
 
     pub(crate) fn select_previous(&mut self, ctx: &mut ModelContext<Self>) {
+        let selectable_ids = self.selectable_ids(ctx);
         let TuiModelMenuState::Open { list } = &mut self.state else {
             return;
         };
-        list.select_previous(MAX_VISIBLE_ROWS, |row| row.is_selectable);
+        list.select_previous(MAX_VISIBLE_ROWS, |row| selectable_ids.contains(&row.id));
         ctx.emit(TuiModelMenuEvent);
     }
 
     pub(crate) fn select_next(&mut self, ctx: &mut ModelContext<Self>) {
+        let selectable_ids = self.selectable_ids(ctx);
         let TuiModelMenuState::Open { list } = &mut self.state else {
             return;
         };
-        list.select_next(MAX_VISIBLE_ROWS, |row| row.is_selectable);
+        list.select_next(MAX_VISIBLE_ROWS, |row| selectable_ids.contains(&row.id));
         ctx.emit(TuiModelMenuEvent);
     }
 
@@ -182,10 +206,20 @@ impl TuiModelMenuModel {
         index: usize,
         ctx: &mut ModelContext<Self>,
     ) -> bool {
+        let Some((retained_index, presentation)) = self.presentations(ctx).into_iter().nth(index)
+        else {
+            return false;
+        };
+        if !presentation.is_selectable {
+            return false;
+        }
+        let selectable_ids = self.selectable_ids(ctx);
         let TuiModelMenuState::Open { list } = &mut self.state else {
             return false;
         };
-        let selected = list.select_absolute(index, MAX_VISIBLE_ROWS, |row| row.is_selectable);
+        let selected = list.select_absolute(retained_index, MAX_VISIBLE_ROWS, |row| {
+            selectable_ids.contains(&row.id)
+        });
         ctx.emit(TuiModelMenuEvent);
         selected
     }
@@ -206,7 +240,10 @@ impl TuiModelMenuModel {
         let TuiModelMenuState::Open { list } = &self.state else {
             return None;
         };
-        list.selected_row().map(|row| row.id.clone())
+        let row = list.selected_row()?;
+        self.presentation(row, ctx)
+            .filter(|presentation| presentation.is_selectable)
+            .map(|presentation| presentation.id)
     }
 
     pub(crate) fn snapshot(&self, ctx: &AppContext) -> Option<TuiInlineMenuSnapshot> {
@@ -216,21 +253,73 @@ impl TuiModelMenuModel {
         let TuiModelMenuState::Open { list } = &self.state else {
             return None;
         };
+        let presentations = self.presentations(ctx);
+        let selected_index = list.selected_index().and_then(|selected_index| {
+            presentations
+                .iter()
+                .position(|(retained_index, presentation)| {
+                    *retained_index == selected_index && presentation.is_selectable
+                })
+        });
+        let rows = presentations
+            .into_iter()
+            .map(|(_, presentation)| snapshot_row(&presentation))
+            .collect::<Vec<_>>();
+        let status = rows
+            .is_empty()
+            .then(|| TuiInlineMenuStatus::Empty("No models found".to_owned()));
         Some(TuiInlineMenuSnapshot {
             header: Some(TuiInlineMenuHeader {
                 title: Some("Models".to_owned()),
                 tabs: Vec::new(),
             }),
-            rows: list.rows().iter().map(snapshot_row).collect(),
-            selected_index: list.selected_index(),
-            scroll_offset: list.scroll_offset(),
+            selected_index,
+            scroll_offset: list
+                .scroll_offset()
+                .min(rows.len().saturating_sub(MAX_VISIBLE_ROWS)),
+            rows,
             scroll_anchor: list.scroll_anchor(),
             max_visible_rows: MAX_VISIBLE_ROWS,
-            status: list
-                .rows()
-                .is_empty()
-                .then(|| TuiInlineMenuStatus::Empty("No models found".to_owned())),
+            status,
         })
+    }
+
+    fn presentation(
+        &self,
+        row: &TuiModelMenuRow,
+        ctx: &AppContext,
+    ) -> Option<TuiModelPickerPresentation> {
+        #[cfg(test)]
+        if self.owner_view.is_none() {
+            return self.test_presentations.get(&row.id).cloned();
+        }
+        tui_model_picker_presentation_for_view(
+            self.owner_view.as_ref()?,
+            self.terminal_view_id,
+            &row.id,
+            ctx,
+        )
+    }
+
+    fn presentations(&self, ctx: &AppContext) -> Vec<(usize, TuiModelPickerPresentation)> {
+        let TuiModelMenuState::Open { list } = &self.state else {
+            return Vec::new();
+        };
+        list.rows()
+            .iter()
+            .enumerate()
+            .filter_map(|(index, row)| {
+                self.presentation(row, ctx)
+                    .map(|presentation| (index, presentation))
+            })
+            .collect()
+    }
+
+    fn selectable_ids(&self, ctx: &AppContext) -> Vec<LLMId> {
+        self.presentations(ctx)
+            .into_iter()
+            .filter_map(|(_, presentation)| presentation.is_selectable.then_some(presentation.id))
+            .collect()
     }
 
     fn refresh_rows(&mut self, ctx: &mut ModelContext<Self>) {
@@ -238,71 +327,60 @@ impl TuiModelMenuModel {
             return;
         }
         let query = input_text(&self.input_editor, ctx);
-        let preferences = LLMPreferences::as_ref(ctx);
-        let active_id = preferences
-            .get_active_base_model(ctx, Some(self.terminal_view_id))
-            .id
-            .clone();
-        let profile_default_id = preferences
-            .get_active_profile_base_model(ctx, Some(self.terminal_view_id))
-            .id
-            .clone();
-        let choices = query_model_picker_choices(
-            preferences,
-            preferences.get_base_llm_choices_for_agent_mode(ctx),
-            &query,
-            ctx,
-        );
-        let rows = choices
+        let rows = tui_model_picker_catalog_ids(&query, ctx)
             .into_iter()
-            .map(|choice| model_menu_row(choice, &profile_default_id, ctx))
+            .map(|id| TuiModelMenuRow { id })
             .collect::<Vec<_>>();
-        let preferred_index = preferred_selection_index(&rows, &active_id, query.trim().is_empty());
+        let presentations = rows
+            .iter()
+            .filter_map(|row| self.presentation(row, ctx))
+            .collect::<Vec<_>>();
+        let active_id = self
+            .owner_view
+            .as_ref()
+            .map(|owner_view| tui_active_model_id_for_view(owner_view, self.terminal_view_id, ctx))
+            .unwrap_or_else(|| LLMId::from(""));
+        let preferred_id =
+            preferred_selection_id(&presentations, &active_id, query.trim().is_empty());
+        let preferred_index = preferred_id.and_then(|id| rows.iter().position(|row| row.id == id));
+        let selectable_ids = presentations
+            .into_iter()
+            .filter_map(|presentation| presentation.is_selectable.then_some(presentation.id))
+            .collect::<Vec<_>>();
         let TuiModelMenuState::Open { list } = &mut self.state else {
             return;
         };
         list.replace_rows(rows, false, preferred_index, MAX_VISIBLE_ROWS, |row| {
-            row.is_selectable
+            selectable_ids.contains(&row.id)
         });
         ctx.emit(TuiModelMenuEvent);
     }
-}
 
-fn model_menu_row(
-    choice: ModelPickerChoice,
-    profile_default_id: &LLMId,
-    app: &AppContext,
-) -> TuiModelMenuRow {
-    let uses_external_inference = should_show_key_icon_for_model(&choice.llm, app)
-        || should_show_bedrock_icon_for_model(&choice.llm, app)
-        || should_show_gemini_enterprise_agent_platform_icon_for_model(&choice.llm, app);
-    TuiModelMenuRow {
-        is_selectable: choice.is_selectable(),
-        is_key_connected: should_show_key_icon_for_model(&choice.llm, app),
-        discount_percentage: choice
-            .llm
-            .discount_percentage
-            .filter(|_| !uses_external_inference),
-        is_profile_default: choice.llm.id == *profile_default_id,
-        id: choice.llm.id,
-        title: choice.llm.display_name,
+    pub(crate) fn active_model_title(&self, ctx: &AppContext) -> Option<String> {
+        let owner_view = self.owner_view.as_ref()?;
+        let id = tui_active_model_id_for_view(owner_view, self.terminal_view_id, ctx);
+        tui_model_picker_presentation_for_view(owner_view, self.terminal_view_id, &id, ctx)
+            .map(|presentation| presentation.title)
     }
 }
 
-fn snapshot_row(row: &TuiModelMenuRow) -> TuiInlineMenuRow {
-    let state_suffix = match (row.is_profile_default, row.is_key_connected) {
+fn snapshot_row(presentation: &TuiModelPickerPresentation) -> TuiInlineMenuRow {
+    let state_suffix = match (
+        presentation.is_profile_default,
+        presentation.is_key_connected,
+    ) {
         (true, true) => Some("(default) (key connected)".to_owned()),
         (true, false) => Some("(default)".to_owned()),
         (false, true) => Some("(key connected)".to_owned()),
         (false, false) => None,
     };
     TuiInlineMenuRow {
-        title: row.title.clone(),
+        title: presentation.title.clone(),
         prefix: None,
-        description: (!row.is_selectable).then(|| "disabled".to_owned()),
+        description: (!presentation.is_selectable).then(|| "disabled".to_owned()),
         state_suffix,
-        promotional_suffix: discount_label(row.discount_percentage),
-        is_selectable: row.is_selectable,
+        promotional_suffix: discount_label(presentation.discount_percentage),
+        is_selectable: presentation.is_selectable,
         style: TuiInlineMenuRowStyle::Default,
     }
 }
@@ -313,18 +391,28 @@ fn discount_label(discount_percentage: Option<f32>) -> Option<String> {
         .map(|percentage| format!("{}% off", percentage.round() as u32))
 }
 
-fn preferred_selection_index(
-    rows: &[TuiModelMenuRow],
+fn preferred_selection_id(
+    presentations: &[TuiModelPickerPresentation],
     active_id: &LLMId,
     query_is_empty: bool,
-) -> Option<usize> {
+) -> Option<LLMId> {
     if query_is_empty {
-        rows.iter()
-            .position(|row| row.id == *active_id && row.is_selectable)
-            .or_else(|| rows.iter().rposition(|row| row.is_selectable))
+        presentations
+            .iter()
+            .find(|presentation| presentation.id == *active_id && presentation.is_selectable)
+            .or_else(|| {
+                presentations
+                    .iter()
+                    .rev()
+                    .find(|presentation| presentation.is_selectable)
+            })
     } else {
-        rows.iter().rposition(|row| row.is_selectable)
+        presentations
+            .iter()
+            .rev()
+            .find(|presentation| presentation.is_selectable)
     }
+    .map(|presentation| presentation.id.clone())
 }
 
 fn input_text(editor: &ModelHandle<CodeEditorModel>, app: &AppContext) -> String {

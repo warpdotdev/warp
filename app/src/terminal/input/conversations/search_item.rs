@@ -54,6 +54,7 @@ impl SearchItem for ConversationSearchItem {
         &self,
         _highlight_state: ItemHighlightState,
         appearance: &Appearance,
+        _app: &AppContext,
     ) -> Box<dyn Element> {
         let icon_size = inline_styles::font_size(appearance);
         let icon = render_status_element(&self.entry.display.status, icon_size, appearance);

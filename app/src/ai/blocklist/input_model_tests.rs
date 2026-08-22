@@ -263,7 +263,6 @@ fn build_input_model(
     let context_model = app.add_model(|_| {
         BlocklistAIContextModel::new_for_test(
             terminal_model.clone(),
-            terminal_surface_id,
             conversation_selection.clone(),
         )
     });

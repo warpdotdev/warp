@@ -134,12 +134,15 @@ impl<A: InlineMenuAction> QueryResultRendererExt for QueryResultRenderer<A> {
     ) -> Box<dyn Element> {
         use warpui::elements::{DispatchEventResult, EventHandler, Hoverable};
         use warpui::platform::Cursor;
+        if !self.search_result.is_visible_for_context(app) {
+            return Empty::new().finish();
+        }
 
         if self.search_result.is_static_separator() {
             return self.render_inline_with_highlight_state(ItemHighlightState::Default, true, app);
         }
 
-        let tooltip_text = self.search_result.tooltip();
+        let tooltip_text = self.search_result.tooltip_for_context(app);
         let hoverable = Hoverable::new(self.mouse_state_handle.clone(), move |mouse_state| {
             let content = self.render_inline_with_highlight_state(
                 ItemHighlightState::new(is_selected, mouse_state),
@@ -169,7 +172,7 @@ impl<A: InlineMenuAction> QueryResultRendererExt for QueryResultRenderer<A> {
             }
         });
 
-        if self.search_result.is_disabled() {
+        if self.search_result.is_disabled_for_context(app) {
             hoverable.finish()
         } else {
             let accept_result = self.search_result.accept_result();
@@ -193,7 +196,9 @@ impl<A: InlineMenuAction> QueryResultRendererExt for QueryResultRenderer<A> {
         use warpui::elements::{MainAxisSize, Shrinkable};
 
         let appearance = Appearance::as_ref(app);
-        let icon = self.search_result.render_icon(highlight_state, appearance);
+        let icon = self
+            .search_result
+            .render_icon(highlight_state, appearance, app);
         let item = self.search_result.render_item(highlight_state, app);
 
         let (cross_axis_alignment, margin_top) = match self.search_result.icon_location(appearance)
@@ -421,7 +426,10 @@ impl<A: InlineMenuAction, T: 'static + Send + Sync> InlineMenuView<A, T> {
                     me.selection.reconcile_results(
                         mixer.is_loading(),
                         mixer.results().len(),
-                        |idx| !mixer.results()[idx].is_disabled(),
+                        |idx| {
+                            mixer.results()[idx].is_visible_for_context(ctx)
+                                && !mixer.results()[idx].is_disabled_for_context(ctx)
+                        },
                     )
                 };
                 let selected_idx = match results_update {
@@ -459,7 +467,7 @@ impl<A: InlineMenuAction, T: 'static + Send + Sync> InlineMenuView<A, T> {
                                 let action = match item.click_behavior() {
                                     InlineMenuClickBehavior::AcceptOnClick => {
                                         InlineMenuRowAction::Accept {
-                                            item,
+                                            result_index,
                                             cmd_or_ctrl_enter: false,
                                         }
                                     }
@@ -561,7 +569,9 @@ impl<A: InlineMenuAction, T: 'static + Send + Sync> InlineMenuView<A, T> {
         else {
             return;
         };
-        if selected_result.is_disabled() {
+        if !selected_result.is_visible_for_context(ctx)
+            || selected_result.is_disabled_for_context(ctx)
+        {
             return;
         }
         ctx.emit(InlineMenuEvent::AcceptedItem {
@@ -598,6 +608,13 @@ impl<A: InlineMenuAction, T: 'static + Send + Sync> InlineMenuView<A, T> {
         self.result_renderers.len()
     }
 
+    pub fn visible_result_count(&self, app: &AppContext) -> usize {
+        self.result_renderers
+            .iter()
+            .filter(|renderer| renderer.search_result.is_visible_for_context(app))
+            .count()
+    }
+
     pub fn selected_idx(&self) -> Option<usize> {
         self.selection.selected_index()
     }
@@ -607,13 +624,32 @@ impl<A: InlineMenuAction, T: 'static + Send + Sync> InlineMenuView<A, T> {
         if self
             .selection
             .select(idx, result_renderers.len(), |idx| {
-                !result_renderers[idx].search_result.is_disabled()
+                result_renderers[idx]
+                    .search_result
+                    .is_visible_for_context(ctx)
+                    && !result_renderers[idx]
+                        .search_result
+                        .is_disabled_for_context(ctx)
             })
             .is_none()
         {
             return;
         }
         self.did_select_idx(idx, ctx);
+    }
+
+    pub fn select_visible_idx(&mut self, idx: usize, ctx: &mut ViewContext<Self>) {
+        let Some(result_idx) = self
+            .result_renderers
+            .iter()
+            .enumerate()
+            .filter(|(_, renderer)| renderer.search_result.is_visible_for_context(ctx))
+            .nth(idx)
+            .map(|(result_idx, _)| result_idx)
+        else {
+            return;
+        };
+        self.select_idx(result_idx, ctx);
     }
 
     fn did_select_idx(&mut self, idx: usize, ctx: &mut ViewContext<Self>) {
@@ -637,7 +673,7 @@ impl<A: InlineMenuAction, T: 'static + Send + Sync> InlineMenuView<A, T> {
     ) -> bool {
         for (idx, renderer) in self.result_renderers.iter().enumerate() {
             let action = renderer.search_result.accept_result();
-            if predicate(&action) {
+            if renderer.search_result.is_visible_for_context(ctx) && predicate(&action) {
                 self.select_idx(idx, ctx);
                 return true;
             }
@@ -651,8 +687,9 @@ impl<A: InlineMenuAction, T: 'static + Send + Sync> InlineMenuView<A, T> {
         ctx: &mut ViewContext<Self>,
     ) -> bool {
         for idx in (0..self.result_renderers.len()).rev() {
-            let action = self.result_renderers[idx].search_result.accept_result();
-            if predicate(&action) {
+            let result = &self.result_renderers[idx].search_result;
+            let action = result.accept_result();
+            if result.is_visible_for_context(ctx) && predicate(&action) {
                 self.select_idx(idx, ctx);
                 return true;
             }
@@ -661,11 +698,27 @@ impl<A: InlineMenuAction, T: 'static + Send + Sync> InlineMenuView<A, T> {
     }
 
     fn scroll_to_selected_idx(&self, app: &AppContext) {
-        let result_count = self.result_renderers.len();
+        let visible_indices = self
+            .result_renderers
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, renderer)| {
+                renderer
+                    .search_result
+                    .is_visible_for_context(app)
+                    .then_some(idx)
+            })
+            .collect_vec();
+        let result_count = visible_indices.len();
         if result_count == 0 {
             return;
         }
         let Some(selected_idx) = self.selection.selected_index() else {
+            return;
+        };
+        let Some(selected_visible_idx) =
+            visible_indices.iter().position(|idx| *idx == selected_idx)
+        else {
             return;
         };
 
@@ -675,9 +728,9 @@ impl<A: InlineMenuAction, T: 'static + Send + Sync> InlineMenuView<A, T> {
                 .as_ref(app)
                 .should_render_results_in_reverse(app)
             {
-                reverse_index(selected_idx, result_count)
+                reverse_index(selected_visible_idx, result_count)
             } else {
-                selected_idx
+                selected_visible_idx
             },
         );
     }
@@ -685,7 +738,12 @@ impl<A: InlineMenuAction, T: 'static + Send + Sync> InlineMenuView<A, T> {
     fn select_next(&mut self, ctx: &mut ViewContext<Self>) {
         let result_renderers = &self.result_renderers;
         if let Some(idx) = self.selection.select_next(result_renderers.len(), |idx| {
-            !result_renderers[idx].search_result.is_disabled()
+            result_renderers[idx]
+                .search_result
+                .is_visible_for_context(ctx)
+                && !result_renderers[idx]
+                    .search_result
+                    .is_disabled_for_context(ctx)
         }) {
             self.did_select_idx(idx, ctx);
         }
@@ -696,7 +754,12 @@ impl<A: InlineMenuAction, T: 'static + Send + Sync> InlineMenuView<A, T> {
         if let Some(idx) = self
             .selection
             .select_previous(result_renderers.len(), |idx| {
-                !result_renderers[idx].search_result.is_disabled()
+                result_renderers[idx]
+                    .search_result
+                    .is_visible_for_context(ctx)
+                    && !result_renderers[idx]
+                        .search_result
+                        .is_disabled_for_context(ctx)
             })
         {
             self.did_select_idx(idx, ctx);
@@ -878,24 +941,36 @@ impl<A: InlineMenuAction, T: 'static + Send + Sync> InlineMenuView<A, T> {
 
         let selected_idx = self.selection.selected_index();
         let weak_handle = self.weak_handle.clone();
+        let visible_indices = self
+            .result_renderers
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, renderer)| {
+                renderer
+                    .search_result
+                    .is_visible_for_context(app)
+                    .then_some(idx)
+            })
+            .collect_vec();
+        let visible_count = visible_indices.len();
 
         let scrollable_items = Scrollable::vertical(
             self.state_handles.scroll_state.clone(),
             UniformList::new(
                 self.state_handles.uniform_list.clone(),
-                self.result_renderers.len(),
+                visible_count,
                 move |range, app| {
                     let handle = weak_handle.upgrade(app).expect("Handle is upgradeable");
                     let me = handle.as_ref(app);
 
-                    let result_count = me.result_renderers.len();
                     range
                         .filter_map(|idx| {
-                            let logical_idx = if should_render_results_in_reverse {
-                                reverse_index(idx, result_count)
+                            let visible_idx = if should_render_results_in_reverse {
+                                reverse_index(idx, visible_count)
                             } else {
                                 idx
                             };
+                            let logical_idx = *visible_indices.get(visible_idx)?;
                             let result_renderer = me.result_renderers.get(logical_idx)?;
                             Some(
                                 SavePosition::new(
@@ -964,13 +1039,21 @@ impl<A: InlineMenuAction, T: 'static + Send + Sync> InlineMenuView<A, T> {
         }
     }
 
-    fn details_display_idx(&self) -> Option<usize> {
+    fn details_display_idx(&self, app: &AppContext) -> Option<usize> {
         if self.details_pane_target == DetailsPaneTarget::Hover
             && let Some(idx) = self.hovered_idx
+            && self
+                .result_renderers
+                .get(idx)
+                .is_some_and(|renderer| renderer.search_result.is_visible_for_context(app))
         {
             return Some(idx);
         }
-        self.selection.selected_index()
+        self.selection.selected_index().filter(|idx| {
+            self.result_renderers
+                .get(*idx)
+                .is_some_and(|renderer| renderer.search_result.is_visible_for_context(app))
+        })
     }
 
     fn render_no_results_state(&self, message: String, app: &AppContext) -> Box<dyn Element> {
@@ -1009,7 +1092,7 @@ impl<A: InlineMenuAction, T: 'static + Send + Sync> View for InlineMenuView<A, T
             .should_render_inline_menu_below_input();
 
         let content: Box<dyn Element>;
-        if self.result_renderers.is_empty() {
+        if self.visible_result_count(app) == 0 {
             content = if self.mixer.as_ref(app).is_loading() {
                 self.render_no_results_state("Loading...".into(), app)
             } else {
@@ -1019,7 +1102,7 @@ impl<A: InlineMenuAction, T: 'static + Send + Sync> View for InlineMenuView<A, T
             let results_list = self.render_results_list(app);
 
             match A::details_render_config(app).zip(
-                self.details_display_idx()
+                self.details_display_idx(app)
                     .and_then(|idx| self.result_renderers.get(idx))
                     .and_then(|renderer| renderer.search_result.render_details(app)),
             ) {
@@ -1183,12 +1266,27 @@ impl<A: InlineMenuAction, T: 'static + Send + Sync> View for InlineMenuView<A, T
 /// Internal action for handling item selection via click.
 #[derive(Debug, Clone)]
 pub enum InlineMenuRowAction<A: Action + Clone> {
-    Accept { item: A, cmd_or_ctrl_enter: bool },
-    Select { result_index: usize, item: A },
-    HoverItem { result_index: usize },
+    Accept {
+        result_index: usize,
+        cmd_or_ctrl_enter: bool,
+    },
+    AcceptSelected {
+        cmd_or_ctrl_enter: bool,
+    },
+    Select {
+        result_index: usize,
+        item: A,
+    },
+    HoverItem {
+        result_index: usize,
+    },
     Dismiss,
-    SelectTab { index: usize },
-    ResizeUpdate { delta: f32 },
+    SelectTab {
+        index: usize,
+    },
+    ResizeUpdate {
+        delta: f32,
+    },
     ResizeEnd,
 }
 
@@ -1198,13 +1296,26 @@ impl<A: InlineMenuAction, T: 'static + Send + Sync> TypedActionView for InlineMe
     fn handle_action(&mut self, action: &Self::Action, ctx: &mut ViewContext<Self>) {
         match action {
             InlineMenuRowAction::Accept {
-                item,
+                result_index,
                 cmd_or_ctrl_enter,
             } => {
+                let Some(result) = self
+                    .result_renderers
+                    .get(*result_index)
+                    .map(|renderer| &renderer.search_result)
+                else {
+                    return;
+                };
+                if !result.is_visible_for_context(ctx) || result.is_disabled_for_context(ctx) {
+                    return;
+                }
                 ctx.emit(InlineMenuEvent::AcceptedItem {
-                    item: item.clone(),
+                    item: result.accept_result(),
                     cmd_or_ctrl_shift_enter: *cmd_or_ctrl_enter,
                 });
+            }
+            InlineMenuRowAction::AcceptSelected { cmd_or_ctrl_enter } => {
+                self.accept_selected_item(*cmd_or_ctrl_enter, ctx);
             }
             InlineMenuRowAction::Select {
                 result_index,
@@ -1214,7 +1325,12 @@ impl<A: InlineMenuAction, T: 'static + Send + Sync> TypedActionView for InlineMe
             }
             InlineMenuRowAction::HoverItem { result_index } => {
                 let idx = *result_index;
-                if idx < self.result_renderers.len() && self.hovered_idx != Some(idx) {
+                if self
+                    .result_renderers
+                    .get(idx)
+                    .is_some_and(|renderer| renderer.search_result.is_visible_for_context(ctx))
+                    && self.hovered_idx != Some(idx)
+                {
                     self.hovered_idx = Some(idx);
                     self.details_pane_target = DetailsPaneTarget::Hover;
                     ctx.notify();

@@ -28,6 +28,7 @@ use crate::terminal::view::{
 };
 use crate::view_components::DismissibleToast;
 use crate::workspace::ToastStack;
+use crate::workspaces::user_workspaces::UserWorkspaces;
 
 pub const ENTER_AGAIN_TO_SEND_MESSAGE_ID: &str = "enter_again_to_send";
 
@@ -300,11 +301,13 @@ impl TerminalView {
                     }
                 });
 
-                self.ai_controller.update(ctx, |controller, ctx| {
+                let team_context = UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx);
+                self.ai_controller.update(ctx, move |controller, ctx| {
                     controller.send_user_query_in_conversation(
                         initial_prompt,
                         conversation_id,
                         None,
+                        team_context,
                         ctx,
                     );
                 });

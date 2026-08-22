@@ -46,6 +46,7 @@ use crate::server::server_api::ai::{
 };
 use crate::terminal::CLIAgent;
 use crate::terminal::view::ambient_agent::{SetupCommandGroupId, SetupCommandState};
+use crate::workspaces::user_workspaces::TeamContextForOperation;
 
 /// Tracks progress timestamps for each step during ambient agent spawning.
 #[derive(Debug, Clone)]
@@ -792,6 +793,7 @@ impl AmbientAgentViewModel {
     pub fn enter_viewing_existing_session(
         &mut self,
         task_id: AmbientAgentTaskId,
+        team_context: TeamContextForOperation,
         ctx: &mut ModelContext<Self>,
     ) {
         let ai_client = ServerApiProvider::as_ref(ctx).get_ai_client();
@@ -811,7 +813,11 @@ impl AmbientAgentViewModel {
             move |me, result, ctx| match result {
                 Ok(task) => {
                     me.source = task.source.clone();
-                    me.apply_viewed_task_config_snapshot(task.agent_config_snapshot.as_ref(), ctx);
+                    me.apply_viewed_task_config_snapshot(
+                        task.agent_config_snapshot.as_ref(),
+                        &team_context,
+                        ctx,
+                    );
                     ctx.emit(AmbientAgentViewModelEvent::ViewerHarnessResolved);
                 }
                 Err(_) => {
@@ -840,6 +846,7 @@ impl AmbientAgentViewModel {
     fn apply_viewed_task_config_snapshot(
         &mut self,
         snapshot: Option<&AgentConfigSnapshot>,
+        team_context: &TeamContextForOperation,
         ctx: &mut ModelContext<Self>,
     ) {
         let environment_id = snapshot
@@ -853,6 +860,7 @@ impl AmbientAgentViewModel {
                 prefs.update_preferred_agent_mode_llm(
                     &LLMId::from(model_id),
                     self.terminal_view_id,
+                    team_context,
                     ctx,
                 )
             });
@@ -1003,7 +1011,11 @@ impl AmbientAgentViewModel {
     /// host (`WARP_CLOUD_MODE_DEFAULT_HOST`), and the pane's currently-selected env
     /// and harness. Shared by `spawn_agent` and the local-to-cloud handoff path so
     /// both flows route to the same worker host and inherit the same defaults.
-    pub(crate) fn build_default_spawn_config(&self, ctx: &AppContext) -> AgentConfigSnapshot {
+    pub(crate) fn build_default_spawn_config(
+        &self,
+        team_context: &TeamContextForOperation,
+        ctx: &AppContext,
+    ) -> AgentConfigSnapshot {
         let selected_harness = self.selected_harness();
         let computer_use_enabled = if selected_harness == Harness::Oz {
             // If the harness is Oz, determine computer use based on workspace AI autonomy settings.
@@ -1017,7 +1029,7 @@ impl AmbientAgentViewModel {
         let oz_model = (selected_harness == Harness::Oz).then(|| {
             let prefs = LLMPreferences::as_ref(ctx);
             let active_id = &prefs
-                .get_active_base_model(ctx, Some(self.terminal_view_id))
+                .get_active_base_model(Some(self.terminal_view_id), team_context, ctx)
                 .id;
             prefs.cloud_runnable_oz_model_id_or_fallback(active_id)
         });
@@ -1058,9 +1070,10 @@ impl AmbientAgentViewModel {
         &mut self,
         prompt: String,
         attachments: Vec<AttachmentInput>,
+        team_context: TeamContextForOperation,
         ctx: &mut ModelContext<Self>,
     ) {
-        let config = Some(self.build_default_spawn_config(ctx));
+        let config = Some(self.build_default_spawn_config(&team_context, ctx));
 
         let (prompt, mode) = extract_user_query_mode(prompt);
         let request = SpawnAgentRequest {
@@ -1089,6 +1102,7 @@ impl AmbientAgentViewModel {
     pub fn spawn_agent_with_request(
         &mut self,
         request: SpawnAgentRequest,
+        team_context: TeamContextForOperation,
         ctx: &mut ModelContext<Self>,
     ) {
         // Apply pane settings from the request.
@@ -1105,6 +1119,7 @@ impl AmbientAgentViewModel {
                     prefs.update_preferred_agent_mode_llm(
                         &LLMId::from(model_id),
                         self.terminal_view_id,
+                        &team_context,
                         ctx,
                     )
                 });

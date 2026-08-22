@@ -24,6 +24,7 @@ use crate::terminal::view::{
     CompletedChildPresentation, ConversationAccess, completed_child_conversation_access,
     completed_child_presentation,
 };
+use crate::workspaces::user_workspaces::UserWorkspaces;
 
 /// How to hydrate a restored hidden remote-child pane given its
 /// [`AmbientAgentTask`]. Only used while `OrchestrationUnifiedStack` is
@@ -301,7 +302,8 @@ impl PaneGroup {
             return;
         }
 
-        new_terminal_view.update(ctx, |terminal_view, ctx| {
+        let team_context = UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx);
+        new_terminal_view.update(ctx, move |terminal_view, ctx| {
             terminal_view.suppress_initial_conversation_details_panel_auto_open();
             terminal_view.restore_conversation_after_view_creation(
                 RestoredAIConversation::new(child_conversation),
@@ -320,7 +322,7 @@ impl PaneGroup {
             {
                 ambient_agent_view_model.update(ctx, |model, ctx| {
                     model.set_conversation_id(Some(child_id));
-                    model.enter_viewing_existing_session(task_id, ctx);
+                    model.enter_viewing_existing_session(task_id, team_context, ctx);
                     model.set_live_execution_session(session_id);
                 });
             }
@@ -344,7 +346,8 @@ impl PaneGroup {
         let Some(terminal_view) = self.terminal_view_from_pane_id(pane_id, ctx) else {
             return;
         };
-        terminal_view.update(ctx, |terminal_view, ctx| {
+        let team_context = UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx);
+        terminal_view.update(ctx, move |terminal_view, ctx| {
             let Some(ambient_agent_view_model) = terminal_view
                 .ambient_agent_view_model()
                 .into_optional_handle()
@@ -354,7 +357,7 @@ impl PaneGroup {
             };
             ambient_agent_view_model.update(ctx, |model, ctx| {
                 model.set_conversation_id(Some(child_id));
-                model.enter_viewing_existing_session(task_id, ctx);
+                model.enter_viewing_existing_session(task_id, team_context, ctx);
             });
         });
     }

@@ -20,6 +20,7 @@ use crate::network::NetworkStatus;
 use crate::send_telemetry_from_ctx;
 use crate::server::retry_strategies::backoff_after_attempts;
 use crate::server::server_api::{AIApiError, ServerApiProvider};
+use crate::workspaces::user_workspaces::TeamContextForOperation;
 
 /// Maximum number of recovery attempts spent on one request before the failure is
 /// surfaced.
@@ -41,6 +42,13 @@ const GROK_REFRESH_REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::f
 /// giving up and sending anyway.
 #[cfg(not(target_family = "wasm"))]
 const GEAP_REFRESH_REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+#[cfg(not(target_family = "wasm"))]
+fn should_rearm_geap_request_after_refresh(
+    outcome: ::ai::api_keys::GeapRefreshOutcome,
+    failure_applies_to_binding: bool,
+) -> bool {
+    outcome == ::ai::api_keys::GeapRefreshOutcome::Failed && !failure_applies_to_binding
+}
 
 /// The recovery budget for one request and the retries and resumes that recover it,
 /// carried forward across each of those attempts.
@@ -104,26 +112,38 @@ impl RecoveryBudget {
 /// The wait is decided here, where the recovery decision is made, rather than recomputed
 /// at send time — the schedule is jittered, so recomputing would produce a different
 /// duration than the one that was logged.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PendingResume {
     recovery: RecoveryBudget,
     backoff: Duration,
+    team_context: TeamContextForOperation,
 }
 
 impl PendingResume {
     /// The budget the resumed request runs with, already charged for this resume.
-    pub(crate) fn recovery(self) -> RecoveryBudget {
+    pub(crate) fn recovery(&self) -> RecoveryBudget {
         self.recovery
     }
 
     /// How long to wait before sending the resume.
-    pub(crate) fn backoff(self) -> Duration {
+    pub(crate) fn backoff(&self) -> Duration {
         self.backoff
     }
 
     #[cfg(test)]
-    pub(crate) fn new_for_test(recovery: RecoveryBudget, backoff: Duration) -> Self {
-        Self { recovery, backoff }
+    pub(crate) fn new_for_test(
+        recovery: RecoveryBudget,
+        backoff: Duration,
+        team_context: TeamContextForOperation,
+    ) -> Self {
+        Self {
+            recovery,
+            backoff,
+            team_context,
+        }
+    }
+
+    pub(crate) fn into_team_context(self) -> TeamContextForOperation {
+        self.team_context
     }
 }
 
@@ -248,6 +268,7 @@ impl ResponseStreamId {
 pub struct ResponseStream {
     id: ResponseStreamId,
     params: api::RequestParams,
+    team_context: Option<TeamContextForOperation>,
     /// The shared retry/resume budget for this request, inherited from the request this one
     /// recovers (if any) and charged for each retry sent from this stream.
     recovery: RecoveryBudget,
@@ -315,6 +336,7 @@ impl ResponseStream {
         Self {
             id,
             params: api::RequestParams::new_for_test(),
+            team_context: None,
             recovery: RecoveryBudget::fresh().without_resume(),
             retries_sent: 0,
             start_time: Local::now(),
@@ -331,8 +353,9 @@ impl ResponseStream {
         }
     }
 
-    pub fn new(
+    pub(crate) fn new(
         params: api::RequestParams,
+        team_context: TeamContextForOperation,
         ai_identifiers: AIIdentifiers,
         recovery: RecoveryBudget,
         ctx: &mut ModelContext<Self>,
@@ -345,6 +368,7 @@ impl ResponseStream {
         Self {
             id: ResponseStreamId(Uuid::new_v4().to_string()),
             params,
+            team_context: Some(team_context),
             start_time,
             time_to_latest_event: TimeDelta::seconds(0),
             cancellation_tx: Some(cancellation_tx),
@@ -373,8 +397,12 @@ impl ResponseStream {
     /// The resume to send once the stream finishes, if one was scheduled. It carries this
     /// request's budget with the resume already charged against it, so the resumed request
     /// can't restart recovery from scratch.
-    pub(super) fn pending_resume(&self) -> Option<PendingResume> {
-        self.pending_resume
+    pub(super) fn take_pending_resume(&mut self) -> Option<PendingResume> {
+        self.pending_resume.take()
+    }
+
+    pub(super) fn take_team_context(&mut self) -> Option<TeamContextForOperation> {
+        self.team_context.take()
     }
 
     /// Whether the request that just failed was the turn's own request or an automatic
@@ -418,7 +446,9 @@ impl ResponseStream {
         // eventsource closes on its first error, so a `Resume` decision is never followed by
         // another error on the same stream), but that depends on a transport detail several
         // crates away, and the retry backoff widens the window it holds in.
-        self.pending_resume = None;
+        if let Some(pending_resume) = self.pending_resume.take() {
+            self.team_context = Some(pending_resume.into_team_context());
+        }
 
         let (cancellation_tx, cancellation_rx) = oneshot::channel();
         if let Some(old_cancellation_tx) = self.cancellation_tx.take() {
@@ -469,6 +499,10 @@ impl ResponseStream {
                 self.pending_resume = Some(PendingResume {
                     recovery: self.recovery.next_attempt(),
                     backoff: delay,
+                    team_context: self
+                        .team_context
+                        .take()
+                        .expect("response stream team context already consumed"),
                 });
                 self.log_recovery(action, &format!("after_stream_finished+{delay:?}"), error);
                 self.error_event_emitted = true;
@@ -506,12 +540,8 @@ impl ResponseStream {
         );
     }
 
-    /// Sends the request for `request_id`. When the request's model is served by
-    /// the connected Grok subscription or may route to Gemini Enterprise, and
-    /// that credential is already past hard expiry, this first blocks on a
-    /// single shared refresh (owned by `ApiKeyManager`, so only one runs at a
-    /// time) before sending. Requests with valid credentials, and requests for
-    /// other providers, are sent directly.
+    /// Sends the request for `request_id`, waiting on the shared credential refresh when a
+    /// required Grok token is expired or the captured Gemini binding lacks a usable token.
     fn spawn_request(
         request_id: Uuid,
         params: api::RequestParams,
@@ -589,17 +619,22 @@ impl ResponseStream {
                         .get(&LLMModelHost::GeminiEnterprise)
                         .is_some_and(|host| host.enabled)
                 });
-            if uses_geap
-                && let Some(binding) =
-                    crate::ai::geap_credentials::current_geap_policy(ctx).mint_binding()
-            {
+            if uses_geap && let Some(binding) = params.geap_mint_binding.clone() {
                 let refresh_binding = binding.clone();
-                let refresh_rx = ApiKeyManager::handle(ctx).update(ctx, |manager, ctx| {
-                    manager.begin_expired_geap_refresh(&binding, ctx, |manager, waiter, ctx| {
-                        crate::ai::geap_credentials::start_geap_refresh_for_waiter(
-                            manager, waiter, ctx,
-                        );
-                    })
+                let mint_binding = binding.clone();
+                let refresh_rx = ApiKeyManager::handle(ctx).update(ctx, move |manager, ctx| {
+                    manager.begin_geap_request_refresh(
+                        &binding,
+                        ctx,
+                        move |manager, waiter, ctx| {
+                            crate::ai::geap_credentials::start_geap_refresh_for_waiter(
+                                manager,
+                                mint_binding,
+                                waiter,
+                                ctx,
+                            );
+                        },
+                    )
                 });
                 if let Some(refresh_rx) = refresh_rx {
                     let _ = ctx.spawn(
@@ -613,16 +648,54 @@ impl ResponseStream {
                             // the wait, so re-read just the GEAP credential and
                             // leave every other key alone.
                             //
-                            // Unlike the Grok branch above, a mint failure, a
-                            // timeout, or a dropped sender is never surfaced as a
-                            // terminal error — the request goes out with the
-                            // snapshot untouched, and it is the job of the server
-                            // to respond with an error if the GEAP credentials are bad.
-                            if matches!(result, Ok(Ok(GeapRefreshOutcome::Refreshed)))
-                                && let Some(credentials) = ApiKeyManager::as_ref(ctx)
-                                    .geap_credentials_for_request(&refresh_binding)
-                            {
-                                apply_geap_refresh_to_params(&mut me.params, Some(credentials));
+                            // Unlike the Grok branch above, a mint failure,
+                            // timeout, or dropped sender is not surfaced as a
+                            // terminal error. An unrelated mint completion
+                            // re-arms this binding; otherwise the request sends
+                            // with the best matching credential now available.
+                            match result {
+                                Ok(Ok(GeapRefreshOutcome::Refreshed)) => {
+                                    if let Some(credentials) = ApiKeyManager::as_ref(ctx)
+                                        .geap_credentials_for_request(&refresh_binding)
+                                    {
+                                        apply_geap_refresh_to_params(
+                                            &mut me.params,
+                                            Some(credentials),
+                                        );
+                                    } else {
+                                        Self::spawn_request(
+                                            request_id,
+                                            me.params.clone(),
+                                            cancellation_rx,
+                                            ctx,
+                                        );
+                                        return;
+                                    }
+                                }
+                                Ok(Ok(GeapRefreshOutcome::Failed)) => {
+                                    let manager = ApiKeyManager::as_ref(ctx);
+                                    if let Some(credentials) =
+                                        manager.geap_credentials_for_request(&refresh_binding)
+                                    {
+                                        apply_geap_refresh_to_params(
+                                            &mut me.params,
+                                            Some(credentials),
+                                        );
+                                    } else if should_rearm_geap_request_after_refresh(
+                                        GeapRefreshOutcome::Failed,
+                                        manager
+                                            .geap_mint_failure_applies_to_binding(&refresh_binding),
+                                    ) {
+                                        Self::spawn_request(
+                                            request_id,
+                                            me.params.clone(),
+                                            cancellation_rx,
+                                            ctx,
+                                        );
+                                        return;
+                                    }
+                                }
+                                Ok(Err(_)) | Err(_) => {}
                             }
                             Self::spawn_generate(
                                 request_id,

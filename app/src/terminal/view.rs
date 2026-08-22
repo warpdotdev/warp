@@ -3507,7 +3507,6 @@ impl TerminalView {
                 sessions.clone(),
                 &model_events_handle,
                 model.clone(),
-                terminal_view_id,
                 conversation_selection.clone(),
                 ctx,
             )
@@ -4240,7 +4239,14 @@ impl TerminalView {
 
         ctx.subscribe_to_model(&AISettings::handle(ctx), |me, _, ai_settings_event, ctx| {
             if let AISettingsChangedEvent::AwsBedrockCredentialsEnabled { .. } = ai_settings_event
-                && !UserWorkspaces::as_ref(ctx).is_aws_bedrock_credentials_enabled(ctx)
+                && {
+                    let workspaces = UserWorkspaces::as_ref(ctx);
+                    let context = workspaces.team_context(&ctx.handle(), ctx);
+                    !workspaces.is_aws_bedrock_credentials_enabled_for_render_context(
+                        context.as_ref(),
+                        ctx,
+                    )
+                }
             {
                 me.remove_aws_bedrock_login_banner(ctx);
             }
@@ -5353,6 +5359,14 @@ impl TerminalView {
             conversation_id, ..
         } = event
         {
+            if FeatureFlag::PromptSuggestionsViaMAA.is_enabled() {
+                let team_context = UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx);
+                self.passive_suggestions_models
+                    .maa
+                    .update(ctx, move |model, ctx| {
+                        model.handle_finished_stream(*conversation_id, team_context, ctx);
+                    });
+            }
             // If the conversation still has a subagent in flight (e.g. a CLI
             // subagent managing a long-running command), the response stream
             // that just ended belongs to the subagent or to the main agent
@@ -6915,8 +6929,9 @@ impl TerminalView {
             });
         }
 
-        self.ai_controller.update(ctx, |controller, ctx| {
-            controller.resume_conversation(*conversation_id, vec![], ctx);
+        let team_context = UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx);
+        self.ai_controller.update(ctx, move |controller, ctx| {
+            controller.resume_conversation(*conversation_id, vec![], team_context, ctx);
         });
     }
 
@@ -7392,18 +7407,23 @@ impl TerminalView {
                     }
                 }
             }
-            BlocklistAIActionEvent::InitProject(_) => {
-                self.on_next_conversation_finished(|me, _reason, ctx| {
+            BlocklistAIActionEvent::InitProject(action_id) => {
+                let conversation_id = BlocklistAIHistoryModel::as_ref(ctx)
+                    .conversation_id_for_action(action_id, ctx.view_id());
+                self.on_next_conversation_finished(move |me, _reason, ctx| {
                     if let Some(path) = me.pwd() {
                         CodebaseIndexManager::handle(ctx).update(ctx, |manager, ctx| {
                             manager.index_directory(PathBuf::from(path), ctx);
                         });
-                        me.ai_controller.update(ctx, |controller, ctx| {
-                            controller.send_slash_command_request(
-                                SlashCommandRequest::InitProjectRules,
-                                ctx,
-                            );
-                        });
+                        if let Some(conversation_id) = conversation_id {
+                            me.ai_controller.update(ctx, |controller, ctx| {
+                                controller.send_slash_command_request_with_stored_team_context(
+                                    SlashCommandRequest::InitProjectRules,
+                                    conversation_id,
+                                    ctx,
+                                );
+                            });
+                        }
                     }
                 });
             }
@@ -8071,8 +8091,9 @@ impl TerminalView {
         ctx: &mut ViewContext<Self>,
     ) {
         let model = self.ensure_ambient_agent_view_model(ctx);
+        let team_context = UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx);
         model.update(ctx, |model, ctx| {
-            model.enter_viewing_existing_session(task_id, ctx);
+            model.enter_viewing_existing_session(task_id, team_context, ctx);
             model.set_live_execution_session(session_id);
         });
     }
@@ -10278,11 +10299,13 @@ impl TerminalView {
                 }
             };
 
-            self.ai_controller.update(ctx, |controller, ctx| {
+            let team_context = UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx);
+            self.ai_controller.update(ctx, move |controller, ctx| {
                 controller.send_passive_suggestion_result(
                     Some(conversation_id),
                     PassiveSuggestionResultType::Prompt { prompt },
                     trigger,
+                    team_context,
                     ctx,
                 );
             });
@@ -10846,8 +10869,10 @@ impl TerminalView {
             return;
         }
 
-        // Check if AWS Bedrock is available in the workspace
-        if !UserWorkspaces::as_ref(ctx).is_aws_bedrock_credentials_enabled(ctx) {
+        let workspaces = UserWorkspaces::as_ref(ctx);
+        let context = workspaces.team_context(&ctx.handle(), ctx);
+        if !workspaces.is_aws_bedrock_credentials_enabled_for_render_context(context.as_ref(), ctx)
+        {
             return;
         }
 
@@ -11243,7 +11268,11 @@ impl TerminalView {
             };
 
             self.ai_controller.update(ctx, |controller, ctx| {
-                controller.resume_conversation(conversation_id, resume_context, ctx);
+                controller.resume_conversation_with_stored_team_context(
+                    conversation_id,
+                    resume_context,
+                    ctx,
+                );
             });
         }
 
@@ -12256,6 +12285,32 @@ impl TerminalView {
                 // future already resolved, abort has no effect. We handle this as early as possible
                 // because the abort is time sensitive.
                 self.warpify_state.abort_auto_warpify();
+                if let BlockType::User(block_completed) = block_type
+                    && !block_completed.was_part_of_agent_interaction
+                {
+                    let team_context = UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx);
+                    if FeatureFlag::PromptSuggestionsViaMAA.is_enabled() {
+                        self.passive_suggestions_models
+                            .maa
+                            .update(ctx, move |model, ctx| {
+                                model.handle_user_block_completed(
+                                    block_completed,
+                                    team_context,
+                                    ctx,
+                                );
+                            });
+                    } else {
+                        self.passive_suggestions_models
+                            .legacy
+                            .update(ctx, move |model, ctx| {
+                                model.handle_user_block_completed(
+                                    block_completed,
+                                    team_context,
+                                    ctx,
+                                );
+                            });
+                    }
+                }
 
                 let active_session = self
                     .active_block_session_id()
@@ -14141,9 +14196,13 @@ impl TerminalView {
     }
 
     fn summarize_conversation(&mut self, ctx: &mut ViewContext<Self>) {
-        self.ai_controller.update(ctx, |controller, ctx| {
-            controller
-                .send_slash_command_request(SlashCommandRequest::Summarize { prompt: None }, ctx);
+        let team_context = UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx);
+        self.ai_controller.update(ctx, move |controller, ctx| {
+            controller.send_slash_command_request(
+                SlashCommandRequest::Summarize { prompt: None },
+                team_context,
+                ctx,
+            );
         });
     }
 
@@ -14242,12 +14301,14 @@ impl TerminalView {
                     ctx.emit(Event::OnboardingInitCompleted);
                 }
                 InitProjectModelEvent::GenerateProjectRules => {
-                    me.ai_controller.update(ctx, |controller, ctx| {
+                    let team_context = UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx);
+                    me.ai_controller.update(ctx, move |controller, ctx| {
                         controller.send_ai_input_with_context(
                             |context| AIAgentInput::InitProjectRules {
                                 context,
                                 display_query: None,
                             },
+                            team_context,
                             ctx,
                         );
                     });
@@ -14280,12 +14341,14 @@ impl TerminalView {
                     });
                 }
                 InitProjectModelEvent::RegenerateProjectRules => {
-                    me.ai_controller.update(ctx, |controller, ctx| {
+                    let team_context = UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx);
+                    me.ai_controller.update(ctx, move |controller, ctx| {
                         controller.send_ai_input_with_context(
                             |context| AIAgentInput::InitProjectRules {
                                 context,
                                 display_query: None,
                             },
+                            team_context,
                             ctx,
                         );
                     });
@@ -14300,13 +14363,15 @@ impl TerminalView {
                     me.start_lsp_server_in_active_pwd(ctx);
                 }
                 InitProjectModelEvent::CreateEnvironment => {
-                    me.ai_controller.update(ctx, |controller, ctx| {
+                    let team_context = UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx);
+                    me.ai_controller.update(ctx, move |controller, ctx| {
                         controller.send_ai_input_with_context(
                             |context| AIAgentInput::CreateEnvironment {
                                 context,
                                 display_query: None,
                                 repo_paths: vec![".".to_string()],
                             },
+                            team_context,
                             ctx,
                         );
                     });
@@ -14598,12 +14663,14 @@ impl TerminalView {
         });
 
         // Send the CreateEnvironment request (shows "/create-environment" instead of full prompt)
-        self.ai_controller.update(ctx, |controller, ctx| {
+        let team_context = UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx);
+        self.ai_controller.update(ctx, move |controller, ctx| {
             controller.send_slash_command_request(
                 SlashCommandRequest::CreateEnvironment {
                     repos,
                     use_current_dir,
                 },
+                team_context,
                 ctx,
             );
         });
@@ -15653,7 +15720,10 @@ impl TerminalView {
                     let summary = title_for_result.clone().unwrap_or_default();
                     let diffs = original_edits.clone();
                     if *accepted {
-                        me.ai_controller.update(ctx, |controller, ctx| {
+                        let trigger = trigger.clone();
+                        let team_context =
+                            UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx);
+                        me.ai_controller.update(ctx, move |controller, ctx| {
                             controller.send_passive_suggestion_result(
                                 Some(conversation_id),
                                 PassiveSuggestionResultType::CodeDiff {
@@ -15661,7 +15731,8 @@ impl TerminalView {
                                     summary,
                                     accepted: true,
                                 },
-                                Some(trigger.clone()),
+                                Some(trigger),
+                                team_context,
                                 ctx,
                             );
                         });
@@ -23504,9 +23575,10 @@ impl TerminalView {
             });
         }
 
-        self.ai_controller.update(ctx, |controller, ctx| {
+        let team_context = UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx);
+        self.ai_controller.update(ctx, move |controller, ctx| {
             // Send the code review request to the AI controller and return the result
-            controller.send_custom_ai_input_query(code_review_input, ctx);
+            controller.send_custom_ai_input_query(code_review_input, team_context, ctx);
         });
         Ok(())
     }
@@ -28652,7 +28724,6 @@ impl View for TerminalView {
             final_element
         }
     }
-
     fn on_focus(&mut self, focus_ctx: &FocusContext, ctx: &mut ViewContext<Self>) {
         if focus_ctx.is_self_focused() {
             self.maybe_report_focus_in(ctx);

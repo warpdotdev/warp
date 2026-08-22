@@ -7,8 +7,8 @@ use warp_core::ui::icons::Icon;
 use warp_core::ui::theme::Fill;
 use warp_core::ui::theme::color::internal_colors;
 use warpui::elements::{
-    ConstrainedBox, Container, CornerRadius, FormattedTextElement, Highlight, HighlightedHyperlink,
-    MouseStateHandle, Radius, Text,
+    ConstrainedBox, Container, CornerRadius, Empty, FormattedTextElement, Highlight,
+    HighlightedHyperlink, MouseStateHandle, Radius, Text,
 };
 use warpui::fonts::{Properties, Style, Weight};
 use warpui::keymap::Keystroke;
@@ -18,7 +18,7 @@ use warpui::ui_components::button::ButtonVariant;
 use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
 use warpui::{
     AppContext, Element, Entity, EntityId, ModelContext, ModelHandle, SingletonEntity as _,
-    WindowId,
+    WeakViewHandle,
 };
 
 use super::model_spec_scores::{
@@ -26,13 +26,15 @@ use super::model_spec_scores::{
     MODEL_SPECS_TITLE, ModelSpecScoresLayout, REASONING_LEVEL_DESCRIPTION, REASONING_LEVEL_TITLE,
     render_model_spec_header, render_model_spec_scores,
 };
+use super::view::InlineModelSelectorView;
 use crate::ai::custom_model_routers::is_custom_router_id;
 use crate::ai::execution_profiles::model_menu_items::is_auto;
 use crate::ai::llms::{
-    ByoKeySource, DisableReason, LLMId, LLMInfo, LLMPreferences, LLMProvider, LLMSpec,
-    ModelIconFlags, byo_key_source_for_model, model_leading_icon,
-    should_show_bedrock_icon_for_model,
-    should_show_gemini_enterprise_agent_platform_icon_for_model, should_show_key_icon_for_model,
+    ByoKeySource, DisableReason, LLMId, LLMInfo, LLMPreferences, LLMProvider, ModelIconFlags,
+    byo_key_source_for_model_for_render_context, effective_model_disable_reason,
+    effective_model_disable_reason_for_render_context, model_leading_icon,
+    should_show_bedrock_icon_for_model_for_render_context,
+    should_show_gemini_enterprise_agent_platform_icon_for_model_for_render_context,
 };
 use crate::auth::AuthStateProvider;
 use crate::features::FeatureFlag;
@@ -48,7 +50,7 @@ use crate::terminal::input::inline_menu::{
 use crate::terminal::input::message_bar::{Message, MessageItem};
 use crate::terminal::view::ambient_agent::AmbientAgentViewModel;
 use crate::workspace::WorkspaceAction;
-use crate::workspaces::user_workspaces::UserWorkspaces;
+use crate::workspaces::user_workspaces::{TeamContextForOperation, UserWorkspaces};
 
 /// Auto models pick their concrete model server-side, so the cost line names the
 /// class of inference rather than a host the request may never reach.
@@ -162,6 +164,7 @@ pub fn query_model_picker_choices<'a>(
     llm_preferences: &LLMPreferences,
     choices: impl IntoIterator<Item = &'a LLMInfo>,
     query_text: &str,
+    team_context: &TeamContextForOperation,
     app: &AppContext,
 ) -> Vec<ModelPickerChoice> {
     let choices = ModelSelectorDataSource::order_model_choices(
@@ -184,13 +187,7 @@ pub fn query_model_picker_choices<'a>(
                 }
                 Some(result)
             };
-            let disable_reason = if llm.disable_reason == Some(DisableReason::RequiresUpgrade)
-                && should_show_key_icon_for_model(llm, app)
-            {
-                None
-            } else {
-                llm.disable_reason.clone()
-            };
+            let disable_reason = effective_model_disable_reason(llm, team_context, app);
             Some(ModelPickerChoice {
                 llm: llm.clone(),
                 disable_reason,
@@ -207,21 +204,62 @@ pub fn query_model_picker_choices<'a>(
     results
 }
 
+pub(crate) fn query_model_picker_catalog_choices<'a>(
+    llm_preferences: &LLMPreferences,
+    choices: impl IntoIterator<Item = &'a LLMInfo>,
+    query_text: &str,
+) -> Vec<ModelPickerChoice> {
+    let choices = ModelSelectorDataSource::order_model_choices(
+        llm_preferences,
+        choices.into_iter().collect(),
+    );
+    let query_text = query_text.trim().to_lowercase();
+    let mut results = choices
+        .into_iter()
+        .filter_map(|llm| {
+            let name_match_result = if query_text.is_empty() {
+                None
+            } else {
+                let result = match_indices_case_insensitive(
+                    llm.display_name.to_lowercase().as_str(),
+                    query_text.as_str(),
+                )?;
+                if query_text.len() > 1 && result.score < 10 {
+                    return None;
+                }
+                Some(result)
+            };
+            Some(ModelPickerChoice {
+                llm: llm.clone(),
+                disable_reason: llm.disable_reason.clone(),
+                score: OrderedFloat(
+                    name_match_result
+                        .as_ref()
+                        .map_or(f64::MIN, |result| result.score as f64),
+                ),
+                name_match_result,
+            })
+        })
+        .collect::<Vec<_>>();
+    results.sort_by_key(|choice| (choice.priority_tier(), choice.score));
+    results
+}
+
 pub struct ModelSelectorDataSource {
     terminal_view_id: EntityId,
-    window_id: WindowId,
+    owner_view: WeakViewHandle<InlineModelSelectorView>,
     ambient_agent_view_model: Option<ModelHandle<AmbientAgentViewModel>>,
 }
 
 impl ModelSelectorDataSource {
     pub fn new(
         terminal_view_id: EntityId,
-        window_id: WindowId,
+        owner_view: WeakViewHandle<InlineModelSelectorView>,
         ambient_agent_view_model: Option<ModelHandle<AmbientAgentViewModel>>,
     ) -> Self {
         Self {
             terminal_view_id,
-            window_id,
+            owner_view,
             ambient_agent_view_model,
         }
     }
@@ -293,22 +331,10 @@ impl SyncDataSource for ModelSelectorDataSource {
         let llm_preferences = LLMPreferences::as_ref(app);
         let is_full_terminal = query.filters.contains(&QueryFilter::FullTerminalUseModels);
 
-        let active_llm_id = if is_full_terminal {
-            llm_preferences
-                .get_active_cli_agent_model(app, Some(self.terminal_view_id))
-                .id
-                .clone()
-        } else {
-            llm_preferences
-                .get_active_base_model(app, Some(self.terminal_view_id))
-                .id
-                .clone()
-        };
-
         let is_cloud_pane = self.ambient_agent_view_model.is_some();
         let choices = if is_full_terminal {
             llm_preferences
-                .get_cli_agent_llm_choices(app)
+                .get_cli_agent_llm_choices_catalog()
                 .filter(|llm| {
                     let is_custom = llm_preferences.custom_llm_info_for_id(&llm.id).is_some();
                     Self::include_model_in_picker(is_cloud_pane, is_custom)
@@ -316,7 +342,7 @@ impl SyncDataSource for ModelSelectorDataSource {
                 .collect_vec()
         } else {
             llm_preferences
-                .get_base_llm_choices_for_agent_mode(app)
+                .get_base_llm_choices_for_agent_mode_catalog()
                 .filter(|llm| {
                     let is_custom = llm_preferences.custom_llm_info_for_id(&llm.id).is_some();
                     Self::include_model_in_picker(is_cloud_pane, is_custom)
@@ -324,14 +350,15 @@ impl SyncDataSource for ModelSelectorDataSource {
                 .collect_vec()
         };
         Ok(
-            query_model_picker_choices(llm_preferences, choices, &query.text, app)
+            query_model_picker_catalog_choices(llm_preferences, choices, &query.text)
                 .into_iter()
                 .map(|choice| {
                     QueryResult::from(ModelSearchItem::new(
                         choice,
-                        &active_llm_id,
-                        self.window_id,
-                        app,
+                        self.terminal_view_id,
+                        self.owner_view.clone(),
+                        is_full_terminal,
+                        is_cloud_pane,
                     ))
                 })
                 .collect(),
@@ -346,44 +373,93 @@ impl Entity for ModelSelectorDataSource {
 #[derive(Clone)]
 struct ModelSearchItem {
     id: LLMId,
-    window_id: WindowId,
-    provider: LLMProvider,
-    spec: Option<LLMSpec>,
-    leading_icon: Icon,
-    credential_icon: Option<Icon>,
-    byo_key_source: Option<ByoKeySource>,
-    display_text: String,
-    is_selected: bool,
-    is_custom_router: bool,
-    /// Source/routing description for custom model routers (from `LLMInfo.description`).
-    description: Option<String>,
-    disable_reason: Option<DisableReason>,
-    is_auto: bool,
-    is_using_bedrock: bool,
-    is_using_gemini_enterprise_agent_platform: bool,
+    terminal_view_id: EntityId,
+    owner_view: WeakViewHandle<InlineModelSelectorView>,
+    is_full_terminal: bool,
+    is_cloud_pane: bool,
+    catalog_disable_reason: Option<DisableReason>,
     name_match_result: Option<FuzzyMatchResult>,
     score: OrderedFloat<f64>,
     manage_api_key_mouse_state: MouseStateHandle,
-    reasoning_level: Option<String>,
-    discount_percentage: Option<f32>,
 }
 
 impl ModelSearchItem {
     fn new(
         choice: ModelPickerChoice,
-        active_llm_id: &LLMId,
-        window_id: WindowId,
-        app: &AppContext,
+        terminal_view_id: EntityId,
+        owner_view: WeakViewHandle<InlineModelSelectorView>,
+        is_full_terminal: bool,
+        is_cloud_pane: bool,
     ) -> Self {
-        let llm = &choice.llm;
-        let is_custom_router = is_custom_router_id(llm.id.as_str());
-        let is_auto = is_auto(llm);
-        let is_using_bedrock = should_show_bedrock_icon_for_model(llm, app);
+        Self {
+            id: choice.llm.id,
+            terminal_view_id,
+            owner_view,
+            is_full_terminal,
+            is_cloud_pane,
+            catalog_disable_reason: choice.disable_reason,
+            name_match_result: choice.name_match_result,
+            score: choice.score,
+            manage_api_key_mouse_state: Default::default(),
+        }
+    }
+
+    fn presentation(&self, app: &AppContext) -> Option<ModelSearchPresentation> {
+        self.owner_view.upgrade(app)?;
+        let workspaces = UserWorkspaces::as_ref(app);
+        let team_render_context = workspaces.team_context(&self.owner_view, app);
+        let preferences = LLMPreferences::as_ref(app);
+        let llm = preferences.get_llm_info(&self.id)?.clone();
+        let is_custom_endpoint = preferences.custom_llm_info_for_id(&llm.id).is_some();
+        let is_visible = ModelSelectorDataSource::include_model_in_picker(
+            self.is_cloud_pane,
+            is_custom_endpoint,
+        ) && if self.is_full_terminal {
+            preferences
+                .get_cli_agent_llm_choices_for_render_context(team_render_context.as_ref(), app)
+                .any(|choice| choice.id == llm.id)
+        } else {
+            preferences
+                .get_base_llm_choices_for_agent_mode_for_render_context(
+                    team_render_context.as_ref(),
+                    app,
+                )
+                .any(|choice| choice.id == llm.id)
+        };
+        let active_id = if self.is_full_terminal {
+            &preferences
+                .get_active_cli_agent_model_for_render_context(
+                    Some(self.terminal_view_id),
+                    team_render_context.as_ref(),
+                    app,
+                )
+                .id
+        } else {
+            &preferences
+                .get_active_base_model_for_render_context(
+                    Some(self.terminal_view_id),
+                    team_render_context.as_ref(),
+                    app,
+                )
+                .id
+        };
+        let is_using_bedrock = should_show_bedrock_icon_for_model_for_render_context(
+            &llm,
+            team_render_context.as_ref(),
+            app,
+        );
         let is_using_gemini_enterprise_agent_platform =
-            should_show_gemini_enterprise_agent_platform_icon_for_model(llm, app);
-        let byo_key_source = byo_key_source_for_model(llm, app);
+            should_show_gemini_enterprise_agent_platform_icon_for_model_for_render_context(
+                &llm,
+                team_render_context.as_ref(),
+                app,
+            );
+        let byo_key_source =
+            byo_key_source_for_model_for_render_context(&llm, team_render_context.as_ref(), app);
+        let is_custom_router = is_custom_router_id(llm.id.as_str());
+        let is_auto = is_auto(&llm);
         let leading_icon = model_leading_icon(
-            llm,
+            &llm,
             ModelIconFlags {
                 is_custom_router,
                 is_auto,
@@ -394,29 +470,47 @@ impl ModelSearchItem {
         let is_using_cloud_host = is_using_bedrock || is_using_gemini_enterprise_agent_platform;
         let credential_icon =
             (!is_using_cloud_host && byo_key_source.is_some()).then_some(Icon::Key);
-        Self {
-            id: llm.id.clone(),
-            window_id,
-            provider: llm.provider,
-            spec: llm.spec.clone(),
+        let disable_reason = effective_model_disable_reason_for_render_context(
+            &llm,
+            team_render_context.as_ref(),
+            app,
+        );
+        let user_id = AuthStateProvider::as_ref(app)
+            .get()
+            .user_id()
+            .unwrap_or_default();
+        let upgrade_url =
+            UserWorkspaces::upgrade_link_for_render_context(team_render_context.as_ref(), user_id);
+        Some(ModelSearchPresentation {
+            is_visible,
+            is_selected: active_id == &llm.id,
+            llm,
             leading_icon,
             credential_icon,
             byo_key_source,
-            display_text: llm.display_name.clone(),
-            is_selected: &llm.id == active_llm_id,
+            disable_reason,
             is_custom_router,
-            description: llm.description.clone(),
-            disable_reason: choice.disable_reason,
             is_auto,
             is_using_bedrock,
             is_using_gemini_enterprise_agent_platform,
-            name_match_result: choice.name_match_result,
-            score: choice.score,
-            manage_api_key_mouse_state: Default::default(),
-            reasoning_level: llm.reasoning_level(),
-            discount_percentage: llm.discount_percentage,
-        }
+            upgrade_url,
+        })
     }
+}
+
+struct ModelSearchPresentation {
+    is_visible: bool,
+    is_selected: bool,
+    llm: LLMInfo,
+    leading_icon: Icon,
+    credential_icon: Option<Icon>,
+    byo_key_source: Option<ByoKeySource>,
+    disable_reason: Option<DisableReason>,
+    is_custom_router: bool,
+    is_auto: bool,
+    is_using_bedrock: bool,
+    is_using_gemini_enterprise_agent_platform: bool,
+    upgrade_url: String,
 }
 
 impl SearchItem for ModelSearchItem {
@@ -426,11 +520,17 @@ impl SearchItem for ModelSearchItem {
         &self,
         _highlight_state: ItemHighlightState,
         appearance: &crate::appearance::Appearance,
+        app: &AppContext,
     ) -> Box<dyn Element> {
+        let Some(presentation) = self.presentation(app) else {
+            return Empty::new().finish();
+        };
         let icon_size = inline_styles::font_size(appearance);
         let icon_color = inline_styles::icon_color(appearance);
-
-        let icon = self.leading_icon.to_warpui_icon(icon_color).finish();
+        let icon = presentation
+            .leading_icon
+            .to_warpui_icon(icon_color)
+            .finish();
 
         Container::new(
             ConstrainedBox::new(icon)
@@ -449,6 +549,9 @@ impl SearchItem for ModelSearchItem {
     ) -> Box<dyn Element> {
         use warpui::elements::{Flex, ParentElement as _};
         use warpui::prelude::CrossAxisAlignment;
+        let Some(presentation) = self.presentation(app) else {
+            return Empty::new().finish();
+        };
 
         let appearance = crate::appearance::Appearance::as_ref(app);
         let theme = appearance.theme();
@@ -459,14 +562,14 @@ impl SearchItem for ModelSearchItem {
         let secondary_text_color =
             inline_styles::secondary_text_color(theme, background_color.into());
 
-        let name_text_color = if self.is_disabled() {
+        let name_text_color = if presentation.disable_reason.is_some() {
             secondary_text_color
         } else {
             primary_text_color
         };
 
         let mut text = Text::new_inline(
-            self.display_text.clone(),
+            presentation.llm.display_name.clone(),
             appearance.ui_font_family(),
             font_size,
         )
@@ -485,7 +588,7 @@ impl SearchItem for ModelSearchItem {
         let mut row = Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_child(text.finish());
-        if let Some(icon) = self.credential_icon {
+        if let Some(icon) = presentation.credential_icon {
             let credential_icon =
                 ConstrainedBox::new(icon.to_warpui_icon(secondary_text_color).finish())
                     .with_width(font_size)
@@ -498,7 +601,7 @@ impl SearchItem for ModelSearchItem {
             );
         }
 
-        if self.is_selected {
+        if presentation.is_selected {
             let selected_label = "(selected)";
             let selected_text = Text::new_inline(
                 selected_label.to_string(),
@@ -517,7 +620,7 @@ impl SearchItem for ModelSearchItem {
             row = row.with_child(Container::new(selected_text).with_margin_left(6.).finish());
         }
 
-        if self.is_disabled() {
+        if presentation.disable_reason.is_some() {
             let disabled_label = "(disabled)";
             let disabled_text = Text::new_inline(
                 disabled_label.to_string(),
@@ -537,12 +640,12 @@ impl SearchItem for ModelSearchItem {
         }
 
         if should_show_discount_chip(
-            self.discount_percentage,
-            self.credential_icon.is_some()
-                || self.is_using_bedrock
-                || self.is_using_gemini_enterprise_agent_platform,
+            presentation.llm.discount_percentage,
+            presentation.credential_icon.is_some()
+                || presentation.is_using_bedrock
+                || presentation.is_using_gemini_enterprise_agent_platform,
         ) {
-            let discount_percentage = self.discount_percentage.unwrap_or(0.);
+            let discount_percentage = presentation.llm.discount_percentage.unwrap_or(0.);
             let chip = Container::new(
                 Text::new_inline(
                     format!("{}% off", discount_percentage.round() as u32),
@@ -574,19 +677,23 @@ impl SearchItem for ModelSearchItem {
 
     fn render_details(&self, app: &AppContext) -> Option<Box<dyn Element>> {
         use warpui::elements::{Flex, ParentElement as _};
+        let presentation = self.presentation(app)?;
 
         let appearance = crate::appearance::Appearance::as_ref(app);
         let theme = appearance.theme();
-
-        // Custom auto models get an informational blurb instead of spec bars.
-        if self.is_custom_router {
+        if presentation.is_custom_router {
             let header = render_model_spec_header(
                 CUSTOM_MODEL_ROUTER_TITLE,
                 CUSTOM_MODEL_ROUTER_DESCRIPTION,
                 app,
             );
             let source_text = Text::new(
-                self.description.as_deref().unwrap_or("").to_string(),
+                presentation
+                    .llm
+                    .description
+                    .as_deref()
+                    .unwrap_or("")
+                    .to_string(),
                 appearance.ui_font_family(),
                 inline_styles::font_size(appearance),
             )
@@ -603,20 +710,20 @@ impl SearchItem for ModelSearchItem {
             );
         }
 
-        let (title, description) = if self.reasoning_level.is_some() {
+        let (title, description) = if presentation.llm.reasoning_level().is_some() {
             (REASONING_LEVEL_TITLE, REASONING_LEVEL_DESCRIPTION)
         } else {
             (MODEL_SPECS_TITLE, MODEL_SPECS_DESCRIPTION)
         };
         let header = render_model_spec_header(title, description, app);
 
-        let uses_external_inference = self.is_using_bedrock
-            || self.is_using_gemini_enterprise_agent_platform
-            || self.byo_key_source.is_some();
+        let uses_external_inference = presentation.is_using_bedrock
+            || presentation.is_using_gemini_enterprise_agent_platform
+            || presentation.byo_key_source.is_some();
         let cost_row = if uses_external_inference {
-            let search_query = if self.is_using_bedrock {
+            let search_query = if presentation.is_using_bedrock {
                 "bedrock"
-            } else if self.is_using_gemini_enterprise_agent_platform {
+            } else if presentation.is_using_gemini_enterprise_agent_platform {
                 "gemini enterprise"
             } else {
                 "api"
@@ -649,15 +756,16 @@ impl SearchItem for ModelSearchItem {
                 })
                 .finish();
             CostRow::BilledToProvider {
-                label: if self.is_auto
-                    && (self.is_using_bedrock || self.is_using_gemini_enterprise_agent_platform)
+                label: if presentation.is_auto
+                    && (presentation.is_using_bedrock
+                        || presentation.is_using_gemini_enterprise_agent_platform)
                 {
                     AUTO_HOSTED_INFERENCE_LABEL
-                } else if self.is_using_bedrock {
+                } else if presentation.is_using_bedrock {
                     "Inference via Bedrock"
-                } else if self.is_using_gemini_enterprise_agent_platform {
+                } else if presentation.is_using_gemini_enterprise_agent_platform {
                     "Inference via Gemini Enterprise Agent Platform"
-                } else if let Some(source) = self.byo_key_source {
+                } else if let Some(source) = presentation.byo_key_source {
                     source.inference_label()
                 } else {
                     "Inference via API key"
@@ -666,12 +774,12 @@ impl SearchItem for ModelSearchItem {
             }
         } else {
             CostRow::Bar {
-                value: self.spec.as_ref().map(|spec| spec.cost),
+                value: presentation.llm.spec.as_ref().map(|spec| spec.cost),
             }
         };
 
         let scores = render_model_spec_scores(
-            self.spec.as_ref(),
+            presentation.llm.spec.as_ref(),
             cost_row,
             ModelSpecScoresLayout {
                 bg_bar_color: internal_colors::neutral_3(theme),
@@ -682,29 +790,14 @@ impl SearchItem for ModelSearchItem {
         let mut column = Flex::column()
             .with_child(Container::new(header).with_margin_bottom(12.).finish())
             .with_child(scores);
-
-        if self.disable_reason.as_ref() == Some(&DisableReason::RequiresUpgrade) {
-            let upgrade_url =
-                if let Some(team) = UserWorkspaces::as_ref(app).team_for_window(self.window_id) {
-                    UserWorkspaces::upgrade_link_for_team(team.uid)
-                } else {
-                    let user_id = AuthStateProvider::as_ref(app)
-                        .get()
-                        .user_id()
-                        .unwrap_or_default();
-                    UserWorkspaces::upgrade_link(user_id)
-                };
-
-            let mut display_name = self.display_text.clone();
+        if presentation.disable_reason.as_ref() == Some(&DisableReason::RequiresUpgrade) {
+            let mut display_name = presentation.llm.display_name.clone();
             if let Some(first) = display_name.get_mut(..1) {
                 first.make_ascii_uppercase();
             }
-
-            // Show a BYOK option when the user's tier supports it and the provider
-            // is one that accepts user-supplied API keys.
             let byok_available = UserWorkspaces::as_ref(app).is_byo_api_key_enabled(app)
                 && matches!(
-                    self.provider,
+                    presentation.llm.provider,
                     LLMProvider::OpenAI | LLMProvider::Anthropic | LLMProvider::Google
                 );
 
@@ -712,7 +805,7 @@ impl SearchItem for ModelSearchItem {
                 FormattedTextFragment::plain_text(format!(
                     "{display_name} is not available for free users. "
                 )),
-                FormattedTextFragment::hyperlink("Upgrade", upgrade_url),
+                FormattedTextFragment::hyperlink("Upgrade", presentation.upgrade_url),
             ];
 
             if byok_available {
@@ -761,7 +854,11 @@ impl SearchItem for ModelSearchItem {
     }
 
     fn priority_tier(&self) -> u8 {
-        if self.is_disabled() { 1 } else { 0 }
+        if self.catalog_disable_reason.is_some() {
+            1
+        } else {
+            0
+        }
     }
 
     fn score(&self) -> OrderedFloat<f64> {
@@ -779,21 +876,43 @@ impl SearchItem for ModelSearchItem {
     }
 
     fn is_disabled(&self) -> bool {
-        self.disable_reason.is_some()
+        self.catalog_disable_reason.is_some()
+    }
+
+    fn is_visible_for_context(&self, app: &AppContext) -> bool {
+        self.presentation(app)
+            .is_some_and(|presentation| presentation.is_visible)
+    }
+
+    fn is_disabled_for_context(&self, app: &AppContext) -> bool {
+        self.presentation(app)
+            .is_none_or(|presentation| presentation.disable_reason.is_some())
     }
 
     fn tooltip(&self) -> Option<String> {
-        self.disable_reason
+        self.catalog_disable_reason
             .as_ref()
+            .map(|reason| reason.tooltip_text().to_string())
+    }
+    fn tooltip_for_context(&self, app: &AppContext) -> Option<String> {
+        self.presentation(app)
+            .and_then(|presentation| presentation.disable_reason)
             .map(|reason| reason.tooltip_text().to_string())
     }
 
     fn accessibility_label(&self) -> String {
-        let mut label = format!("Model: {}", self.display_text);
-        if self.is_selected {
+        format!("Model: {}", self.id)
+    }
+
+    fn accessibility_label_for_context(&self, app: &AppContext) -> String {
+        let Some(presentation) = self.presentation(app) else {
+            return self.accessibility_label();
+        };
+        let mut label = format!("Model: {}", presentation.llm.display_name);
+        if presentation.is_selected {
             label.push_str(" (selected)");
         }
-        if self.is_disabled() {
+        if presentation.disable_reason.is_some() {
             label.push_str(" (disabled)");
         }
         label

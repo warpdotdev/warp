@@ -71,8 +71,8 @@ use crate::workspaces::team_tester::TeamTesterStatus;
 use crate::workspaces::update_manager::TeamUpdateManager;
 use crate::workspaces::user_workspaces::UserWorkspaces;
 use crate::workspaces::workspace::{
-    AdminEnablementSetting, HostEnablementSetting, LlmHostSettings, MultiAdminPolicy,
-    PurchaseAddOnCreditsPolicy, Workspace,
+    AdminEnablementSetting, HostEnablementSetting, LlmHostSettings, ManagedByokByoePolicy,
+    MultiAdminPolicy, PurchaseAddOnCreditsPolicy, TeamByoSettings, Workspace,
 };
 
 #[derive(Default)]
@@ -320,12 +320,30 @@ fn team_for_test() -> Team {
     }
 }
 
+fn sole_team_context(user_workspaces: &UserWorkspaces) -> TeamContextForOperation {
+    TeamContextForOperation {
+        team_uid: Some(
+            user_workspaces
+                .sole_team_uid()
+                .expect("the test workspace should have one team"),
+        ),
+    }
+}
+
+fn sole_team_render_context(user_workspaces: &UserWorkspaces) -> TeamContext<'_> {
+    let team = user_workspaces
+        .sole_team()
+        .expect("the test workspace should have one team");
+    TeamContext {
+        team_uid: Some(&team.uid),
+    }
+}
+
 #[test]
 fn test_aws_bedrock_credentials_default_off_when_admin_respects_user_setting() {
-    let team = team_for_test();
-    let mut workspace = workspace_for_test(&team);
-    workspace.settings.llm_settings.enabled = true;
-    workspace.settings.llm_settings.host_configs.insert(
+    let mut team = team_for_test();
+    team.settings.llm_settings.enabled = true;
+    team.settings.llm_settings.host_configs.insert(
         LLMModelHost::AwsBedrock,
         LlmHostSettings {
             enabled: true,
@@ -333,6 +351,7 @@ fn test_aws_bedrock_credentials_default_off_when_admin_respects_user_setting() {
             ..Default::default()
         },
     );
+    let workspace = workspace_for_test(&team);
 
     App::test((), |mut app| async move {
         initialize_app(
@@ -345,12 +364,18 @@ fn test_aws_bedrock_credentials_default_off_when_admin_respects_user_setting() {
         );
 
         app.read(|ctx| {
+            let user_workspaces = UserWorkspaces::as_ref(ctx);
+            let context = sole_team_context(user_workspaces);
+            let render_context = sole_team_render_context(user_workspaces);
             assert!(
-                !UserWorkspaces::as_ref(ctx).is_aws_bedrock_credentials_enabled(ctx),
+                !user_workspaces
+                    .is_aws_bedrock_credentials_enabled_for_context(Some(&context), ctx),
                 "respect-user-setting should default the local Bedrock credentials toggle to off"
             );
             assert!(
-                UserWorkspaces::as_ref(ctx).is_aws_bedrock_credentials_toggleable(),
+                user_workspaces.is_aws_bedrock_credentials_toggleable_for_render_context(Some(
+                    &render_context
+                )),
                 "respect-user-setting should leave the local Bedrock credentials toggle editable"
             );
         });
@@ -359,10 +384,9 @@ fn test_aws_bedrock_credentials_default_off_when_admin_respects_user_setting() {
 
 #[test]
 fn test_aws_bedrock_credentials_respect_user_setting() {
-    let team = team_for_test();
-    let mut workspace = workspace_for_test(&team);
-    workspace.settings.llm_settings.enabled = true;
-    workspace.settings.llm_settings.host_configs.insert(
+    let mut team = team_for_test();
+    team.settings.llm_settings.enabled = true;
+    team.settings.llm_settings.host_configs.insert(
         LLMModelHost::AwsBedrock,
         LlmHostSettings {
             enabled: true,
@@ -370,6 +394,7 @@ fn test_aws_bedrock_credentials_respect_user_setting() {
             ..Default::default()
         },
     );
+    let workspace = workspace_for_test(&team);
     let mut team_client = MockTeamClient::new();
     let workspace_for_poll = workspace.clone();
     team_client.expect_workspaces_metadata().returning(move || {
@@ -403,12 +428,18 @@ fn test_aws_bedrock_credentials_respect_user_setting() {
         });
 
         app.read(|ctx| {
+            let user_workspaces = UserWorkspaces::as_ref(ctx);
+            let context = sole_team_context(user_workspaces);
+            let render_context = sole_team_render_context(user_workspaces);
             assert!(
-                !UserWorkspaces::as_ref(ctx).is_aws_bedrock_credentials_enabled(ctx),
+                !user_workspaces
+                    .is_aws_bedrock_credentials_enabled_for_context(Some(&context), ctx),
                 "respect-user-setting should honor the local Bedrock credentials toggle"
             );
             assert!(
-                UserWorkspaces::as_ref(ctx).is_aws_bedrock_credentials_toggleable(),
+                user_workspaces.is_aws_bedrock_credentials_toggleable_for_render_context(Some(
+                    &render_context
+                )),
                 "respect-user-setting should leave the local Bedrock credentials toggle editable"
             );
         });
@@ -417,10 +448,9 @@ fn test_aws_bedrock_credentials_respect_user_setting() {
 
 #[test]
 fn test_aws_bedrock_credentials_enforced_by_admin() {
-    let team = team_for_test();
-    let mut workspace = workspace_for_test(&team);
-    workspace.settings.llm_settings.enabled = true;
-    workspace.settings.llm_settings.host_configs.insert(
+    let mut team = team_for_test();
+    team.settings.llm_settings.enabled = true;
+    team.settings.llm_settings.host_configs.insert(
         LLMModelHost::AwsBedrock,
         LlmHostSettings {
             enabled: true,
@@ -428,6 +458,7 @@ fn test_aws_bedrock_credentials_enforced_by_admin() {
             ..Default::default()
         },
     );
+    let workspace = workspace_for_test(&team);
     let mut team_client = MockTeamClient::new();
     let workspace_for_poll = workspace.clone();
     team_client.expect_workspaces_metadata().returning(move || {
@@ -461,12 +492,17 @@ fn test_aws_bedrock_credentials_enforced_by_admin() {
         });
 
         app.read(|ctx| {
+            let user_workspaces = UserWorkspaces::as_ref(ctx);
+            let context = sole_team_context(user_workspaces);
+            let render_context = sole_team_render_context(user_workspaces);
             assert!(
-                UserWorkspaces::as_ref(ctx).is_aws_bedrock_credentials_enabled(ctx),
+                user_workspaces.is_aws_bedrock_credentials_enabled_for_context(Some(&context), ctx),
                 "enforced Bedrock host policy should ignore the local Bedrock credentials toggle"
             );
             assert!(
-                !UserWorkspaces::as_ref(ctx).is_aws_bedrock_credentials_toggleable(),
+                !user_workspaces.is_aws_bedrock_credentials_toggleable_for_render_context(Some(
+                    &render_context
+                )),
                 "enforced Bedrock host policy should disable the local Bedrock credentials toggle"
             );
         });
@@ -481,9 +517,9 @@ fn workspace_with_gemini_enterprise_host(
     enabled: bool,
     enablement_setting: HostEnablementSetting,
 ) -> Workspace {
-    let mut workspace = workspace_for_test(team);
-    workspace.settings.llm_settings.enabled = true;
-    workspace.settings.llm_settings.host_configs.insert(
+    let mut team = team.clone();
+    team.settings.llm_settings.enabled = true;
+    team.settings.llm_settings.host_configs.insert(
         LLMModelHost::GeminiEnterprise,
         LlmHostSettings {
             enabled,
@@ -492,7 +528,7 @@ fn workspace_with_gemini_enterprise_host(
             gcp_sa_email: Some(TEST_GCP_SA_EMAIL.to_string()),
         },
     );
-    workspace
+    workspace_for_test(&team)
 }
 
 #[test]
@@ -516,12 +552,15 @@ fn test_gemini_enterprise_credentials_default_off_when_admin_respects_user_setti
         );
 
         app.read(|ctx| {
+            let user_workspaces = UserWorkspaces::as_ref(ctx);
+            let context = sole_team_context(user_workspaces);
+            let render_context = sole_team_render_context(user_workspaces);
             assert!(
-                !UserWorkspaces::as_ref(ctx).is_gemini_enterprise_credentials_enabled(ctx),
+                !user_workspaces.is_gemini_enterprise_credentials_enabled_for_context(Some(&context), ctx),
                 "respect-user-setting should default the local Gemini Enterprise credentials toggle to off"
             );
             assert!(
-                UserWorkspaces::as_ref(ctx).is_gemini_enterprise_credentials_toggleable(),
+                user_workspaces.is_gemini_enterprise_credentials_toggleable_for_render_context(Some(&render_context)),
                 "respect-user-setting should leave the local Gemini Enterprise credentials toggle editable"
             );
         });
@@ -555,8 +594,11 @@ fn test_gemini_enterprise_credentials_respect_user_setting_honors_member_toggle(
         });
 
         app.read(|ctx| {
+            let user_workspaces = UserWorkspaces::as_ref(ctx);
+            let context = sole_team_context(user_workspaces);
             assert!(
-                UserWorkspaces::as_ref(ctx).is_gemini_enterprise_credentials_enabled(ctx),
+                user_workspaces
+                    .is_gemini_enterprise_credentials_enabled_for_context(Some(&context), ctx),
                 "respect-user-setting should honor an opted-in Gemini Enterprise credentials toggle"
             );
         });
@@ -587,12 +629,18 @@ fn test_gemini_enterprise_credentials_enforced_by_admin() {
         });
 
         app.read(|ctx| {
+            let user_workspaces = UserWorkspaces::as_ref(ctx);
+            let context = sole_team_context(user_workspaces);
+            let render_context = sole_team_render_context(user_workspaces);
             assert!(
-                UserWorkspaces::as_ref(ctx).is_gemini_enterprise_credentials_enabled(ctx),
+                user_workspaces
+                    .is_gemini_enterprise_credentials_enabled_for_context(Some(&context), ctx),
                 "enforced Gemini Enterprise host policy should ignore the local credentials toggle"
             );
             assert!(
-                !UserWorkspaces::as_ref(ctx).is_gemini_enterprise_credentials_toggleable(),
+                !user_workspaces.is_gemini_enterprise_credentials_toggleable_for_render_context(
+                    Some(&render_context)
+                ),
                 "enforced Gemini Enterprise host policy should disable the local credentials toggle"
             );
         });
@@ -617,12 +665,17 @@ fn test_gemini_enterprise_credentials_disabled_when_host_disabled() {
         );
 
         app.read(|ctx| {
+            let user_workspaces = UserWorkspaces::as_ref(ctx);
+            let context = sole_team_context(user_workspaces);
+            let render_context = sole_team_render_context(user_workspaces);
             assert!(
-                !UserWorkspaces::as_ref(ctx).is_gemini_enterprise_available_from_workspace(),
-                "a disabled Gemini Enterprise host should not be available from the workspace"
+                !user_workspaces
+                    .is_gemini_enterprise_available_for_render_context(Some(&render_context)),
+                "a disabled Gemini Enterprise host should not be available for the team"
             );
             assert!(
-                !UserWorkspaces::as_ref(ctx).is_gemini_enterprise_credentials_enabled(ctx),
+                !user_workspaces
+                    .is_gemini_enterprise_credentials_enabled_for_context(Some(&context), ctx),
                 "a disabled Gemini Enterprise host should gate credentials off even under ENFORCE"
             );
         });
@@ -632,11 +685,9 @@ fn test_gemini_enterprise_credentials_disabled_when_host_disabled() {
 #[test]
 fn test_gemini_enterprise_credentials_disabled_when_host_absent() {
     let _flag = FeatureFlag::GeminiEnterprise.override_enabled(true);
-    let team = team_for_test();
-    // Bedrock-only workspace: proves the GEAP gate reads its own host entry.
-    let mut workspace = workspace_for_test(&team);
-    workspace.settings.llm_settings.enabled = true;
-    workspace.settings.llm_settings.host_configs.insert(
+    let mut team = team_for_test();
+    team.settings.llm_settings.enabled = true;
+    team.settings.llm_settings.host_configs.insert(
         LLMModelHost::AwsBedrock,
         LlmHostSettings {
             enabled: true,
@@ -644,6 +695,7 @@ fn test_gemini_enterprise_credentials_disabled_when_host_absent() {
             ..Default::default()
         },
     );
+    let workspace = workspace_for_test(&team);
 
     App::test((), |mut app| async move {
         initialize_app(
@@ -656,15 +708,18 @@ fn test_gemini_enterprise_credentials_disabled_when_host_absent() {
         );
 
         app.read(|ctx| {
+            let user_workspaces = UserWorkspaces::as_ref(ctx);
+            let context = sole_team_context(user_workspaces);
             assert!(
-                UserWorkspaces::as_ref(ctx)
-                    .gemini_enterprise_host_settings()
+                user_workspaces
+                    .gemini_enterprise_host_settings_for_context(Some(&context))
                     .is_none(),
-                "a workspace without a Gemini Enterprise host entry should expose no settings"
+                "a team without a Gemini Enterprise host entry should expose no settings"
             );
             assert!(
-                !UserWorkspaces::as_ref(ctx).is_gemini_enterprise_credentials_enabled(ctx),
-                "a workspace without a Gemini Enterprise host entry should gate credentials off"
+                !user_workspaces
+                    .is_gemini_enterprise_credentials_enabled_for_context(Some(&context), ctx),
+                "a team without a Gemini Enterprise host entry should gate credentials off"
             );
         });
     })
@@ -689,8 +744,11 @@ fn test_gemini_enterprise_credentials_disabled_when_logged_out() {
         );
 
         app.read(|ctx| {
+            let user_workspaces = UserWorkspaces::as_ref(ctx);
+            let context = sole_team_context(user_workspaces);
             assert!(
-                !UserWorkspaces::as_ref(ctx).is_gemini_enterprise_credentials_enabled(ctx),
+                !user_workspaces
+                    .is_gemini_enterprise_credentials_enabled_for_context(Some(&context), ctx),
                 "logged-out users should never mint or attach Gemini Enterprise credentials"
             );
         });
@@ -718,15 +776,113 @@ fn test_gemini_enterprise_host_settings_carries_federation_config() {
 
         app.read(|ctx| {
             let user_workspaces = UserWorkspaces::as_ref(ctx);
+            let context = sole_team_context(user_workspaces);
             let settings = user_workspaces
-                .gemini_enterprise_host_settings()
-                .expect("workspace should expose the Gemini Enterprise host settings");
+                .gemini_enterprise_host_settings_for_context(Some(&context))
+                .expect("team should expose the Gemini Enterprise host settings");
             assert_eq!(settings.gcp_audience.as_deref(), Some(TEST_GCP_AUDIENCE));
             assert_eq!(settings.gcp_sa_email.as_deref(), Some(TEST_GCP_SA_EMAIL));
         });
     })
 }
 
+#[test]
+fn test_llm_policy_uses_team_context_with_teamless_fallback_and_no_stale_fallback() {
+    let _flag = FeatureFlag::GeminiEnterprise.override_enabled(true);
+    let mut team_a = team_for_test();
+    team_a.settings.llm_settings.enabled = true;
+    team_a.settings.llm_settings.host_configs.insert(
+        LLMModelHost::AwsBedrock,
+        LlmHostSettings {
+            enabled: true,
+            enablement_setting: HostEnablementSetting::Enforce,
+            ..Default::default()
+        },
+    );
+    team_a.settings.llm_settings.host_configs.insert(
+        LLMModelHost::GeminiEnterprise,
+        LlmHostSettings {
+            enabled: true,
+            enablement_setting: HostEnablementSetting::Enforce,
+            gcp_audience: Some(TEST_GCP_AUDIENCE.to_string()),
+            gcp_sa_email: Some(TEST_GCP_SA_EMAIL.to_string()),
+        },
+    );
+    let mut team_b = team_for_test();
+    team_b.uid = 456.into();
+    team_b.name = "team-b".to_string();
+    let mut workspace = workspace_for_test(&team_a);
+    workspace.teams.push(team_b.clone());
+    workspace.settings.llm_settings = team_a.settings.llm_settings.clone();
+
+    App::test((), |mut app| async move {
+        initialize_app(
+            &mut app,
+            CachedResources {
+                workspaces: vec![workspace.clone()],
+            },
+            Arc::new(MockTeamClient::new()),
+            Arc::new(MockWorkspaceClient::new()),
+        );
+
+        let context_a = TeamContextForOperation::new_for_test(team_a.uid);
+        let context_b = TeamContextForOperation::new_for_test(team_b.uid);
+
+        app.read(|ctx| {
+            let user_workspaces = UserWorkspaces::as_ref(ctx);
+            assert!(
+                user_workspaces
+                    .is_aws_bedrock_credentials_enabled_for_context(Some(&context_a), ctx)
+            );
+            assert!(
+                user_workspaces
+                    .is_gemini_enterprise_credentials_enabled_for_context(Some(&context_a), ctx)
+            );
+            assert!(
+                !user_workspaces
+                    .is_aws_bedrock_credentials_enabled_for_context(Some(&context_b), ctx)
+            );
+            assert!(
+                !user_workspaces
+                    .is_gemini_enterprise_credentials_enabled_for_context(Some(&context_b), ctx)
+            );
+            assert!(
+                user_workspaces.is_aws_bedrock_credentials_enabled_for_context(
+                    None::<&TeamContextForOperation>,
+                    ctx
+                )
+            );
+            assert!(
+                user_workspaces.is_gemini_enterprise_credentials_enabled_for_context(
+                    None::<&TeamContextForOperation>,
+                    ctx
+                )
+            );
+        });
+
+        workspace.teams = vec![team_b];
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.update_workspaces(vec![workspace], ctx);
+        });
+
+        app.read(|ctx| {
+            let user_workspaces = UserWorkspaces::as_ref(ctx);
+            assert!(
+                !user_workspaces
+                    .is_aws_bedrock_credentials_enabled_for_context(Some(&context_a), ctx)
+            );
+            assert!(
+                !user_workspaces
+                    .is_gemini_enterprise_credentials_enabled_for_context(Some(&context_a), ctx)
+            );
+            assert!(
+                user_workspaces
+                    .gemini_enterprise_host_settings_for_context(Some(&context_a))
+                    .is_none()
+            );
+        });
+    })
+}
 fn workspace_for_test(team: &Team) -> Workspace {
     Workspace {
         uid: "workspace_uid123456789".to_string().into(),
@@ -1081,26 +1237,24 @@ fn test_team_context_for_view_resolves_each_windows_own_team() {
         });
 
         let context_a = view_a.update(&mut app, |_, ctx| {
-            UserWorkspaces::as_ref(ctx).team_context_for_view(ctx)
+            UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx)
         });
         let context_b = view_b.update(&mut app, |_, ctx| {
-            UserWorkspaces::as_ref(ctx).team_context_for_view(ctx)
+            UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx)
         });
 
         app.read(|ctx| {
             let user_workspaces = UserWorkspaces::as_ref(ctx);
             assert_eq!(
-                context_a
-                    .as_ref()
-                    .and_then(|context| user_workspaces.team_for_context(context))
+                user_workspaces
+                    .team_for_context(&context_a)
                     .map(|team| team.uid),
                 Some(team_a.uid),
                 "the view in window A should mint a context resolving to team A"
             );
             assert_eq!(
-                context_b
-                    .as_ref()
-                    .and_then(|context| user_workspaces.team_for_context(context))
+                user_workspaces
+                    .team_for_context(&context_b)
                     .map(|team| team.uid),
                 Some(team_b.uid),
                 "the view in window B should mint a context resolving to team B"
@@ -1126,18 +1280,16 @@ fn test_window_team_reconciliation_moves_rendering_but_not_a_captured_context() 
             user_workspaces.set_team_for_window(window_id, team_a.uid, ctx);
         });
 
-        let context_a = view
-            .update(&mut app, |_, ctx| {
-                UserWorkspaces::as_ref(ctx).team_context_for_view(ctx)
-            })
-            .expect("a window assigned to team A should mint a context");
+        let context_a = view.update(&mut app, |_, ctx| {
+            UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx)
+        });
 
         app.read(|ctx| {
             assert_eq!(
                 UserWorkspaces::as_ref(ctx)
-                    .team_render_context_for_view_handle(&weak_view, ctx)
-                    .map(|render| render.team.uid),
-                Some(team_a.uid)
+                    .team_context(&weak_view, ctx)
+                    .and_then(|context| context.team_uid()),
+                Some(team_a.uid),
             );
         });
 
@@ -1149,8 +1301,8 @@ fn test_window_team_reconciliation_moves_rendering_but_not_a_captured_context() 
             let user_workspaces = UserWorkspaces::as_ref(ctx);
             assert_eq!(
                 user_workspaces
-                    .team_render_context_for_view_handle(&weak_view, ctx)
-                    .map(|render| render.team.uid),
+                    .team_context(&weak_view, ctx)
+                    .and_then(|context| context.team_uid()),
                 Some(team_b.uid),
                 "a freshly resolved render context should follow the window to team B"
             );
@@ -1164,7 +1316,7 @@ fn test_window_team_reconciliation_moves_rendering_but_not_a_captured_context() 
 }
 
 #[test]
-fn test_team_context_and_render_context_return_none_without_a_team() {
+fn test_team_contexts_represent_a_registered_teamless_window() {
     App::test((), |mut app| async move {
         initialize_window_team_test_app(&mut app, vec![]);
 
@@ -1174,20 +1326,207 @@ fn test_team_context_and_render_context_return_none_without_a_team() {
         });
 
         let context = view.update(&mut app, |_, ctx| {
-            UserWorkspaces::as_ref(ctx).team_context_for_view(ctx)
+            UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx)
         });
-        assert!(
-            context.is_none(),
-            "a window with no team should not mint a TeamContext"
-        );
+        assert_eq!(context.team_uid(), None);
 
         let weak_view = view.downgrade();
         app.read(|ctx| {
+            let context = UserWorkspaces::as_ref(ctx)
+                .team_context(&weak_view, ctx)
+                .expect("a registered teamless window should resolve");
+            assert_eq!(context.team_uid(), None);
+        });
+    })
+}
+
+fn team_byo_settings(allow_user_keys: bool, allow_user_endpoints: bool) -> TeamByoSettings {
+    TeamByoSettings {
+        first_party_enabled: true,
+        endpoints_enabled: true,
+        allow_user_keys,
+        allow_user_endpoints,
+        first_party_keys: vec![],
+        endpoints: vec![],
+    }
+}
+
+#[test]
+fn test_agent_settings_are_member_byo_keys_allowed_reads_selected_team_per_window() {
+    let (mut team_a, mut team_b) = two_teams();
+    // BYOK/BYOE management is a workspace billing entitlement, shared by every team in the
+    // workspace; only the `team_byo` policy below varies per team.
+    team_a.settings.team_byo = Some(team_byo_settings(true, true));
+    team_b.settings.team_byo = Some(team_byo_settings(false, false));
+    let mut workspace = workspace_for_test(&team_a);
+    workspace.billing_metadata.tier.managed_byok_byoe_policy =
+        Some(ManagedByokByoePolicy { enabled: true });
+    workspace.teams.push(team_b.clone());
+
+    App::test((), |mut app| async move {
+        initialize_window_team_test_app(&mut app, vec![workspace]);
+
+        let (window_a, view_a) = create_test_window(&mut app);
+        let (window_b, view_b) = create_test_window(&mut app);
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.set_team_for_window(window_a, team_a.uid, ctx);
+            user_workspaces.set_team_for_window(window_b, team_b.uid, ctx);
+        });
+        let weak_a = view_a.downgrade();
+        let weak_b = view_b.downgrade();
+
+        app.read(|ctx| {
+            let user_workspaces = UserWorkspaces::as_ref(ctx);
             assert!(
-                UserWorkspaces::as_ref(ctx)
-                    .team_render_context_for_view_handle(&weak_view, ctx)
-                    .is_none(),
-                "a window with no team should not resolve a TeamRenderContext"
+                user_workspaces.is_managed_byok_byoe_enabled(),
+                "the workspace plan manages BYOK/BYOE centrally, regardless of window team"
+            );
+            let context_a = user_workspaces.team_context(&weak_a, ctx);
+            let context_b = user_workspaces.team_context(&weak_b, ctx);
+            assert!(
+                user_workspaces.agent_settings_are_member_byo_keys_allowed(context_a.as_ref()),
+                "team A's policy should allow members to use their own keys"
+            );
+            assert!(
+                !user_workspaces.agent_settings_are_member_byo_keys_allowed(context_b.as_ref()),
+                "team B's policy should disallow members from using their own keys"
+            );
+        });
+    })
+}
+
+#[test]
+fn test_agent_settings_are_member_byo_endpoints_allowed_reads_selected_team_per_window() {
+    let (mut team_a, mut team_b) = two_teams();
+    team_a.settings.team_byo = Some(team_byo_settings(true, true));
+    team_b.settings.team_byo = Some(team_byo_settings(false, false));
+    let mut workspace = workspace_for_test(&team_a);
+    workspace.billing_metadata.tier.managed_byok_byoe_policy =
+        Some(ManagedByokByoePolicy { enabled: true });
+    workspace.teams.push(team_b.clone());
+
+    App::test((), |mut app| async move {
+        initialize_window_team_test_app(&mut app, vec![workspace]);
+
+        let (window_a, view_a) = create_test_window(&mut app);
+        let (window_b, view_b) = create_test_window(&mut app);
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.set_team_for_window(window_a, team_a.uid, ctx);
+            user_workspaces.set_team_for_window(window_b, team_b.uid, ctx);
+        });
+        let weak_a = view_a.downgrade();
+        let weak_b = view_b.downgrade();
+
+        app.read(|ctx| {
+            let user_workspaces = UserWorkspaces::as_ref(ctx);
+            let context_a = user_workspaces.team_context(&weak_a, ctx);
+            let context_b = user_workspaces.team_context(&weak_b, ctx);
+            assert!(
+                user_workspaces.agent_settings_are_member_byo_endpoints_allowed(context_a.as_ref()),
+                "team A's policy should allow members to use their own custom endpoints"
+            );
+            assert!(
+                !user_workspaces
+                    .agent_settings_are_member_byo_endpoints_allowed(context_b.as_ref()),
+                "team B's policy should disallow members from using their own custom endpoints"
+            );
+        });
+    })
+}
+
+#[test]
+fn test_agent_settings_are_member_byo_keys_allowed_follows_window_team_change() {
+    let (mut team_a, mut team_b) = two_teams();
+    team_a.settings.team_byo = Some(team_byo_settings(true, true));
+    team_b.settings.team_byo = Some(team_byo_settings(false, false));
+
+    let mut workspace_a = workspace_for_test(&team_a);
+    workspace_a.billing_metadata.tier.managed_byok_byoe_policy =
+        Some(ManagedByokByoePolicy { enabled: true });
+    let mut workspace_b = workspace_for_test(&team_b);
+    // The workspace's managed BYOK/BYOE entitlement is unchanged by the team swap below; only
+    // the team's `team_byo` policy differs.
+    workspace_b.billing_metadata.tier.managed_byok_byoe_policy =
+        Some(ManagedByokByoePolicy { enabled: true });
+
+    App::test((), |mut app| async move {
+        initialize_window_team_test_app(&mut app, vec![workspace_a]);
+
+        let (window_id, view) = create_test_window(&mut app);
+        let weak_view = view.downgrade();
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.set_team_for_window(window_id, team_a.uid, ctx);
+        });
+        let operation_context = view.update(&mut app, |_, ctx| {
+            UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx)
+        });
+
+        app.read(|ctx| {
+            let user_workspaces = UserWorkspaces::as_ref(ctx);
+            let context = user_workspaces.team_context(&weak_view, ctx);
+            assert!(
+                user_workspaces.agent_settings_are_member_byo_keys_allowed(context.as_ref()),
+                "team A's policy allows members to use their own keys"
+            );
+        });
+
+        // Reconcile the window onto team B by removing team A from the workspace.
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.update_workspaces(vec![workspace_b], ctx);
+        });
+
+        app.read(|ctx| {
+            let user_workspaces = UserWorkspaces::as_ref(ctx);
+            let context = user_workspaces.team_context(&weak_view, ctx);
+            assert!(
+                !user_workspaces.agent_settings_are_member_byo_keys_allowed(context.as_ref()),
+                "after the window reconciles onto team B, its restrictive policy should apply"
+            );
+            assert!(
+                !user_workspaces.are_member_byo_keys_allowed_for_context(&operation_context),
+                "a captured scope must not allow member keys after its team disappears"
+            );
+            assert!(
+                !user_workspaces.are_member_byo_endpoints_allowed_for_context(&operation_context),
+                "a captured scope must not allow member endpoints after its team disappears"
+            );
+        });
+    })
+}
+
+#[test]
+fn test_agent_settings_byo_reads_default_without_a_team() {
+    App::test((), |mut app| async move {
+        initialize_window_team_test_app(&mut app, vec![]);
+        app.add_singleton_model(|_| AuthStateProvider::new_for_test());
+        let _flag = FeatureFlag::SoloUserByok.override_enabled(true);
+
+        let (window_id, _view) = create_test_window(&mut app);
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.register_window(window_id, None, ctx);
+        });
+
+        app.read(|ctx| {
+            let user_workspaces = UserWorkspaces::as_ref(ctx);
+            assert!(
+                user_workspaces.is_byo_api_key_enabled(ctx),
+                "with no workspace, BYO API key falls back to the solo-user feature flag"
+            );
+            assert!(
+                user_workspaces.is_custom_inference_enabled(ctx),
+                "with no workspace, custom inference defaults to enabled"
+            );
+            assert!(
+                !user_workspaces.is_managed_byok_byoe_enabled(),
+                "with no workspace, there is no plan to manage BYOK/BYOE centrally"
+            );
+            assert!(
+                user_workspaces.agent_settings_are_member_byo_keys_allowed(None),
+                "a no-team window has no team policy restricting it"
+            );
+            assert!(
+                user_workspaces.agent_settings_are_member_byo_endpoints_allowed(None),
+                "a no-team window has no team policy restricting it"
             );
         });
     })
@@ -2393,7 +2732,7 @@ fn test_teamless_user_falls_back_to_workspace_settings() {
                 "an admin with no membership should end up teamless"
             );
             assert!(
-                user_workspaces.is_custom_llm_enabled_for_team(None),
+                user_workspaces.is_custom_llm_enabled(None),
                 "workspace settings should supply the teamless default"
             );
         });
@@ -2418,8 +2757,11 @@ fn test_member_team_settings_win_over_workspace_settings() {
             let user_workspaces = UserWorkspaces::as_ref(ctx);
             let team = user_workspaces.sole_team();
             assert!(team.is_some(), "the member team should survive filtering");
+            let team_render_context = team.map(|team| TeamContext {
+                team_uid: Some(&team.uid),
+            });
             assert!(
-                !user_workspaces.is_custom_llm_enabled_for_team(team),
+                !user_workspaces.is_custom_llm_enabled(team_render_context),
                 "the team's own settings should win when the user has a team"
             );
         });

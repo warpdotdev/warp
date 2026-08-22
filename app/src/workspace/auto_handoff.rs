@@ -20,6 +20,7 @@ use crate::settings::AISettings;
 use crate::system::{SystemStats, SystemStatsEvent};
 use crate::terminal::view::TerminalView;
 use crate::view_components::DismissibleToast;
+use crate::workspaces::user_workspaces::UserWorkspaces;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum AutoCloudHandoffSkipReason {
@@ -304,7 +305,7 @@ impl AutoCloudHandoffController {
     /// skipped.
     fn evaluate_handoff_candidate(
         &self,
-        ctx: &ModelContext<Self>,
+        ctx: &mut ModelContext<Self>,
     ) -> Result<AutoCloudHandoffCandidate, AutoCloudHandoffSkipReason> {
         let Some((terminal_view_id, conversation_id)) = Self::last_focused_local_conversation(ctx)
         else {
@@ -329,14 +330,19 @@ impl AutoCloudHandoffController {
             return Err(AutoCloudHandoffSkipReason::LongRunningCommand);
         }
 
+        let can_handoff_to_cloud = AISettings::as_ref(ctx).is_cloud_handoff_enabled(ctx);
+        let weak_terminal_view = terminal_view.downgrade();
+        let team_context = UserWorkspaces::as_ref(ctx).team_context(&weak_terminal_view, ctx);
+        let active_model_not_cloud_runnable = !LLMPreferences::as_ref(ctx)
+            .is_active_base_model_cloud_runnable_for_team_context(
+                terminal_view_id,
+                team_context.as_ref(),
+                ctx,
+            );
         let history = BlocklistAIHistoryModel::as_ref(ctx);
         let Some(conversation) = history.conversation(&conversation_id) else {
             return Err(AutoCloudHandoffSkipReason::ConversationNotLoaded { conversation_id });
         };
-
-        let can_handoff_to_cloud = AISettings::as_ref(ctx).is_cloud_handoff_enabled(ctx);
-        let active_model_not_cloud_runnable =
-            !LLMPreferences::as_ref(ctx).is_active_base_model_cloud_runnable(terminal_view_id, ctx);
         if let Some(reason) = AutoCloudHandoffEligibility::from_conversation(
             conversation,
             can_handoff_to_cloud,

@@ -2,10 +2,13 @@
 use std::time::Duration;
 
 #[cfg(not(target_family = "wasm"))]
-use super::apply_geap_refresh_to_params;
+use ai::api_keys::GeapRefreshOutcome;
+
 use super::{FailReason, MAX_RECOVERY_ATTEMPTS, RecoveryAction, RecoveryBudget, recovery_action};
 #[cfg(not(target_family = "wasm"))]
 use super::{ResponseStream, ResponseStreamId};
+#[cfg(not(target_family = "wasm"))]
+use super::{apply_geap_refresh_to_params, should_rearm_geap_request_after_refresh};
 #[cfg(not(target_family = "wasm"))]
 use crate::ai::agent::api::RequestParams;
 // `agent_sdk` (and so the driver's recovery deadline) is native-only.
@@ -317,4 +320,21 @@ fn geap_refresh_does_not_add_credentials_to_a_keyless_request() {
     );
 
     assert!(params.api_keys.is_none());
+}
+
+#[cfg(not(target_family = "wasm"))]
+#[test]
+fn geap_request_rearms_after_an_unrelated_mint_failure() {
+    assert!(should_rearm_geap_request_after_refresh(
+        GeapRefreshOutcome::Failed,
+        false
+    ));
+    assert!(!should_rearm_geap_request_after_refresh(
+        GeapRefreshOutcome::Failed,
+        true
+    ));
+    assert!(!should_rearm_geap_request_after_refresh(
+        GeapRefreshOutcome::Refreshed,
+        false
+    ));
 }

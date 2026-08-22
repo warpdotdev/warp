@@ -34,6 +34,7 @@ use crate::ui_components::icons::Icon;
 use crate::view_components::action_button::{ActionButton, ActionButtonTheme, ButtonSize};
 use crate::view_components::alert::{Alert, AlertConfig};
 use crate::workspace::WorkspaceAction;
+use crate::workspaces::user_workspaces::{UserWorkspaces, UserWorkspacesEvent};
 
 struct ManageDefaultsTheme;
 
@@ -129,12 +130,9 @@ impl InlineModelSelectorView {
         positioner: &ModelHandle<InlineMenuPositioner>,
         ctx: &mut ViewContext<Self>,
     ) -> Self {
-        let window_id = ctx.window_id();
-        let data_source = ctx.add_model(move |_| {
-            // Built without the ambient model; the setter (called below for construction and by
-            // the lazy shared-session viewer path) is the single point that attaches it.
-            ModelSelectorDataSource::new(terminal_view_id, window_id, None)
-        });
+        let weak_self = ctx.handle();
+        let data_source =
+            ctx.add_model(move |_| ModelSelectorDataSource::new(terminal_view_id, weak_self, None));
 
         let tab_configs = TAB_CONFIGS.clone();
         let initial_filters = tab_configs
@@ -275,6 +273,17 @@ impl InlineModelSelectorView {
                 });
             }
         });
+        ctx.subscribe_to_model(
+            &UserWorkspaces::handle(ctx),
+            |me, _, event, ctx| match event {
+                UserWorkspacesEvent::WindowTeamChanged { window_id }
+                    if *window_id == ctx.window_id() =>
+                {
+                    me.rerun_query(ctx);
+                }
+                _ => {}
+            },
+        );
 
         ctx.subscribe_to_model(input_buffer_model, |me, _, _, ctx| {
             if !me
@@ -381,10 +390,10 @@ impl InlineModelSelectorView {
                     })
                 });
                 if !found_by_id && let Some(idx) = selection.index {
-                    let count = me.menu_view.as_ref(ctx).result_count();
+                    let count = me.menu_view.as_ref(ctx).visible_result_count(ctx);
                     if count > 0 {
                         me.menu_view.update(ctx, |menu, ctx| {
-                            menu.select_idx(idx.min(count - 1), ctx);
+                            menu.select_visible_idx(idx.min(count - 1), ctx);
                         });
                     }
                 }
@@ -453,13 +462,23 @@ impl InlineModelSelectorView {
 
     fn active_model_id_for_current_tab(&self, ctx: &ViewContext<Self>) -> LLMId {
         let llm_preferences = LLMPreferences::as_ref(ctx);
+        let handle = ctx.handle();
+        let team_context = UserWorkspaces::as_ref(ctx).team_context(&handle, ctx);
         match self.active_tab(ctx) {
             InlineModelSelectorTab::BaseAgent => llm_preferences
-                .get_active_base_model(ctx, Some(self.terminal_view_id))
+                .get_active_base_model_for_render_context(
+                    Some(self.terminal_view_id),
+                    team_context.as_ref(),
+                    ctx,
+                )
                 .id
                 .clone(),
             InlineModelSelectorTab::FullTerminalUse => llm_preferences
-                .get_active_cli_agent_model(ctx, Some(self.terminal_view_id))
+                .get_active_cli_agent_model_for_render_context(
+                    Some(self.terminal_view_id),
+                    team_context.as_ref(),
+                    ctx,
+                )
                 .id
                 .clone(),
         }

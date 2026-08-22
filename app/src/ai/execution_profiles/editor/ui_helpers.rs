@@ -307,7 +307,7 @@ fn render_context_window_row(
     if !AISettings::as_ref(app).is_any_ai_enabled(app) {
         return None;
     }
-    let cw = view.configurable_context_window(app)?;
+    let cw = view.configurable_context_window_for_render(app)?;
     let min = cw.min;
     let max = cw.max;
 
@@ -352,7 +352,7 @@ fn render_context_window_row(
         .finish();
 
     let current_value = view
-        .current_context_window_display_value(app)
+        .current_context_window_display_value_for_render(app)
         .unwrap_or(cw.default_max)
         .clamp(min, max);
     let slider = appearance
@@ -426,9 +426,14 @@ fn render_context_window_row(
     let mut column = Flex::column()
         .with_child(Container::new(label_desc).with_margin_bottom(4.).finish())
         .with_child(slider_row);
+    let team_render_context = crate::UserWorkspaces::as_ref(app).team_context(&view.weak_self, app);
     if BlocklistAIPermissions::as_ref(app)
         .permissions_profile_for_id(app, view.profile_id())
-        .should_show_long_context_pricing_warning(view.dragged_context_window_value, app)
+        .should_show_long_context_pricing_warning_for_render_context(
+            view.dragged_context_window_value,
+            team_render_context.as_ref(),
+            app,
+        )
     {
         column.add_child(render_long_context_pricing_warning(appearance));
     }

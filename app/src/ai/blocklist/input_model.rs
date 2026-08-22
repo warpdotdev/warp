@@ -332,7 +332,6 @@ impl BlocklistAIInputModel {
         let ai_context_model = ctx.add_model(|_| {
             BlocklistAIContextModel::new_for_test(
                 context_terminal_model,
-                EntityId::new(),
                 context_conversation_selection,
             )
         });

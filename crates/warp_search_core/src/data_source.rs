@@ -408,8 +408,9 @@ impl<T: Action + Clone> QueryResult<T> {
         &self,
         highlight_state: ItemHighlightState,
         appearance: &Appearance,
+        app: &AppContext,
     ) -> Box<dyn Element> {
-        self.item.render_icon(highlight_state, appearance)
+        self.item.render_icon(highlight_state, appearance, app)
     }
 
     pub fn icon_location(&self, appearance: &Appearance) -> IconLocation {
@@ -455,6 +456,9 @@ impl<T: Action + Clone> QueryResult<T> {
     pub fn accessibility_label(&self) -> String {
         self.item.accessibility_label()
     }
+    pub fn accessibility_label_for_context(&self, app: &AppContext) -> String {
+        self.item.accessibility_label_for_context(app)
+    }
 
     pub fn accessibility_help_message(&self) -> Option<String> {
         self.item.accessibility_help_message()
@@ -469,16 +473,26 @@ impl<T: Action + Clone> QueryResult<T> {
     pub fn is_static_separator(&self) -> bool {
         self.item.is_static_separator()
     }
+    pub fn is_visible_for_context(&self, app: &AppContext) -> bool {
+        self.item.is_visible_for_context(app)
+    }
 
     /// Returns whether this item is disabled.
     /// Disabled items cannot be accepted or selected.
     pub fn is_disabled(&self) -> bool {
         self.item.is_disabled()
     }
+    pub fn is_disabled_for_context(&self, app: &AppContext) -> bool {
+        self.item.is_disabled_for_context(app)
+    }
 
     /// Returns an optional tooltip string to display when hovering over this item.
     pub fn tooltip(&self) -> Option<String> {
         self.item.tooltip()
+    }
+
+    pub fn tooltip_for_context(&self, app: &AppContext) -> Option<String> {
+        self.item.tooltip_for_context(app)
     }
 }
 

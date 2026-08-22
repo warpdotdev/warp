@@ -98,6 +98,7 @@ impl SearchItem for ProjectSearchItem {
         &self,
         highlight_state: ItemHighlightState,
         appearance: &Appearance,
+        _app: &AppContext,
     ) -> Box<dyn Element> {
         let icon_color: Fill = appearance.theme().terminal_colors().normal.cyan.into();
 

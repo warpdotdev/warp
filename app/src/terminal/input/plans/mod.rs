@@ -31,8 +31,7 @@ impl InlineMenuAction for AcceptPlan {
 
         let mut items = Vec::new();
 
-        if let Some(item) = inline_menu_model.selected_item() {
-            let accept_item = item.clone();
+        if inline_menu_model.selected_item().is_some() {
             items.push(MessageItem::clickable(
                 vec![
                     MessageItem::keystroke(Keystroke {
@@ -42,8 +41,7 @@ impl InlineMenuAction for AcceptPlan {
                     MessageItem::text(" open plan"),
                 ],
                 move |ctx| {
-                    ctx.dispatch_typed_action(InlineMenuRowAction::Accept {
-                        item: accept_item.clone(),
+                    ctx.dispatch_typed_action(InlineMenuRowAction::<AcceptPlan>::AcceptSelected {
                         cmd_or_ctrl_enter: false,
                     });
                 },

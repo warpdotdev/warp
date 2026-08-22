@@ -51,8 +51,6 @@ impl InlineMenuAction for AcceptConversation {
                 " continue in this pane"
             };
 
-            let item_id = item.item_id;
-            let is_open_elsewhere = item.is_open_elsewhere;
             items.push(MessageItem::clickable(
                 vec![
                     MessageItem::keystroke(Keystroke {
@@ -62,13 +60,11 @@ impl InlineMenuAction for AcceptConversation {
                     MessageItem::text(text),
                 ],
                 move |ctx| {
-                    ctx.dispatch_typed_action(InlineMenuRowAction::Accept {
-                        item: AcceptConversation {
-                            item_id,
-                            is_open_elsewhere,
+                    ctx.dispatch_typed_action(
+                        InlineMenuRowAction::<AcceptConversation>::AcceptSelected {
+                            cmd_or_ctrl_enter: false,
                         },
-                        cmd_or_ctrl_enter: false,
-                    });
+                    );
                 },
                 inline_menu_model.mouse_states().accept.clone(),
             ));

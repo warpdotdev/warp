@@ -50,7 +50,7 @@ pub use crate::ai::agent_conversations_model::{
 };
 pub use crate::ai::ambient_agents::AmbientAgentTaskId;
 pub use crate::ai::ambient_agents::telemetry::{
-    CloudAgentTelemetryEvent, HandoffEntryPoint, HandoffSurface,
+    CloudAgentTelemetryEvent, HandoffEntryPoint, HandoffOrigin, HandoffSurface,
 };
 pub use crate::ai::blocklist::agent_view::{
     AgentViewController, AgentViewDisplayMode, AgentViewEntryOrigin, EnterAgentViewError,
@@ -138,10 +138,7 @@ pub use crate::ai::harness_availability::{
     AuthSecretEntry, AuthSecretFetchState, HarnessAvailability, HarnessAvailabilityEvent,
     HarnessAvailabilityModel, HarnessModelInfo,
 };
-pub use crate::ai::llms::{
-    LLMId, LLMInfo, LLMPreferences, LLMPreferencesEvent, should_show_bedrock_icon_for_model,
-    should_show_gemini_enterprise_agent_platform_icon_for_model, should_show_key_icon_for_model,
-};
+pub use crate::ai::llms::{DisableReason, LLMId, LLMInfo, LLMPreferences, LLMPreferencesEvent};
 pub use crate::ai::orchestration::{
     AuthSecretSelection, CloudAgentStartupAuthFlow, CloudAgentStartupBlocker,
     CloudAgentStartupFailure, CloudAgentStartupIssue, CloudAgentStartupPresentation,
@@ -183,7 +180,7 @@ pub use crate::search::slash_command_menu::static_commands::{
     SlashCommandKind, SlashCommandSurfaces,
 };
 pub use crate::search::slash_command_menu::{SlashCommandId, StaticCommand};
-pub use crate::server::ids::SyncId;
+pub use crate::server::ids::{ServerId, SyncId};
 pub use crate::server::server_api::ServerApiProvider;
 #[cfg(feature = "voice_input")]
 pub use crate::server::server_api::TranscribeError;
@@ -265,6 +262,7 @@ pub use crate::tui_test_support::{
     blocklist_ai_history_model_with_queries, forkable_tui_conversation_for_test,
     queue_tui_permission_action, register_tui_input_mode_test_settings,
     register_tui_session_view_test_singletons, set_tui_default_team_admin_for_test,
+    set_tui_managed_byok_team_for_test,
 };
 pub use crate::user_config::{WarpConfig, WarpConfigUpdateEvent};
 pub use crate::util::image::{
@@ -275,8 +273,107 @@ pub use crate::util::repo_detection::{RepoDetectionSessionType, detect_possible_
 pub use crate::util::time_format::format_elapsed_seconds;
 #[cfg(feature = "voice_input")]
 pub use crate::voice::transcriber::{Transcriber, VoiceTranscriber};
-pub use crate::workspaces::user_workspaces::{UserWorkspaces, UserWorkspacesEvent};
+pub use crate::workspaces::user_workspaces::{
+    TeamContextForOperation, UserWorkspaces, UserWorkspacesEvent,
+};
 pub use crate::workspaces::workspace::{AiCreditsUsageAndCostType, UsageVisibilityGranularity};
+
+#[derive(Debug, Clone)]
+pub struct TuiModelPickerPresentation {
+    pub id: LLMId,
+    pub title: String,
+    pub is_selectable: bool,
+    pub is_key_connected: bool,
+    pub is_profile_default: bool,
+    pub discount_percentage: Option<f32>,
+}
+
+pub fn tui_model_picker_catalog_ids(query: &str, app: &warpui::AppContext) -> Vec<LLMId> {
+    let preferences = crate::ai::llms::LLMPreferences::as_ref(app);
+    crate::terminal::input::models::query_model_picker_catalog_choices(
+        preferences,
+        preferences.get_base_llm_choices_for_agent_mode_catalog(),
+        query,
+    )
+    .into_iter()
+    .map(|choice| choice.llm.id)
+    .collect()
+}
+
+pub fn tui_model_picker_presentation_for_view<T: warpui::Entity>(
+    owner_view: &warpui::WeakViewHandle<T>,
+    terminal_view_id: warpui::EntityId,
+    id: &LLMId,
+    app: &warpui::AppContext,
+) -> Option<TuiModelPickerPresentation> {
+    let workspaces = crate::workspaces::user_workspaces::UserWorkspaces::as_ref(app);
+    let team_context = workspaces.team_context(owner_view, app);
+    let preferences = crate::ai::llms::LLMPreferences::as_ref(app);
+    let llm = preferences.get_llm_info(id)?;
+    if !preferences
+        .get_base_llm_choices_for_agent_mode_for_render_context(team_context.as_ref(), app)
+        .any(|choice| choice.id == llm.id)
+    {
+        return None;
+    }
+
+    let is_profile_default = preferences
+        .get_active_profile_base_model_for_render_context(
+            Some(terminal_view_id),
+            team_context.as_ref(),
+            app,
+        )
+        .id
+        == llm.id;
+    let is_key_connected = crate::ai::llms::should_show_key_icon_for_model_for_render_context(
+        llm,
+        team_context.as_ref(),
+        app,
+    );
+    let uses_external_inference = is_key_connected
+        || crate::ai::llms::should_show_bedrock_icon_for_model_for_render_context(
+            llm,
+            team_context.as_ref(),
+            app,
+        )
+        || crate::ai::llms::
+            should_show_gemini_enterprise_agent_platform_icon_for_model_for_render_context(
+                llm,
+                team_context.as_ref(),
+                app,
+            );
+
+    Some(TuiModelPickerPresentation {
+        id: llm.id.clone(),
+        title: llm.display_name.clone(),
+        is_selectable: crate::ai::llms::effective_model_disable_reason_for_render_context(
+            llm,
+            team_context.as_ref(),
+            app,
+        )
+        .is_none(),
+        is_key_connected,
+        is_profile_default,
+        discount_percentage: llm.discount_percentage.filter(|_| !uses_external_inference),
+    })
+}
+
+pub fn tui_active_model_id_for_view<T: warpui::Entity>(
+    owner_view: &warpui::WeakViewHandle<T>,
+    terminal_view_id: warpui::EntityId,
+    app: &warpui::AppContext,
+) -> LLMId {
+    let workspaces = crate::workspaces::user_workspaces::UserWorkspaces::as_ref(app);
+    let team_context = workspaces.team_context(owner_view, app);
+    crate::ai::llms::LLMPreferences::as_ref(app)
+        .get_active_base_model_for_render_context(
+            Some(terminal_view_id),
+            team_context.as_ref(),
+            app,
+        )
+        .id
+        .clone()
+}
 
 pub fn format_usage_cost_cents(cents: i64) -> String {
     crate::settings_view::format_cost_cents(cents)

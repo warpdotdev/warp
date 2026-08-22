@@ -30,6 +30,7 @@ use crate::terminal::shared_session::IsSharedSessionCreator;
 use crate::terminal::view::load_ai_conversation::{
     RestoreConversationEntryBehavior, RestoredAIConversation,
 };
+use crate::workspaces::user_workspaces::UserWorkspaces;
 
 /// Max direct children fetched per ancestor-list restore seed. The server
 /// caps at 100 regardless, matching the Observer-side ancestor seed fetch.
@@ -682,7 +683,8 @@ impl PaneGroup {
             return;
         }
 
-        new_terminal_view.update(ctx, |terminal_view, ctx| {
+        let team_context = UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx);
+        new_terminal_view.update(ctx, move |terminal_view, ctx| {
             terminal_view.suppress_initial_conversation_details_panel_auto_open();
             terminal_view.restore_conversation_after_view_creation(
                 RestoredAIConversation::new(child_conversation),
@@ -708,7 +710,7 @@ impl PaneGroup {
                 ambient_agent_view_model.update(ctx, |model, ctx| {
                     model.set_conversation_id(Some(child_conversation_id));
                     if let Some(task_id) = child_task_id {
-                        model.enter_viewing_existing_session(task_id, ctx);
+                        model.enter_viewing_existing_session(task_id, team_context, ctx);
                     }
                 });
             }

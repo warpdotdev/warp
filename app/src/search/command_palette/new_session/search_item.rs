@@ -37,6 +37,7 @@ impl crate::search::item::SearchItem for SearchItem {
         &self,
         highlight_state: ItemHighlightState,
         appearance: &Appearance,
+        _app: &AppContext,
     ) -> Box<dyn Element> {
         render_search_item_icon(
             appearance,

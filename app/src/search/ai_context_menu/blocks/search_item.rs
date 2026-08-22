@@ -57,6 +57,7 @@ impl SearchItem for BlockSearchItem {
         &self,
         highlight_state: ItemHighlightState,
         appearance: &Appearance,
+        _app: &AppContext,
     ) -> Box<dyn Element> {
         // Show error icon if the block failed, otherwise show the regular block icon
         let (icon_path, icon_color) = if !self.exit_code.was_successful() {

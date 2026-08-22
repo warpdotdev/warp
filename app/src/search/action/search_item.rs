@@ -104,6 +104,7 @@ impl SearchItem for MatchedBinding {
         &self,
         highlight_state: ItemHighlightState,
         appearance: &Appearance,
+        _app: &AppContext,
     ) -> Box<dyn Element> {
         match self.binding.group {
             None => render_search_item_icon_placeholder(appearance),

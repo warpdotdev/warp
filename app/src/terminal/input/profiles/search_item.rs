@@ -76,6 +76,7 @@ impl SearchItem for ProfileSearchItem {
         &self,
         _highlight_state: ItemHighlightState,
         appearance: &Appearance,
+        _app: &AppContext,
     ) -> Box<dyn Element> {
         let icon = match self.kind {
             ProfileSearchItemKind::Profile { .. } => Icon::Psychology,

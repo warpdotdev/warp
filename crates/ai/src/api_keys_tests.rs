@@ -122,7 +122,7 @@ fn make_manager_with_grok(keys: ApiKeys, grok_tokens: Option<GrokTokens>) -> Api
         #[cfg(not(target_family = "wasm"))]
         geap_refresh_waiters: None,
         #[cfg(not(target_family = "wasm"))]
-        geap_last_mint_failure: None,
+        geap_mint_failures: Vec::new(),
         aws_credentials_state: AwsCredentialsState::Missing,
         aws_credentials_refresh_strategy: AwsCredentialsRefreshStrategy::default(),
         geap_credentials_state: GeapCredentialsState::Missing,
@@ -797,6 +797,7 @@ fn api_keys_for_request_omits_geap_token_for_non_loaded_states() {
                 status: None,
                 detail: "boom".into(),
             },
+            minted_for: geap_binding(),
         },
     ] {
         let mgr = make_manager_with_geap(state);
@@ -838,6 +839,26 @@ fn geap_expired_refresh_eligibility_requires_expired_matching_binding() {
     let mut mismatched = binding.clone();
     mismatched.user_uid = "different-user".into();
     assert!(!expired.geap_expired_refresh_eligibility(&mismatched));
+}
+
+#[cfg(not(target_family = "wasm"))]
+#[test]
+fn geap_request_refresh_eligibility_includes_missing_and_mismatched_bindings() {
+    let binding = geap_gate();
+    let missing = make_manager_with_geap(GeapCredentialsState::Missing);
+    assert!(missing.geap_request_refresh_eligibility(&binding));
+
+    let fresh = make_manager_with_geap(geap_loaded("fresh", Some(3600)));
+    assert!(!fresh.geap_request_refresh_eligibility(&binding));
+
+    let mut mismatched = binding.clone();
+    mismatched.user_uid = "different-user".into();
+    assert!(fresh.geap_request_refresh_eligibility(&mismatched));
+
+    let refreshing = make_manager_with_geap(GeapCredentialsState::Refreshing {
+        previous: Some((geap_credentials("fresh", Some(3600)), binding.clone())),
+    });
+    assert!(refreshing.geap_request_refresh_eligibility(&mismatched));
 }
 
 #[cfg(not(target_family = "wasm"))]
@@ -892,19 +913,22 @@ fn declined_geap_kickoff_leaves_no_in_flight_window() {
 
 #[cfg(not(target_family = "wasm"))]
 #[test]
-fn geap_mint_failure_cooldown_suppresses_the_blocking_wait() {
+fn geap_mint_failure_cooldown_only_suppresses_its_binding() {
     let binding = geap_gate();
     let mut manager = make_manager_with_geap(geap_loaded("expired", Some(0)));
     assert!(manager.geap_expired_refresh_eligibility(&binding));
-
-    // A failed mint restores the expired credential, so without the cooldown
-    // every following request would block on a mint that is failing.
-    manager.record_geap_mint_failure();
+    manager.record_geap_mint_failure(binding.clone());
     assert!(!manager.geap_expired_refresh_eligibility(&binding));
+    assert!(manager.geap_mint_failure_applies_to_binding(&binding));
 
-    // A later success reopens the blocking path.
-    manager.clear_geap_mint_failure();
+    let mut unrelated = binding.clone();
+    unrelated.audience = "unrelated-audience".into();
+    assert!(manager.geap_request_refresh_eligibility(&unrelated));
+    assert!(!manager.geap_mint_failure_applies_to_binding(&unrelated));
+    manager.record_geap_mint_failure(unrelated.clone());
+    manager.clear_geap_mint_failure(&binding);
     assert!(manager.geap_expired_refresh_eligibility(&binding));
+    assert!(manager.geap_mint_failure_applies_to_binding(&unrelated));
 }
 
 // ── grok expiry + blocking-refresh eligibility ──────────────────

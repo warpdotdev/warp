@@ -26,7 +26,7 @@ use warpui::ui_components::segmented_control::{
 };
 use warpui::{
     AppContext, Element, Entity, EntityId, ModelHandle, SingletonEntity as _, TypedActionView,
-    View, ViewAsRef, ViewContext, ViewHandle,
+    View, ViewAsRef, ViewContext, ViewHandle, WeakViewHandle,
 };
 
 use crate::BlocklistAIHistoryModel;
@@ -194,6 +194,7 @@ const BLURRED_OPACITY: Opacity = 50;
 // This is used for determining whether the selector should be rendered as full or compact
 fn calculate_profile_model_selector_threshold(
     terminal_view_id: EntityId,
+    active_model_display_name: &str,
     appearance: &Appearance,
     ctx: &AppContext,
 ) -> f32 {
@@ -211,9 +212,7 @@ fn calculate_profile_model_selector_threshold(
         .font_cache()
         .em_width(appearance.monospace_font_family(), scaled_font_size);
 
-    let llm_preferences = LLMPreferences::as_ref(ctx);
-    let active_llm = llm_preferences.get_active_base_model(ctx, Some(terminal_view_id));
-    let model_name_char_count = active_llm.menu_display_name().chars().count() as f32;
+    let model_name_char_count = active_model_display_name.chars().count() as f32;
     let model_text_width = model_name_char_count * em_width;
 
     if has_multiple_profiles {
@@ -290,6 +289,7 @@ impl CachedUIState {
 
 pub struct UniversalDeveloperInputButtonBar {
     terminal_view_id: EntityId,
+    weak_self: WeakViewHandle<Self>,
     mic_button: ViewHandle<ActionButton>,
     at_button: ViewHandle<ActionButton>,
     file_button: ViewHandle<ActionButton>,
@@ -596,6 +596,7 @@ impl UniversalDeveloperInputButtonBar {
 
         let mut me = Self {
             terminal_view_id,
+            weak_self: ctx.handle(),
             mic_button: mic_button_view,
             at_button: at_button_view,
             file_button: file_button_view,
@@ -864,8 +865,21 @@ impl View for UniversalDeveloperInputButtonBar {
             buttons.finish()
         };
 
-        let compact_threshold =
-            calculate_profile_model_selector_threshold(self.terminal_view_id, appearance, app);
+        let workspaces = UserWorkspaces::as_ref(app);
+        let team_render_context = workspaces.team_context(&self.weak_self, app);
+        let active_model_display_name = LLMPreferences::as_ref(app)
+            .get_active_base_model_for_render_context(
+                Some(self.terminal_view_id),
+                team_render_context.as_ref(),
+                app,
+            )
+            .menu_display_name();
+        let compact_threshold = calculate_profile_model_selector_threshold(
+            self.terminal_view_id,
+            &active_model_display_name,
+            appearance,
+            app,
+        );
         let content = SizeConstraintSwitch::new(
             // We only need to add left padding to the full profile model selector because the
             // compact selector icons follow the UDI button styling with ~4px margin horizontally.

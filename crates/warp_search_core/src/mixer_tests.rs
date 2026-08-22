@@ -28,6 +28,7 @@ impl SearchItem for TestSearchItem {
         &self,
         _highlight_state: crate::result_renderer::ItemHighlightState,
         _appearance: &warp_core::ui::appearance::Appearance,
+        _app: &AppContext,
     ) -> Box<dyn Element> {
         unimplemented!()
     }

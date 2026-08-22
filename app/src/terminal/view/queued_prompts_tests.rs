@@ -34,6 +34,7 @@ use crate::terminal::shared_session::SharedSessionStatus;
 use crate::terminal::view::ambient_agent::AmbientAgentViewModelEvent;
 use crate::test_util::settings::initialize_settings_for_tests;
 use crate::test_util::terminal::{add_window_with_terminal, initialize_app_for_terminal_view};
+use crate::workspaces::user_workspaces::TeamContextForOperation;
 
 fn user_query(text: &str) -> QueuedQuery {
     QueuedQuery::new(text.to_owned(), QueuedQueryOrigin::QueueSlashCommand)
@@ -219,7 +220,11 @@ fn dispatched_cloud_prompt_uses_locked_queue_row_when_v2_is_enabled() {
             view.ambient_agent_view_model()
                 .expect("cloud terminal should have an ambient model")
                 .update(ctx, |model, ctx| {
-                    model.spawn_agent_with_request(cloud_spawn_request("write tests"), ctx);
+                    model.spawn_agent_with_request(
+                        cloud_spawn_request("write tests"),
+                        TeamContextForOperation::teamless(),
+                        ctx,
+                    );
                 });
             view.handle_ambient_agent_event(&AmbientAgentViewModelEvent::DispatchedAgent, ctx);
 
@@ -253,7 +258,11 @@ fn dispatched_cloud_followup_uses_locked_queue_row_when_v2_is_enabled() {
             view.ambient_agent_view_model()
                 .expect("cloud terminal should have an ambient model")
                 .update(ctx, |model, ctx| {
-                    model.enter_viewing_existing_session(task_id, ctx);
+                    model.enter_viewing_existing_session(
+                        task_id,
+                        TeamContextForOperation::teamless(),
+                        ctx,
+                    );
                     model.submit_cloud_followup("follow up".to_owned(), ctx);
                 });
             view.handle_ambient_agent_event(&AmbientAgentViewModelEvent::FollowupDispatched, ctx);
@@ -387,7 +396,11 @@ fn cloud_setup_enter_queues_followup_input_when_v2_is_enabled() {
             view.ambient_agent_view_model()
                 .expect("cloud terminal should have an ambient model")
                 .update(ctx, |model, ctx| {
-                    model.spawn_agent_with_request(cloud_spawn_request("initial"), ctx);
+                    model.spawn_agent_with_request(
+                        cloud_spawn_request("initial"),
+                        TeamContextForOperation::teamless(),
+                        ctx,
+                    );
                 });
 
             view.input.update(ctx, |input, ctx| {
@@ -423,7 +436,11 @@ fn cloud_setup_enter_does_not_queue_followup_for_third_party_harness() {
             view.ambient_agent_view_model()
                 .expect("cloud terminal should have an ambient model")
                 .update(ctx, |model, ctx| {
-                    model.spawn_agent_with_request(cloud_spawn_request("initial"), ctx);
+                    model.spawn_agent_with_request(
+                        cloud_spawn_request("initial"),
+                        TeamContextForOperation::teamless(),
+                        ctx,
+                    );
                     model.set_harness(Harness::Claude, ctx);
                 });
 
@@ -463,7 +480,11 @@ fn cloud_setup_enter_queues_followup_while_setup_commands_run() {
                 .expect("cloud terminal should have an ambient model")
                 .update(ctx, |model, ctx| {
                     // Session has started: the run moves to AgentRunning.
-                    model.enter_viewing_existing_session(task_id, ctx);
+                    model.enter_viewing_existing_session(
+                        task_id,
+                        TeamContextForOperation::teamless(),
+                        ctx,
+                    );
                 });
             // Environment setup commands are running (pre-first-exchange).
             view.model
@@ -500,7 +521,11 @@ fn cloud_setup_enter_remains_blocked_when_v2_is_disabled() {
             view.ambient_agent_view_model()
                 .expect("cloud terminal should have an ambient model")
                 .update(ctx, |model, ctx| {
-                    model.spawn_agent_with_request(cloud_spawn_request("initial"), ctx);
+                    model.spawn_agent_with_request(
+                        cloud_spawn_request("initial"),
+                        TeamContextForOperation::teamless(),
+                        ctx,
+                    );
                 });
 
             view.input.update(ctx, |input, ctx| {
@@ -535,7 +560,11 @@ fn terminal_cloud_status_transition_drains_once_through_cloud_followup_input_eve
             view.ambient_agent_view_model()
                 .expect("cloud terminal should have an ambient model")
                 .update(ctx, |model, ctx| {
-                    model.enter_viewing_existing_session(task_id, ctx);
+                    model.enter_viewing_existing_session(
+                        task_id,
+                        TeamContextForOperation::teamless(),
+                        ctx,
+                    );
                 });
             view.model
                 .lock()
@@ -622,7 +651,11 @@ fn promptless_setup_complete_auto_sends_queued_prompt_to_viewer() {
             view.ambient_agent_view_model()
                 .expect("cloud terminal should have an ambient model")
                 .update(ctx, |model, ctx| {
-                    model.spawn_agent_with_request(promptless_cloud_spawn_request(), ctx);
+                    model.spawn_agent_with_request(
+                        promptless_cloud_spawn_request(),
+                        TeamContextForOperation::teamless(),
+                        ctx,
+                    );
                 });
             QueuedQueryModel::handle(ctx).update(ctx, |model, ctx| {
                 model.append(
@@ -683,7 +716,11 @@ fn promptless_setup_complete_with_initial_prompt_does_not_drain_queue() {
             view.ambient_agent_view_model()
                 .expect("cloud terminal should have an ambient model")
                 .update(ctx, |model, ctx| {
-                    model.spawn_agent_with_request(cloud_spawn_request("initial prompt"), ctx);
+                    model.spawn_agent_with_request(
+                        cloud_spawn_request("initial prompt"),
+                        TeamContextForOperation::teamless(),
+                        ctx,
+                    );
                 });
             QueuedQueryModel::handle(ctx).update(ctx, |model, ctx| {
                 model.append(

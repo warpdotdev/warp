@@ -12,7 +12,7 @@ use warp::tui_export::{
     AIConversation, AIConversationAutoexecuteMode, AIConversationId, AmbientAgentTaskId,
     BannerState, BlocklistAIHistoryModel, GlobalResourceHandlesProvider, IsSharedSessionCreator,
     LocalTtyTerminalManager, PersistenceWriter, ServerConversationToken, TerminalManagerTrait,
-    TerminalSurfaceResult, oz_run_url,
+    TerminalSurfaceResult, UserWorkspaces, oz_run_url,
 };
 use warpui::SingletonEntity;
 use warpui_core::runtime::TuiDriverHandle;
@@ -322,16 +322,21 @@ impl TuiSessions {
         let id = TuiSessionId(view.id());
         if ctx.has_singleton_model::<TuiOrchestrationModel>() {
             let orchestration = TuiOrchestrationModel::handle(ctx);
+            let view_for_team_context = view.clone();
             ctx.subscribe_to_view(&view, move |_, event, ctx| match event {
                 TuiTerminalSessionEvent::StartAgentConversation {
                     request,
                     working_directory,
                 } => {
+                    let team_context = view_for_team_context.update(ctx, |_, ctx| {
+                        UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx)
+                    });
                     orchestration.update(ctx, |orchestration, ctx| {
                         orchestration.dispatch_create_agent(
                             id,
                             (**request).clone(),
                             working_directory.clone(),
+                            team_context,
                             ctx,
                         );
                     });

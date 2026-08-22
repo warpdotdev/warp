@@ -45,6 +45,7 @@ impl crate::search::item::SearchItem for SearchItem {
         &self,
         highlight_state: ItemHighlightState,
         appearance: &Appearance,
+        _app: &AppContext,
     ) -> Box<dyn Element> {
         let color = appearance.theme().foreground().into_solid();
 

@@ -16,7 +16,7 @@ pub use crate::aws_credentials::{AwsCredentials, AwsCredentialsState};
 pub use crate::geap_credentials::GeapRefreshOutcome;
 pub use crate::geap_credentials::{
     GEAP_MINT_FAILURE_COOLDOWN, GEAP_REFRESH_LEAD_TIME, GeapCredentials, GeapCredentialsState,
-    GeapFederation, GeapMintBinding, LoadGeapCredentialsError,
+    GeapFederation, GeapMintBinding, GeapRecoveryAction, LoadGeapCredentialsError,
 };
 use crate::telemetry::{
     AITelemetryEvent, ProviderCredentialTelemetryAction, ProviderCredentialTelemetryKind,
@@ -263,10 +263,9 @@ pub struct ApiKeyManager {
     /// may be empty for a proactive mint with no waiters.
     #[cfg(not(target_family = "wasm"))]
     pub(crate) geap_refresh_waiters: Option<Vec<oneshot::Sender<GeapRefreshOutcome>>>,
-    /// When the last GEAP mint failed, if one has. The timestamp is what
-    /// suppresses repeated request-time waits.
+    /// Recent GEAP mint failures and the bindings they failed for.
     #[cfg(not(target_family = "wasm"))]
-    pub(crate) geap_last_mint_failure: Option<SystemTime>,
+    pub(crate) geap_mint_failures: Vec<(SystemTime, GeapMintBinding)>,
     pub(crate) aws_credentials_state: AwsCredentialsState,
     aws_credentials_refresh_strategy: AwsCredentialsRefreshStrategy,
     /// In-memory Gemini Enterprise (GEAP) credential state.
@@ -335,7 +334,7 @@ impl ApiKeyManager {
             #[cfg(not(target_family = "wasm"))]
             geap_refresh_waiters: None,
             #[cfg(not(target_family = "wasm"))]
-            geap_last_mint_failure: None,
+            geap_mint_failures: Vec::new(),
             aws_credentials_state: AwsCredentialsState::Missing,
             aws_credentials_refresh_strategy: AwsCredentialsRefreshStrategy::default(),
             geap_credentials_state: GeapCredentialsState::Missing,

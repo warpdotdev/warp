@@ -57,6 +57,7 @@ impl SearchItem for WarpAISearchItem {
         &self,
         highlight_state: ItemHighlightState,
         appearance: &Appearance,
+        _app: &AppContext,
     ) -> Box<dyn Element> {
         // Since the Warp AI logo color is hardcoded, let's find the best
         // contrasting color depending on the user's theme and the item's selected state.

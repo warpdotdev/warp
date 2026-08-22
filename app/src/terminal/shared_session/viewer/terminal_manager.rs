@@ -67,6 +67,7 @@ use crate::terminal::{
     Event as TerminalViewEvent, PTY_READS_BROADCAST_CHANNEL_SIZE, TerminalModel, TerminalView,
 };
 use crate::view_components::ToastFlavor;
+use crate::workspaces::user_workspaces::UserWorkspaces;
 
 enum NetworkState {
     /// No viewer network is attached yet; deferred cloud-mode viewers start here until the
@@ -587,6 +588,7 @@ impl TerminalManager {
             // Send model selection updates during session sharing (if viewer has Editor role)
             let current_network_for_models = self.current_network.clone();
             let terminal_view_id = self.view.id();
+            let weak_view_for_models = self.view.downgrade();
             let model_clone = self.model.clone();
             let model_remote_update_guard = self.viewer_remote_update_guard.clone();
             ctx.subscribe_to_model(&LLMPreferences::handle(ctx), move |_prefs, event, ctx| {
@@ -595,9 +597,17 @@ impl TerminalManager {
                     return;
                 }
 
-                let llm_prefs = &LLMPreferences::as_ref(ctx);
-                let selected_model_id: String = llm_prefs
-                    .get_active_base_model(ctx, Some(terminal_view_id))
+                if weak_view_for_models.upgrade(ctx).is_none() {
+                    return;
+                }
+                let team_context =
+                    UserWorkspaces::as_ref(ctx).team_context(&weak_view_for_models, ctx);
+                let selected_model_id: String = LLMPreferences::as_ref(ctx)
+                    .get_active_base_model_for_team_context(
+                        Some(terminal_view_id),
+                        team_context.as_ref(),
+                        ctx,
+                    )
                     .id
                     .clone()
                     .into();
@@ -1527,12 +1537,7 @@ impl TerminalManager {
         guard: &ActiveRemoteUpdate,
         ctx: &mut AppContext,
     ) {
-        let Some(view) = weak_view_handle.upgrade(ctx) else {
-            return;
-        };
-
-        let terminal_view_id = view.id();
-        apply_selected_agent_model_update(terminal_view_id, selected_model, guard, ctx);
+        apply_selected_agent_model_update(weak_view_handle, selected_model, guard, ctx);
     }
 
     fn handle_input_mode_update(

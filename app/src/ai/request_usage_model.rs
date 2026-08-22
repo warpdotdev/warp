@@ -527,7 +527,7 @@ impl AIRequestUsageModel {
         if user_workspaces.is_byo_api_key_enabled(ctx) && api_keys.has_any_key() {
             return true;
         }
-        user_workspaces.is_aws_bedrock_credentials_enabled(ctx)
+        user_workspaces.is_aws_bedrock_credentials_enabled_for_any_scope(ctx)
             && matches!(
                 api_keys.aws_credentials_state(),
                 AwsCredentialsState::Loaded { .. }

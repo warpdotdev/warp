@@ -56,11 +56,12 @@ impl InlineMenuAction for AcceptRepo {
                     },
                 ],
                 move |ctx| {
-                    if let Some(path) = path.clone() {
-                        ctx.dispatch_typed_action(InlineMenuRowAction::Accept {
-                            item: AcceptRepo { path },
-                            cmd_or_ctrl_enter: false,
-                        });
+                    if path.is_some() {
+                        ctx.dispatch_typed_action(
+                            InlineMenuRowAction::<AcceptRepo>::AcceptSelected {
+                                cmd_or_ctrl_enter: false,
+                            },
+                        );
                     }
                 },
                 args.inline_menu_model.mouse_states().accept.clone(),

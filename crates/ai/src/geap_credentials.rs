@@ -134,6 +134,7 @@ pub enum GeapCredentialsState {
     },
     Failed {
         error: LoadGeapCredentialsError,
+        minted_for: GeapMintBinding,
     },
 }
 
@@ -260,7 +261,7 @@ impl GeapCredentialsState {
                 },
                 Icon::CheckCircleBroken,
             ),
-            Self::Failed { error } => {
+            Self::Failed { error, .. } => {
                 let (title, description, _) = error.user_facing();
                 (title, description, Icon::AlertTriangle)
             }
@@ -269,7 +270,7 @@ impl GeapCredentialsState {
 
     pub fn recovery_action(&self) -> Option<GeapRecoveryAction> {
         match self {
-            Self::Failed { error } => Some(error.recovery_action()),
+            Self::Failed { error, .. } => Some(error.recovery_action()),
             // An incomplete admin setup can't be retried from the client, so it
             // routes to the same admin-guidance affordance as a config failure.
             Self::Unconfigured => Some(GeapRecoveryAction::ContactAdmin),
@@ -331,10 +332,11 @@ impl ApiKeyManager {
     /// block on a mint before sending.
     ///
     /// True only when the stored credential was minted for this same binding
-    /// and is at or past hard expiry, and no mint has failed recently.
+    /// and is at or past hard expiry, and no mint for this binding has failed
+    /// recently.
     #[cfg(not(target_family = "wasm"))]
     pub fn geap_expired_refresh_eligibility(&self, binding: &GeapMintBinding) -> bool {
-        if self.geap_mint_recently_failed() {
+        if self.geap_mint_failure_applies_to_binding(binding) {
             return false;
         }
         match self.geap_credentials_state() {
@@ -347,6 +349,29 @@ impl ApiKeyManager {
                 previous: Some((credentials, minted_for)),
             } if minted_for == binding => credentials.is_expired(),
             _ => false,
+        }
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    pub fn geap_request_refresh_eligibility(&self, binding: &GeapMintBinding) -> bool {
+        if self.geap_mint_failure_applies_to_binding(binding) {
+            return false;
+        }
+        match self.geap_credentials_state() {
+            GeapCredentialsState::Loaded {
+                credentials,
+                minted_for,
+                ..
+            } if minted_for == binding => credentials.is_expired(),
+            GeapCredentialsState::Refreshing {
+                previous: Some((credentials, minted_for)),
+            } if minted_for == binding => credentials.is_expired(),
+            GeapCredentialsState::Missing
+            | GeapCredentialsState::Disabled
+            | GeapCredentialsState::Unconfigured
+            | GeapCredentialsState::Refreshing { .. }
+            | GeapCredentialsState::Loaded { .. }
+            | GeapCredentialsState::Failed { .. } => true,
         }
     }
 
@@ -376,6 +401,28 @@ impl ApiKeyManager {
         Some(rx)
     }
 
+    #[cfg(not(target_family = "wasm"))]
+    pub fn begin_geap_request_refresh<F>(
+        &mut self,
+        binding: &GeapMintBinding,
+        ctx: &mut ModelContext<Self>,
+        start_refresh: F,
+    ) -> Option<oneshot::Receiver<GeapRefreshOutcome>>
+    where
+        F: FnOnce(&mut Self, oneshot::Sender<GeapRefreshOutcome>, &mut ModelContext<Self>),
+    {
+        if !self.geap_request_refresh_eligibility(binding) {
+            return None;
+        }
+
+        let (tx, rx) = oneshot::channel();
+        match self.geap_refresh_waiters.as_mut() {
+            Some(waiters) => waiters.push(tx),
+            None => start_refresh(self, tx, ctx),
+        }
+        Some(rx)
+    }
+
     /// Opens the single-flight window for a mint that is about to start.
     #[cfg(not(target_family = "wasm"))]
     pub fn install_geap_refresh_waiter(
@@ -391,22 +438,34 @@ impl ApiKeyManager {
     }
 
     #[cfg(not(target_family = "wasm"))]
-    pub fn record_geap_mint_failure(&mut self) {
-        self.geap_last_mint_failure = Some(SystemTime::now());
+    pub fn record_geap_mint_failure(&mut self, binding: GeapMintBinding) {
+        let now = SystemTime::now();
+        self.geap_mint_failures
+            .retain(|(failed_at, failed_binding)| {
+                failed_binding != &binding
+                    && now
+                        .duration_since(*failed_at)
+                        .is_ok_and(|elapsed| elapsed < GEAP_MINT_FAILURE_COOLDOWN)
+            });
+        self.geap_mint_failures.push((now, binding));
     }
 
     #[cfg(not(target_family = "wasm"))]
-    pub fn clear_geap_mint_failure(&mut self) {
-        self.geap_last_mint_failure = None;
+    pub fn clear_geap_mint_failure(&mut self, binding: &GeapMintBinding) {
+        self.geap_mint_failures
+            .retain(|(_, failed_binding)| failed_binding != binding);
     }
 
     #[cfg(not(target_family = "wasm"))]
-    fn geap_mint_recently_failed(&self) -> bool {
-        self.geap_last_mint_failure.is_some_and(|failed_at| {
-            SystemTime::now()
-                .duration_since(failed_at)
-                .is_ok_and(|elapsed| elapsed < GEAP_MINT_FAILURE_COOLDOWN)
-        })
+    pub fn geap_mint_failure_applies_to_binding(&self, binding: &GeapMintBinding) -> bool {
+        self.geap_mint_failures
+            .iter()
+            .any(|(failed_at, failed_binding)| {
+                failed_binding == binding
+                    && SystemTime::now()
+                        .duration_since(*failed_at)
+                        .is_ok_and(|elapsed| elapsed < GEAP_MINT_FAILURE_COOLDOWN)
+            })
     }
 }
 

@@ -136,6 +136,9 @@ impl<T: Action + Clone> QueryResultRenderer<T> {
         is_selected: bool,
         app: &AppContext,
     ) -> Box<dyn Element> {
+        if !self.search_result.is_visible_for_context(app) {
+            return Empty::new().finish();
+        }
         // For static separators, render without hover effects or click handling
         if self.search_result.is_static_separator() {
             return self.render_with_highlight_state(ItemHighlightState::Default, true, app);
@@ -171,7 +174,9 @@ impl<T: Action + Clone> QueryResultRenderer<T> {
         app: &AppContext,
     ) -> Box<dyn Element> {
         let appearance = Appearance::as_ref(app);
-        let icon = self.search_result.render_icon(highlight_state, appearance);
+        let icon = self
+            .search_result
+            .render_icon(highlight_state, appearance, app);
         let item = self.search_result.render_item(highlight_state, app);
 
         let row_height = self.renderer_styles.result_item_height(appearance);

@@ -4,7 +4,7 @@ use warp::editor::CodeEditorModel;
 use warp::tui_export::{
     ActiveSession, BlocklistAIContextEvent, BlocklistAIContextModel, BlocklistAIInputModel,
     InputType, InputTypeAutoDetectionSource, LLMPreferences, MAX_IMAGE_COUNT_FOR_QUERY,
-    PendingAttachmentSummary,
+    PendingAttachmentSummary, TeamContextForOperation,
 };
 use warp_core::features::FeatureFlag;
 use warp_editor::model::CoreEditorModel;
@@ -185,6 +185,7 @@ impl TuiAttachmentModel {
     pub(crate) fn try_attach_paste(
         &mut self,
         text: String,
+        team_context: TeamContextForOperation,
         ctx: &mut ModelContext<Self>,
     ) -> TuiAttachmentPasteDisposition {
         if !FeatureFlag::ImageAsContext.is_enabled() {
@@ -193,19 +194,20 @@ impl TuiAttachmentModel {
         let Some(paths) = parse_image_paths(&text, &self.current_working_directory(ctx)) else {
             return TuiAttachmentPasteDisposition::NotHandled;
         };
-        self.attach_image_paths(paths, text, ctx)
+        self.attach_image_paths(paths, text, team_context, ctx)
     }
 
     fn attach_image_paths(
         &mut self,
         paths: Vec<PathBuf>,
         original_text: String,
+        team_context: TeamContextForOperation,
         ctx: &mut ModelContext<Self>,
     ) -> TuiAttachmentPasteDisposition {
         if !FeatureFlag::ImageAsContext.is_enabled() {
             return TuiAttachmentPasteDisposition::NotHandled;
         }
-        if let Err(error) = self.validate_new_images(paths.len(), ctx) {
+        if let Err(error) = self.validate_new_images(paths.len(), &team_context, ctx) {
             ctx.emit(TuiAttachmentModelEvent::RestorePastedText(original_text));
             ctx.emit(TuiAttachmentModelEvent::ShowHint(error));
             return TuiAttachmentPasteDisposition::Handled;
@@ -242,22 +244,30 @@ impl TuiAttachmentModel {
         TuiAttachmentPasteDisposition::Started
     }
 
-    pub(crate) fn paste_from_clipboard(&mut self, ctx: &mut ModelContext<Self>) {
+    pub(crate) fn paste_from_clipboard(
+        &mut self,
+        team_context: TeamContextForOperation,
+        ctx: &mut ModelContext<Self>,
+    ) {
         ctx.spawn(
             read_clipboard_content(),
-            |model, result, ctx| match result {
+            move |model, result, ctx| match result {
                 Ok(content) => {
                     let cwd = model.current_working_directory(ctx);
                     match classify_clipboard_content(content, &cwd) {
                         ClipboardPasteContent::Image(content) => {
-                            model.attach_clipboard_image(content, ctx);
+                            model.attach_clipboard_image(content, team_context, ctx);
                         }
                         ClipboardPasteContent::ImagePaths {
                             paths,
                             original_text,
                         } => {
-                            if model.attach_image_paths(paths, original_text.clone(), ctx)
-                                == TuiAttachmentPasteDisposition::NotHandled
+                            if model.attach_image_paths(
+                                paths,
+                                original_text.clone(),
+                                team_context,
+                                ctx,
+                            ) == TuiAttachmentPasteDisposition::NotHandled
                             {
                                 ctx.emit(TuiAttachmentModelEvent::RestorePastedText(original_text));
                             }
@@ -276,9 +286,10 @@ impl TuiAttachmentModel {
     fn attach_clipboard_image(
         &mut self,
         content: ClipboardContent,
+        team_context: TeamContextForOperation,
         ctx: &mut ModelContext<Self>,
     ) -> bool {
-        if let Err(error) = self.validate_new_images(1, ctx) {
+        if let Err(error) = self.validate_new_images(1, &team_context, ctx) {
             ctx.emit(TuiAttachmentModelEvent::ShowHint(error));
             return false;
         }
@@ -318,7 +329,12 @@ impl TuiAttachmentModel {
         self.processing_count > 0
     }
 
-    fn validate_new_images(&self, count: usize, ctx: &AppContext) -> Result<(), String> {
+    fn validate_new_images(
+        &self,
+        count: usize,
+        team_context: &TeamContextForOperation,
+        ctx: &AppContext,
+    ) -> Result<(), String> {
         if !FeatureFlag::ImageAsContext.is_enabled() {
             return Err("Image attachments are unavailable.".to_owned());
         }
@@ -331,7 +347,11 @@ impl TuiAttachmentModel {
                 "Image attachment limit is {MAX_IMAGE_COUNT_FOR_QUERY} per query."
             ));
         }
-        if !LLMPreferences::as_ref(ctx).vision_supported(ctx, Some(self.terminal_surface_id)) {
+        if !LLMPreferences::as_ref(ctx).vision_supported(
+            Some(self.terminal_surface_id),
+            team_context,
+            ctx,
+        ) {
             return Err("The selected model does not support image attachments.".to_owned());
         }
         Ok(())

@@ -59,6 +59,7 @@ use crate::view_components::action_button::{
     ActionButton, ButtonSize, NakedTheme, PrimaryTheme, SecondaryTheme, TooltipAlignment,
 };
 use crate::workspace::ToastStack;
+use crate::workspaces::user_workspaces::UserWorkspaces;
 use crate::{BlocklistAIHistoryModel, send_telemetry_from_ctx};
 
 pub fn init(app: &mut AppContext) {
@@ -1256,13 +1257,15 @@ impl TypedActionView for AIDocumentView {
                     // The document is already marked as Dirty and pending_document_id
                     // is already set in the context model, so the updated plan will be attached.
                     // TODO(roland): don't directly use user query, but send a new input type that can be formatted on the server.
+                    let team_context = UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx);
                     terminal_view
                         .ai_controller()
-                        .update(ctx, |controller, ctx| {
+                        .update(ctx, move |controller, ctx| {
                             controller.send_user_query_in_conversation(
                                 "I've updated the plan.".to_string(),
                                 conversation_id,
                                 None,
+                                team_context,
                                 ctx,
                             );
                         });

@@ -38,7 +38,7 @@ use crate::ai::agent::conversation::{AIConversation, AIConversationId};
 use crate::ai::agent::{CancellationReason, extract_user_query_mode};
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::ambient_agents::telemetry::{
-    CloudAgentTelemetryEvent, HandoffEntryPoint, HandoffInjectionPath, HandoffSurface,
+    CloudAgentTelemetryEvent, HandoffInjectionPath, HandoffOrigin,
 };
 use crate::ai::blocklist::orchestration_topology::descendant_conversation_ids_in_spawn_order;
 use crate::ai::blocklist::{
@@ -58,6 +58,7 @@ use crate::server::server_api::ai::{
     AIClient, AgentConfigSnapshot, AttachmentInput, InitialSnapshotToken, SpawnAgentRequest,
 };
 use crate::settings::AISettings;
+use crate::workspaces::user_workspaces::TeamContextForOperation;
 
 const HANDOFF_CONTINUE_PROMPT: &str = "Continue";
 const HANDOFF_APPLY_SNAPSHOT_PROMPT: &str = "Apply the workspace changes from my previous session.";
@@ -83,10 +84,10 @@ pub struct HandoffPrepareInput {
     transfer_pending_attachments: bool,
     environment_id: Option<SyncId>,
     environment_required: bool,
-    entry_point: HandoffEntryPoint,
-    surface: HandoffSurface,
+    origin: HandoffOrigin,
     cancellation_reason: CancellationReason,
     require_in_progress_source: bool,
+    team_context: TeamContextForOperation,
 }
 
 impl HandoffPrepareInput {
@@ -96,8 +97,8 @@ impl HandoffPrepareInput {
         controller: ModelHandle<BlocklistAIController>,
         context: ModelHandle<BlocklistAIContextModel>,
         snapshot_target: SnapshotUploadTarget,
-        entry_point: HandoffEntryPoint,
-        surface: HandoffSurface,
+        origin: HandoffOrigin,
+        team_context: TeamContextForOperation,
     ) -> Self {
         Self {
             terminal_surface_id,
@@ -113,10 +114,10 @@ impl HandoffPrepareInput {
             transfer_pending_attachments: true,
             environment_id: None,
             environment_required: false,
-            entry_point,
-            surface,
+            origin,
             cancellation_reason: CancellationReason::ManuallyCancelled,
             require_in_progress_source: false,
+            team_context,
         }
     }
 
@@ -402,10 +403,10 @@ pub fn prepare_handoff(
         transfer_pending_attachments,
         environment_id: selected_environment_id,
         environment_required,
-        entry_point,
-        surface,
+        origin,
         cancellation_reason,
         require_in_progress_source,
+        team_context,
     } = input;
 
     let selected_id = match (expected_conversation_id, source_conversation_id) {
@@ -542,7 +543,7 @@ pub fn prepare_handoff(
         .collect();
     let preferences = LLMPreferences::as_ref(ctx);
     let active_model_id = &preferences
-        .get_active_base_model(ctx, Some(terminal_surface_id))
+        .get_active_base_model(Some(terminal_surface_id), &team_context, ctx)
         .id;
     let model_id = preferences.cloud_runnable_oz_model_id_or_fallback(active_model_id);
     let model_is_cloud_runnable =
@@ -565,8 +566,8 @@ pub fn prepare_handoff(
     };
     send_telemetry_from_ctx!(
         CloudAgentTelemetryEvent::HandoffInitiated {
-            entry_point,
-            surface,
+            entry_point: origin.entry_point,
+            surface: origin.surface,
             forked_existing_conversation: source_conversation.is_some(),
             empty_prompt,
             injection_path,

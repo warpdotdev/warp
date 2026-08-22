@@ -11,15 +11,24 @@ use {
 };
 
 use crate::AIExecutionProfilesModel;
+use crate::ai::execution_profiles::ExecutionProfileId;
 #[cfg(not(target_family = "wasm"))]
-use crate::ai::llms::LLMId;
-use crate::ai::llms::LLMPreferences;
+use crate::ai::llms::AgentModeLLMOverrideUpdate;
+use crate::ai::llms::{LLMId, LLMPreferences};
+use crate::workspaces::user_workspaces::TeamContext;
+#[cfg(feature = "tui")]
+use crate::workspaces::user_workspaces::TeamContextForOperation;
 
 /// Server-side state prepared before a frontend creates the child's surface.
 #[cfg(not(target_family = "wasm"))]
 pub struct PreparedLocalOzChildLaunch {
     pub task_id: AmbientAgentTaskId,
     pub conversation_name: String,
+}
+pub(crate) struct InheritedChildAgentSettings {
+    profile_id: ExecutionProfileId,
+    base_model_id: LLMId,
+    profile_default_model_id: LLMId,
 }
 
 /// Creates the server task row shared by the GUI hidden-pane and TUI
@@ -57,34 +66,84 @@ pub fn prepare_local_oz_child_launch(
 
 /// Copies the parent's execution profile and effective base model to a child
 /// surface before its first request is sent.
+#[cfg(feature = "tui")]
 pub fn inherit_child_agent_settings(
     parent_surface_id: EntityId,
     child_surface_id: EntityId,
+    team_context: &TeamContextForOperation,
     ctx: &mut AppContext,
 ) {
-    let parent_profile_id = AIExecutionProfilesModel::as_ref(ctx)
+    let profile_id = AIExecutionProfilesModel::as_ref(ctx)
         .active_profile(Some(parent_surface_id), ctx)
         .id()
         .clone();
-    AIExecutionProfilesModel::handle(ctx).update(ctx, |profiles, ctx| {
-        profiles.set_active_profile(child_surface_id, parent_profile_id, ctx);
-    });
-
-    let parent_base_model_id = LLMPreferences::as_ref(ctx)
-        .get_active_base_model(ctx, Some(parent_surface_id))
+    let preferences = LLMPreferences::as_ref(ctx);
+    let base_model_id = preferences
+        .get_active_base_model(Some(parent_surface_id), team_context, ctx)
         .id
         .clone();
+    let profile_default_model_id = preferences
+        .get_active_profile_base_model(Some(parent_surface_id), team_context, ctx)
+        .id
+        .clone();
+    let settings = InheritedChildAgentSettings {
+        profile_id,
+        base_model_id,
+        profile_default_model_id,
+    };
+    apply_inherited_child_agent_settings(child_surface_id, settings, ctx);
+}
+pub(crate) fn inherited_child_agent_settings_for_team_context(
+    parent_surface_id: EntityId,
+    team_context: Option<&TeamContext<'_>>,
+    ctx: &AppContext,
+) -> InheritedChildAgentSettings {
+    let profile_id = AIExecutionProfilesModel::as_ref(ctx)
+        .active_profile(Some(parent_surface_id), ctx)
+        .id()
+        .clone();
+    let preferences = LLMPreferences::as_ref(ctx);
+    let base_model_id = preferences
+        .get_active_base_model_for_team_context(Some(parent_surface_id), team_context, ctx)
+        .id
+        .clone();
+    let profile_default_model_id = preferences
+        .get_active_profile_base_model_for_team_context(Some(parent_surface_id), team_context, ctx)
+        .id
+        .clone();
+    InheritedChildAgentSettings {
+        profile_id,
+        base_model_id,
+        profile_default_model_id,
+    }
+}
+
+pub(crate) fn apply_inherited_child_agent_settings(
+    child_surface_id: EntityId,
+    settings: InheritedChildAgentSettings,
+    ctx: &mut AppContext,
+) {
+    AIExecutionProfilesModel::handle(ctx).update(ctx, |profiles, ctx| {
+        profiles.set_active_profile(child_surface_id, settings.profile_id, ctx);
+    });
     LLMPreferences::handle(ctx).update(ctx, |preferences, ctx| {
-        preferences.update_preferred_agent_mode_llm(&parent_base_model_id, child_surface_id, ctx);
+        preferences.update_preferred_agent_mode_llm_with_profile_default(
+            &settings.base_model_id,
+            child_surface_id,
+            &settings.profile_default_model_id,
+            ctx,
+        );
     });
 }
 
 /// Applies a non-empty run-wide model override after parent settings have
 /// been inherited.
 #[cfg(not(target_family = "wasm"))]
+#[cfg(feature = "tui")]
 pub fn apply_child_agent_model_override(
     child_surface_id: EntityId,
     model_id: Option<&str>,
+    team_context: &TeamContextForOperation,
     ctx: &mut AppContext,
 ) {
     let Some(model_id) = model_id.map(str::trim).filter(|id| !id.is_empty()) else {
@@ -92,6 +151,37 @@ pub fn apply_child_agent_model_override(
     };
     let model_id = LLMId::from(model_id);
     LLMPreferences::handle(ctx).update(ctx, |preferences, ctx| {
-        preferences.set_agent_mode_llm_override(child_surface_id, model_id, ctx);
+        preferences.set_agent_mode_llm_override(child_surface_id, model_id, team_context, ctx);
+    });
+}
+
+#[cfg(not(target_family = "wasm"))]
+pub(crate) fn prepare_child_agent_model_override_for_team_context(
+    child_surface_id: EntityId,
+    model_id: Option<&str>,
+    team_context: Option<&TeamContext<'_>>,
+    ctx: &AppContext,
+) -> Option<AgentModeLLMOverrideUpdate> {
+    let model_id = model_id.map(str::trim).filter(|id| !id.is_empty())?;
+    Some(
+        LLMPreferences::as_ref(ctx).prepare_agent_mode_llm_override_for_team_context(
+            child_surface_id,
+            LLMId::from(model_id),
+            team_context,
+            ctx,
+        ),
+    )
+}
+
+#[cfg(not(target_family = "wasm"))]
+pub(crate) fn apply_prepared_child_agent_model_override(
+    update: Option<AgentModeLLMOverrideUpdate>,
+    ctx: &mut AppContext,
+) {
+    let Some(update) = update else {
+        return;
+    };
+    LLMPreferences::handle(ctx).update(ctx, |preferences, ctx| {
+        preferences.apply_agent_mode_llm_override(update, ctx);
     });
 }

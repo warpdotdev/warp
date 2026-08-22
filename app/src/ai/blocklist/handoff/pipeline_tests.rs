@@ -15,6 +15,7 @@ use crate::ai::agent::{
     AIAgentExchange, AIAgentExchangeId, AIAgentInput, AIAgentOutputStatus, FinishedAIAgentOutput,
     Shared, UserQueryMode,
 };
+use crate::ai::ambient_agents::telemetry::{HandoffEntryPoint, HandoffSurface};
 use crate::ai::blocklist::{
     PendingAttachment, PendingFile, RequestInput, ResponseStream, ResponseStreamId,
 };
@@ -154,8 +155,8 @@ fn prepare_falls_back_to_auto_for_an_implicit_local_model() {
                             ai_client: provider.get_ai_client(),
                             http: provider.get_http_client(),
                         },
-                        HandoffEntryPoint::Ampersand,
-                        HandoffSurface::Gui,
+                        HandoffOrigin::new(HandoffEntryPoint::Ampersand, HandoffSurface::Gui),
+                        TeamContextForOperation::teamless(),
                     )
                     .with_launch(Some(PendingCloudLaunch {
                         prompt: "new task".to_owned(),
@@ -368,8 +369,8 @@ fn prepare_rejects_an_empty_source_without_a_prompt() {
                         ai_client: provider.get_ai_client(),
                         http: provider.get_http_client(),
                     },
-                    HandoffEntryPoint::Ampersand,
-                    HandoffSurface::Gui,
+                    HandoffOrigin::new(HandoffEntryPoint::Ampersand, HandoffSurface::Gui),
+                    TeamContextForOperation::teamless(),
                 ),
                 ctx,
             )
@@ -399,8 +400,8 @@ fn prepare_accepts_a_cwd_snapshot_without_a_source_or_prompt() {
                             ai_client: provider.get_ai_client(),
                             http: provider.get_http_client(),
                         },
-                        HandoffEntryPoint::Ampersand,
-                        HandoffSurface::Gui,
+                        HandoffOrigin::new(HandoffEntryPoint::Ampersand, HandoffSurface::Gui),
+                        TeamContextForOperation::teamless(),
                     )
                     .with_current_working_directory(Some("/repo".to_owned())),
                     ctx,
@@ -447,8 +448,8 @@ fn prepare_preserves_untransferred_source_attachments() {
                             ai_client: provider.get_ai_client(),
                             http: provider.get_http_client(),
                         },
-                        HandoffEntryPoint::Ampersand,
-                        HandoffSurface::Gui,
+                        HandoffOrigin::new(HandoffEntryPoint::Ampersand, HandoffSurface::Gui),
+                        TeamContextForOperation::teamless(),
                     )
                     .with_source_conversation_id(None)
                     .with_launch(Some(PendingCloudLaunch {
@@ -545,8 +546,8 @@ fn prepare_collects_completed_descendant_paths() {
                             ai_client: provider.get_ai_client(),
                             http: provider.get_http_client(),
                         },
-                        HandoffEntryPoint::Ampersand,
-                        HandoffSurface::Gui,
+                        HandoffOrigin::new(HandoffEntryPoint::Ampersand, HandoffSurface::Gui),
+                        TeamContextForOperation::teamless(),
                     )
                     .with_expected_conversation_id(Some(parent_id))
                     .with_launch(Some(PendingCloudLaunch {
@@ -641,8 +642,8 @@ fn prepare_orders_guards_cancellation_token_check_and_attachment_transfer() {
                         ai_client: provider.get_ai_client(),
                         http: provider.get_http_client(),
                     },
-                    HandoffEntryPoint::Ampersand,
-                    HandoffSurface::Gui,
+                    HandoffOrigin::new(HandoffEntryPoint::Ampersand, HandoffSurface::Gui),
+                    TeamContextForOperation::teamless(),
                 )
                 .with_expected_conversation_id(Some(conversation_id))
                 .with_long_running_command(true)
@@ -683,8 +684,8 @@ fn prepare_orders_guards_cancellation_token_check_and_attachment_transfer() {
                         ai_client: provider.get_ai_client(),
                         http: provider.get_http_client(),
                     },
-                    HandoffEntryPoint::Ampersand,
-                    HandoffSurface::Gui,
+                    HandoffOrigin::new(HandoffEntryPoint::Ampersand, HandoffSurface::Gui),
+                    TeamContextForOperation::teamless(),
                 )
                 .with_expected_conversation_id(Some(conversation_id))
                 .with_launch(Some(launch.clone()))
@@ -730,8 +731,8 @@ fn prepare_orders_guards_cancellation_token_check_and_attachment_transfer() {
                         ai_client: provider.get_ai_client(),
                         http: provider.get_http_client(),
                     },
-                    HandoffEntryPoint::Ampersand,
-                    HandoffSurface::Gui,
+                    HandoffOrigin::new(HandoffEntryPoint::Ampersand, HandoffSurface::Gui),
+                    TeamContextForOperation::teamless(),
                 )
                 .with_expected_conversation_id(Some(conversation_id))
                 .with_launch(Some(launch)),

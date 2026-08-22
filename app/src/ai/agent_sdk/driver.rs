@@ -103,6 +103,7 @@ use crate::terminal::cli_agent_sessions::{
 };
 use crate::terminal::model::BlockId;
 use crate::terminal::view::ConversationRestorationInNewPaneType;
+use crate::workspaces::user_workspaces::UserWorkspaces;
 
 pub(crate) mod attachments;
 #[cfg(feature = "local_fs")]
@@ -3754,11 +3755,31 @@ impl AgentDriver {
         model_id: LLMId,
         ctx: &mut ModelContext<Self>,
     ) -> Result<(), AgentDriverError> {
-        let terminal_view_id = self.terminal_driver.as_ref(ctx).terminal_view().id();
         log::info!("Selecting base agent model {model_id} (from agent driver)");
-
-        LLMPreferences::handle(ctx).update(ctx, |preferences, ctx| {
-            preferences.update_preferred_agent_mode_llm(&model_id, terminal_view_id, ctx);
+        self.terminal_driver.update(ctx, |driver, ctx| {
+            driver.with_terminal_view(ctx, |terminal_view, ctx| {
+                let terminal_view_id = terminal_view.id();
+                let handle = ctx.handle();
+                let profile_default_model_id = {
+                    let team_context = UserWorkspaces::as_ref(ctx).team_context(&handle, ctx);
+                    LLMPreferences::as_ref(ctx)
+                        .get_active_profile_base_model_for_team_context(
+                            Some(terminal_view_id),
+                            team_context.as_ref(),
+                            ctx,
+                        )
+                        .id
+                        .clone()
+                };
+                LLMPreferences::handle(ctx).update(ctx, move |preferences, ctx| {
+                    preferences.update_preferred_agent_mode_llm_with_profile_default(
+                        &model_id,
+                        terminal_view_id,
+                        &profile_default_model_id,
+                        ctx,
+                    );
+                });
+            });
         });
         Ok(())
     }
@@ -4149,17 +4170,22 @@ impl AgentDriver {
                             return;
                         };
                         let ambient_run_id = task_id.to_string();
-                        terminal.ai_controller().update(ctx, |controller, ctx| {
-                            controller.send_ai_input_with_context(
-                                |context| AIAgentInput::StartFromAmbientRunPrompt {
-                                    ambient_run_id: ambient_run_id.clone(),
-                                    context,
-                                    runtime_skill: skill.clone(),
-                                    attachments_dir: attachments_dir.clone(),
-                                },
-                                ctx,
-                            );
-                        });
+                        let team_context =
+                            UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx);
+                        terminal
+                            .ai_controller()
+                            .update(ctx, move |controller, ctx| {
+                                controller.send_ai_input_with_context(
+                                    |context| AIAgentInput::StartFromAmbientRunPrompt {
+                                        ambient_run_id: ambient_run_id.clone(),
+                                        context,
+                                        runtime_skill: skill.clone(),
+                                        attachments_dir: attachments_dir.clone(),
+                                    },
+                                    team_context,
+                                    ctx,
+                                );
+                            });
                     }
                 })
             });

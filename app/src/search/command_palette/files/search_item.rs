@@ -32,6 +32,7 @@ impl SearchItem for FileSearchItem {
         &self,
         highlight_state: ItemHighlightState,
         appearance: &Appearance,
+        _app: &AppContext,
     ) -> Box<dyn Element> {
         Container::new(
             ConstrainedBox::new(if self.is_directory {
@@ -130,6 +131,7 @@ impl SearchItem for CreateFileSearchItem {
         &self,
         highlight_state: ItemHighlightState,
         appearance: &Appearance,
+        _app: &AppContext,
     ) -> Box<dyn Element> {
         Container::new(
             ConstrainedBox::new(

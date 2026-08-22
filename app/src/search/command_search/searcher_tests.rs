@@ -38,7 +38,12 @@ struct TestSearchItem {
 impl SearchItem for TestSearchItem {
     type Action = TestItemAction;
 
-    fn render_icon(&self, _: ItemHighlightState, _: &Appearance) -> Box<dyn Element> {
+    fn render_icon(
+        &self,
+        _: ItemHighlightState,
+        _: &Appearance,
+        _app: &AppContext,
+    ) -> Box<dyn Element> {
         Empty::new().finish()
     }
 

@@ -37,6 +37,7 @@ impl SearchItem for EnvVarCollectionSearchItem {
         &self,
         highlight_state: ItemHighlightState,
         appearance: &Appearance,
+        _app: &AppContext,
     ) -> Box<dyn Element> {
         let color = warp_drive_icon_color(appearance, DriveObjectType::EnvVarCollection);
         render_search_item_icon(appearance, Icon::EnvVarCollection, color, highlight_state)

@@ -9,7 +9,7 @@ use warpui::{AppContext, SingletonEntity};
 use super::llms::{LLMInfo, LLMPreferences};
 use crate::auth::AuthStateProvider;
 use crate::pricing::{PricingInfoModel, onboarding_credit_pack_options};
-use crate::workspaces::user_workspaces::UserWorkspaces;
+use crate::workspaces::user_workspaces::{TeamContextForOperation, UserWorkspaces};
 
 impl From<&LLMInfo> for OnboardingModelInfo {
     fn from(llm: &LLMInfo) -> Self {
@@ -26,7 +26,8 @@ pub fn build_onboarding_models(
     prefs: &LLMPreferences,
     app: &AppContext,
 ) -> (Vec<OnboardingModelInfo>, LLMId) {
-    let default_id = prefs.get_default_base_model(app).id.clone();
+    let team_context = TeamContextForOperation::teamless();
+    let default_id = prefs.get_default_base_model(&team_context, app).id.clone();
     let models: Vec<OnboardingModelInfo> = prefs
         .get_base_llm_choices_for_agent_mode(app)
         .map(|llm| {

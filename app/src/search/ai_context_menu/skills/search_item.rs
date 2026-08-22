@@ -32,6 +32,7 @@ impl SearchItem for SkillSearchItem {
         &self,
         highlight_state: ItemHighlightState,
         appearance: &Appearance,
+        _app: &AppContext,
     ) -> Box<dyn Element> {
         let icon_color = highlight_state.icon_fill(appearance).into_solid();
 

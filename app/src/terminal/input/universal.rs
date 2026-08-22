@@ -150,7 +150,6 @@ impl Input {
             &self.buy_credits_banner,
             &self.weak_view_handle,
             self.is_pane_focused(app),
-            self.terminal_view_id,
             self.is_input_at_top(&model, app),
             app,
         );

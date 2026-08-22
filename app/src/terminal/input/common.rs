@@ -13,9 +13,9 @@ use warpui::elements::{
 use warpui::fonts::Weight;
 use warpui::presenter::ChildView;
 use warpui::ui_components::components::{UiComponent, UiComponentStyles};
-use warpui::{AppContext, EntityId, SingletonEntity, ViewHandle, WeakViewHandle};
+use warpui::{AppContext, SingletonEntity, ViewHandle, WeakViewHandle};
 
-use crate::ai::llms::{LLMPreferences, should_show_key_icon_for_model};
+use crate::ai::llms::{LLMPreferences, should_show_key_icon_for_model_for_render_context};
 use crate::ai::{AIRequestUsageModel, BuyCreditsBannerDisplayState};
 use crate::appearance::Appearance;
 use crate::settings::{AISettings, InputSettings};
@@ -480,13 +480,13 @@ pub(super) fn maybe_add_buy_credits_banner(
     buy_credits_banner: &ViewHandle<BuyCreditsBanner>,
     input_view_handle: &WeakViewHandle<Input>,
     is_focused: bool,
-    terminal_view_id: EntityId,
     is_input_at_top: bool,
     app: &AppContext,
 ) {
     let workspaces = UserWorkspaces::as_ref(app);
+    let team = workspaces.team_for_view_handle(input_view_handle, app);
     let can_purchase_addon_credits = workspaces
-        .purchase_policy_for_team(workspaces.team_for_view_handle(input_view_handle, app))
+        .purchase_policy_for_team(team)
         .is_some_and(|policy| policy.allows_purchases());
 
     // Show buy credits banner if billing policy allows purchasing, input is focused,
@@ -498,8 +498,19 @@ pub(super) fn maybe_add_buy_credits_banner(
         ai_request_usage.compute_buy_addon_credits_banner_display_state(app),
         BuyCreditsBannerDisplayState::Hidden
     );
-    let is_using_api_key_for_current_model = should_show_key_icon_for_model(
-        LLMPreferences::as_ref(app).get_active_base_model(app, Some(terminal_view_id)),
+    let team_render_context = workspaces.team_context(input_view_handle, app);
+    let Some(input) = input_view_handle.upgrade(app) else {
+        return;
+    };
+    let input = input.as_ref(app);
+    let active_model = LLMPreferences::as_ref(app).get_active_base_model_for_render_context(
+        Some(input.terminal_view_id),
+        team_render_context.as_ref(),
+        app,
+    );
+    let is_using_api_key_for_current_model = should_show_key_icon_for_model_for_render_context(
+        active_model,
+        team_render_context.as_ref(),
         app,
     );
     if can_purchase_addon_credits

@@ -22,7 +22,8 @@ use warp::tui_export::{
     CloudConversationData, ConversationStatus, Harness, LoadedSubtreeRollup,
     OrchestrationEventStreamer, OrchestrationEventStreamerEvent, PreparedRemoteChildLaunch,
     RemoteChildLaunchConfig, RenderableAIError, ServerApiProvider, StartAgentExecutionMode,
-    StartAgentRequest, aggregated_orchestrator_status, apply_child_agent_model_override,
+    StartAgentRequest, StartAgentRequestId, TeamContextForOperation,
+    aggregated_orchestrator_status, apply_child_agent_model_override,
     child_conversations_in_pill_order, classify_cloud_agent_startup_error,
     descendant_conversation_ids_in_spawn_order, descendant_conversations_in_pill_order,
     inherit_child_agent_settings, loaded_subtree_rollup, orchestration_root_conversation_id,
@@ -30,6 +31,7 @@ use warp::tui_export::{
     register_agent_event_consumer, unregister_agent_event_consumer,
 };
 use warp_core::features::FeatureFlag;
+use warp_errors::report_error;
 use warpui::SingletonEntity;
 use warpui_core::{AppContext, Entity, EntityId, ModelContext, ModelHandle, ViewHandle};
 
@@ -108,6 +110,7 @@ pub(crate) struct TuiOrchestrationModel {
     /// rendered level (keyed by the level's anchor conversation) so paging
     /// within a drilled-in level does not disturb any other level's page.
     tab_bar_paging_by_anchor: HashMap<AIConversationId, TuiTabBarPagingState<AIConversationId>>,
+    local_child_team_contexts: HashMap<StartAgentRequestId, TeamContextForOperation>,
 }
 #[allow(clippy::enum_variant_names)]
 pub(crate) enum TuiOrchestrationEvent {
@@ -173,6 +176,7 @@ impl TuiOrchestrationModel {
             child_session_by_conversation: HashMap::new(),
             event_consumers_by_session: HashMap::new(),
             tab_bar_paging_by_anchor: HashMap::new(),
+            local_child_team_contexts: HashMap::new(),
         });
         let model_for_history = model.clone();
         ctx.subscribe_to_model(&history, move |_, event, ctx| {
@@ -493,6 +497,7 @@ impl TuiOrchestrationModel {
         parent_session_id: TuiSessionId,
         request: StartAgentRequest,
         working_directory: Option<PathBuf>,
+        team_context: TeamContextForOperation,
         ctx: &mut ModelContext<Self>,
     ) {
         match request.execution_mode.clone() {
@@ -504,6 +509,7 @@ impl TuiOrchestrationModel {
                 request,
                 model_id,
                 working_directory,
+                team_context,
                 ctx,
             ),
             StartAgentExecutionMode::Local {
@@ -764,8 +770,11 @@ impl TuiOrchestrationModel {
         request: StartAgentRequest,
         model_id: Option<String>,
         working_directory: Option<PathBuf>,
+        team_context: TeamContextForOperation,
         ctx: &mut ModelContext<Self>,
     ) {
+        self.local_child_team_contexts
+            .insert(request.id, team_context);
         let launch = prepare_local_oz_child_launch(
             &request.name,
             &request.prompt,
@@ -781,11 +790,14 @@ impl TuiOrchestrationModel {
                 task_id: prepared.task_id,
                 conversation_name: prepared.conversation_name,
             }),
-            Err(error) => me.fail_child_request(
-                &request,
-                format!("Failed to create local child task: {error}"),
-                ctx,
-            ),
+            Err(error) => {
+                me.local_child_team_contexts.remove(&request.id);
+                me.fail_child_request(
+                    &request,
+                    format!("Failed to create local child task: {error}"),
+                    ctx,
+                );
+            }
         });
     }
 
@@ -806,10 +818,22 @@ impl TuiOrchestrationModel {
             conversation_name,
         } = child;
         let child_surface_id = session_id.surface_id();
+        let Some(team_context) = self.local_child_team_contexts.remove(&request.id) else {
+            report_error!(
+                "Missing team context for materialized local Oz child",
+                extra: { "request_id" => ?request.id }
+            );
+            self.fail_child_request(
+                &request,
+                "Failed to initialize the local child session.".to_owned(),
+                ctx,
+            );
+            return;
+        };
 
         let parent_surface_id = parent_session_id.surface_id();
-        inherit_child_agent_settings(parent_surface_id, child_surface_id, ctx);
-        apply_child_agent_model_override(child_surface_id, model_id.as_deref(), ctx);
+        inherit_child_agent_settings(parent_surface_id, child_surface_id, &team_context, ctx);
+        apply_child_agent_model_override(child_surface_id, model_id.as_deref(), &team_context, ctx);
 
         let conversation_id = BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
             let conversation_id = history.start_new_child_conversation(

@@ -33,14 +33,14 @@ use crate::safe_warn;
 use crate::server::server_api::ServerApiProvider;
 use crate::server::telemetry::PromptSuggestionFallbackReason;
 use crate::settings::AISettings;
-use crate::terminal::event::{BlockType, UserBlockCompleted};
+use crate::terminal::event::UserBlockCompleted;
 use crate::terminal::model::block::BlockId;
 use crate::terminal::model::session::SessionType;
 use crate::terminal::model::session::active_session::ActiveSession;
 use crate::terminal::model::terminal_model::TerminalModel;
 use crate::terminal::model_events::{ModelEvent, ModelEventDispatcher};
 use crate::terminal::view::{AgentModePromptSuggestion, PromptSuggestion};
-use crate::workspaces::user_workspaces::UserWorkspaces;
+use crate::workspaces::user_workspaces::{TeamContextForOperation, UserWorkspaces};
 
 const NUM_TOP_BLOCK_LINES: usize = 100;
 const NUM_BOTTOM_BLOCK_LINES: usize = 200;
@@ -161,16 +161,10 @@ impl PassiveSuggestionsModel {
             ModelEvent::AfterBlockStarted { .. } => {
                 self.abort_pending_requests(ctx);
             }
-            ModelEvent::AfterBlockCompleted(after_block_completed_event) => {
-                if FeatureFlag::PromptSuggestionsViaMAA.is_enabled() {
-                    self.abort_pending_requests(ctx);
-                    return;
-                }
-                let BlockType::User(block_completed) = &after_block_completed_event.block_type
-                else {
-                    return;
-                };
-                self.handle_user_block_completed(block_completed, ctx);
+            ModelEvent::AfterBlockCompleted(_)
+                if FeatureFlag::PromptSuggestionsViaMAA.is_enabled() =>
+            {
+                self.abort_pending_requests(ctx);
             }
             _ => {}
         }
@@ -215,9 +209,10 @@ impl PassiveSuggestionsModel {
         }
     }
 
-    fn handle_user_block_completed(
+    pub(crate) fn handle_user_block_completed(
         &mut self,
         block_completed: &UserBlockCompleted,
+        team_context: TeamContextForOperation,
         ctx: &mut ModelContext<Self>,
     ) {
         if block_completed.was_part_of_agent_interaction {
@@ -240,15 +235,16 @@ impl PassiveSuggestionsModel {
         }
 
         if should_generate_unit_test_suggestion(block_completed, &self.terminal_model, ctx) {
-            self.generate_unit_test_suggestion(block_completed.clone(), ctx);
+            self.generate_unit_test_suggestion(block_completed.clone(), team_context, ctx);
         } else if should_generate_prompt_suggestions(block_completed, &self.terminal_model, ctx) {
-            self.generate_prompt_suggestions(block_completed.clone(), ctx);
+            self.generate_prompt_suggestions(block_completed.clone(), team_context, ctx);
         }
     }
 
     fn generate_prompt_suggestions(
         &mut self,
         block_completed: UserBlockCompleted,
+        team_context: TeamContextForOperation,
         ctx: &mut ModelContext<Self>,
     ) {
         let block_id = block_completed
@@ -277,7 +273,7 @@ impl PassiveSuggestionsModel {
                 command,
                 request_duration_ms: 0,
             });
-            self.maybe_generate_passive_code_diff(suggestion, block_id, ctx);
+            self.maybe_generate_passive_code_diff(suggestion, block_id, team_context, ctx);
             return;
         }
 
@@ -321,18 +317,19 @@ impl PassiveSuggestionsModel {
                     command,
                     request_duration_ms,
                 });
-                me.maybe_generate_passive_code_diff(prompt_suggestion, block_id, ctx);
+                me.maybe_generate_passive_code_diff(prompt_suggestion, block_id, team_context, ctx);
             }));
     }
 
     fn generate_unit_test_suggestion(
         &mut self,
         block_completed: UserBlockCompleted,
+        team_context: TeamContextForOperation,
         ctx: &mut ModelContext<Self>,
     ) {
         #[cfg(target_family = "wasm")]
         {
-            let (_, _) = (block_completed, ctx);
+            let (_, _, _) = (block_completed, team_context, ctx);
         }
 
         #[cfg(not(target_family = "wasm"))]
@@ -368,6 +365,7 @@ impl PassiveSuggestionsModel {
                         controller.send_unit_test_suggestions_request(
                             diff_json.to_string(),
                             PassiveSuggestionTrigger::CommandRun,
+                            team_context,
                             ctx,
                         )
                     });
@@ -383,6 +381,7 @@ impl PassiveSuggestionsModel {
         &mut self,
         prompt_suggestion: AgentModePromptSuggestion,
         block_id: BlockId,
+        team_context: TeamContextForOperation,
         ctx: &mut ModelContext<Self>,
     ) {
         if !passive_code_diffs_enabled(ctx) {
@@ -513,6 +512,7 @@ impl PassiveSuggestionsModel {
                         query_text,
                         &block_id,
                         content.file_contexts,
+                        team_context,
                         ctx,
                     )
                 });

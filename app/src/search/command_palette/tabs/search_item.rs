@@ -35,6 +35,7 @@ impl SearchItemTrait for SearchItem {
         &self,
         highlight_state: ItemHighlightState,
         appearance: &Appearance,
+        _app: &AppContext,
     ) -> Box<dyn Element> {
         let color = if let Some(tab_color) = self.tab.color {
             tab_color

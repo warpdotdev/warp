@@ -244,13 +244,7 @@ fn build_test_context_model(app: &mut App) -> ModelHandle<BlocklistAIContextMode
             as Box<dyn ConversationSelection>
     });
 
-    app.add_model(|_| {
-        BlocklistAIContextModel::new_for_test(
-            terminal_model,
-            terminal_view_id,
-            conversation_selection,
-        )
-    })
+    app.add_model(|_| BlocklistAIContextModel::new_for_test(terminal_model, conversation_selection))
 }
 
 /// Builds context state for a TUI conversation surface.
@@ -274,11 +268,7 @@ fn build_tui_context_model(app: &mut App) -> (ModelHandle<BlocklistAIContextMode
             as Box<dyn ConversationSelection>
     });
     let model = app.add_model(|_| {
-        BlocklistAIContextModel::new_for_test(
-            terminal_model,
-            terminal_surface_id,
-            conversation_selection,
-        )
+        BlocklistAIContextModel::new_for_test(terminal_model, conversation_selection)
     });
     (model, terminal_surface_id)
 }

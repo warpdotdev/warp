@@ -84,7 +84,10 @@ fn spawn_config_falls_back_to_auto_only_for_non_cloud_runnable_model() {
         );
         model.read(&app, |model, app| {
             assert_eq!(
-                model.build_default_spawn_config(app).model_id.as_deref(),
+                model
+                    .build_default_spawn_config(&TeamContextForOperation::teamless(), app)
+                    .model_id
+                    .as_deref(),
                 Some("auto")
             );
         });
@@ -92,7 +95,10 @@ fn spawn_config_falls_back_to_auto_only_for_non_cloud_runnable_model() {
         install_default_agent_mode_model(&model, &mut app, LLMInfo::new_for_test("auto-genius"));
         model.read(&app, |model, app| {
             assert_eq!(
-                model.build_default_spawn_config(app).model_id.as_deref(),
+                model
+                    .build_default_spawn_config(&TeamContextForOperation::teamless(), app)
+                    .model_id
+                    .as_deref(),
                 Some("auto-genius")
             );
         });
@@ -124,6 +130,7 @@ fn spawn_config_honors_pane_model_override() {
                 prefs.update_preferred_agent_mode_llm(
                     &LLMId::from("auto-genius"),
                     terminal_view_id,
+                    &TeamContextForOperation::teamless(),
                     ctx,
                 );
             });
@@ -131,7 +138,10 @@ fn spawn_config_honors_pane_model_override() {
 
         model.read(&app, |model, app| {
             assert_eq!(
-                model.build_default_spawn_config(app).model_id.as_deref(),
+                model
+                    .build_default_spawn_config(&TeamContextForOperation::teamless(), app)
+                    .model_id
+                    .as_deref(),
                 Some("auto-genius")
             );
         });
@@ -145,7 +155,12 @@ fn spawn_agent_omits_orchestration_handoff_for_fresh_launches() {
         let model = add_model(&mut app);
 
         model.update(&mut app, |model, ctx| {
-            model.spawn_agent("new run".to_owned(), vec![], ctx);
+            model.spawn_agent(
+                "new run".to_owned(),
+                vec![],
+                TeamContextForOperation::teamless(),
+                ctx,
+            );
         });
 
         model.read(&app, |model, _| {
@@ -459,6 +474,7 @@ fn viewed_task_config_preserves_environment_before_cloud_model_load() {
                     environment_id: Some(environment_id.to_string()),
                     ..Default::default()
                 }),
+                &TeamContextForOperation::teamless(),
                 ctx,
             );
             model.validate_environment_after_initial_load(ctx);
@@ -486,6 +502,7 @@ fn viewed_task_config_applies_oz_model_override() {
                     model_id: Some("model-from-run".to_string()),
                     ..Default::default()
                 }),
+                &TeamContextForOperation::teamless(),
                 ctx,
             );
         });

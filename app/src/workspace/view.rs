@@ -184,7 +184,7 @@ use crate::ai::agent_sdk::driver::harness::{claude_transcript, codex_transcript}
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::ambient_agents::telemetry::{CloudAgentTelemetryEvent, CloudModeEntryPoint};
 #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
-use crate::ai::ambient_agents::telemetry::{HandoffEntryPoint, HandoffSurface};
+use crate::ai::ambient_agents::telemetry::{HandoffEntryPoint, HandoffOrigin, HandoffSurface};
 use crate::ai::blocklist::agent_view::AgentViewEntryOrigin;
 use crate::ai::blocklist::agent_view::agent_input_footer::editor::AgentToolbarEditorMode;
 use crate::ai::blocklist::agent_view::editor::{AgentToolbarEditorEvent, AgentToolbarEditorModal};
@@ -14018,13 +14018,16 @@ impl Workspace {
 
         terminal_view.update(ctx, |terminal_view, terminal_view_ctx| {
             if summarize_after_fork {
+                let team_context = UserWorkspaces::as_ref(terminal_view_ctx)
+                    .team_context_for_operation(terminal_view_ctx);
                 terminal_view
                     .ai_controller()
-                    .update(terminal_view_ctx, |controller, ctx| {
+                    .update(terminal_view_ctx, move |controller, ctx| {
                         controller.send_slash_command_request(
                             SlashCommandRequest::Summarize {
                                 prompt: summarization_prompt,
                             },
+                            team_context,
                             ctx,
                         );
                     });
@@ -14048,13 +14051,16 @@ impl Workspace {
                         },
                     );
                 }
+                let team_context = UserWorkspaces::as_ref(terminal_view_ctx)
+                    .team_context_for_operation(terminal_view_ctx);
                 terminal_view
                     .ai_controller()
-                    .update(terminal_view_ctx, |controller, ctx| {
+                    .update(terminal_view_ctx, move |controller, ctx| {
                         controller.send_user_query_in_conversation_no_lrc_subagent(
                             prompt,
                             forked_conversation_id,
                             None,
+                            team_context,
                             ctx,
                         );
                     });
@@ -14127,10 +14133,16 @@ impl Workspace {
         };
 
         terminal_view.update(ctx, |terminal, ctx| {
-            terminal.ai_controller().update(ctx, |controller, ctx| {
-                controller
-                    .send_slash_command_request(SlashCommandRequest::Summarize { prompt }, ctx);
-            });
+            let team_context = UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx);
+            terminal
+                .ai_controller()
+                .update(ctx, move |controller, ctx| {
+                    controller.send_slash_command_request(
+                        SlashCommandRequest::Summarize { prompt },
+                        team_context,
+                        ctx,
+                    );
+                });
 
             if let Some(prompt) = initial_prompt {
                 // The slash-command handler at
@@ -15467,10 +15479,11 @@ impl Workspace {
                         Some((prompt, attachments))
                     })
                 });
-                model_handle.update(ctx, |model, ctx| {
+                let team_context = UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx);
+                model_handle.update(ctx, move |model, ctx| {
                     model.set_environment_id(Some(env_id), ctx);
                     if let Some((prompt, attachments)) = pending {
-                        model.spawn_agent(prompt, attachments, ctx);
+                        model.spawn_agent(prompt, attachments, team_context, ctx);
                     }
                 });
             }
@@ -15692,14 +15705,15 @@ impl Workspace {
         } else {
             CancellationReason::ManuallyCancelled
         };
+        let team_context = UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx);
         let prepare_input = HandoffPrepareInput::new(
             terminal_surface_id,
             history,
             controller,
             context,
             snapshot_target,
-            intent.entry_point(),
-            HandoffSurface::Gui,
+            HandoffOrigin::new(intent.entry_point(), HandoffSurface::Gui),
+            team_context,
         )
         .with_expected_conversation_id(intent.expected_conversation_id())
         .with_source_conversation_id(source_conversation_id)
@@ -15843,10 +15857,12 @@ impl Workspace {
             ctx,
         );
         let handoff_terminal_view_id = model_handle.as_ref(ctx).terminal_view_id();
-        LLMPreferences::handle(ctx).update(ctx, |preferences, ctx| {
+        let team_context = UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx);
+        LLMPreferences::handle(ctx).update(ctx, move |preferences, ctx| {
             preferences.update_preferred_agent_mode_llm(
                 &HandoffLLMId::from(presentation.model_id.as_str()),
                 handoff_terminal_view_id,
+                &team_context,
                 ctx,
             );
         });
@@ -24335,14 +24351,17 @@ impl TypedActionView for Workspace {
                             // The modify-settings skill should always be available for
                             // production builds.
                             if let Some(skill) = modify_settings_skill {
+                                let team_context = UserWorkspaces::as_ref(terminal_view_ctx)
+                                    .team_context_for_operation(terminal_view_ctx);
                                 terminal_view.ai_controller().update(
                                     terminal_view_ctx,
-                                    |controller, ctx| {
+                                    move |controller, ctx| {
                                         controller.send_slash_command_request(
                                             SlashCommandRequest::InvokeSkill {
                                                 skill,
                                                 user_query: Some(query),
                                             },
+                                            team_context,
                                             ctx,
                                         );
                                     },
@@ -24350,13 +24369,16 @@ impl TypedActionView for Workspace {
                             } else if let Some(conversation_id) =
                                 terminal_view.active_conversation_id(terminal_view_ctx)
                             {
+                                let team_context = UserWorkspaces::as_ref(terminal_view_ctx)
+                                    .team_context_for_operation(terminal_view_ctx);
                                 terminal_view.ai_controller().update(
                                     terminal_view_ctx,
-                                    |controller, ctx| {
+                                    move |controller, ctx| {
                                         controller.send_user_query_in_conversation(
                                             query,
                                             conversation_id,
                                             None,
+                                            team_context,
                                             ctx,
                                         );
                                     },
@@ -25359,14 +25381,17 @@ impl TypedActionView for Workspace {
                     pane_group.add_terminal_pane_in_agent_mode(None, None, ctx);
                     if let Some(terminal_view) = pane_group.focused_session_view(ctx) {
                         terminal_view.update(ctx, |terminal_view, terminal_view_ctx| {
+                            let team_context = UserWorkspaces::as_ref(terminal_view_ctx)
+                                .team_context_for_operation(terminal_view_ctx);
                             terminal_view.ai_controller().update(
                                 terminal_view_ctx,
-                                |controller, ctx| {
+                                move |controller, ctx| {
                                     controller.send_user_query_in_new_conversation(
                                         query.to_owned(),
                                         None,
                                         EntrypointType::UserInitiated,
                                         None,
+                                        team_context,
                                         ctx,
                                     );
                                 },

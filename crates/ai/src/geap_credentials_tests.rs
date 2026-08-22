@@ -180,6 +180,7 @@ fn state_recovery_action_for_failed_and_unconfigured() {
             status: Some(403),
             detail: "denied".to_string(),
         },
+        minted_for: binding(),
     };
     assert_eq!(
         failed.recovery_action(),
@@ -192,6 +193,7 @@ fn state_recovery_action_for_failed_and_unconfigured() {
             status: Some(503),
             detail: "unavailable".to_string(),
         },
+        minted_for: binding(),
     };
     assert!(!retryable.requires_admin_action());
 }
@@ -244,6 +246,7 @@ fn state_components_use_expected_icons() {
         error: LoadGeapCredentialsError::MintIdentityToken {
             detail: "boom".to_string(),
         },
+        minted_for: binding(),
     };
     assert!(matches!(
         failed.user_facing_components().2,
@@ -278,7 +281,10 @@ fn failed_state_components_match_error_copy() {
         detail: "denied".to_string(),
     };
     let (err_title, err_desc, _) = error.user_facing();
-    let state = GeapCredentialsState::Failed { error };
+    let state = GeapCredentialsState::Failed {
+        error,
+        minted_for: binding(),
+    };
     let (title, description, _) = state.user_facing_components();
     assert_eq!(title, err_title);
     assert_eq!(description, err_desc);

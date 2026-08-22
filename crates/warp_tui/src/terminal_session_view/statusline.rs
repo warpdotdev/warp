@@ -5,7 +5,7 @@ use std::time::Duration;
 use chrono::{Local, NaiveDateTime};
 use vim::vim::{MotionType, VimMode};
 use warp::settings::{AISettings, TuiStatuslineConfig, TuiStatuslineItem};
-use warp::tui_export::{ConversationUsageTotals, GitRepoModels, GitStatusMetadata, LLMPreferences};
+use warp::tui_export::{ConversationUsageTotals, GitRepoModels, GitStatusMetadata};
 use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warpui::SingletonEntity;
 use warpui_core::elements::tui::{
@@ -447,10 +447,11 @@ impl TuiTerminalSessionView {
                     .vim_mode_indicator(ctx)
                     .map(FooterSegment::VimIndicator),
                 TuiStatuslineItem::Model => (!shell_mode).then(|| {
-                    let model_name = LLMPreferences::as_ref(ctx)
-                        .get_active_base_model(ctx, Some(self.terminal_surface_id))
-                        .display_name
-                        .clone();
+                    let model_name = self
+                        .model_menu
+                        .as_ref(ctx)
+                        .active_model_title(ctx)
+                        .unwrap_or_default();
                     let model_label_hovered = self
                         .model_label_hover
                         .lock()

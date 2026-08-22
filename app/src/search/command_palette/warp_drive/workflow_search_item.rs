@@ -34,6 +34,7 @@ impl SearchItem for WorkflowSearchItem {
         &self,
         highlight_state: ItemHighlightState,
         appearance: &Appearance,
+        _app: &AppContext,
     ) -> Box<dyn Element> {
         let (icon, icon_color) = if self.cloud_workflow.model().data.is_agent_mode_workflow() {
             (

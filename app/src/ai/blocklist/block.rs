@@ -4192,16 +4192,12 @@ impl AIBlock {
         }
 
         let view = ctx.add_typed_action_view(GeminiEnterpriseCredentialsErrorView::new);
-        ctx.subscribe_to_view(&view, |_me, _view, event, ctx| match event {
+        ctx.subscribe_to_view(&view, |me, _view, event, ctx| match event {
             GeminiEnterpriseCredentialsErrorEvent::RefreshCredentials => {
                 #[cfg(not(target_family = "wasm"))]
-                {
-                    use ai::api_keys::ApiKeyManager;
-
-                    ApiKeyManager::handle(ctx).update(ctx, |manager, ctx| {
-                        crate::ai::geap_credentials::force_refresh_geap_credentials(manager, ctx);
-                    });
-                }
+                me.controller.update(ctx, |controller, ctx| {
+                    controller.force_refresh_geap_credentials(me.client_ids.conversation_id, ctx)
+                });
             }
             GeminiEnterpriseCredentialsErrorEvent::OpenSettings => {
                 // Defer so Workspace is not opened while AIBlock is still mid-subscription.

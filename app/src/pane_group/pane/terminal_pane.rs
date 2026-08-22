@@ -34,7 +34,10 @@ use crate::ai::blocklist::agent_view::{AgentViewControllerEvent, AgentViewEntryO
 use crate::ai::blocklist::orchestration_event_streamer::OrchestrationEventStreamer;
 use crate::ai::blocklist::{BlocklistAIHistoryModel, StartAgentRequest};
 #[cfg(not(target_family = "wasm"))]
-use crate::ai::blocklist::{apply_child_agent_model_override, prepare_local_oz_child_launch};
+use crate::ai::blocklist::{
+    apply_prepared_child_agent_model_override, prepare_child_agent_model_override_for_team_context,
+    prepare_local_oz_child_launch,
+};
 use crate::ai::conversation_utils;
 use crate::ai::llms::LLMPreferences;
 use crate::ai::orchestration::{RemoteChildLaunchConfig, prepare_remote_child_launch};
@@ -64,6 +67,8 @@ use crate::terminal::{TerminalManager, TerminalView};
 use crate::view_components::ToastFlavor;
 use crate::workspace::sync_inputs::SyncedInputState;
 use crate::workspace::{PaneViewLocator, WorkspaceRegistry};
+#[cfg(not(target_family = "wasm"))]
+use crate::workspaces::user_workspaces::UserWorkspaces;
 #[cfg(not(target_family = "wasm"))]
 use crate::{
     pane_group::child_agent::{
@@ -1668,7 +1673,18 @@ fn launch_local_no_harness_child(
                     conversation_id,
                     ..
                 }) => {
-                    apply_child_agent_model_override(terminal_view_id, model_id.as_deref(), ctx);
+                    let weak_terminal_view = new_terminal_view.downgrade();
+                    let model_override = {
+                        let team_context =
+                            UserWorkspaces::as_ref(ctx).team_context(&weak_terminal_view, ctx);
+                        prepare_child_agent_model_override_for_team_context(
+                            terminal_view_id,
+                            model_id.as_deref(),
+                            team_context.as_ref(),
+                            ctx,
+                        )
+                    };
+                    apply_prepared_child_agent_model_override(model_override, ctx);
 
                     // Stamp the task id on the child conversation directly
                     // so the share-reporter in
@@ -1688,12 +1704,15 @@ fn launch_local_no_harness_child(
                     });
 
                     new_terminal_view.update(ctx, |terminal_view, ctx| {
+                        let team_context =
+                            UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx);
                         terminal_view
                             .ai_controller()
-                            .update(ctx, |controller, ctx| {
+                            .update(ctx, move |controller, ctx| {
                                 controller.send_agent_query_in_conversation(
                                     prompt.clone(),
                                     conversation_id,
+                                    team_context,
                                     ctx,
                                 );
                             });
@@ -1819,11 +1838,18 @@ fn launch_local_harness_child(
                         conversation_id,
                         ..
                     }) => {
-                        apply_child_agent_model_override(
-                            terminal_view_id,
-                            model_id.as_deref(),
-                            ctx,
-                        );
+                        let weak_terminal_view = new_terminal_view.downgrade();
+                        let model_override = {
+                            let team_context =
+                                UserWorkspaces::as_ref(ctx).team_context(&weak_terminal_view, ctx);
+                            prepare_child_agent_model_override_for_team_context(
+                                terminal_view_id,
+                                model_id.as_deref(),
+                                team_context.as_ref(),
+                                ctx,
+                            )
+                        };
+                        apply_prepared_child_agent_model_override(model_override, ctx);
 
                         BlocklistAIHistoryModel::handle(ctx).update(ctx, |model, ctx| {
                             model.record_new_conversation_request_complete(
@@ -1977,7 +2003,8 @@ fn launch_remote_child(
         }
     };
 
-    new_terminal_view.update(ctx, |terminal_view, ctx| {
+    let team_context = UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx);
+    new_terminal_view.update(ctx, move |terminal_view, ctx| {
         terminal_view.enter_agent_view(
             None,
             Some(conversation_id),
@@ -1987,7 +2014,7 @@ fn launch_remote_child(
         if let Some(ambient_agent_view_model) = terminal_view.ambient_agent_view_model() {
             ambient_agent_view_model.update(ctx, |model, ctx| {
                 model.set_conversation_id(Some(conversation_id));
-                model.spawn_agent_with_request(prepared.spawn_request, ctx);
+                model.spawn_agent_with_request(prepared.spawn_request, team_context, ctx);
             });
         } else {
             report_error!("Remote StartAgent child pane missing ambient agent view model");

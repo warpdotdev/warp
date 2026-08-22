@@ -42,8 +42,8 @@ use warp::tui_export::{
     TuiMcpAction, TuiMcpManager, TuiMcpServerId, TuiMcpVariableValue, TuiOnboardingMarker,
     TuiOnboardingMarkers, TuiOnboardingMarkersEvent, TuiSlashCommandDataSource,
     TuiSlashCommandDataSourceArgs, TuiUpArrowHistoryItemKind, TuiUserInfoManager,
-    TuiUserInfoManagerEvent, TuiZeroStateDataSource, UserTakeOverReason, WAKEUP_THROTTLE_PERIOD,
-    WarpConfig, WarpConfigUpdateEvent, block_context_from_terminal_model,
+    TuiUserInfoManagerEvent, TuiZeroStateDataSource, UserTakeOverReason, UserWorkspaces,
+    WAKEUP_THROTTLE_PERIOD, WarpConfig, WarpConfigUpdateEvent, block_context_from_terminal_model,
     build_slash_command_mixer, detect_possible_git_repo, export_conversation_markdown,
     loaded_subtree_rollup, log_out_tui, maybe_build_ai_query_upsert_event,
     prepare_conversation_block_restoration, record_autodetection_toggle_from_slash_command,
@@ -1193,7 +1193,11 @@ impl TuiTerminalSessionView {
                 .collect()
         };
         self.ai_controller.update(ctx, |controller, ctx| {
-            controller.resume_conversation(conversation_id, resume_context, ctx);
+            controller.resume_conversation_with_stored_team_context(
+                conversation_id,
+                resume_context,
+                ctx,
+            );
         });
     }
     fn handle_block_completed(&mut self, block_id: &BlockId, ctx: &mut ViewContext<Self>) {
@@ -1454,8 +1458,16 @@ impl TuiTerminalSessionView {
         self.input_view.update(ctx, |input, ctx| input.clear(ctx));
         ctx.notify();
 
+        let team_context = UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx);
+        let request_prompt = prompt.clone();
         let dispatched = self.ai_controller.update(ctx, |controller, ctx| {
-            controller.send_user_query_in_conversation(prompt.clone(), conversation_id, None, ctx)
+            controller.send_user_query_in_conversation(
+                request_prompt,
+                conversation_id,
+                None,
+                team_context,
+                ctx,
+            )
         });
         if !dispatched {
             self.cli_subagent_controller.update(ctx, |controller, ctx| {
@@ -1498,8 +1510,10 @@ impl TuiTerminalSessionView {
                 view.show_settings_file_error(error, ctx);
             }
         });
+        let model_menu_owner = ctx.handle();
 
         let terminal_surface_id: EntityId = ctx.view_id();
+        let window_id = ctx.window_id();
         let active_session =
             ctx.add_model(|ctx| ActiveSession::new(sessions.clone(), model_events.clone(), ctx));
         let zero_state_animation_config = ZeroStateAnimationConfig::handle(ctx);
@@ -1528,7 +1542,6 @@ impl TuiTerminalSessionView {
                 sessions.clone(),
                 &model_events,
                 model.clone(),
-                terminal_surface_id,
                 conversation_selection.clone(),
                 ctx,
             )
@@ -1571,7 +1584,7 @@ impl TuiTerminalSessionView {
             }
         });
         let ai_controller = ctx.add_model(|ctx| {
-            BlocklistAIController::new(
+            BlocklistAIController::new_for_tui(
                 ai_input_model.clone(),
                 context_model.clone(),
                 conversation_selection.clone(),
@@ -1657,12 +1670,12 @@ impl TuiTerminalSessionView {
             )
         });
         ctx.subscribe_to_model(&slash_commands, |_, _, _, ctx| ctx.notify());
-        let window_id = ctx.window_id();
         let api_keys_menu = ctx.add_model(|ctx| {
             TuiApiKeysMenuModel::new(input_editor_model.clone(), suggestions_mode.clone(), ctx)
         });
-        ctx.subscribe_to_model(&api_keys_menu, |_, _, _: &TuiApiKeysMenuEvent, ctx| {
-            ctx.notify();
+        ctx.subscribe_to_model(&api_keys_menu, |view, _, event, ctx| match event {
+            TuiApiKeysMenuEvent::Updated => ctx.notify(),
+            TuiApiKeysMenuEvent::RequestGrokOAuth => view.start_grok_oauth(ctx),
         });
         let conversation_menu = ctx.add_model(|ctx| {
             TuiConversationMenuModel::new(
@@ -1688,6 +1701,7 @@ impl TuiTerminalSessionView {
                 input_editor_model.clone(),
                 suggestions_mode.clone(),
                 terminal_surface_id,
+                model_menu_owner,
                 ctx,
             )
         });
@@ -1910,11 +1924,13 @@ impl TuiTerminalSessionView {
                 conversation_id,
                 text,
             } => {
-                view.ai_controller.update(ctx, |controller, ctx| {
+                let team_context = UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx);
+                view.ai_controller.update(ctx, move |controller, ctx| {
                     controller.send_user_query_in_conversation(
                         text.clone(),
                         *conversation_id,
                         None,
+                        team_context,
                         ctx,
                     );
                 });
@@ -2356,9 +2372,10 @@ impl TuiTerminalSessionView {
         conversation_id: AIConversationId,
         ctx: &mut ViewContext<Self>,
     ) {
-        self.ai_controller.update(ctx, |controller, ctx| {
+        let team_context = UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx);
+        self.ai_controller.update(ctx, move |controller, ctx| {
             controller.set_ambient_agent_task_id(Some(task_id), ctx);
-            controller.send_agent_query_in_conversation(prompt, conversation_id, ctx);
+            controller.send_agent_query_in_conversation(prompt, conversation_id, team_context, ctx);
         });
     }
 
@@ -3439,9 +3456,10 @@ impl TuiTerminalSessionView {
     }
 
     fn handle_pasted(&mut self, text: String, ctx: &mut ViewContext<Self>) {
-        let disposition = self
-            .attachment_bar
-            .update(ctx, |bar, ctx| bar.try_attach_paste(text.clone(), ctx));
+        let team_context = UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx);
+        let disposition = self.attachment_bar.update(ctx, |bar, ctx| {
+            bar.try_attach_paste(text.clone(), team_context, ctx)
+        });
         if disposition == TuiAttachmentPasteDisposition::NotHandled {
             self.input_view
                 .update(ctx, |input, ctx| input.insert_pasted_text(&text, ctx));
@@ -3849,6 +3867,12 @@ impl TuiTerminalSessionView {
         });
     }
 
+    fn start_grok_oauth(&mut self, ctx: &mut ViewContext<Self>) {
+        let team_context = UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx);
+        self.api_keys_menu
+            .update(ctx, |menu, ctx| menu.start_grok_oauth(team_context, ctx));
+    }
+
     /// The session's working directory. The cwd only arrives once shell
     /// metadata flows (warpified sessions); until then fall back to the
     /// process cwd the TUI's shell was spawned with.
@@ -4003,8 +4027,16 @@ impl TuiTerminalSessionView {
             report_error!("TUI prompt submitted without an eagerly selected conversation");
             return;
         };
-        let dispatched = self.ai_controller.update(ctx, |controller, ctx| {
-            controller.send_user_query_in_conversation(prompt.clone(), conversation_id, None, ctx)
+        let team_context = UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx);
+        let request_prompt = prompt.clone();
+        let dispatched = self.ai_controller.update(ctx, move |controller, ctx| {
+            controller.send_user_query_in_conversation(
+                request_prompt,
+                conversation_id,
+                None,
+                team_context,
+                ctx,
+            )
         });
         if dispatched && let Some(publisher) = &self.cli_agent_osc_event_publisher {
             publisher
@@ -4188,8 +4220,9 @@ impl TuiTerminalSessionView {
             self.show_transient_hint(LOCAL_SKILLS_REMOTE_EXECUTION_ERROR_MESSAGE.to_owned(), ctx);
             return;
         }
-        let result = self.ai_controller.update(ctx, |controller, ctx| {
-            controller.send_invoke_skill_request(reference, user_query, ctx)
+        let team_context = UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx);
+        let result = self.ai_controller.update(ctx, move |controller, ctx| {
+            controller.send_invoke_skill_request(reference, user_query, team_context, ctx)
         });
         match result {
             Ok(()) => {
@@ -4296,9 +4329,12 @@ impl TuiTerminalSessionView {
     }
 
     fn handle_accepted_model(&mut self, id: &LLMId, ctx: &mut ViewContext<Self>) {
-        LLMPreferences::handle(ctx).update(ctx, |preferences, ctx| {
-            preferences.update_preferred_agent_mode_llm(id, self.terminal_surface_id, ctx);
-        });
+        LLMPreferences::update_preferred_agent_mode_llm_for_view(
+            id,
+            self.terminal_surface_id,
+            &ctx.handle(),
+            ctx,
+        );
         self.model_menu.update(ctx, |menu, ctx| menu.dismiss(ctx));
     }
     fn handle_accepted_mcp_action(&mut self, action: TuiMcpAction, ctx: &mut ViewContext<Self>) {
@@ -4707,8 +4743,9 @@ impl TuiTerminalSessionView {
                     );
                     return;
                 };
-                self.ai_controller.update(ctx, |controller, ctx| {
-                    controller.send_create_new_project_request(query.to_owned(), ctx);
+                let team_context = UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx);
+                self.ai_controller.update(ctx, move |controller, ctx| {
+                    controller.send_create_new_project_request(query.to_owned(), team_context, ctx);
                 });
                 self.input_view.update(ctx, |input, ctx| input.clear(ctx));
                 record_static_slash_command_accepted(command.name, true, ctx);
@@ -5641,8 +5678,9 @@ impl TypedActionView for TuiTerminalSessionView {
                 }
             }
             TuiTerminalSessionAction::PasteFromClipboard => {
+                let team_context = UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx);
                 self.attachment_bar
-                    .update(ctx, |bar, ctx| bar.paste_from_clipboard(ctx));
+                    .update(ctx, |bar, ctx| bar.paste_from_clipboard(team_context, ctx));
             }
             #[cfg(feature = "voice_input")]
             TuiTerminalSessionAction::StartVoiceInput => {

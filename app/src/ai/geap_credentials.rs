@@ -16,7 +16,10 @@ use warpui::{AppContext, ModelContext, SingletonEntity};
 
 use crate::auth::AuthStateProvider;
 use crate::settings::{AISettings, AISettingsChangedEvent};
-use crate::workspaces::user_workspaces::{UserWorkspaces, UserWorkspacesEvent};
+use crate::workspaces::user_workspaces::{
+    TeamContext, TeamContextForOperation, TeamScope, UserWorkspaces, UserWorkspacesEvent,
+};
+use crate::workspaces::workspace::LlmHostSettings;
 
 const GEAP_IDENTITY_TOKEN_DURATION: Duration = Duration::from_secs(60 * 60);
 
@@ -76,17 +79,48 @@ fn geap_mint_binding_from_parts(
 }
 
 pub(crate) fn current_geap_policy(app: &AppContext) -> GeapPolicy {
-    if !FeatureFlag::GeminiEnterprise.is_enabled() {
-        return GeapPolicy::Disabled;
-    }
+    let context = TeamContextForOperation::teamless();
+    geap_policy_for_context(&context, app)
+}
+
+pub(crate) fn geap_policy_for_context(
+    context: &TeamContextForOperation,
+    app: &AppContext,
+) -> GeapPolicy {
+    geap_policy_for_scope(Some(context), app)
+}
+
+fn geap_policy_for_scope<S: TeamScope + ?Sized>(
+    context: Option<&S>,
+    app: &AppContext,
+) -> GeapPolicy {
     let user_workspaces = UserWorkspaces::as_ref(app);
-    if !user_workspaces.is_gemini_enterprise_credentials_enabled(app) {
+    geap_policy_from_host_settings(
+        user_workspaces.is_gemini_enterprise_credentials_enabled_for_context(context, app),
+        user_workspaces.gemini_enterprise_host_settings_for_context(context),
+        app,
+    )
+}
+
+pub(crate) fn geap_policy_for_render_context(
+    context: Option<&TeamContext<'_>>,
+    app: &AppContext,
+) -> GeapPolicy {
+    geap_policy_for_scope(context, app)
+}
+
+fn geap_policy_from_host_settings(
+    credentials_enabled: bool,
+    settings: Option<&LlmHostSettings>,
+    app: &AppContext,
+) -> GeapPolicy {
+    if !FeatureFlag::GeminiEnterprise.is_enabled() || !credentials_enabled {
         return GeapPolicy::Disabled;
     }
     let Some(user_id) = AuthStateProvider::as_ref(app).get().user_id() else {
         return GeapPolicy::Disabled;
     };
-    let Some(settings) = user_workspaces.gemini_enterprise_host_settings() else {
+    let Some(settings) = settings else {
         return GeapPolicy::Unconfigured;
     };
     match geap_mint_binding_from_parts(
@@ -113,7 +147,7 @@ impl GeapCredentialRefresher for ApiKeyManager {
                 UserWorkspacesEvent::UpdateWorkspaceSettingsSuccess
                     | UserWorkspacesEvent::TeamsChanged
             ) {
-                refresh_geap_credentials(manager, ctx);
+                refresh_teamless_geap_credentials(manager, ctx);
             }
         });
 
@@ -122,10 +156,23 @@ impl GeapCredentialRefresher for ApiKeyManager {
                 event,
                 AISettingsChangedEvent::GeminiEnterpriseCredentialsEnabled { .. }
             ) {
-                refresh_geap_credentials(manager, ctx);
+                refresh_teamless_geap_credentials(manager, ctx);
             }
         });
     }
+}
+
+fn refresh_teamless_geap_credentials(
+    manager: &mut ApiKeyManager,
+    ctx: &mut ModelContext<ApiKeyManager>,
+) {
+    if UserWorkspaces::as_ref(ctx)
+        .current_workspace()
+        .is_some_and(|workspace| !workspace.teams.is_empty())
+    {
+        return;
+    }
+    refresh_geap_credentials(manager, ctx);
 }
 
 /// Standard (non-forced) refresh: the skip-if-valid guard decides whether a
@@ -137,6 +184,7 @@ pub(crate) fn refresh_geap_credentials(
     refresh_geap_credentials_with_options(manager, false, None, ctx);
 }
 
+#[cfg(test)]
 pub(crate) fn force_refresh_geap_credentials(
     manager: &mut ApiKeyManager,
     ctx: &mut ModelContext<ApiKeyManager>,
@@ -144,24 +192,38 @@ pub(crate) fn force_refresh_geap_credentials(
     refresh_geap_credentials_with_options(manager, true, None, ctx);
 }
 
+pub(crate) fn force_refresh_geap_credentials_for_policy(
+    manager: &mut ApiKeyManager,
+    policy: GeapPolicy,
+    ctx: &mut ModelContext<ApiKeyManager>,
+) {
+    refresh_geap_credentials_for_policy(manager, policy, true, None, false, ctx);
+}
+
 /// Mint kickoff for a request blocked on an expired credential.
 pub(crate) fn start_geap_refresh_for_waiter(
     manager: &mut ApiKeyManager,
+    binding: GeapMintBinding,
     waiter: oneshot::Sender<GeapRefreshOutcome>,
     ctx: &mut ModelContext<ApiKeyManager>,
 ) {
-    refresh_geap_credentials_with_options(manager, false, Some(waiter), ctx);
+    refresh_geap_credentials_for_binding_with_options(
+        manager,
+        binding,
+        false,
+        Some(waiter),
+        false,
+        ctx,
+    );
 }
 
-/// Request-time safety net. The triggering request is never delayed —
-/// it carries the currently stored token.
-pub(crate) fn refresh_geap_credentials_if_needed(
+pub(crate) fn refresh_geap_credentials_if_needed_for_binding(
     manager: &mut ApiKeyManager,
+    binding: Option<&GeapMintBinding>,
     ctx: &mut ModelContext<ApiKeyManager>,
 ) {
-    let binding = match current_geap_policy(ctx) {
-        GeapPolicy::Disabled | GeapPolicy::Unconfigured => return,
-        GeapPolicy::Mintable(binding) => binding,
+    let Some(binding) = binding else {
+        return;
     };
     let needs_mint = match manager.geap_credentials_state() {
         GeapCredentialsState::Refreshing { .. } => false,
@@ -169,7 +231,7 @@ pub(crate) fn refresh_geap_credentials_if_needed(
             credentials,
             minted_for,
             ..
-        } => *minted_for != binding || credentials.needs_refresh(),
+        } => minted_for != binding || credentials.needs_refresh(),
         GeapCredentialsState::Missing
         | GeapCredentialsState::Unconfigured
         | GeapCredentialsState::Disabled
@@ -177,7 +239,14 @@ pub(crate) fn refresh_geap_credentials_if_needed(
     };
     if needs_mint {
         log::info!("GEAP: request-time safety net arming a credential refresh");
-        refresh_geap_credentials(manager, ctx);
+        refresh_geap_credentials_for_binding_with_options(
+            manager,
+            binding.clone(),
+            false,
+            None,
+            false,
+            ctx,
+        );
     }
 }
 
@@ -188,7 +257,25 @@ fn refresh_geap_credentials_with_options(
     waiter: Option<oneshot::Sender<GeapRefreshOutcome>>,
     ctx: &mut ModelContext<ApiKeyManager>,
 ) {
-    let minted_for = match current_geap_policy(ctx) {
+    refresh_geap_credentials_for_policy(
+        manager,
+        current_geap_policy(ctx),
+        force,
+        waiter,
+        true,
+        ctx,
+    );
+}
+
+fn refresh_geap_credentials_for_policy(
+    manager: &mut ApiKeyManager,
+    policy: GeapPolicy,
+    force: bool,
+    waiter: Option<oneshot::Sender<GeapRefreshOutcome>>,
+    validate_current_policy: bool,
+    ctx: &mut ModelContext<ApiKeyManager>,
+) {
+    let minted_for = match policy {
         GeapPolicy::Disabled => {
             manager.set_geap_credentials_state(GeapCredentialsState::Disabled, ctx);
             return;
@@ -199,6 +286,24 @@ fn refresh_geap_credentials_with_options(
         }
         GeapPolicy::Mintable(binding) => binding,
     };
+    refresh_geap_credentials_for_binding_with_options(
+        manager,
+        minted_for,
+        force,
+        waiter,
+        validate_current_policy,
+        ctx,
+    );
+}
+
+fn refresh_geap_credentials_for_binding_with_options(
+    manager: &mut ApiKeyManager,
+    minted_for: GeapMintBinding,
+    force: bool,
+    waiter: Option<oneshot::Sender<GeapRefreshOutcome>>,
+    validate_current_policy: bool,
+    ctx: &mut ModelContext<ApiKeyManager>,
+) {
     if matches!(
         manager.geap_credentials_state(),
         GeapCredentialsState::Refreshing { .. }
@@ -252,7 +357,16 @@ fn refresh_geap_credentials_with_options(
                     })?;
             exchange_identity_token_for_geap_credentials(identity_token, &binding).await
         },
-        move |manager, result, ctx| apply_geap_mint_result(manager, result, minted_for, force, ctx),
+        move |manager, result, ctx| {
+            apply_geap_mint_result(
+                manager,
+                result,
+                minted_for,
+                force,
+                validate_current_policy,
+                ctx,
+            )
+        },
     );
 }
 
@@ -261,10 +375,18 @@ fn apply_geap_mint_result(
     result: Result<GeapCredentials, LoadGeapCredentialsError>,
     minted_for: GeapMintBinding,
     force: bool,
+    validate_current_policy: bool,
     ctx: &mut ModelContext<ApiKeyManager>,
 ) {
     let waiters = manager.take_geap_refresh_waiters();
-    let outcome = apply_geap_mint_result_inner(manager, result, minted_for, force, ctx);
+    let outcome = apply_geap_mint_result_inner(
+        manager,
+        result,
+        minted_for,
+        force,
+        validate_current_policy,
+        ctx,
+    );
     for waiter in waiters {
         let _ = waiter.send(outcome);
     }
@@ -275,20 +397,25 @@ fn apply_geap_mint_result_inner(
     result: Result<GeapCredentials, LoadGeapCredentialsError>,
     minted_for: GeapMintBinding,
     force: bool,
+    validate_current_policy: bool,
     ctx: &mut ModelContext<ApiKeyManager>,
 ) -> GeapRefreshOutcome {
-    let current_binding = match current_geap_policy(ctx) {
-        GeapPolicy::Disabled => {
-            log::info!("GEAP: gate flipped off mid-mint; discarding the mint result");
-            manager.set_geap_credentials_state(GeapCredentialsState::Disabled, ctx);
-            return GeapRefreshOutcome::Failed;
+    let current_binding = if validate_current_policy {
+        match current_geap_policy(ctx) {
+            GeapPolicy::Disabled => {
+                log::info!("GEAP: gate flipped off mid-mint; discarding the mint result");
+                manager.set_geap_credentials_state(GeapCredentialsState::Disabled, ctx);
+                return GeapRefreshOutcome::Failed;
+            }
+            GeapPolicy::Unconfigured => {
+                log::info!("GEAP: gate unconfigured mid-mint; discarding the mint result");
+                manager.set_geap_credentials_state(GeapCredentialsState::Unconfigured, ctx);
+                return GeapRefreshOutcome::Failed;
+            }
+            GeapPolicy::Mintable(binding) => binding,
         }
-        GeapPolicy::Unconfigured => {
-            log::info!("GEAP: gate unconfigured mid-mint; discarding the mint result");
-            manager.set_geap_credentials_state(GeapCredentialsState::Unconfigured, ctx);
-            return GeapRefreshOutcome::Failed;
-        }
-        GeapPolicy::Mintable(binding) => binding,
+    } else {
+        minted_for.clone()
     };
     let previous = match manager.geap_credentials_state() {
         GeapCredentialsState::Refreshing {
@@ -311,7 +438,9 @@ fn apply_geap_mint_result_inner(
                     },
                     ctx,
                 );
-                schedule_geap_token_refresh(manager, ctx);
+                if validate_current_policy {
+                    schedule_geap_token_refresh(manager, ctx);
+                }
             }
             None => {
                 manager.set_geap_credentials_state(GeapCredentialsState::Missing, ctx);
@@ -328,6 +457,7 @@ fn apply_geap_mint_result_inner(
                 minted_for.audience,
                 credentials.expires_at()
             );
+            manager.clear_geap_mint_failure(&minted_for);
             manager.set_geap_credentials_state(
                 GeapCredentialsState::Loaded {
                     credentials,
@@ -338,8 +468,9 @@ fn apply_geap_mint_result_inner(
             );
             // Arm the next one-shot proactive refresh — this is what makes
             // the ~hourly loop self-sustaining.
-            schedule_geap_token_refresh(manager, ctx);
-            manager.clear_geap_mint_failure();
+            if validate_current_policy {
+                schedule_geap_token_refresh(manager, ctx);
+            }
             GeapRefreshOutcome::Refreshed
         }
         Err(err) => {
@@ -365,13 +496,15 @@ fn apply_geap_mint_result_inner(
                 // where the user explicitly asked and needs visible feedback.
                 _ => {
                     manager.set_geap_credentials_state(
-                        GeapCredentialsState::Failed { error: err },
+                        GeapCredentialsState::Failed {
+                            error: err,
+                            minted_for: minted_for.clone(),
+                        },
                         ctx,
                     );
                 }
             }
-            // Start the cooldown.
-            manager.record_geap_mint_failure();
+            manager.record_geap_mint_failure(minted_for);
             GeapRefreshOutcome::Failed
         }
     }

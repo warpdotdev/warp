@@ -44,6 +44,21 @@ pub enum HandoffEntryPoint {
     Automatic,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct HandoffOrigin {
+    pub entry_point: HandoffEntryPoint,
+    pub surface: HandoffSurface,
+}
+
+impl HandoffOrigin {
+    pub fn new(entry_point: HandoffEntryPoint, surface: HandoffSurface) -> Self {
+        Self {
+            entry_point,
+            surface,
+        }
+    }
+}
+
 /// Describes which synthetic-input path drives an empty-prompt handoff.
 /// Captured at handoff initiation so telemetry reflects the intended path
 /// regardless of whether the snapshot derivation later produces content.

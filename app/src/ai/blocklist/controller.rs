@@ -82,7 +82,7 @@ use crate::terminal::model::terminal_model::TerminalModel;
 use crate::terminal::view::inline_banner::ZeroStatePromptSuggestionType;
 use crate::workspace::OneTimeModalModel;
 use crate::workspaces::update_manager::TeamUpdateManager;
-use crate::workspaces::user_workspaces::UserWorkspaces;
+use crate::workspaces::user_workspaces::{TeamContextForOperation, UserWorkspaces};
 
 #[derive(Debug, Clone)]
 pub struct SessionContext {
@@ -205,22 +205,26 @@ pub struct RequestInput {
     pub request_start_ts: DateTime<Local>,
     pub supported_tools_override: Option<Vec<ToolType>>,
 }
+struct RequestInputSession<'a> {
+    active_session: &'a ModelHandle<ActiveSession>,
+    terminal_surface_id: EntityId,
+}
 
 impl RequestInput {
     fn for_task(
         inputs: Vec<AIAgentInput>,
         task_id: TaskId,
-        active_session: &ModelHandle<ActiveSession>,
+        session: RequestInputSession<'_>,
         shared_session_response_initiator: Option<ParticipantId>,
         conversation_id: AIConversationId,
-        terminal_surface_id: EntityId,
+        team_context: &TeamContextForOperation,
         app: &AppContext,
     ) -> Self {
         let mut me = Self::new_with_common_fields(
             conversation_id,
-            active_session,
+            session,
             shared_session_response_initiator,
-            terminal_surface_id,
+            team_context,
             app,
         );
         me.input_messages.insert(task_id, inputs);
@@ -230,17 +234,17 @@ impl RequestInput {
     fn for_actions_results(
         action_results: Vec<AIAgentActionResult>,
         context: Arc<[AIAgentContext]>,
-        active_session: &ModelHandle<ActiveSession>,
+        session: RequestInputSession<'_>,
         shared_session_response_initiator: Option<ParticipantId>,
         conversation_id: AIConversationId,
-        terminal_surface_id: EntityId,
+        team_context: &TeamContextForOperation,
         app: &AppContext,
     ) -> Self {
         let mut me = Self::new_with_common_fields(
             conversation_id,
-            active_session,
+            session,
             shared_session_response_initiator,
-            terminal_surface_id,
+            team_context,
             app,
         );
         for result in action_results.into_iter() {
@@ -266,29 +270,30 @@ impl RequestInput {
 
     fn new_with_common_fields(
         conversation_id: AIConversationId,
-        active_session: &ModelHandle<ActiveSession>,
+        session: RequestInputSession<'_>,
         shared_session_response_initiator: Option<ParticipantId>,
-        terminal_surface_id: EntityId,
+        team_context: &TeamContextForOperation,
         app: &AppContext,
     ) -> Self {
         let llm_prefs = LLMPreferences::as_ref(app);
         let model_id = llm_prefs
-            .get_active_base_model(app, Some(terminal_surface_id))
+            .get_active_base_model(Some(session.terminal_surface_id), team_context, app)
             .id
             .clone();
         let coding_model_id = llm_prefs
-            .get_active_coding_model(app, Some(terminal_surface_id))
+            .get_active_coding_model(Some(session.terminal_surface_id), team_context, app)
             .id
             .clone();
         let cli_agent_model_id = llm_prefs
-            .get_active_cli_agent_model(app, Some(terminal_surface_id))
+            .get_active_cli_agent_model(Some(session.terminal_surface_id), team_context, app)
             .id
             .clone();
         let computer_use_model_id = llm_prefs
-            .get_active_computer_use_model(app, Some(terminal_surface_id))
+            .get_active_computer_use_model(Some(session.terminal_surface_id), team_context, app)
             .id
             .clone();
-        let working_directory = active_session
+        let working_directory = session
+            .active_session
             .as_ref(app)
             .current_working_directory()
             .cloned();
@@ -417,14 +422,43 @@ impl InputQuery {
 }
 
 impl BlocklistAIController {
+    fn request_input_session(&self) -> RequestInputSession<'_> {
+        RequestInputSession {
+            active_session: &self.active_session,
+            terminal_surface_id: self.terminal_surface_id,
+        }
+    }
     /// Returns the bundled-skill catalog origin for this controller's active session.
     pub fn skill_path_origin(&self, ctx: &AppContext) -> SkillPathOrigin {
         SessionContext::from_session(self.active_session.as_ref(ctx), ctx).skill_path_origin()
     }
+    #[cfg(feature = "tui")]
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_for_tui(
+        input_model: ModelHandle<BlocklistAIInputModel>,
+        context_model: ModelHandle<BlocklistAIContextModel>,
+        conversation_selection: ConversationSelectionHandle,
+        action_model: ModelHandle<BlocklistAIActionModel>,
+        active_session: ModelHandle<ActiveSession>,
+        terminal_model: Arc<FairMutex<TerminalModel>>,
+        terminal_surface_id: EntityId,
+        ctx: &mut ModelContext<Self>,
+    ) -> Self {
+        Self::new(
+            input_model,
+            context_model,
+            conversation_selection,
+            action_model,
+            active_session,
+            terminal_model,
+            terminal_surface_id,
+            ctx,
+        )
+    }
 
     /// Creates a controller for a terminal surface.
     #[allow(clippy::too_many_arguments)]
-    pub fn new(
+    pub(crate) fn new(
         input_model: ModelHandle<BlocklistAIInputModel>,
         context_model: ModelHandle<BlocklistAIContextModel>,
         conversation_selection: ConversationSelectionHandle,
@@ -637,6 +671,16 @@ impl BlocklistAIController {
         }
     }
 
+    fn take_team_context_for_continuation(
+        &mut self,
+        conversation_id: AIConversationId,
+        ctx: &mut ModelContext<Self>,
+    ) -> Option<TeamContextForOperation> {
+        self.action_model.update(ctx, |action_model, _| {
+            action_model.take_request_team_context(conversation_id)
+        })
+    }
+
     /// Internal method to send a query to the AI model. External callers should use either
     /// `send_user_query_in_conversation`, `send_user_in_conversation`, or
     /// `send_custom_ai_input_query` instead.
@@ -652,6 +696,7 @@ impl BlocklistAIController {
         // (None if this is not a shared session).
         shared_session_participant_id: Option<ParticipantId>,
         is_queued_prompt: bool,
+        team_context: TeamContextForOperation,
         ctx: &mut ModelContext<Self>,
     ) {
         // Store the participant who initiated this query before sending
@@ -703,6 +748,7 @@ impl BlocklistAIController {
                 self,
                 input_query.queued_query_id,
                 conversation_id_override,
+                team_context,
                 ctx,
             );
             return;
@@ -838,12 +884,13 @@ impl BlocklistAIController {
             RequestInput::for_task(
                 inputs,
                 task_id,
-                &self.active_session,
+                self.request_input_session(),
                 self.get_current_response_initiator(),
                 conversation_id,
-                self.terminal_surface_id,
+                &team_context,
                 ctx,
             ),
+            team_context,
             Some(RequestMetadata {
                 is_autodetected_user_query: !self.input_model.as_ref(ctx).is_input_type_locked(),
                 entrypoint: entrypoint_type,
@@ -947,6 +994,7 @@ impl BlocklistAIController {
         static_query_type: Option<StaticQueryType>,
         entrypoint_type: EntrypointType,
         participant_id: Option<ParticipantId>,
+        team_context: TeamContextForOperation,
         ctx: &mut ModelContext<Self>,
     ) {
         self.send_user_query_in_new_conversation_internal(
@@ -956,6 +1004,7 @@ impl BlocklistAIController {
             participant_id,
             /*is_queued_prompt*/ false,
             /*queued_query_id*/ None,
+            team_context,
             ctx,
         );
     }
@@ -964,6 +1013,7 @@ impl BlocklistAIController {
     /// Same as [`Self::send_user_query_in_new_conversation`] but marks the emitted
     /// `SentRequest` event so UI subscribers (e.g. the input editor) know not to treat
     /// this as a direct user submission and therefore not clear the input buffer.
+    #[allow(clippy::too_many_arguments)]
     pub fn send_queued_user_query_in_new_conversation(
         &mut self,
         query: String,
@@ -971,6 +1021,7 @@ impl BlocklistAIController {
         entrypoint_type: EntrypointType,
         participant_id: Option<ParticipantId>,
         queued_query_id: QueuedQueryId,
+        team_context: TeamContextForOperation,
         ctx: &mut ModelContext<Self>,
     ) {
         self.send_user_query_in_new_conversation_internal(
@@ -980,6 +1031,7 @@ impl BlocklistAIController {
             participant_id,
             /*is_queued_prompt*/ true,
             Some(queued_query_id),
+            team_context,
             ctx,
         );
     }
@@ -993,6 +1045,7 @@ impl BlocklistAIController {
         participant_id: Option<ParticipantId>,
         is_queued_prompt: bool,
         queued_query_id: Option<QueuedQueryId>,
+        team_context: TeamContextForOperation,
         ctx: &mut ModelContext<Self>,
     ) {
         let participant_id = participant_id.or_else(|| self.get_sharer_participant_id());
@@ -1037,6 +1090,7 @@ impl BlocklistAIController {
                 entrypoint_type,
                 participant_id,
                 is_queued_prompt,
+                team_context,
                 ctx,
             );
         } else {
@@ -1054,6 +1108,7 @@ impl BlocklistAIController {
                 entrypoint_type,
                 participant_id,
                 is_queued_prompt,
+                team_context,
                 ctx,
             );
         }
@@ -1065,6 +1120,7 @@ impl BlocklistAIController {
         &mut self,
         query: String,
         conversation_id: AIConversationId,
+        team_context: TeamContextForOperation,
         ctx: &mut ModelContext<Self>,
     ) {
         self.send_user_query_in_conversation_internal(
@@ -1076,6 +1132,7 @@ impl BlocklistAIController {
             EntrypointType::AgentInitiated,
             /*is_queued_prompt*/ false,
             /*queued_query_id*/ None,
+            team_context,
             ctx,
         );
     }
@@ -1087,6 +1144,7 @@ impl BlocklistAIController {
         query: String,
         conversation_id: AIConversationId,
         participant_id: Option<ParticipantId>,
+        team_context: TeamContextForOperation,
         ctx: &mut ModelContext<Self>,
     ) -> bool {
         self.send_user_query_in_conversation_internal(
@@ -1098,6 +1156,7 @@ impl BlocklistAIController {
             EntrypointType::UserInitiated,
             /*is_queued_prompt*/ false,
             /*queued_query_id*/ None,
+            team_context,
             ctx,
         )
     }
@@ -1112,6 +1171,7 @@ impl BlocklistAIController {
         conversation_id: AIConversationId,
         participant_id: Option<ParticipantId>,
         queued_query_id: QueuedQueryId,
+        team_context: TeamContextForOperation,
         ctx: &mut ModelContext<Self>,
     ) {
         self.send_user_query_in_conversation_internal(
@@ -1123,6 +1183,7 @@ impl BlocklistAIController {
             EntrypointType::UserInitiated,
             /*is_queued_prompt*/ true,
             Some(queued_query_id),
+            team_context,
             ctx,
         );
     }
@@ -1134,6 +1195,7 @@ impl BlocklistAIController {
         conversation_id: AIConversationId,
         participant_id: Option<ParticipantId>,
         additional_attachments: HashMap<String, AIAgentAttachment>,
+        team_context: TeamContextForOperation,
         ctx: &mut ModelContext<Self>,
     ) {
         self.send_user_query_in_conversation_internal(
@@ -1145,6 +1207,7 @@ impl BlocklistAIController {
             EntrypointType::UserInitiated,
             /*is_queued_prompt*/ false,
             /*queued_query_id*/ None,
+            team_context,
             ctx,
         );
     }
@@ -1158,6 +1221,7 @@ impl BlocklistAIController {
         query: String,
         conversation_id: AIConversationId,
         participant_id: Option<ParticipantId>,
+        team_context: TeamContextForOperation,
         ctx: &mut ModelContext<Self>,
     ) {
         self.send_user_query_in_conversation_internal(
@@ -1169,6 +1233,7 @@ impl BlocklistAIController {
             EntrypointType::UserInitiated,
             /*is_queued_prompt*/ false,
             /*queued_query_id*/ None,
+            team_context,
             ctx,
         );
     }
@@ -1184,6 +1249,7 @@ impl BlocklistAIController {
         entrypoint_type: EntrypointType,
         is_queued_prompt: bool,
         queued_query_id: Option<QueuedQueryId>,
+        team_context: TeamContextForOperation,
         ctx: &mut ModelContext<Self>,
     ) -> bool {
         let is_viewer = self
@@ -1302,6 +1368,7 @@ impl BlocklistAIController {
             entrypoint_type,
             participant_id,
             is_queued_prompt,
+            team_context,
             ctx,
         );
         true
@@ -1311,6 +1378,7 @@ impl BlocklistAIController {
     pub fn send_zero_state_prompt_suggestion(
         &mut self,
         query_type: ZeroStatePromptSuggestionType,
+        team_context: TeamContextForOperation,
         ctx: &mut ModelContext<Self>,
     ) {
         let participant_id = self.get_sharer_participant_id();
@@ -1328,6 +1396,7 @@ impl BlocklistAIController {
             EntrypointType::ZeroStateAgentModePromptSuggestion,
             participant_id,
             /*is_queued_prompt*/ false,
+            team_context,
             ctx,
         );
     }
@@ -1336,6 +1405,7 @@ impl BlocklistAIController {
     pub fn send_custom_ai_input_query(
         &mut self,
         ai_input: AIAgentInput,
+        team_context: TeamContextForOperation,
         ctx: &mut ModelContext<Self>,
     ) {
         let participant_id = self.get_sharer_participant_id();
@@ -1365,6 +1435,7 @@ impl BlocklistAIController {
             EntrypointType::UserInitiated,
             participant_id,
             /*is_queued_prompt*/ false,
+            team_context,
             ctx,
         )
     }
@@ -1372,13 +1443,39 @@ impl BlocklistAIController {
     pub fn send_slash_command_request(
         &mut self,
         slash_command: SlashCommandRequest,
+        team_context: TeamContextForOperation,
         ctx: &mut ModelContext<Self>,
     ) {
-        slash_command.send_request(self, None, None, ctx);
+        slash_command.send_request(self, None, None, team_context, ctx);
+    }
+    pub(crate) fn send_slash_command_request_with_stored_team_context(
+        &mut self,
+        slash_command: SlashCommandRequest,
+        conversation_id: AIConversationId,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let Some(team_context) = self.take_team_context_for_continuation(conversation_id, ctx)
+        else {
+            report_error!(
+                "Missing team context for action-result continuation",
+                extra: { "conversation_id" => ?conversation_id }
+            );
+            return;
+        };
+        slash_command.send_request(self, None, Some(conversation_id), team_context, ctx);
     }
     /// Starts the create-project agent flow with the supplied project description.
-    pub fn send_create_new_project_request(&mut self, query: String, ctx: &mut ModelContext<Self>) {
-        self.send_slash_command_request(SlashCommandRequest::CreateNewProject { query }, ctx);
+    pub fn send_create_new_project_request(
+        &mut self,
+        query: String,
+        team_context: TeamContextForOperation,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        self.send_slash_command_request(
+            SlashCommandRequest::CreateNewProject { query },
+            team_context,
+            ctx,
+        );
     }
 
     /// Resolves a skill reference against this controller's active execution host.
@@ -1401,13 +1498,20 @@ impl BlocklistAIController {
         user_query: Option<String>,
         queued_query_id: Option<QueuedQueryId>,
         conversation_id: Option<AIConversationId>,
+        team_context: TeamContextForOperation,
         ctx: &mut ModelContext<Self>,
     ) {
         let request = SlashCommandRequest::InvokeSkill { skill, user_query };
         if let Some(query_id) = queued_query_id {
-            self.send_queued_slash_command_request(request, query_id, conversation_id, ctx);
+            self.send_queued_slash_command_request(
+                request,
+                query_id,
+                conversation_id,
+                team_context,
+                ctx,
+            );
         } else {
-            self.send_slash_command_request(request, ctx);
+            self.send_slash_command_request(request, team_context, ctx);
         }
     }
 
@@ -1416,10 +1520,11 @@ impl BlocklistAIController {
         &mut self,
         reference: SkillReference,
         user_query: Option<String>,
+        team_context: TeamContextForOperation,
         ctx: &mut ModelContext<Self>,
     ) -> Result<(), ActiveSkillLookupError> {
         let skill = self.resolve_skill_for_invocation(&reference, ctx)?;
-        self.send_resolved_skill_invocation(skill, user_query, None, None, ctx);
+        self.send_resolved_skill_invocation(skill, user_query, None, None, team_context, ctx);
         Ok(())
     }
 
@@ -1431,9 +1536,16 @@ impl BlocklistAIController {
         slash_command: SlashCommandRequest,
         queued_query_id: QueuedQueryId,
         conversation_id: Option<AIConversationId>,
+        team_context: TeamContextForOperation,
         ctx: &mut ModelContext<Self>,
     ) {
-        slash_command.send_request(self, Some(queued_query_id), conversation_id, ctx);
+        slash_command.send_request(
+            self,
+            Some(queued_query_id),
+            conversation_id,
+            team_context,
+            ctx,
+        );
     }
 
     /// Mark a conversation to follow up after its actions complete and attempt to send immediately
@@ -1475,6 +1587,7 @@ impl BlocklistAIController {
     pub fn send_ai_input_with_context(
         &mut self,
         build_input: impl FnOnce(Arc<[AIAgentContext]>) -> AIAgentInput,
+        team_context: TeamContextForOperation,
         ctx: &mut ModelContext<Self>,
     ) {
         let context = input_context_for_request(
@@ -1485,7 +1598,7 @@ impl BlocklistAIController {
             vec![],
             ctx,
         );
-        self.send_custom_ai_input_query(build_input(context), ctx);
+        self.send_custom_ai_input_query(build_input(context), team_context, ctx);
     }
 
     /// Sends the result of a passive suggestion (accepted/rejected code diff or
@@ -1495,6 +1608,7 @@ impl BlocklistAIController {
         conversation_id: Option<AIConversationId>,
         suggestion: PassiveSuggestionResultType,
         trigger: Option<PassiveSuggestionTrigger>,
+        team_context: TeamContextForOperation,
         ctx: &mut ModelContext<Self>,
     ) {
         let which_task = match conversation_id {
@@ -1549,6 +1663,7 @@ impl BlocklistAIController {
             },
             participant_id,
             /*is_queued_prompt*/ false,
+            team_context,
             ctx,
         );
     }
@@ -1591,6 +1706,14 @@ impl BlocklistAIController {
         if finished_results.is_empty() {
             return;
         }
+        let Some(team_context) = self.take_team_context_for_continuation(conversation_id, ctx)
+        else {
+            report_error!(
+                "Missing team context for action-result continuation",
+                extra: { "conversation_id" => ?conversation_id }
+            );
+            return;
+        };
 
         // Check whether any result will trigger a server-side subagent (e.g. CLI
         // subagent for LRC), or if one is already active. If so, we must not
@@ -1614,10 +1737,10 @@ impl BlocklistAIController {
         let mut request_input = RequestInput::for_actions_results(
             finished_results,
             context,
-            &self.active_session,
+            self.request_input_session(),
             self.get_current_response_initiator(),
             conversation_id,
-            self.terminal_surface_id,
+            &team_context,
             ctx,
         );
 
@@ -1651,6 +1774,7 @@ impl BlocklistAIController {
 
         let result = self.send_request_input(
             request_input,
+            team_context,
             None,
             RecoveryBudget::fresh(),
             /*is_queued_prompt*/ false,
@@ -1909,18 +2033,30 @@ impl BlocklistAIController {
         self.action_model.update(ctx, |action_model, ctx| {
             action_model.cancel_wait_for_events_for_conversation(conversation_id, ctx);
         });
+        let Some(team_context) = self.take_team_context_for_continuation(conversation_id, ctx)
+        else {
+            report_error!(
+                "Missing team context for pending-event continuation",
+                extra: { "conversation_id" => ?conversation_id }
+            );
+            OrchestrationEventService::handle(ctx).update(ctx, |svc, ctx| {
+                svc.requeue_awaiting_events(conversation_id, ctx);
+            });
+            return;
+        };
 
         if self
             .send_request_input(
                 RequestInput::for_task(
                     inputs,
                     task_id,
-                    &self.active_session,
+                    self.request_input_session(),
                     self.get_current_response_initiator(),
                     conversation_id,
-                    self.terminal_surface_id,
+                    &team_context,
                     ctx,
                 ),
+                team_context,
                 None,
                 RecoveryBudget::fresh(),
                 /*is_queued_prompt*/ false,
@@ -1989,15 +2125,34 @@ impl BlocklistAIController {
         &mut self,
         conversation_id: AIConversationId,
         additional_context: Vec<AIAgentContext>,
+        team_context: TeamContextForOperation,
         ctx: &mut ModelContext<Self>,
     ) {
         self.resume_conversation_with_recovery_budget(
             conversation_id,
+            team_context,
             RecoveryBudget::fresh(),
             /*is_auto_resume_after_error*/ false,
             additional_context,
             ctx,
         );
+    }
+
+    pub fn resume_conversation_with_stored_team_context(
+        &mut self,
+        conversation_id: AIConversationId,
+        additional_context: Vec<AIAgentContext>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let Some(team_context) = self.take_team_context_for_continuation(conversation_id, ctx)
+        else {
+            report_error!(
+                "Missing team context for stored conversation resume",
+                extra: { "conversation_id" => ?conversation_id }
+            );
+            return;
+        };
+        self.resume_conversation(conversation_id, additional_context, team_context, ctx);
     }
 
     /// Resumes the conversation with `recovery` as the new request's retry/resume budget.
@@ -2007,6 +2162,7 @@ impl BlocklistAIController {
     fn resume_conversation_with_recovery_budget(
         &mut self,
         conversation_id: AIConversationId,
+        team_context: TeamContextForOperation,
         recovery: RecoveryBudget,
         is_auto_resume_after_error: bool,
         additional_context: Vec<AIAgentContext>,
@@ -2062,12 +2218,13 @@ impl BlocklistAIController {
             RequestInput::for_task(
                 inputs,
                 task_id,
-                &self.active_session,
+                self.request_input_session(),
                 self.get_current_response_initiator(),
                 conversation_id,
-                self.terminal_surface_id,
+                &team_context,
                 ctx,
             ),
+            team_context,
             metadata,
             recovery,
             /*is_queued_prompt*/ false,
@@ -2093,6 +2250,7 @@ impl BlocklistAIController {
     ) {
         let backoff = resume.backoff();
         let recovery = resume.recovery();
+        let team_context = resume.into_team_context();
         let wait_for_online = NetworkStatus::as_ref(ctx).wait_until_online();
         let wait_for_modal_closed =
             OneTimeModalModel::as_ref(ctx).wait_until_auto_handoff_sleep_modal_closed();
@@ -2109,6 +2267,7 @@ impl BlocklistAIController {
             me.pending_auto_resume_handles.remove(&conversation_id);
             me.resume_conversation_with_recovery_budget(
                 conversation_id,
+                team_context,
                 recovery,
                 /*is_auto_resume_after_error*/ true,
                 vec![],
@@ -2124,6 +2283,7 @@ impl BlocklistAIController {
         query: String,
         block_id: &BlockId,
         file_contexts: Vec<FileContext>,
+        team_context: TeamContextForOperation,
         ctx: &mut ModelContext<Self>,
     ) -> anyhow::Result<(AIConversationId, ResponseStreamId)> {
         let mut input_context = file_contexts
@@ -2146,12 +2306,13 @@ impl BlocklistAIController {
                     context: input_context.into(),
                 }],
                 new_conversation.get_root_task_id().clone(),
-                &self.active_session,
+                self.request_input_session(),
                 self.get_current_response_initiator(),
                 new_conversation.id(),
-                self.terminal_surface_id,
+                &team_context,
                 ctx,
             ),
+            team_context,
             Some(RequestMetadata {
                 is_autodetected_user_query: false,
                 entrypoint: EntrypointType::PromptSuggestion {
@@ -2185,11 +2346,12 @@ impl BlocklistAIController {
     /// context and server token are included so the server can use prior
     /// context. Otherwise a fresh, ephemeral conversation ID is generated
     /// without touching the history model.
-    pub fn build_passive_suggestions_request_params(
+    pub(crate) fn build_passive_suggestions_request_params(
         &self,
         followup_conversation_id: Option<AIConversationId>,
         trigger: PassiveSuggestionTrigger,
         supported_tools: Vec<ToolType>,
+        team_context: TeamContextForOperation,
         ctx: &ModelContext<Self>,
     ) -> anyhow::Result<(AIConversationId, api::RequestParams)> {
         let history_model = BlocklistAIHistoryModel::as_ref(ctx);
@@ -2258,10 +2420,10 @@ impl BlocklistAIController {
         let request_input = RequestInput::for_task(
             inputs,
             task_id,
-            &self.active_session,
+            self.request_input_session(),
             self.get_current_response_initiator(),
             conversation_id,
-            self.terminal_surface_id,
+            &team_context,
             ctx,
         )
         .with_supported_tools(supported_tools);
@@ -2274,14 +2436,16 @@ impl BlocklistAIController {
             is_auto_resume_after_error: false,
         });
 
-        let request_params = api::RequestParams::new(
+        let mut request_params = api::RequestParams::new(
             Some(self.terminal_surface_id),
+            &team_context,
             SessionContext::from_session(self.active_session.as_ref(ctx), ctx),
             &request_input,
             conversation_data,
             metadata,
             ctx,
         );
+        request_params.apply_team_byo_policy(&team_context, ctx);
 
         Ok((conversation_id, request_params))
     }
@@ -2290,6 +2454,7 @@ impl BlocklistAIController {
         &mut self,
         block_output: String,
         trigger: PassiveSuggestionTrigger,
+        team_context: TeamContextForOperation,
         ctx: &mut ModelContext<Self>,
     ) -> anyhow::Result<(AIConversationId, ResponseStreamId)> {
         let attachments = vec![AIAgentAttachment::PlainText(block_output.to_string())];
@@ -2312,12 +2477,13 @@ impl BlocklistAIController {
             RequestInput::for_task(
                 inputs,
                 new_conversation.get_root_task_id().clone(),
-                &self.active_session,
+                self.request_input_session(),
                 self.get_current_response_initiator(),
                 new_conversation.id(),
-                self.terminal_surface_id,
+                &team_context,
                 ctx,
             ),
+            team_context,
             Some(RequestMetadata {
                 is_autodetected_user_query: false,
                 entrypoint: EntrypointType::TriggerPassiveSuggestion {
@@ -2351,6 +2517,37 @@ impl BlocklistAIController {
     /// Set the per-session directory for downloading file attachments.
     pub fn set_attachments_download_dir(&mut self, dir: std::path::PathBuf) {
         self.attachments_download_dir = Some(dir);
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    pub(crate) fn force_refresh_geap_credentials(
+        &mut self,
+        conversation_id: AIConversationId,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        use ::ai::api_keys::ApiKeyManager;
+
+        let action_model = self.action_model.clone();
+        let geap_policy = {
+            let Some(team_context) = action_model
+                .as_ref(ctx)
+                .request_team_context(conversation_id)
+            else {
+                report_error!(
+                    "Missing team context for GEAP credential refresh",
+                    extra: { "conversation_id" => ?conversation_id }
+                );
+                return;
+            };
+            crate::ai::geap_credentials::geap_policy_for_context(team_context, ctx)
+        };
+        ApiKeyManager::handle(ctx).update(ctx, move |manager, ctx| {
+            crate::ai::geap_credentials::force_refresh_geap_credentials_for_policy(
+                manager,
+                geap_policy,
+                ctx,
+            );
+        });
     }
 
     fn start_new_conversation_for_request<'a>(
@@ -2393,6 +2590,7 @@ impl BlocklistAIController {
     fn send_request_input(
         &mut self,
         request_input: RequestInput,
+        team_context: TeamContextForOperation,
         query_metadata: Option<RequestMetadata>,
         recovery: RecoveryBudget,
         is_queued_prompt: bool,
@@ -2495,28 +2693,29 @@ impl BlocklistAIController {
             &conversation_data.server_conversation_token,
         );
 
-        // Safety net: re-arm the Gemini Enterprise (GEAP) credential refresh
-        // chain if it was parked or never armed, so upcoming requests can
-        // authenticate. The connected Grok subscription's request-time OAuth
-        // refresh is handled in the response stream's send path
-        // (`ResponseStream::spawn_request`).
-        #[cfg(not(target_family = "wasm"))]
-        {
-            use ::ai::api_keys::ApiKeyManager;
-
-            ApiKeyManager::handle(ctx).update(ctx, |manager, ctx| {
-                crate::ai::geap_credentials::refresh_geap_credentials_if_needed(manager, ctx);
-            });
-        }
-
         let mut request_params = api::RequestParams::new(
             Some(self.terminal_surface_id),
+            &team_context,
             SessionContext::from_session(self.active_session.as_ref(ctx), ctx),
             &request_input,
             conversation_data.clone(),
             query_metadata,
             ctx,
         );
+        request_params.apply_team_byo_policy(&team_context, ctx);
+
+        #[cfg(not(target_family = "wasm"))]
+        {
+            use ::ai::api_keys::ApiKeyManager;
+
+            ApiKeyManager::handle(ctx).update(ctx, |manager, ctx| {
+                crate::ai::geap_credentials::refresh_geap_credentials_if_needed_for_binding(
+                    manager,
+                    request_params.geap_mint_binding.as_ref(),
+                    ctx,
+                );
+            });
+        }
         request_params.parent_agent_id = parent_agent_id;
         request_params.agent_name = agent_name;
 
@@ -2532,7 +2731,13 @@ impl BlocklistAIController {
                 client_exchange_id: None,
                 model_id: Some(request_params.model.clone()),
             };
-            ResponseStream::new(request_params.clone(), ai_identifiers, recovery, ctx)
+            ResponseStream::new(
+                request_params.clone(),
+                team_context,
+                ai_identifiers,
+                recovery,
+                ctx,
+            )
         });
         let response_stream_id = response_stream.as_ref(ctx).id().clone();
         let response_stream_clone = response_stream.clone();
@@ -3172,6 +3377,23 @@ impl BlocklistAIController {
                     });
                 }
 
+                let pending_resume =
+                    response_stream.update(ctx, |stream, _| stream.take_pending_resume());
+                if let Some(resume) = pending_resume {
+                    self.schedule_auto_resume_after_error(conversation_id, resume, ctx);
+                } else if let Some(team_context) =
+                    response_stream.update(ctx, |stream, _| stream.take_team_context())
+                {
+                    self.action_model.update(ctx, |action_model, _| {
+                        action_model.set_request_team_context(conversation_id, team_context);
+                    });
+                } else {
+                    report_error!(
+                        "Response stream completed without its team context",
+                        extra: { "conversation_id" => ?conversation_id }
+                    );
+                }
+
                 // Cancelled streams will handle pending_response_stream updates synchronously.
                 if cancellation.is_none() {
                     self.in_flight_response_streams.cleanup_stream(&stream_id);
@@ -3179,14 +3401,6 @@ impl BlocklistAIController {
                     // Now that the stream is cleaned up, re-check for pending
                     // orchestration events that couldn't be drained earlier.
                     self.handle_pending_events_ready(conversation_id, ctx);
-                }
-
-                // Before cleaning up the response stream, check if we should attempt to resume.
-                // The resume inherits the failed request's remaining recovery budget, so
-                // retries and resumes stay bounded by one shared counter.
-                let pending_resume = response_stream.as_ref(ctx).pending_resume();
-                if let Some(resume) = pending_resume {
-                    self.schedule_auto_resume_after_error(conversation_id, resume, ctx);
                 }
 
                 // Clean up the response stream tracking entry now that the stream is complete.

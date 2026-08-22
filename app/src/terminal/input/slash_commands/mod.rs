@@ -71,6 +71,7 @@ use crate::view_components::DismissibleToast;
 use crate::workflows::command_parser::compute_workflow_display_data;
 use crate::workflows::{WorkflowSelectionSource, WorkflowSource, WorkflowType};
 use crate::workspace::{ForkedConversationDestination, ToastStack, WorkspaceAction};
+use crate::workspaces::user_workspaces::UserWorkspaces;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AcceptSlashCommandOrSavedPrompt {
@@ -1531,11 +1532,13 @@ impl Input {
         let followup_attachments = QueuedQueryModel::as_ref(ctx)
             .attachments_for(conversation_id, queued_query_id)
             .to_vec();
+        let team_context = UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx);
         self.ai_controller.update(ctx, move |controller, ctx| {
             controller.send_queued_slash_command_request(
                 SlashCommandRequest::Summarize { prompt: None },
                 queued_query_id,
                 Some(conversation_id),
+                team_context,
                 ctx,
             );
         });
