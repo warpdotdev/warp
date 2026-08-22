@@ -31,7 +31,7 @@
 
 ## About
 
-[Warp](https://www.warp.dev) is an agentic development environment, born out of the terminal. Use Warp's built-in coding agent, or bring your own CLI agent (Claude Code, Codex, Gemini CLI, and others).
+[Warp](https://www.warp.dev) is an agentic development environment, born out of the terminal. Use Warp's built-in coding agent, or bring your own CLI agent ([Claude Code](https://www.warp.dev/agents/claude-code), [Codex](https://www.warp.dev/agents/codex), [Gemini CLI](https://www.warp.dev/agents/gemini-cli), and others).
 
 ## Installation
 
