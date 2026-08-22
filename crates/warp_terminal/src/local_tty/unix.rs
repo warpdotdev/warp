@@ -28,7 +28,7 @@ use warp_core::cli_agent_protocol::{
 use warp_core::features::FeatureFlag;
 use warp_core::safe_error;
 use warp_errors::report_if_error;
-use warpui::{AppContext, SingletonEntity};
+use warpui_core::{AppContext, SingletonEntity};
 
 use super::event_loop::{PTY_TOKEN, SIGNALS_TOKEN};
 use super::spawner::{PtyHandle, PtySpawnHooks, PtySpawnInfo, PtySpawner};

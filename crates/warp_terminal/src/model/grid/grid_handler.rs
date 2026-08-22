@@ -32,7 +32,7 @@ use warp_core::semantic_selection::{SMART_SELECT_MATCH_WINDOW_LIMIT, SemanticSel
 use warp_core::{safe_assert, safe_assert_eq};
 use warp_errors::report_error;
 use warp_util::path::CleanPathResult;
-use warpui::color::ColorU;
+use warpui_core::color::ColorU;
 
 use super::displayed_output::DisplayedOutput;
 use super::grapheme_cursor::{self, GraphemeCursor};

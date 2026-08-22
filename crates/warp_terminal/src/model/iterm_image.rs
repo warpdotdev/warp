@@ -3,7 +3,7 @@ use std::path::Path;
 use base64::Engine;
 use pathfinder_geometry::vector::Vector2F;
 use rand::Rng;
-use warpui::util::parse_u32;
+use warpui_core::util::parse_u32;
 
 #[derive(Debug, Default, Clone)]
 pub struct ITermImage {

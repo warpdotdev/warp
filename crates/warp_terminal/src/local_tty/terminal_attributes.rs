@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use nix::Result;
 use nix::sys::termios::{self, Termios};
-use warpui::{Entity, ModelContext};
+use warpui_core::{Entity, ModelContext};
 
 /// The default amount of time we wait before polling the terminal attributes again.
 const POLL_INTERVAL: Duration = Duration::from_secs(1);
@@ -51,7 +51,7 @@ impl TerminalAttributesPoller {
         let fd = self.fd;
         ctx.spawn(
             async move {
-                warpui::r#async::Timer::after(POLL_INTERVAL).await;
+                warpui_core::r#async::Timer::after(POLL_INTERVAL).await;
                 fetch_termial_attributes(fd)
             },
             move |me, termios, ctx| {

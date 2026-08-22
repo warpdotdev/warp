@@ -4,7 +4,7 @@ use async_broadcast::Receiver;
 use futures_lite::StreamExt;
 use instant::{Duration, Instant};
 use parking_lot::FairMutex;
-use warpui::r#async::executor::Background;
+use warpui_core::r#async::executor::Background;
 
 /// We want to measure throughput as bytes / sec.
 const PTY_THROUGHPUT_TIME_INTERVAL: Duration = Duration::from_secs(1);

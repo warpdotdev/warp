@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::io;
 
-use warpui::color::ColorU;
+use warpui_core::color::ColorU;
 
 use super::ProcessorInput;
 use super::dcs_hooks::*;

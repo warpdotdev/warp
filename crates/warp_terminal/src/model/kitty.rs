@@ -8,12 +8,12 @@ use base64::Engine;
 use flate2::read::ZlibDecoder;
 use pathfinder_geometry::vector::Vector2F;
 use rand::Rng;
-use warpui::assets::asset_cache::Asset;
-use warpui::image_cache::{
+use warpui_core::assets::asset_cache::Asset;
+use warpui_core::image_cache::{
     CustomHeaderCreationError, CustomImageFormat, CustomImageHeader, FitType, ImageType,
     resize_dimensions,
 };
-use warpui::util::{parse_i32, parse_u32};
+use warpui_core::util::{parse_i32, parse_u32};
 
 use super::escape_sequences::C1;
 

@@ -12,7 +12,7 @@ use parking_lot::Mutex;
 use rangemap::{RangeInclusiveMap, StepLite};
 use warp_core::safe_warn;
 use warp_errors::report_error;
-use warpui::elements::SecretRange;
+use warpui_core::elements::SecretRange;
 
 use super::RangeInModel;
 use super::grid::grid_handler::GridHandler;

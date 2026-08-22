@@ -21,7 +21,7 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 use warp_core::channel::ChannelState;
 use warp_core::features::FeatureFlag;
 use warp_errors::report_error;
-use warpui::image_cache::{FitType, resize_dimensions};
+use warpui_core::image_cache::{FitType, resize_dimensions};
 
 use super::{AbsolutePoint, FullGridClearBehavior, GridHandler, PerformResetGridChecks, TermMode};
 use crate::event::Event;
@@ -1148,7 +1148,7 @@ impl ansi::Handler for GridHandler {
         self.grid.cursor.charsets[index] = charset;
     }
 
-    fn set_color(&mut self, _: usize, _: warpui::color::ColorU) {
+    fn set_color(&mut self, _: usize, _: warpui_core::color::ColorU) {
         report_error!(
             "Handler method GridHandler::set_color should never be called. This should be handled by TerminalModel."
         );

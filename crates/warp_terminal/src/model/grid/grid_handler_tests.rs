@@ -4,7 +4,7 @@
 use std::ops::BitOrAssign;
 
 use warp_util::path::LineAndColumnArg;
-use warpui::text::words::is_default_word_boundary;
+use warpui_core::text::words::is_default_word_boundary;
 
 use super::*;
 use crate::model::blockgrid::BlockGrid;

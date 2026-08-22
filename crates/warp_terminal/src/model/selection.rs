@@ -13,8 +13,8 @@ pub use std::ops::{Range, RangeBounds};
 use pathfinder_geometry::vector::Vector2F;
 use vec1::Vec1;
 use warp_core::semantic_selection::SemanticSelection;
-use warpui::text::SelectionType;
-use warpui::units::Lines;
+use warpui_core::text::SelectionType;
+use warpui_core::units::Lines;
 
 use super::index::{Direction, VisibleRow};
 use crate::model::GridStorage;

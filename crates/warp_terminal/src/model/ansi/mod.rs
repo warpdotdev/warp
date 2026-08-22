@@ -32,7 +32,7 @@ use vte::{Params, Parser as VteParser, Perform as VtePerform};
 use warp_core::features::FeatureFlag;
 use warp_core::{safe_debug, safe_error, safe_warn};
 use warp_errors::report_error;
-use warpui::color::ColorU;
+use warpui_core::color::ColorU;
 
 use super::kitty::parse_kitty_chunk;
 use crate::model::completions::{

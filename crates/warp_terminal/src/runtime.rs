@@ -3,7 +3,7 @@ use std::cmp::max;
 use ordered_float::Float;
 use pathfinder_geometry::vector::{Vector2F, vec2f};
 use serde::{Deserialize, Serialize};
-use warpui::units::{IntoPixels, Pixels};
+use warpui_core::units::{IntoPixels, Pixels};
 
 use crate::model::Side;
 

@@ -65,7 +65,6 @@ warp_assets.workspace = true
 warp_core.workspace = true
 warp_errors.workspace = true
 warp_util.workspace = true
-warpui.workspace = true
 warpui_core.workspace = true
 
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
@@ -119,9 +118,9 @@ warp_core = { workspace = true, features = ["test-util"] }
 
 [features]
 crash_reporting = ["warp_errors/crash_reporting"]
-integration_tests = ["warp_core/integration_tests", "warpui/integration_tests"]
+integration_tests = ["warp_core/integration_tests", "warpui_core/integration_tests"]
 local_fs = ["warp_core/local_fs"]
 local_tty = []
 remote_tty = []
-test-util = ["warp_core/test-util", "warpui/test-util"]
+test-util = ["warp_core/test-util", "warpui_core/test-util"]
 tui = ["warpui_core/tui"]

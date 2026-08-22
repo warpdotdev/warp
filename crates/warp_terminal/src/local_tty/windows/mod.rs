@@ -17,7 +17,7 @@ use environment::get_shell_environment_variables;
 pub use environment::get_user_and_system_env_variable;
 use thiserror::Error;
 use warp_errors::{report_error, report_if_error};
-use warpui::{AppContext, SingletonEntity};
+use warpui_core::{AppContext, SingletonEntity};
 use windows::Win32::Foundation::{CloseHandle, HANDLE, WAIT_OBJECT_0, WAIT_TIMEOUT};
 use windows::Win32::System::Console::{COORD, HPCON};
 use windows::Win32::System::Threading::{

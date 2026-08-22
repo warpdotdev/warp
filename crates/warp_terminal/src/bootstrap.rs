@@ -5,7 +5,7 @@ use lazy_static::lazy_static;
 use memo_map::MemoMap;
 use rand::Rng;
 use warp_core::SessionId;
-use warpui::AssetProvider;
+use warpui_core::AssetProvider;
 
 use crate::shell::ShellType;
 

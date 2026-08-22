@@ -1,7 +1,7 @@
 use anyhow::Result;
 #[cfg(unix)]
 use warp_errors::report_error;
-use warpui::{AppContext, Entity, SingletonEntity};
+use warpui_core::{AppContext, Entity, SingletonEntity};
 #[cfg(unix)]
 use {
     crate::local_tty::server::TerminalServer, anyhow::bail, std::cmp::Reverse,

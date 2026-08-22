@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use hex;
 use warp_core::command::ExitCode;
 use warp_core::features::FeatureFlag;
-use warpui::color::ColorU;
+use warpui_core::color::ColorU;
 
 use super::*;
 use crate::model::ansi::InputBufferValue;
