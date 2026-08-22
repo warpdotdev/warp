@@ -125,8 +125,6 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::ClearAutosuggestionOnEscape,
         #[cfg(feature = "autoupdate_ui_revamp")]
         FeatureFlag::AutoupdateUIRevamp,
-        #[cfg(all(not(windows), feature = "kitty_images"))]
-        FeatureFlag::KittyImages,
         #[cfg(feature = "warp_packs")]
         FeatureFlag::WarpPacks,
         #[cfg(feature = "global_ai_analytics_banner")]

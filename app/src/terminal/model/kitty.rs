@@ -143,7 +143,6 @@ pub type KittyResponse = Result<(), KittyError>;
 pub enum KittyError {
     InvalidKittyAction(InvalidKittyAction),
     StorageError(StorageError),
-    KittyFeatureDisabled,
 }
 
 #[derive(Debug, Clone)]
