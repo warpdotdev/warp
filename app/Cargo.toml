@@ -597,7 +597,6 @@ default = [
     "integration_command",
     "artifact_command",
     "conversation_api",
-    "cloud_environments",
     "create_environment_slash_command",
     "code_review_find",
     "async_find",
@@ -965,7 +964,6 @@ auto_open_code_review_pane = []
 inline_code_review = []
 integration_command = []
 artifact_command = []
-cloud_environments = []
 cloud_runners = []
 cloud_agent_runners = []
 create_environment_slash_command = []

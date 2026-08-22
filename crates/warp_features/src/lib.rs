@@ -461,9 +461,6 @@ pub enum FeatureFlag {
     /// Enables inline code review functionality
     InlineCodeReview,
 
-    /// Enables cloud environments management via CLI.
-    CloudEnvironments,
-
     /// Enables the /create-environment slash command for setting up Warp Environments
     CreateEnvironmentSlashCommand,
 
@@ -1141,9 +1138,6 @@ impl FeatureFlag {
             CodeReviewFind => Some("Enables the find bar in the code review pane."),
             BlocklistMarkdownImages => {
                 Some("Enables rendering markdown images inline in AI block list responses.")
-            }
-            CloudEnvironments => {
-                Some("Enables creating and managing Warp Environments via the CLI.")
             }
             CreateEnvironmentSlashCommand => Some(
                 "Enables the /create environment slash command for setting up Warp Environments with custom configurations.",
