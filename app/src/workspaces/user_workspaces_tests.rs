@@ -72,7 +72,7 @@ use crate::workspaces::update_manager::TeamUpdateManager;
 use crate::workspaces::user_workspaces::UserWorkspaces;
 use crate::workspaces::workspace::{
     AdminEnablementSetting, HostEnablementSetting, LlmHostSettings, MultiAdminPolicy,
-    PurchaseAddOnCreditsPolicy, Workspace,
+    PurchaseAddOnCreditsPolicy, SandboxedAgentSettings, Workspace,
 };
 
 #[derive(Default)]
@@ -1173,6 +1173,280 @@ fn test_team_contexts_represent_a_registered_teamless_window() {
                 .team_context(&weak_view, ctx)
                 .expect("a registered teamless window should resolve");
             assert_eq!(context.team_uid(), None);
+        });
+    })
+}
+
+fn team_with_sandboxed_denylist(uid: i64, patterns: &[&str]) -> Team {
+    let mut team = team_for_test();
+    team.uid = uid.into();
+    team.settings.sandboxed_agent.execute_commands_denylist = SplitListSetting {
+        values: patterns
+            .iter()
+            .map(|pattern| (*pattern).to_owned())
+            .collect(),
+        ..Default::default()
+    };
+    team
+}
+
+fn workspace_sandboxed_denylist(patterns: &[&str]) -> Option<SandboxedAgentSettings> {
+    Some(SandboxedAgentSettings {
+        execute_commands_denylist: Some(
+            patterns
+                .iter()
+                .map(|pattern| {
+                    AgentModeCommandExecutionPredicate::new_regex(pattern)
+                        .expect("test pattern should be a valid regex")
+                })
+                .collect(),
+        ),
+    })
+}
+
+/// Neither accessor's traversal order is observable — callers only ever ask whether some entry
+/// matches — so tests compare the denylist as a set, plus a length check to keep duplicates
+/// visible.
+fn denylist_patterns(
+    patterns: Vec<AgentModeCommandExecutionPredicate>,
+) -> (HashSet<String>, usize) {
+    (
+        patterns
+            .iter()
+            .map(|predicate| predicate.to_string())
+            .collect(),
+        patterns.len(),
+    )
+}
+
+fn expected_denylist(patterns: &[&str]) -> (HashSet<String>, usize) {
+    (
+        patterns.iter().map(|p| (*p).to_owned()).collect(),
+        patterns.len(),
+    )
+}
+
+/// Reads the denylist the way the enforcement path does: resolve the surface's scope from its
+/// handle at the moment of the read, then ask for that scope's rules.
+fn scoped_sandboxed_denylist(
+    view: &ViewHandle<TeamContextTestView>,
+    app: &AppContext,
+) -> Vec<AgentModeCommandExecutionPredicate> {
+    let team_context = (UserWorkspaces::team_context_resolver(view.downgrade()))(app);
+    UserWorkspaces::as_ref(app).sandboxed_agent_execute_commands_denylist_for_scope(&team_context)
+}
+
+/// Running in a team's context means running under that team's rules: two surfaces in windows
+/// on different teams read different denylists, concurrently, with neither leaking into the
+/// other.
+#[test]
+fn test_sandboxed_denylist_is_the_surfaces_own_window_team() {
+    let team_a = team_with_sandboxed_denylist(123, &["rm .*"]);
+    let team_b = team_with_sandboxed_denylist(456, &["curl .*"]);
+    let mut workspace = workspace_for_test(&team_a);
+    workspace.teams.push(team_b.clone());
+
+    App::test((), |mut app| async move {
+        initialize_window_team_test_app(&mut app, vec![workspace]);
+
+        let (window_a, view_a) = create_test_window(&mut app);
+        let (window_b, view_b) = create_test_window(&mut app);
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.set_team_for_window(window_a, team_a.uid, ctx);
+            user_workspaces.set_team_for_window(window_b, team_b.uid, ctx);
+        });
+
+        app.read(|ctx| {
+            assert_eq!(
+                denylist_patterns(scoped_sandboxed_denylist(&view_a, ctx)),
+                expected_denylist(&["rm .*"]),
+                "the surface in window A is governed by team A alone"
+            );
+            assert_eq!(
+                denylist_patterns(scoped_sandboxed_denylist(&view_b, ctx)),
+                expected_denylist(&["curl .*"]),
+                "team B's rules do not reach a surface running in team A's context"
+            );
+        });
+    })
+}
+
+/// The denylist is policy, not a fact captured when the surface was created, so it is resolved
+/// afresh: dragging the tab onto another team's window changes which rules apply to it.
+#[test]
+fn test_sandboxed_denylist_follows_a_surface_dragged_to_another_window() {
+    let team_a = team_with_sandboxed_denylist(123, &["rm .*"]);
+    let team_b = team_with_sandboxed_denylist(456, &["curl .*"]);
+    let mut workspace = workspace_for_test(&team_a);
+    workspace.teams.push(team_b.clone());
+
+    App::test((), |mut app| async move {
+        initialize_window_team_test_app(&mut app, vec![workspace]);
+
+        let (window_a, dragged_view) = create_test_window(&mut app);
+        let (window_b, _view_b) = create_test_window(&mut app);
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.set_team_for_window(window_a, team_a.uid, ctx);
+            user_workspaces.set_team_for_window(window_b, team_b.uid, ctx);
+        });
+
+        let dragged_view_id = dragged_view.id();
+        app.update(|ctx| {
+            ctx.transfer_view_tree_to_window(dragged_view_id, window_a, window_b);
+        });
+
+        app.read(|ctx| {
+            assert_eq!(
+                denylist_patterns(scoped_sandboxed_denylist(&dragged_view, ctx)),
+                expected_denylist(&["curl .*"]),
+                "the dragged surface is now governed by its destination window's team"
+            );
+        });
+    })
+}
+
+/// Retires the implicit `teams[0]` read: workspace settings are one arbitrarily-chosen team's
+/// effective settings once the user has any team, so they must not contribute.
+#[test]
+fn test_sandboxed_denylist_ignores_workspace_settings_once_a_team_exists() {
+    let team = team_with_sandboxed_denylist(123, &["rm .*"]);
+    let mut workspace = workspace_for_test(&team);
+    workspace.settings.sandboxed_agent_settings = workspace_sandboxed_denylist(&["git .*"]);
+
+    App::test((), |mut app| async move {
+        initialize_window_team_test_app(&mut app, vec![workspace]);
+
+        let (window_id, view) = create_test_window(&mut app);
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.set_team_for_window(window_id, team.uid, ctx);
+        });
+
+        app.read(|ctx| {
+            assert_eq!(
+                denylist_patterns(scoped_sandboxed_denylist(&view, ctx)),
+                expected_denylist(&["rm .*"]),
+                "the workspace's own denylist is not a team-neutral default"
+            );
+        });
+    })
+}
+
+/// A scope on no team must act as not on a team rather than borrow another team's rules, even
+/// though that is the less restrictive answer — substituting a team the surface is not in would
+/// enforce rules its user never agreed to and still miss the ones that do apply.
+#[test]
+fn test_sandboxed_denylist_is_empty_for_a_teamless_window_of_a_user_with_teams() {
+    let team = team_with_sandboxed_denylist(123, &["rm .*"]);
+    let mut workspace = workspace_for_test(&team);
+    workspace.settings.sandboxed_agent_settings = workspace_sandboxed_denylist(&["git .*"]);
+
+    App::test((), |mut app| async move {
+        initialize_window_team_test_app(&mut app, vec![workspace]);
+
+        let (window_id, view) = create_test_window(&mut app);
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.register_window(window_id, None, ctx);
+        });
+
+        app.read(|ctx| {
+            assert_eq!(
+                denylist_patterns(scoped_sandboxed_denylist(&view, ctx)),
+                expected_denylist(&[]),
+                "neither the only team's rules nor the workspace's stand in for no team"
+            );
+        });
+    })
+}
+
+#[test]
+fn test_sandboxed_denylist_falls_back_to_workspace_settings_without_any_team() {
+    let team = team_for_test();
+    let mut workspace = workspace_for_test(&team);
+    workspace.teams.clear();
+    workspace.settings.sandboxed_agent_settings = workspace_sandboxed_denylist(&["git .*"]);
+
+    App::test((), |mut app| async move {
+        initialize_window_team_test_app(&mut app, vec![workspace]);
+
+        let (_window_id, view) = create_test_window(&mut app);
+
+        app.read(|ctx| {
+            assert_eq!(
+                denylist_patterns(scoped_sandboxed_denylist(&view, ctx)),
+                expected_denylist(&["git .*"]),
+                "with no team anywhere, workspace settings are genuinely teamless data"
+            );
+        });
+    })
+}
+
+#[test]
+fn test_sandboxed_denylist_drops_unparsable_patterns() {
+    let team = team_with_sandboxed_denylist(123, &["rm .*", "[unclosed", "curl .*"]);
+    let workspace = workspace_for_test(&team);
+
+    App::test((), |mut app| async move {
+        initialize_window_team_test_app(&mut app, vec![workspace]);
+
+        let (window_id, view) = create_test_window(&mut app);
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.set_team_for_window(window_id, team.uid, ctx);
+        });
+
+        app.read(|ctx| {
+            assert_eq!(
+                denylist_patterns(scoped_sandboxed_denylist(&view, ctx)),
+                expected_denylist(&["rm .*", "curl .*"]),
+                "one malformed pattern must not void the rest of the denylist"
+            );
+        });
+    })
+}
+
+/// The unknown-surface fallback. A caller that cannot name a surface has no team to read, and a
+/// safety control must not take that as no policy, so every team's entries apply.
+#[test]
+fn test_sandboxed_denylist_without_a_surface_unions_every_teams_entries() {
+    let team_a = team_with_sandboxed_denylist(123, &["rm .*", "rm .*"]);
+    let team_b = team_with_sandboxed_denylist(456, &["rm .*", "[unclosed", "curl .*"]);
+    let first_workspace = workspace_for_test(&team_a);
+    let mut second_workspace = workspace_for_test(&team_b);
+    second_workspace.uid = "workspace_uid987654321".to_string().into();
+
+    App::test((), |mut app| async move {
+        initialize_window_team_test_app(&mut app, vec![first_workspace, second_workspace]);
+
+        app.read(|ctx| {
+            assert_eq!(
+                denylist_patterns(
+                    UserWorkspaces::as_ref(ctx)
+                        .sandboxed_agent_execute_commands_denylist_across_all_teams()
+                ),
+                expected_denylist(&["rm .*", "curl .*"]),
+                "teams in every workspace contribute, deduplicated, malformed patterns dropped"
+            );
+        });
+    })
+}
+
+#[test]
+fn test_sandboxed_denylist_without_a_surface_falls_back_to_workspace_settings() {
+    let team = team_for_test();
+    let mut workspace = workspace_for_test(&team);
+    workspace.teams.clear();
+    workspace.settings.sandboxed_agent_settings = workspace_sandboxed_denylist(&["git .*"]);
+
+    App::test((), |mut app| async move {
+        initialize_window_team_test_app(&mut app, vec![workspace]);
+
+        app.read(|ctx| {
+            assert_eq!(
+                denylist_patterns(
+                    UserWorkspaces::as_ref(ctx)
+                        .sandboxed_agent_execute_commands_denylist_across_all_teams()
+                ),
+                expected_denylist(&["git .*"])
+            );
         });
     })
 }

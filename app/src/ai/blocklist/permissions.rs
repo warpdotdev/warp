@@ -25,7 +25,7 @@ use crate::ai::mcp::mcp_provider_from_file_path;
 use crate::settings::{
     AISettings, AgentModeCodingPermissionsType, AgentModeCommandExecutionPredicate,
 };
-use crate::workspaces::user_workspaces::UserWorkspaces;
+use crate::workspaces::user_workspaces::{TeamScope, UserWorkspaces};
 use crate::workspaces::workspace::AiAutonomySettings;
 
 /// Whether or not a command can be auto-executed, along with a detailed reason.
@@ -224,17 +224,28 @@ impl BlocklistAIPermissions {
     }
 
     /// Returns the applicable workspace autonomy settings based on execution mode.
-    /// In sandboxed mode, returns settings derived from the sandboxed agent config.
     /// In unsandboxed mode, returns the standard AI autonomy settings.
+    ///
+    /// A sandboxed process answers to the sandbox instead, whose only organization policy is a
+    /// command denylist. That denylist is team-scoped, so it is not part of these settings; see
+    /// [`Self::get_org_execute_commands_denylist`].
     fn workspace_autonomy_settings(ctx: &AppContext) -> AiAutonomySettings {
         if AppExecutionMode::as_ref(ctx).is_sandboxed() {
-            let sandboxed = UserWorkspaces::as_ref(ctx).sandboxed_agent_settings();
-            AiAutonomySettings {
-                execute_commands_denylist: sandboxed.and_then(|s| s.execute_commands_denylist),
-                ..Default::default()
-            }
+            AiAutonomySettings::default()
         } else {
             UserWorkspaces::as_ref(ctx).ai_autonomy_settings()
+        }
+    }
+
+    /// Appends the entries of `additional` that `denylist` does not already carry.
+    fn extend_denylist(
+        denylist: &mut Vec<AgentModeCommandExecutionPredicate>,
+        additional: Vec<AgentModeCommandExecutionPredicate>,
+    ) {
+        for entry in additional {
+            if !denylist.contains(&entry) {
+                denylist.push(entry);
+            }
         }
     }
 
@@ -393,6 +404,10 @@ impl BlocklistAIPermissions {
         self.get_execute_commands_allowlist_for_profile(ctx, active_profile.id())
     }
 
+    /// The denylist a profile contributes, merged with the organization policy that does not
+    /// depend on a surface. A sandboxed process's organization denylist does depend on one, so
+    /// it is absent here and added by [`Self::get_execute_commands_denylist`], which knows the
+    /// surface. Enforcement must go through that; this alone is the profile editor's view.
     pub fn get_execute_commands_denylist_for_profile(
         &self,
         ctx: &AppContext,
@@ -410,29 +425,53 @@ impl BlocklistAIPermissions {
         match autonomy_settings.execute_commands_denylist {
             Some(org_denylist) => {
                 let mut merged = org_denylist;
-                for item in user_denylist {
-                    if !merged.contains(&item) {
-                        merged.push(item);
-                    }
-                }
+                Self::extend_denylist(&mut merged, user_denylist);
                 merged
             }
             None => user_denylist,
         }
     }
 
+    /// The workspace-level organization denylist, with no profile entries and no team scope.
+    ///
+    /// This is the denylist the profile-editing surfaces display as "enforced by your
+    /// organization". A sandboxed process's organization denylist is its team's and is not
+    /// visible here; enforcement therefore goes through
+    /// [`Self::org_execute_commands_denylist_for_scope`], never this.
     pub fn get_org_execute_commands_denylist(
         ctx: &AppContext,
     ) -> Vec<AgentModeCommandExecutionPredicate> {
-        let autonomy_settings = Self::workspace_autonomy_settings(ctx);
-        autonomy_settings
+        Self::workspace_autonomy_settings(ctx)
             .execute_commands_denylist
             .unwrap_or_default()
+    }
+
+    /// The organization denylist enforced on work done in `scope`'s team. Auto-approve may
+    /// bypass the user's denylist but never this one.
+    ///
+    /// Sandboxed and unsandboxed runs answer to different organization policy: a sandboxed agent
+    /// obeys its team's sandboxed-agent denylist, everything else obeys the workspace autonomy
+    /// denylist. Whether this process is sandboxed is a fact recorded when it launched, so it is
+    /// read from [`AppExecutionMode`]; which commands are denied is policy, so it is resolved on
+    /// every check from the team `scope` names at that moment. A tab dragged into a window on
+    /// another team is therefore governed by that team from the next check onwards.
+    fn org_execute_commands_denylist_for_scope(
+        scope: &dyn TeamScope,
+        ctx: &AppContext,
+    ) -> Vec<AgentModeCommandExecutionPredicate> {
+        if AppExecutionMode::as_ref(ctx).is_sandboxed() {
+            UserWorkspaces::as_ref(ctx).sandboxed_agent_execute_commands_denylist_for_scope(scope)
+        } else {
+            Self::get_org_execute_commands_denylist(ctx)
+        }
     }
 
     /// Returns a denylist of command regexes that AM should not auto-execute.
     /// Note that the caller is responsible for deciding how the workspace's/user's settings
     /// should affect how this gets used, if at all.
+    ///
+    /// Carries no team scope, so it omits a sandboxed process's team denylist; enforcement adds
+    /// that through [`Self::org_execute_commands_denylist_for_scope`].
     pub fn get_execute_commands_denylist(
         &self,
         ctx: &AppContext,
@@ -870,7 +909,11 @@ impl BlocklistAIPermissions {
 
     #[allow(clippy::too_many_arguments)]
     /// Returns whether or not Agent Mode can auto-execute the given command.
-    pub fn can_autoexecute_command(
+    ///
+    /// `team_scope` is the team the calling surface is running in; the organization policy this
+    /// applies is that team's. Callers resolve it from the surface at the moment of the check
+    /// rather than capturing it, so the answer follows the surface between windows.
+    pub(crate) fn can_autoexecute_command(
         &self,
         conversation_id: &AIConversationId,
         command: &str,
@@ -878,6 +921,7 @@ impl BlocklistAIPermissions {
         is_read_only: bool,
         is_risky: Option<bool>,
         terminal_view_id: Option<EntityId>,
+        team_scope: &dyn TeamScope,
         ctx: &AppContext,
     ) -> CommandExecutionPermission {
         // Normalize line continuations based on shell type.
@@ -905,15 +949,15 @@ impl BlocklistAIPermissions {
             && !AppExecutionMode::as_ref(ctx).is_sandboxed()
             && *AISettings::as_ref(ctx).auto_approve_bypasses_command_denylist;
 
-        // The denylist takes precedence over the remaining conditions.
-        let denylist = if bypass_user_denylist {
-            // Auto-approve may bypass the user denylist, but the organization denylist
-            // must always be enforced.
-            Self::get_org_execute_commands_denylist(ctx)
-        } else {
-            // Without the bypass, enforce both the organization and user denylists.
-            self.get_execute_commands_denylist(ctx, terminal_view_id)
-        };
+        // The denylist takes precedence over the remaining conditions. The organization half is
+        // always enforced; auto-approve may only drop the user's own entries.
+        let mut denylist = Self::org_execute_commands_denylist_for_scope(team_scope, ctx);
+        if !bypass_user_denylist {
+            Self::extend_denylist(
+                &mut denylist,
+                self.get_execute_commands_denylist(ctx, terminal_view_id),
+            );
+        }
         if commands_for_denylist
             .iter()
             .any(|c| denylist.iter().any(|d| d.matches(c)))

@@ -13,7 +13,8 @@ use warp::tui_export::{
 };
 use warp_core::execution_mode::{AppExecutionMode, ExecutionMode};
 use warp_core::semantic_selection::SemanticSelection;
-use warpui::{AddSingletonModel, App, EntityId, ModelHandle};
+use warpui::platform::WindowStyle;
+use warpui::{AddSingletonModel, AddWindowOptions, App, EntityId, ModelHandle};
 use warpui_core::elements::tui::{TuiElement, TuiText};
 use warpui_core::{AppContext, Entity, TuiView, TypedActionView, ViewHandle, WindowId};
 
@@ -124,6 +125,20 @@ pub(crate) fn add_test_action_model_and_events(
     // singleton, which these tests don't register; `default` skips it.
     let get_relevant_files = app.add_model(|_| GetRelevantFilesController::default());
     let terminal_surface_id = EntityId::new();
+    // The action model resolves team-scoped policy through its surface, so the surface has to
+    // be a real view in a window. Deliberately left on no team: no TUI window registers with
+    // `UserWorkspaces` today, so "a surface that resolves to no team" is what the TUI actually
+    // is. Assigning one here would quietly change what these tests prove.
+    let terminal_surface = app.update(|ctx| {
+        let (_window_id, host) = ctx.add_tui_window(
+            AddWindowOptions {
+                window_style: WindowStyle::NotStealFocus,
+                ..Default::default()
+            },
+            |_| TestHostView,
+        );
+        host.downgrade()
+    });
     let action_model = app.add_model(|ctx| {
         BlocklistAIActionModel::new(
             terminal_model,
@@ -131,6 +146,7 @@ pub(crate) fn add_test_action_model_and_events(
             &dispatcher,
             get_relevant_files,
             terminal_surface_id,
+            terminal_surface,
             ctx,
         )
     });
