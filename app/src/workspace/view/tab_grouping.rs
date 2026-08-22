@@ -546,6 +546,32 @@ impl Workspace {
         idx.max(self.pinned_boundary_index(tabs))
     }
 
+    /// Resolves a raw insertion index for a whole GROUP being dropped into
+    /// this window's tab list.
+    ///
+    /// The single-tab insert applies its clamps inside
+    /// `insert_transferred_tab_at_index`, but a group must resolve the index
+    /// BEFORE inserting, because the ghost slot has to be drawn at the same
+    /// place the members will actually land. Both callers go through here, so
+    /// ghost position and drop position agree by construction.
+    ///
+    /// Three clamps, matching the single-tab path:
+    /// - bounded by the list length,
+    /// - kept on the correct side of the pinned boundary (a pinned group stays
+    ///   inside the pinned prefix; an unpinned one stays out of it),
+    /// - pushed past any group whose run it would otherwise land inside, so a
+    ///   drop can never split an existing group in the target window.
+    pub(crate) fn resolve_group_drop_index(&self, raw: usize, group_pinned: bool) -> usize {
+        let index = raw.min(self.tabs.len());
+        let boundary = self.pinned_boundary_index(&self.tabs);
+        let index = if group_pinned {
+            index.min(boundary)
+        } else {
+            self.clamp_to_unpinned_region(&self.tabs, index)
+        };
+        self.clamp_past_group(index)
+    }
+
     /// Returns the slot just past the last member of `group_id`, suitable as
     /// an insert/move target that keeps the group contiguous. `None` when the
     /// group has no members.

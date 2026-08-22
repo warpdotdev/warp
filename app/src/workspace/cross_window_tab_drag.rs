@@ -5,7 +5,7 @@ use warpui::elements::DraggableState;
 use warpui::geometry::vector::{Vector2F, vec2f};
 use warpui::platform::TerminationMode;
 use warpui::windowing::WindowManager;
-use warpui::{AppContext, Entity, ModelContext, SingletonEntity, WindowId};
+use warpui::{AppContext, Entity, EntityId, ModelContext, SingletonEntity, WindowId};
 
 /// Singleton model that owns all cross-window tab drag state.
 ///
@@ -88,8 +88,9 @@ use warpui::{AppContext, Entity, ModelContext, SingletonEntity, WindowId};
 ///
 /// View transfers between windows are handled by `transfer_view_tree_to_window`.
 use crate::tab::tab_position_id;
-use crate::workspace::WorkspaceRegistry;
+use crate::workspace::tab_group::TabGroupId;
 use crate::workspace::view::{TAB_BAR_POSITION_ID, TransferredTab, tab_bar_rects_for_window};
+use crate::workspace::{Workspace, WorkspaceRegistry};
 
 /// Identifies a window and tab-bar index where a dragged tab can be attached.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -127,6 +128,9 @@ pub struct CrossWindowTabDrag {
 
 /// Describes how the drag was initiated, which determines how the preview window is
 /// managed.
+// The shared `Window` suffix is meaningful here: each variant names what acts
+// as the floating preview window for that flavour of drag.
+#[allow(clippy::enum_variant_names)]
 enum DragSource {
     /// The source window had only one tab, so the window itself acts as the floating
     /// preview. No extra window is created and no view transfers are needed at drag start.
@@ -136,6 +140,26 @@ enum DragSource {
     MultiTabWindow {
         source_tab_index: usize,
         preview_window_id: WindowId,
+    },
+    /// A whole tab group is being dragged.
+    ///
+    /// `preview_window_id` is `None` when the group spanned *every* tab in the
+    /// source window: there is nothing left behind, so the source window itself
+    /// acts as the floating preview exactly like [`Self::SingleTabWindow`], and
+    /// no view transfer happens at drag start.
+    ///
+    /// Cleanup keys off `member_pane_group_ids`, never off `source_first_index`.
+    /// The index is a position frozen at drag start and the source tab list can
+    /// change underneath it mid-drag.
+    GroupWindow {
+        source_group_id: TabGroupId,
+        source_first_index: usize,
+        member_pane_group_ids: Vec<EntityId>,
+        /// Whether the dragged group is pinned. Carried on the drag because
+        /// the TARGET window needs it to place the ghost slot, and the target
+        /// does not have the group in its own `tab_groups` until the drop.
+        source_group_pinned: bool,
+        preview_window_id: Option<WindowId>,
     },
 }
 
@@ -187,6 +211,13 @@ struct ActiveDrag {
     /// preview window's alpha is only toggled on the transition in/out of this
     /// mode; the phase stays `Floating` throughout.
     reordering_in_source: bool,
+    /// Identity of the pane group being dragged, captured at drag start.
+    ///
+    /// `source_tab_index` is a position, and nothing keeps it in step with the
+    /// source window's tab list: a shell exiting, a cmd-W, or another window
+    /// handing a tab off all shift the list mid-drag. Source cleanup at drop
+    /// time therefore resolves the tab by this id rather than by that index.
+    source_pane_group_id: EntityId,
     phase: DragPhase,
 }
 
@@ -197,15 +228,64 @@ impl ActiveDrag {
             DragSource::MultiTabWindow {
                 source_tab_index, ..
             } => *source_tab_index,
+            DragSource::GroupWindow {
+                source_first_index, ..
+            } => *source_first_index,
         }
     }
 
-    fn source_was_single_tab(&self) -> bool {
-        matches!(self.source, DragSource::SingleTabWindow)
+    /// True when the source window is itself the floating preview, so there is
+    /// no separate preview window to promote or close, and the source window
+    /// must be closed rather than have tabs removed from it.
+    ///
+    /// Covers the single-tab drag and a group drag that took every tab with it.
+    fn source_is_own_preview(&self) -> bool {
+        match &self.source {
+            DragSource::SingleTabWindow => true,
+            DragSource::MultiTabWindow { .. } => false,
+            DragSource::GroupWindow {
+                preview_window_id, ..
+            } => preview_window_id.is_none(),
+        }
     }
 
     fn has_dedicated_preview_window(&self) -> bool {
-        matches!(self.source, DragSource::MultiTabWindow { .. })
+        match &self.source {
+            DragSource::SingleTabWindow => false,
+            DragSource::MultiTabWindow { .. } => true,
+            DragSource::GroupWindow {
+                preview_window_id, ..
+            } => preview_window_id.is_some(),
+        }
+    }
+
+    fn source_group_id(&self) -> Option<TabGroupId> {
+        match &self.source {
+            DragSource::SingleTabWindow | DragSource::MultiTabWindow { .. } => None,
+            DragSource::GroupWindow {
+                source_group_id, ..
+            } => Some(*source_group_id),
+        }
+    }
+
+    fn source_group_pinned(&self) -> bool {
+        match &self.source {
+            DragSource::SingleTabWindow | DragSource::MultiTabWindow { .. } => false,
+            DragSource::GroupWindow {
+                source_group_pinned,
+                ..
+            } => *source_group_pinned,
+        }
+    }
+
+    fn member_pane_group_ids(&self) -> &[EntityId] {
+        match &self.source {
+            DragSource::SingleTabWindow | DragSource::MultiTabWindow { .. } => &[],
+            DragSource::GroupWindow {
+                member_pane_group_ids,
+                ..
+            } => member_pane_group_ids,
+        }
     }
 
     fn preview_window_id(&self) -> WindowId {
@@ -214,6 +294,9 @@ impl ActiveDrag {
             DragSource::MultiTabWindow {
                 preview_window_id, ..
             } => *preview_window_id,
+            DragSource::GroupWindow {
+                preview_window_id, ..
+            } => preview_window_id.unwrap_or(self.source_window_id),
         }
     }
 }
@@ -274,6 +357,10 @@ pub struct GhostState {
     /// Rendered size of the dragged tab in the source layout. The chip is
     /// constrained to this size so it looks identical to the source tab.
     pub source_element_size: Vector2F,
+    /// How many tabs are being dragged: 1 for a tab, the member count for a
+    /// group. The insertion slot is sized for this many tabs so the gap the
+    /// user sees matches what will land in it.
+    pub member_count: usize,
     /// Window id of the preview workspace whose first tab is the dragged
     /// tab. The target's renderer looks this workspace up and renders its
     /// `tabs[0]` using the same code path the source layout uses, so the
@@ -322,15 +409,19 @@ pub enum DropResult {
     FocusSelf,
     /// The source window's only tab was transferred elsewhere.  The calling
     /// workspace should unsubscribe the pane group and close itself.
-    CloseSourceWindow { transferred_tab_index: usize },
+    CloseSourceWindow { pane_group_id: EntityId },
     /// One tab was transferred out of a multi-tab source.  The calling
     /// workspace should unsubscribe and remove the tab.
-    RemoveSourceTab { transferred_tab_index: usize },
+    ///
+    /// Carries the pane group's identity rather than its index: the source tab
+    /// list can shift while the drag is in flight, and removing by a drag-start
+    /// index then destroys whichever tab happens to have slid into that slot.
+    RemoveSourceTab { pane_group_id: EntityId },
     /// One tab was transferred out of a multi-tab source via a handoff to
     /// a different window.  The calling workspace should unsubscribe, remove
     /// the tab, and close the now-unused preview window.
     RemoveSourceTabAndClosePreview {
-        transferred_tab_index: usize,
+        pane_group_id: EntityId,
         preview_window_id: WindowId,
     },
     /// A `Floating` drop landed on empty space but a prior put-back had
@@ -347,6 +438,26 @@ pub enum DropResult {
     /// `target` and then re-invoke `CrossWindowTabDrag::finalize(ctx)` to
     /// close the preview and clean up source state.
     DropInto { target: AttachTarget },
+    /// A whole group was transferred out of a source that has other tabs.
+    /// The caller should unsubscribe and remove every listed member.
+    ///
+    /// Members are carried as pane-group identities rather than an index
+    /// range: the source tab list can shift while the drag is in flight, and
+    /// a stale range removes bystanders that are still in bounds.
+    RemoveSourceGroup {
+        member_pane_group_ids: Vec<EntityId>,
+    },
+    /// As [`Self::RemoveSourceGroup`], plus close the now-unused preview.
+    RemoveSourceGroupAndClosePreview {
+        member_pane_group_ids: Vec<EntityId>,
+        preview_window_id: WindowId,
+    },
+    /// The dragged group was every tab in the source window, so the source has
+    /// nothing left. The caller should unsubscribe the members and close
+    /// itself, the same way a single-tab source does.
+    CloseSourceWindowForGroup {
+        member_pane_group_ids: Vec<EntityId>,
+    },
 }
 
 impl Entity for CrossWindowTabDrag {
@@ -395,6 +506,16 @@ impl CrossWindowTabDrag {
     /// Returns the tab index of the dragged tab within the source window, if a drag is active.
     pub fn transferred_tab_index(&self) -> Option<usize> {
         self.active_drag.as_ref().map(|d| d.source_tab_index())
+    }
+
+    /// Identity of the pane group being dragged, captured at drag start.
+    ///
+    /// Prefer this over [`Self::transferred_tab_index`] anywhere the result is
+    /// used to pick a tab out of the source window: the index is a position
+    /// frozen at drag start, and the source tab list can change underneath it
+    /// while the drag is in flight.
+    pub fn source_pane_group_id(&self) -> Option<EntityId> {
+        self.active_drag.as_ref().map(|d| d.source_pane_group_id)
     }
 
     /// Returns the tab index in the source window of the detached placeholder
@@ -500,6 +621,7 @@ impl CrossWindowTabDrag {
                 cursor_in_window: *ghost_cursor_in_target,
                 cursor_offset_in_element: d.initial_drag_center_offset,
                 source_element_size: d.source_element_size,
+                member_count: d.member_pane_group_ids().len().max(1),
                 preview_window_id: d.preview_window_id(),
                 was_vertical_layout: d.was_vertical_layout,
             }),
@@ -507,10 +629,42 @@ impl CrossWindowTabDrag {
         })
     }
 
-    pub fn source_was_single_tab(&self) -> bool {
+    /// True when the source window is itself the floating preview: a single-tab
+    /// drag, or a group drag that took every tab in the window.
+    ///
+    /// Callers use this to decide "close the source window" versus "remove tabs
+    /// from it", which is why a whole-window group drag answers the same as a
+    /// single-tab drag.
+    pub fn source_is_own_preview(&self) -> bool {
         self.active_drag
             .as_ref()
-            .is_some_and(|d| d.source_was_single_tab())
+            .is_some_and(|d| d.source_is_own_preview())
+    }
+
+    /// Group being dragged, when the drag is a group drag.
+    pub fn source_group_id(&self) -> Option<TabGroupId> {
+        self.active_drag.as_ref().and_then(|d| d.source_group_id())
+    }
+
+    /// Pane-group identities of the dragged group's members, captured at drag
+    /// start. Empty for a non-group drag.
+    pub fn member_pane_group_ids(&self) -> Vec<EntityId> {
+        self.active_drag
+            .as_ref()
+            .map(|d| d.member_pane_group_ids().to_vec())
+            .unwrap_or_default()
+    }
+
+    /// Records that the dragged content now lives in `target_window_id`.
+    /// Used by the whole-window group handoff, which performs its own transfer
+    /// rather than going through one of the execute_handoff_* helpers.
+    pub(crate) fn mark_inserted_in_target(&mut self, target_window_id: WindowId, index: usize) {
+        if let Some(drag) = self.active_drag.as_mut() {
+            drag.phase = DragPhase::InsertedInTarget {
+                target_window_id,
+                target_insertion_index: index,
+            };
+        }
     }
 
     pub(crate) fn reset_to_floating(&mut self) {
@@ -523,6 +677,7 @@ impl CrossWindowTabDrag {
     pub fn begin_single_tab_drag(
         &mut self,
         source_window_id: WindowId,
+        source_pane_group_id: EntityId,
         initial_drag_center_offset: Vector2F,
         window_size: Vector2F,
         last_known_target_tab_origin_in_window: Vector2F,
@@ -535,6 +690,61 @@ impl CrossWindowTabDrag {
         self.active_drag = Some(ActiveDrag {
             source_window_id,
             source: DragSource::SingleTabWindow,
+            source_pane_group_id,
+            window_size,
+            initial_drag_center_offset,
+            last_known_target_tab_origin_in_window,
+            last_drag_center_on_screen: None,
+            last_caller_window_id: None,
+            drop_resolution_attempted: false,
+            source_placeholder_consumed: false,
+            was_vertical_layout,
+            source_element_size,
+            reordering_in_source: false,
+            phase: DragPhase::Floating,
+        });
+    }
+
+    /// Arms the model for a whole-group drag.
+    ///
+    /// `preview_window_id` is `None` when the group took every tab in the
+    /// source window, so the source window itself is the floating preview.
+    #[allow(clippy::too_many_arguments)]
+    pub fn begin_group_drag(
+        &mut self,
+        source_window_id: WindowId,
+        source_group_id: TabGroupId,
+        source_first_index: usize,
+        member_pane_group_ids: Vec<EntityId>,
+        source_group_pinned: bool,
+        preview_window_id: Option<WindowId>,
+        initial_drag_center_offset: Vector2F,
+        window_size: Vector2F,
+        last_known_target_tab_origin_in_window: Vector2F,
+        was_vertical_layout: bool,
+        source_element_size: Vector2F,
+    ) {
+        log::info!(
+            "tab_drag: begin_group_drag source_wid={source_window_id} group={source_group_id:?} \
+             members={} preview_wid={preview_window_id:?}",
+            member_pane_group_ids.len()
+        );
+        self.active_drag = Some(ActiveDrag {
+            source_window_id,
+            // The first member stands in as the drag's pane group for the
+            // single-tab-shaped code paths; group cleanup uses the full member
+            // list instead.
+            source_pane_group_id: member_pane_group_ids
+                .first()
+                .copied()
+                .unwrap_or(EntityId::from_usize(0)),
+            source: DragSource::GroupWindow {
+                source_group_id,
+                source_first_index,
+                member_pane_group_ids,
+                source_group_pinned,
+                preview_window_id,
+            },
             window_size,
             initial_drag_center_offset,
             last_known_target_tab_origin_in_window,
@@ -554,6 +764,7 @@ impl CrossWindowTabDrag {
         &mut self,
         source_window_id: WindowId,
         source_tab_index: usize,
+        source_pane_group_id: EntityId,
         initial_drag_center_offset: Vector2F,
         window_size: Vector2F,
         last_known_target_tab_origin_in_window: Vector2F,
@@ -570,6 +781,7 @@ impl CrossWindowTabDrag {
                 source_tab_index,
                 preview_window_id,
             },
+            source_pane_group_id,
             window_size,
             initial_drag_center_offset,
             last_known_target_tab_origin_in_window,
@@ -601,12 +813,19 @@ impl CrossWindowTabDrag {
     /// `source_placeholder_tab_index` all operate on the placeholder's current
     /// position rather than its original one. No-op for single-tab drags.
     pub fn set_source_placeholder_index(&mut self, index: usize) {
-        if let Some(drag) = self.active_drag.as_mut()
-            && let DragSource::MultiTabWindow {
+        let Some(drag) = self.active_drag.as_mut() else {
+            return;
+        };
+        match &mut drag.source {
+            DragSource::MultiTabWindow {
                 source_tab_index, ..
-            } = &mut drag.source
-        {
-            *source_tab_index = index;
+            } => *source_tab_index = index,
+            // A group's placeholder run starts here; the run length comes from
+            // the member list, so only the start moves.
+            DragSource::GroupWindow {
+                source_first_index, ..
+            } => *source_first_index = index,
+            DragSource::SingleTabWindow => {}
         }
     }
 
@@ -870,19 +1089,39 @@ impl CrossWindowTabDrag {
                 });
 
             if let Some(new_insertion_index) = new_insertion_index {
-                let target_index = if new_insertion_index > target_insertion_index {
-                    new_insertion_index - 1
-                } else {
-                    new_insertion_index
-                };
+                // A group occupies a whole run, so the pre-removal index maps
+                // to the post-removal one through the run's length. Reusing the
+                // single-tab `- 1` would land the block short, and moving one
+                // member would split the run.
+                let member_ids = drag.member_pane_group_ids().to_vec();
+                let run_len = member_ids.len().max(1);
+                let target_index = crate::workspace::view::post_drain_index(
+                    new_insertion_index,
+                    target_insertion_index,
+                    run_len,
+                );
 
                 if target_index != target_insertion_index {
                     if let Some(target_ws) =
                         WorkspaceRegistry::as_ref(ctx).get(target_window_id, ctx)
                     {
                         target_ws.update(ctx, |workspace, ctx| {
-                            let tab = workspace.tabs.remove(target_insertion_index);
-                            workspace.tabs.insert(target_index, tab);
+                            if member_ids.is_empty() {
+                                let tab = workspace.tabs.remove(target_insertion_index);
+                                workspace.tabs.insert(target_index, tab);
+                            } else {
+                                // Move the whole run in one piece.
+                                let mut indices =
+                                    workspace.tab_indices_for_pane_group_ids(&member_ids);
+                                indices.sort_unstable();
+                                let mut block = Vec::with_capacity(indices.len());
+                                for index in indices.into_iter().rev() {
+                                    block.push(workspace.tabs.remove(index));
+                                }
+                                block.reverse();
+                                let at = target_index.min(workspace.tabs.len());
+                                workspace.tabs.splice(at..at, block);
+                            }
                             workspace.set_active_tab_index(target_index, ctx);
                             ctx.notify();
                         });
@@ -1027,6 +1266,7 @@ impl CrossWindowTabDrag {
             drag.source_window_id,
             drag_center_on_screen,
             preview_window_id,
+            drag.source_group_id().map(|_| drag.source_group_pinned()),
             ctx,
         );
 
@@ -1212,12 +1452,15 @@ impl CrossWindowTabDrag {
                 let last_caller = drag.last_caller_window_id;
                 let source_window_id = drag.source_window_id;
                 let preview_window_id = drag.preview_window_id();
+                let dragged_group_pinned =
+                    drag.source_group_id().map(|_| drag.source_group_pinned());
                 if let (Some(cursor), Some(caller)) = (last_cursor, last_caller) {
                     let resolved = cross_window_attach_target(
                         caller,
                         source_window_id,
                         cursor,
                         preview_window_id,
+                        dragged_group_pinned,
                         ctx,
                     );
                     if let Some(target) = resolved {
@@ -1351,8 +1594,24 @@ impl CrossWindowTabDrag {
                 );
                 self.register_pending_source_close(*preview_window_id);
             }
+            DropResult::CloseSourceWindowForGroup { .. } => {
+                log::info!(
+                    "tab_drag: register_pending_source_close source_wid={} (CloseSourceWindowForGroup)",
+                    drag.source_window_id
+                );
+                self.register_pending_source_close(drag.source_window_id);
+            }
+            DropResult::RemoveSourceGroupAndClosePreview {
+                preview_window_id, ..
+            } => {
+                log::info!(
+                    "tab_drag: register_pending_source_close preview_wid={preview_window_id} (RemoveSourceGroupAndClosePreview)"
+                );
+                self.register_pending_source_close(*preview_window_id);
+            }
             DropResult::FocusSelf
             | DropResult::RemoveSourceTab { .. }
+            | DropResult::RemoveSourceGroup { .. }
             | DropResult::NoOp
             | DropResult::DropInto { .. } => {}
         }
@@ -1428,13 +1687,26 @@ impl CrossWindowTabDrag {
         ctx.windows().show_window_and_focus_app(preview_window_id);
         Self::deferred_focus(preview_window_id, ctx);
 
-        if drag.source_was_single_tab() {
+        let members = drag.member_pane_group_ids();
+        if !members.is_empty() {
+            // Group drag: cleanup is by member identity, never by index.
+            return if drag.source_is_own_preview() {
+                DropResult::CloseSourceWindowForGroup {
+                    member_pane_group_ids: members.to_vec(),
+                }
+            } else {
+                DropResult::RemoveSourceGroup {
+                    member_pane_group_ids: members.to_vec(),
+                }
+            };
+        }
+        if drag.source_is_own_preview() {
             DropResult::CloseSourceWindow {
-                transferred_tab_index: drag.source_tab_index(),
+                pane_group_id: drag.source_pane_group_id,
             }
         } else {
             DropResult::RemoveSourceTab {
-                transferred_tab_index: drag.source_tab_index(),
+                pane_group_id: drag.source_pane_group_id,
             }
         }
     }
@@ -1474,22 +1746,44 @@ impl CrossWindowTabDrag {
             return DropResult::NoOp;
         }
 
-        if drag.source_was_single_tab() {
+        let members = drag.member_pane_group_ids();
+        if !members.is_empty() {
+            return if drag.source_is_own_preview() {
+                log::info!(
+                    "tab_drag: finalize_handoff -> CloseSourceWindowForGroup members={}",
+                    members.len()
+                );
+                DropResult::CloseSourceWindowForGroup {
+                    member_pane_group_ids: members.to_vec(),
+                }
+            } else {
+                log::info!(
+                    "tab_drag: finalize_handoff -> RemoveSourceGroupAndClosePreview members={} preview_wid={}",
+                    members.len(),
+                    drag.preview_window_id()
+                );
+                DropResult::RemoveSourceGroupAndClosePreview {
+                    member_pane_group_ids: members.to_vec(),
+                    preview_window_id: drag.preview_window_id(),
+                }
+            };
+        }
+        if drag.source_is_own_preview() {
             log::info!(
-                "tab_drag: finalize_handoff -> CloseSourceWindow transferred_tab_index={}",
-                drag.source_tab_index()
+                "tab_drag: finalize_handoff -> CloseSourceWindow pane_group={:?}",
+                drag.source_pane_group_id
             );
             DropResult::CloseSourceWindow {
-                transferred_tab_index: drag.source_tab_index(),
+                pane_group_id: drag.source_pane_group_id,
             }
         } else {
             log::info!(
-                "tab_drag: finalize_handoff -> RemoveSourceTabAndClosePreview transferred_tab_index={} preview_wid={}",
-                drag.source_tab_index(),
+                "tab_drag: finalize_handoff -> RemoveSourceTabAndClosePreview pane_group={:?} preview_wid={}",
+                drag.source_pane_group_id,
                 drag.preview_window_id()
             );
             DropResult::RemoveSourceTabAndClosePreview {
-                transferred_tab_index: drag.source_tab_index(),
+                pane_group_id: drag.source_pane_group_id,
                 preview_window_id: drag.preview_window_id(),
             }
         }
@@ -1618,11 +1912,33 @@ impl CrossWindowTabDrag {
             workspace.prepare_for_transferred_tab_attach(&transferred_tab.pane_group, ctx);
         });
 
-        let pane_group_id = transferred_tab.pane_group.id();
-        ctx.transfer_view_tree_to_window(pane_group_id, preview_window_id, caller_window_id);
+        // A group drag left N detached placeholders behind in the source, so
+        // every member's view tree has to come back, not just the first. The
+        // placeholders still carry their group_id, so restoring the views is
+        // what makes the group whole again.
+        let member_ids = drag.member_pane_group_ids().to_vec();
+        if member_ids.is_empty() {
+            let pane_group_id = transferred_tab.pane_group.id();
+            ctx.transfer_view_tree_to_window(pane_group_id, preview_window_id, caller_window_id);
+        } else {
+            preview_workspace.update(ctx, |workspace, ctx| {
+                for id in &member_ids {
+                    if let Some(index) = workspace.tab_index_for_pane_group_id(*id) {
+                        let pane_group = workspace.tabs[index].pane_group.clone();
+                        workspace.prepare_for_transferred_tab_attach(&pane_group, ctx);
+                    }
+                }
+            });
+            for id in &member_ids {
+                ctx.transfer_view_tree_to_window(*id, preview_window_id, caller_window_id);
+            }
+        }
 
+        // The placeholder run is `member_ids.len()` wide for a group, 1 for a
+        // tab, so the pre-removal index maps back through the run length.
+        let run_len = member_ids.len().max(1);
         let insertion_index = if target.insertion_index > drag.source_tab_index() {
-            target.insertion_index - 1
+            target.insertion_index.saturating_sub(run_len)
         } else {
             target.insertion_index
         };
@@ -1683,6 +1999,61 @@ impl CrossWindowTabDrag {
             self.reset_to_floating();
             return;
         };
+        // Group drag: move the whole group out of the preview as one block.
+        if let Some(group_id) = drag.source_group_id() {
+            let Some(transferred_group) = preview_workspace.read(ctx, |workspace, ctx| {
+                workspace.get_tab_group_transfer_info_for_attach(group_id, ctx)
+            }) else {
+                log::warn!(
+                    "tab_drag: execute_handoff_multi_tab_to_other preview has no group {group_id:?} for preview_wid={preview_window_id} (reset_to_floating)"
+                );
+                self.reset_to_floating();
+                return;
+            };
+            let group_pinned = transferred_group.group.pinned;
+            let member_pane_group_ids = transferred_group.member_pane_group_ids.clone();
+
+            preview_workspace.update(ctx, |workspace, ctx| {
+                for id in &member_pane_group_ids {
+                    if let Some(index) = workspace.tab_index_for_pane_group_id(*id) {
+                        let pane_group = workspace.tabs[index].pane_group.clone();
+                        workspace.prepare_for_transferred_tab_attach(&pane_group, ctx);
+                    }
+                }
+            });
+
+            // Every view tree moves before the target's tab list is touched.
+            for id in &member_pane_group_ids {
+                ctx.transfer_view_tree_to_window(*id, preview_window_id, target.window_id);
+            }
+
+            let raw_index = target.insertion_index;
+            target_workspace.update(ctx, move |workspace, ctx| {
+                let resolved = workspace.resolve_group_drop_index(raw_index, group_pinned);
+                workspace.insert_transferred_tab_group_at_index(transferred_group, resolved, ctx);
+                workspace.current_workspace_state.is_tab_being_dragged = true;
+            });
+
+            ctx.windows().hide_window(preview_window_id);
+            ctx.windows().show_window_and_focus_app(target.window_id);
+            if let Some(workspace) = WorkspaceRegistry::as_ref(ctx).get(target.window_id, ctx) {
+                workspace.update(ctx, |ws, ctx| {
+                    ws.focus_active_tab(ctx);
+                });
+            }
+
+            drag.phase = DragPhase::InsertedInTarget {
+                target_window_id: target.window_id,
+                target_insertion_index: target.insertion_index,
+            };
+            log::info!(
+                "tab_drag: execute_handoff_multi_tab_to_other (group) -> InsertedInTarget target_wid={} insertion_index={}",
+                target.window_id,
+                target.insertion_index
+            );
+            return;
+        }
+
         let Some(mut transferred_tab) = preview_workspace.read(ctx, |workspace, ctx| {
             workspace.get_tab_transfer_info_for_attach(0, ctx)
         }) else {
@@ -1763,6 +2134,61 @@ impl CrossWindowTabDrag {
             return;
         }
 
+        // Group drag: pull the whole block back out of the target, not one tab.
+        // Doing this with the single-tab path would clear the preview's tab
+        // list and re-insert one member, stranding the other N-1 in the target.
+        if let Some(group_id) = drag.source_group_id() {
+            let Some(transferred_group) = target_workspace.read(ctx, |workspace, ctx| {
+                workspace.get_tab_group_transfer_info_for_attach(group_id, ctx)
+            }) else {
+                drag.phase = DragPhase::Floating;
+                return;
+            };
+            let member_pane_group_ids = transferred_group.member_pane_group_ids.clone();
+
+            target_workspace.update(ctx, |workspace, ctx| {
+                for id in &member_pane_group_ids {
+                    if let Some(index) = workspace.tab_index_for_pane_group_id(*id) {
+                        let pane_group = workspace.tabs[index].pane_group.clone();
+                        workspace.prepare_for_transferred_tab_attach(&pane_group, ctx);
+                    }
+                }
+            });
+            for id in &member_pane_group_ids {
+                ctx.transfer_view_tree_to_window(*id, target_window_id, preview_window_id);
+            }
+            // Remove by identity, descending, so earlier indices stay valid.
+            target_workspace.update(ctx, |workspace, ctx| {
+                workspace.current_workspace_state.is_tab_being_dragged = false;
+                let mut indices = workspace.tab_indices_for_pane_group_ids(&member_pane_group_ids);
+                indices.sort_unstable();
+                for index in indices.into_iter().rev() {
+                    workspace.remove_tab_without_undo(index, ctx);
+                }
+            });
+
+            if !preview_is_self
+                && let Some(preview_workspace) =
+                    WorkspaceRegistry::as_ref(ctx).get(preview_window_id, ctx)
+            {
+                preview_workspace.update(ctx, |workspace, ctx| {
+                    workspace.set_is_tab_drag_preview(true);
+                    workspace.tabs.clear();
+                    workspace.tab_groups.clear();
+                    workspace.insert_transferred_tab_group_at_index(transferred_group, 0, ctx);
+                });
+            }
+
+            ctx.windows().set_window_alpha(preview_window_id, 1.0);
+            ctx.windows().show_window_and_focus_app(preview_window_id);
+            drag.phase = DragPhase::Floating;
+            log::info!(
+                "tab_drag: reverse_handoff (group) restored {} members to preview_wid={preview_window_id}",
+                member_pane_group_ids.len()
+            );
+            return;
+        }
+
         let Some(transferred_tab) = target_workspace.read(ctx, |workspace, ctx| {
             workspace.get_tab_transfer_info_for_attach(target_insertion_index, ctx)
         }) else {
@@ -1785,7 +2211,7 @@ impl CrossWindowTabDrag {
         });
 
         if !preview_is_self {
-            let is_single_tab_source = drag.source_was_single_tab();
+            let is_single_tab_source = drag.source_is_own_preview();
             if let Some(preview_workspace) =
                 WorkspaceRegistry::as_ref(ctx).get(preview_window_id, ctx)
             {
@@ -1802,7 +2228,7 @@ impl CrossWindowTabDrag {
                     workspace.insert_transferred_tab_at_index(transferred_tab, 0, ctx);
                 });
             }
-        } else if drag.source_was_single_tab() {
+        } else if drag.source_is_own_preview() {
             // For a single-tab source, `preview_window_id == source_window_id`
             // and on this code path the OS-level drag is still bound to the
             // source's draggable, so `caller_window_id == preview_window_id`
@@ -1845,6 +2271,7 @@ fn cross_window_attach_target(
     source_window_id: WindowId,
     cursor_position_on_screen: Vector2F,
     preview_window_id: WindowId,
+    dragged_group_pinned: Option<bool>,
     ctx: &AppContext,
 ) -> Option<AttachTarget> {
     let ordered_windows = WindowManager::as_ref(ctx).ordered_window_ids();
@@ -1885,6 +2312,7 @@ fn cross_window_attach_target(
                 window_id,
                 caller_window_id,
                 cursor_position_on_screen,
+                dragged_group_pinned,
                 ctx,
             );
 
@@ -1933,6 +2361,7 @@ fn cross_window_attach_target(
                 source_window_id,
                 caller_window_id,
                 cursor_position_on_screen,
+                dragged_group_pinned,
                 ctx,
             );
             update_best_target(
@@ -1943,7 +2372,7 @@ fn cross_window_attach_target(
         }
     }
 
-    for (window_id, workspace) in WorkspaceRegistry::as_ref(ctx).all_workspaces(ctx) {
+    for (window_id, _workspace) in WorkspaceRegistry::as_ref(ctx).all_workspaces(ctx) {
         if window_id == preview_window_id || window_id == source_window_id {
             continue;
         }
@@ -1966,9 +2395,13 @@ fn cross_window_attach_target(
                 continue;
             }
 
-            let insertion_index = workspace.read(ctx, |workspace, ctx| {
-                workspace.tab_insertion_index_for_cursor(window_id, cursor_position_on_screen, ctx)
-            });
+            let insertion_index = compute_insertion_index_for_window(
+                window_id,
+                caller_window_id,
+                cursor_position_on_screen,
+                dragged_group_pinned,
+                ctx,
+            );
             update_best_target(window_id, insertion_index, tab_bar_position_on_screen);
         }
     }
@@ -1984,32 +2417,45 @@ fn expanded_rect(rect: RectF, margin: f32) -> RectF {
     )
 }
 
+/// Resolves the drop index in `target_window_id` for the cursor.
+///
+/// `dragged_group_pinned` carries the pinned state of the dragged GROUP when a
+/// whole group is in flight, and is `None` for a single tab. A group resolves
+/// through `group_insertion_index_for_cursor` (which applies the pinned-region
+/// and past-group clamps) so the ghost slot drawn during the drag matches where
+/// the commit re-resolves the index; a single tab uses the plain resolver.
+/// Taking the group state as a parameter is deliberate: every targeting path
+/// funnels through here, so a new call site cannot silently get the single-tab
+/// resolver for a group drag and draw a ghost that disagrees with the landing.
 fn compute_insertion_index_for_window(
     target_window_id: WindowId,
     caller_window_id: WindowId,
     cursor_position_on_screen: Vector2F,
+    dragged_group_pinned: Option<bool>,
     ctx: &AppContext,
 ) -> usize {
+    let resolve = |workspace: &Workspace, ctx: &AppContext| match dragged_group_pinned {
+        Some(group_pinned) => workspace.group_insertion_index_for_cursor(
+            target_window_id,
+            cursor_position_on_screen,
+            group_pinned,
+            ctx,
+        ),
+        None => workspace.tab_insertion_index_for_cursor(
+            target_window_id,
+            cursor_position_on_screen,
+            ctx,
+        ),
+    };
+
     if target_window_id == caller_window_id
         && let Some(ws) = WorkspaceRegistry::as_ref(ctx).get(caller_window_id, ctx)
     {
-        return ws.read(ctx, |workspace, ctx| {
-            workspace.tab_insertion_index_for_cursor(
-                target_window_id,
-                cursor_position_on_screen,
-                ctx,
-            )
-        });
+        return ws.read(ctx, resolve);
     }
 
     match WorkspaceRegistry::as_ref(ctx).get(target_window_id, ctx) {
-        Some(ws) => ws.read(ctx, |workspace, ctx| {
-            workspace.tab_insertion_index_for_cursor(
-                target_window_id,
-                cursor_position_on_screen,
-                ctx,
-            )
-        }),
+        Some(ws) => ws.read(ctx, resolve),
         _ => 0,
     }
 }

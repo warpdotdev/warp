@@ -1280,11 +1280,16 @@ pub(super) fn any_workspace_pane_being_dragged(workspace: &Workspace, app: &AppC
 /// vertical tabs panel. Shows a plain `fg_overlay_1` rectangle the same
 /// height as a real tab row — the floating chip at the cursor carries all
 /// visual content.
-fn render_ghost_vertical_tab_slot(workspace: &Workspace, app: &AppContext) -> Box<dyn Element> {
+fn render_ghost_vertical_tab_slot(
+    workspace: &Workspace,
+    member_count: usize,
+    app: &AppContext,
+) -> Box<dyn Element> {
     let appearance = Appearance::as_ref(app);
     let theme = appearance.theme();
-    // Match the height of a real tab group row from the last rendered frame.
-    // Falls back to 40px if no frame data is available yet.
+    // Match the height of a real tab row from the last rendered frame, times
+    // the number of rows being dragged, so a group opens a gap the size of the
+    // whole block. Falls back to 40px per row if no frame data is available.
     let height = workspace
         .tabs
         .first()
@@ -1292,7 +1297,8 @@ fn render_ghost_vertical_tab_slot(workspace: &Workspace, app: &AppContext) -> Bo
             app.element_position_by_id_at_last_frame(workspace.window_id, tab_position_id(0))
         })
         .map(|rect| rect.height())
-        .unwrap_or(40.);
+        .unwrap_or(40.)
+        * member_count.max(1) as f32;
     ConstrainedBox::new(
         Container::new(Empty::new().finish())
             .with_background(internal_colors::fg_overlay_1(theme))
@@ -1916,6 +1922,7 @@ fn render_groups(
     // Ghost state for cross-window drag hovering over this window's vertical tabs panel.
     let ghost_state = CrossWindowTabDrag::as_ref(app).ghost_state_for_window(workspace.window_id);
     let ghost_insertion_index = ghost_state.as_ref().map(|g| g.insertion_index);
+    let ghost_member_count = ghost_state.as_ref().map(|g| g.member_count).unwrap_or(1);
     let mut groups = Flex::column()
         .with_main_axis_size(MainAxisSize::Min)
         .with_cross_axis_alignment(CrossAxisAlignment::Stretch);
@@ -1930,7 +1937,11 @@ fn render_groups(
     while i < total_visible {
         let (tab_index, ref filtered_pane_ids) = visible_tabs[i];
         if ghost_insertion_index == Some(tab_index) {
-            groups.add_child(render_ghost_vertical_tab_slot(workspace, app));
+            groups.add_child(render_ghost_vertical_tab_slot(
+                workspace,
+                ghost_member_count,
+                app,
+            ));
         }
         let tab = &workspace.tabs[tab_index];
         match tab.group_id.and_then(|gid| {
@@ -1987,7 +1998,11 @@ fn render_groups(
     }
     // Ghost after all tab groups (fencepost).
     if ghost_insertion_index == Some(workspace.tabs.len()) {
-        groups.add_child(render_ghost_vertical_tab_slot(workspace, app));
+        groups.add_child(render_ghost_vertical_tab_slot(
+            workspace,
+            ghost_member_count,
+            app,
+        ));
     }
 
     // Trailing indicator for an ungrouped insertion after the last tab/group
@@ -3213,7 +3228,12 @@ fn render_grouped_tab_container(
             .on_drop(move |ctx, _, _, _| {
                 ctx.dispatch_typed_action(WorkspaceAction::DropGroup);
             })
-            .with_drag_axis(DragAxis::VerticalOnly)
+            // Unconstrained when cross-window drag is on: the axis lock pins the
+            // perpendicular axis to the laid-out origin, so the detach hit-test
+            // could never fire and a group could only ever be reordered in place.
+            .with_optional_drag_axis(
+                (!FeatureFlag::DragTabsToWindows.is_enabled()).then_some(DragAxis::VerticalOnly),
+            )
             // Yield to a nested per-tab `Draggable` when it claims the mouse-down.
             // This allows dragging a tab within a group, without triggering the groups `Draggable`.
             .with_defer_to_handled_child_mouse_down()
