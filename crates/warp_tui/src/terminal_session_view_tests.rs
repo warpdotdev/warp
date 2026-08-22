@@ -7229,7 +7229,7 @@ fn resume_shell_commands_use_shared_tui_launcher() {
 }
 
 /// Seeds `names` as the user's teams and puts `window_id` on the first, standing in for what
-/// `TuiTeamScope` does once a workspaces-metadata response lands.
+/// `RootTuiView` does once a workspaces-metadata response lands.
 fn set_teams_and_register_window(
     app: &mut App,
     names: &[&str],
