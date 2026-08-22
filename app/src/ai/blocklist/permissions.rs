@@ -25,7 +25,7 @@ use crate::ai::mcp::mcp_provider_from_file_path;
 use crate::settings::{
     AISettings, AgentModeCodingPermissionsType, AgentModeCommandExecutionPredicate,
 };
-use crate::workspaces::user_workspaces::UserWorkspaces;
+use crate::workspaces::user_workspaces::{TeamScope, UserWorkspaces};
 use crate::workspaces::workspace::AiAutonomySettings;
 
 /// Whether or not a command can be auto-executed, along with a detailed reason.
@@ -1224,14 +1224,23 @@ impl Entity for BlocklistAIPermissions {
 
 impl SingletonEntity for BlocklistAIPermissions {}
 
-/// Returns true iff Agent Mode autonomy features are allowed on this client.
+/// Returns true iff Agent Mode autonomy features are allowed for `scope`.
 /// Granular permissions still need to be checked for specific autonomy features
 /// (e.g. whether a command is auto-executable).
-///
-/// Every caller reaches here from an [`AppContext`] with no window in the chain, so there
-/// is no team to scope to and this reads across all of the user's teams.
-pub fn is_agent_mode_autonomy_allowed(ctx: &AppContext) -> bool {
-    crate::UserWorkspaces::as_ref(ctx).all_teams_allow_ai_autonomy()
+pub(crate) fn is_agent_mode_autonomy_allowed<S: TeamScope + ?Sized>(
+    scope: &S,
+    ctx: &AppContext,
+) -> bool {
+    let user_workspaces = UserWorkspaces::as_ref(ctx);
+    let settings = user_workspaces.ai_autonomy_settings_for_scope(scope);
+    UserWorkspaces::autonomy_allowed_by_policy(&settings)
+        || user_workspaces.current_workspace().is_none_or(|workspace| {
+            workspace
+                .billing_metadata
+                .tier
+                .ai_autonomy_policy
+                .is_some_and(|policy| policy.is_enabled)
+        })
 }
 
 #[cfg(test)]

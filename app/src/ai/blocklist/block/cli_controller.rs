@@ -6,7 +6,7 @@ use parking_lot::FairMutex;
 use serde::{Deserialize, Deserializer, Serialize};
 use warp_core::send_telemetry_from_ctx;
 use warp_errors::report_error;
-use warpui::{Entity, EntityId, ModelContext, ModelHandle, SingletonEntity};
+use warpui::{AppContext, Entity, EntityId, ModelContext, ModelHandle, SingletonEntity};
 
 use crate::BlocklistAIHistoryModel;
 use crate::ai::agent::conversation::AIConversationId;
@@ -25,6 +25,7 @@ use crate::server::telemetry::{CLISubagentControlState, TelemetryEvent};
 use crate::terminal::TerminalModel;
 use crate::terminal::model::block::BlockId;
 use crate::terminal::model_events::{ModelEvent, ModelEventDispatcher};
+use crate::workspaces::user_workspaces::TeamContext;
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub enum UserTakeOverReason {
@@ -214,6 +215,9 @@ pub struct CLISubagentController {
 }
 
 impl CLISubagentController {
+    pub(crate) fn team_context<'a>(&self, app: &'a AppContext) -> TeamContext<'a> {
+        self.controller.as_ref(app).team_context(app)
+    }
     pub fn new(
         controller: &ModelHandle<BlocklistAIController>,
         action_model: &ModelHandle<BlocklistAIActionModel>,

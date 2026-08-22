@@ -50,6 +50,7 @@ use warpui::{AddSingletonModel, App, Element, TypedActionView, View, ViewHandle,
 use warpui_extras::user_preferences;
 
 use super::*;
+use crate::ai::blocklist::is_agent_mode_autonomy_allowed;
 use crate::ai::execution_profiles::{
     ActionPermission, ComputerUsePermission, WriteToPtyPermission,
 };
@@ -790,7 +791,6 @@ fn test_window_team_assignment_is_immutable() {
 
     App::test((), |mut app| async move {
         initialize_window_team_test_app(&mut app, vec![workspace]);
-
         let window_id = WindowId::new();
         UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
             user_workspaces.set_team_for_window(window_id, second_team.uid, ctx);
@@ -1722,36 +1722,64 @@ fn workspace_without_autonomy_entitlement(teams: Vec<Team>) -> Workspace {
 }
 
 #[test]
-fn test_ai_autonomy_is_disallowed_when_any_team_disallows_it() {
+fn test_ai_autonomy_allowed_uses_the_scoped_team() {
     let (team_a, team_b) = two_teams();
     let team_a = team_enforcing_execute_commands(&team_a, ActionPermission::AlwaysAsk);
-    let workspace = workspace_without_autonomy_entitlement(vec![team_a, team_b]);
+    let workspace = workspace_without_autonomy_entitlement(vec![team_a.clone(), team_b.clone()]);
 
     App::test((), |mut app| async move {
         initialize_window_team_test_app(&mut app, vec![workspace]);
+        let (window_a, view_a) = create_test_window(&mut app);
+        let (window_b, view_b) = create_test_window(&mut app);
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.set_team_for_window(window_a, team_a.uid, ctx);
+            user_workspaces.set_team_for_window(window_b, team_b.uid, ctx);
+        });
+        let view_a = view_a.downgrade();
+        let view_b = view_b.downgrade();
 
         app.read(|ctx| {
+            let user_workspaces = UserWorkspaces::as_ref(ctx);
+            let scope_a = user_workspaces
+                .team_context(&view_a, ctx)
+                .expect("window A should have a team context");
+            let scope_b = user_workspaces
+                .team_context(&view_b, ctx)
+                .expect("window B should have a team context");
             assert!(
-                !UserWorkspaces::as_ref(ctx).all_teams_allow_ai_autonomy(),
-                "team B enforces nothing and the tier does not entitle autonomy, so autonomy \
-                 is disallowed even though team A's admins configured a policy"
+                is_agent_mode_autonomy_allowed(&scope_a, ctx),
+                "team A configures autonomy, so its window should allow autonomy"
+            );
+            assert!(
+                !is_agent_mode_autonomy_allowed(&scope_b, ctx),
+                "team B configures no autonomy policy and the workspace tier does not allow it"
             );
         });
     })
 }
 
 #[test]
-fn test_ai_autonomy_is_allowed_when_every_team_allows_it() {
-    let (team_a, team_b) = two_teams();
-    let team_a = team_enforcing_execute_commands(&team_a, ActionPermission::AlwaysAsk);
-    let team_b = team_enforcing_execute_commands(&team_b, ActionPermission::AlwaysAllow);
-    let workspace = workspace_without_autonomy_entitlement(vec![team_a, team_b]);
+fn test_ai_autonomy_allowed_uses_the_workspace_tier_fallback() {
+    let team = team_for_test();
+    let mut workspace = workspace_for_test(&team);
+    workspace.billing_metadata.tier.ai_autonomy_policy = Some(AIAutonomyPolicy {
+        is_enabled: true,
+        toggleable: true,
+    });
 
     App::test((), |mut app| async move {
         initialize_window_team_test_app(&mut app, vec![workspace]);
+        let (window_id, view) = create_test_window(&mut app);
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.set_team_for_window(window_id, team.uid, ctx);
+        });
+        let view = view.downgrade();
 
         app.read(|ctx| {
-            assert!(UserWorkspaces::as_ref(ctx).all_teams_allow_ai_autonomy());
+            let scope = UserWorkspaces::as_ref(ctx)
+                .team_context(&view, ctx)
+                .expect("window should have a team context");
+            assert!(is_agent_mode_autonomy_allowed(&scope, ctx));
         });
     })
 }
@@ -1766,10 +1794,18 @@ fn test_ai_autonomy_falls_back_to_the_workspace_layer_with_no_teams() {
 
     App::test((), |mut app| async move {
         initialize_window_team_test_app(&mut app, vec![workspace]);
+        let (window_id, view) = create_test_window(&mut app);
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.register_window(window_id, None, ctx);
+        });
+        let view = view.downgrade();
 
         app.read(|ctx| {
+            let scope = UserWorkspaces::as_ref(ctx)
+                .team_context(&view, ctx)
+                .expect("teamless window should have a team context");
             assert!(
-                UserWorkspaces::as_ref(ctx).all_teams_allow_ai_autonomy(),
+                is_agent_mode_autonomy_allowed(&scope, ctx),
                 "a user with no teams reads the workspace layer, which is team-neutral for them"
             );
         });

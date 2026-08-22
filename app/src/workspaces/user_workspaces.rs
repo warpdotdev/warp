@@ -1071,61 +1071,9 @@ impl UserWorkspaces {
             .and_then(|workspace| workspace.settings.sandboxed_agent_settings.clone())
     }
 
-    /// Returns true iff AI autonomy features are allowed across every team the user is on.
-    ///
-    /// Aggregates conservatively: one team that disallows autonomy disallows it everywhere.
-    /// This is for code that has no window and so cannot name a team — it must read every
-    /// team explicitly rather than fabricate a scope. Autonomy is a safety control whose
-    /// enforcement paths do not yet take a team scope, so until they do, the honest answer
-    /// for a windowless caller is the most restrictive team's. Once enforcement is scoped,
-    /// these callers should take a scope and this aggregate should go away rather than have
-    /// its direction revisited.
-    ///
-    /// The per-team decision is the interim shim below: AI autonomy settings moved into
-    /// organization settings, but an enterprise that previously had the whole feature set
-    /// disabled may not have had its org settings set up yet. When a team overrides nothing,
-    /// fall back to the tier policy. Once everyone is migrated, `is_enabled` should be
-    /// removed from the policy and this fallback deleted.
-    ///
-    /// The tier policy is billing entitlement, which belongs to the paying workspace rather
-    /// than to any team, so it is read from the workspace either way.
-    ///
-    /// Asks each team's settings the question directly rather than lowering them into
-    /// [`AiAutonomySettings`] first, which would compile every list entry into a regex to
-    /// answer something that needs none.
-    pub fn all_teams_allow_ai_autonomy(&self) -> bool {
-        let tier_allows_autonomy = self.current_workspace().is_none_or(|workspace| {
-            workspace
-                .billing_metadata
-                .tier
-                .ai_autonomy_policy
-                .is_some_and(|policy| policy.is_enabled)
-        });
-        if tier_allows_autonomy {
-            return true;
-        }
-
-        let mut teams = self
-            .workspaces
-            .iter()
-            .flat_map(|workspace| workspace.teams.iter())
-            .peekable();
-
-        if teams.peek().is_none() {
-            return self.current_workspace().is_some_and(|workspace| {
-                Self::autonomy_allowed_by_policy(&workspace.settings.ai_autonomy_settings)
-            });
-        }
-
-        teams.all(|team| team.settings.ai_autonomy.configures_any_policy())
-    }
-
     /// Whether an admin has configured any autonomy policy at all. An admin who has set
     /// something has implicitly allowed autonomy, whatever the tier policy says.
-    ///
-    /// The team-layer counterpart is [`TeamAiAutonomySettings::configures_any_policy`],
-    /// which must read the same set of fields.
-    fn autonomy_allowed_by_policy(settings: &AiAutonomySettings) -> bool {
+    pub(crate) fn autonomy_allowed_by_policy(settings: &AiAutonomySettings) -> bool {
         settings.apply_code_diffs_setting.is_some()
             || settings.read_files_setting.is_some()
             || settings.read_files_allowlist.is_some()

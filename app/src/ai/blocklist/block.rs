@@ -2751,6 +2751,8 @@ impl AIBlock {
 
         let shell_type = self.active_session.as_ref(ctx).shell_type(ctx);
         let escape_char = shell_type.map(|s| ShellFamily::from(s).escape_char());
+        let scope = self.controller.as_ref(ctx).team_context(ctx);
+        let autonomy_allowed = is_agent_mode_autonomy_allowed(&scope, ctx);
 
         for (requested_command_action_id, command, is_read_only, is_risky) in
             output.actions().filter_map(|action| {
@@ -2776,7 +2778,7 @@ impl AIBlock {
                 }
             })
         {
-            if is_agent_mode_autonomy_allowed(ctx) {
+            if autonomy_allowed {
                 let autoexecute_decision = escape_char.map(|escape_char| {
                     BlocklistAIPermissions::as_ref(ctx).can_autoexecute_command(
                         &self.client_ids.conversation_id,
@@ -2863,7 +2865,7 @@ impl AIBlock {
             .actions()
             .filter_map(|action| (action.is_get_relevant_files()).then_some(&action.id))
         {
-            if is_agent_mode_autonomy_allowed(ctx)
+            if autonomy_allowed
                 && *AISettings::as_ref(ctx).should_show_agent_mode_autoread_files_speedbump
             {
                 // Try to show the speedbump for codebase search.
@@ -2896,7 +2898,7 @@ impl AIBlock {
             let is_file_access =
                 action.is_get_specific_files() || action.is_grep() || action.is_file_glob();
             if is_file_access {
-                if is_agent_mode_autonomy_allowed(ctx)
+                if autonomy_allowed
                     && *AISettings::as_ref(ctx).should_show_agent_mode_autoread_files_speedbump
                 {
                     // Try to show the speedbump for autoread files setting
@@ -2922,7 +2924,7 @@ impl AIBlock {
             } else if matches!(action.action, AIAgentActionType::AskUserQuestion { .. })
                 && !self.model.is_restored()
                 && FeatureFlag::AskUserQuestion.is_enabled()
-                && is_agent_mode_autonomy_allowed(ctx)
+                && autonomy_allowed
                 && *AISettings::as_ref(ctx).should_show_agent_mode_ask_user_question_speedbump
             {
                 self.autonomy_setting_speedbump =
