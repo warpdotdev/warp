@@ -16,9 +16,7 @@ use inquire::{InquireError, Password, PasswordDisplayMode};
 use warp::settings::{TuiThemeSettings, TuiZeroStateSettings, TuiZeroStateSettingsChangedEvent};
 #[cfg(feature = "voice_input")]
 use warp::settings::{TuiVoiceSettings, TuiVoiceSettingsChangedEvent};
-use warp::tui_export::{
-    AIConversationAutoexecuteMode, Appearance, ServerConversationToken, TuiTeamScope,
-};
+use warp::tui_export::{AIConversationAutoexecuteMode, Appearance, ServerConversationToken};
 use warp::{TuiLoginEvent, TuiLoginModel, TuiLoginPhase};
 use warp_core::channel::ChannelState;
 use warp_core::settings::Setting as _;
@@ -254,13 +252,8 @@ fn init(
             window_style: WindowStyle::NotStealFocus,
             ..Default::default()
         },
-        |_| RootTuiView::new(),
+        RootTuiView::new,
     );
-    // Scope this window to a team so per-window settings reads resolve for it. The team is
-    // only known once the server names the user's teams, which is after the terminal is
-    // already on screen; until then the window is deliberately unregistered rather than
-    // guessed at.
-    TuiTeamScope::register(window_id, ctx);
     #[cfg(feature = "voice_input")]
     let modifier_key_lifecycle_enabled = requires_modifier_key_reporting(ctx);
     #[cfg(not(feature = "voice_input"))]

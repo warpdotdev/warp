@@ -41,14 +41,13 @@ use warp::tui_export::{
     StaticCommand, TelemetryEvent, TerminalModel, TerminalSurface, TerminalSurfaceInit,
     TranscriptScope, TuiMcpAction, TuiMcpManager, TuiMcpServerId, TuiMcpVariableValue,
     TuiOnboardingMarker, TuiOnboardingMarkers, TuiOnboardingMarkersEvent,
-    TuiSlashCommandDataSource, TuiSlashCommandDataSourceArgs, TuiTeamScope,
-    TuiUpArrowHistoryItemKind, TuiUserInfoManager, TuiUserInfoManagerEvent, TuiZeroStateDataSource,
-    UserTakeOverReason, WAKEUP_THROTTLE_PERIOD, WarpConfig, WarpConfigUpdateEvent,
-    block_context_from_terminal_model, build_slash_command_mixer, detect_possible_git_repo,
-    export_conversation_markdown, loaded_subtree_rollup, log_out_tui,
-    maybe_build_ai_query_upsert_event, prepare_conversation_block_restoration,
-    record_autodetection_toggle_from_slash_command, record_saved_prompt_accepted,
-    record_static_slash_command_accepted, saved_prompt_text_for_id,
+    TuiSlashCommandDataSource, TuiSlashCommandDataSourceArgs, TuiUpArrowHistoryItemKind,
+    TuiUserInfoManager, TuiUserInfoManagerEvent, TuiZeroStateDataSource, UserTakeOverReason,
+    WAKEUP_THROTTLE_PERIOD, WarpConfig, WarpConfigUpdateEvent, block_context_from_terminal_model,
+    build_slash_command_mixer, detect_possible_git_repo, export_conversation_markdown,
+    loaded_subtree_rollup, log_out_tui, maybe_build_ai_query_upsert_event,
+    prepare_conversation_block_restoration, record_autodetection_toggle_from_slash_command,
+    record_saved_prompt_accepted, record_static_slash_command_accepted, saved_prompt_text_for_id,
     slash_command_selection_behavior, throttle,
 };
 use warp_core::channel::{Channel, ChannelState};
@@ -124,6 +123,7 @@ use crate::prompt_and_command_history_menu::{
 };
 use crate::read_only_menu::{TuiReadOnlyMenu, TuiReadOnlyMenuKind};
 use crate::resume::TuiExitSummaryHandle;
+use crate::root_view::RootTuiView;
 use crate::session_registry::TuiSessions;
 use crate::skills_menu::{TuiSkillMenuEvent, TuiSkillMenuModel};
 use crate::slash_commands::TuiSlashCommandModel;
@@ -4322,9 +4322,7 @@ impl TuiTerminalSessionView {
     }
 
     fn handle_accepted_team(&mut self, team_uid: ServerId, ctx: &mut ViewContext<Self>) {
-        TuiTeamScope::handle(ctx).update(ctx, |team_scope, ctx| {
-            team_scope.switch_to_team(team_uid, ctx);
-        });
+        RootTuiView::switch_window_to_team(ctx.window_id(), team_uid, ctx);
         self.team_menu.update(ctx, |menu, ctx| menu.dismiss(ctx));
     }
     fn handle_accepted_mcp_action(&mut self, action: TuiMcpAction, ctx: &mut ViewContext<Self>) {

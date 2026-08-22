@@ -1,8 +1,4 @@
 //! Searchable TUI team switcher backing `/team`.
-//!
-//! The GUI's equivalent (the title-bar team pill) switches teams by opening a *new* window
-//! scoped to the chosen team. The TUI has a single window, so accepting a row re-scopes that
-//! window in place through `TuiTeamScope`.
 
 use warp::editor::{CodeEditorModel, CodeEditorModelEvent};
 use warp::tui_export::{ServerId, UserWorkspaces, UserWorkspacesEvent};
