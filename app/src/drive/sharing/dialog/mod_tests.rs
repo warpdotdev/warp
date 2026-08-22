@@ -4,8 +4,8 @@ use warpui::{App, SingletonEntity, TypedActionView, ViewHandle};
 
 use super::{SharingDialog, SharingDialogAction, SharingDialogMode};
 use crate::auth::UserUid;
+use crate::cloud_object::Owner;
 use crate::cloud_object::model::persistence::CloudModel;
-use crate::cloud_object::{CloudObject, Owner};
 use crate::drive::sharing::{ShareableObject, SharingAccessLevel};
 use crate::server::ids::{ClientId, ServerId, SyncId};
 use crate::terminal::TerminalView;
