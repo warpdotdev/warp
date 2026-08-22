@@ -1227,8 +1227,11 @@ impl SingletonEntity for BlocklistAIPermissions {}
 /// Returns true iff Agent Mode autonomy features are allowed on this client.
 /// Granular permissions still need to be checked for specific autonomy features
 /// (e.g. whether a command is auto-executable).
+///
+/// Every caller reaches here from an [`AppContext`] with no window in the chain, so there
+/// is no team to scope to and this reads across all of the user's teams.
 pub fn is_agent_mode_autonomy_allowed(ctx: &AppContext) -> bool {
-    crate::UserWorkspaces::as_ref(ctx).is_ai_autonomy_allowed()
+    crate::UserWorkspaces::as_ref(ctx).all_teams_allow_ai_autonomy()
 }
 
 #[cfg(test)]

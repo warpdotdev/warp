@@ -185,10 +185,6 @@ pub struct CreateTeamResponse {
 /// [`TeamScope`]'s contract. Code with no window at all (e.g. background GEAP token refresh)
 /// is not this type's job -- it needs its own accessor that reads across every one of the
 /// user's teams explicitly, in the shape of `UserWorkspaces::teams_allow_codebase_context`.
-// Nothing constructs or consumes one outside this module's own tests yet; remove this
-// `#[allow(dead_code)]`, and widen visibility to `pub`, once a Group 1 migration PR has a real
-// call site.
-#[allow(dead_code)]
 pub(crate) struct TeamContextForOperation {
     team_uid: Option<ServerId>,
 }
@@ -451,8 +447,6 @@ impl UserWorkspaces {
     /// [`TeamContextForOperation`]. This is the only way application code mints one. Always
     /// succeeds -- a window with no team selected still yields a scope, just one whose
     /// `team_uid()` is `None`; see [`TeamScope`]'s contract for what that means to a getter.
-    // Only tests call this today; remove once a Group 1 migration PR has a real call site.
-    #[allow(dead_code)]
     pub(crate) fn team_context_for_operation<T: Entity>(
         &self,
         ctx: &ViewContext<T>,
@@ -1012,10 +1006,49 @@ impl UserWorkspaces {
 
     /// Returns the AI autonomy settings that are enforced by the workspace for all its members.
     /// If a setting is `None`, the workspace doesn't enforce a particular setting.
+    ///
+    /// This reads the workspace layer, which is one arbitrarily-chosen team's effective
+    /// settings whenever the user belongs to a team. Callers that can name the team they
+    /// act for should use [`Self::ai_autonomy_settings_for_scope`] instead.
     pub fn ai_autonomy_settings(&self) -> AiAutonomySettings {
         self.current_workspace()
             .map(|workspace| workspace.settings.ai_autonomy_settings.clone())
             .unwrap_or_default()
+    }
+
+    /// The AI autonomy policy that applies to `scope`'s team.
+    ///
+    /// A scope carrying no team yields no overrides: a window that is not pointed at a team
+    /// is governed by no team's policy, and substituting another team's would be worse than
+    /// substituting none. The workspace layer is read only when the user belongs to no team
+    /// at all, which is the one case where it is genuinely team-neutral.
+    pub(crate) fn ai_autonomy_settings_for_scope<S: TeamScope + ?Sized>(
+        &self,
+        scope: &S,
+    ) -> AiAutonomySettings {
+        match self.team_from_scope(scope) {
+            Some(team) => AiAutonomySettings::from(&team.settings.ai_autonomy),
+            None if self.has_any_team() => AiAutonomySettings::default(),
+            None => self.ai_autonomy_settings(),
+        }
+    }
+
+    /// Resolves a scope's team. Private on purpose: a caller outside this type that could
+    /// turn a scope into a whole [`Team`] could carry that team somewhere the scope never
+    /// reached. Leaf settings are resolved by the getters here, which hand back the setting.
+    fn team_from_scope<S: TeamScope + ?Sized>(&self, scope: &S) -> Option<&Team> {
+        scope
+            .team_uid()
+            .and_then(|team_uid| self.team_from_uid(team_uid))
+    }
+
+    /// Whether the user belongs to any team, in any of their workspaces. Distinguishes the
+    /// genuinely-teamless user, for whom workspace settings are team-neutral, from a user
+    /// whose workspace settings are some team's settings in disguise.
+    fn has_any_team(&self) -> bool {
+        self.workspaces
+            .iter()
+            .any(|workspace| !workspace.teams.is_empty())
     }
 
     /// Returns the sandboxed agent settings enforced by the workspace, if any.
@@ -1024,33 +1057,59 @@ impl UserWorkspaces {
             .and_then(|workspace| workspace.settings.sandboxed_agent_settings.clone())
     }
 
-    /// Returns true iff AI autonomy features are allowed for this client.
-    /// TODO: This should be deleted soon. AI autonomy settings have been moved into organization
-    /// settings (see `ai_autonomy_settings` above), but there could be an interim time where we
-    /// have not set up the org settings yet for an enterprise that previously had the entire
-    /// feature set disabled. To capture that case, we'll see if all the settings are `None`;
-    /// if so, we'll fall back to their billing metadata's value. Once we've migrated everyone
-    /// into org settings, we should remove `is_enabled` from the policy and delete this function.
-    pub fn is_ai_autonomy_allowed(&self) -> bool {
-        self.current_workspace().is_none_or(|workspace| {
-            let settings = &workspace.settings.ai_autonomy_settings;
-            let all_settings_none = settings.apply_code_diffs_setting.is_none()
-                && settings.read_files_setting.is_none()
-                && settings.read_files_allowlist.is_none()
-                && settings.execute_commands_setting.is_none()
-                && settings.execute_commands_allowlist.is_none()
-                && settings.execute_commands_denylist.is_none();
+    /// Returns true iff AI autonomy features are allowed across every team the user is on.
+    ///
+    /// Aggregates conservatively: one team that disallows autonomy disallows it everywhere.
+    /// This is for code that has no window and so cannot name a team — it must read every
+    /// team explicitly rather than fabricate a scope. Autonomy is a safety control whose
+    /// enforcement paths do not yet take a team scope, so until they do, the honest answer
+    /// for a windowless caller is the most restrictive team's. Once enforcement is scoped,
+    /// these callers should take a scope and this aggregate should go away rather than have
+    /// its direction revisited.
+    ///
+    /// The per-team decision is the interim shim below: AI autonomy settings moved into
+    /// organization settings, but an enterprise that previously had the whole feature set
+    /// disabled may not have had its org settings set up yet. When a team overrides nothing,
+    /// fall back to the tier policy. Once everyone is migrated, `is_enabled` should be
+    /// removed from the policy and this fallback deleted.
+    ///
+    /// The tier policy is billing entitlement, which belongs to the paying workspace rather
+    /// than to any team, so it is read from the workspace either way.
+    pub fn all_teams_allow_ai_autonomy(&self) -> bool {
+        let tier_allows_autonomy = self.current_workspace().is_none_or(|workspace| {
+            workspace
+                .billing_metadata
+                .tier
+                .ai_autonomy_policy
+                .is_some_and(|policy| policy.is_enabled)
+        });
 
-            if all_settings_none {
-                workspace
-                    .billing_metadata
-                    .tier
-                    .ai_autonomy_policy
-                    .is_some_and(|policy| policy.is_enabled)
-            } else {
-                true
-            }
+        let mut teams = self
+            .workspaces
+            .iter()
+            .flat_map(|workspace| workspace.teams.iter())
+            .peekable();
+
+        if teams.peek().is_none() {
+            return Self::autonomy_allowed_by_policy(&self.ai_autonomy_settings())
+                || tier_allows_autonomy;
+        }
+
+        teams.all(|team| {
+            Self::autonomy_allowed_by_policy(&AiAutonomySettings::from(&team.settings.ai_autonomy))
+                || tier_allows_autonomy
         })
+    }
+
+    /// Whether an admin has configured any autonomy policy at all. An admin who has set
+    /// something has implicitly allowed autonomy, whatever the tier policy says.
+    fn autonomy_allowed_by_policy(settings: &AiAutonomySettings) -> bool {
+        settings.apply_code_diffs_setting.is_some()
+            || settings.read_files_setting.is_some()
+            || settings.read_files_allowlist.is_some()
+            || settings.execute_commands_setting.is_some()
+            || settings.execute_commands_allowlist.is_some()
+            || settings.execute_commands_denylist.is_some()
     }
 
     // Returns a Vec of the user's active spaces, based on their
