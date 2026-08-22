@@ -27,7 +27,7 @@ use warp_core::assertions::safe_assert;
 use warp_errors::report_error;
 use warp_multi_agent_api::{Task, ToolType, message};
 use warpui::r#async::{SpawnedFutureHandle, Timer};
-use warpui::{AppContext, Entity, EntityId, ModelContext, ModelHandle, SingletonEntity};
+use warpui::{AppContext, Entity, EntityId, ModelContext, ModelHandle, SingletonEntity, WindowId};
 
 use self::response_stream::{PendingResume, RecoveryBudget, ResponseStream, ResponseStreamEvent};
 use super::action_model::{BlocklistAIActionEvent, BlocklistAIActionModel};
@@ -323,6 +323,16 @@ pub struct BlocklistAIController {
     /// The ID of the terminal surface this controller is associated with.
     terminal_surface_id: EntityId,
 
+    /// The window this controller's terminal surface currently lives in. Requests resolve the
+    /// window's selected team through it, so it has to stay current across pane re-parenting;
+    /// see [`Self::set_window_id`].
+    ///
+    /// Only the GUI registers its windows with `UserWorkspaces` (`RootView::new` is the sole
+    /// caller of `register_window`), so in the TUI this resolves to no team and the team
+    /// `team_byo` policy is inert. Giving the TUI a window registration is what fixes that;
+    /// substituting workspace-level settings here would read one arbitrarily-chosen team's.
+    window_id: WindowId,
+
     should_refresh_available_llms_on_stream_finish: bool,
 
     shared_session_state: shared_session::SharedSessionState,
@@ -422,6 +432,28 @@ impl BlocklistAIController {
         SessionContext::from_session(self.active_session.as_ref(ctx), ctx).skill_path_origin()
     }
 
+    /// Applies the team policy governing member-provided credentials to `request_params`.
+    ///
+    /// The team is resolved fresh from this controller's window on every request rather than
+    /// captured when the conversation started: which credentials a member may use is a
+    /// property of the team the user is acting as right now, so an admin's restriction binds
+    /// on the next request instead of waiting for a new conversation.
+    fn apply_team_byo_policy(&self, request_params: &mut api::RequestParams, ctx: &AppContext) {
+        let user_workspaces = UserWorkspaces::as_ref(ctx);
+        let team_scope = user_workspaces.team_context_for_window(self.window_id);
+        request_params.apply_team_byo_policy(&team_scope, ctx);
+    }
+
+    /// Updates the window this controller's terminal surface lives in.
+    ///
+    /// Dragging a tab between windows re-parents the terminal pane and the models it owns,
+    /// which would otherwise leave [`Self::window_id`] naming the source window and resolve
+    /// team policy against the wrong team. Models get no transfer notification of their own,
+    /// so the owning view calls this from its `on_window_transferred` hook.
+    pub(crate) fn set_window_id(&mut self, window_id: WindowId) {
+        self.window_id = window_id;
+    }
+
     /// Creates a controller for a terminal surface.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
@@ -432,6 +464,7 @@ impl BlocklistAIController {
         active_session: ModelHandle<ActiveSession>,
         terminal_model: Arc<FairMutex<TerminalModel>>,
         terminal_surface_id: EntityId,
+        window_id: WindowId,
         ctx: &mut ModelContext<Self>,
     ) -> Self {
         ctx.subscribe_to_model(&action_model, move |me, _, event, ctx| {
@@ -626,6 +659,7 @@ impl BlocklistAIController {
             terminal_model,
             in_flight_response_streams: PendingResponseStreams::new(),
             terminal_surface_id,
+            window_id,
             should_refresh_available_llms_on_stream_finish: false,
             shared_session_state: shared_session::SharedSessionState::default(),
             ambient_agent_task_id: None,
@@ -2274,7 +2308,7 @@ impl BlocklistAIController {
             is_auto_resume_after_error: false,
         });
 
-        let request_params = api::RequestParams::new(
+        let mut request_params = api::RequestParams::new(
             Some(self.terminal_surface_id),
             SessionContext::from_session(self.active_session.as_ref(ctx), ctx),
             &request_input,
@@ -2282,6 +2316,7 @@ impl BlocklistAIController {
             metadata,
             ctx,
         );
+        self.apply_team_byo_policy(&mut request_params, ctx);
 
         Ok((conversation_id, request_params))
     }
@@ -2517,6 +2552,7 @@ impl BlocklistAIController {
             query_metadata,
             ctx,
         );
+        self.apply_team_byo_policy(&mut request_params, ctx);
         request_params.parent_agent_id = parent_agent_id;
         request_params.agent_name = agent_name;
 

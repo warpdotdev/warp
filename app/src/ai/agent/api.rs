@@ -34,7 +34,7 @@ use crate::ai::mcp::TemplatableMCPServerManager;
 use crate::server::server_api::AIApiError;
 use crate::settings::AISettings;
 use crate::terminal::safe_mode_settings::get_secret_obfuscation_mode;
-use crate::workspaces::user_workspaces::UserWorkspaces;
+use crate::workspaces::user_workspaces::{TeamScope, UserWorkspaces};
 
 /// Unique, server-generated conversation-scoped token to be roundtripped to the API when sending
 /// requests that follow-up within a given conversation.
@@ -309,6 +309,9 @@ impl RequestParams {
 
         let user_workspaces = UserWorkspaces::as_ref(app);
         let api_key_manager = ApiKeyManager::as_ref(app);
+        // Plan entitlement only. The requesting window's team `team_byo` policy is layered on
+        // afterward by the caller, via [`Self::apply_team_byo_policy`]: these params are built
+        // and cloned in places that have no window to resolve a team from.
         let is_byo_enabled = user_workspaces.is_byo_api_key_enabled(app);
         #[cfg(not(target_family = "wasm"))]
         let geap_binding = crate::ai::geap_credentials::current_geap_policy(app).mint_binding();
@@ -416,6 +419,39 @@ impl RequestParams {
             supported_tools_override: request_input.supported_tools_override.clone(),
             parent_agent_id: None,
             agent_name: None,
+        }
+    }
+
+    /// Applies `scope`'s team `team_byo` policy on top of the workspace plan entitlement
+    /// [`Self::new`] already baked into these credentials, stripping the member-provided ones
+    /// the team's admin disallows.
+    ///
+    /// Both halves have to hold for a member credential to reach the server: the plan must
+    /// permit BYO at all, and the team the request is made as must allow its members to bring
+    /// their own. Without this step an admin's restriction only ever reached the settings UI,
+    /// and the credentials went out regardless.
+    ///
+    /// Only member-provided credentials are stripped. Team-managed keys, AWS Bedrock and
+    /// Gemini Enterprise credentials are not member BYO and survive a restrictive policy.
+    pub(crate) fn apply_team_byo_policy(&mut self, scope: &impl TeamScope, app: &AppContext) {
+        let user_workspaces = UserWorkspaces::as_ref(app);
+        if self.api_keys.is_some() && !user_workspaces.are_member_byo_keys_allowed_for_scope(scope)
+        {
+            let api_key_manager = ApiKeyManager::as_ref(app);
+            #[cfg(not(target_family = "wasm"))]
+            let geap_binding = crate::ai::geap_credentials::current_geap_policy(app).mint_binding();
+            #[cfg(target_family = "wasm")]
+            let geap_binding: Option<::ai::api_keys::GeapMintBinding> = None;
+            self.api_keys = api_key_manager.api_keys_for_request(
+                false,
+                user_workspaces.is_aws_bedrock_credentials_enabled(app),
+                geap_binding,
+            );
+        }
+        if self.custom_model_providers.is_some()
+            && !user_workspaces.are_member_byo_endpoints_allowed_for_scope(scope)
+        {
+            self.custom_model_providers = None;
         }
     }
 }
