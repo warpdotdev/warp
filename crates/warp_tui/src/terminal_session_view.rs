@@ -1500,6 +1500,7 @@ impl TuiTerminalSessionView {
         });
 
         let terminal_surface_id: EntityId = ctx.view_id();
+        let terminal_surface = ctx.handle();
         let active_session =
             ctx.add_model(|ctx| ActiveSession::new(sessions.clone(), model_events.clone(), ctx));
         let zero_state_animation_config = ZeroStateAnimationConfig::handle(ctx);
@@ -1579,6 +1580,7 @@ impl TuiTerminalSessionView {
                 active_session.clone(),
                 model.clone(),
                 terminal_surface_id,
+                terminal_surface,
                 ctx,
             )
         });

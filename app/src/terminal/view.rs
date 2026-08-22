@@ -3161,6 +3161,7 @@ impl TerminalView {
         ctx: &mut ViewContext<Self>,
     ) -> Self {
         let terminal_view_id = ctx.view_id();
+        let terminal_view = ctx.handle();
         let active_session = ctx.add_model(|ctx| {
             ActiveSession::new(sessions.clone(), model_events_handle.clone(), ctx)
         });
@@ -3557,6 +3558,7 @@ impl TerminalView {
                 active_session.clone(),
                 model.clone(),
                 terminal_view_id,
+                terminal_view,
                 ctx,
             )
         });
@@ -28677,22 +28679,6 @@ impl View for TerminalView {
             self.maybe_report_focus_out(ctx);
             ctx.notify();
         }
-    }
-
-    fn on_window_transferred(
-        &mut self,
-        _source_window_id: WindowId,
-        target_window_id: WindowId,
-        ctx: &mut ViewContext<Self>,
-    ) {
-        // Dragging this tab into another window can move it onto a different team, but the
-        // transfer touches neither `UserWorkspaces` nor any window's team assignment, so nothing
-        // else tells the surface's team-scoped state to re-read. This is the only hook that
-        // fires at drag time.
-        let view_id = ctx.view_id();
-        UserWorkspaces::handle(ctx).update(ctx, |user_workspaces, ctx| {
-            user_workspaces.surface_moved_to_window(view_id, target_window_id, ctx);
-        });
     }
 
     fn keymap_context(&self, app: &AppContext) -> warpui::keymap::Context {

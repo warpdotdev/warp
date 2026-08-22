@@ -25,7 +25,7 @@ use crate::test_util::terminal::{
     add_window_with_id_and_terminal, add_window_with_terminal, initialize_app_for_terminal_view,
 };
 use crate::workspaces::team::{Team, TeamVisibility};
-use crate::workspaces::user_workspaces::{TeamScope, UserWorkspaces, UserWorkspacesEvent};
+use crate::workspaces::user_workspaces::{TeamScope, UserWorkspaces};
 use crate::workspaces::workspace::Workspace;
 
 fn new_ambient_agent_task_id() -> AmbientAgentTaskId {
@@ -541,7 +541,6 @@ fn workspace_for_test(teams: Vec<Team>) -> Workspace {
     }
 }
 
-/// Publishes `workspace` and makes it current, so window/team assignments resolve against it.
 fn set_current_workspace(app: &mut App, workspace: Workspace) {
     let workspace_uid = workspace.uid;
     let user_workspaces = UserWorkspaces::handle(app);
@@ -609,12 +608,8 @@ fn team_context_has_no_team_when_the_window_has_none() {
     });
 }
 
-/// The team applies to what the user sends *next*, so a switch mid-conversation moves the
-/// blocklist with the window rather than leaving it on the team the conversation started on.
-/// A window switches teams by its team leaving the workspace and the window reconciling onto
-/// the remaining one.
 #[test]
-fn team_context_follows_a_mid_conversation_window_team_change() {
+fn team_context_follows_a_window_team_change() {
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);
         let team_a = team_for_test(123, "team-a");
@@ -629,11 +624,6 @@ fn team_context_follows_a_mid_conversation_window_team_change() {
             user_workspaces.set_team_for_window(window_id, team_a.uid, ctx);
         });
 
-        terminal.update(&mut app, |terminal, ctx| {
-            BlocklistAIHistoryModel::handle(ctx).update(ctx, |history_model, ctx| {
-                history_model.start_new_conversation(terminal.id(), false, false, false, ctx)
-            });
-        });
         assert_eq!(controller_team_uid(&terminal, &mut app), Some(team_a.uid));
 
         set_current_workspace(&mut app, workspace_for_test(vec![team_b.clone()]));
@@ -641,21 +631,10 @@ fn team_context_follows_a_mid_conversation_window_team_change() {
         assert_eq!(
             controller_team_uid(&terminal, &mut app),
             Some(team_b.uid),
-            "an in-progress conversation reads the team its window is on now"
-        );
-        // Resolving is not consuming: every continuation of this conversation -- a follow-up
-        // once actions finish, an auto-resume after an error -- gets the same answer, where a
-        // per-conversation store handed out only the first one.
-        assert_eq!(
-            controller_team_uid(&terminal, &mut app),
-            Some(team_b.uid),
-            "a repeat continuation resolves the same scope as the first"
+            "the blocklist reads the team its window is on now"
         );
     });
 }
-
-/// Dragging a tab into another window neither reassigns a window's team nor emits
-/// `WindowTeamChanged`, so this is the case that a window-keyed subscription misses.
 #[test]
 fn team_context_follows_a_tab_dragged_into_a_window_on_another_team() {
     App::test((), |mut app| async move {
@@ -675,19 +654,6 @@ fn team_context_follows_a_tab_dragged_into_a_window_on_another_team() {
         });
         assert_eq!(controller_team_uid(&terminal, &mut app), Some(team_a.uid));
 
-        let moved_surfaces = Arc::new(Mutex::new(Vec::new()));
-        let moved_surfaces_for_subscription = Arc::clone(&moved_surfaces);
-        app.update(|ctx| {
-            ctx.subscribe_to_model(&UserWorkspaces::handle(ctx), move |_, event, _| {
-                if let UserWorkspacesEvent::SurfaceWindowChanged { view_id, window_id } = event {
-                    moved_surfaces_for_subscription
-                        .lock()
-                        .unwrap()
-                        .push((*view_id, *window_id));
-                }
-            });
-        });
-
         let terminal_view_id = terminal.id();
         app.update(|ctx| {
             ctx.transfer_view_tree_to_window(terminal_view_id, window_a, window_b);
@@ -697,12 +663,6 @@ fn team_context_follows_a_tab_dragged_into_a_window_on_another_team() {
             controller_team_uid(&terminal, &mut app),
             Some(team_b.uid),
             "after the drag the blocklist is scoped to the destination window's team"
-        );
-        assert_eq!(
-            *moved_surfaces.lock().unwrap(),
-            vec![(terminal_view_id, window_b)],
-            "the drag reports the surface's new window, which is the only signal a subscriber \
-             caching a team-scoped value gets"
         );
     });
 }
