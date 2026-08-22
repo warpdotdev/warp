@@ -2511,12 +2511,13 @@ jobs:
   # downstream jobs don't each need their own copy of the same "which
   # platforms actually matter, and did they succeed" logic. A platform whose
   # build was deliberately disabled via a workflow input (build_macos,
-  # build_linux, build_web, or web-on-preview) is excluded entirely, rather
-  # than being treated as a failure. Anything else that isn't a plain
-  # `success` -- a genuine failure, a cancellation, or a job skipped because
-  # one of ITS OWN dependencies failed (e.g. a build-only job) -- counts as a
-  # failure. `if: always()` is required so this job still runs, and still
-  # reports failures, even when one of the jobs it depends on did not succeed.
+  # build_linux, build_windows, build_web, or web-on-preview) is excluded
+  # entirely, rather than being treated as a failure. Anything else that
+  # isn't a plain `success` -- a genuine failure, a cancellation, or a job
+  # skipped because one of ITS OWN dependencies failed (e.g. a build-only
+  # job) -- counts as a failure. `if: always()` is required so this job
+  # still runs, and still reports failures, even when one of the jobs it
+  # depends on did not succeed.
   collect_results:
     name: Collect release job results
     runs-on: ubuntu-latest
@@ -2550,6 +2551,7 @@ jobs:
         env:
           BUILD_MACOS: ${{ inputs.build_macos }}
           BUILD_LINUX: ${{ inputs.build_linux }}
+          BUILD_WINDOWS: ${{ inputs.build_windows }}
           BUILD_WEB: ${{ inputs.build_web }}
           CHANNEL: ${{ inputs.channel }}
           MACOS_SINGLE_ARCH_RESULT: ${{ needs.release_macos_single_arch.result }}
@@ -2586,6 +2588,8 @@ jobs:
           [[ "$BUILD_MACOS" == "false" ]] && MACOS_DISABLED=true
           LINUX_DISABLED=false
           [[ "$BUILD_LINUX" == "false" ]] && LINUX_DISABLED=true
+          WINDOWS_DISABLED=false
+          [[ "$BUILD_WINDOWS" == "false" ]] && WINDOWS_DISABLED=true
           WEB_DISABLED=false
           [[ "$BUILD_WEB" == "false" || "$CHANNEL" == "preview" ]] && WEB_DISABLED=true
 
@@ -2598,8 +2602,8 @@ jobs:
           check "Linux ARM64" "$LINUX_ARM_RESULT" "$LINUX_DISABLED"
           check "Linux CLI x86_64" "$LINUX_CLI_X86_RESULT" "$LINUX_DISABLED"
           check "WASM" "$WEB_RESULT" "$WEB_DISABLED"
-          check "Windows TUI" "$WINDOWS_TUI_RESULT" "false"
-          check "Windows" "$WINDOWS_RESULT" "false"
+          check "Windows TUI" "$WINDOWS_TUI_RESULT" "$WINDOWS_DISABLED"
+          check "Windows" "$WINDOWS_RESULT" "$WINDOWS_DISABLED"
 
           if (( ${#FAILED[@]} )); then
             printf -v FORMATTED "%s, " "${FAILED[@]}"
