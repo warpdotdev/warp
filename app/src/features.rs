@@ -261,8 +261,6 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::GithubPrPromptChip,
         #[cfg(feature = "create_project_flow")]
         FeatureFlag::CreateProjectFlow,
-        #[cfg(feature = "vim_code_editor")]
-        FeatureFlag::VimCodeEditor,
         #[cfg(feature = "allow_opening_file_links_using_editor_env")]
         FeatureFlag::AllowOpeningFileLinksUsingEditorEnv,
         #[cfg(feature = "revert_diff_hunk")]

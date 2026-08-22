@@ -394,9 +394,6 @@ pub enum FeatureFlag {
     /// A button on the homepage for easily creating new projects.
     CreateProjectFlow,
 
-    /// Enables vim keybindings in the code editor.
-    VimCodeEditor,
-
     /// Allows opening file links using the $EDITOR environment variable.
     AllowOpeningFileLinksUsingEditorEnv,
 
