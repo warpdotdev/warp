@@ -43,7 +43,17 @@ archive_for_platform() {
             echo "cargo-binstall-$(uname -m)-unknown-linux-musl.tgz" ;;
         *)
             if [ "${OS-}" = "Windows_NT" ]; then
-                echo "cargo-binstall-$(uname -m)-pc-windows-msvc.zip"
+                # uname -m is unreliable here: Git for Windows' MSYS runtime reports the
+                # emulated x86_64 host under WOW64, or "unknown" on a native arm64 host,
+                # rather than the real machine architecture. PROCESSOR_ARCHITEW6432 (set
+                # only under emulation, to the true native architecture) falling back to
+                # PROCESSOR_ARCHITECTURE reports it correctly in both cases.
+                case "${PROCESSOR_ARCHITEW6432:-${PROCESSOR_ARCHITECTURE-}}" in
+                    ARM64)
+                        echo "cargo-binstall-aarch64-pc-windows-msvc.zip" ;;
+                    AMD64)
+                        echo "cargo-binstall-x86_64-pc-windows-msvc.zip" ;;
+                esac
             fi
             ;;
     esac
