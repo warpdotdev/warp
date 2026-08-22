@@ -22,12 +22,15 @@ fn begin_multi_tab_drag(
     drag.begin_multi_tab_drag(
         source_window_id,
         SOURCE_TAB_INDEX,
+        1,
         Vector2F::zero(),
         vec2f(800.0, 600.0),
         Vector2F::zero(),
         preview_window_id,
         false,
         vec2f(120.0, 34.0),
+        None,
+        false,
     );
 }
 
