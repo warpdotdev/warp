@@ -13,6 +13,7 @@ use warpui::text::{SelectionType, str_to_byte_vec};
 use super::*;
 use crate::ai::agent::conversation::AIConversationId;
 use crate::terminal::color;
+use crate::terminal::event::BlockType;
 use crate::terminal::event_listener::ChannelEventListener;
 use crate::terminal::model::ObfuscateSecrets;
 use crate::terminal::model::ansi::{CompletionMetadata, Handler, Processor};
@@ -1439,7 +1440,11 @@ fn precmd_with_completion_metadata_completion_recovery_is_disabled_by_default() 
 #[test]
 fn precmd_with_completion_metadata_recovers_in_band_completion_and_reuses_cached_prompt() {
     let _recovery_enabled = FeatureFlag::TerminalLifecycleRecovery.override_enabled(true);
-    let mut terminal = TerminalModel::mock(None, None);
+    let (event_tx, event_rx) = async_channel::unbounded();
+    let event_proxy = ChannelEventListener::builder_for_test()
+        .with_terminal_events_tx(event_tx)
+        .build();
+    let mut terminal = TerminalModel::mock(None, Some(event_proxy));
     normal_command_finished_and_precmd(
         &mut terminal,
         PromptMetadata {
@@ -1457,6 +1462,7 @@ fn precmd_with_completion_metadata_recovers_in_band_completion_and_reuses_cached
             .block_list()
             .is_writing_or_executing_in_band_command()
     );
+    while event_rx.try_recv().is_ok() {}
 
     let next_block_id = BlockId::new();
     terminal.precmd_with_completion_metadata(PrecmdValue {
@@ -1470,12 +1476,25 @@ fn precmd_with_completion_metadata_recovers_in_band_completion_and_reuses_cached
         },
     });
 
-    let completed_block = terminal
-        .block_list()
-        .block_with_id(&completed_block_id)
-        .expect("The recovered in-band block should remain in the block list.");
-    assert!(completed_block.is_in_band_command_block());
-    assert_eq!(completed_block.state(), BlockState::DoneWithExecution);
+    // Hidden in-band command blocks are dropped once their completion event has fired, so the
+    // recovered completion is only observable through the events it emitted.
+    let events: Vec<_> = std::iter::from_fn(|| event_rx.try_recv().ok()).collect();
+    assert!(events.iter().any(|event| matches!(
+        event,
+        Event::BlockCompleted(event)
+            if event.block_id == completed_block_id
+                && matches!(event.block_type, BlockType::InBandCommand)
+    )));
+    assert!(events.iter().any(|event| matches!(
+        event,
+        Event::AfterBlockCompleted(event) if matches!(event.block_type, BlockType::InBandCommand)
+    )));
+    assert!(
+        terminal
+            .block_list()
+            .block_with_id(&completed_block_id)
+            .is_none()
+    );
     assert_eq!(terminal.active_block_id(), &next_block_id);
     assert!(
         !terminal
