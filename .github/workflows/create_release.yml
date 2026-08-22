@@ -1468,6 +1468,10 @@ jobs:
         run: rm -rf target/*/bundle/linux
         shell: bash
 
+      # This cross-compiles aarch64 on an x86_64 host, so the just-built binary
+      # cannot be executed here to generate a schema. release_linux_arm, which
+      # packages this binary, supplies the canonical SETTINGS_SCHEMA_SOURCE
+      # itself, so this job never needs one.
       - name: Build CLI
         id: build_cli
         run: |
@@ -1477,6 +1481,7 @@ jobs:
         env:
           CHANNEL: ${{ steps.get-config.outputs.channel }}
           GIT_RELEASE_TAG: ${{ needs.prepare_release.outputs.release_tag }}
+          SKIP_SETTINGS_SCHEMA: "1"
 
       - name: Package binaries
         id: package_binaries

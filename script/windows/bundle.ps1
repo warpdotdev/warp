@@ -60,6 +60,20 @@ if ($ARCH -eq 'arm64') {
     $PLATFORM_TARGET = 'x86_64-pc-windows-msvc'
 }
 
+# Windows-on-ARM64 hosts can run x64 binaries via built-in emulation, but x64
+# hosts cannot run arm64 binaries at all, so only that direction is unsafe.
+# Resolve it once so the settings-schema default below (which assumes the
+# just-built binary is executable) can fail clearly instead of the process
+# simply failing to start.
+$HOST_ARCH = if ($env:PROCESSOR_ARCHITECTURE -eq 'AMD64') {
+    'x64'
+} elseif ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64') {
+    'arm64'
+} else {
+    throw "Unsupported host architecture: $env:PROCESSOR_ARCHITECTURE"
+}
+$CAN_EXECUTE_ARCH = -not ($ARCH -eq 'arm64' -and $HOST_ARCH -eq 'x64')
+
 $ErrorActionPreference = 'Stop'
 
 function Assert-ValidSignature {
@@ -255,6 +269,9 @@ if ($env:SKIP_SETTINGS_SCHEMA -ne '1' -and -not $env:SETTINGS_SCHEMA_EXECUTABLE 
         exit 1
     } elseif ($SKIP_BUILD_BINARY) {
         Write-Error '-skip_build_binary requires SETTINGS_SCHEMA_SOURCE or SETTINGS_SCHEMA_EXECUTABLE.'
+        exit 1
+    } elseif (-not $CAN_EXECUTE_ARCH) {
+        Write-Error "Cannot execute the just-built $ARCH binary on this $HOST_ARCH host to generate a settings schema; pass SETTINGS_SCHEMA_SOURCE or SETTINGS_SCHEMA_EXECUTABLE."
         exit 1
     }
     $env:SETTINGS_SCHEMA_EXECUTABLE = $BINARY_PATH
