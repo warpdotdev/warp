@@ -1,4 +1,5 @@
 use typed_path::{TypedPath, TypedPathBuf, WindowsPath};
+use warp_core::features::FeatureFlag;
 use warp_errors::report_error;
 use warp_terminal::shell::ShellLaunchData;
 use warp_util::path::{
@@ -70,6 +71,52 @@ pub fn shell_native_absolute_path(
     shell_native_absolute_path_internal(file_path, shell, cwd)
         .to_string_lossy()
         .into_owned()
+}
+
+/// Returns a path suitable for display in the shell's native format.
+///
+/// Paths below the current working directory, or reachable from it with at most
+/// two parent traversals, are rendered relatively. All other paths retain the
+/// normalized absolute form returned by [`shell_native_absolute_path`].
+pub fn shell_native_path_for_display(
+    file_path: &str,
+    shell: Option<&ShellLaunchData>,
+    current_working_directory: Option<&String>,
+) -> String {
+    let Some(cwd) = current_working_directory else {
+        return shell_native_absolute_path(file_path, shell, None);
+    };
+
+    let absolute_path = shell_native_absolute_path_internal(file_path, shell, cwd);
+    if !FeatureFlag::RelativeBlocklistPaths.is_enabled() {
+        return absolute_path.to_string_lossy().into_owned();
+    }
+    let normalized_cwd = shell_native_absolute_path_internal(".", shell, cwd);
+
+    for (parent_count, base) in normalized_cwd.ancestors().take(3).enumerate() {
+        let Ok(remainder) = absolute_path.strip_prefix(base) else {
+            continue;
+        };
+
+        if parent_count == 0 && remainder.as_bytes().is_empty() {
+            return ".".to_string();
+        }
+
+        let mut relative_path = if use_unix_paths(shell) {
+            TypedPathBuf::unix()
+        } else {
+            TypedPathBuf::windows()
+        };
+        for _ in 0..parent_count {
+            relative_path.push("..");
+        }
+        if !remainder.as_bytes().is_empty() {
+            relative_path.push(remainder.as_bytes());
+        }
+        return relative_path.to_string_lossy().into_owned();
+    }
+
+    absolute_path.to_string_lossy().into_owned()
 }
 
 /// Returns the absolute path of the path in the host's native format.
