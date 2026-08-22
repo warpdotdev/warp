@@ -309,6 +309,10 @@ pub enum WorkspaceAction {
         key_code: KeyCode,
         pressed: bool,
     },
+    ActivateTabOrGroupByNumber(usize),
+    ActivateLastTabOrGroup,
+    ActivateTabInActiveGroupByNumber(usize),
+    ActivateLastTabInActiveGroup,
     OpenPalette {
         mode: PaletteMode,
         source: PaletteSource,
@@ -939,6 +943,10 @@ impl WorkspaceAction {
             ActivateTab(_)
             | ActivateTabByNumber(_)
             | SetTabShortcutModifierKey { .. }
+            | ActivateTabOrGroupByNumber(_)
+            | ActivateLastTabOrGroup
+            | ActivateTabInActiveGroupByNumber(_)
+            | ActivateLastTabInActiveGroup
             | ActivatePrevTab
             | ActivateNextTab
             | ActivateLastTab
