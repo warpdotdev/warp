@@ -244,7 +244,11 @@ impl FileNotebookView {
 
         let editor_model = ctx.add_model(|ctx| {
             let styles = rich_text_styles(Appearance::as_ref(ctx), FontSettings::as_ref(ctx));
-            let mut model = NotebooksEditorModel::new(styles, window_id, ctx);
+            // Use lazy layout for file-based notebooks (read-only). Layout is deferred to
+            // first render, which prevents eagerly allocating all text-frame data for the
+            // entire document before it is ever shown on screen — a key source of memory
+            // spikes when large markdown files are opened. See APP-4688.
+            let mut model = NotebooksEditorModel::new(styles, window_id, true, ctx);
             model.set_default_mermaid_display_mode(MarkdownDisplayMode::Rendered, ctx);
             model
         });
