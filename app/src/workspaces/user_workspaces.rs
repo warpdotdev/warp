@@ -421,18 +421,6 @@ impl UserWorkspaces {
         self.window_team_uids.get(&window_id).copied().flatten()
     }
 
-    /// Puts `window_id` on `team_uid`, overwriting whatever it was on and registering it if it
-    /// was not already.
-    ///
-    /// This is the only path that overwrites a window's team, and it exists for front-ends
-    /// that switch teams in place. The GUI has no such path: its team switcher opens a *new*
-    /// window scoped to the chosen team ([`crate::root_view::NewWorkspaceSource::TeamSwitched`])
-    /// rather than re-scoping the current one, so [`Self::register_window`] and
-    /// [`Self::set_team_for_window`] can stay insert-only. Keep it that way — a single
-    /// greppable overwrite is worth more than symmetry for a field that decides which team's
-    /// admin policy applies.
-    ///
-    /// No-ops when the window is already on `team_uid`, so callers may call it unconditionally.
     pub fn switch_window_to_team(
         &mut self,
         window_id: WindowId,
