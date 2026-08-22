@@ -27,7 +27,7 @@ fn is_in_band_command_recognizes_the_native_completions_generator_names() {
         "warp_run_generator_command_native_completions 676974206368"
     ));
     assert!(is_in_band_command(
-        "Warp-Run-GeneratorCommand-NativeCompletions 676974206368"
+        "Warp-Run-GeneratorCommand-NativeCompletion 676974206368"
     ));
 
     // An ordinary user command is not an in-band command.

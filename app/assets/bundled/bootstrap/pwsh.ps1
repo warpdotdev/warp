@@ -823,7 +823,7 @@ $null = New-Module -Name Warp-Module -ScriptBlock {
     # prompt) rather than a PSReadLine key handler: `CompleteInput` takes the line as a plain string,
     # and since nothing is ever typed into the real buffer there is no kill-buffer chord to race and
     # nothing to restore.
-    function Warp-Run-GeneratorCommand-NativeCompletions {
+    function Warp-Run-GeneratorCommand-NativeCompletion {
         [CmdletBinding()]
         param([string]$hexEncodedLine)
 
@@ -1089,7 +1089,7 @@ $null = New-Module -Name Warp-Module -ScriptBlock {
     # bootstrap logic pasted into the PTY and the output of shell startup files.
     Warp-Precmd -status $global:? -code $global:LASTEXITCODE
 
-    Export-ModuleMember -Function clear, Clear-Host, Get-EpochTime, Warp-Finish-Update, Warp-Handle-DistUpgrade, Warp-Run-GeneratorCommand, Warp-Run-GeneratorCommand-NativeCompletions, Warp-Finish-Bootstrap
+    Export-ModuleMember -Function clear, Clear-Host, Get-EpochTime, Warp-Finish-Update, Warp-Handle-DistUpgrade, Warp-Run-GeneratorCommand, Warp-Run-GeneratorCommand-NativeCompletion, Warp-Finish-Bootstrap
 }
 
 # Finally, get ready to source the user's RC files. This must be done in the global scope (not

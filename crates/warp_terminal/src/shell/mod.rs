@@ -407,7 +407,7 @@ impl ShellType {
                 format!(" warp_run_generator_command_native_completions {hex_encoded_line}")
             }
             ShellType::PowerShell => {
-                format!("Warp-Run-GeneratorCommand-NativeCompletions {hex_encoded_line}")
+                format!("Warp-Run-GeneratorCommand-NativeCompletion {hex_encoded_line}")
             }
         }
     }

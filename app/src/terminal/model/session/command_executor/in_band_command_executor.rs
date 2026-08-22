@@ -439,7 +439,7 @@ impl CommandExecutor for InBandCommandExecutor {
 /// Returns `true` if `command` is an in-band command string -- either one executed via
 /// `InBandCommandExecutor` (`warp_run_generator_command`/`Warp-Run-GeneratorCommand`), or a
 /// native-shell-completions generator (`warp_run_generator_command_native_completions`, or
-/// PowerShell's `Warp-Run-GeneratorCommand-NativeCompletions`) that `PtyController` dispatches
+/// PowerShell's `Warp-Run-GeneratorCommand-NativeCompletion`) that `PtyController` dispatches
 /// directly rather than through this executor.
 ///
 /// In-band commands are prefixed with a leading space for Fish, which is done to omit them from
