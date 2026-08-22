@@ -12,12 +12,14 @@ pub(crate) mod diff_types;
 pub(crate) mod handoff;
 
 pub(crate) mod local_agent_task_sync_model;
+pub(crate) mod observed_file_contents;
 pub(crate) mod orchestration_child_tracker;
 pub(crate) mod orchestration_event_streamer;
 pub(crate) mod orchestration_events;
 pub(crate) mod orchestration_topology;
 mod passive_suggestions;
 pub(crate) mod queued_query;
+pub(crate) mod shell_file_observations;
 pub(super) use controller::RequestInput;
 pub mod history_model;
 pub mod inline_action;

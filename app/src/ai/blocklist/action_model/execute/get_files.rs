@@ -10,7 +10,9 @@ use crate::{
             conversation::AIConversationId, AIAgentAction, AIAgentActionResultType,
             AIAgentActionType, FileLocations, GetFilesRequestType, GetFilesResult,
         },
-        blocklist::BlocklistAIPermissions,
+        blocklist::{
+            observed_file_contents::record_whole_file_reads, BlocklistAIPermissions,
+        },
         get_relevant_files::controller::{
             GetRelevantFilesController, GetRelevantFilesError, GetRelevantFilesRequestTarget,
             GetRelevantFilesStatus,
@@ -324,8 +326,11 @@ impl GetFilesExecutor {
                     )))
                 }
             }),
-            on_complete: Box::new(|res, _ctx| {
+            on_complete: Box::new(move |res, ctx| {
                 let action_result = res.unwrap_or_else(|e| GetFilesResult::Error(e.to_string()));
+                if let GetFilesResult::Success { files } = &action_result {
+                    record_whole_file_reads(conversation_id, files, ctx);
+                }
                 AIAgentActionResultType::GetFiles(action_result)
             }),
         }

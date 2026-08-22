@@ -47,6 +47,7 @@ impl RegisteredDiffStorage for TestStorage {
             deleted_files: Vec::new(),
             lines_added: 0,
             lines_removed: 0,
+            notes: Vec::new(),
         })
         .boxed()
     }
@@ -121,12 +122,16 @@ fn on_diffs_applied_seeds_registered_storage() {
         let (tx, _rx) = oneshot::channel();
         executor.update(&mut app, |executor, ctx| {
             executor.on_diffs_applied(
-                Ok(vec![AIRequestedCodeDiff {
-                    file_name: "/tmp/x.rs".to_owned(),
-                    diff_type: DiffType::creation("fn main() {}\n".to_owned()),
-                    failures: None,
-                    original_content: String::new(),
-                }]),
+                Ok(AppliedEdits {
+                    diffs: vec![AIRequestedCodeDiff {
+                        file_name: "/tmp/x.rs".to_owned(),
+                        diff_type: DiffType::creation("fn main() {}\n".to_owned()),
+                        failures: None,
+                        original_content: String::new(),
+                    }],
+                    notes: Vec::new(),
+                    overwrites: Vec::new(),
+                }),
                 action_id.clone(),
                 tx,
                 ctx,
@@ -218,4 +223,28 @@ fn discard_pending_drops_state_in_any_state() {
             assert!(!executor.diff_application_failures.contains_key(&failed_id));
         });
     });
+}
+
+#[test]
+fn elide_replaced_content_collapses_deletion_runs_for_flagged_sections() {
+    let diff = "--- /tmp/big.txt\n+++ /tmp/big.txt\n@@ -1,3 +1,2 @@\n-old one\n-old two\n\
+                -old three\n+new one\n+new two\n";
+    let elide_paths: HashSet<&str> = HashSet::from(["/tmp/big.txt"]);
+    assert_eq!(
+        elide_replaced_content(diff, &elide_paths),
+        "--- /tmp/big.txt\n+++ /tmp/big.txt\n@@ -1,3 +1,2 @@\n[- 3 lines replaced -]\n\
+         +new one\n+new two\n"
+    );
+}
+
+#[test]
+fn elide_replaced_content_leaves_unflagged_sections_untouched() {
+    let diff = "--- /tmp/a.txt\n+++ /tmp/a.txt\n@@ -1,1 +1,1 @@\n-a old\n+a new\n\
+                --- /tmp/b.txt\n+++ /tmp/b.txt\n@@ -1,1 +1,1 @@\n-b old\n+b new\n";
+    let elide_paths: HashSet<&str> = HashSet::from(["/tmp/b.txt"]);
+    assert_eq!(
+        elide_replaced_content(diff, &elide_paths),
+        "--- /tmp/a.txt\n+++ /tmp/a.txt\n@@ -1,1 +1,1 @@\n-a old\n+a new\n\
+         --- /tmp/b.txt\n+++ /tmp/b.txt\n@@ -1,1 +1,1 @@\n[- 1 lines replaced -]\n+b new\n"
+    );
 }

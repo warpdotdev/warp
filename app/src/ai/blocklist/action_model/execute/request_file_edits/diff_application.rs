@@ -21,6 +21,9 @@ use super::telemetry::{
 };
 use crate::ai::agent::{AIIdentifiers, FileEdit};
 use crate::ai::blocklist::SessionContext;
+use crate::ai::blocklist::observed_file_contents::{
+    ContentFingerprint, ConversationObservedContents,
+};
 use crate::ai::paths::host_native_absolute_path;
 use crate::auth::auth_state::AuthState;
 use crate::{safe_debug, safe_warn, send_telemetry_on_executor};
@@ -71,6 +74,7 @@ pub(crate) enum DiffApplicationError {
     /// A file that was supposed to be new already exists.
     AlreadyExists {
         file: String,
+        line_count: usize,
     },
     /// The diff contained multiple attempts to create the same file.
     MultipleFileCreation {
@@ -120,8 +124,13 @@ impl DiffApplicationError {
             DiffApplicationError::MissingFile { file } => {
                 format!("{file} does not exist. Is the path correct?")
             }
-            DiffApplicationError::AlreadyExists { file } => {
-                format!("Could not create {file} because it already exists.")
+            DiffApplicationError::AlreadyExists { file, line_count } => {
+                format!(
+                    "{file} already exists ({line_count} lines); nothing was written. Read the \
+                     whole file, then retry: after a full read, this same create_file request \
+                     will replace the file's contents. Do not delete the file or rewrite it via \
+                     shell redirection."
+                )
             }
             DiffApplicationError::ReadFailed { file, .. } => {
                 format!("Could not read {file}")
@@ -157,6 +166,26 @@ impl DiffApplicationError {
     }
 }
 
+/// The successful output of [`apply_edits`].
+#[derive(Debug)]
+pub(crate) struct AppliedEdits {
+    pub(crate) diffs: Vec<AIRequestedCodeDiff>,
+    /// Human/model-facing notices about how edits were applied (e.g. a create coerced into an
+    /// overwrite), surfaced in the action result on acceptance.
+    pub(crate) notes: Vec<String>,
+    /// Create-file requests that were coerced into informed full-content replacements.
+    pub(crate) overwrites: Vec<CoercedOverwrite>,
+}
+
+/// A create-file request applied as a full-content replacement of an existing file whose content
+/// the conversation had observed.
+#[derive(Debug)]
+pub(crate) struct CoercedOverwrite {
+    /// The file path as the model requested it (not absolutized).
+    pub(crate) file_path: String,
+    pub(crate) replaced_line_count: usize,
+}
+
 fn append_fuzzy_match_failure_details(message: &mut String, match_failures: &DiffMatchFailures) {
     if match_failures.fuzzy_match_failure_details.is_empty() {
         return;
@@ -177,23 +206,26 @@ fn append_fuzzy_match_failure(message: &mut String, failure: &DiffMatchFailure) 
 /// to the user as a series of code diffs.
 ///
 /// * Search-and-replace diffs are matched to existing files on disk
-/// * Created files are expected to not already exist
+/// * Created files are expected to not already exist, unless the conversation has observed the
+///   existing content (per `observed`), in which case the create is applied as a full replacement
 ///
 /// Errors are reported as telemetry, and also returned for display.
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn apply_edits<F, Fut>(
     edits: Vec<FileEdit>,
     session_context: &SessionContext,
+    observed: &ConversationObservedContents,
     ai_identifiers: &AIIdentifiers,
     background_executor: Arc<Background>,
     auth_state: Arc<AuthState>,
     passive_diff: bool,
     read_file: F,
-) -> Result<Vec<AIRequestedCodeDiff>, Vec1<DiffApplicationError>>
+) -> Result<AppliedEdits, Vec1<DiffApplicationError>>
 where
     F: Fn(String) -> Fut,
     Fut: Future<Output = FileReadResult>,
 {
-    let result = apply_edits_internal(edits, session_context, &read_file).await;
+    let result = apply_edits_internal(edits, session_context, observed, &read_file).await;
 
     // Send telemetry for all diff application errors.
 
@@ -262,7 +294,11 @@ where
 
     match Vec1::try_from_vec(result.errors) {
         Ok(errors) => Err(errors),
-        Err(vec1::Size0Error) => Ok(result.diffs),
+        Err(vec1::Size0Error) => Ok(AppliedEdits {
+            diffs: result.diffs,
+            notes: result.notes,
+            overwrites: result.overwrites,
+        }),
     }
 }
 
@@ -285,6 +321,10 @@ struct DiffResult {
     errors: Vec<DiffApplicationError>,
     /// All warnings that occurred while applying diffs.
     warnings: Vec<DiffWarning>,
+    /// Notices about how edits were applied, surfaced in the action result on acceptance.
+    notes: Vec<String>,
+    /// Create-file requests coerced into informed full-content replacements.
+    overwrites: Vec<CoercedOverwrite>,
 }
 
 /// You generally want to use `apply_edits`, however, if you don't want to report telemetry or be as
@@ -292,6 +332,7 @@ struct DiffResult {
 async fn apply_edits_internal<F, Fut>(
     edits: Vec<FileEdit>,
     session_context: &SessionContext,
+    observed: &ConversationObservedContents,
     read_file: &F,
 ) -> DiffResult
 where
@@ -414,7 +455,15 @@ where
         } else if replacement_file_paths.contains(&file) {
             apply_replace_file(file, content, session_context, read_file, &mut result).await;
         } else {
-            apply_create_file(file, content, session_context, read_file, &mut result).await;
+            apply_create_file(
+                file,
+                content,
+                session_context,
+                observed,
+                read_file,
+                &mut result,
+            )
+            .await;
         }
     }
 
@@ -457,25 +506,9 @@ async fn apply_replace_file<F, Fut>(
 
     match read_file(absolute_path.clone()).await {
         FileReadResult::Found(file_content) => {
-            let num_lines = file_content.lines().count();
-            let replacement_line_range = if num_lines == 0 {
-                0..0
-            } else {
-                1..num_lines.saturating_add(1)
-            };
-
-            result.diffs.push(AIRequestedCodeDiff {
-                file_name: file_path,
-                diff_type: DiffType::update(
-                    vec![DiffDelta {
-                        replacement_line_range,
-                        insertion: content,
-                    }],
-                    None,
-                ),
-                failures: None,
-                original_content: file_content,
-            });
+            result
+                .diffs
+                .push(full_replacement_diff(file_path, file_content, content));
         }
         FileReadResult::NotFound => {
             result
@@ -495,11 +528,39 @@ async fn apply_replace_file<F, Fut>(
     }
 }
 
+/// Builds a diff that swaps a file's entire content for `content`.
+fn full_replacement_diff(
+    file_path: String,
+    existing_content: String,
+    content: String,
+) -> AIRequestedCodeDiff {
+    let num_lines = existing_content.lines().count();
+    let replacement_line_range = if num_lines == 0 {
+        0..0
+    } else {
+        1..num_lines.saturating_add(1)
+    };
+
+    AIRequestedCodeDiff {
+        file_name: file_path,
+        diff_type: DiffType::update(
+            vec![DiffDelta {
+                replacement_line_range,
+                insertion: content,
+            }],
+            None,
+        ),
+        failures: None,
+        original_content: existing_content,
+    }
+}
+
 /// Converts a file-creation request into a diff.
 async fn apply_create_file<F, Fut>(
     file_path: String,
     content: String,
     session_context: &SessionContext,
+    observed: &ConversationObservedContents,
     read_file: &F,
     result: &mut DiffResult,
 ) where
@@ -513,14 +574,53 @@ async fn apply_create_file<F, Fut>(
     );
 
     match read_file(absolute_path.clone()).await {
-        FileReadResult::Found(_) => {
+        // Creating over an existing file is coerced into a full-content update when doing so
+        // cannot lose anything: the file is empty, or it already holds exactly what was requested.
+        FileReadResult::Found(existing_content)
+            if existing_content.is_empty()
+                || (existing_content == content && content.ends_with('\n')) =>
+        {
+            let note = if existing_content.is_empty() {
+                format!("Replaced empty {file_path}.")
+            } else {
+                format!("{file_path} already contained the requested content.")
+            };
+            result.notes.push(note);
+            result
+                .diffs
+                .push(full_replacement_diff(file_path, existing_content, content));
+        }
+        // The conversation has observed the file's current content in full (a whole-file read or
+        // an earlier accepted edit), so the overwrite is informed. Apply it as a full replacement
+        // routed through the normal reviewable-diff pipeline, and note the overwrite in the
+        // action result so it is never silent.
+        FileReadResult::Found(existing_content)
+            if observed.contains(&absolute_path, ContentFingerprint::of(&existing_content)) =>
+        {
+            let replaced_line_count = existing_content.lines().count();
+            result.notes.push(format!(
+                "Overwrote existing {file_path} ({replaced_line_count} lines replaced)."
+            ));
+            result.overwrites.push(CoercedOverwrite {
+                file_path: file_path.clone(),
+                replaced_line_count,
+            });
+            result
+                .diffs
+                .push(full_replacement_diff(file_path, existing_content, content));
+        }
+        // Nothing in this conversation shows the model knows what the file currently holds, so
+        // this is a blind overwrite. Fail so the model reads the file and edits it (or
+        // deliberately re-creates it) on its next turn instead of clobbering data it never saw.
+        FileReadResult::Found(existing_content) => {
             safe_warn!(
                 safe: ("Agent Code tried to create a file that already exists"),
                 full: ("Agent Code tried to create a file that already exists: {absolute_path:?}")
             );
-            result
-                .errors
-                .push(DiffApplicationError::AlreadyExists { file: file_path });
+            result.errors.push(DiffApplicationError::AlreadyExists {
+                file: file_path,
+                line_count: existing_content.lines().count(),
+            });
         }
         FileReadResult::NotFound => {
             result.diffs.push(AIRequestedCodeDiff {

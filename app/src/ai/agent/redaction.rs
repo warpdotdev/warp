@@ -181,24 +181,36 @@ pub(crate) fn redact_inputs(inputs: &mut [AIAgentInput]) {
                         }
                     }
                     AIAgentActionResultType::RequestFileEdits(request_file_edits_result) => {
-                        if let crate::ai::agent::RequestFileEditsResult::Success {
-                            diff,
-                            updated_files,
-                            deleted_files,
-                            ..
-                        } = request_file_edits_result
-                        {
-                            redact_secrets(diff);
-                            for file in updated_files {
-                                if let AnyFileContent::StringContent(content) =
-                                    &mut file.file_context.content
-                                {
-                                    redact_secrets(content);
+                        match request_file_edits_result {
+                            crate::ai::agent::RequestFileEditsResult::Success {
+                                diff,
+                                updated_files,
+                                deleted_files,
+                                notes,
+                                ..
+                            } => {
+                                redact_secrets(diff);
+                                for file in updated_files {
+                                    if let AnyFileContent::StringContent(content) =
+                                        &mut file.file_context.content
+                                    {
+                                        redact_secrets(content);
+                                    }
+                                }
+                                for file_path in deleted_files {
+                                    redact_secrets(file_path);
+                                }
+                                for note in notes {
+                                    redact_secrets(note);
                                 }
                             }
-                            for file_path in deleted_files {
-                                redact_secrets(file_path);
-                            }
+                            // Failure messages can quote existing file content (e.g. a
+                            // create_file that hit an existing path), so they need the same
+                            // redaction as file reads.
+                            crate::ai::agent::RequestFileEditsResult::DiffApplicationFailed {
+                                error,
+                            } => redact_secrets(error),
+                            crate::ai::agent::RequestFileEditsResult::Cancelled => {}
                         }
                     }
                     AIAgentActionResultType::InsertReviewComments(result) => {

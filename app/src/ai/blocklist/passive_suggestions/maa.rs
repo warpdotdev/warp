@@ -17,6 +17,7 @@ use crate::ai::agent::{
 };
 use crate::ai::block_context::BlockContext;
 use crate::ai::blocklist::diff_types::FileDiff;
+use crate::ai::blocklist::observed_file_contents::ObservedFileContents;
 use crate::ai::blocklist::{
     BlocklistAIHistoryModel, FileReadResult, RequestFileEditsFormatKind, SessionContext,
     apply_edits,
@@ -262,6 +263,8 @@ impl PassiveSuggestionsModel {
 
                         let session_context =
                             SessionContext::from_session(me.active_session.as_ref(ctx), ctx);
+                        let observed = ObservedFileContents::as_ref(ctx)
+                            .snapshot(continuable_conversation_id);
                         let identifiers = AIIdentifiers::default();
                         let background_executor = ctx.background_executor();
                         let auth_state = AuthStateProvider::as_ref(ctx).get().clone();
@@ -271,6 +274,7 @@ impl PassiveSuggestionsModel {
                                 apply_edits(
                                     file_edits,
                                     &session_context,
+                                    &observed,
                                     &identifiers,
                                     background_executor,
                                     auth_state,
@@ -281,12 +285,15 @@ impl PassiveSuggestionsModel {
                                 )
                                 .await
                             },
-                            move |me: &mut Self, applied_diffs: Result<Vec<ai::diff_validation::AIRequestedCodeDiff>, _>, ctx: &mut ModelContext<Self>| {
-                                let Ok(applied_diffs) = applied_diffs else {
+                            move |me: &mut Self, applied_edits, ctx: &mut ModelContext<Self>| {
+                                let Ok(applied_edits) = applied_edits else {
                                     log::warn!("[passive-code-diff] apply_edits failed");
                                     return;
                                 };
-                                if applied_diffs.is_empty() {
+                                // Passive suggestions surface diffs directly (no action
+                                // result), so apply-time notes have nowhere to land and are
+                                // dropped.
+                                if applied_edits.diffs.is_empty() {
                                     log::warn!("[passive-code-diff] no diffs generated");
                                     return;
                                 }
@@ -298,7 +305,8 @@ impl PassiveSuggestionsModel {
                                     .cloned();
                                 let shell = me.active_session.as_ref(ctx).shell_launch_data(ctx);
 
-                                let diffs: Vec<FileDiff> = applied_diffs
+                                let diffs: Vec<FileDiff> = applied_edits
+                                    .diffs
                                     .into_iter()
                                     .map(|diff: ai::diff_validation::AIRequestedCodeDiff| {
                                         let path = host_native_absolute_path(

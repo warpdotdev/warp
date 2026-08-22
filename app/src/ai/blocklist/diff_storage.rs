@@ -203,6 +203,7 @@ fn assemble_result(combined: DiffResult, files: Vec<FileSnapshot>) -> RequestFil
         deleted_files,
         lines_added: combined.lines_added,
         lines_removed: combined.lines_removed,
+        notes: Vec::new(),
     }
 }
 
