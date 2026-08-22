@@ -27,6 +27,7 @@ pub mod list_ai_conversations;
 pub mod list_harness_auth_secrets;
 pub mod list_managed_secrets;
 pub mod list_warp_dev_images;
+pub mod managed_mcp_servers;
 pub mod managed_secret_config;
 pub mod rerank_fragments;
 pub mod suggest_cloud_environment_image;
