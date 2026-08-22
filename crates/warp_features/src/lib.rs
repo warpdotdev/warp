@@ -382,9 +382,6 @@ pub enum FeatureFlag {
     /// Enables Projects and Project management
     Projects,
 
-    /// Enables selection-as-context functionality in the code editor.
-    SelectionAsContext,
-
     /// A context chip that shows when the PWD is inside of a git repository.
     CodeModeChip,
 
