@@ -54,6 +54,13 @@ fn auto_approve_denylist_bypass_defaults_on_and_is_available_in_gui_and_tui_sett
     assert!(surfaces.includes(SettingsMode::Tui));
 }
 
+/// A real terminal surface for the [`FocusedTerminalInfo`] cases below, which record the handle
+/// of the terminal their flags came from.
+fn focused_terminal_for_test(app: &mut App) -> WeakViewHandle<TerminalView> {
+    crate::test_util::terminal::initialize_app_for_terminal_view(app);
+    crate::test_util::add_window_with_terminal(app, None).downgrade()
+}
+
 fn add_ai_enablement_dependencies_for_test(app: &mut App) {
     app.add_singleton_model(|_| AuthStateProvider::new_for_test());
     app.add_singleton_model(UserWorkspaces::default_mock);
@@ -143,7 +150,9 @@ fn tui_statusline_normalization_preserves_explicitly_disabled_vim_indicator() {
 #[test]
 fn test_update_both_values_changed() {
     App::test((), |mut app| async move {
-        // Create FocusedTerminalInfo with default values (false, false)
+        // The flags are always published with the surface they came from, so these
+        // change-detection cases keep one stable surface throughout.
+        let terminal = focused_terminal_for_test(&mut app);
         let model_handle = app.add_model(|_| FocusedTerminalInfo::default());
 
         // Setup event tracking
@@ -162,7 +171,7 @@ fn test_update_both_values_changed() {
 
         // Update both values to (true, false)
         model_handle.update(&mut app, |model, ctx| {
-            model.update(true, false, ctx);
+            model.update(terminal.clone(), true, false, ctx);
         });
 
         // Verify model state
@@ -183,7 +192,9 @@ fn test_update_both_values_changed() {
 #[test]
 fn test_update_additional_value_changed() {
     App::test((), |mut app| async move {
-        // Create FocusedTerminalInfo with default values (false, false)
+        // The flags are always published with the surface they came from, so these
+        // change-detection cases keep one stable surface throughout.
+        let terminal = focused_terminal_for_test(&mut app);
         let model_handle = app.add_model(|_| FocusedTerminalInfo::default());
 
         // Setup event tracking
@@ -202,7 +213,7 @@ fn test_update_additional_value_changed() {
 
         // First update to (true, false)
         model_handle.update(&mut app, |model, ctx| {
-            model.update(true, false, ctx);
+            model.update(terminal.clone(), true, false, ctx);
         });
 
         // Clear events by draining the channel
@@ -210,7 +221,7 @@ fn test_update_additional_value_changed() {
 
         // Now update to (true, true) - only changing restored blocks
         model_handle.update(&mut app, |model, ctx| {
-            model.update(true, true, ctx);
+            model.update(terminal.clone(), true, true, ctx);
         });
 
         // Verify model state
@@ -231,7 +242,9 @@ fn test_update_additional_value_changed() {
 #[test]
 fn test_update_no_change() {
     App::test((), |mut app| async move {
-        // Create FocusedTerminalInfo with default values (false, false)
+        // The flags are always published with the surface they came from, so these
+        // change-detection cases keep one stable surface throughout.
+        let terminal = focused_terminal_for_test(&mut app);
         let model_handle = app.add_model(|_| FocusedTerminalInfo::default());
 
         // Setup event tracking
@@ -250,7 +263,7 @@ fn test_update_no_change() {
 
         // First update to (true, true)
         model_handle.update(&mut app, |model, ctx| {
-            model.update(true, true, ctx);
+            model.update(terminal.clone(), true, true, ctx);
         });
 
         // Clear events by draining the channel
@@ -258,7 +271,7 @@ fn test_update_no_change() {
 
         // Update with same values (true, true)
         model_handle.update(&mut app, |model, ctx| {
-            model.update(true, true, ctx);
+            model.update(terminal.clone(), true, true, ctx);
         });
 
         // Verify model state remains the same
@@ -279,7 +292,9 @@ fn test_update_no_change() {
 #[test]
 fn test_update_only_remote_toggles() {
     App::test((), |mut app| async move {
-        // Create FocusedTerminalInfo with default values (false, false)
+        // The flags are always published with the surface they came from, so these
+        // change-detection cases keep one stable surface throughout.
+        let terminal = focused_terminal_for_test(&mut app);
         let model_handle = app.add_model(|_| FocusedTerminalInfo::default());
 
         // Setup event tracking
@@ -298,7 +313,7 @@ fn test_update_only_remote_toggles() {
 
         // First update to (true, true)
         model_handle.update(&mut app, |model, ctx| {
-            model.update(true, true, ctx);
+            model.update(terminal.clone(), true, true, ctx);
         });
 
         // Clear events by draining the channel
@@ -306,7 +321,7 @@ fn test_update_only_remote_toggles() {
 
         // Update with (false, true) - only remote blocks changes
         model_handle.update(&mut app, |model, ctx| {
-            model.update(false, true, ctx);
+            model.update(terminal.clone(), false, true, ctx);
         });
 
         // Verify model state
@@ -327,7 +342,9 @@ fn test_update_only_remote_toggles() {
 #[test]
 fn test_update_only_restored_toggles() {
     App::test((), |mut app| async move {
-        // Create FocusedTerminalInfo with default values (false, false)
+        // The flags are always published with the surface they came from, so these
+        // change-detection cases keep one stable surface throughout.
+        let terminal = focused_terminal_for_test(&mut app);
         let model_handle = app.add_model(|_| FocusedTerminalInfo::default());
 
         // Setup event tracking
@@ -346,7 +363,7 @@ fn test_update_only_restored_toggles() {
 
         // First update to (true, true)
         model_handle.update(&mut app, |model, ctx| {
-            model.update(true, true, ctx);
+            model.update(terminal.clone(), true, true, ctx);
         });
 
         // Clear events by draining the channel
@@ -354,7 +371,7 @@ fn test_update_only_restored_toggles() {
 
         // Update with (true, false) - only restored blocks changes
         model_handle.update(&mut app, |model, ctx| {
-            model.update(true, false, ctx);
+            model.update(terminal.clone(), true, false, ctx);
         });
 
         // Verify model state

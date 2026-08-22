@@ -8400,22 +8400,28 @@ impl TerminalView {
             .all(|block| block.restored_block_was_local().unwrap_or(true))
     }
 
-    /// Publishes this pane's remote-block state to [`FocusedTerminalInfo`], which the app-global
-    /// AI switch reads (see `AISettings::is_ai_disabled_due_to_remote_session_org_policy`).
+    /// Publishes this pane and its remote-block state to [`FocusedTerminalInfo`], which
+    /// `AISettings::is_ai_disabled_due_to_remote_session_org_policy` reads.
     ///
     /// What is published is a fact about the pane, independent of the remote-session AI
-    /// permission; that permission is applied where the decision is made, so it can be revoked
-    /// without anything here having to be republished.
+    /// permission; that permission is resolved against this pane's team where the decision is
+    /// made, so it can be revoked without anything here having to be republished.
     fn update_focused_terminal_info(&mut self, ctx: &mut ViewContext<Self>) {
         if !ctx.is_self_or_child_focused() {
             return;
         }
 
+        let terminal = self.view_handle.clone();
         let contains_remote_blocks = self.any_session_contains_remote_blocks;
         let contains_restored_remote_blocks = self.any_session_contains_restored_remote_blocks;
         let updated =
             FocusedTerminalInfo::handle(ctx).update(ctx, |model: &mut FocusedTerminalInfo, ctx| {
-                model.update(contains_remote_blocks, contains_restored_remote_blocks, ctx)
+                model.update(
+                    terminal,
+                    contains_remote_blocks,
+                    contains_restored_remote_blocks,
+                    ctx,
+                )
             });
         if updated {
             ctx.notify();
@@ -11296,8 +11302,9 @@ impl TerminalView {
             return false;
         };
 
+        let scope = UserWorkspaces::team_context_resolver(self.view_handle.clone())(app);
         let remote_session_regex_list =
-            UserWorkspaces::as_ref(app).remote_session_regexes_union_across_teams();
+            UserWorkspaces::as_ref(app).remote_session_regexes_for_scope(&scope);
 
         // Almost nobody has org patterns at all, so there is nothing further to check.
         if remote_session_regex_list.is_empty() {
