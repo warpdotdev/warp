@@ -99,6 +99,7 @@ fn tui_statusline_normalization_preserves_custom_order_and_appends_missing_items
             TuiStatuslineItem::Model,
             TuiStatuslineItem::AutoApprove,
             TuiStatuslineItem::VimModeIndicator,
+            TuiStatuslineItem::Team,
             TuiStatuslineItem::WorkingDirectory,
             TuiStatuslineItem::GitBranchStatus,
             TuiStatuslineItem::GitDiffStatus,
@@ -120,6 +121,28 @@ fn tui_statusline_normalization_preserves_custom_order_and_appends_missing_items
             TuiStatuslineItem::ContextWindowUsage,
         ]
     );
+}
+
+/// A config saved before the team item existed must gain it rather than silently keeping a
+/// catalog that can never show it.
+#[test]
+fn tui_statusline_normalization_adds_the_team_item_to_an_older_config() {
+    let config = TuiStatuslineConfig {
+        order: vec![TuiStatuslineItem::Model, TuiStatuslineItem::GitBranch],
+        enabled: vec![TuiStatuslineItem::Model],
+    }
+    .normalized();
+
+    assert!(config.order.contains(&TuiStatuslineItem::Team));
+    assert!(
+        !config.is_enabled(TuiStatuslineItem::Team),
+        "an existing config's enabled set is the user's choice and must not gain items"
+    );
+}
+
+#[test]
+fn tui_statusline_default_shows_the_active_team() {
+    assert!(TuiStatuslineConfig::default().is_enabled(TuiStatuslineItem::Team));
 }
 
 #[test]

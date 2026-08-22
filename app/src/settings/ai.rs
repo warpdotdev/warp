@@ -689,6 +689,9 @@ pub enum TuiStatuslineItem {
     /// Vim mode indicator (NOR/INS/VIS/V-L/REP); hidden when vim mode is disabled.
     VimModeIndicator,
     Model,
+    /// The window's active team. Only rendered for users on more than one team, matching the
+    /// GUI's team-switcher pill.
+    Team,
     WorkingDirectory,
     GitBranch,
     GitBranchStatus,
@@ -706,10 +709,11 @@ pub enum TuiStatuslineItem {
 }
 
 impl TuiStatuslineItem {
-    pub const ALL: [Self; 15] = [
+    pub const ALL: [Self; 16] = [
         Self::AutoApprove,
         Self::VimModeIndicator,
         Self::Model,
+        Self::Team,
         Self::WorkingDirectory,
         Self::GitBranch,
         Self::GitBranchStatus,
@@ -729,6 +733,7 @@ impl TuiStatuslineItem {
             Self::AutoApprove => "Auto-approve indicator",
             Self::VimModeIndicator => "Vim mode indicator",
             Self::Model => "Model",
+            Self::Team => "Team",
             Self::WorkingDirectory => "Working directory",
             Self::GitBranch => "Git branch",
             Self::GitBranchStatus => "Git branch status",
@@ -769,6 +774,7 @@ impl Default for TuiStatuslineConfig {
                 TuiStatuslineItem::AutoApprove,
                 TuiStatuslineItem::VimModeIndicator,
                 TuiStatuslineItem::Model,
+                TuiStatuslineItem::Team,
                 TuiStatuslineItem::WorkingDirectory,
                 TuiStatuslineItem::GitBranch,
                 TuiStatuslineItem::GitDiffStatus,
