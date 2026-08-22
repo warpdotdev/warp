@@ -169,11 +169,49 @@ pub struct CreateTeamResponse {
 /// share a lifetime, restructure so they share the single owner instead.
 ///
 /// This is scope, not authority: the server still authorizes every request made under it.
-// Only tests construct one today; remove this once a Group 1 migration PR mints one from a
-// real call site.
-#[allow(dead_code)]
-pub(crate) struct TeamContext {
-    team_uid: ServerId,
+pub struct TeamContextForOperation {
+    team_uid: Option<ServerId>,
+}
+
+/// Reads a [`TeamContextForOperation`] or [`TeamContext`]'s team, regardless of which one a
+/// caller was handed. Implemented only by those two types — see their docs for what each one
+/// promises about when it was resolved and what it can be used for.
+pub(crate) trait TeamScope {
+    fn team_uid(&self) -> Option<ServerId>;
+}
+
+impl TeamScope for TeamContextForOperation {
+    fn team_uid(&self) -> Option<ServerId> {
+        self.team_uid
+    }
+}
+
+impl TeamContextForOperation {
+    // Only tests construct a teamless context today; remove this `#[allow(dead_code)]` once a
+    // Group 1 migration PR has a real call site.
+    #[allow(dead_code)]
+    pub(crate) fn teamless() -> Self {
+        Self { team_uid: None }
+    }
+}
+
+#[cfg(any(test, feature = "test-util"))]
+impl TeamContextForOperation {
+    pub fn teamless_for_test() -> Self {
+        Self::teamless()
+    }
+}
+
+#[cfg(test)]
+impl TeamContextForOperation {
+    // Only tests for the mint/render APIs use `teamless_for_test` today; this constructs a
+    // team-bound context, which no test needs until a Group 1 migration PR has one.
+    #[allow(dead_code)]
+    pub(crate) fn new_for_test(team_uid: ServerId) -> Self {
+        Self {
+            team_uid: Some(team_uid),
+        }
+    }
 }
 
 /// The team a view renders as, borrowed for the duration of a single render.
@@ -181,14 +219,20 @@ pub(crate) struct TeamContext {
 /// Current-team UI must reflect the window's team as of this frame, so this is resolved
 /// per render rather than cached. The borrow is what enforces that: it cannot be stored in
 /// view state or moved into a `'static` future, and it deliberately offers no conversion to
-/// a team UID or to a [`TeamContext`]. A [`WeakViewHandle`] locates a window to read from;
-/// it is not evidence that the holder is running in that window, which is what minting
-/// operation scope requires.
+/// a [`TeamContextForOperation`]. A [`WeakViewHandle`] locates a window to read from; it is
+/// not evidence that the holder is running in that window, which is what minting operation
+/// scope requires.
 // Only tests construct one today; remove this once a Group 1 migration PR resolves one from a
 // real render.
 #[allow(dead_code)]
-pub(crate) struct TeamRenderContext<'a> {
-    team: &'a Team,
+pub(crate) struct TeamContext<'a> {
+    team_uid: Option<&'a ServerId>,
+}
+
+impl TeamScope for TeamContext<'_> {
+    fn team_uid(&self) -> Option<ServerId> {
+        self.team_uid.copied()
+    }
 }
 
 impl UserWorkspaces {
@@ -384,39 +428,42 @@ impl UserWorkspaces {
             .and_then(|window_id| self.team_for_window(window_id))
     }
 
-    /// Captures the team selected in `ctx`'s window as an operation's [`TeamContext`]. This
-    /// is the only way application code mints one.
-    // Only tests call this today; remove once a Group 1 migration PR has a real call site.
-    #[allow(dead_code)]
-    pub(crate) fn team_context_for_view<T: Entity>(
+    /// Captures the team selected in `ctx`'s window as an operation's
+    /// [`TeamContextForOperation`]. This is the only way application code mints one.
+    pub fn team_context_for_operation<T: Entity>(
         &self,
         ctx: &ViewContext<T>,
-    ) -> Option<TeamContext> {
-        self.team_uid_for_window(ctx.window_id())
-            .map(|team_uid| TeamContext { team_uid })
+    ) -> TeamContextForOperation {
+        TeamContextForOperation {
+            team_uid: self.team_uid_for_window(ctx.window_id()),
+        }
     }
 
-    /// Resolves `view`'s window team for one render. See [`TeamRenderContext`].
+    /// Resolves `view`'s window team for one render. See [`TeamContext`].
     // Only tests call this today; remove once a Group 1 migration PR has a real call site.
     #[allow(dead_code)]
-    pub(crate) fn team_render_context_for_view_handle<'a, T: Entity>(
+    pub(crate) fn team_context<'a, T: Entity>(
         &'a self,
         view: &WeakViewHandle<T>,
         app: &AppContext,
-    ) -> Option<TeamRenderContext<'a>> {
+    ) -> Option<TeamContext<'a>> {
         let window_id = view.window_id(app)?;
-        let team_uid = self.team_uid_for_window(window_id)?;
-        let team = self.team_from_uid(team_uid)?;
-
-        Some(TeamRenderContext { team })
+        let team_uid = self.window_team_uids.get(&window_id)?;
+        let team_uid = match team_uid {
+            Some(team_uid) => Some(&self.team_from_uid(*team_uid)?.uid),
+            None => None,
+        };
+        Some(TeamContext { team_uid })
     }
 
     /// Reads a captured team's metadata. Returns `None` once that team is gone from the
-    /// current workspace, e.g. after the user leaves it.
+    /// current workspace, e.g. after the user leaves it, or when `context` carries no team.
     // Only tests call this today; remove once a Group 1 migration PR has a real call site.
     #[allow(dead_code)]
-    pub(crate) fn team_for_context(&self, context: &TeamContext) -> Option<&Team> {
-        self.team_from_uid(context.team_uid)
+    pub(crate) fn team_for_context<S: TeamScope + ?Sized>(&self, context: &S) -> Option<&Team> {
+        context
+            .team_uid()
+            .and_then(|team_uid| self.team_from_uid(team_uid))
     }
 
     /// Returns the windows whose team assignment changed.
