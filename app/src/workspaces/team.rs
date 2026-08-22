@@ -179,8 +179,4 @@ impl Team {
         }
         None // No reason found, team can be deleted
     }
-
-    pub fn is_custom_llm_enabled(&self) -> bool {
-        self.settings.llm_settings.enabled
-    }
 }

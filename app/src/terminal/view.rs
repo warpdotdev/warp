@@ -4240,7 +4240,7 @@ impl TerminalView {
 
         ctx.subscribe_to_model(&AISettings::handle(ctx), |me, _, ai_settings_event, ctx| {
             if let AISettingsChangedEvent::AwsBedrockCredentialsEnabled { .. } = ai_settings_event
-                && !UserWorkspaces::as_ref(ctx).is_aws_bedrock_credentials_enabled(ctx)
+                && !me.is_aws_bedrock_credentials_enabled_for_window(ctx)
             {
                 me.remove_aws_bedrock_login_banner(ctx);
             }
@@ -10764,6 +10764,19 @@ impl TerminalView {
         }
     }
 
+    /// Whether this terminal's window is on a team whose policy enables Bedrock credentials.
+    ///
+    /// Resolved fresh on each read from the view's handle rather than cached, so a window that
+    /// changes team stops offering the banner for the team it left.
+    fn is_aws_bedrock_credentials_enabled_for_window(&self, app: &AppContext) -> bool {
+        let user_workspaces = UserWorkspaces::as_ref(app);
+        user_workspaces
+            .team_context(&self.view_handle, app)
+            .is_some_and(|context| {
+                user_workspaces.is_aws_bedrock_credentials_enabled(&context, app)
+            })
+    }
+
     fn remove_aws_bedrock_login_banner(&mut self, ctx: &mut ViewContext<Self>) {
         if let Some(banner_state) = self.inline_banners_state.aws_bedrock_login_banner.take() {
             self.model
@@ -10846,8 +10859,8 @@ impl TerminalView {
             return;
         }
 
-        // Check if AWS Bedrock is available in the workspace
-        if !UserWorkspaces::as_ref(ctx).is_aws_bedrock_credentials_enabled(ctx) {
+        // Check if AWS Bedrock is enabled by the policy of this window's team
+        if !self.is_aws_bedrock_credentials_enabled_for_window(ctx) {
             return;
         }
 

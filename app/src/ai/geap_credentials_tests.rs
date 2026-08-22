@@ -3,6 +3,7 @@ use std::time::{Duration, SystemTime};
 
 use ai::api_keys::ApiKeyManager;
 use settings::{PrivatePreferences, PublicPreferences};
+use warp_core::features::FeatureFlag;
 use warp_managed_secrets::ManagedSecretManager;
 use warpui::{AddSingletonModel, App};
 use warpui_extras::user_preferences;
@@ -153,9 +154,22 @@ fn team_for_test() -> Team {
     }
 }
 
+/// The GEAP host lives on the team's effective settings, not the workspace's: the windowless
+/// gate aggregates over the user's teams and only reads workspace settings for a user who has
+/// none.
 fn workspace_with_geap_host(enabled: bool) -> Workspace {
-    let team = team_for_test();
-    let mut workspace = Workspace {
+    let mut team = team_for_test();
+    team.settings.llm_settings.enabled = true;
+    team.settings.llm_settings.host_configs.insert(
+        crate::ai::llms::LLMModelHost::GeminiEnterprise,
+        LlmHostSettings {
+            enabled,
+            enablement_setting: HostEnablementSetting::Enforce,
+            gcp_audience: Some(TEST_AUDIENCE.to_string()),
+            gcp_sa_email: Some(TEST_SA_EMAIL.to_string()),
+        },
+    );
+    Workspace {
         uid: "workspace_uid123456789".to_string().into(),
         name: "test".to_string(),
         stripe_customer_id: None,
@@ -170,18 +184,7 @@ fn workspace_with_geap_host(enabled: bool) -> Workspace {
         is_eligible_for_discovery: false,
         members: vec![],
         total_requests_used_since_last_refresh: 0,
-    };
-    workspace.settings.llm_settings.enabled = true;
-    workspace.settings.llm_settings.host_configs.insert(
-        crate::ai::llms::LLMModelHost::GeminiEnterprise,
-        LlmHostSettings {
-            enabled,
-            enablement_setting: HostEnablementSetting::Enforce,
-            gcp_audience: Some(TEST_AUDIENCE.to_string()),
-            gcp_sa_email: Some(TEST_SA_EMAIL.to_string()),
-        },
-    );
-    workspace
+    }
 }
 
 /// Registers the minimal singleton set the refresh path touches: workspace
@@ -292,7 +295,7 @@ fn refresh_disables_and_drops_tokens_when_gate_is_off() {
 fn refresh_rests_at_unconfigured_when_enabled_but_unconfigured() {
     let mut workspace = workspace_with_geap_host(true);
     // Enabled, but the admin has not configured an audience yet.
-    workspace
+    workspace.teams[0]
         .settings
         .llm_settings
         .host_configs
