@@ -40,7 +40,9 @@ use crate::settings::{
     AISettings, AISettingsChangedEvent, CodeSettings, CodeSettingsChangedEvent, PrivacySettings,
 };
 #[cfg(test)]
-use crate::workspaces::workspace::{AIAutonomyPolicy, WorkspaceMember, WorkspaceSettings};
+use crate::workspaces::workspace::{
+    AIAutonomyPolicy, SplitListSetting, WorkspaceMember, WorkspaceSettings,
+};
 use crate::workspaces::workspace::{
     AiAutonomySettings, AiOverages, PurchaseAddOnCreditsPolicy, SandboxedAgentSettings,
     UsageBasedPricingSettings,
@@ -206,7 +208,7 @@ pub(crate) struct TeamContextForOperation {
 /// this; it should read across every team explicitly, the way
 /// `UserWorkspaces::teams_allow_codebase_context` does.
 #[allow(dead_code)]
-pub(crate) trait TeamScope {
+pub trait TeamScope {
     fn team_uid(&self) -> Option<ServerId>;
 }
 
@@ -231,7 +233,7 @@ impl TeamContextForOperation {
 /// The team a view renders as, borrowed for the duration of a single read.
 ///
 /// It is resolved at the point of use so policy reads follow the view between windows.
-pub(crate) struct TeamContext<'a> {
+pub struct TeamContext<'a> {
     #[allow(dead_code)]
     team_uid: Option<&'a ServerId>,
 }
@@ -242,7 +244,8 @@ impl TeamScope for TeamContext<'_> {
     }
 }
 
-pub(crate) type TeamContextResolver = Rc<dyn for<'a> Fn(&'a AppContext) -> TeamContext<'a>>;
+pub type TeamContextResolver = Rc<dyn for<'a> Fn(&'a AppContext) -> TeamContext<'a>>;
+
 impl UserWorkspaces {
     #[cfg(any(test, all(feature = "tui", feature = "test-util")))]
     pub fn mock(
@@ -463,31 +466,31 @@ impl UserWorkspaces {
         }
     }
 
-    pub(crate) fn team_context_resolver<T: Entity>(view: WeakViewHandle<T>) -> TeamContextResolver {
-        Rc::new(move |app| {
-            let team_uid = Self::as_ref(app)
-                .team_for_view_handle(&view, app)
-                .map(|team| &team.uid);
-            TeamContext { team_uid }
-        })
+    /// A [`TeamContext`] source for consumers that have no view handle of their own -- models
+    /// and executors, which must resolve against the view that owns them.
+    pub fn team_context_resolver<T: Entity>(view: WeakViewHandle<T>) -> TeamContextResolver {
+        Rc::new(move |app| Self::as_ref(app).team_context(&view, app))
+    }
+
+    /// A resolver for tests that build a model without a window to resolve against.
+    #[cfg(any(test, feature = "test-util"))]
+    pub fn teamless_context_resolver_for_test() -> TeamContextResolver {
+        Rc::new(|_| TeamContext { team_uid: None })
     }
 
     /// Resolves `view`'s window team for one read. See [`TeamContext`].
-    #[allow(dead_code)]
+    ///
+    /// A view that has left its window resolves the same way as a window with no team: to no
+    /// team. Both mean there is no team to govern the read, and a caller on a render path has
+    /// no better answer to give than that.
     pub(crate) fn team_context<'a, T: Entity>(
         &'a self,
         view: &WeakViewHandle<T>,
         app: &AppContext,
-    ) -> Option<TeamContext<'a>> {
-        let window_id = view.window_id(app)?;
-        let team_uid = self.window_team_uids.get(&window_id)?;
-        let team_uid = match team_uid {
-            Some(team_uid) => Some(&self.team_from_uid(*team_uid)?.uid),
-            None => None,
-        };
-        Some(TeamContext { team_uid })
+    ) -> TeamContext<'a> {
+        let team_uid = self.team_for_view_handle(view, app).map(|team| &team.uid);
+        TeamContext { team_uid }
     }
-
     /// Returns the windows whose team assignment changed.
     #[must_use]
     fn reconcile_window_team_assignments(&mut self) -> Vec<WindowId> {
@@ -1018,7 +1021,6 @@ impl UserWorkspaces {
                 .value(),
         }
     }
-
 
     /// The AI autonomy policy that applies to `scope`'s team.
     pub(crate) fn ai_autonomy_settings_for_scope<S: TeamScope + ?Sized>(
@@ -2174,14 +2176,18 @@ impl UserWorkspaces {
                             .map(|path| path.display().to_string())
                             .collect()
                     }));
-                team_settings.execute_commands_allowlist =
-                    split_test_list(settings.execute_commands_allowlist.as_ref().map(|items| {
-                        items.iter().map(ToString::to_string).collect()
-                    }));
-                team_settings.execute_commands_denylist =
-                    split_test_list(settings.execute_commands_denylist.as_ref().map(|items| {
-                        items.iter().map(ToString::to_string).collect()
-                    }));
+                team_settings.execute_commands_allowlist = split_test_list(
+                    settings
+                        .execute_commands_allowlist
+                        .as_ref()
+                        .map(|items| items.iter().map(ToString::to_string).collect()),
+                );
+                team_settings.execute_commands_denylist = split_test_list(
+                    settings
+                        .execute_commands_denylist
+                        .as_ref()
+                        .map(|items| items.iter().map(ToString::to_string).collect()),
+                );
             },
             ctx,
         );

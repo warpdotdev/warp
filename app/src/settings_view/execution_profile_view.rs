@@ -9,9 +9,9 @@ use warpui::elements::{
 use warpui::fonts::{Properties, Weight};
 use warpui::{
     AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle,
+    WeakViewHandle,
 };
 
-use crate::TemplatableMCPServerManager;
 use crate::ai::blocklist::BlocklistAIPermissions;
 use crate::ai::execution_profiles::profiles::{
     AIExecutionProfilesModel, AIExecutionProfilesModelEvent,
@@ -26,8 +26,7 @@ use crate::cloud_object::model::generic_string_model::StringModel;
 use crate::settings::AISettings;
 use crate::ui_components::icons::Icon;
 use crate::view_components::action_button::{ActionButton, ButtonSize, SecondaryTheme};
-use crate::workspaces::user_workspaces::TeamContextResolver;
-use crate::UserWorkspaces;
+use crate::{TemplatableMCPServerManager, UserWorkspaces};
 
 #[derive(Debug, Clone)]
 pub enum ExecutionProfileViewAction {
@@ -40,13 +39,13 @@ pub enum ExecutionProfileViewEvent {
 
 pub struct ExecutionProfileView {
     profile_id: ExecutionProfileId,
-    team_context_resolver: TeamContextResolver,
+    self_handle: WeakViewHandle<Self>,
     edit_button: ViewHandle<ActionButton>,
 }
 
 impl ExecutionProfileView {
     pub fn new(profile_id: ExecutionProfileId, ctx: &mut ViewContext<Self>) -> Self {
-        let team_context_resolver = UserWorkspaces::team_context_resolver(ctx.handle());
+        let self_handle = ctx.handle();
         ctx.subscribe_to_model(&AIExecutionProfilesModel::handle(ctx), |me, _, event, ctx| {
             if matches!(event, AIExecutionProfilesModelEvent::ProfileUpdated(profile_id) if profile_id == &me.profile_id) {
                 ctx.notify();
@@ -82,7 +81,7 @@ impl ExecutionProfileView {
 
         Self {
             profile_id,
-            team_context_resolver,
+            self_handle,
             edit_button,
         }
     }
@@ -102,7 +101,7 @@ impl View for ExecutionProfileView {
         let is_any_ai_enabled = AISettings::as_ref(app).is_any_ai_enabled(app);
 
         let permissions = BlocklistAIPermissions::as_ref(app);
-        let scope = (self.team_context_resolver)(app);
+        let scope = UserWorkspaces::as_ref(app).team_context(&self.self_handle, app);
         let profile = permissions.permissions_profile_for_id(&self.profile_id, &scope, app);
 
         let llm_preferences = LLMPreferences::as_ref(app);

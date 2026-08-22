@@ -1466,9 +1466,7 @@ fn test_a_captured_autonomy_scope_does_not_follow_its_window_to_another_team() {
                  silently adopting team B's"
             );
 
-            let resolved = user_workspaces
-                .team_context(&weak_view, ctx)
-                .expect("the view is still in a window");
+            let resolved = user_workspaces.team_context(&weak_view, ctx);
             assert_eq!(
                 user_workspaces
                     .ai_autonomy_settings_for_scope(&resolved)

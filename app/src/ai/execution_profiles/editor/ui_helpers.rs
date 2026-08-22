@@ -776,8 +776,7 @@ fn render_command_denylist_section(
 
     let ai_disabled = !AISettings::as_ref(app).is_any_ai_enabled(app);
     let scope = view.team_context(app);
-    let org_denylist =
-        BlocklistAIPermissions::get_org_execute_commands_denylist(&scope, app);
+    let org_denylist = BlocklistAIPermissions::get_org_execute_commands_denylist(&scope, app);
     let mut tooltip_idx = 0usize;
 
     let input_items: Vec<InputListItem<ExecutionProfileEditorViewAction>> = profile_data

@@ -16,7 +16,7 @@ use warpui::ui_components::slider::SliderStateHandle;
 use warpui::ui_components::switch::SwitchStateHandle;
 use warpui::{
     AppContext, Element, Entity, ModelHandle, SingletonEntity, TypedActionView, View, ViewContext,
-    ViewHandle,
+    ViewHandle, WeakViewHandle,
 };
 
 use crate::ai::blocklist::BlocklistAIPermissions;
@@ -46,7 +46,7 @@ use crate::view_components::{
     Dropdown, DropdownItem, FilterableDropdown, SubmittableTextInput, SubmittableTextInputEvent,
 };
 use crate::workspace::WorkspaceAction;
-use crate::workspaces::user_workspaces::{TeamContext, TeamContextResolver, UserWorkspacesEvent};
+use crate::workspaces::user_workspaces::{TeamContext, UserWorkspacesEvent};
 use crate::{Appearance, TemplatableMCPServerManager, UserWorkspaces};
 
 const MODEL_MENU_WIDTH: f32 = 250.;
@@ -237,7 +237,7 @@ pub enum ExecutionProfileEditorViewAction {
 
 pub struct ExecutionProfileEditorView {
     profile_id: ExecutionProfileId,
-    team_context_resolver: TeamContextResolver,
+    self_handle: WeakViewHandle<Self>,
     pane_configuration: ModelHandle<PaneConfiguration>,
     focus_handle: Option<PaneFocusHandle>,
     clipped_scroll_state: ClippedScrollStateHandle,
@@ -279,8 +279,7 @@ pub struct ExecutionProfileEditorView {
 
 impl ExecutionProfileEditorView {
     pub fn new(profile_id: ExecutionProfileId, ctx: &mut ViewContext<Self>) -> Self {
-        let team_context = UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx);
-        let team_context_resolver = UserWorkspaces::team_context_resolver(ctx.handle());
+        let self_handle = ctx.handle();
         let pane_configuration = ctx.add_model(|_ctx| PaneConfiguration::new(HEADER_TEXT));
 
         let apply_code_diffs_dropdown = ctx.add_typed_action_view(|ctx| {
@@ -520,6 +519,7 @@ impl ExecutionProfileEditorView {
         });
 
         let permissions = BlocklistAIPermissions::as_ref(ctx);
+        let team_context = UserWorkspaces::as_ref(ctx).team_context(&self_handle, ctx);
         let profile_data = permissions.permissions_profile_for_id(&profile_id, &team_context, ctx);
 
         let mcp_allowlist_mouse_state_handles = profile_data
@@ -647,7 +647,7 @@ impl ExecutionProfileEditorView {
 
         let mut view = Self {
             profile_id,
-            team_context_resolver,
+            self_handle,
             pane_configuration,
             focus_handle: None,
             clipped_scroll_state: Default::default(),
@@ -881,7 +881,7 @@ impl ExecutionProfileEditorView {
     }
 
     pub(super) fn team_context<'a>(&self, app: &'a AppContext) -> TeamContext<'a> {
-        (self.team_context_resolver)(app)
+        UserWorkspaces::as_ref(app).team_context(&self.self_handle, app)
     }
 
     fn update_mouse_state_handles(&mut self, ctx: &mut ViewContext<Self>) {
@@ -934,9 +934,11 @@ impl ExecutionProfileEditorView {
             permissions.permissions_profile_for_id(&self.profile_id, &scope, ctx);
         let ai_settings = AISettings::as_ref(ctx);
 
-        let apply_code_diffs_disabled = !ai_settings.is_code_diffs_permissions_editable(&scope, ctx);
+        let apply_code_diffs_disabled =
+            !ai_settings.is_code_diffs_permissions_editable(&scope, ctx);
         let read_files_disabled = !ai_settings.is_read_files_permissions_editable(&scope, ctx);
-        let execute_commands_disabled = !ai_settings.is_execute_commands_permissions_editable(&scope, ctx);
+        let execute_commands_disabled =
+            !ai_settings.is_execute_commands_permissions_editable(&scope, ctx);
         let write_to_pty_disabled = !ai_settings.is_write_to_pty_permissions_editable(&scope, ctx);
         let computer_use_disabled = !ai_settings.is_computer_use_permissions_editable(&scope, ctx);
         let ask_user_question_disabled =
@@ -1408,15 +1410,21 @@ impl ExecutionProfileEditorView {
 
     fn configurable_context_window(&self, app: &AppContext) -> Option<LLMContextWindow> {
         let scope = self.team_context(app);
-        let profile = BlocklistAIPermissions::as_ref(app)
-            .permissions_profile_for_id(&self.profile_id, &scope, app);
+        let profile = BlocklistAIPermissions::as_ref(app).permissions_profile_for_id(
+            &self.profile_id,
+            &scope,
+            app,
+        );
         profile.configurable_context_window(app)
     }
 
     fn current_context_window_display_value(&self, app: &AppContext) -> Option<u32> {
         let scope = self.team_context(app);
-        let profile = BlocklistAIPermissions::as_ref(app)
-            .permissions_profile_for_id(&self.profile_id, &scope, app);
+        let profile = BlocklistAIPermissions::as_ref(app).permissions_profile_for_id(
+            &self.profile_id,
+            &scope,
+            app,
+        );
         profile.context_window_display_value(app)
     }
 

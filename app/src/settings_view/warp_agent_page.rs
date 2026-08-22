@@ -103,7 +103,7 @@ use crate::view_components::action_button::{
     ActionButton, ButtonSize, DangerSecondaryTheme, SecondaryTheme,
 };
 use crate::view_components::{Dropdown, DropdownItem, FilterableDropdown};
-use crate::workspaces::user_workspaces::{TeamContextResolver, UserWorkspacesEvent};
+use crate::workspaces::user_workspaces::UserWorkspacesEvent;
 use crate::workspaces::workspace::{AdminEnablementSetting, CustomerType};
 use crate::{TelemetryEvent, UserWorkspaces, send_telemetry_from_ctx};
 
@@ -575,7 +575,7 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
 
 pub struct WarpAgentPageView {
     page: PageType<Self>,
-    team_context_resolver: TeamContextResolver,
+    self_handle: WeakViewHandle<Self>,
     voice_input_toggle_key_dropdown: ViewHandle<Dropdown<WarpAgentPageAction>>,
     voice_input_language_dropdown: ViewHandle<FilterableDropdown<WarpAgentPageAction>>,
     local_only_icon_tooltip_states: RefCell<HashMap<String, MouseStateHandle>>,
@@ -619,7 +619,7 @@ pub struct WarpAgentPageView {
 
 impl WarpAgentPageView {
     pub fn new(ctx: &mut ViewContext<Self>) -> Self {
-        let team_context_resolver = UserWorkspaces::team_context_resolver(ctx.handle());
+        let self_handle = ctx.handle();
         let is_any_ai_enabled = AISettings::as_ref(ctx).is_any_ai_enabled(ctx);
 
         let workspace = UserWorkspaces::handle(ctx);
@@ -1104,7 +1104,7 @@ impl WarpAgentPageView {
 
         Self {
             page: Self::build_page(ctx),
-            team_context_resolver,
+            self_handle,
             voice_input_toggle_key_dropdown,
             voice_input_language_dropdown,
             autodetection_denylist_editor,
@@ -4288,7 +4288,7 @@ impl SettingsWidget for CloudAgentComputerUseWidget {
             enabled: is_checked,
             is_forced_by_org,
         } = {
-            let scope = (view.team_context_resolver)(app);
+            let scope = UserWorkspaces::as_ref(app).team_context(&view.self_handle, app);
             resolve_cloud_agent_computer_use_state(&scope, app)
         };
 

@@ -5,6 +5,7 @@ use super::*;
 use crate::ai::llms::{AvailableLLMs, LLMId, LLMInfo, LLMPreferences, ModelsByFeature};
 use crate::server::server_api::ClientError;
 use crate::test_util::terminal::initialize_app_for_terminal_view;
+use crate::workspaces::user_workspaces::UserWorkspaces;
 fn attachment() -> AttachmentInput {
     AttachmentInput {
         file_name: "context.txt".to_owned(),
@@ -14,7 +15,13 @@ fn attachment() -> AttachmentInput {
 }
 
 fn add_model(app: &mut App) -> warpui::ModelHandle<AmbientAgentViewModel> {
-    app.add_model(|ctx| AmbientAgentViewModel::new(EntityId::new(), ctx))
+    app.add_model(|ctx| {
+        AmbientAgentViewModel::new(
+            EntityId::new(),
+            UserWorkspaces::teamless_context_resolver_for_test(),
+            ctx,
+        )
+    })
 }
 
 #[test]

@@ -8047,11 +8047,7 @@ impl TerminalView {
         let terminal_view_id = self.view_id;
         let team_context_resolver = UserWorkspaces::team_context_resolver(ctx.handle());
         let model = ctx.add_model(|ctx| {
-            ambient_agent::AmbientAgentViewModel::new(
-                terminal_view_id,
-                team_context_resolver,
-                ctx,
-            )
+            ambient_agent::AmbientAgentViewModel::new(terminal_view_id, team_context_resolver, ctx)
         });
         self.wire_ambient_agent_view_model(model.clone(), ctx);
         // Notify observers (e.g. `PaneGroup::create_shared_session_viewer`) that the model

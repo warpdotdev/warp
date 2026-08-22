@@ -21,8 +21,8 @@ use crate::terminal::model::session::active_session::ActiveSession;
 use crate::terminal::model::session::command_executor::shell_quote_arg;
 use crate::terminal::model::session::{ExecuteCommandOptions, Session};
 use crate::terminal::shell::ShellType;
-use crate::{TelemetryEvent, send_telemetry_from_app_ctx};
 use crate::workspaces::user_workspaces::TeamContextResolver;
+use crate::{TelemetryEvent, send_telemetry_from_app_ctx};
 
 const FILE_GLOB_TIMEOUT: Duration = Duration::from_secs(10);
 

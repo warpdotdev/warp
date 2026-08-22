@@ -70,8 +70,8 @@ use crate::ai::get_relevant_files::controller::GetRelevantFilesController;
 use crate::terminal::TerminalModel;
 use crate::terminal::model::session::active_session::ActiveSession;
 use crate::terminal::model_events::ModelEventDispatcher;
-use crate::{TelemetryEvent, send_telemetry_from_ctx};
 use crate::workspaces::user_workspaces::TeamContextResolver;
+use crate::{TelemetryEvent, send_telemetry_from_ctx};
 
 /// The status of an action from an AI output.
 #[derive(Clone, Debug)]

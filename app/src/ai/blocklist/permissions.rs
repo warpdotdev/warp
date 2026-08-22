@@ -192,8 +192,10 @@ impl BlocklistAIPermissions {
             execute_commands: self.get_execute_commands_setting_for_profile(profile_id, scope, ctx),
             mcp_permissions: self.get_mcp_permissions_setting_for_profile(ctx, profile_id),
             write_to_pty: self.get_write_to_pty_setting_for_profile(profile_id, scope, ctx),
-            command_allowlist: self.get_execute_commands_allowlist_for_profile(profile_id, scope, ctx),
-            command_denylist: self.get_execute_commands_denylist_for_profile(profile_id, scope, ctx),
+            command_allowlist: self
+                .get_execute_commands_allowlist_for_profile(profile_id, scope, ctx),
+            command_denylist: self
+                .get_execute_commands_denylist_for_profile(profile_id, scope, ctx),
             directory_allowlist: self.get_read_files_allowlist_for_profile(profile_id, scope, ctx),
             mcp_allowlist: self.get_mcp_allowlist_for_profile(ctx, profile_id),
             mcp_denylist: self.get_mcp_denylist_for_profile(ctx, profile_id),
@@ -228,10 +230,7 @@ impl BlocklistAIPermissions {
     /// Returns the applicable workspace autonomy settings based on execution mode.
     /// In sandboxed mode, returns settings derived from the sandboxed agent config.
     /// In unsandboxed mode, returns the standard AI autonomy settings.
-    fn team_autonomy_settings(
-        scope: &impl TeamScope,
-        ctx: &AppContext,
-    ) -> AiAutonomySettings {
+    fn team_autonomy_settings(scope: &impl TeamScope, ctx: &AppContext) -> AiAutonomySettings {
         if AppExecutionMode::as_ref(ctx).is_sandboxed() {
             let sandboxed = UserWorkspaces::as_ref(ctx).sandboxed_agent_settings();
             AiAutonomySettings {

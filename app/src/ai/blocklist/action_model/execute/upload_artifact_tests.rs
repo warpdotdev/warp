@@ -175,6 +175,7 @@ fn should_autoexecute_honors_file_read_permissions_for_resolved_path() {
                     action: &action,
                     conversation_id,
                 },
+                &UserWorkspaces::teamless_context_resolver_for_test(),
                 ctx,
             )
         });
@@ -193,6 +194,7 @@ fn should_autoexecute_honors_file_read_permissions_for_resolved_path() {
                     action: &action,
                     conversation_id,
                 },
+                &UserWorkspaces::teamless_context_resolver_for_test(),
                 ctx,
             )
         });

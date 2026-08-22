@@ -197,13 +197,10 @@ fn handle_onboarding_credit_purchase_event(
 fn team_enforces_autonomy(ctx: &ViewContext<RootView>) -> bool {
     let view = ctx.handle();
     let user_workspaces = UserWorkspaces::as_ref(ctx);
+    let scope = user_workspaces.team_context(&view, ctx);
     user_workspaces
-        .team_context(&view, ctx)
-        .is_some_and(|scope| {
-            user_workspaces
-                .ai_autonomy_settings_for_scope(&scope)
-                .has_any_overrides()
-        })
+        .ai_autonomy_settings_for_scope(&scope)
+        .has_any_overrides()
 }
 
 /// Re-reads the account state onboarding decides on once the user has been out

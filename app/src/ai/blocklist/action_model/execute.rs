@@ -103,13 +103,13 @@ use crate::terminal::model::session::{ExecuteCommandOptions, Session};
 use crate::terminal::model_events::ModelEventDispatcher;
 use crate::terminal::shell::ShellType;
 use crate::terminal::{ShellLaunchData, TerminalModel};
-use crate::workspaces::user_workspaces::TeamContextResolver;
 #[cfg(feature = "local_fs")]
 use crate::util::image::{
     ProcessImageResult, is_supported_image_mime_type, process_image_for_agent,
 };
 #[cfg(feature = "local_fs")]
 use crate::util::openable_file_type::is_binary_file;
+use crate::workspaces::user_workspaces::TeamContextResolver;
 
 /// Types of actions that can be executed in parallel.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -965,41 +965,39 @@ impl BlocklistAIActionExecutor {
             AIAgentActionType::RequestCommandOutput { .. }
             | AIAgentActionType::WriteToLongRunningShellCommand { .. }
             | AIAgentActionType::ReadShellCommandOutput { .. }
-            | AIAgentActionType::TransferShellCommandControlToUser { .. } => self
-                .shell_command_executor
-                .update(ctx, |executor, ctx| {
+            | AIAgentActionType::TransferShellCommandControlToUser { .. } => {
+                self.shell_command_executor.update(ctx, |executor, ctx| {
                     executor.should_autoexecute(input, &team_context_resolver, ctx)
-                }),
-            AIAgentActionType::ReadFiles(_) => self
-                .read_files_executor
-                .update(ctx, |executor, ctx| {
+                })
+            }
+            AIAgentActionType::ReadFiles(_) => {
+                self.read_files_executor.update(ctx, |executor, ctx| {
                     executor.should_autoexecute(input, &team_context_resolver, ctx)
-                }),
-            AIAgentActionType::UploadArtifact(_) => self
-                .upload_artifact_executor
-                .update(ctx, |executor, ctx| {
+                })
+            }
+            AIAgentActionType::UploadArtifact(_) => {
+                self.upload_artifact_executor.update(ctx, |executor, ctx| {
                     executor.should_autoexecute(input, &team_context_resolver, ctx)
-                }),
-            AIAgentActionType::SearchCodebase(_) => self
-                .search_codebase_executor
-                .update(ctx, |executor, ctx| {
+                })
+            }
+            AIAgentActionType::SearchCodebase(_) => {
+                self.search_codebase_executor.update(ctx, |executor, ctx| {
                     executor.should_autoexecute(input, &team_context_resolver, ctx)
-                }),
+                })
+            }
             AIAgentActionType::RequestFileEdits { .. } => self
                 .request_file_edits_executor
                 .update(ctx, |executor, ctx| {
                     executor.should_autoexecute(input, &team_context_resolver, ctx)
                 }),
-            AIAgentActionType::Grep { .. } => self
-                .grep_executor
-                .update(ctx, |executor, ctx| {
+            AIAgentActionType::Grep { .. } => self.grep_executor.update(ctx, |executor, ctx| {
+                executor.should_autoexecute(input, &team_context_resolver, ctx)
+            }),
+            AIAgentActionType::FileGlob { .. } | AIAgentActionType::FileGlobV2 { .. } => {
+                self.file_glob_executor.update(ctx, |executor, ctx| {
                     executor.should_autoexecute(input, &team_context_resolver, ctx)
-                }),
-            AIAgentActionType::FileGlob { .. } | AIAgentActionType::FileGlobV2 { .. } => self
-                .file_glob_executor
-                .update(ctx, |executor, ctx| {
-                    executor.should_autoexecute(input, &team_context_resolver, ctx)
-                }),
+                })
+            }
             AIAgentActionType::CallMCPTool { .. } => self
                 .call_mcp_tool_executor
                 .update(ctx, |executor, ctx| executor.should_autoexecute(input, ctx)),

@@ -14,13 +14,6 @@ use crate::workspace::tab_settings::TabSettings;
 use crate::workspaces::user_workspaces::{TeamContextForOperation, UserWorkspaces};
 use crate::workspaces::workspace::FtueAccountClass;
 
-/// `team_context` scopes the admin autonomy policy this consults before writing the user's
-/// chosen permissions. It comes from the caller because this runs on an [`AppContext`] and
-/// so cannot resolve a scope itself.
-///
-/// Callers should capture it as they call rather than when the user made the choices: a
-/// logged-out window has no team, and the paths that defer this work until after login are
-/// waiting for the very thing that gives the window one.
 pub(crate) fn apply_account_first_onboarding_settings(
     selected_settings: &SelectedSettings,
     account_class: Option<FtueAccountClass>,
@@ -81,8 +74,6 @@ pub(crate) fn apply_account_first_onboarding_settings(
 /// `has_account` indicates whether the user has (or is creating) a real Warp
 /// account. Warp's AI features run on a Warp account, so agent intent only
 /// enables AI when `has_account` is true; skipping login leaves AI off.
-///
-/// See [`apply_account_first_onboarding_settings`] for what `team_context` scopes.
 pub(crate) fn apply_onboarding_settings(
     selected_settings: &SelectedSettings,
     has_account: bool,

@@ -81,7 +81,7 @@ use crate::view_components::{
     Dropdown, DropdownItem, FilterableDropdown, SubmittableTextInput, SubmittableTextInputEvent,
     WarningBoxConfig, render_warning_box,
 };
-use crate::workspaces::user_workspaces::{TeamContext, TeamContextResolver, UserWorkspacesEvent};
+use crate::workspaces::user_workspaces::{TeamContext, UserWorkspacesEvent};
 use crate::{TelemetryEvent, UserWorkspaces, send_telemetry_from_ctx};
 
 const AI_SETTINGS_DROPDOWN_WIDTH: f32 = 250.;
@@ -91,7 +91,7 @@ const CONTEXT_WINDOW_INPUT_BOX_WIDTH: f32 = 120.;
 
 pub struct AgentProfilesPageView {
     page: PageType<Self>,
-    team_context_resolver: TeamContextResolver,
+    self_handle: WeakViewHandle<Self>,
     local_only_icon_tooltip_states: RefCell<HashMap<String, MouseStateHandle>>,
 
     autonomy_dropdown_menu: ViewHandle<Dropdown<AgentProfilesPageAction>>,
@@ -141,13 +141,15 @@ pub struct AgentProfilesPageView {
 
 impl AgentProfilesPageView {
     pub fn new(ctx: &mut ViewContext<Self>) -> Self {
-        let team_context = UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx);
-        let team_context_resolver = UserWorkspaces::team_context_resolver(ctx.handle());
+        let self_handle = ctx.handle();
         let is_any_ai_enabled = AISettings::as_ref(ctx).is_any_ai_enabled(ctx);
 
         let workspace = UserWorkspaces::handle(ctx);
-        let ai_autonomy_settings =
-            workspace.as_ref(ctx).ai_autonomy_settings_for_scope(&team_context);
+        let ai_autonomy_settings = {
+            let user_workspaces = workspace.as_ref(ctx);
+            let scope = user_workspaces.team_context(&self_handle, ctx);
+            user_workspaces.ai_autonomy_settings_for_scope(&scope)
+        };
         ctx.subscribe_to_model(&workspace, |me, workspace, event, ctx| {
             if let UserWorkspacesEvent::TeamsChanged = event {
                 me.refresh_all_execution_profile_ui(ctx);
@@ -520,8 +522,11 @@ impl AgentProfilesPageView {
             }
         });
 
-        let current_permission = BlocklistAIPermissions::as_ref(ctx)
-            .active_permissions_profile(None, &team_context, ctx);
+        let current_permission = BlocklistAIPermissions::as_ref(ctx).active_permissions_profile(
+            None,
+            &team_context,
+            ctx,
+        );
 
         let apply_code_diffs_dropdown_menu = ctx.add_typed_action_view(|ctx| {
             let mut dropdown = Dropdown::new(ctx);
@@ -868,7 +873,7 @@ impl AgentProfilesPageView {
 
         Self {
             page: Self::build_page(ctx),
-            team_context_resolver,
+            self_handle,
             local_only_icon_tooltip_states: Default::default(),
             command_execution_allowlist_editor,
             command_execution_denylist_editor,
@@ -1229,8 +1234,7 @@ impl AgentProfilesPageView {
             .map(|_| Default::default())
             .collect();
 
-        let org_denylist =
-            BlocklistAIPermissions::get_org_execute_commands_denylist(&scope, ctx);
+        let org_denylist = BlocklistAIPermissions::get_org_execute_commands_denylist(&scope, ctx);
         self.command_denylist_tooltip_mouse_state_handles =
             org_denylist.iter().map(|_| Default::default()).collect();
 
@@ -1423,7 +1427,7 @@ impl AgentProfilesPageView {
     }
 
     fn team_context<'a>(&self, app: &'a AppContext) -> TeamContext<'a> {
-        (self.team_context_resolver)(app)
+        UserWorkspaces::as_ref(app).team_context(&self.self_handle, app)
     }
 
     fn refresh_profile_views(&mut self, ctx: &mut ViewContext<Self>) {
@@ -2539,8 +2543,8 @@ impl AgentsWidget {
         if execute_commands_setting == ActionPermission::AlwaysAsk
             || execute_commands_setting == ActionPermission::AgentDecides
         {
-            let command_allowlist =
-                BlocklistAIPermissions::as_ref(app).get_execute_commands_allowlist(None, &scope, app);
+            let command_allowlist = BlocklistAIPermissions::as_ref(app)
+                .get_execute_commands_allowlist(None, &scope, app);
             execute_commands_flex.add_child(
                 Container::new(Self::render_command_allowlist(
                     command_allowlist,
@@ -2556,7 +2560,8 @@ impl AgentsWidget {
 
         if execute_commands_setting != ActionPermission::AlwaysAsk {
             let command_denylist = Container::new(Self::render_command_denylist(
-                BlocklistAIPermissions::as_ref(app).get_execute_commands_denylist(None, &scope, app),
+                BlocklistAIPermissions::as_ref(app)
+                    .get_execute_commands_denylist(None, &scope, app),
                 view,
                 ai_settings,
                 appearance,
@@ -2693,8 +2698,7 @@ impl AgentsWidget {
     ) -> Box<dyn Element> {
         let ai_disabled = !ai_settings.is_any_ai_enabled(app);
         let scope = view.team_context(app);
-        let org_denylist =
-            BlocklistAIPermissions::get_org_execute_commands_denylist(&scope, app);
+        let org_denylist = BlocklistAIPermissions::get_org_execute_commands_denylist(&scope, app);
         let mut tooltip_idx = 0usize;
         let list = render_input_list(
             None,
