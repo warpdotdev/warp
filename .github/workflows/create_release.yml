@@ -435,10 +435,16 @@ jobs:
           name: release-macos-universal-${{ steps.get-config.outputs.channel }}
           path: ${{ steps.bundle_app.outputs.dmg_path }}
 
-  release_macos_cli:
-    name: Build Release (macOS CLI ${{ matrix.arch }})
+  # Builds the CLI binary only, with no dependency on release_macos_single_arch,
+  # so this heavy build+notarize step keeps running in parallel with the app
+  # build instead of serializing behind it. Packaging (which needs the
+  # canonical schema release_macos_single_arch produces) happens in
+  # release_macos_cli below, mirroring the build_macos_tui_binaries /
+  # release_macos_tui split.
+  build_macos_cli_binaries:
+    name: Build Release Binary (macOS CLI ${{ matrix.arch }})
     runs-on: macos-26-xlarge
-    needs: [prepare_release, release_macos_single_arch]
+    needs: prepare_release
     if: ${{ inputs.build_macos != false }}
     timeout-minutes: 60
     strategy:
@@ -475,16 +481,108 @@ jobs:
           config_file: ${{ env.CONFIG_FILE }}
           channel: ${{ inputs.channel }}
 
+      # Only the binary matters here; this job's own bundled resources are
+      # discarded, so skip signing/notarization and the (otherwise mandatory)
+      # schema, both of which belong to the packaging step below.
+      - name: Build ${{ matrix.arch }} binary
+        id: build_cli
+        run: |
+          script/bundle --channel $CHANNEL --arch ${{ matrix.arch }} --artifact cli --nosign
+        shell: bash
+        env:
+          CHANNEL: ${{ steps.get-config.outputs.channel }}
+          GIT_RELEASE_TAG: ${{ needs.prepare_release.outputs.release_tag }}
+          NO_LICENSES: "1"
+          SKIP_SETTINGS_SCHEMA: "1"
+
+      # binary_path is already copied out of the per-target-triple Cargo output
+      # directory; --skip-build (used by release_macos_cli below) re-derives
+      # that copy from the triple directory, so preserve it here instead. The
+      # dSYM Cargo produces there is itself a symlink into target/.../deps, so
+      # (as with the app archive above) also include its resolved target;
+      # otherwise the link dangles once extracted into a fresh job.
+      - name: Create tar archive with build artifacts
+        run: |
+          BINARY_PATH="${{ steps.build_cli.outputs.binary_path }}"
+          PROFILE_DIR="${BINARY_PATH#target/}"
+          PROFILE_DIR="${PROFILE_DIR%/bundle/osx/*}"
+          RAW_BINARY_PATH="target/${{ steps.build_cli.outputs.rust_target }}/$PROFILE_DIR/$(basename "$BINARY_PATH")"
+          RAW_DSYM_PATH="$RAW_BINARY_PATH.dSYM"
+          TAR_PATHS=("$RAW_BINARY_PATH")
+          if [[ -e "$RAW_DSYM_PATH" ]]; then
+            TAR_PATHS+=("$RAW_DSYM_PATH")
+            if [[ -L "$RAW_DSYM_PATH" ]]; then
+              REAL_DSYM_PATH="$(python3 -c 'import os,sys; print(os.path.relpath(sys.argv[1]))' "$(realpath "$RAW_DSYM_PATH")")"
+              TAR_PATHS+=("$REAL_DSYM_PATH")
+            fi
+          fi
+          tar czfv build-artifacts.tar.gz "${TAR_PATHS[@]}"
+        shell: bash
+
+      - name: Archive ${{ matrix.arch }} CLI build artifacts
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: macos-cli-${{ matrix.arch }}-${{ steps.get-config.outputs.channel }}
+          retention-days: 1
+          # We compress the tar archive, so no need to re-compress.
+          compression-level: 0
+          path: build-artifacts.tar.gz
+
+  release_macos_cli:
+    name: Build Release (macOS CLI ${{ matrix.arch }})
+    runs-on: macos-26-xlarge
+    needs: [prepare_release, release_macos_single_arch, build_macos_cli_binaries]
+    if: ${{ inputs.build_macos != false }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: aarch64
+          - arch: x86_64
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+
+      - uses: ./.github/actions/prepare_environment
+        with:
+          target_os: macos
+          is_self_hosted: false
+          ref: ${{ needs.prepare_release.outputs.release_branch }}
+          install_release_deps: true
+          ssh_key: ${{ secrets.WARP_CHANNEL_CONFIG_ACCESS_SSH_KEY }}
+
+      # Install go toolchain, as it may be needed for some build steps.
+      - name: Setup Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version: stable
+
+      - name: Get channel configuration
+        id: get-config
+        uses: ./.github/actions/get_channel_config/
+        with:
+          config_file: ${{ env.CONFIG_FILE }}
+          channel: ${{ inputs.channel }}
+
+      - name: Download ${{ matrix.arch }} CLI build artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: macos-cli-${{ matrix.arch }}-${{ steps.get-config.outputs.channel }}
+
+      - name: Extract CLI build artifacts
+        run: tar xvfz build-artifacts.tar.gz
+        shell: bash
+
       - name: Download canonical macOS settings schema
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: settings-schema-macos-aarch64-${{ steps.get-config.outputs.channel }}
           path: .release-artifacts/settings-schema-macos
 
-      - name: Build ${{ matrix.arch }} binary
+      - name: Bundle ${{ matrix.arch }} binary
         id: bundle_cli
         run: |
-          script/bundle --read-passwords-from-env --channel $CHANNEL --arch ${{ matrix.arch }} --artifact cli
+          script/bundle --skip-build --read-passwords-from-env --channel $CHANNEL --arch ${{ matrix.arch }} --artifact cli
         shell: bash
         env:
           CHANNEL: ${{ steps.get-config.outputs.channel }}
@@ -1146,10 +1244,93 @@ jobs:
           name: release-linux-x86_64-${{ steps.get-config.outputs.channel }}
           path: ${{ steps.bundle_app.outputs.packages_dir }}
 
+  # Builds the CLI binary only, with no dependency on release_linux_x86, so
+  # this build keeps running in parallel with the app build instead of
+  # serializing behind it. Packaging (which needs the canonical schema
+  # release_linux_x86 produces) happens in release_linux_cli_x86 below,
+  # mirroring the build_linux_tui_binaries / release_linux_tui split.
+  build_linux_cli_x86_binaries:
+    name: Build Release Binary (Linux CLI x86_64)
+    runs-on: namespace-profile-ubuntu-22-04
+    needs: prepare_release
+    if: ${{ inputs.build_linux != false }}
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+
+      - uses: ./.github/actions/prepare_environment
+        with:
+          target_os: linux
+          is_self_hosted: false
+          ref: ${{ needs.prepare_release.outputs.release_branch }}
+          install_release_deps: true
+          ssh_key: ${{ secrets.WARP_CHANNEL_CONFIG_ACCESS_SSH_KEY }}
+
+      # Install gcc 10, as gcc 9.5 has a bug with memcmp that is incompatible
+      # with aws-lc-rs (see https://gcc.gnu.org/bugzilla/show_bug.cgi?id=95189).
+      - name: Install and configure gcc-10
+        run: |
+          sudo apt update
+          sudo apt install -y gcc-10 g++-10
+          sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-10 60 --slave /usr/bin/g++ g++ /usr/bin/g++-10
+          gcc --version
+          g++ --version
+
+      - name: Get channel configuration
+        id: get-config
+        uses: ./.github/actions/get_channel_config/
+        with:
+          config_file: ${{ env.CONFIG_FILE }}
+          channel: ${{ inputs.channel }}
+
+      # Namespace's User Bundled Cache persists target/ between jobs on the same profile.
+      - name: Clean stale bundle output
+        run: |
+          if [[ -d target ]]; then
+            find target -path '*/bundle/linux' -type d -prune -exec rm -rf {} +
+          fi
+        shell: bash
+
+      # Only the binary matters here; this job's own bundled resources are
+      # discarded, so skip the (otherwise mandatory) schema and third-party
+      # license generation, both of which belong to the packaging step below.
+      # --packages none avoids building the (app-only) AppImage that
+      # --packages otherwise defaults to.
+      - name: Build CLI binary
+        id: build_cli
+        run: script/bundle --channel "$CHANNEL" --artifact cli --packages none
+        shell: bash
+        env:
+          CHANNEL: ${{ steps.get-config.outputs.channel }}
+          GIT_RELEASE_TAG: ${{ needs.prepare_release.outputs.release_tag }}
+          NO_LICENSES: "1"
+          SKIP_SETTINGS_SCHEMA: "1"
+
+      # Unlike the TUI job above, the cli artifact doesn't stage a copy into
+      # bundle/linux, so executable_path and debug_executable_path are
+      # already the raw target/<profile>/<bin>[.debug] Cargo output paths;
+      # no derivation is needed to satisfy --skip-build below.
+      - name: Create tar archive with build artifacts
+        run: |
+          EXECUTABLE_PATH="$(realpath --relative-to=$(pwd) "$EXECUTABLE_PATH")"
+          DEBUG_EXECUTABLE_PATH="$(realpath --relative-to=$(pwd) "$DEBUG_EXECUTABLE_PATH")"
+          tar czvf build-artifacts.tar.gz "$EXECUTABLE_PATH" "$DEBUG_EXECUTABLE_PATH"
+        shell: bash
+        env:
+          EXECUTABLE_PATH: ${{ steps.build_cli.outputs.executable_path }}
+          DEBUG_EXECUTABLE_PATH: ${{ steps.build_cli.outputs.debug_executable_path }}
+
+      - name: Archive Linux CLI build artifacts
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: linux-cli-x86_64-${{ steps.get-config.outputs.channel }}
+          retention-days: 1
+          path: build-artifacts.tar.gz
+
   release_linux_cli_x86:
     name: Build Release (Linux CLI x86_64)
     runs-on: namespace-profile-ubuntu-22-04
-    needs: [prepare_release, release_linux_x86]
+    needs: [prepare_release, release_linux_x86, build_linux_cli_x86_binaries]
     if: ${{ inputs.build_linux != false }}
     timeout-minutes: 90
     steps:
@@ -1224,6 +1405,15 @@ jobs:
           fi
         shell: bash
 
+      - name: Download Linux CLI build artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: linux-cli-x86_64-${{ steps.get-config.outputs.channel }}
+
+      - name: Extract Linux CLI build artifacts
+        run: tar xzvf build-artifacts.tar.gz
+        shell: bash
+
       - name: Download canonical Linux settings schema
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
@@ -1233,8 +1423,8 @@ jobs:
       - name: Bundle CLI
         id: bundle_cli
         run: |
-          # Build CLI only
-          script/bundle --channel $CHANNEL --artifact cli --packages deb,rpm
+          # Package the already-built CLI binary
+          script/bundle --channel $CHANNEL --skip-build --artifact cli --packages deb,rpm
         shell: bash
         env:
           CHANNEL: ${{ steps.get-config.outputs.channel }}
