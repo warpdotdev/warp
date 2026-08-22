@@ -295,7 +295,15 @@ fn measure_table_cells(
             let mut line = LayOutArgs::new();
             line.highlighted_urls = highlight_urls(&runs);
             for run in &runs {
-                line.layout_run(layout, run, &paragraph_style);
+                // `layout_run` strips a trailing `\n` (from a raw HTML `<br>`) out of
+                // `line.text`; an interior `\n` is left in place. Reinsert the break at each run
+                // boundary where it occurred — a `<br>` can land at a style-run boundary (e.g.
+                // `**bold**<br>**plain**`), so the break may terminate a non-final run. Tracking
+                // only the final run's flag would drop such interior breaks and silently collapse
+                // the cell to one line.
+                if line.layout_run(layout, run, &paragraph_style) {
+                    line.text.push('\n');
+                }
             }
             let text_layout = InlineTextLayoutInput {
                 text: line.text,
