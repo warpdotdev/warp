@@ -1570,6 +1570,7 @@ impl TuiTerminalSessionView {
                 });
             }
         });
+        let window_id = ctx.window_id();
         let ai_controller = ctx.add_model(|ctx| {
             BlocklistAIController::new(
                 ai_input_model.clone(),
@@ -1579,6 +1580,7 @@ impl TuiTerminalSessionView {
                 active_session.clone(),
                 model.clone(),
                 terminal_surface_id,
+                window_id,
                 ctx,
             )
         });
@@ -1657,7 +1659,6 @@ impl TuiTerminalSessionView {
             )
         });
         ctx.subscribe_to_model(&slash_commands, |_, _, _, ctx| ctx.notify());
-        let window_id = ctx.window_id();
         let api_keys_menu = ctx.add_model(|ctx| {
             TuiApiKeysMenuModel::new(input_editor_model.clone(), suggestions_mode.clone(), ctx)
         });

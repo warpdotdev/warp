@@ -48,7 +48,7 @@ use warpui::{AddSingletonModel, App, Element, TypedActionView, View, ViewHandle,
 use warpui_extras::user_preferences;
 
 use super::*;
-use crate::ai::llms::LLMModelHost;
+use crate::ai::llms::{LLMModelHost, LLMProvider};
 use crate::auth::AuthManager;
 use crate::cloud_object::model::persistence::CloudModel;
 use crate::cloud_object::{CloudObject, CloudObjectGuest};
@@ -71,8 +71,9 @@ use crate::workspaces::team_tester::TeamTesterStatus;
 use crate::workspaces::update_manager::TeamUpdateManager;
 use crate::workspaces::user_workspaces::UserWorkspaces;
 use crate::workspaces::workspace::{
-    AdminEnablementSetting, HostEnablementSetting, LlmHostSettings, MultiAdminPolicy,
-    PurchaseAddOnCreditsPolicy, Workspace,
+    AdminEnablementSetting, ByoFirstPartyKey, HostEnablementSetting, LlmHostSettings,
+    ManagedByokByoePolicy, MultiAdminPolicy, PurchaseAddOnCreditsPolicy, TeamByoSettings,
+    Workspace,
 };
 
 #[derive(Default)]
@@ -1173,6 +1174,288 @@ fn test_team_contexts_represent_a_registered_teamless_window() {
                 .team_context(&weak_view, ctx)
                 .expect("a registered teamless window should resolve");
             assert_eq!(context.team_uid(), None);
+        });
+    })
+}
+
+/// Two teams under a plan that manages BYOK/BYOE centrally, with opposing `team_byo` policy:
+/// `team_a` lets its members bring their own credentials, `team_b` does not.
+fn two_teams_with_opposing_byo_policy() -> (Team, Team) {
+    let (mut team_a, mut team_b) = two_teams();
+    for team in [&mut team_a, &mut team_b] {
+        team.billing_metadata.tier.managed_byok_byoe_policy =
+            Some(ManagedByokByoePolicy { enabled: true });
+    }
+    team_a.settings.team_byo = Some(TeamByoSettings {
+        first_party_enabled: true,
+        endpoints_enabled: true,
+        allow_user_keys: true,
+        allow_user_endpoints: true,
+        first_party_keys: vec![],
+        endpoints: vec![],
+    });
+    team_b.settings.team_byo = Some(TeamByoSettings {
+        first_party_enabled: true,
+        endpoints_enabled: true,
+        allow_user_keys: false,
+        allow_user_endpoints: false,
+        first_party_keys: vec![ByoFirstPartyKey {
+            provider: LLMProvider::Anthropic,
+            credential_uid: "team-b-anthropic".to_string(),
+        }],
+        endpoints: vec![],
+    });
+    (team_a, team_b)
+}
+
+#[test]
+fn member_byo_policy_follows_each_windows_own_team() {
+    let (team_a, team_b) = two_teams_with_opposing_byo_policy();
+    let mut workspace = workspace_for_test(&team_a);
+    workspace.teams.push(team_b.clone());
+
+    App::test((), |mut app| async move {
+        initialize_window_team_test_app(&mut app, vec![workspace]);
+
+        let (window_a, _view_a) = create_test_window(&mut app);
+        let (window_b, _view_b) = create_test_window(&mut app);
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.set_team_for_window(window_a, team_a.uid, ctx);
+            user_workspaces.set_team_for_window(window_b, team_b.uid, ctx);
+        });
+
+        app.read(|ctx| {
+            let user_workspaces = UserWorkspaces::as_ref(ctx);
+            let scope_a = user_workspaces.team_context_for_window(window_a);
+            let scope_b = user_workspaces.team_context_for_window(window_b);
+
+            assert!(
+                user_workspaces.are_member_byo_keys_allowed_for_scope(&scope_a),
+                "the window on the permissive team should allow member API keys"
+            );
+            assert!(
+                user_workspaces.are_member_byo_endpoints_allowed_for_scope(&scope_a),
+                "the window on the permissive team should allow member custom endpoints"
+            );
+            assert!(
+                !user_workspaces.are_member_byo_keys_allowed_for_scope(&scope_b),
+                "the window on the restrictive team should not allow member API keys"
+            );
+            assert!(
+                !user_workspaces.are_member_byo_endpoints_allowed_for_scope(&scope_b),
+                "the window on the restrictive team should not allow member custom endpoints"
+            );
+        });
+    })
+}
+
+#[test]
+fn team_first_party_key_follows_each_windows_own_team() {
+    let (team_a, team_b) = two_teams_with_opposing_byo_policy();
+    let mut workspace = workspace_for_test(&team_a);
+    workspace.teams.push(team_b.clone());
+
+    App::test((), |mut app| async move {
+        initialize_window_team_test_app(&mut app, vec![workspace]);
+
+        let (window_a, _view_a) = create_test_window(&mut app);
+        let (window_b, _view_b) = create_test_window(&mut app);
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.set_team_for_window(window_a, team_a.uid, ctx);
+            user_workspaces.set_team_for_window(window_b, team_b.uid, ctx);
+        });
+
+        app.read(|ctx| {
+            let user_workspaces = UserWorkspaces::as_ref(ctx);
+            assert!(
+                !user_workspaces.has_team_first_party_key_for_scope(
+                    &user_workspaces.team_context_for_window(window_a),
+                    LLMProvider::Anthropic,
+                ),
+                "team A provides no first-party key, so its window should report none"
+            );
+            assert!(
+                user_workspaces.has_team_first_party_key_for_scope(
+                    &user_workspaces.team_context_for_window(window_b),
+                    LLMProvider::Anthropic,
+                ),
+                "team B provides an Anthropic key, so its window should report one"
+            );
+            assert!(
+                !user_workspaces.has_team_first_party_key_for_scope(
+                    &user_workspaces.team_context_for_window(window_b),
+                    LLMProvider::OpenAI,
+                ),
+                "team B provides no OpenAI key, so its window should report none for OpenAI"
+            );
+        });
+    })
+}
+
+/// A restrictive team's policy must not leak onto a window that is not on a team: no team
+/// means no team policy, and the plan's own BYO entitlement decides on its own.
+#[test]
+fn member_byo_policy_is_unrestricted_for_a_window_with_no_team() {
+    let (_team_a, team_b) = two_teams_with_opposing_byo_policy();
+    let mut workspace = workspace_for_test(&team_b);
+    // Reconciliation assigns a teamless window to the workspace's first team, so the window
+    // can only stay teamless while the workspace itself has no teams to fall back to.
+    workspace.teams.clear();
+
+    App::test((), |mut app| async move {
+        initialize_window_team_test_app(&mut app, vec![workspace]);
+
+        let (window_id, _view) = create_test_window(&mut app);
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.register_window(window_id, None, ctx);
+        });
+
+        app.read(|ctx| {
+            let user_workspaces = UserWorkspaces::as_ref(ctx);
+            let scope = user_workspaces.team_context_for_window(window_id);
+            assert_eq!(scope.team_uid(), None);
+            assert!(
+                user_workspaces.is_managed_byok_byoe_enabled(),
+                "the plan still manages BYOK/BYOE centrally; only the team is missing"
+            );
+            assert!(user_workspaces.are_member_byo_keys_allowed_for_scope(&scope));
+            assert!(user_workspaces.are_member_byo_endpoints_allowed_for_scope(&scope));
+            assert!(
+                !user_workspaces.has_team_first_party_key_for_scope(&scope, LLMProvider::Anthropic)
+            );
+        });
+    })
+}
+
+/// `team_byo` is only administered by plans that manage credentials centrally, so without
+/// that entitlement the team's policy is inert and the plan's own BYO entitlement decides.
+#[test]
+fn member_byo_policy_is_unrestricted_without_the_managed_byok_entitlement() {
+    let (_team_a, mut team_b) = two_teams_with_opposing_byo_policy();
+    team_b.billing_metadata.tier.managed_byok_byoe_policy = None;
+    let workspace = workspace_for_test(&team_b);
+
+    App::test((), |mut app| async move {
+        initialize_window_team_test_app(&mut app, vec![workspace]);
+
+        let (window_id, _view) = create_test_window(&mut app);
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.set_team_for_window(window_id, team_b.uid, ctx);
+        });
+
+        app.read(|ctx| {
+            let user_workspaces = UserWorkspaces::as_ref(ctx);
+            let scope = user_workspaces.team_context_for_window(window_id);
+            assert_eq!(scope.team_uid(), Some(team_b.uid));
+            assert!(!user_workspaces.is_managed_byok_byoe_enabled());
+            assert!(
+                user_workspaces.are_member_byo_keys_allowed_for_scope(&scope),
+                "a restrictive team_byo should be inert without the managed BYOK entitlement"
+            );
+            assert!(user_workspaces.are_member_byo_endpoints_allowed_for_scope(&scope));
+        });
+    })
+}
+
+/// The settings page resolves its scope from a view handle rather than a window, so the
+/// handle-based path has to agree with the window-based one it is a wrapper over.
+#[test]
+fn member_byo_policy_resolved_from_a_view_handle_matches_its_window() {
+    let (team_a, team_b) = two_teams_with_opposing_byo_policy();
+    let mut workspace = workspace_for_test(&team_a);
+    workspace.teams.push(team_b.clone());
+
+    App::test((), |mut app| async move {
+        initialize_window_team_test_app(&mut app, vec![workspace]);
+
+        let (window_a, view_a) = create_test_window(&mut app);
+        let (window_b, view_b) = create_test_window(&mut app);
+        let (weak_a, weak_b) = (view_a.downgrade(), view_b.downgrade());
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.set_team_for_window(window_a, team_a.uid, ctx);
+            user_workspaces.set_team_for_window(window_b, team_b.uid, ctx);
+        });
+
+        app.read(|ctx| {
+            let user_workspaces = UserWorkspaces::as_ref(ctx);
+            let scope_a = user_workspaces
+                .team_context(&weak_a, ctx)
+                .expect("a view in a window should resolve a scope");
+            let scope_b = user_workspaces
+                .team_context(&weak_b, ctx)
+                .expect("a view in a window should resolve a scope");
+            assert!(user_workspaces.are_member_byo_keys_allowed_for_scope(&scope_a));
+            assert!(!user_workspaces.are_member_byo_keys_allowed_for_scope(&scope_b));
+        });
+    })
+}
+
+/// A [`TeamContextForOperation`] captures a uid and can outlive the team it names, which is
+/// the only way a scope reaches the `Some(_)` deny arm. The restriction then stands: resolving
+/// to some other team's `team_byo` is exactly what this migration exists to stop, so the
+/// no-team-means-unrestricted branch must not swallow a team that merely cannot be read.
+///
+/// A window scope cannot reach this state -- `team_context_for_window` resolves the team
+/// before building the scope, so a departed team is already indistinguishable from teamless.
+#[test]
+fn member_byo_policy_denies_a_scope_naming_a_team_outside_the_workspace() {
+    let (team_a, _team_b) = two_teams_with_opposing_byo_policy();
+    let workspace = workspace_for_test(&team_a);
+
+    App::test((), |mut app| async move {
+        initialize_window_team_test_app(&mut app, vec![workspace]);
+
+        let departed_team_scope = TeamContextForOperation::new_for_test(9999.into());
+        app.read(|ctx| {
+            let user_workspaces = UserWorkspaces::as_ref(ctx);
+            assert!(user_workspaces.is_managed_byok_byoe_enabled());
+            assert!(
+                !user_workspaces.are_member_byo_keys_allowed_for_scope(&departed_team_scope),
+                "a team whose policy cannot be read must not inherit another team's"
+            );
+            assert!(
+                !user_workspaces.are_member_byo_endpoints_allowed_for_scope(&departed_team_scope),
+                "a team whose policy cannot be read must not inherit another team's"
+            );
+        });
+    })
+}
+
+/// A window whose team leaves the workspace is reconciled onto the remaining team, and the
+/// policy read has to move with it rather than keep answering for the departed team.
+#[test]
+fn member_byo_policy_follows_a_window_reconciled_onto_another_team() {
+    let (team_a, team_b) = two_teams_with_opposing_byo_policy();
+    let mut workspace = workspace_for_test(&team_a);
+    workspace.teams.push(team_b.clone());
+
+    App::test((), |mut app| async move {
+        initialize_window_team_test_app(&mut app, vec![workspace]);
+
+        let (window_id, _view) = create_test_window(&mut app);
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.set_team_for_window(window_id, team_a.uid, ctx);
+        });
+
+        app.read(|ctx| {
+            let user_workspaces = UserWorkspaces::as_ref(ctx);
+            assert!(user_workspaces.are_member_byo_keys_allowed_for_scope(
+                &user_workspaces.team_context_for_window(window_id)
+            ));
+        });
+
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.update_workspaces(vec![workspace_for_test(&team_b)], ctx);
+        });
+
+        app.read(|ctx| {
+            let user_workspaces = UserWorkspaces::as_ref(ctx);
+            assert!(
+                !user_workspaces.are_member_byo_keys_allowed_for_scope(
+                    &user_workspaces.team_context_for_window(window_id)
+                ),
+                "the window reconciled onto the restrictive team, so its policy applies now"
+            );
         });
     })
 }

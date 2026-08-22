@@ -3548,6 +3548,7 @@ impl TerminalView {
                 ctx,
             )
         });
+        let window_id = ctx.window_id();
         let ai_controller = ctx.add_model(|ctx| {
             BlocklistAIController::new(
                 ai_input_model.clone(),
@@ -3557,6 +3558,7 @@ impl TerminalView {
                 active_session.clone(),
                 model.clone(),
                 terminal_view_id,
+                window_id,
                 ctx,
             )
         });
@@ -4309,7 +4311,6 @@ impl TerminalView {
             }
         });
 
-        let window_id = ctx.window_id();
         let mut terminal_view = Self {
             model,
             input,
@@ -28651,6 +28652,18 @@ impl View for TerminalView {
         } else {
             final_element
         }
+    }
+
+    fn on_window_transferred(
+        &mut self,
+        _source_window_id: WindowId,
+        target_window_id: WindowId,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        self.window_id = target_window_id;
+        self.ai_controller.update(ctx, |ai_controller, _| {
+            ai_controller.set_window_id(target_window_id);
+        });
     }
 
     fn on_focus(&mut self, focus_ctx: &FocusContext, ctx: &mut ViewContext<Self>) {

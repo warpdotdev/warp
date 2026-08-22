@@ -22,7 +22,7 @@ use super::workspace::{
     HostEnablementSetting, UgcCollectionEnablementSetting, Workspace, WorkspaceUid,
 };
 use crate::ai::credit_availability::AICreditAvailability;
-use crate::ai::llms::LLMModelHost;
+use crate::ai::llms::{LLMModelHost, LLMProvider};
 use crate::ai::request_usage_model::AIRequestUsageModel;
 use crate::auth::{AuthStateProvider, UserUid};
 use crate::channel::ChannelState;
@@ -42,7 +42,7 @@ use crate::settings::{
 use crate::workspaces::workspace::{AIAutonomyPolicy, WorkspaceMember, WorkspaceSettings};
 use crate::workspaces::workspace::{
     AiAutonomySettings, AiOverages, PurchaseAddOnCreditsPolicy, SandboxedAgentSettings,
-    UsageBasedPricingSettings,
+    TeamByoSettings, UsageBasedPricingSettings,
 };
 
 const STRIPE_SUBSCRIPTION_INTERVAL_PAGE_PREFIX: &str = "/upgrade";
@@ -208,9 +208,6 @@ pub(crate) struct TeamContextForOperation {
 /// workspace-level data. Code with no window at all must not construct a scope to route around
 /// this; it should read across every team explicitly, the way
 /// `UserWorkspaces::teams_allow_codebase_context` does.
-// Only tests call `team_uid()` today; remove this `#[allow(dead_code)]` once a Group 1
-// migration PR has a real getter generic over this trait.
-#[allow(dead_code)]
 pub(crate) trait TeamScope {
     fn team_uid(&self) -> Option<ServerId>;
 }
@@ -223,9 +220,6 @@ impl TeamScope for TeamContextForOperation {
 
 #[cfg(test)]
 impl TeamContextForOperation {
-    // Nothing constructs a test context yet; remove this `#[allow(dead_code)]` once a Group 1
-    // migration PR has a real call site.
-    #[allow(dead_code)]
     pub(crate) fn new_for_test(team_uid: ServerId) -> Self {
         Self {
             team_uid: Some(team_uid),
@@ -241,9 +235,6 @@ impl TeamContextForOperation {
 /// a [`TeamContextForOperation`]. A [`WeakViewHandle`] locates a window to read from; it is
 /// not evidence that the holder is running in that window, which is what minting operation
 /// scope requires.
-// Only tests construct one today; remove this once a Group 1 migration PR resolves one from a
-// real render.
-#[allow(dead_code)]
 pub(crate) struct TeamContext<'a> {
     team_uid: Option<&'a ServerId>,
 }
@@ -462,21 +453,52 @@ impl UserWorkspaces {
         }
     }
 
-    /// Resolves `view`'s window team for one render. See [`TeamContext`].
-    // Only tests call this today; remove once a Group 1 migration PR has a real call site.
-    #[allow(dead_code)]
+    /// Resolves `view`'s window team for one read. See [`TeamContext`].
+    ///
+    /// `None` means `view` is not in a window, which the caller has to confront: there is no
+    /// scope to read a team setting for, and the workspace-level value is not a substitute.
+    /// A view is also not yet in a window during its own construction, so a read that has a
+    /// [`ViewContext`] should go through [`Self::team_context_for_window`] instead.
     pub(crate) fn team_context<'a, T: Entity>(
         &'a self,
         view: &WeakViewHandle<T>,
         app: &AppContext,
     ) -> Option<TeamContext<'a>> {
         let window_id = view.window_id(app)?;
-        let team_uid = self.window_team_uids.get(&window_id)?;
-        let team_uid = match team_uid {
-            Some(team_uid) => Some(&self.team_from_uid(*team_uid)?.uid),
-            None => None,
-        };
-        Some(TeamContext { team_uid })
+        Some(self.team_context_for_window(window_id))
+    }
+
+    /// [`Self::team_context`] for a caller that holds a [`WindowId`] rather than a view handle:
+    /// a model owned by a window's view tree, or a view still inside its own constructor.
+    ///
+    /// Same borrow discipline, so a caller still re-resolves on every read and follows the
+    /// window. Unlike [`Self::team_context`] it cannot fail: a `WindowId` names a window
+    /// whether or not this model has a team assignment for it, and a window with no team
+    /// selected yields a scope whose `team_uid()` is `None`. A window assigned to a team that
+    /// has since left the workspace also yields `None`, because the team is resolved here
+    /// rather than by the getter.
+    ///
+    /// A stored `WindowId` is weaker evidence than a live [`ViewContext`]: dragging a tab
+    /// between windows re-parents the pane and the models it owns, so whoever stores one owes
+    /// it an update on re-parent.
+    pub(crate) fn team_context_for_window(&self, window_id: WindowId) -> TeamContext<'_> {
+        TeamContext {
+            team_uid: self
+                .team_uid_for_window(window_id)
+                .and_then(|team_uid| self.team_from_uid(team_uid))
+                .map(|team| &team.uid),
+        }
+    }
+
+    /// The team a scope names, when it names one that is still in the current workspace.
+    ///
+    /// Deliberately private. Callers get a resolved *setting* from a getter that takes their
+    /// scope, never a `&Team` they could carry somewhere the scope never reached. Wanting a
+    /// `&Team` at a call site means the read belongs behind a new getter here instead.
+    fn team_from_scope<S: TeamScope + ?Sized>(&self, scope: &S) -> Option<&Team> {
+        scope
+            .team_uid()
+            .and_then(|team_uid| self.team_from_uid(team_uid))
     }
 
     /// Returns the windows whose team assignment changed.
@@ -902,6 +924,85 @@ impl UserWorkspaces {
                         team_byo.endpoints_enabled && team_byo.allow_user_endpoints
                     })
         })
+    }
+
+    /// Whether the current workspace's plan manages BYOK/BYOE centrally.
+    ///
+    /// Billing metadata is workspace-owned, so this is a plan entitlement and stays
+    /// workspace-level no matter which team a window has selected. It is what turns the
+    /// team-scoped `team_byo` policy on: a plan that does not manage credentials centrally has
+    /// no `team_byo` policy to enforce, and members fall back to the plan's own BYO
+    /// entitlement ([`Self::is_byo_api_key_enabled`] / [`Self::is_custom_inference_enabled`]).
+    pub fn is_managed_byok_byoe_enabled(&self) -> bool {
+        self.current_workspace_billing_metadata()
+            .is_some_and(|billing| billing.is_managed_byok_byoe_enabled())
+    }
+
+    /// Whether `scope`'s team allows its members to use their own provider API keys.
+    ///
+    /// This is the policy half of member BYO keys: an admin restricting which credentials the
+    /// team's members may use. The entitlement half -- whether the plan permits BYO at all --
+    /// is [`Self::is_byo_api_key_enabled`], and stays workspace-level. Both must hold before a
+    /// member key is used.
+    ///
+    /// A scope with no team is not on a team, so no team policy restricts it and the plan's
+    /// entitlement alone decides.
+    ///
+    /// The `Some(_)` arm denies rather than falling back when the named team cannot be found,
+    /// so a scope can never inherit some other team's `team_byo`. No scope this module hands
+    /// out reaches it: [`Self::team_context_for_window`] resolves the uid through
+    /// [`Self::team_from_uid`] before storing it, so a team that has left the workspace is
+    /// already indistinguishable from teamless by the time a getter sees it. The arm exists
+    /// for [`TeamContextForOperation`], which carries a uid captured earlier and can outlive
+    /// the team it names.
+    pub(crate) fn are_member_byo_keys_allowed_for_scope<S: TeamScope + ?Sized>(
+        &self,
+        scope: &S,
+    ) -> bool {
+        !self.is_managed_byok_byoe_enabled()
+            || match scope.team_uid() {
+                Some(_) => self.team_byo_for_scope(scope).is_some_and(|team_byo| {
+                    team_byo.first_party_enabled && team_byo.allow_user_keys
+                }),
+                None => true,
+            }
+    }
+
+    /// [`Self::are_member_byo_keys_allowed_for_scope`] for member-configured custom endpoints.
+    /// Its entitlement half is [`Self::is_custom_inference_enabled`].
+    pub(crate) fn are_member_byo_endpoints_allowed_for_scope<S: TeamScope + ?Sized>(
+        &self,
+        scope: &S,
+    ) -> bool {
+        !self.is_managed_byok_byoe_enabled()
+            || match scope.team_uid() {
+                Some(_) => self.team_byo_for_scope(scope).is_some_and(|team_byo| {
+                    team_byo.endpoints_enabled && team_byo.allow_user_endpoints
+                }),
+                None => true,
+            }
+    }
+
+    /// Whether `scope`'s team has configured its own first-party key for `provider`. A scope
+    /// with no team has no team-provided key.
+    pub(crate) fn has_team_first_party_key_for_scope<S: TeamScope + ?Sized>(
+        &self,
+        scope: &S,
+        provider: LLMProvider,
+    ) -> bool {
+        self.is_managed_byok_byoe_enabled()
+            && self.team_byo_for_scope(scope).is_some_and(|team_byo| {
+                team_byo.first_party_enabled
+                    && team_byo
+                        .first_party_keys
+                        .iter()
+                        .any(|key| key.provider == provider)
+            })
+    }
+
+    fn team_byo_for_scope<S: TeamScope + ?Sized>(&self, scope: &S) -> Option<&TeamByoSettings> {
+        self.team_from_scope(scope)
+            .and_then(|team| team.settings.team_byo.as_ref())
     }
 
     pub fn aws_bedrock_host_settings(&self) -> Option<&super::workspace::LlmHostSettings> {

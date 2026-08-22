@@ -39,7 +39,7 @@ use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
 use warpui::ui_components::switch::{SwitchStateHandle, TooltipConfig};
 use warpui::{
     Action, AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext,
-    ViewHandle, WeakViewHandle, id,
+    ViewHandle, WeakViewHandle, WindowId, id,
 };
 
 use super::ai_shared::{
@@ -103,7 +103,7 @@ use crate::view_components::action_button::{
     ActionButton, ButtonSize, DangerSecondaryTheme, SecondaryTheme,
 };
 use crate::view_components::{Dropdown, DropdownItem, FilterableDropdown};
-use crate::workspaces::user_workspaces::UserWorkspacesEvent;
+use crate::workspaces::user_workspaces::{TeamContext, UserWorkspacesEvent};
 use crate::workspaces::workspace::{AdminEnablementSetting, CustomerType};
 use crate::{TelemetryEvent, UserWorkspaces, send_telemetry_from_ctx};
 
@@ -573,6 +573,32 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
     );
 }
 
+/// Whether `event` can change the team policy this page renders for `window_id`.
+///
+/// Team-scoped settings follow the window's selected team, so imperative widget state (button
+/// and editor enablement) has to be recomputed both when the teams themselves change and when
+/// this window switches to another team. Other windows' team changes are ignored.
+fn is_team_policy_change_for_window(event: &UserWorkspacesEvent, window_id: WindowId) -> bool {
+    matches!(event, UserWorkspacesEvent::TeamsChanged)
+        || matches!(
+            event,
+            UserWorkspacesEvent::WindowTeamChanged {
+                window_id: changed_window_id,
+            } if *changed_window_id == window_id
+        )
+}
+
+/// Whether `ctx`'s window's team allows its members to use their own provider API keys.
+///
+/// Resolves the scope from [`ViewContext::window_id`] rather than a view handle so it is
+/// usable both while the page is being constructed -- when the page is not yet in
+/// `view_to_window` and a handle resolves to nothing -- and from its event subscriptions.
+fn member_byo_keys_allowed_for_window(ctx: &ViewContext<WarpAgentPageView>) -> bool {
+    let workspaces = UserWorkspaces::as_ref(ctx);
+    let team_scope = workspaces.team_context_for_window(ctx.window_id());
+    workspaces.are_member_byo_keys_allowed_for_scope(&team_scope)
+}
+
 pub struct WarpAgentPageView {
     page: PageType<Self>,
     voice_input_toggle_key_dropdown: ViewHandle<Dropdown<WarpAgentPageAction>>,
@@ -622,7 +648,7 @@ impl WarpAgentPageView {
 
         let workspace = UserWorkspaces::handle(ctx);
         ctx.subscribe_to_model(&workspace, |me, _workspace, event, ctx| {
-            if let UserWorkspacesEvent::TeamsChanged = event {
+            if is_team_policy_change_for_window(event, ctx.window_id()) {
                 me.sync_custom_endpoint_buttons(ctx);
                 ctx.notify();
             }
@@ -918,9 +944,7 @@ impl WarpAgentPageView {
             });
         }
 
-        let custom_inference_controls_enabled = is_any_ai_enabled
-            && UserWorkspaces::as_ref(ctx).is_custom_inference_enabled(ctx)
-            && UserWorkspaces::as_ref(ctx).are_member_byo_endpoints_allowed();
+        let custom_inference_controls_enabled = Self::can_use_custom_inference_controls(ctx);
         let custom_inference_add_button = ctx.add_typed_action_view(|_| {
             ActionButton::new("+ Add custom model", SecondaryTheme)
                 .with_size(ButtonSize::Small)
@@ -1415,10 +1439,19 @@ impl WarpAgentPageView {
             })
             .collect()
     }
-    fn can_use_custom_inference_controls(app: &AppContext) -> bool {
-        AISettings::as_ref(app).is_any_ai_enabled(app)
-            && UserWorkspaces::as_ref(app).is_custom_inference_enabled(app)
-            && UserWorkspaces::as_ref(app).are_member_byo_endpoints_allowed()
+    /// Whether this page's window may add or edit member-configured custom endpoints.
+    ///
+    /// Takes a [`ViewContext`] rather than a view handle because the page reads this while it
+    /// is still being constructed, when it is not yet in `view_to_window` and a handle cannot
+    /// resolve a window. `ViewContext::window_id` always can.
+    fn can_use_custom_inference_controls(ctx: &ViewContext<Self>) -> bool {
+        if !AISettings::as_ref(ctx).is_any_ai_enabled(ctx) {
+            return false;
+        }
+        let workspaces = UserWorkspaces::as_ref(ctx);
+        let team_scope = workspaces.team_context_for_window(ctx.window_id());
+        workspaces.is_custom_inference_enabled(ctx)
+            && workspaces.are_member_byo_endpoints_allowed_for_scope(&team_scope)
     }
 
     fn show_add_custom_endpoint_modal(&mut self, ctx: &mut ViewContext<Self>) {
@@ -1957,10 +1990,18 @@ impl WarpAgentPageView {
             ],
         ));
 
+        let page_view_handle = ctx.handle();
         categories.push(Category::with_header(
             CategoryHeader::new("Custom Inference").with_trailing_element(
-                |view: &Self, _appearance, app| {
-                    if CustomInferenceVisibility::compute(app).show_custom_inference {
+                move |view: &Self, _appearance, app| {
+                    let workspaces = UserWorkspaces::as_ref(app);
+                    let shows_custom_inference = workspaces
+                        .team_context(&page_view_handle, app)
+                        .is_some_and(|team_scope| {
+                            CustomInferenceVisibility::compute(&team_scope, app)
+                                .show_custom_inference
+                        });
+                    if shows_custom_inference {
                         view.custom_inference_add_button.as_ref(app).render(app)
                     } else {
                         Empty::new().finish()
@@ -4587,7 +4628,7 @@ impl ApiKeysWidget {
         let workspace_handle = UserWorkspaces::handle(ctx);
         let is_any_ai_enabled = ai_settings.is_any_ai_enabled(ctx);
         let is_byo_enabled = workspace_handle.as_ref(ctx).is_byo_api_key_enabled(ctx);
-        let member_byo_keys_allowed = workspace_handle.as_ref(ctx).are_member_byo_keys_allowed();
+        let member_byo_keys_allowed = member_byo_keys_allowed_for_window(ctx);
 
         let provider_api_key_editors = LLMProvider::API_KEY_PROVIDERS
             .into_iter()
@@ -4640,12 +4681,11 @@ impl ApiKeysWidget {
                 });
                 let editor_clone = editor.clone();
                 ctx.subscribe_to_model(&workspace_handle, move |_, workspace, event, ctx| {
-                    if let UserWorkspacesEvent::TeamsChanged = event {
+                    if is_team_policy_change_for_window(event, ctx.window_id()) {
                         let is_any_ai_enabled =
                             AISettings::handle(ctx).as_ref(ctx).is_any_ai_enabled(ctx);
                         let is_byo_enabled = workspace.as_ref(ctx).is_byo_api_key_enabled(ctx);
-                        let member_byo_keys_allowed =
-                            workspace.as_ref(ctx).are_member_byo_keys_allowed();
+                        let member_byo_keys_allowed = member_byo_keys_allowed_for_window(ctx);
                         let is_enabled = is_any_ai_enabled && is_byo_enabled;
                         let has_key = !editor_clone.as_ref(ctx).is_empty(ctx);
                         if !is_byo_enabled && has_key {
@@ -4746,10 +4786,10 @@ impl ApiKeysWidget {
         // in sync with the BYO API key policy, like the editors above.
         let grok_buttons = [grok_connect_button.clone(), grok_disconnect_button.clone()];
         ctx.subscribe_to_model(&workspace_handle, move |_, workspace, event, ctx| {
-            if let UserWorkspacesEvent::TeamsChanged = event {
+            if is_team_policy_change_for_window(event, ctx.window_id()) {
                 let is_any_ai_enabled = AISettings::handle(ctx).as_ref(ctx).is_any_ai_enabled(ctx);
                 let is_byo_enabled = workspace.as_ref(ctx).is_byo_api_key_enabled(ctx);
-                let member_byo_keys_allowed = workspace.as_ref(ctx).are_member_byo_keys_allowed();
+                let member_byo_keys_allowed = member_byo_keys_allowed_for_window(ctx);
                 for button in &grok_buttons {
                     button.update(ctx, |button, ctx| {
                         button.set_disabled(
@@ -4784,23 +4824,22 @@ impl ApiKeysWidget {
             description_learn_more_index: Default::default(),
         }
     }
-    fn has_team_first_party_key(provider: &LLMProvider, app: &AppContext) -> bool {
-        UserWorkspaces::as_ref(app)
-            .current_workspace()
-            .is_some_and(|workspace| {
-                workspace.billing_metadata.is_managed_byok_byoe_enabled()
-                    && workspace
-                        .settings
-                        .team_byo
-                        .as_ref()
-                        .is_some_and(|team_byo| {
-                            team_byo.first_party_enabled
-                                && team_byo
-                                    .first_party_keys
-                                    .iter()
-                                    .any(|key| key.provider == *provider)
-                        })
+    fn has_team_first_party_key(&self, provider: LLMProvider, app: &AppContext) -> bool {
+        let workspaces = UserWorkspaces::as_ref(app);
+        workspaces
+            .team_context(&self.view_handle, app)
+            .is_some_and(|team_scope| {
+                workspaces.has_team_first_party_key_for_scope(&team_scope, provider)
             })
+    }
+
+    /// The section's visibility for the team this page's window is on, or `None` when the page
+    /// is not in a window and there is no team to resolve policy against. That happens only
+    /// once the page is detached, when its render is discarded anyway.
+    fn visibility(&self, app: &AppContext) -> Option<CustomInferenceVisibility> {
+        let workspaces = UserWorkspaces::as_ref(app);
+        let team_scope = workspaces.team_context(&self.view_handle, app)?;
+        Some(CustomInferenceVisibility::compute(&team_scope, app))
     }
 
     fn render_team_key_info_icon(
@@ -4890,7 +4929,7 @@ impl ApiKeysWidget {
         let mut label_row = Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_child(label);
-        if Self::has_team_first_party_key(&provider, app) {
+        if self.has_team_first_party_key(provider, app) {
             label_row.add_child(
                 Container::new(self.render_team_key_info_icon(
                     &provider,
@@ -5248,13 +5287,20 @@ struct CustomInferenceVisibility {
 }
 
 impl CustomInferenceVisibility {
-    fn compute(app: &AppContext) -> Self {
+    /// Resolves the section's visibility for `team_scope`'s team.
+    ///
+    /// Callers holding only a view handle get their scope from
+    /// [`UserWorkspaces::team_context`], and must confront its `None` -- a page that is not in
+    /// a window has no team to read policy for, and the workspace-level policy is not a
+    /// substitute for it.
+    fn compute(team_scope: &TeamContext<'_>, app: &AppContext) -> Self {
         let workspaces = UserWorkspaces::as_ref(app);
         let is_any_ai_enabled = AISettings::as_ref(app).is_any_ai_enabled(app);
         let is_byo_enabled = workspaces.is_byo_api_key_enabled(app);
         let is_custom_inference_enabled = workspaces.is_custom_inference_enabled(app);
-        let member_byo_keys_allowed = workspaces.are_member_byo_keys_allowed();
-        let member_byo_endpoints_allowed = workspaces.are_member_byo_endpoints_allowed();
+        let member_byo_keys_allowed = workspaces.are_member_byo_keys_allowed_for_scope(team_scope);
+        let member_byo_endpoints_allowed =
+            workspaces.are_member_byo_endpoints_allowed_for_scope(team_scope);
 
         // BYOK: shown even when BYO is off so the upgrade CTA can render.
         let show_provider_keys = member_byo_keys_allowed;
@@ -5271,9 +5317,7 @@ impl CustomInferenceVisibility {
             provider_keys_enabled,
             show_custom_inference,
             custom_inference_controls_enabled,
-            managed_byok_byoe_enabled: workspaces
-                .current_workspace()
-                .is_some_and(|workspace| workspace.billing_metadata.is_managed_byok_byoe_enabled()),
+            managed_byok_byoe_enabled: workspaces.is_managed_byok_byoe_enabled(),
         }
     }
 
@@ -5291,7 +5335,9 @@ impl SettingsWidget for ApiKeysWidget {
     }
 
     fn should_render(&self, app: &AppContext) -> bool {
-        let visibility = CustomInferenceVisibility::compute(app);
+        let Some(visibility) = self.visibility(app) else {
+            return false;
+        };
         visibility.show_section() || visibility.managed_byok_byoe_enabled
     }
 
@@ -5301,7 +5347,9 @@ impl SettingsWidget for ApiKeysWidget {
         appearance: &Appearance,
         app: &AppContext,
     ) -> Box<dyn Element> {
-        let visibility = CustomInferenceVisibility::compute(app);
+        let Some(visibility) = self.visibility(app) else {
+            return Empty::new().finish();
+        };
         let CustomInferenceVisibility {
             is_any_ai_enabled,
             is_byo_enabled,
