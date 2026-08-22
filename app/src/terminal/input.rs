@@ -2019,9 +2019,7 @@ pub fn init(app: &mut AppContext) {
             & !id!(flags::ACTIVE_INLINE_AGENT_VIEW),
     )]);
 
-    if FeatureFlag::ClassicCompletions.is_enabled()
-        && !FeatureFlag::ForceClassicCompletions.is_enabled()
-    {
+    if !FeatureFlag::ForceClassicCompletions.is_enabled() {
         app.register_editable_bindings([EditableBinding::new(
             "input:toggle_classic_completions_mode",
             "(Experimental) Toggle classic completions mode",
@@ -12220,8 +12218,7 @@ impl Input {
     }
 
     fn is_classic_completions_enabled(&self, ctx: &AppContext) -> bool {
-        (FeatureFlag::ClassicCompletions.is_enabled()
-            && *InputSettings::as_ref(ctx).classic_completions_mode)
+        *InputSettings::as_ref(ctx).classic_completions_mode
             || FeatureFlag::ForceClassicCompletions.is_enabled()
     }
 

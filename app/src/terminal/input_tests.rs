@@ -6771,7 +6771,6 @@ fn test_get_expanded_command_on_execute() {
 
 #[test]
 fn test_tab_completions_menu_for_regular_completions() {
-    let _flag = FeatureFlag::ClassicCompletions.override_enabled(true);
     App::test((), |mut app| async move {
         initialize_app(&mut app);
         let terminal = add_window_with_bootstrapped_terminal(&mut app, None, None).await;
@@ -6808,7 +6807,6 @@ fn test_tab_completions_menu_for_regular_completions() {
 
 #[test]
 fn test_tab_completions_menu_for_classic_completions() {
-    let _flag = FeatureFlag::ClassicCompletions.override_enabled(true);
     App::test((), |mut app| async move {
         initialize_app(&mut app);
         let terminal = add_window_with_bootstrapped_terminal(&mut app, None, None).await;
@@ -6858,7 +6856,6 @@ fn test_tab_completions_menu_for_classic_completions() {
 
 #[test]
 fn test_tab_completions_menu_for_classic_completions_with_files() {
-    let _flag = FeatureFlag::ClassicCompletions.override_enabled(true);
     App::test((), |mut app| async move {
         initialize_app(&mut app);
         let terminal = add_window_with_bootstrapped_terminal(&mut app, None, None).await;
@@ -6911,7 +6908,6 @@ fn test_tab_completions_menu_for_classic_completions_with_files() {
 
 #[test]
 fn test_classic_tab_completions_close_after_user_backspace() {
-    let _flag = FeatureFlag::ClassicCompletions.override_enabled(true);
     App::test((), |mut app| async move {
         initialize_app(&mut app);
         let terminal = add_window_with_bootstrapped_terminal(&mut app, None, None).await;
@@ -6974,7 +6970,6 @@ fn test_classic_tab_completions_close_after_user_backspace() {
 
 #[test]
 fn test_classic_tab_completions_keep_menu_open_while_cycling() {
-    let _flag = FeatureFlag::ClassicCompletions.override_enabled(true);
     App::test((), |mut app| async move {
         initialize_app(&mut app);
         let terminal = add_window_with_bootstrapped_terminal(&mut app, None, None).await;

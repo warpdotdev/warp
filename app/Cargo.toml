@@ -611,7 +611,6 @@ default = [
     "scheduled_ambient_agents",
     "warp_managed_secrets",
     "v4a_file_diffs",
-    "classic_completions",
     "force_classic_completions",
     "team_api_keys",
     "named_agents",
@@ -991,7 +990,6 @@ agent_view_prompt_chip = ["agent_view"]
 ambient_agents_rtc = []
 team_api_keys = []
 named_agents = []
-classic_completions = []
 cloud_mode = []
 cloud_mode_from_local_session = []
 cloud_mode_image_context = []
