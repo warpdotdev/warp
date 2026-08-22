@@ -501,9 +501,22 @@ impl GridStorage {
         self.cursor.point.col
     }
 
+    /// Clamps the active and saved cursors to the visible grid region.
+    pub(super) fn clamp_cursors_to_visible_region(&mut self) {
+        let last_row = VisibleRow(self.rows.saturating_sub(1));
+        let last_col = self.columns.saturating_sub(1);
+
+        self.cursor.point.row = min(self.cursor.point.row, last_row);
+        self.cursor.point.col = min(self.cursor.point.col, last_col);
+        self.saved_cursor.point.row = min(self.saved_cursor.point.row, last_row);
+        self.saved_cursor.point.col = min(self.saved_cursor.point.col, last_col);
+    }
+
     /// Truncate all rows after the cursor's row from the Grid.
     #[inline]
     pub(super) fn truncate_to_cursor_rows(&mut self) {
+        // Clamp before using the cursor to compute truncation boundaries.
+        self.clamp_cursors_to_visible_region();
         let cursor_absolute_row = self.rows_to_cursor();
 
         // We want to include the line _with_ the cursor, so add one here.
@@ -519,6 +532,8 @@ impl GridStorage {
         // by truncating the content after the cursor.
         let cursor_position_shift = cursor_absolute_row.saturating_sub(self.rows_to_cursor());
         self.cursor.point.row += cursor_position_shift;
+        // Clamp again in case truncation shrank the visible region.
+        self.clamp_cursors_to_visible_region();
 
         // Reset the max cursor to be the value of the cursor, since the the max cursor isn't
         // guaranteed to be in the grid anymore.
