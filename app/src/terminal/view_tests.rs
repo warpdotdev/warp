@@ -68,11 +68,12 @@ use crate::terminal::cli_agent_sessions::{
     CLIAgentInputEntrypoint, CLIAgentInputState, CLIAgentRichInputCloseReason, CLIAgentSession,
     CLIAgentSessionContext, CLIAgentSessionStatus, CLIAgentSessionsModel,
 };
+use crate::terminal::event::BlockCompletedEvent;
 use crate::terminal::model::ansi::{self, BootstrappedValue, InitShellValue, PreexecValue};
 use crate::terminal::model::block::AgentViewVisibility;
 use crate::terminal::model::blocks::{TotalIndex, insert_block};
 use crate::terminal::model::grid::Dimensions as _;
-use crate::terminal::model::terminal_model::WithinBlock;
+use crate::terminal::model::terminal_model::{BlockSortDirection, WithinBlock};
 use crate::terminal::session_settings::AgentToolbarChipSelection;
 use crate::terminal::shared_session::shared_handlers::{
     RemoteUpdateGuard, apply_cli_agent_state_update,
@@ -5667,6 +5668,92 @@ fn test_find_in_blocks() {
 #[test]
 fn test_find_in_blocks_inverted_blocklist() {
     run_find_test(InputMode::PinnedToTop);
+}
+
+// Hidden in-band command blocks can be removed from the block list once completed, which
+// invalidates `BlockCompletedEvent.block_index` for anything processed afterward. Async find
+// must not act on that stale index for an in-band completion.
+#[test]
+fn block_completed_skips_find_notification_for_in_band_command() {
+    App::test((), |mut app| async move {
+        let _async_find = FeatureFlag::AsyncFind.override_enabled(true);
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+
+        let victim_index = terminal.update(&mut app, |view, ctx| {
+            let victim_block_id = {
+                let mut model = view.model.lock();
+                let id = model.active_block_id().clone();
+                model.simulate_block("victim", "some content\r\nmore content\r\n");
+                id
+            };
+
+            view.find_model.update(ctx, |find_model, ctx| {
+                find_model
+                    .async_find_controller
+                    .as_mut()
+                    .expect("async find should be enabled for this test")
+                    .start_find(
+                        &FindOptions {
+                            query: Some("content".to_owned().into()),
+                            ..Default::default()
+                        },
+                        BlockSortDirection::MostRecentLast,
+                        ctx,
+                    );
+            });
+
+            view.model
+                .lock()
+                .block_list()
+                .block_index_for_id(&victim_block_id)
+                .expect("victim block should still exist")
+        });
+
+        let dirty_before = terminal.read(&app, |view, _ctx| {
+            view.model
+                .lock()
+                .block_list()
+                .block_at(victim_index)
+                .unwrap()
+                .output_grid()
+                .grid_handler()
+                .find_dirty_rows_range()
+        });
+        assert!(
+            dirty_before.is_some(),
+            "victim block should still have unconsumed dirty rows for find to scan"
+        );
+
+        terminal.update(&mut app, |view, ctx| {
+            view.handle_terminal_event(
+                &ModelEvent::BlockCompleted(BlockCompletedEvent {
+                    block_type: BlockType::InBandCommand,
+                    num_secrets_obfuscated: 0,
+                    block_index: victim_index,
+                    block_id: BlockId::new(),
+                    session_id: None,
+                    restored_block_was_local: None,
+                }),
+                ctx,
+            );
+        });
+
+        let dirty_after = terminal.read(&app, |view, _ctx| {
+            view.model
+                .lock()
+                .block_list()
+                .block_at(victim_index)
+                .unwrap()
+                .output_grid()
+                .grid_handler()
+                .find_dirty_rows_range()
+        });
+        assert_eq!(
+            dirty_after, dirty_before,
+            "a BlockCompleted event for an in-band command must not consume another block's find dirty range"
+        );
+    })
 }
 
 #[test]

@@ -11922,11 +11922,16 @@ impl TerminalView {
                     input.handle_block_completed_event(block_completed_event_clone, ctx);
                 });
 
-                // Notify find model that this block completed so it gets scanned with final output.
-                let completed_block_index = block_completed_event.block_index;
-                self.find_model.update(ctx, |find_model, ctx| {
-                    find_model.notify_block_completed(completed_block_index, ctx);
-                });
+                // In-band command blocks may already have been removed from the block list
+                // by the time this event is processed (when hidden), leaving `block_index`
+                // pointing at a different block or out of bounds -- skip notifying find so it
+                // can't scan the wrong block, mirroring the in-band skips below.
+                if !matches!(block_completed_event.block_type, BlockType::InBandCommand) {
+                    let completed_block_index = block_completed_event.block_index;
+                    self.find_model.update(ctx, |find_model, ctx| {
+                        find_model.notify_block_completed(completed_block_index, ctx);
+                    });
+                }
 
                 if !matches!(block_completed_event.block_type, BlockType::BootstrapHidden)
                     && let Some(env_var_block) = self.active_env_var_collection_block(ctx)
