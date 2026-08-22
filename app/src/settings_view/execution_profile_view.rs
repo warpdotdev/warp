@@ -26,6 +26,8 @@ use crate::cloud_object::model::generic_string_model::StringModel;
 use crate::settings::AISettings;
 use crate::ui_components::icons::Icon;
 use crate::view_components::action_button::{ActionButton, ButtonSize, SecondaryTheme};
+use crate::workspaces::user_workspaces::TeamContextResolver;
+use crate::UserWorkspaces;
 
 #[derive(Debug, Clone)]
 pub enum ExecutionProfileViewAction {
@@ -38,11 +40,13 @@ pub enum ExecutionProfileViewEvent {
 
 pub struct ExecutionProfileView {
     profile_id: ExecutionProfileId,
+    team_context_resolver: TeamContextResolver,
     edit_button: ViewHandle<ActionButton>,
 }
 
 impl ExecutionProfileView {
     pub fn new(profile_id: ExecutionProfileId, ctx: &mut ViewContext<Self>) -> Self {
+        let team_context_resolver = UserWorkspaces::team_context_resolver(ctx.handle());
         ctx.subscribe_to_model(&AIExecutionProfilesModel::handle(ctx), |me, _, event, ctx| {
             if matches!(event, AIExecutionProfilesModelEvent::ProfileUpdated(profile_id) if profile_id == &me.profile_id) {
                 ctx.notify();
@@ -78,6 +82,7 @@ impl ExecutionProfileView {
 
         Self {
             profile_id,
+            team_context_resolver,
             edit_button,
         }
     }
@@ -97,7 +102,8 @@ impl View for ExecutionProfileView {
         let is_any_ai_enabled = AISettings::as_ref(app).is_any_ai_enabled(app);
 
         let permissions = BlocklistAIPermissions::as_ref(app);
-        let profile = permissions.permissions_profile_for_id(app, &self.profile_id);
+        let scope = (self.team_context_resolver)(app);
+        let profile = permissions.permissions_profile_for_id(&self.profile_id, &scope, app);
 
         let llm_preferences = LLMPreferences::as_ref(app);
 

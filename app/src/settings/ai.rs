@@ -32,7 +32,7 @@ use crate::ai::request_usage_model::RequestLimitInfo;
 use crate::auth::AuthStateProvider;
 use crate::settings::PrivacySettings;
 use crate::terminal::CLIAgent;
-use crate::workspaces::user_workspaces::UserWorkspaces;
+use crate::workspaces::user_workspaces::{TeamScope, UserWorkspaces};
 
 pub enum FocusedTerminalInfoEvent {
     TerminalInfoUpdated,
@@ -2474,55 +2474,83 @@ impl AISettings {
         self.is_any_ai_enabled(app)
     }
 
-    pub fn is_command_allowlist_editable(&self, app: &AppContext) -> bool {
+    pub fn is_command_allowlist_editable(
+        &self,
+        scope: &impl TeamScope,
+        app: &AppContext,
+    ) -> bool {
         let set_by_workspace = UserWorkspaces::as_ref(app)
-            .ai_autonomy_settings()
+            .ai_autonomy_settings_for_scope(scope)
             .has_override_for_execute_commands_allowlist();
 
         self.is_any_ai_enabled(app) && !set_by_workspace
     }
 
-    pub fn is_directory_allowlist_editable(&self, app: &AppContext) -> bool {
+    pub fn is_directory_allowlist_editable(
+        &self,
+        scope: &impl TeamScope,
+        app: &AppContext,
+    ) -> bool {
         let set_by_workspace = UserWorkspaces::as_ref(app)
-            .ai_autonomy_settings()
+            .ai_autonomy_settings_for_scope(scope)
             .has_override_for_read_files_allowlist();
 
         self.is_any_ai_enabled(app) && !set_by_workspace
     }
 
-    pub fn is_execute_commands_permissions_editable(&self, app: &AppContext) -> bool {
+    pub fn is_execute_commands_permissions_editable(
+        &self,
+        scope: &impl TeamScope,
+        app: &AppContext,
+    ) -> bool {
         let set_by_workspace = UserWorkspaces::as_ref(app)
-            .ai_autonomy_settings()
+            .ai_autonomy_settings_for_scope(scope)
             .has_override_for_execute_commands();
 
         self.is_any_ai_enabled(app) && !set_by_workspace
     }
 
-    pub fn is_write_to_pty_permissions_editable(&self, app: &AppContext) -> bool {
+    pub fn is_write_to_pty_permissions_editable(
+        &self,
+        scope: &impl TeamScope,
+        app: &AppContext,
+    ) -> bool {
         let set_by_workspace = UserWorkspaces::as_ref(app)
-            .ai_autonomy_settings()
+            .ai_autonomy_settings_for_scope(scope)
             .has_override_for_write_to_pty();
         self.is_any_ai_enabled(app) && !set_by_workspace
     }
 
-    pub fn is_computer_use_permissions_editable(&self, app: &AppContext) -> bool {
+    pub fn is_computer_use_permissions_editable(
+        &self,
+        scope: &impl TeamScope,
+        app: &AppContext,
+    ) -> bool {
         let set_by_workspace = UserWorkspaces::as_ref(app)
-            .ai_autonomy_settings()
+            .ai_autonomy_settings_for_scope(scope)
             .has_override_for_computer_use();
         self.is_any_ai_enabled(app) && !set_by_workspace
     }
 
-    pub fn is_read_files_permissions_editable(&self, app: &AppContext) -> bool {
+    pub fn is_read_files_permissions_editable(
+        &self,
+        scope: &impl TeamScope,
+        app: &AppContext,
+    ) -> bool {
         let set_by_workspace = UserWorkspaces::as_ref(app)
-            .ai_autonomy_settings()
+            .ai_autonomy_settings_for_scope(scope)
             .has_override_for_read_files();
 
         self.is_any_ai_enabled(app) && !set_by_workspace
     }
 
-    pub fn is_code_diffs_permissions_editable(&self, app: &AppContext) -> bool {
+    pub fn is_code_diffs_permissions_editable(
+        &self,
+        scope: &impl TeamScope,
+        app: &AppContext,
+    ) -> bool {
         let set_by_workspace = UserWorkspaces::as_ref(app)
-            .ai_autonomy_settings()
+            .ai_autonomy_settings_for_scope(scope)
             .has_override_for_code_diffs();
 
         self.is_any_ai_enabled(app) && !set_by_workspace

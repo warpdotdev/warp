@@ -323,12 +323,13 @@ impl CLISubagentView {
 
         // We want to default the checkbox to true when rendering the speedbump for the first time.
         // Otherwise, update it when the permission changes.
+        let scope = subagent_controller.as_ref(ctx).team_context(ctx);
         let always_allow_write_to_pty_checked =
             if should_show_write_to_pty_speedbump(&subagent_controller, ctx) {
                 true
             } else {
                 BlocklistAIPermissions::as_ref(ctx)
-                    .can_write_to_pty(&conversation_id, Some(ctx.view_id()), ctx)
+                    .can_write_to_pty(&conversation_id, Some(ctx.view_id()), &scope, ctx)
                     .is_always_allow()
             };
         let always_allow_read_files_checked =
@@ -336,7 +337,13 @@ impl CLISubagentView {
                 true
             } else {
                 BlocklistAIPermissions::as_ref(ctx)
-                    .can_read_files(Some(&conversation_id), Vec::new(), Some(ctx.view_id()), ctx)
+                    .can_read_files(
+                        Some(&conversation_id),
+                        Vec::new(),
+                        Some(ctx.view_id()),
+                        &scope,
+                        ctx,
+                    )
                     .is_allowed()
             };
 
@@ -403,15 +410,21 @@ impl CLISubagentView {
                     _ => false,
                 };
                 if should_update_permissions {
+                    let scope = me.subagent_controller.as_ref(ctx).team_context(ctx);
                     let ai_permission = BlocklistAIPermissions::as_ref(ctx);
                     if should_show_write_to_pty_speedbump(&me.subagent_controller, ctx) {
                         me.always_allow_write_to_pty_checked = ai_permission
-                            .can_write_to_pty(&me.conversation_id, Some(me.terminal_view_id), ctx)
+                            .can_write_to_pty(
+                                &me.conversation_id,
+                                Some(me.terminal_view_id),
+                                &scope,
+                                ctx,
+                            )
                             .is_always_allow();
                     }
                     if should_show_read_files_speedbump(&me.subagent_controller, ctx) {
                         me.always_allow_read_files_checked = ai_permission
-                            .get_read_files_setting(ctx, Some(me.terminal_view_id))
+                            .get_read_files_setting(Some(me.terminal_view_id), &scope, ctx)
                             .is_always_allow();
                     }
                     ctx.notify();

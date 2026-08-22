@@ -13,6 +13,7 @@ use warpui::{Entity, EntityId, ModelContext, ModelHandle};
 
 use super::{ActionExecution, AnyActionExecution, ExecuteActionInput, PreprocessActionInput};
 use crate::terminal::model::session::active_session::ActiveSession;
+use crate::workspaces::user_workspaces::TeamContextResolver;
 #[cfg(not(target_family = "wasm"))]
 use crate::{
     ai::{
@@ -54,6 +55,7 @@ impl UploadArtifactExecutor {
     pub(super) fn should_autoexecute(
         &self,
         input: ExecuteActionInput,
+        team_context_resolver: &TeamContextResolver,
         ctx: &mut ModelContext<Self>,
     ) -> bool {
         #[cfg(target_family = "wasm")]
@@ -76,11 +78,13 @@ impl UploadArtifactExecutor {
             };
 
             let resolved_path = self.resolve_path(&request.file_path, ctx);
+            let scope = team_context_resolver(ctx);
             BlocklistAIPermissions::as_ref(ctx)
                 .can_read_files_with_conversation(
                     &conversation_id,
                     vec![resolved_path],
                     Some(self.terminal_view_id),
+                    &scope,
                     ctx,
                 )
                 .is_allowed()

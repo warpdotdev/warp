@@ -3165,8 +3165,16 @@ impl TerminalView {
         let active_session = ctx.add_model(|ctx| {
             ActiveSession::new(sessions.clone(), model_events_handle.clone(), ctx)
         });
+        let ambient_agent_team_context_resolver =
+            UserWorkspaces::team_context_resolver(terminal_view.clone());
         let ambient_agent_view_model = is_ambient_agent.then(|| {
-            ctx.add_model(|ctx| ambient_agent::AmbientAgentViewModel::new(terminal_view_id, ctx))
+            ctx.add_model(|ctx| {
+                ambient_agent::AmbientAgentViewModel::new(
+                    terminal_view_id,
+                    ambient_agent_team_context_resolver,
+                    ctx,
+                )
+            })
         });
 
         let ephemeral_message_model = ctx.add_model(|_| EphemeralMessageModel::new());
@@ -3539,6 +3547,8 @@ impl TerminalView {
         });
 
         let get_relevant_files_controller = ctx.add_model(GetRelevantFilesController::new);
+        let ai_action_team_context_resolver =
+            UserWorkspaces::team_context_resolver(terminal_view.clone());
         let ai_action_model = ctx.add_model(|ctx| {
             BlocklistAIActionModel::new(
                 model.clone(),
@@ -3546,6 +3556,7 @@ impl TerminalView {
                 &model_events_handle,
                 get_relevant_files_controller.clone(),
                 terminal_view_id,
+                ai_action_team_context_resolver,
                 ctx,
             )
         });
@@ -8034,8 +8045,14 @@ impl TerminalView {
             return existing;
         }
         let terminal_view_id = self.view_id;
-        let model =
-            ctx.add_model(|ctx| ambient_agent::AmbientAgentViewModel::new(terminal_view_id, ctx));
+        let team_context_resolver = UserWorkspaces::team_context_resolver(ctx.handle());
+        let model = ctx.add_model(|ctx| {
+            ambient_agent::AmbientAgentViewModel::new(
+                terminal_view_id,
+                team_context_resolver,
+                ctx,
+            )
+        });
         self.wire_ambient_agent_view_model(model.clone(), ctx);
         // Notify observers (e.g. `PaneGroup::create_shared_session_viewer`) that the model
         // now exists so they can wire the viewer `TerminalManager` to its session events.

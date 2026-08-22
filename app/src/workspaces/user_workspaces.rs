@@ -1,4 +1,5 @@
 use std::collections::{HashMap, HashSet};
+use std::rc::Rc;
 use std::sync::Arc;
 
 use anyhow::Result;
@@ -241,7 +242,7 @@ impl TeamScope for TeamContext<'_> {
     }
 }
 
-pub(crate) type TeamContextResolver = Box<dyn for<'a> Fn(&'a AppContext) -> TeamContext<'a>>;
+pub(crate) type TeamContextResolver = Rc<dyn for<'a> Fn(&'a AppContext) -> TeamContext<'a>>;
 impl UserWorkspaces {
     #[cfg(any(test, all(feature = "tui", feature = "test-util")))]
     pub fn mock(
@@ -463,7 +464,7 @@ impl UserWorkspaces {
     }
 
     pub(crate) fn team_context_resolver<T: Entity>(view: WeakViewHandle<T>) -> TeamContextResolver {
-        Box::new(move |app| {
+        Rc::new(move |app| {
             let team_uid = Self::as_ref(app)
                 .team_for_view_handle(&view, app)
                 .map(|team| &team.uid);
@@ -1018,17 +1019,6 @@ impl UserWorkspaces {
         }
     }
 
-    /// Returns the AI autonomy settings that are enforced by the workspace for all its members.
-    /// If a setting is `None`, the workspace doesn't enforce a particular setting.
-    ///
-    /// This reads the workspace layer, which is one arbitrarily-chosen team's effective
-    /// settings whenever the user belongs to a team. Callers that can name the team they
-    /// act for should use [`Self::ai_autonomy_settings_for_scope`] instead.
-    pub fn ai_autonomy_settings(&self) -> AiAutonomySettings {
-        self.current_workspace()
-            .map(|workspace| workspace.settings.ai_autonomy_settings.clone())
-            .unwrap_or_default()
-    }
 
     /// The AI autonomy policy that applies to `scope`'s team.
     ///
@@ -1043,7 +1033,10 @@ impl UserWorkspaces {
         match self.team_from_scope(scope) {
             Some(team) => AiAutonomySettings::from(&team.settings.ai_autonomy),
             None if self.has_any_team() => AiAutonomySettings::default(),
-            None => self.ai_autonomy_settings(),
+            None => self
+                .current_workspace()
+                .map(|workspace| workspace.settings.ai_autonomy_settings.clone())
+                .unwrap_or_default(),
         }
     }
 
@@ -2082,6 +2075,18 @@ impl UserWorkspaces {
 }
 
 #[cfg(test)]
+fn split_test_list(values: Option<Vec<String>>) -> SplitListSetting<String> {
+    match values {
+        Some(values) => SplitListSetting {
+            team_entries: values.clone(),
+            values,
+            ..Default::default()
+        },
+        None => Default::default(),
+    }
+}
+
+#[cfg(test)]
 impl UserWorkspaces {
     /// Creates a test workspace with a team and sets it as the current workspace.
     /// Returns the workspace UID and admin UID for use in tests.
@@ -2174,6 +2179,33 @@ impl UserWorkspaces {
         self.update_current_workspace(
             |workspace| {
                 f(&mut workspace.settings.ai_autonomy_settings);
+                let settings = &workspace.settings.ai_autonomy_settings;
+                let team_settings = &mut workspace
+                    .teams
+                    .first_mut()
+                    .expect("test workspace should have a team")
+                    .settings
+                    .ai_autonomy;
+                team_settings.apply_code_diffs.value = settings.apply_code_diffs_setting;
+                team_settings.read_files.value = settings.read_files_setting;
+                team_settings.execute_commands.value = settings.execute_commands_setting;
+                team_settings.write_to_pty.value = settings.write_to_pty_setting;
+                team_settings.computer_use.value = settings.computer_use_setting;
+                team_settings.read_files_allowlist =
+                    split_test_list(settings.read_files_allowlist.as_ref().map(|items| {
+                        items
+                            .iter()
+                            .map(|path| path.display().to_string())
+                            .collect()
+                    }));
+                team_settings.execute_commands_allowlist =
+                    split_test_list(settings.execute_commands_allowlist.as_ref().map(|items| {
+                        items.iter().map(ToString::to_string).collect()
+                    }));
+                team_settings.execute_commands_denylist =
+                    split_test_list(settings.execute_commands_denylist.as_ref().map(|items| {
+                        items.iter().map(ToString::to_string).collect()
+                    }));
             },
             ctx,
         );

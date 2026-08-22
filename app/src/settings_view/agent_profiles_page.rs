@@ -81,7 +81,7 @@ use crate::view_components::{
     Dropdown, DropdownItem, FilterableDropdown, SubmittableTextInput, SubmittableTextInputEvent,
     WarningBoxConfig, render_warning_box,
 };
-use crate::workspaces::user_workspaces::UserWorkspacesEvent;
+use crate::workspaces::user_workspaces::{TeamContext, TeamContextResolver, UserWorkspacesEvent};
 use crate::{TelemetryEvent, UserWorkspaces, send_telemetry_from_ctx};
 
 const AI_SETTINGS_DROPDOWN_WIDTH: f32 = 250.;
@@ -91,6 +91,7 @@ const CONTEXT_WINDOW_INPUT_BOX_WIDTH: f32 = 120.;
 
 pub struct AgentProfilesPageView {
     page: PageType<Self>,
+    team_context_resolver: TeamContextResolver,
     local_only_icon_tooltip_states: RefCell<HashMap<String, MouseStateHandle>>,
 
     autonomy_dropdown_menu: ViewHandle<Dropdown<AgentProfilesPageAction>>,
@@ -140,17 +141,22 @@ pub struct AgentProfilesPageView {
 
 impl AgentProfilesPageView {
     pub fn new(ctx: &mut ViewContext<Self>) -> Self {
+        let team_context = UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx);
+        let team_context_resolver = UserWorkspaces::team_context_resolver(ctx.handle());
         let is_any_ai_enabled = AISettings::as_ref(ctx).is_any_ai_enabled(ctx);
 
         let workspace = UserWorkspaces::handle(ctx);
-        let ai_autonomy_settings = workspace.as_ref(ctx).ai_autonomy_settings();
+        let ai_autonomy_settings =
+            workspace.as_ref(ctx).ai_autonomy_settings_for_scope(&team_context);
         ctx.subscribe_to_model(&workspace, |me, workspace, event, ctx| {
             if let UserWorkspacesEvent::TeamsChanged = event {
                 me.refresh_all_execution_profile_ui(ctx);
                 me.reset_execution_profile_mouse_state_handles(ctx);
 
                 let is_any_ai_enabled = AISettings::as_ref(ctx).is_any_ai_enabled(ctx);
-                let ai_autonomy_settings = workspace.as_ref(ctx).ai_autonomy_settings();
+                let scope = me.team_context(ctx);
+                let ai_autonomy_settings =
+                    workspace.as_ref(ctx).ai_autonomy_settings_for_scope(&scope);
 
                 update_editor_interaction_state(
                     me.command_denylist_editor.as_ref(ctx).editor().clone(),
@@ -407,7 +413,9 @@ impl AgentProfilesPageView {
             match event {
                 AISettingsChangedEvent::IsAnyAIEnabled { .. } => {
                     let is_enabled = AISettings::as_ref(ctx).is_any_ai_enabled(ctx);
-                    let ai_autonomy_settings = UserWorkspaces::as_ref(ctx).ai_autonomy_settings();
+                    let scope = me.team_context(ctx);
+                    let ai_autonomy_settings =
+                        UserWorkspaces::as_ref(ctx).ai_autonomy_settings_for_scope(&scope);
 
                     update_editor_interaction_state(
                         me.command_execution_allowlist_editor
@@ -512,8 +520,8 @@ impl AgentProfilesPageView {
             }
         });
 
-        let current_permission =
-            BlocklistAIPermissions::as_ref(ctx).active_permissions_profile(ctx, None);
+        let current_permission = BlocklistAIPermissions::as_ref(ctx)
+            .active_permissions_profile(None, &team_context, ctx);
 
         let apply_code_diffs_dropdown_menu = ctx.add_typed_action_view(|ctx| {
             let mut dropdown = Dropdown::new(ctx);
@@ -542,7 +550,7 @@ impl AgentProfilesPageView {
         Self::refresh_execution_profile_dropdown_menu(
             &apply_code_diffs_dropdown_menu,
             current_permission.apply_code_diffs,
-            !AISettings::as_ref(ctx).is_code_diffs_permissions_editable(ctx),
+            !AISettings::as_ref(ctx).is_code_diffs_permissions_editable(&team_context, ctx),
             ctx,
         );
 
@@ -572,7 +580,7 @@ impl AgentProfilesPageView {
         Self::refresh_execution_profile_dropdown_menu(
             &read_files_dropdown_menu,
             current_permission.read_files,
-            !AISettings::as_ref(ctx).is_read_files_permissions_editable(ctx),
+            !AISettings::as_ref(ctx).is_read_files_permissions_editable(&team_context, ctx),
             ctx,
         );
 
@@ -602,7 +610,7 @@ impl AgentProfilesPageView {
         Self::refresh_execution_profile_dropdown_menu(
             &execute_commands_dropdown_menu,
             current_permission.execute_commands,
-            !AISettings::as_ref(ctx).is_execute_commands_permissions_editable(ctx),
+            !AISettings::as_ref(ctx).is_execute_commands_permissions_editable(&team_context, ctx),
             ctx,
         );
 
@@ -634,7 +642,7 @@ impl AgentProfilesPageView {
         Self::refresh_write_to_pty_dropdown_menu(
             &write_to_pty_autonomy_dropdown_menu,
             current_permission.write_to_pty,
-            !AISettings::as_ref(ctx).is_write_to_pty_permissions_editable(ctx),
+            !AISettings::as_ref(ctx).is_write_to_pty_permissions_editable(&team_context, ctx),
             ctx,
         );
 
@@ -750,7 +758,8 @@ impl AgentProfilesPageView {
             }
         });
 
-        let org_denylist = BlocklistAIPermissions::get_org_execute_commands_denylist(ctx);
+        let org_denylist =
+            BlocklistAIPermissions::get_org_execute_commands_denylist(&team_context, ctx);
         let command_denylist_mouse_state_handles = current_permission
             .command_denylist
             .iter()
@@ -859,6 +868,7 @@ impl AgentProfilesPageView {
 
         Self {
             page: Self::build_page(ctx),
+            team_context_resolver,
             local_only_icon_tooltip_states: Default::default(),
             command_execution_allowlist_editor,
             command_execution_denylist_editor,
@@ -1135,41 +1145,53 @@ impl AgentProfilesPageView {
 
     fn refresh_all_execution_profile_ui(&self, ctx: &mut ViewContext<Self>) {
         let permissions = BlocklistAIPermissions::handle(ctx);
+        let (
+            apply_code_diffs_setting,
+            apply_code_diffs_disabled,
+            read_files_setting,
+            read_files_disabled,
+            execute_commands_setting,
+            execute_commands_disabled,
+            write_to_pty_setting,
+            write_to_pty_disabled,
+        ) = {
+            let scope = self.team_context(ctx);
+            let permissions = permissions.as_ref(ctx);
+            let ai_settings = AISettings::as_ref(ctx);
+            (
+                permissions.get_apply_code_diffs_setting(None, &scope, ctx),
+                !ai_settings.is_code_diffs_permissions_editable(&scope, ctx),
+                permissions.get_read_files_setting(None, &scope, ctx),
+                !ai_settings.is_read_files_permissions_editable(&scope, ctx),
+                permissions.get_execute_commands_setting(None, &scope, ctx),
+                !ai_settings.is_execute_commands_permissions_editable(&scope, ctx),
+                permissions.get_write_to_pty_setting(None, &scope, ctx),
+                !ai_settings.is_write_to_pty_permissions_editable(&scope, ctx),
+            )
+        };
 
-        let apply_code_diffs_setting = permissions
-            .as_ref(ctx)
-            .get_apply_code_diffs_setting(ctx, None);
         Self::refresh_execution_profile_dropdown_menu(
             &self.apply_code_diffs_dropdown_menu,
             apply_code_diffs_setting,
-            !AISettings::as_ref(ctx).is_code_diffs_permissions_editable(ctx),
+            apply_code_diffs_disabled,
             ctx,
         );
-
-        let read_files_setting = permissions.as_ref(ctx).get_read_files_setting(ctx, None);
         Self::refresh_execution_profile_dropdown_menu(
             &self.read_files_dropdown_menu,
             read_files_setting,
-            !AISettings::as_ref(ctx).is_read_files_permissions_editable(ctx),
+            read_files_disabled,
             ctx,
         );
-
-        let execute_commands_setting: ActionPermission = permissions
-            .as_ref(ctx)
-            .get_execute_commands_setting(ctx, None);
         Self::refresh_execution_profile_dropdown_menu(
             &self.execute_commands_dropdown_menu,
             execute_commands_setting,
-            !AISettings::as_ref(ctx).is_execute_commands_permissions_editable(ctx),
+            execute_commands_disabled,
             ctx,
         );
-
-        let write_to_pty_setting: WriteToPtyPermission =
-            permissions.as_ref(ctx).get_write_to_pty_setting(ctx, None);
         Self::refresh_write_to_pty_dropdown_menu(
             &self.write_to_pty_autonomy_dropdown_menu,
             write_to_pty_setting,
-            !AISettings::as_ref(ctx).is_write_to_pty_permissions_editable(ctx),
+            write_to_pty_disabled,
             ctx,
         );
 
@@ -1193,25 +1215,27 @@ impl AgentProfilesPageView {
 
     fn reset_execution_profile_mouse_state_handles(&mut self, ctx: &mut ViewContext<Self>) {
         let blocklist_permissions = BlocklistAIPermissions::as_ref(ctx);
+        let scope = self.team_context(ctx);
 
         self.directory_allowlist_mouse_state_handles = blocklist_permissions
-            .get_read_files_allowlist(ctx, None)
+            .get_read_files_allowlist(None, &scope, ctx)
             .iter()
             .map(|_| Default::default())
             .collect();
 
         self.command_denylist_mouse_state_handles = blocklist_permissions
-            .get_execute_commands_denylist(ctx, None)
+            .get_execute_commands_denylist(None, &scope, ctx)
             .iter()
             .map(|_| Default::default())
             .collect();
 
-        let org_denylist = BlocklistAIPermissions::get_org_execute_commands_denylist(ctx);
+        let org_denylist =
+            BlocklistAIPermissions::get_org_execute_commands_denylist(&scope, ctx);
         self.command_denylist_tooltip_mouse_state_handles =
             org_denylist.iter().map(|_| Default::default()).collect();
 
         self.command_allowlist_mouse_state_handles = blocklist_permissions
-            .get_execute_commands_allowlist(ctx, None)
+            .get_execute_commands_allowlist(None, &scope, ctx)
             .iter()
             .map(|_| Default::default())
             .collect();
@@ -1396,6 +1420,10 @@ impl AgentProfilesPageView {
                 profile_view
             })
             .collect()
+    }
+
+    fn team_context<'a>(&self, app: &'a AppContext) -> TeamContext<'a> {
+        (self.team_context_resolver)(app)
     }
 
     fn refresh_profile_views(&mut self, ctx: &mut ViewContext<Self>) {
@@ -2443,6 +2471,7 @@ impl AgentsWidget {
         app: &AppContext,
     ) -> Box<dyn Element> {
         let is_any_ai_enabled = ai_settings.is_any_ai_enabled(app);
+        let scope = view.team_context(app);
         let permissions_subheader = Container::new(render_custom_size_header(
             appearance,
             "Permissions",
@@ -2453,7 +2482,7 @@ impl AgentsWidget {
         .finish();
 
         let code_diff_setting =
-            BlocklistAIPermissions::as_ref(app).get_apply_code_diffs_setting(app, None);
+            BlocklistAIPermissions::as_ref(app).get_apply_code_diffs_setting(None, &scope, app);
         let code_diffs = self.render_execution_profile_dropdown(
             "Apply code diffs",
             Icon::Code2,
@@ -2465,7 +2494,7 @@ impl AgentsWidget {
         );
 
         let read_files_setting =
-            BlocklistAIPermissions::as_ref(app).get_read_files_setting(app, None);
+            BlocklistAIPermissions::as_ref(app).get_read_files_setting(None, &scope, app);
         let mut read_files_flex = Flex::column().with_main_axis_size(MainAxisSize::Min);
         read_files_flex.add_child(self.render_execution_profile_dropdown(
             "Read files",
@@ -2479,7 +2508,7 @@ impl AgentsWidget {
 
         if read_files_setting == ActionPermission::AlwaysAsk {
             let directory_allowlist =
-                BlocklistAIPermissions::as_ref(app).get_read_files_allowlist(app, None);
+                BlocklistAIPermissions::as_ref(app).get_read_files_allowlist(None, &scope, app);
             read_files_flex.add_child(
                 Container::new(Self::render_directory_allowlist(
                     directory_allowlist,
@@ -2495,7 +2524,7 @@ impl AgentsWidget {
         let read_files = read_files_flex.finish();
 
         let execute_commands_setting =
-            BlocklistAIPermissions::as_ref(app).get_execute_commands_setting(app, None);
+            BlocklistAIPermissions::as_ref(app).get_execute_commands_setting(None, &scope, app);
         let mut execute_commands_flex = Flex::column().with_main_axis_size(MainAxisSize::Min);
         execute_commands_flex.add_child(self.render_execution_profile_dropdown(
             "Execute commands",
@@ -2511,7 +2540,7 @@ impl AgentsWidget {
             || execute_commands_setting == ActionPermission::AgentDecides
         {
             let command_allowlist =
-                BlocklistAIPermissions::as_ref(app).get_execute_commands_allowlist(app, None);
+                BlocklistAIPermissions::as_ref(app).get_execute_commands_allowlist(None, &scope, app);
             execute_commands_flex.add_child(
                 Container::new(Self::render_command_allowlist(
                     command_allowlist,
@@ -2527,7 +2556,7 @@ impl AgentsWidget {
 
         if execute_commands_setting != ActionPermission::AlwaysAsk {
             let command_denylist = Container::new(Self::render_command_denylist(
-                BlocklistAIPermissions::as_ref(app).get_execute_commands_denylist(app, None),
+                BlocklistAIPermissions::as_ref(app).get_execute_commands_denylist(None, &scope, app),
                 view,
                 ai_settings,
                 appearance,
@@ -2542,7 +2571,7 @@ impl AgentsWidget {
         let mut widget_children = vec![permissions_subheader];
 
         if UserWorkspaces::as_ref(app)
-            .ai_autonomy_settings()
+            .ai_autonomy_settings_for_scope(&scope)
             .has_any_overrides()
         {
             widget_children.push(
@@ -2559,7 +2588,7 @@ impl AgentsWidget {
         widget_children.extend([code_diffs, read_files, execute_commands]);
 
         let write_to_pty_setting =
-            BlocklistAIPermissions::as_ref(app).get_write_to_pty_setting(app, None);
+            BlocklistAIPermissions::as_ref(app).get_write_to_pty_setting(None, &scope, app);
         let write_to_pty = self.render_execution_profile_dropdown(
             "Interact with running commands",
             Icon::Workflow,
@@ -2663,7 +2692,9 @@ impl AgentsWidget {
         app: &AppContext,
     ) -> Box<dyn Element> {
         let ai_disabled = !ai_settings.is_any_ai_enabled(app);
-        let org_denylist = BlocklistAIPermissions::get_org_execute_commands_denylist(app);
+        let scope = view.team_context(app);
+        let org_denylist =
+            BlocklistAIPermissions::get_org_execute_commands_denylist(&scope, app);
         let mut tooltip_idx = 0usize;
         let list = render_input_list(
             None,
@@ -2713,7 +2744,8 @@ impl AgentsWidget {
         appearance: &Appearance,
         app: &AppContext,
     ) -> Box<dyn Element> {
-        let disabled = !ai_settings.is_command_allowlist_editable(app);
+        let scope = view.team_context(app);
+        let disabled = !ai_settings.is_command_allowlist_editable(&scope, app);
         let list = render_input_list(
             None,
             command_allowlist
@@ -2750,7 +2782,8 @@ impl AgentsWidget {
         appearance: &Appearance,
         app: &AppContext,
     ) -> Box<dyn Element> {
-        let disabled = !ai_settings.is_directory_allowlist_editable(app);
+        let scope = view.team_context(app);
+        let disabled = !ai_settings.is_directory_allowlist_editable(&scope, app);
         let list = render_input_list(
             None,
             directory_allowlist

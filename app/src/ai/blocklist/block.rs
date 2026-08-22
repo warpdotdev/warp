@@ -2751,8 +2751,10 @@ impl AIBlock {
 
         let shell_type = self.active_session.as_ref(ctx).shell_type(ctx);
         let escape_char = shell_type.map(|s| ShellFamily::from(s).escape_char());
-        let scope = self.controller.as_ref(ctx).team_context(ctx);
-        let autonomy_allowed = is_agent_mode_autonomy_allowed(&scope, ctx);
+        let autonomy_allowed = {
+            let scope = self.controller.as_ref(ctx).team_context(ctx);
+            is_agent_mode_autonomy_allowed(&scope, ctx)
+        };
 
         for (requested_command_action_id, command, is_read_only, is_risky) in
             output.actions().filter_map(|action| {
@@ -2780,6 +2782,7 @@ impl AIBlock {
         {
             if autonomy_allowed {
                 let autoexecute_decision = escape_char.map(|escape_char| {
+                    let scope = self.controller.as_ref(ctx).team_context(ctx);
                     BlocklistAIPermissions::as_ref(ctx).can_autoexecute_command(
                         &self.client_ids.conversation_id,
                         command,
@@ -2787,6 +2790,7 @@ impl AIBlock {
                         is_read_only,
                         is_risky,
                         Some(self.terminal_view_id),
+                        &scope,
                         ctx,
                     )
                 });

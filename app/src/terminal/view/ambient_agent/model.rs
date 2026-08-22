@@ -46,6 +46,7 @@ use crate::server::server_api::ai::{
 };
 use crate::terminal::CLIAgent;
 use crate::terminal::view::ambient_agent::{SetupCommandGroupId, SetupCommandState};
+use crate::workspaces::user_workspaces::TeamContextResolver;
 
 /// Tracks progress timestamps for each step during ambient agent spawning.
 #[derive(Debug, Clone)]
@@ -127,6 +128,7 @@ enum LocalToCloudHandoffState {
 /// Model to track the state of an ambient agent run.
 pub struct AmbientAgentViewModel {
     status: Status,
+    team_context_resolver: TeamContextResolver,
 
     /// The request with which the cloud agent was spawned, if it was spawned.
     request: Option<SpawnAgentRequest>,
@@ -193,7 +195,11 @@ pub struct AmbientAgentViewModel {
 }
 
 impl AmbientAgentViewModel {
-    pub fn new(terminal_view_id: EntityId, ctx: &mut ModelContext<Self>) -> Self {
+    pub fn new(
+        terminal_view_id: EntityId,
+        team_context_resolver: TeamContextResolver,
+        ctx: &mut ModelContext<Self>,
+    ) -> Self {
         ctx.subscribe_to_model(&CloudModel::handle(ctx), |me, _, event, ctx| {
             me.handle_cloud_model_event(event, ctx);
         });
@@ -237,6 +243,7 @@ impl AmbientAgentViewModel {
 
         Self {
             status: Status::Composing,
+            team_context_resolver,
             request: None,
             terminal_view_id,
             environment_id: None,
@@ -1007,8 +1014,9 @@ impl AmbientAgentViewModel {
         let selected_harness = self.selected_harness();
         let computer_use_enabled = if selected_harness == Harness::Oz {
             // If the harness is Oz, determine computer use based on workspace AI autonomy settings.
+            let scope = (self.team_context_resolver)(ctx);
             let CloudAgentComputerUseState { enabled, .. } =
-                resolve_cloud_agent_computer_use_state(ctx);
+                resolve_cloud_agent_computer_use_state(&scope, ctx);
             Some(enabled)
         } else {
             None

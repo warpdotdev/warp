@@ -215,9 +215,6 @@ pub struct CLISubagentController {
 }
 
 impl CLISubagentController {
-    pub(crate) fn team_context<'a>(&self, app: &'a AppContext) -> TeamContext<'a> {
-        self.controller.as_ref(app).team_context(app)
-    }
     pub fn new(
         controller: &ModelHandle<BlocklistAIController>,
         action_model: &ModelHandle<BlocklistAIActionModel>,
@@ -358,6 +355,10 @@ impl CLISubagentController {
             terminal_view_id,
             active_subagents_by_block: HashMap::new(),
         }
+    }
+
+    pub(crate) fn team_context<'a>(&self, app: &'a AppContext) -> TeamContext<'a> {
+        self.controller.as_ref(app).team_context(app)
     }
 
     pub fn is_agent_in_control(&self) -> bool {

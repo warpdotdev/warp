@@ -28,6 +28,7 @@ use crate::terminal::ShellLaunchData;
 use crate::terminal::model::session::active_session::ActiveSession;
 use crate::terminal::model::session::{ExecuteCommandOptions, Session, shell_quote_arg};
 use crate::terminal::shell::ShellType;
+use crate::workspaces::user_workspaces::TeamContextResolver;
 use crate::{PrivacySettings, TelemetryEvent, send_telemetry_from_app_ctx};
 
 const GREP_TIMEOUT: Duration = Duration::from_secs(10);
@@ -193,6 +194,7 @@ impl GrepExecutor {
     pub(super) fn should_autoexecute(
         &self,
         input: ExecuteActionInput,
+        team_context_resolver: &TeamContextResolver,
         ctx: &mut ModelContext<Self>,
     ) -> bool {
         let ExecuteActionInput {
@@ -215,12 +217,14 @@ impl GrepExecutor {
         let shell = self.active_session.as_ref(ctx).shell_launch_data(ctx);
         let absolute_path = host_native_absolute_path(path, &shell, &current_working_directory);
 
+        let scope = team_context_resolver(ctx);
         BlocklistAIPermissions::handle(ctx)
             .as_ref(ctx)
             .can_read_files_with_conversation(
                 &conversation_id,
                 vec![PathBuf::from(absolute_path)],
                 Some(self.terminal_view_id),
+                &scope,
                 ctx,
             )
             .is_allowed()

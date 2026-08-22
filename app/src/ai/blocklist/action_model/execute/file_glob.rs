@@ -22,6 +22,7 @@ use crate::terminal::model::session::command_executor::shell_quote_arg;
 use crate::terminal::model::session::{ExecuteCommandOptions, Session};
 use crate::terminal::shell::ShellType;
 use crate::{TelemetryEvent, send_telemetry_from_app_ctx};
+use crate::workspaces::user_workspaces::TeamContextResolver;
 
 const FILE_GLOB_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -53,6 +54,7 @@ impl FileGlobExecutor {
     pub(super) fn should_autoexecute(
         &self,
         input: ExecuteActionInput,
+        team_context_resolver: &TeamContextResolver,
         ctx: &mut ModelContext<Self>,
     ) -> bool {
         let ExecuteActionInput {
@@ -83,11 +85,13 @@ impl FileGlobExecutor {
         let absolute_path =
             host_native_absolute_path(path.as_str(), &shell, &current_working_directory);
 
+        let scope = team_context_resolver(ctx);
         BlocklistAIPermissions::as_ref(ctx)
             .can_read_files_with_conversation(
                 &conversation_id,
                 vec![PathBuf::from(absolute_path)],
                 Some(self.terminal_view_id),
+                &scope,
                 ctx,
             )
             .is_allowed()

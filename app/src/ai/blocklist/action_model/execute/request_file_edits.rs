@@ -36,6 +36,7 @@ use crate::ai::blocklist::{BlocklistAIPermissions, RequestedEditResolution};
 use crate::ai::paths::host_native_absolute_path;
 use crate::terminal::model::session::SessionType;
 use crate::terminal::model::session::active_session::ActiveSession;
+use crate::workspaces::user_workspaces::TeamContextResolver;
 use crate::{BlocklistAIHistoryModel, safe_warn};
 
 pub struct RequestFileEditsExecutor {
@@ -67,6 +68,7 @@ impl RequestFileEditsExecutor {
     pub(super) fn should_autoexecute(
         &self,
         input: ExecuteActionInput,
+        team_context_resolver: &TeamContextResolver,
         ctx: &mut ModelContext<Self>,
     ) -> bool {
         let ExecuteActionInput {
@@ -109,8 +111,15 @@ impl RequestFileEditsExecutor {
             return true;
         }
 
+        let scope = team_context_resolver(ctx);
         BlocklistAIPermissions::as_ref(ctx)
-            .can_write_files(&conversation_id, &paths, Some(self.terminal_view_id), ctx)
+            .can_write_files(
+                &conversation_id,
+                &paths,
+                Some(self.terminal_view_id),
+                &scope,
+                ctx,
+            )
             .is_allowed()
     }
 
