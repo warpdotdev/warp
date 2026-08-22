@@ -181,8 +181,6 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::MSYS2Shells,
         #[cfg(feature = "file_retrieval_tools")]
         FeatureFlag::FileRetrievalTools,
-        #[cfg(feature = "reload_stale_conversation_files")]
-        FeatureFlag::ReloadStaleConversationFiles,
         #[cfg(feature = "shared_block_title_generation")]
         FeatureFlag::SharedBlockTitleGeneration,
         #[cfg(feature = "retry_truncated_code_responses")]
