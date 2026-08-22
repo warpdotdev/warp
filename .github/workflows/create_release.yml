@@ -62,6 +62,15 @@ env:
   CONFIG_FILE: ".github/workflows/release_configurations.json"
 
 jobs:
+  # ============================================================================
+  # TEMPORARY TEST SCAFFOLDING (arm64-native-test) — DO NOT MERGE THIS COMMIT.
+  # Every release job below except the Windows arm64 path (and the parts of
+  # build_windows_binaries it depends on) has its `if:` forced to `false`, or
+  # restricted to `matrix.arch == 'arm64'`, so a manual run of this workflow
+  # exercises only the Windows arm64 build/release/TUI path. This is scoped to
+  # a single, self-contained commit; revert that commit before this PR merges.
+  # ============================================================================
+
   # Perform all once-per-release steps.  Dependent jobs will build release
   # assets and upload them as appropriate.
   prepare_release:
@@ -141,7 +150,7 @@ jobs:
     name: Build Release (macOS ${{ matrix.dmg_name_suffix }})
     runs-on: ${{ matrix.runner }}
     needs: prepare_release
-    if: ${{ inputs.build_macos != false }}
+    if: false  # TEMPORARY TEST SCAFFOLDING (arm64-native-test): macOS build forced off to isolate the Windows arm64 job. MUST be removed before merge.
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -278,7 +287,7 @@ jobs:
     name: Build Release (macOS Universal)
     runs-on: macos-26-xlarge
     needs: [prepare_release, release_macos_single_arch]
-    if: ${{ inputs.build_macos != false }}
+    if: false  # TEMPORARY TEST SCAFFOLDING (arm64-native-test): macOS build forced off to isolate the Windows arm64 job. MUST be removed before merge.
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
@@ -439,7 +448,7 @@ jobs:
     name: Build Release (macOS CLI ${{ matrix.arch }})
     runs-on: macos-26-xlarge
     needs: [prepare_release, release_macos_single_arch]
-    if: ${{ inputs.build_macos != false }}
+    if: false  # TEMPORARY TEST SCAFFOLDING (arm64-native-test): macOS build forced off to isolate the Windows arm64 job. MUST be removed before merge.
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -556,7 +565,7 @@ jobs:
     name: Build Release Binary (macOS TUI ${{ matrix.arch }})
     runs-on: macos-26-xlarge
     needs: prepare_release
-    if: ${{ inputs.build_macos != false }}
+    if: false  # TEMPORARY TEST SCAFFOLDING (arm64-native-test): macOS build forced off to isolate the Windows arm64 job. MUST be removed before merge.
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -643,7 +652,7 @@ jobs:
     name: Build Release (macOS TUI ${{ matrix.arch }})
     runs-on: macos-26-xlarge
     needs: [prepare_release, release_macos_single_arch, build_macos_tui_binaries]
-    if: ${{ inputs.build_macos != false }}
+    if: false  # TEMPORARY TEST SCAFFOLDING (arm64-native-test): macOS build forced off to isolate the Windows arm64 job. MUST be removed before merge.
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -775,7 +784,7 @@ jobs:
     name: Build Release Binary (Linux TUI ${{ matrix.arch }})
     runs-on: ${{ matrix.runner }}
     needs: prepare_release
-    if: ${{ inputs.build_linux != false }}
+    if: false  # TEMPORARY TEST SCAFFOLDING (arm64-native-test): Linux build forced off to isolate the Windows arm64 job. MUST be removed before merge.
     timeout-minutes: 180
     strategy:
       fail-fast: false
@@ -859,7 +868,7 @@ jobs:
     name: Build Release (Linux TUI ${{ matrix.arch }})
     runs-on: ${{ matrix.runner }}
     needs: [prepare_release, release_linux_x86, build_linux_tui_binaries]
-    if: ${{ inputs.build_linux != false }}
+    if: false  # TEMPORARY TEST SCAFFOLDING (arm64-native-test): Linux build forced off to isolate the Windows arm64 job. MUST be removed before merge.
     timeout-minutes: 180
     strategy:
       fail-fast: false
@@ -984,7 +993,7 @@ jobs:
     name: Build Release (Linux x86_64)
     runs-on: namespace-profile-ubuntu-20-04
     needs: prepare_release
-    if: ${{ inputs.build_linux != false }}
+    if: false  # TEMPORARY TEST SCAFFOLDING (arm64-native-test): Linux build forced off to isolate the Windows arm64 job. MUST be removed before merge.
     timeout-minutes: 90
     env:
       # Automatically extract AppImages before running them instead of mounting
@@ -1150,7 +1159,7 @@ jobs:
     name: Build Release (Linux CLI x86_64)
     runs-on: namespace-profile-ubuntu-22-04
     needs: [prepare_release, release_linux_x86]
-    if: ${{ inputs.build_linux != false }}
+    if: false  # TEMPORARY TEST SCAFFOLDING (arm64-native-test): Linux build forced off to isolate the Windows arm64 job. MUST be removed before merge.
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
@@ -1332,7 +1341,7 @@ jobs:
     name: Build Release (Linux ARM)
     runs-on: namespace-profile-ubuntu-20-04-arm
     needs: prepare_release
-    if: ${{ inputs.build_linux != false }}
+    if: false  # TEMPORARY TEST SCAFFOLDING (arm64-native-test): Linux build forced off to isolate the Windows arm64 job. MUST be removed before merge.
     timeout-minutes: 90
     env:
       # Automatically extract AppImages before running them instead of mounting
@@ -1428,7 +1437,7 @@ jobs:
     name: Build Release (Linux CLI ARM)
     runs-on: namespace-profile-ubuntu-22-04
     needs: prepare_release
-    if: ${{ inputs.build_linux != false }}
+    if: false  # TEMPORARY TEST SCAFFOLDING (arm64-native-test): Linux build forced off to isolate the Windows arm64 job. MUST be removed before merge.
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
@@ -1510,7 +1519,7 @@ jobs:
     name: Bundle Release (Linux ARM)
     runs-on: namespace-profile-ubuntu-20-04
     needs: [ prepare_release, release_linux_x86, build_linux_arm_binaries, build_linux_cli_arm_binaries ]
-    if: ${{ inputs.build_linux != false }}
+    if: false  # TEMPORARY TEST SCAFFOLDING (arm64-native-test): Linux build forced off to isolate the Windows arm64 job. MUST be removed before merge.
     timeout-minutes: 60
     steps:
       - name: Checkout sources
@@ -1777,7 +1786,7 @@ jobs:
     name: Build Release (Web)
     runs-on: namespace-profile-ubuntu-22-04
     needs: prepare_release
-    if: ${{ inputs.build_web != false }}
+    if: false  # TEMPORARY TEST SCAFFOLDING (arm64-native-test): Web build forced off to isolate the Windows arm64 job. MUST be removed before merge.
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
@@ -1895,7 +1904,7 @@ jobs:
   # release_windows.
   build_windows_tui_binaries:
     name: Build Release Binary (Windows TUI ${{ matrix.arch }})
-    runs-on: windows-latest-large
+    runs-on: ${{ matrix.runner }}
     needs: prepare_release
     if: ${{ inputs.build_windows != false }}
     timeout-minutes: 150
@@ -1903,8 +1912,13 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - arch: x64
+          # TEMPORARY TEST SCAFFOLDING (arm64-native-test): the x64 entry is removed from this
+          # matrix (not gated by `if:`, which cannot see `matrix` at the job level) to isolate
+          # the Windows arm64 job. Restore this entry before merge.
+          # - arch: x64
+          #   runner: windows-latest-large
           - arch: arm64
+            runner: windows-11-arm
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
 
@@ -1916,10 +1930,6 @@ jobs:
           ref: ${{ needs.prepare_release.outputs.release_branch }}
           install_release_deps: true
           ssh_key: ${{ secrets.WARP_CHANNEL_CONFIG_ACCESS_SSH_KEY }}
-      - name: Add arm64 target
-        if: ${{ matrix.arch == 'arm64' }}
-        run: rustup target add aarch64-pc-windows-msvc
-        shell: bash
 
       - name: Get channel configuration
         id: get-config
@@ -1947,7 +1957,7 @@ jobs:
 
   release_windows_tui:
     name: Build Release (Windows TUI ${{ matrix.arch }})
-    runs-on: windows-latest-large
+    runs-on: ${{ matrix.runner }}
     needs: [prepare_release, build_windows_binaries, build_windows_tui_binaries]
     if: ${{ inputs.build_windows != false }}
     timeout-minutes: 150
@@ -1955,10 +1965,15 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - arch: x64
-            release_arch: x86_64
+          # TEMPORARY TEST SCAFFOLDING (arm64-native-test): the x64 entry is removed from this
+          # matrix (not gated by `if:`, which cannot see `matrix` at the job level) to isolate
+          # the Windows arm64 job. Restore this entry before merge.
+          # - arch: x64
+          #   release_arch: x86_64
+          #   runner: windows-latest-large
           - arch: arm64
             release_arch: aarch64
+            runner: windows-11-arm
     env:
       TRUSTED_SIGNING_ENDPOINT: https://eus.codesigning.azure.net/
       TRUSTED_SIGNING_ACCOUNT: warpdotdev
@@ -2024,6 +2039,10 @@ jobs:
           file-digest: SHA256
           timestamp-rfc3161: http://timestamp.acs.microsoft.com
           timestamp-digest: SHA256
+          # The action's dependency cache is not keyed by runner architecture, so x64 and arm64
+          # legs of this matrix can clobber each other's cached tools when they run concurrently
+          # (Azure/artifact-signing-action#146).
+          cache-dependencies: false
       - name: Build sign-tool command for Inno Setup
         id: setup_signing
         shell: pwsh
@@ -2090,6 +2109,10 @@ jobs:
     name: Build Release Binary (Windows ${{ matrix.arch }})
     runs-on: ${{ matrix.runner }}
     needs: prepare_release
+    # Not restricted to arm64 by the TEMPORARY TEST SCAFFOLDING above: the x64
+    # leg still runs here because it alone produces the canonical Windows
+    # settings schema artifact that the arm64 release_windows/release_windows_tui
+    # legs download below.
     if: ${{ inputs.build_windows != false }}
     timeout-minutes: 150
     strategy:
@@ -2098,7 +2121,7 @@ jobs:
           - arch: x64
             runner: windows-latest-large
           - arch: arm64
-            runner: windows-latest-large
+            runner: windows-11-arm
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
 
@@ -2110,11 +2133,6 @@ jobs:
           ref: ${{ needs.prepare_release.outputs.release_branch }}
           install_release_deps: true
           ssh_key: ${{ secrets.WARP_CHANNEL_CONFIG_ACCESS_SSH_KEY }}
-
-      - name: Add arm64 target
-        if: ${{ matrix.arch == 'arm64' }}
-        run: rustup target add aarch64-pc-windows-msvc
-        shell: bash
 
       - name: Get channel configuration
         id: get-config
@@ -2170,10 +2188,13 @@ jobs:
     strategy:
       matrix:
         include:
-          - arch: x64
-            runner: windows-latest-large
+          # TEMPORARY TEST SCAFFOLDING (arm64-native-test): the x64 entry is removed from this
+          # matrix (not gated by `if:`, which cannot see `matrix` at the job level) to isolate
+          # the Windows arm64 job. Restore this entry before merge.
+          # - arch: x64
+          #   runner: windows-latest-large
           - arch: arm64
-            runner: windows-latest-large
+            runner: windows-11-arm
     env:
       TRUSTED_SIGNING_ENDPOINT: https://eus.codesigning.azure.net/
       TRUSTED_SIGNING_ACCOUNT: warpdotdev
@@ -2236,6 +2257,10 @@ jobs:
           file-digest: SHA256
           timestamp-rfc3161: http://timestamp.acs.microsoft.com
           timestamp-digest: SHA256
+          # The action's dependency cache is not keyed by runner architecture, so x64 and arm64
+          # legs of this matrix can clobber each other's cached tools when they run concurrently
+          # (Azure/artifact-signing-action#146).
+          cache-dependencies: false
 
       # The azure/artifact-signing-action above downloads signtool.exe and the Trusted Signing dlib.
       # We locate them so ISCC can call signtool during compilation to sign the inner setup engine
