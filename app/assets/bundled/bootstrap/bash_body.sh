@@ -269,7 +269,7 @@ if [ -z "$WARP_BOOTSTRAPPED" ]; then
 
     # Computes native shell completions for the given (hex-encoded) command line and emits
     # them via the completions OSC protocol (see zsh_body.sh's compadd shim for the wire
-    # format: "\e]9280;A;incrementally_typed\a", then "\e]9280;C;<match>\a" per match, then
+    # format: "\e]9280;A\a", then "\e]9280;C;<match>\a" per match, then
     # "\e]9280;B\a"). Runs synchronously in the foreground -- like native completions in the
     # other shells, there is no async cancel-by-PID for this request.
     #
@@ -285,7 +285,7 @@ if [ -z "$WARP_BOOTSTRAPPED" ]; then
       local line
       line="$(warp_hex_decode_string "$1")"
 
-      printf '\e]9280;A;incrementally_typed\a'
+      printf '\e]9280;A\a'
       _warp_native_bash_completions "$line"
       printf '\e]9280;B\a'
     }

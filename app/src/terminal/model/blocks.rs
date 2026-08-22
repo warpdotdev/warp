@@ -3038,7 +3038,6 @@ impl BlockList {
 
         self.active_block_mut().start();
         self.early_output.reset_user_input();
-        self.early_output.reset_expected_echo();
     }
     /// Prepares an active block whose command start was not observed.
     pub(super) fn ensure_active_block_started(&mut self) {

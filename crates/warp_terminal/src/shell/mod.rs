@@ -390,6 +390,41 @@ impl ShellType {
         }
     }
 
+    /// Builds the native-completions generator-command line for this shell from an
+    /// already-hex-encoded line to complete. The caller hex-encodes the buffer text -- a hex
+    /// string only ever contains `[0-9a-f]`, so it needs no shell-specific quoting -- and passes
+    /// the encoded payload in; this only supplies the per-shell function name and fish's
+    /// leading-space history exclusion, so it needs no knowledge of the encoding itself.
+    ///
+    /// The function name is chosen so each shell's own bookkeeping recognizes it as a generator
+    /// command (hidden from history, treated as in-band rather than a normal foreground command),
+    /// matching the `warp_run_generator_command` / `Warp-Run-GeneratorCommand` convention already
+    /// used for other in-band commands:
+    /// - zsh's `_is_warp_generator_command`/`_warp_zshaddhistory` and bash's
+    ///   `warp_preexec`/`HISTIGNORE` match on the `warp_run_generator_command` prefix.
+    /// - fish's `warp_preexec` matches it too, but fish has no configurable history-pattern
+    ///   exclusion -- a leading space is its only, default way to omit a command from its history
+    ///   file, so one is prepended here (matching `InBandCommandExecutor`'s own fish convention).
+    /// - PowerShell's `Warp-Preexec`/`AddToHistoryHandler`/`Clear-History` match the
+    ///   `Warp-Run-GeneratorCommand` prefix.
+    pub fn native_completions_generator_command(self, hex_encoded_line: &str) -> String {
+        match self {
+            // zsh must run this in the foreground with no command substitution around the
+            // `select` loop that activates ZLE (see
+            // `warp_run_generator_command_native_completions` in zsh_body.sh); bash uses the same
+            // entry point.
+            ShellType::Zsh | ShellType::Bash => {
+                format!("warp_run_generator_command_native_completions {hex_encoded_line}")
+            }
+            ShellType::Fish => {
+                format!(" warp_run_generator_command_native_completions {hex_encoded_line}")
+            }
+            ShellType::PowerShell => {
+                format!("Warp-Run-GeneratorCommand-NativeCompletions {hex_encoded_line}")
+            }
+        }
+    }
+
     /// Given the output of the `alias` command, returns a map of alias keys to values.
     pub fn aliases(self, alias_output: &str) -> HashMap<SmolStr, String> {
         match self {

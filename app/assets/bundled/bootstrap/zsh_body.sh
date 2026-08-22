@@ -1531,13 +1531,12 @@ esac
   }
 
   # Marks the start of completions generation using a custom OSC.
-  # Expects the `format` as the first positional argument.
   function warp_mark_start_of_completions () {
-    printf '\e]9280;A;%s\a' $1
+    printf '\e]9280;A\a'
   }
 
   function warp_mark_start_of_completions_for_compadd_override () {
-    warp_mark_start_of_completions 'incrementally_typed'
+    warp_mark_start_of_completions
   }
 
   # Reports the range of the buffer (byte offsets into the line passed to
@@ -1701,7 +1700,7 @@ esac
     # the bundled completer instead of hanging or erroring, and so we never pay the cost
     # of listing every top-level command/file synchronously in the user's own shell.
     if [[ -z ${line//[[:space:]]/} ]] || ! { [[ -o zle ]] && [[ -o interactive ]] && [[ "$TERM" != emacs ]] }; then
-      printf '\e]9280;A;incrementally_typed\a'
+      printf '\e]9280;A\a'
       printf '\e]9280;B\a'
       return
     fi
@@ -1740,7 +1739,7 @@ esac
     # and answer with zero matches so the client always gets a response either way.
     if (( _WARP_NATIVE_COMPLETIONS_ARMED )); then
       _WARP_NATIVE_COMPLETIONS_ARMED=0
-      printf '\e]9280;A;incrementally_typed\a'
+      printf '\e]9280;A\a'
       printf '\e]9280;B\a'
     fi
   }
