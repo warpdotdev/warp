@@ -60,7 +60,7 @@ use crate::word_block_editor::{
     WordBlockStyles,
 };
 use crate::workspace::{ToastStack, WorkspaceAction};
-use crate::workspaces::user_workspaces::UserWorkspaces;
+use crate::workspaces::user_workspaces::{TeamContext, UserWorkspaces};
 use crate::{TelemetryEvent, send_telemetry_from_ctx};
 
 mod inheritance;
@@ -475,12 +475,29 @@ impl SharingDialog {
         self.target.is_some() && self.access_level(app).can_edit_access()
     }
 
-    fn can_anyone_with_link_share(&self, app: &AppContext) -> bool {
-        UserWorkspaces::as_ref(app).is_anyone_with_link_sharing_enabled()
+    /// The team this dialog's window is sharing as, resolved afresh on every read so a window
+    /// that moves to another team is never governed by the team it opened with.
+    ///
+    /// `None` when the dialog's window cannot be located, which for a live dialog means its
+    /// window is gone: `RootView::new` registers every window as it is created.
+    fn team_scope<'a>(&self, app: &'a AppContext) -> Option<TeamContext<'a>> {
+        UserWorkspaces::as_ref(app).team_context(&self.self_handle, app)
     }
 
+    /// Whether this window's team permits sharing the target with anyone who holds its link.
+    /// A window whose team cannot be resolved denies: offering a sharing channel whose
+    /// governing policy is unknown is the unsafe direction to guess in.
+    fn can_anyone_with_link_share(&self, app: &AppContext) -> bool {
+        self.team_scope(app).is_some_and(|scope| {
+            UserWorkspaces::as_ref(app).is_anyone_with_link_sharing_enabled(&scope)
+        })
+    }
+
+    /// Whether this window's team permits sharing the target directly with named people. See
+    /// [`Self::can_anyone_with_link_share`] for why an unresolvable team denies.
     fn can_direct_link_share(&self, app: &AppContext) -> bool {
-        UserWorkspaces::as_ref(app).is_direct_link_sharing_enabled()
+        self.team_scope(app)
+            .is_some_and(|scope| UserWorkspaces::as_ref(app).is_direct_link_sharing_enabled(&scope))
     }
 
     /// The editability state of the object.
@@ -1615,6 +1632,13 @@ impl SharingDialog {
 
     /// Send all pending email invitations.
     fn send_invitations(&mut self, ctx: &mut ViewContext<Self>) {
+        // Re-read the policy instead of trusting the render that put the form on screen: an
+        // open dialog whose window moved to a team that forbids direct sharing must not send
+        // the invitations that team now disallows.
+        if !self.can_direct_link_share(ctx) {
+            return;
+        }
+
         let form_state = self.invite_form_state(ctx);
         if !form_state.is_valid() {
             return;
@@ -2930,6 +2954,13 @@ impl TypedActionView for SharingDialog {
             }
             SharingDialogAction::SetLinkPermissions(access_level) => {
                 self.set_open_menu(OpenMenuState::None, ctx);
+                // The menu's items were built when it opened. Re-read the policy so a window
+                // that has since moved to a team forbidding link sharing cannot act on the
+                // permission it was offered under the old one.
+                if !self.can_anyone_with_link_share(ctx) {
+                    ctx.notify();
+                    return;
+                }
                 if let Some(ShareableObject::WarpDriveObject(id)) = self.target.as_ref() {
                     UpdateManager::handle(ctx).update(ctx, move |update_manager, ctx| {
                         update_manager.set_object_link_permissions(*id, *access_level, ctx);

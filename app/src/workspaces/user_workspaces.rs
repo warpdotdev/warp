@@ -41,8 +41,8 @@ use crate::settings::{
 #[cfg(test)]
 use crate::workspaces::workspace::{AIAutonomyPolicy, WorkspaceMember, WorkspaceSettings};
 use crate::workspaces::workspace::{
-    AiAutonomySettings, AiOverages, PurchaseAddOnCreditsPolicy, SandboxedAgentSettings,
-    UsageBasedPricingSettings,
+    AiAutonomySettings, AiOverages, LinkSharingSettings, PurchaseAddOnCreditsPolicy,
+    SandboxedAgentSettings, UsageBasedPricingSettings,
 };
 
 const STRIPE_SUBSCRIPTION_INTERVAL_PAGE_PREFIX: &str = "/upgrade";
@@ -241,9 +241,6 @@ impl TeamContextForOperation {
 /// a [`TeamContextForOperation`]. A [`WeakViewHandle`] locates a window to read from; it is
 /// not evidence that the holder is running in that window, which is what minting operation
 /// scope requires.
-// Only tests construct one today; remove this once a Group 1 migration PR resolves one from a
-// real render.
-#[allow(dead_code)]
 pub(crate) struct TeamContext<'a> {
     team_uid: Option<&'a ServerId>,
 }
@@ -463,8 +460,6 @@ impl UserWorkspaces {
     }
 
     /// Resolves `view`'s window team for one render. See [`TeamContext`].
-    // Only tests call this today; remove once a Group 1 migration PR has a real call site.
-    #[allow(dead_code)]
     pub(crate) fn team_context<'a, T: Entity>(
         &'a self,
         view: &WeakViewHandle<T>,
@@ -477,6 +472,19 @@ impl UserWorkspaces {
             None => None,
         };
         Some(TeamContext { team_uid })
+    }
+
+    /// Reads a `TeamScope`'s team, whether captured (a [`TeamContextForOperation`]) or freshly
+    /// resolved (a [`TeamContext`]). Returns `None` once that team is gone from the current
+    /// workspace, e.g. after the user leaves it, or when `scope` carries no team.
+    ///
+    /// Private on purpose: a scope resolves to a *setting*, through one of the getters below,
+    /// never to a `Team` a caller could carry somewhere the scope never reached. A call site
+    /// that wants a `Team` from a scope wants a new getter instead.
+    fn team_from_scope<S: TeamScope + ?Sized>(&self, scope: &S) -> Option<&Team> {
+        scope
+            .team_uid()
+            .and_then(|team_uid| self.team_from_uid(team_uid))
     }
 
     /// Returns the windows whose team assignment changed.
@@ -1922,26 +1930,45 @@ impl UserWorkspaces {
             .unwrap_or_default()
     }
 
-    pub fn is_anyone_with_link_sharing_enabled(&self) -> bool {
-        self.current_workspace()
-            .map(|workspace| {
-                workspace
-                    .settings
-                    .link_sharing_settings
+    /// The link-sharing policy that governs `scope`.
+    ///
+    /// A scope that resolves to a team reads that team's effective policy, so two windows on
+    /// different teams disagree exactly as their admins configured them.
+    ///
+    /// A scope with no team is not on a team, and no team's policy may stand in for that.
+    /// [`Self::current_workspace`]'s settings are only genuine workspace-level data while the
+    /// workspace has no teams; once it has any, the server resolved them for one arbitrarily
+    /// chosen team, so a teamless scope gets [`LinkSharingSettings::UNRESTRICTED`] instead.
+    fn link_sharing_settings(&self, scope: &impl TeamScope) -> LinkSharingSettings {
+        if let Some(team) = self.team_from_scope(scope) {
+            let link_sharing = &team.settings.link_sharing;
+            return LinkSharingSettings {
+                anyone_with_link_sharing_enabled: link_sharing
                     .anyone_with_link_sharing_enabled
-            })
-            .unwrap_or(true)
+                    .value,
+                direct_link_sharing_enabled: link_sharing.direct_link_sharing_enabled.value,
+            };
+        }
+
+        if self.has_teams() {
+            return LinkSharingSettings::UNRESTRICTED;
+        }
+
+        self.current_workspace()
+            .map(|workspace| workspace.settings.link_sharing_settings.clone())
+            .unwrap_or(LinkSharingSettings::UNRESTRICTED)
     }
 
-    pub fn is_direct_link_sharing_enabled(&self) -> bool {
-        self.current_workspace()
-            .map(|workspace| {
-                workspace
-                    .settings
-                    .link_sharing_settings
-                    .direct_link_sharing_enabled
-            })
-            .unwrap_or(true)
+    /// Whether `scope` may share an object with anyone who holds its link.
+    pub(crate) fn is_anyone_with_link_sharing_enabled(&self, scope: &impl TeamScope) -> bool {
+        self.link_sharing_settings(scope)
+            .anyone_with_link_sharing_enabled
+    }
+
+    /// Whether `scope` may share an object directly with named people.
+    pub(crate) fn is_direct_link_sharing_enabled(&self, scope: &impl TeamScope) -> bool {
+        self.link_sharing_settings(scope)
+            .direct_link_sharing_enabled
     }
 
     /// Whether invite links are enabled for the current workspace. This is a
