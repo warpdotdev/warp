@@ -5536,16 +5536,16 @@ impl AwsBedrockWidget {
     }
 
     /// [`Self::is_usage_enabled`] for the initial state set while the page is being built. The
-    /// page is not attached to its window yet, so its handle cannot locate one; the
-    /// `ViewContext` names the same window the handle will resolve to from the first render.
+    /// page is not in `view_to_window` until its constructor returns, so its own handle
+    /// resolves no window yet; the `ViewContext` names the same window the handle will resolve
+    /// to from the first render onward.
     fn is_usage_enabled_during_construction(ctx: &ViewContext<WarpAgentPageView>) -> bool {
         let user_workspaces = UserWorkspaces::as_ref(ctx);
         AISettings::as_ref(ctx).is_any_ai_enabled(ctx)
-            && user_workspaces
-                .team_context_for_view(ctx)
-                .is_some_and(|context| {
-                    user_workspaces.is_aws_bedrock_credentials_enabled(&context, ctx)
-                })
+            && user_workspaces.is_aws_bedrock_credentials_enabled(
+                &user_workspaces.team_context_for_window(ctx.window_id()),
+                ctx,
+            )
     }
 
     /// Whether an admin turned Bedrock on for the window's team, which is what decides whether
@@ -5763,7 +5763,9 @@ impl AwsBedrockWidget {
             && team_context.as_ref().is_some_and(|context| {
                 user_workspaces.is_aws_bedrock_credentials_toggleable(context)
             });
-        let are_credentials_enabled = Self::are_credentials_enabled(&self.view_handle, app);
+        let are_credentials_enabled = team_context.as_ref().is_some_and(|context| {
+            user_workspaces.is_aws_bedrock_credentials_enabled(context, app)
+        });
         let is_usage_enabled = is_section_enabled && are_credentials_enabled;
         let toggle_description = if is_admin_enforced {
             "Warp loads and sends local AWS CLI credentials for Bedrock-supported models. This setting is managed by your organization.".to_string()
@@ -6026,12 +6028,10 @@ impl GeminiEnterpriseWidget {
     /// See [`AwsBedrockWidget::is_usage_enabled_during_construction`].
     fn is_refresh_enabled_during_construction(ctx: &ViewContext<WarpAgentPageView>) -> bool {
         let user_workspaces = UserWorkspaces::as_ref(ctx);
-        let are_credentials_enabled =
-            user_workspaces
-                .team_context_for_view(ctx)
-                .is_some_and(|context| {
-                    user_workspaces.is_gemini_enterprise_credentials_enabled(&context, ctx)
-                });
+        let are_credentials_enabled = user_workspaces.is_gemini_enterprise_credentials_enabled(
+            &user_workspaces.team_context_for_window(ctx.window_id()),
+            ctx,
+        );
         Self::is_refresh_enabled_for_credentials(are_credentials_enabled, ctx)
     }
 
@@ -6120,7 +6120,9 @@ impl GeminiEnterpriseWidget {
             && team_context.as_ref().is_some_and(|context| {
                 user_workspaces.is_gemini_enterprise_credentials_toggleable(context)
             });
-        let are_credentials_enabled = Self::are_credentials_enabled(&self.view_handle, app);
+        let are_credentials_enabled = team_context.as_ref().is_some_and(|context| {
+            user_workspaces.is_gemini_enterprise_credentials_enabled(context, app)
+        });
         let toggle_description = if is_admin_enforced {
             "Warp routes eligible requests through your team's Gemini Enterprise Google Cloud \
              project. This setting is managed by your organization."

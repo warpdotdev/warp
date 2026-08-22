@@ -987,9 +987,10 @@ impl AIAssistantPanelView {
         );
 
         let user_workspaces = UserWorkspaces::as_ref(app);
-        // A panel that can no longer locate its window has no team policy to read; the
-        // request-limit footer then shows as it does for a user on no team, rather than
-        // borrowing some other team's custom-LLM setting.
+        // A panel that can no longer locate its window has no team policy to read, so the
+        // footer renders rather than borrowing some other team's custom-LLM setting. Note this
+        // is not the teamless-user answer: a user on no team reads the workspace's own setting
+        // and can suppress the footer.
         let is_custom_llm_enabled = user_workspaces
             .team_context(&self.view_handle, app)
             .is_some_and(|context| user_workspaces.is_custom_llm_enabled(&context));

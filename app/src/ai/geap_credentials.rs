@@ -15,7 +15,9 @@ use warpui::{AppContext, ModelContext, SingletonEntity};
 
 use crate::auth::AuthStateProvider;
 use crate::settings::{AISettings, AISettingsChangedEvent};
-use crate::workspaces::user_workspaces::{UserWorkspaces, UserWorkspacesEvent};
+use crate::workspaces::user_workspaces::{
+    GeminiEnterpriseBackgroundHost, UserWorkspaces, UserWorkspacesEvent,
+};
 
 const GEAP_IDENTITY_TOKEN_DURATION: Duration = Duration::from_secs(60 * 60);
 
@@ -80,13 +82,23 @@ fn geap_mint_binding_from_parts(
 /// a settings poll, a token nearing expiry, a request-time safety net -- so this deliberately
 /// takes no team scope and instead reads across all of the user's teams: background GEAP work
 /// succeeds if any one of them enables it. See
-/// [`UserWorkspaces::gemini_enterprise_host_settings_for_any_enabling_team`], which also
-/// covers what happens when two enabling teams name different Google Cloud projects.
+/// [`UserWorkspaces::gemini_enterprise_host_for_any_enabling_team`].
 pub(crate) fn current_geap_policy(app: &AppContext) -> GeapPolicy {
-    let user_workspaces = UserWorkspaces::as_ref(app);
-    let Some(settings) = user_workspaces.gemini_enterprise_host_settings_for_any_enabling_team(app)
-    else {
-        return GeapPolicy::Disabled;
+    let settings = match UserWorkspaces::as_ref(app)
+        .gemini_enterprise_host_for_any_enabling_team(app)
+    {
+        GeminiEnterpriseBackgroundHost::NoneEnabled => return GeapPolicy::Disabled,
+        // Nothing can be minted, but the user's org does use GEAP and an admin has to pick one
+        // project. `Unconfigured` is the state that says so and offers them the admin
+        // recovery action; `Disabled` would tell them the feature is simply not theirs.
+        GeminiEnterpriseBackgroundHost::Conflicting => {
+            log::warn!(
+                "GEAP: the user's teams enable Gemini Enterprise against different Google Cloud \
+                 projects; background minting has no window to choose between them"
+            );
+            return GeapPolicy::Unconfigured;
+        }
+        GeminiEnterpriseBackgroundHost::Enabled(settings) => settings,
     };
     let Some(user_id) = AuthStateProvider::as_ref(app).get().user_id() else {
         return GeapPolicy::Disabled;

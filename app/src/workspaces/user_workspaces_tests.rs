@@ -323,6 +323,7 @@ fn team_for_test() -> Team {
 const TEST_GCP_AUDIENCE: &str = "//iam.googleapis.com/projects/123456/locations/global/workloadIdentityPools/warp-pool/providers/warp-provider";
 const TEST_GCP_SA_EMAIL: &str = "warp-geap@test-project.iam.gserviceaccount.com";
 const OTHER_GCP_AUDIENCE: &str = "//iam.googleapis.com/projects/999999/locations/global/workloadIdentityPools/other-pool/providers/other-provider";
+const OTHER_GCP_SA_EMAIL: &str = "warp-geap@other-project.iam.gserviceaccount.com";
 
 fn bedrock_host(enablement_setting: HostEnablementSetting) -> LlmHostSettings {
     LlmHostSettings {
@@ -905,9 +906,10 @@ fn test_gemini_enterprise_credentials_disabled_when_logged_out() {
                 "logged-out users should never mint or attach Gemini Enterprise credentials"
             );
             assert!(
-                user_workspaces
-                    .gemini_enterprise_host_settings_for_any_enabling_team(ctx)
-                    .is_none(),
+                matches!(
+                    user_workspaces.gemini_enterprise_host_for_any_enabling_team(ctx),
+                    GeminiEnterpriseBackgroundHost::NoneEnabled
+                ),
                 "logged-out users should not mint background Gemini Enterprise credentials either"
             );
         });
@@ -932,9 +934,11 @@ fn test_gemini_enterprise_background_mint_uses_an_enabling_team_config() {
         );
 
         app.read(|ctx| {
-            let settings = UserWorkspaces::as_ref(ctx)
-                .gemini_enterprise_host_settings_for_any_enabling_team(ctx)
-                .expect("one enabling team should be enough for background minting");
+            let GeminiEnterpriseBackgroundHost::Enabled(settings) =
+                UserWorkspaces::as_ref(ctx).gemini_enterprise_host_for_any_enabling_team(ctx)
+            else {
+                panic!("one enabling team should be enough for background minting");
+            };
             assert_eq!(settings.gcp_audience.as_deref(), Some(TEST_GCP_AUDIENCE));
             assert_eq!(settings.gcp_sa_email.as_deref(), Some(TEST_GCP_SA_EMAIL));
         });
@@ -957,7 +961,7 @@ fn test_gemini_enterprise_background_mint_requires_one_project() {
         gemini_enterprise_host(true, HostEnablementSetting::Enforce),
     );
     agreeing_team.name = "agreeing".to_string();
-    let mut disagreeing_team = team_with_llm_host(
+    let mut team_with_other_audience = team_with_llm_host(
         789.into(),
         LLMModelHost::GeminiEnterprise,
         LlmHostSettings {
@@ -965,7 +969,18 @@ fn test_gemini_enterprise_background_mint_requires_one_project() {
             ..gemini_enterprise_host(true, HostEnablementSetting::Enforce)
         },
     );
-    disagreeing_team.name = "disagreeing".to_string();
+    team_with_other_audience.name = "other-audience".to_string();
+    // Each half of the equality is exercised separately, so dropping either one from the check
+    // fails a test rather than passing silently.
+    let mut team_with_other_service_account = team_with_llm_host(
+        1011.into(),
+        LLMModelHost::GeminiEnterprise,
+        LlmHostSettings {
+            gcp_sa_email: Some(OTHER_GCP_SA_EMAIL.to_string()),
+            ..gemini_enterprise_host(true, HostEnablementSetting::Enforce)
+        },
+    );
+    team_with_other_service_account.name = "other-service-account".to_string();
 
     App::test((), |mut app| async move {
         app_with_workspace(
@@ -974,28 +989,35 @@ fn test_gemini_enterprise_background_mint_requires_one_project() {
         );
 
         app.read(|ctx| {
-            let settings = UserWorkspaces::as_ref(ctx)
-                .gemini_enterprise_host_settings_for_any_enabling_team(ctx)
-                .expect("teams naming the same project should still mint");
+            let GeminiEnterpriseBackgroundHost::Enabled(settings) =
+                UserWorkspaces::as_ref(ctx).gemini_enterprise_host_for_any_enabling_team(ctx)
+            else {
+                panic!("teams naming the same project should still mint");
+            };
             assert_eq!(settings.gcp_audience.as_deref(), Some(TEST_GCP_AUDIENCE));
         });
 
-        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
-            user_workspaces.update_workspaces(
-                vec![workspace_with_teams(vec![first_team, disagreeing_team])],
-                ctx,
-            );
-        });
+        for (divergence, other_team) in [
+            ("audience", team_with_other_audience),
+            ("service account", team_with_other_service_account),
+        ] {
+            let teams = vec![first_team.clone(), other_team];
+            UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+                user_workspaces.update_workspaces(vec![workspace_with_teams(teams)], ctx);
+            });
 
-        app.read(|ctx| {
-            assert!(
-                UserWorkspaces::as_ref(ctx)
-                    .gemini_enterprise_host_settings_for_any_enabling_team(ctx)
-                    .is_none(),
-                "teams naming different Google Cloud projects leave background minting no \
-                 defensible choice, so it must not mint"
-            );
-        });
+            app.read(|ctx| {
+                assert!(
+                    matches!(
+                        UserWorkspaces::as_ref(ctx)
+                            .gemini_enterprise_host_for_any_enabling_team(ctx),
+                        GeminiEnterpriseBackgroundHost::Conflicting
+                    ),
+                    "teams differing on {divergence} leave background minting no defensible \
+                     choice, and that is a misconfiguration rather than an absent feature"
+                );
+            });
+        }
     })
 }
 
@@ -1326,6 +1348,88 @@ impl TypedActionView for TeamContextTestView {
 
 fn create_test_window(app: &mut App) -> (WindowId, ViewHandle<TeamContextTestView>) {
     app.add_window(WindowStyle::NotStealFocus, |_| TeamContextTestView)
+}
+
+/// Records what a view can resolve about its own team *during its own construction*, which is
+/// where the agent settings page's Bedrock and Gemini Enterprise widgets take their first read.
+struct ConstructionTimeScopeProbe {
+    bedrock_enabled_from_view_context: bool,
+    team_uid_from_own_handle: Option<ServerId>,
+}
+
+impl ConstructionTimeScopeProbe {
+    fn new(ctx: &mut ViewContext<Self>) -> Self {
+        let user_workspaces = UserWorkspaces::as_ref(ctx);
+        Self {
+            bedrock_enabled_from_view_context: user_workspaces.is_aws_bedrock_credentials_enabled(
+                &user_workspaces.team_context_for_window(ctx.window_id()),
+                ctx,
+            ),
+            team_uid_from_own_handle: user_workspaces
+                .team_context(&ctx.handle(), ctx)
+                .and_then(|context| context.team_uid()),
+        }
+    }
+}
+
+impl Entity for ConstructionTimeScopeProbe {
+    type Event = ();
+}
+
+impl View for ConstructionTimeScopeProbe {
+    fn ui_name() -> &'static str {
+        "ConstructionTimeScopeProbe"
+    }
+
+    fn render(&self, _: &AppContext) -> Box<dyn Element> {
+        Empty::new().finish()
+    }
+}
+
+impl TypedActionView for ConstructionTimeScopeProbe {
+    type Action = ();
+}
+
+/// A view is not in `view_to_window` until its build closure returns, so during its own
+/// construction it can resolve its team through its `ViewContext` but *not* through a handle to
+/// itself. Both halves are asserted: the shape the settings widgets use works, and the shape it
+/// would be tempting to refactor to silently resolves nothing -- which would leave the Bedrock
+/// editors and both Refresh buttons initialised disabled under an enforcing team.
+#[test]
+fn test_a_view_can_only_resolve_its_own_team_through_its_view_context_while_constructing() {
+    let team = team_with_llm_host(
+        123.into(),
+        LLMModelHost::AwsBedrock,
+        bedrock_host(HostEnablementSetting::Enforce),
+    );
+    let team_uid = team.uid;
+
+    App::test((), |mut app| async move {
+        app_with_workspace(&mut app, workspace_with_teams(vec![team]));
+
+        let (window_id, view) = create_test_window(&mut app);
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.set_team_for_window(window_id, team_uid, ctx);
+        });
+
+        let probe = view.update(&mut app, |_, ctx| {
+            ctx.add_typed_action_view(ConstructionTimeScopeProbe::new)
+        });
+
+        app.read(|ctx| {
+            let probe = probe.as_ref(ctx);
+            assert!(
+                probe.bedrock_enabled_from_view_context,
+                "a view under construction still resolves its window's team through its \
+                 ViewContext, whose window id is a plain field"
+            );
+            assert_eq!(
+                probe.team_uid_from_own_handle, None,
+                "a handle to a view still being constructed resolves no window, so reading the \
+                 host policy through one would silently report the team's Bedrock host as off"
+            );
+        });
+    })
 }
 
 fn two_teams() -> (Team, Team) {
