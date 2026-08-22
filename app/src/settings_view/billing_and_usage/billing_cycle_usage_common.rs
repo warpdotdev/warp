@@ -18,10 +18,9 @@ use crate::settings_view::billing_and_usage_page_v2::{
     BONUS_CREDITS_DOT_COLOR, PAYG_CREDITS_DOT_COLOR,
 };
 use crate::ui_components::blended_colors;
-use crate::workspaces::team::Team;
 use crate::workspaces::workspace::{
     AiCreditsUsageAndCostSubjectType, AiCreditsUsageAndCostType, AiCreditsUsageBucket,
-    BillingCycleUsageEntry, WorkspaceMember,
+    BillingCycleUsageEntry,
 };
 
 // for a bunch of this (min fill ratio, cost type order, ... )
@@ -194,30 +193,6 @@ pub fn filter_legacy_buckets(entries: &[BillingCycleUsageEntry]) -> Vec<BillingC
             e.usage_bucket != AiCreditsUsageBucket::Voice
                 && e.usage_bucket != AiCreditsUsageBucket::SuggestedCodeDiffs
         })
-        .cloned()
-        .collect()
-}
-
-pub fn filter_entries_by_attributed_team(
-    entries: &[BillingCycleUsageEntry],
-    team_uid: &str,
-) -> Vec<BillingCycleUsageEntry> {
-    entries
-        .iter()
-        .filter(|e| e.attributed_team_uid.as_deref() == Some(team_uid))
-        .cloned()
-        .collect()
-}
-
-pub fn members_for_team(members: &[WorkspaceMember], team: Option<&Team>) -> Vec<WorkspaceMember> {
-    let Some(team) = team else {
-        return members.to_vec();
-    };
-    let team_member_uids: std::collections::HashSet<_> =
-        team.members.iter().map(|member| &member.uid).collect();
-    members
-        .iter()
-        .filter(|member| team_member_uids.contains(&member.uid))
         .cloned()
         .collect()
 }

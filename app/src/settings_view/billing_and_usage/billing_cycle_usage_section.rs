@@ -19,8 +19,7 @@ use crate::auth::{AuthManager, AuthStateProvider};
 use crate::menu::{self, Menu, MenuItem, MenuItemFields};
 use crate::settings_view::admin_actions::AdminActions;
 use crate::settings_view::billing_and_usage::billing_cycle_usage_common::{
-    BillingUsageMouseStates, filter_entries_by_attributed_team, filter_legacy_buckets,
-    has_non_viewer_data, legend_cost_types, members_for_team,
+    BillingUsageMouseStates, filter_legacy_buckets, has_non_viewer_data, legend_cost_types,
 };
 use crate::settings_view::billing_and_usage::billing_cycle_usage_rows::{
     SourceFilter, has_cloud_usage, render_own_usage_solo_row, render_own_usage_with_workspace_row,
@@ -33,9 +32,8 @@ use crate::settings_view::billing_and_usage_page_v2::{
 };
 use crate::settings_view::settings_page::render_cta_banner;
 use crate::ui_components::icons::Icon;
-use crate::workspaces::team::Team;
 use crate::workspaces::update_manager::TeamUpdateManager;
-use crate::workspaces::user_workspaces::UserWorkspaces;
+use crate::workspaces::user_workspaces::{TeamRenderContext, UserWorkspaces};
 use crate::workspaces::workspace::{
     AiCreditsUsageAndCostType, BillingCycleUsageEntry, BillingCycleUsageSummary, MaxPriorCycles,
     UsageVisibility, UsageVisibilityGranularity, Workspace, WorkspaceMember,
@@ -122,17 +120,17 @@ impl BillingCycleUsageSectionView {
     }
 
     fn viewer_is_team_admin(&self, app: &AppContext) -> bool {
-        let Some(team) = self.selected_team(app) else {
+        let Some(render_context) = self.render_context(app) else {
             return false;
         };
         Self::resolved_viewer_email(app)
             .as_deref()
-            .is_some_and(|email| team.has_admin_permissions(email))
+            .is_some_and(|email| render_context.has_admin_permissions(email))
     }
 
-    /// The team this settings window is pointed at.
-    fn selected_team<'a>(&self, app: &'a AppContext) -> Option<&'a Team> {
-        UserWorkspaces::as_ref(app).team_for_view_handle(&self.self_handle, app)
+    /// The render-scoped team this settings window is pointed at.
+    fn render_context<'a>(&self, app: &'a AppContext) -> Option<TeamRenderContext<'a>> {
+        UserWorkspaces::as_ref(app).team_render_context_for_view_handle(&self.self_handle, app)
     }
 
     fn visible_entries(
@@ -145,8 +143,8 @@ impl BillingCycleUsageSectionView {
                 .map(|summary| summary.entries.as_slice())
                 .unwrap_or_default(),
         );
-        match self.selected_team(app) {
-            Some(team) => filter_entries_by_attributed_team(&entries, &team.uid.to_string()),
+        match self.render_context(app) {
+            Some(render_context) => render_context.filter_entries_by_attribution(&entries),
             // No team resolved (teamless viewer): nothing to scope to, so
             // leave the entries as the server sent them.
             None => entries,
@@ -156,7 +154,15 @@ impl BillingCycleUsageSectionView {
     /// Workspace members that belong to the selected team; the roster the
     /// per-member rows are built from.
     fn visible_members(&self, workspace: &Workspace, app: &AppContext) -> Vec<WorkspaceMember> {
-        members_for_team(&workspace.members, self.selected_team(app))
+        match self.render_context(app) {
+            Some(render_context) => workspace
+                .members
+                .iter()
+                .filter(|member| render_context.has_member(&member.uid))
+                .cloned()
+                .collect(),
+            None => workspace.members.clone(),
+        }
     }
 
     fn current_summary<'a>(

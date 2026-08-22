@@ -71,8 +71,9 @@ use crate::workspaces::team_tester::TeamTesterStatus;
 use crate::workspaces::update_manager::TeamUpdateManager;
 use crate::workspaces::user_workspaces::UserWorkspaces;
 use crate::workspaces::workspace::{
-    AdminEnablementSetting, HostEnablementSetting, LlmHostSettings, MultiAdminPolicy,
-    PurchaseAddOnCreditsPolicy, Workspace,
+    AdminEnablementSetting, AiCreditsUsageAndCostSubjectType, AiCreditsUsageAndCostType,
+    AiCreditsUsageBucket, AiCreditsUsageSource, BillingCycleUsageEntry, HostEnablementSetting,
+    LlmHostSettings, MultiAdminPolicy, PurchaseAddOnCreditsPolicy, Workspace,
 };
 
 #[derive(Default)]
@@ -1177,6 +1178,105 @@ fn test_team_contexts_represent_a_registered_teamless_window() {
     })
 }
 
+/// Focused coverage for the narrow `TeamRenderContext` predicates that billing/usage
+/// presentation call sites use instead of reading the struct's private field directly (as the
+/// tests above do). Window-team change and no-team behavior for this same resolution are
+/// already covered above; this only checks that the predicates reflect what was resolved for
+/// each window.
+#[test]
+fn test_team_render_context_predicates_match_each_windows_own_team() {
+    let (mut team_a, mut team_b) = two_teams();
+    let admin_uid = UserUid::new("admin");
+    let admin_email = "admin@example.com";
+    team_a.members.push(TeamMember {
+        uid: admin_uid,
+        email: admin_email.to_string(),
+        role: MembershipRole::Owner,
+    });
+    let outsider_uid = UserUid::new("outsider");
+    team_b.members.push(TeamMember {
+        uid: UserUid::new("team-b-member"),
+        email: "member@example.com".to_string(),
+        role: MembershipRole::User,
+    });
+    let mut workspace = workspace_for_test(&team_a);
+    workspace.teams.push(team_b.clone());
+
+    App::test((), |mut app| async move {
+        initialize_window_team_test_app(&mut app, vec![workspace]);
+
+        let (window_a, view_a) = create_test_window(&mut app);
+        let (window_b, view_b) = create_test_window(&mut app);
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.set_team_for_window(window_a, team_a.uid, ctx);
+            user_workspaces.set_team_for_window(window_b, team_b.uid, ctx);
+        });
+
+        let weak_view_a = view_a.downgrade();
+        let weak_view_b = view_b.downgrade();
+        app.read(|ctx| {
+            let user_workspaces = UserWorkspaces::as_ref(ctx);
+            let render_a = user_workspaces
+                .team_render_context_for_view_handle(&weak_view_a, ctx)
+                .expect("window A should resolve a render context");
+            let render_b = user_workspaces
+                .team_render_context_for_view_handle(&weak_view_b, ctx)
+                .expect("window B should resolve a render context");
+
+            assert!(
+                render_a.has_admin_permissions(admin_email),
+                "the admin should have admin permissions on team A"
+            );
+            assert!(
+                !render_b.has_admin_permissions(admin_email),
+                "team A's admin should not have admin permissions on team B"
+            );
+
+            assert!(
+                render_a.has_member(&admin_uid),
+                "team A should have its own member"
+            );
+            assert!(
+                !render_a.has_member(&outsider_uid),
+                "team A should not claim a member that never joined it"
+            );
+
+            // `filter_entries_by_attribution` does the whole comparison internally rather
+            // than exposing a bare candidate-vs-team-UID predicate a caller could use to
+            // probe for the team's UID one guess at a time.
+            let entries = vec![
+                entry_attributed_to(Some(team_a.uid.to_string())),
+                entry_attributed_to(Some(team_b.uid.to_string())),
+                entry_attributed_to(None),
+            ];
+            let filtered = render_a.filter_entries_by_attribution(&entries);
+            assert_eq!(
+                filtered.len(),
+                1,
+                "only the entry attributed to team A should survive"
+            );
+            assert_eq!(
+                filtered[0].attributed_team_uid,
+                Some(team_a.uid.to_string())
+            );
+        });
+    })
+}
+
+fn entry_attributed_to(attributed_team_uid: Option<String>) -> BillingCycleUsageEntry {
+    BillingCycleUsageEntry {
+        subject_type: AiCreditsUsageAndCostSubjectType::User,
+        subject_uid: None,
+        subject_display_name: None,
+        cost_type: AiCreditsUsageAndCostType::BaseLimit,
+        usage_bucket: AiCreditsUsageBucket::Ai,
+        usage_source: AiCreditsUsageSource::Local,
+        credits_used: 1,
+        cost_cents: 0,
+        attributed_team_uid,
+    }
+}
+
 #[test]
 fn test_spaces_for_window_orders_selected_team_shared_and_personal() {
     let _flag = FeatureFlag::SharedWithMe.override_enabled(true);
@@ -1835,7 +1935,7 @@ fn test_purchase_addon_credits_forwards_teamless_team_uid() {
         });
 
         UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
-            user_workspaces.purchase_addon_credits(None, 1_000, ctx);
+            drop(user_workspaces.purchase_addon_credits(None, 1_000, ctx));
         });
 
         // Give the spawned client call time to run so the mock expectation is
@@ -1868,7 +1968,7 @@ fn test_purchase_addon_credits_forwards_team_uid_when_present() {
         });
 
         UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
-            user_workspaces.purchase_addon_credits(Some(123.into()), 2_000, ctx);
+            drop(user_workspaces.purchase_addon_credits(Some(123.into()), 2_000, ctx));
         });
 
         // Give the spawned client call time to run so the mock expectation is

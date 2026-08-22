@@ -608,8 +608,9 @@ impl BillingAndUsagePageV2View {
         let workspaces = UserWorkspaces::as_ref(app);
         let workspace = workspaces.current_workspace();
         let billing_metadata = workspace.map(|workspace| &workspace.billing_metadata);
-        let team = workspaces.team_for_view_handle(&self.self_handle, app);
-        let presentation = plan_header_presentation(billing_metadata, team.is_some(), false);
+        let render_context = workspaces.team_render_context_for_view_handle(&self.self_handle, app);
+        let presentation =
+            plan_header_presentation(billing_metadata, render_context.is_some(), false);
         if let Some(badge_label) = presentation.badge_label {
             right_side.add_child(
                 Container::new(render_customer_type_badge(appearance, badge_label))
@@ -617,111 +618,120 @@ impl BillingAndUsagePageV2View {
                     .finish(),
             );
         }
-        if let Some(team) = team {
+        if let Some(render_context) = render_context.as_ref() {
             let current_user_email = AuthStateProvider::as_ref(app)
                 .get()
                 .user_email()
                 .unwrap_or_default();
-            let is_team_admin = team.has_admin_permissions(&current_user_email);
+            let is_team_admin = render_context.has_admin_permissions(&current_user_email);
             let is_workspace_admin = workspace
                 .is_some_and(|workspace| workspace.is_workspace_admin(&current_user_email));
+            // The actions below are bound to whichever team is currently displayed: capture
+            // that team's raw UID directly from the window, not through the render context,
+            // which exposes no UID by design.
+            let team_uid = self
+                .self_handle
+                .window_id(app)
+                .and_then(|window_id| workspaces.team_uid_for_window(window_id));
 
-            if is_team_admin
-                && billing_metadata.is_some_and(|billing_metadata| {
-                    billing_metadata.customer_type != CustomerType::Enterprise
-                })
-                && workspace.is_some_and(|workspace| workspace.has_billing_history)
-            {
-                let team_uid = team.uid;
-                let fg_color = appearance.theme().active_ui_text_color();
-                right_side.add_child(
-                    Container::new(
-                        appearance
-                            .ui_builder()
-                            .button(
-                                ButtonVariant::Link,
-                                self.plan_mouse_states.manage_billing_link.clone(),
-                            )
-                            .with_text_and_icon_label(
-                                TextAndIcon::new(
-                                    TextAndIconAlignment::IconFirst,
-                                    "Manage billing",
-                                    Icon::CoinsStacked.to_warpui_icon(fg_color),
-                                    MainAxisSize::Min,
-                                    MainAxisAlignment::Center,
-                                    vec2f(14., 14.),
+            if let Some(team_uid) = team_uid {
+                if is_team_admin
+                    && billing_metadata.is_some_and(|billing_metadata| {
+                        billing_metadata.customer_type != CustomerType::Enterprise
+                    })
+                    && workspace.is_some_and(|workspace| workspace.has_billing_history)
+                {
+                    let fg_color = appearance.theme().active_ui_text_color();
+                    right_side.add_child(
+                        Container::new(
+                            appearance
+                                .ui_builder()
+                                .button(
+                                    ButtonVariant::Link,
+                                    self.plan_mouse_states.manage_billing_link.clone(),
                                 )
-                                .with_inner_padding(4.),
-                            )
-                            .with_style(UiComponentStyles {
-                                font_color: Some(fg_color.into()),
-                                ..Default::default()
-                            })
-                            .build()
-                            .on_click(move |ctx, _, _| {
-                                ctx.dispatch_typed_action(
-                                    BillingAndUsagePageAction::GenerateStripeBillingPortalLink {
-                                        team_uid,
-                                    },
-                                );
-                            })
-                            .finish(),
-                    )
-                    .with_margin_left(8.)
-                    .finish(),
-                );
-            }
+                                .with_text_and_icon_label(
+                                    TextAndIcon::new(
+                                        TextAndIconAlignment::IconFirst,
+                                        "Manage billing",
+                                        Icon::CoinsStacked.to_warpui_icon(fg_color),
+                                        MainAxisSize::Min,
+                                        MainAxisAlignment::Center,
+                                        vec2f(14., 14.),
+                                    )
+                                    .with_inner_padding(4.),
+                                )
+                                .with_style(UiComponentStyles {
+                                    font_color: Some(fg_color.into()),
+                                    ..Default::default()
+                                })
+                                .build()
+                                .on_click(move |ctx, _, _| {
+                                    ctx.dispatch_typed_action(
+                                        BillingAndUsagePageAction::GenerateStripeBillingPortalLink {
+                                            team_uid,
+                                        },
+                                    );
+                                })
+                                .finish(),
+                        )
+                        .with_margin_left(8.)
+                        .finish(),
+                    );
+                }
 
-            if should_show_open_admin_panel_link(
-                is_team_admin,
-                is_workspace_admin,
-                billing_metadata.is_some_and(|metadata| metadata.is_enterprise_plan()),
-            ) {
-                let team_uid = team.uid;
-                let use_workspace_admin_panel = workspace.is_some_and(|workspace| {
-                    workspace.is_native_workspaces_admin(&current_user_email)
-                });
-                let fg_color = appearance.theme().active_ui_text_color();
-                right_side.add_child(
-                    Container::new(
-                        appearance
-                            .ui_builder()
-                            .button(
-                                ButtonVariant::Link,
-                                self.plan_mouse_states.open_admin_panel_link.clone(),
-                            )
-                            .with_text_and_icon_label(
-                                TextAndIcon::new(
-                                    TextAndIconAlignment::IconFirst,
-                                    "Open admin panel",
-                                    Icon::Users.to_warpui_icon(fg_color),
-                                    MainAxisSize::Min,
-                                    MainAxisAlignment::Center,
-                                    vec2f(14., 14.),
+                if should_show_open_admin_panel_link(
+                    is_team_admin,
+                    is_workspace_admin,
+                    billing_metadata.is_some_and(|metadata| metadata.is_enterprise_plan()),
+                ) {
+                    let use_workspace_admin_panel = workspace.is_some_and(|workspace| {
+                        workspace.is_native_workspaces_admin(&current_user_email)
+                    });
+                    let fg_color = appearance.theme().active_ui_text_color();
+                    right_side.add_child(
+                        Container::new(
+                            appearance
+                                .ui_builder()
+                                .button(
+                                    ButtonVariant::Link,
+                                    self.plan_mouse_states.open_admin_panel_link.clone(),
                                 )
-                                .with_inner_padding(4.),
-                            )
-                            .with_style(UiComponentStyles {
-                                font_color: Some(fg_color.into()),
-                                ..Default::default()
-                            })
-                            .build()
-                            .on_click(move |ctx, _, _| {
-                                if use_workspace_admin_panel {
-                                    ctx.dispatch_typed_action(
-                                        BillingAndUsagePageAction::OpenWorkspaceAdminPanel,
-                                    );
-                                } else {
-                                    ctx.dispatch_typed_action(
-                                        BillingAndUsagePageAction::OpenTeamAdminPanel { team_uid },
-                                    );
-                                }
-                            })
-                            .finish(),
-                    )
-                    .with_margin_left(8.)
-                    .finish(),
-                );
+                                .with_text_and_icon_label(
+                                    TextAndIcon::new(
+                                        TextAndIconAlignment::IconFirst,
+                                        "Open admin panel",
+                                        Icon::Users.to_warpui_icon(fg_color),
+                                        MainAxisSize::Min,
+                                        MainAxisAlignment::Center,
+                                        vec2f(14., 14.),
+                                    )
+                                    .with_inner_padding(4.),
+                                )
+                                .with_style(UiComponentStyles {
+                                    font_color: Some(fg_color.into()),
+                                    ..Default::default()
+                                })
+                                .build()
+                                .on_click(move |ctx, _, _| {
+                                    if use_workspace_admin_panel {
+                                        ctx.dispatch_typed_action(
+                                            BillingAndUsagePageAction::OpenWorkspaceAdminPanel,
+                                        );
+                                    } else {
+                                        ctx.dispatch_typed_action(
+                                            BillingAndUsagePageAction::OpenTeamAdminPanel {
+                                                team_uid,
+                                            },
+                                        );
+                                    }
+                                })
+                                .finish(),
+                        )
+                        .with_margin_left(8.)
+                        .finish(),
+                    );
+                }
             }
         } else if presentation.show_personal_upgrade {
             let current_user_id = self.auth_state.user_id().unwrap_or_default();
@@ -1168,8 +1178,8 @@ impl BillingAndUsagePageV2View {
         });
 
         let team_count = workspaces
-            .team_for_view_handle(&self.self_handle, app)
-            .map(|team| team.members.len())
+            .team_render_context_for_view_handle(&self.self_handle, app)
+            .map(|render_context| render_context.member_count())
             .unwrap_or(1);
         let description_text = if team_count > 1 {
             format!("{ADDON_CREDITS_DESCRIPTION} {ADDITIONAL_ADDON_CREDITS_DESCRIPTION_FOR_TEAM}")
@@ -1785,10 +1795,10 @@ impl BillingAndUsagePageV2View {
         });
 
         let ws = workspaces.current_workspace();
-        let team = workspaces.team_for_view_handle(&self.self_handle, app);
+        let render_context = workspaces.team_render_context_for_view_handle(&self.self_handle, app);
         let show_addon_credits_panel = ws.is_some()
             || workspaces
-                .purchase_policy_for_team(team)
+                .purchase_policy()
                 .is_some_and(|policy| policy.allows_purchases());
         if show_addon_credits_panel {
             let is_payg_zero = ws.is_some_and(|ws| {
@@ -1797,16 +1807,23 @@ impl BillingAndUsagePageV2View {
             });
 
             if !is_payg_zero {
-                let current_user_is_admin = team.is_none_or(|team| {
+                let current_user_is_admin = render_context.as_ref().is_none_or(|render_context| {
                     let email = AuthStateProvider::as_ref(app)
                         .get()
                         .user_email()
                         .unwrap_or_default();
-                    team.has_admin_permissions(&email)
+                    render_context.has_admin_permissions(&email)
                 });
+                // The addon-credits panel is bound to whichever team is currently displayed:
+                // capture that team's raw UID directly from the window, not through the
+                // render context, which exposes no UID by design.
+                let team_uid = self
+                    .self_handle
+                    .window_id(app)
+                    .and_then(|window_id| workspaces.team_uid_for_window(window_id));
                 content.add_child(self.render_addon_credits_panel(
                     ws,
-                    team.map(|team| team.uid),
+                    team_uid,
                     current_user_is_admin,
                     delinquent,
                     app,
@@ -2148,7 +2165,10 @@ impl TypedActionView for BillingAndUsagePageV2View {
                 self.addon_credits.selected_denomination = *i;
                 self.update_denomination_buttons_focus(ctx);
                 let workspaces = UserWorkspaces::as_ref(ctx);
-                let team = workspaces.team_for_view(ctx);
+                let team_context = workspaces.team_context_for_view(ctx);
+                let team = team_context
+                    .as_ref()
+                    .and_then(|team_context| workspaces.team_for_context(team_context));
                 let has_admin_permissions = team.is_some_and(|team| {
                     AuthStateProvider::as_ref(ctx)
                         .get()
@@ -2189,7 +2209,11 @@ impl TypedActionView for BillingAndUsagePageV2View {
                     let purchase_team_uid = *team_uid;
                     self.addon_credits.purchase_loading = true;
                     UserWorkspaces::handle(ctx).update(ctx, |ws, ctx| {
-                        ws.purchase_addon_credits(purchase_team_uid, credits, ctx);
+                        // This page reacts to the purchase via the global
+                        // `UserWorkspacesEvent::PurchaseAddonCredits*` events (unaffected by
+                        // this call's return value), not the per-call `Receiver`, since there
+                        // is only ever one such page per window.
+                        drop(ws.purchase_addon_credits(purchase_team_uid, credits, ctx));
                     });
                     ctx.notify();
                 }

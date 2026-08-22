@@ -2993,7 +2993,11 @@ impl RootView {
                 let credits = *credits;
                 let team_uid = UserWorkspaces::as_ref(ctx).team_uid_for_window(ctx.window_id());
                 UserWorkspaces::handle(ctx).update(ctx, |user_workspaces, ctx| {
-                    user_workspaces.purchase_addon_credits(team_uid, credits, ctx);
+                    // Onboarding reacts to the purchase via the global
+                    // `UserWorkspacesEvent::PurchaseAddonCredits*` events (see
+                    // `handle_onboarding_credit_purchase_event`), not the per-call
+                    // `Receiver`, since only one onboarding flow can be in progress.
+                    drop(user_workspaces.purchase_addon_credits(team_uid, credits, ctx));
                 });
             }
             AgentOnboardingEvent::OfferCreditsPurchased { variant } => match variant {
