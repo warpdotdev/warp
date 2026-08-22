@@ -43,8 +43,7 @@ if NO_LICENSES=1 \
   exit 1
 fi
 
-# Local TUI runs (script/run-tui) skip schema generation entirely, since the TUI
-# binaries don't implement dump-settings-schema.
+# SKIP_SETTINGS_SCHEMA=1 lets build-only jobs defer schema generation to a later packaging step.
 SKIPPED_DESTINATION="$TEMP_DIR/skipped-schema"
 NO_LICENSES=1 \
   SKIP_SETTINGS_SCHEMA=1 \
