@@ -689,6 +689,9 @@ pub enum TuiStatuslineItem {
     /// Vim mode indicator (NOR/INS/VIS/V-L/REP); hidden when vim mode is disabled.
     VimModeIndicator,
     Model,
+    /// The window's active team. Only rendered for users on more than one team, matching the
+    /// GUI's team-switcher pill.
+    Team,
     WorkingDirectory,
     GitBranch,
     GitBranchStatus,
@@ -706,10 +709,11 @@ pub enum TuiStatuslineItem {
 }
 
 impl TuiStatuslineItem {
-    pub const ALL: [Self; 15] = [
+    pub const ALL: [Self; 16] = [
         Self::AutoApprove,
         Self::VimModeIndicator,
         Self::Model,
+        Self::Team,
         Self::WorkingDirectory,
         Self::GitBranch,
         Self::GitBranchStatus,
@@ -729,6 +733,7 @@ impl TuiStatuslineItem {
             Self::AutoApprove => "Auto-approve indicator",
             Self::VimModeIndicator => "Vim mode indicator",
             Self::Model => "Model",
+            Self::Team => "Team",
             Self::WorkingDirectory => "Working directory",
             Self::GitBranch => "Git branch",
             Self::GitBranchStatus => "Git branch status",
@@ -759,6 +764,18 @@ impl TuiStatuslineItem {
 pub struct TuiStatuslineConfig {
     pub order: Vec<TuiStatuslineItem>,
     pub enabled: Vec<TuiStatuslineItem>,
+    /// Whether to show the active team, as a tri-state that `enabled` cannot express.
+    ///
+    /// `enabled` conflates "never decided" with "explicitly off", which is fine for the items
+    /// that are simply on or off but not for this one: it defaults to shown, and only appears
+    /// in `/statusline` at all when the user is on more than one team, so an absent entry has
+    /// to keep meaning "has not been asked yet" rather than "turned off".
+    ///
+    /// `None` is that undecided state and is treated as shown. Keeping it out of `enabled`
+    /// rather than adding a third list is what makes an older saved config correct for free:
+    /// it has no such field, serde gives `None`, and `None` already means shown.
+    #[serde(default)]
+    pub show_active_team: Option<bool>,
 }
 
 impl Default for TuiStatuslineConfig {
@@ -773,6 +790,7 @@ impl Default for TuiStatuslineConfig {
                 TuiStatuslineItem::GitBranch,
                 TuiStatuslineItem::GitDiffStatus,
             ],
+            show_active_team: None,
         }
     }
 }
@@ -798,11 +816,27 @@ impl TuiStatuslineConfig {
             enabled.insert(0, TuiStatuslineItem::VimModeIndicator);
         }
 
-        Self { order, enabled }
+        Self {
+            order,
+            enabled,
+            show_active_team: self.show_active_team,
+        }
     }
 
     pub fn is_enabled(&self, item: TuiStatuslineItem) -> bool {
-        self.enabled.contains(&item)
+        match item {
+            // Deliberately reads a different field from the other items. The asymmetry is real
+            // -- this is the only item whose default is on and whose availability depends on
+            // the user's teams -- so it is better shown here than hidden behind machinery that
+            // implies the other fifteen work the same way. See `show_active_team`.
+            TuiStatuslineItem::Team => self.show_active_team.unwrap_or(true),
+            _ => self.enabled.contains(&item),
+        }
+    }
+
+    /// Records an explicit `/statusline` decision about the active-team item.
+    pub fn set_show_active_team(&mut self, show: bool) {
+        self.show_active_team = Some(show);
     }
 }
 

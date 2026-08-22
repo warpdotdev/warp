@@ -89,6 +89,7 @@ fn tui_statusline_normalization_preserves_custom_order_and_appends_missing_items
             TuiStatuslineItem::Model,
             TuiStatuslineItem::ContextWindowUsage,
         ],
+        show_active_team: None,
     }
     .normalized();
 
@@ -99,6 +100,7 @@ fn tui_statusline_normalization_preserves_custom_order_and_appends_missing_items
             TuiStatuslineItem::Model,
             TuiStatuslineItem::AutoApprove,
             TuiStatuslineItem::VimModeIndicator,
+            TuiStatuslineItem::Team,
             TuiStatuslineItem::WorkingDirectory,
             TuiStatuslineItem::GitBranchStatus,
             TuiStatuslineItem::GitDiffStatus,
@@ -120,6 +122,72 @@ fn tui_statusline_normalization_preserves_custom_order_and_appends_missing_items
             TuiStatuslineItem::ContextWindowUsage,
         ]
     );
+}
+
+/// A config saved before the team item existed has no opinion about it, which is the undecided
+/// state, which shows. That needs no back-fill: it falls out of the field being absent.
+#[test]
+fn tui_statusline_an_older_config_shows_the_team_item_without_being_migrated() {
+    let config = TuiStatuslineConfig {
+        order: vec![TuiStatuslineItem::Model, TuiStatuslineItem::GitBranch],
+        enabled: vec![TuiStatuslineItem::Model],
+        show_active_team: None,
+    }
+    .normalized();
+
+    assert!(config.order.contains(&TuiStatuslineItem::Team));
+    assert!(config.is_enabled(TuiStatuslineItem::Team));
+    assert!(
+        !config.enabled.contains(&TuiStatuslineItem::Team),
+        "normalization must not sweep the team item into `enabled`"
+    );
+    assert!(
+        config.enabled.contains(&TuiStatuslineItem::Model),
+        "the rest of an existing config's enabled set is the user's choice and must not change"
+    );
+}
+
+/// The team item's state is a tri-state kept out of `enabled`, so `enabled` — and therefore
+/// `tui_statusline_default_matches_figma` — is untouched by it.
+#[test]
+fn tui_statusline_team_item_defaults_to_shown_without_entering_the_enabled_list() {
+    let config = TuiStatuslineConfig::default();
+
+    assert!(config.order.contains(&TuiStatuslineItem::Team));
+    assert_eq!(config.show_active_team, None);
+    assert!(
+        config.is_enabled(TuiStatuslineItem::Team),
+        "undecided means shown"
+    );
+    assert!(
+        !config.enabled.contains(&TuiStatuslineItem::Team),
+        "the team item must never enter `enabled`, or normalization would start managing it"
+    );
+}
+
+#[test]
+fn tui_statusline_team_item_honours_an_explicit_decision() {
+    let mut config = TuiStatuslineConfig::default();
+
+    config.set_show_active_team(false);
+    assert!(!config.is_enabled(TuiStatuslineItem::Team));
+
+    config.set_show_active_team(true);
+    assert!(config.is_enabled(TuiStatuslineItem::Team));
+}
+
+/// An explicit "off" is permanent. It has to survive normalization, since that is what runs on
+/// every read and is the path that would otherwise quietly resurrect the item.
+#[test]
+fn tui_statusline_normalization_preserves_an_explicit_team_decision() {
+    let mut config = TuiStatuslineConfig::default();
+    config.set_show_active_team(false);
+
+    let normalized = config.normalized();
+
+    assert_eq!(normalized.show_active_team, Some(false));
+    assert!(!normalized.is_enabled(TuiStatuslineItem::Team));
+    assert!(!normalized.enabled.contains(&TuiStatuslineItem::Team));
 }
 
 #[test]

@@ -28,9 +28,10 @@ use warp::tui_export::{
     OutputStatusUpdateCallback, ParsedSlashCommandInput, PtyIntent, PtyIntentEvent, ServerOutputId,
     Session, Shared, SizeInfo, SizeUpdate, SlashCommandDataSource as _, SlashCommandKind, TaskId,
     TranscriptScope, TuiMcpAction, TuiMcpServerId, TuiOnboardingMarker, TuiOnboardingMarkers,
-    TuiUpArrowHistoryItemKind, UserTakeOverReason, WarpConfig, WarpConfigUpdateEvent,
-    export_conversation_markdown, forkable_tui_conversation_for_test, queue_tui_permission_action,
-    register_tui_session_view_test_singletons, set_tui_default_team_admin_for_test, slash_commands,
+    TuiUpArrowHistoryItemKind, UserTakeOverReason, UserWorkspaces, WarpConfig,
+    WarpConfigUpdateEvent, export_conversation_markdown, forkable_tui_conversation_for_test,
+    queue_tui_permission_action, register_tui_session_view_test_singletons,
+    set_tui_default_team_admin_for_test, set_tui_workspace_teams_for_test, slash_commands,
 };
 use warp_core::channel::{Channel, ChannelState};
 use warp_core::features::FeatureFlag;
@@ -866,6 +867,7 @@ fn composite_git_branch_status_suppresses_the_plain_branch_item() {
     let branch_only = TuiStatuslineConfig {
         order: TuiStatuslineItem::ALL.to_vec(),
         enabled: vec![TuiStatuslineItem::GitBranch],
+        show_active_team: None,
     };
     assert!(should_render_plain_git_branch(&branch_only));
 
@@ -875,6 +877,7 @@ fn composite_git_branch_status_suppresses_the_plain_branch_item() {
             TuiStatuslineItem::GitBranch,
             TuiStatuslineItem::GitBranchStatus,
         ],
+        show_active_team: None,
     };
     assert!(!should_render_plain_git_branch(&branch_and_status));
 }
@@ -914,6 +917,7 @@ fn enabled_auto_approve_indicator_is_always_visible_with_state_aware_color() {
                         TuiStatuslineConfig {
                             order: vec![TuiStatuslineItem::AutoApprove],
                             enabled: vec![TuiStatuslineItem::AutoApprove],
+                            show_active_team: None,
                         }
                         .normalized(),
                         ctx,
@@ -2179,6 +2183,7 @@ fn saving_statusline_configuration_persists_and_restores_input_focus() {
                 TuiStatuslineItem::CreditUsage,
             ],
             enabled: Vec::new(),
+            show_active_team: None,
         }
         .normalized();
 
@@ -2213,6 +2218,7 @@ fn reset_statusline_command_restores_default_items_and_ordering() {
         let custom = TuiStatuslineConfig {
             order: vec![TuiStatuslineItem::CreditUsage, TuiStatuslineItem::Model],
             enabled: vec![TuiStatuslineItem::CreditUsage],
+            show_active_team: None,
         }
         .normalized();
         assert_ne!(custom, TuiStatuslineConfig::default());
@@ -4473,6 +4479,7 @@ fn set_enabled_statusline_items(app: &mut App, items: Vec<TuiStatuslineItem>) {
                     TuiStatuslineConfig {
                         order: items.clone(),
                         enabled: items,
+                        show_active_team: None,
                     }
                     .normalized(),
                     ctx,
@@ -7219,4 +7226,159 @@ fn resume_shell_commands_use_shared_tui_launcher() {
         super::tui_resume_shell_command(Channel::Preview, "conversation-token"),
         "warp-preview --resume conversation-token"
     );
+}
+
+/// Seeds `names` as the user's teams and puts `window_id` on the first, standing in for what
+/// `TuiTeamScope` does once a workspaces-metadata response lands.
+fn set_teams_and_register_window(
+    app: &mut App,
+    names: &[&str],
+    window_id: warpui::WindowId,
+) -> Vec<warp::tui_export::ServerId> {
+    let team_uids: Vec<warp::tui_export::ServerId> = (1..=names.len() as i64)
+        .map(warp::tui_export::ServerId::from)
+        .collect();
+    let teams = team_uids
+        .iter()
+        .copied()
+        .zip(names.iter().map(|name| (*name).to_owned()))
+        .collect::<Vec<_>>();
+    app.update(|ctx| {
+        set_tui_workspace_teams_for_test(teams, ctx);
+        let starting_team = team_uids.first().copied();
+        UserWorkspaces::handle(ctx).update(ctx, |workspaces, ctx| {
+            workspaces.register_window(window_id, starting_team, ctx);
+        });
+    });
+    team_uids
+}
+
+/// Records an explicit `/statusline` decision about the active-team item.
+fn set_show_active_team(app: &mut App, show: bool) {
+    app.update(|ctx| {
+        let mut config = AISettings::as_ref(ctx).tui_statusline.normalized();
+        config.set_show_active_team(show);
+        AISettings::handle(ctx).update(ctx, |settings, ctx| {
+            settings
+                .tui_statusline
+                .set_value(config, ctx)
+                .expect("failed to set the active-team statusline decision");
+        });
+    });
+}
+
+/// The team item mirrors the GUI's title-bar pill: it exists to disambiguate, so it stays
+/// hidden for the single-team and teamless users who have nothing to disambiguate.
+#[test]
+fn active_team_is_hidden_unless_the_user_is_on_more_than_one_team() {
+    App::test((), |mut app| async move {
+        let fixture = focus_test_fixture(&mut app);
+        let (view, _) = add_focus_test_session(&mut app, &fixture, true);
+
+        let window_id = app.read(|ctx| view.as_ref(ctx).window_id);
+
+        set_teams_and_register_window(&mut app, &["Solo"], window_id);
+        let rendered = render_session(&mut app, &view, 100, 24).join("\n");
+        assert!(
+            !rendered.contains("Solo"),
+            "a single-team user has nothing to disambiguate, got:\n{rendered}"
+        );
+
+        set_teams_and_register_window(&mut app, &[], window_id);
+        let rendered = render_session(&mut app, &view, 100, 24).join("\n");
+        assert!(
+            !rendered.contains("Solo"),
+            "a teamless user should show no team, got:\n{rendered}"
+        );
+    });
+}
+
+#[test]
+fn active_team_is_rendered_and_follows_a_switch() {
+    App::test((), |mut app| async move {
+        let fixture = focus_test_fixture(&mut app);
+        let (view, _) = add_focus_test_session(&mut app, &fixture, true);
+
+        let window_id = app.read(|ctx| view.as_ref(ctx).window_id);
+        let team_uids =
+            set_teams_and_register_window(&mut app, &["Platform", "Security"], window_id);
+
+        let rendered = render_session(&mut app, &view, 100, 24).join("\n");
+        assert!(
+            rendered.contains("Platform"),
+            "a multi-team user's active team should be shown, got:\n{rendered}"
+        );
+
+        // Switching must repaint, not wait for some unrelated redraw.
+        app.update(|ctx| {
+            UserWorkspaces::handle(ctx).update(ctx, |workspaces, ctx| {
+                workspaces.switch_window_to_team(window_id, team_uids[1], ctx);
+            });
+        });
+        let rendered = render_session(&mut app, &view, 100, 24).join("\n");
+        assert!(
+            rendered.contains("Security") && !rendered.contains("Platform"),
+            "the statusline should follow the window's team, got:\n{rendered}"
+        );
+    });
+}
+
+/// Unchecking the item in `/statusline` is permanent, including across the team-count changes
+/// that control whether the row is even offered.
+#[test]
+fn an_explicitly_hidden_active_team_stays_hidden() {
+    App::test((), |mut app| async move {
+        let fixture = focus_test_fixture(&mut app);
+        let (view, _) = add_focus_test_session(&mut app, &fixture, true);
+
+        let window_id = app.read(|ctx| view.as_ref(ctx).window_id);
+        set_teams_and_register_window(&mut app, &["Platform", "Security"], window_id);
+        set_show_active_team(&mut app, false);
+
+        let rendered = render_session(&mut app, &view, 100, 24).join("\n");
+        assert!(
+            !rendered.contains("Platform"),
+            "an explicit opt-out must be honoured, got:\n{rendered}"
+        );
+
+        // Down to one team and back up again: the opt-out is not a transient state that a
+        // team-count change can reset.
+        set_teams_and_register_window(&mut app, &["Platform"], window_id);
+        set_teams_and_register_window(&mut app, &["Platform", "Security"], window_id);
+        let rendered = render_session(&mut app, &view, 100, 24).join("\n");
+        assert!(
+            !rendered.contains("Platform"),
+            "the opt-out must survive the team count changing, got:\n{rendered}"
+        );
+
+        // Re-checking brings it back.
+        set_show_active_team(&mut app, true);
+        let rendered = render_session(&mut app, &view, 100, 24).join("\n");
+        assert!(
+            rendered.contains("Platform"),
+            "re-enabling should show it again, got:\n{rendered}"
+        );
+    });
+}
+
+/// Gaining a second team is what makes the item appear at all, and it must appear without
+/// waiting for some unrelated repaint.
+#[test]
+fn active_team_appears_when_a_second_team_arrives() {
+    App::test((), |mut app| async move {
+        let fixture = focus_test_fixture(&mut app);
+        let (view, _) = add_focus_test_session(&mut app, &fixture, true);
+
+        let window_id = app.read(|ctx| view.as_ref(ctx).window_id);
+        set_teams_and_register_window(&mut app, &["Platform"], window_id);
+        let rendered = render_session(&mut app, &view, 100, 24).join("\n");
+        assert!(!rendered.contains("Platform"), "got:\n{rendered}");
+
+        set_teams_and_register_window(&mut app, &["Platform", "Security"], window_id);
+        let rendered = render_session(&mut app, &view, 100, 24).join("\n");
+        assert!(
+            rendered.contains("Platform"),
+            "the item should appear once there is more than one team, got:\n{rendered}"
+        );
+    });
 }
