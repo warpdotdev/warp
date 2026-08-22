@@ -97,7 +97,7 @@ fn terminal_bootstrap_is_idempotent_after_background_terminal_exists() {
                     window_style: WindowStyle::NotStealFocus,
                     ..Default::default()
                 },
-                |_| RootTuiView::new(),
+                RootTuiView::new,
             )
         });
         let sessions = app.add_singleton_model(|_| TuiSessions::new_for_test());

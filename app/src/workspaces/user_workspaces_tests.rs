@@ -1,3 +1,5 @@
+use std::cell::Cell;
+use std::rc::Rc;
 use std::time::Duration;
 
 use mockall::Sequence;
@@ -1149,6 +1151,138 @@ fn test_window_team_reconciliation_moves_rendering_but_not_a_captured_context() 
             "a context captured for team A should keep pointing at team A rather than follow \
              the window onto team B"
         );
+    })
+}
+
+fn team_named(uid: i64, name: &str) -> Team {
+    let mut team = team_for_test();
+    team.uid = uid.into();
+    team.name = name.to_owned();
+    team
+}
+
+/// Two teams in workspace order, so a test can tell the default apart from a chosen team.
+fn platform_and_security() -> (Team, Team, Workspace) {
+    let platform = team_named(123, "Platform");
+    let security = team_named(456, "Security");
+    let mut workspace = workspace_for_test(&platform);
+    workspace.teams.push(security.clone());
+    (platform, security, workspace)
+}
+
+#[test]
+fn is_window_registered_distinguishes_absent_from_teamless() {
+    App::test((), |mut app| async move {
+        initialize_window_team_test_app(&mut app, vec![]);
+
+        let window_id = WindowId::new();
+        app.read(|ctx| {
+            assert!(!UserWorkspaces::as_ref(ctx).is_window_registered(window_id));
+        });
+
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.register_window(window_id, None, ctx);
+        });
+
+        app.read(|ctx| {
+            let user_workspaces = UserWorkspaces::as_ref(ctx);
+            assert!(
+                user_workspaces.is_window_registered(window_id),
+                "a teamless window is registered even though it has no team uid"
+            );
+            assert_eq!(user_workspaces.team_uid_for_window(window_id), None);
+        });
+    })
+}
+
+#[test]
+fn switching_a_window_to_a_team_overwrites_and_announces_it() {
+    let (platform, security, workspace) = platform_and_security();
+
+    App::test((), |mut app| async move {
+        initialize_window_team_test_app(&mut app, vec![workspace]);
+
+        let window_id = WindowId::new();
+        let changes = Rc::new(Cell::new(0));
+        let changes_for_subscription = changes.clone();
+        app.update(|ctx| {
+            ctx.subscribe_to_model(&UserWorkspaces::handle(ctx), move |_, event, _| {
+                if matches!(event, UserWorkspacesEvent::WindowTeamChanged { .. }) {
+                    changes_for_subscription.set(changes_for_subscription.get() + 1);
+                }
+            });
+        });
+
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.register_window(window_id, Some(platform.uid), ctx);
+        });
+        let changes_after_register = changes.get();
+
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.switch_window_to_team(window_id, security.uid, ctx);
+        });
+
+        app.read(|ctx| {
+            assert_eq!(
+                UserWorkspaces::as_ref(ctx).team_uid_for_window(window_id),
+                Some(security.uid),
+                "switching must overwrite, unlike the insert-only registration paths"
+            );
+        });
+        assert_eq!(
+            changes.get(),
+            changes_after_register + 1,
+            "the switch must announce itself so scoped consumers resync"
+        );
+    })
+}
+
+#[test]
+fn switching_a_window_to_its_current_team_announces_nothing() {
+    let team = team_for_test();
+    let workspace = workspace_for_test(&team);
+
+    App::test((), |mut app| async move {
+        initialize_window_team_test_app(&mut app, vec![workspace]);
+
+        let window_id = WindowId::new();
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.register_window(window_id, Some(team.uid), ctx);
+        });
+
+        let changes = Rc::new(Cell::new(0));
+        let changes_for_subscription = changes.clone();
+        app.update(|ctx| {
+            ctx.subscribe_to_model(&UserWorkspaces::handle(ctx), move |_, event, _| {
+                if matches!(event, UserWorkspacesEvent::WindowTeamChanged { .. }) {
+                    changes_for_subscription.set(changes_for_subscription.get() + 1);
+                }
+            });
+        });
+
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.switch_window_to_team(window_id, team.uid, ctx);
+        });
+
+        assert_eq!(changes.get(), 0);
+    })
+}
+
+/// The switcher's own visibility rule, which the TUI indicator reuses rather than
+/// reimplementing so the two front-ends cannot disagree about who counts as multi-team.
+#[test]
+fn can_switch_teams_only_with_more_than_one_team() {
+    let (_, _, two_team_workspace) = platform_and_security();
+    let one_team_workspace = workspace_for_test(&team_for_test());
+
+    App::test((), |mut app| async move {
+        initialize_window_team_test_app(&mut app, vec![one_team_workspace]);
+        app.read(|ctx| assert!(!UserWorkspaces::as_ref(ctx).can_switch_teams()));
+
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.update_workspaces(vec![two_team_workspace], ctx);
+        });
+        app.read(|ctx| assert!(UserWorkspaces::as_ref(ctx).can_switch_teams()));
     })
 }
 

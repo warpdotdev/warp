@@ -413,6 +413,41 @@ impl UserWorkspaces {
         self.window_team_uids.get(&window_id).copied().flatten()
     }
 
+    /// Whether `window_id` has a team assignment at all, teamless included.
+    ///
+    /// [`Self::team_uid_for_window`] answers `None` both for a window that was never
+    /// registered and for one registered with no team, so it cannot be used to decide whether
+    /// a default still needs applying.
+    pub fn is_window_registered(&self, window_id: WindowId) -> bool {
+        self.window_team_uids.contains_key(&window_id)
+    }
+
+    /// Puts `window_id` on `team_uid`, overwriting whatever it was on and registering it if it
+    /// was not already.
+    ///
+    /// This is the only path that overwrites a window's team, and it exists for front-ends
+    /// that switch teams in place. The GUI has no such path: its team switcher opens a *new*
+    /// window scoped to the chosen team ([`crate::root_view::NewWorkspaceSource::TeamSwitched`])
+    /// rather than re-scoping the current one, so [`Self::register_window`] and
+    /// [`Self::set_team_for_window`] can stay insert-only. Keep it that way — a single
+    /// greppable overwrite is worth more than symmetry for a field that decides which team's
+    /// admin policy applies.
+    ///
+    /// No-ops when the window is already on `team_uid`, so callers may call it unconditionally.
+    pub fn switch_window_to_team(
+        &mut self,
+        window_id: WindowId,
+        team_uid: ServerId,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        if self.team_uid_for_window(window_id) == Some(team_uid) {
+            return;
+        }
+        self.window_team_uids.insert(window_id, Some(team_uid));
+        ctx.emit(UserWorkspacesEvent::WindowTeamChanged { window_id });
+        ctx.notify();
+    }
+
     /// Returns `true` when the user belongs to more than one team in the current
     /// workspace, meaning the team-switcher pill and dropdown should be shown.
     /// Single-team and no-workspace users return `false` so their UI is unchanged.

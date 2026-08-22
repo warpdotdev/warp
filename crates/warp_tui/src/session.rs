@@ -252,7 +252,7 @@ fn init(
             window_style: WindowStyle::NotStealFocus,
             ..Default::default()
         },
-        |_| RootTuiView::new(),
+        RootTuiView::new,
     );
     #[cfg(feature = "voice_input")]
     let modifier_key_lifecycle_enabled = requires_modifier_key_reporting(ctx);
