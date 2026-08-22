@@ -663,8 +663,6 @@ fn create_test_model() -> AgentConversationsModel {
     AgentConversationsModel {
         tasks: HashMap::new(),
         conversations: HashMap::new(),
-        in_flight_poll_abort_handle: None,
-        next_poll_abort_handle: None,
         active_data_consumers_per_window: HashMap::new(),
         initial_load_state: InitialConversationLoadState::LoadingLocal,
         task_fetch_state: Default::default(),

@@ -9417,7 +9417,7 @@ impl Workspace {
             if is_open {
                 model.register_view_open(window_id, view_id, ctx);
             } else {
-                model.register_view_closed(window_id, view_id, ctx);
+                model.register_view_closed(window_id, view_id);
             }
         });
 

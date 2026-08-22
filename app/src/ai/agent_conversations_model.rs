@@ -25,10 +25,9 @@ use warp_core::ui::theme::color::internal_colors;
 use warp_errors::report_error;
 use warpui::r#async::Timer;
 use warpui::color::ColorU;
-use warpui::windowing::{StateEvent, WindowManager};
 use warpui::{
     AppContext, Entity, EntityId, ModelContext, ModelHandle, RequestState, SingletonEntity,
-    WindowId, duration_with_jitter,
+    WindowId,
 };
 
 use crate::ai::active_agent_views_model::ActiveAgentViewsModel;
@@ -48,11 +47,10 @@ use crate::ai::conversation_navigation::ConversationNavigationData;
 use crate::auth::AuthStateProvider;
 use crate::auth::auth_manager::{AuthManager, AuthManagerEvent};
 use crate::cloud_object::CloudObjectLookup as _;
-use crate::network::{NetworkStatus, NetworkStatusEvent, NetworkStatusKind};
 use crate::server::cloud_objects::update_manager::{UpdateManager, UpdateManagerEvent};
 use crate::server::ids::{ServerId, SyncId};
 use crate::server::retry_strategies::{
-    OUT_OF_BAND_REQUEST_RETRY_STRATEGY, PERIODIC_POLL_RETRY_STRATEGY, is_transient_http_error,
+    OUT_OF_BAND_REQUEST_RETRY_STRATEGY, is_transient_http_error,
 };
 use crate::server::server_api::ServerApiProvider;
 use crate::server::server_api::ai::TaskListFilter;
@@ -61,7 +59,6 @@ use crate::settings::AISettings;
 use crate::ui_components::icons::Icon;
 use crate::workspace::{RestoreConversationLayout, WorkspaceAction};
 
-const POLLING_INTERVAL: Duration = Duration::from_secs(30);
 const RTC_TASK_REFRESH_THROTTLE: Duration = Duration::from_secs(5);
 const INITIAL_TASK_AMOUNT: i32 = 100;
 
@@ -153,17 +150,6 @@ impl InitialConversationLoadState {
             | InitialConversationLoadState::LoadingCloud
             | InitialConversationLoadState::Loaded
             | InitialConversationLoadState::CloudFailed => false,
-        }
-    }
-
-    fn can_poll(self) -> bool {
-        match self {
-            InitialConversationLoadState::Loaded | InitialConversationLoadState::CloudFailed => {
-                true
-            }
-            InitialConversationLoadState::LoadingLocal
-            | InitialConversationLoadState::WaitingForCloud
-            | InitialConversationLoadState::LoadingCloud => false,
         }
     }
 }
@@ -619,8 +605,8 @@ pub(crate) fn artifacts_match_filter(
 }
 
 /// This model serves as a unified interface for reading both local and ambient agent conversations
-/// (i.e. conversations & tasks). The model is responsible for polling for new tasks and updating
-/// its local state accordingly.
+/// (i.e. conversations & tasks). Ambient agent task updates arrive over the Warp Drive RTC
+/// subscription, and the model refreshes its local state in response.
 ///
 /// This model backs both the agent management view and the conversation list view.
 pub struct AgentConversationsModel {
@@ -628,12 +614,8 @@ pub struct AgentConversationsModel {
     tasks: HashMap<AmbientAgentTaskId, AmbientAgentTask>,
     /// A map of conversation IDs to local conversations.
     conversations: HashMap<AIConversationId, ConversationMetadata>,
-    /// Handle to abort the in-flight polling request.
-    in_flight_poll_abort_handle: Option<AbortHandle>,
-    /// Handle to abort the timer for initiating the next poll.
-    next_poll_abort_handle: Option<AbortHandle>,
     /// Set of view IDs actively consuming this model's data per window.
-    /// When a window has at least one consumer, we poll for new tasks while that window is active.
+    /// When at least one consumer is registered, RTC task updates trigger throttled list refreshes.
     active_data_consumers_per_window: HashMap<WindowId, HashSet<EntityId>>,
     initial_load_state: InitialConversationLoadState,
     /// Per-task fetch state for `get_or_async_fetch_task_data`. See [`TaskFetchState`] for
@@ -649,7 +631,7 @@ pub struct AgentConversationsModel {
 pub enum AgentConversationsModelEvent {
     /// Conversation data was loaded or refreshed.
     ConversationsLoaded,
-    /// New tasks were received during polling (view should diff against its local state).
+    /// New tasks were received from the server (view should diff against its local state).
     NewTasksReceived,
     /// Existing task data may have been updated (e.g., state changes).
     TasksUpdated,
@@ -687,8 +669,6 @@ impl AgentConversationsModel {
             return Self {
                 tasks: HashMap::new(),
                 conversations: HashMap::new(),
-                in_flight_poll_abort_handle: None,
-                next_poll_abort_handle: None,
                 active_data_consumers_per_window: HashMap::new(),
                 initial_load_state: InitialConversationLoadState::Loaded,
                 task_fetch_state: HashMap::new(),
@@ -696,12 +676,6 @@ impl AgentConversationsModel {
                 dirty_since: None,
             };
         }
-
-        // Subscribe to network status and window manager to inform whether we should poll for new task data
-        let network_status = NetworkStatus::handle(ctx);
-        ctx.subscribe_to_model(&network_status, Self::handle_network_status_changed);
-        let window_manager = WindowManager::handle(ctx);
-        ctx.subscribe_to_model(&window_manager, Self::handle_window_state_changed);
 
         // Subscribe to auth events to retry initial sync when user becomes available
         let auth_manager = AuthManager::handle(ctx);
@@ -718,16 +692,12 @@ impl AgentConversationsModel {
         });
 
         // Subscribe to UpdateManager for RTC task updates
-        if FeatureFlag::AmbientAgentsRTC.is_enabled() {
-            let update_manager = UpdateManager::handle(ctx);
-            ctx.subscribe_to_model(&update_manager, Self::handle_update_manager_event);
-        }
+        let update_manager = UpdateManager::handle(ctx);
+        ctx.subscribe_to_model(&update_manager, Self::handle_update_manager_event);
 
         let mut model = Self {
             tasks: HashMap::new(),
             conversations: HashMap::new(),
-            in_flight_poll_abort_handle: None,
-            next_poll_abort_handle: None,
             active_data_consumers_per_window: HashMap::new(),
             initial_load_state: InitialConversationLoadState::LoadingLocal,
             task_fetch_state: HashMap::new(),
@@ -754,40 +724,6 @@ impl AgentConversationsModel {
     #[cfg_attr(not(feature = "tui"), allow(dead_code))]
     pub(crate) fn cloud_conversation_metadata_load_failed(&self) -> bool {
         self.initial_load_state == InitialConversationLoadState::CloudFailed
-    }
-
-    fn handle_network_status_changed(
-        &mut self,
-        _: ModelHandle<NetworkStatus>,
-        event: &NetworkStatusEvent,
-        ctx: &mut ModelContext<Self>,
-    ) {
-        match event {
-            NetworkStatusEvent::NetworkStatusChanged { new_status } => match new_status {
-                NetworkStatusKind::Online => {
-                    self.update_polling_state(ctx);
-                }
-                NetworkStatusKind::Offline => {
-                    self.abort_existing_poll();
-                }
-            },
-        }
-    }
-
-    fn handle_window_state_changed(
-        &mut self,
-        _: ModelHandle<WindowManager>,
-        event: &StateEvent,
-        ctx: &mut ModelContext<Self>,
-    ) {
-        match event {
-            StateEvent::ValueChanged { current, previous } => {
-                // If the active window changed, check if we need to start/stop polling
-                if current.active_window != previous.active_window {
-                    self.update_polling_state(ctx);
-                }
-            }
-        }
     }
 
     fn handle_auth_manager_event(
@@ -1099,11 +1035,9 @@ impl AgentConversationsModel {
                     // Sync conversations to refresh local cache
                     model.sync_conversations(ctx);
 
-                    model.update_polling_state(ctx);
                     ctx.emit(AgentConversationsModelEvent::ConversationsLoaded);
                 } else if let RequestState::RequestFailed(e) = result {
                     model.initial_load_state = InitialConversationLoadState::CloudFailed;
-                    model.update_polling_state(ctx);
                     report_error!(e);
                 }
             },
@@ -1122,7 +1056,6 @@ impl AgentConversationsModel {
             .entry(window_id)
             .or_default()
             .insert(view_id);
-        self.update_polling_state(ctx);
 
         // Flush dirty tasks accumulated while no list surface was open.
         if let Some(dirty_since) = self.dirty_since.take() {
@@ -1132,114 +1065,13 @@ impl AgentConversationsModel {
 
     /// Called when a view that consumes this model's data becomes hidden.
     /// Uses view_id to make unregistration idempotent.
-    pub fn register_view_closed(
-        &mut self,
-        window_id: WindowId,
-        view_id: EntityId,
-        ctx: &mut ModelContext<Self>,
-    ) {
+    pub fn register_view_closed(&mut self, window_id: WindowId, view_id: EntityId) {
         if let Some(views) = self.active_data_consumers_per_window.get_mut(&window_id) {
             views.remove(&view_id);
             if views.is_empty() {
                 self.active_data_consumers_per_window.remove(&window_id);
             }
         }
-        self.update_polling_state(ctx);
-    }
-
-    /// Updates the polling state based on whether the active window has the view open.
-    fn update_polling_state(&mut self, ctx: &mut ModelContext<Self>) {
-        let should_poll = self.should_be_polling(ctx);
-
-        if should_poll && self.next_poll_abort_handle.is_none() {
-            self.poll_for_tasks(ctx);
-        } else if !should_poll {
-            self.abort_existing_poll();
-        }
-    }
-
-    /// Returns true if we should be polling: online, not loading, and active window has the view open.
-    fn should_be_polling(&self, ctx: &ModelContext<Self>) -> bool {
-        if !self.initial_load_state.can_poll() {
-            return false;
-        }
-
-        // Don't poll if we're using RTC
-        if FeatureFlag::AmbientAgentsRTC.is_enabled() {
-            return false;
-        }
-
-        let is_online = NetworkStatus::as_ref(ctx).is_online();
-
-        if !is_online {
-            return false;
-        }
-
-        let active_window = WindowManager::as_ref(ctx).active_window();
-
-        match active_window {
-            Some(window_id) => self
-                .active_data_consumers_per_window
-                .get(&window_id)
-                .is_some_and(|views| !views.is_empty()),
-            None => false,
-        }
-    }
-
-    /// Abort the current in-flight poll (does NOT abort initial sync)
-    fn abort_existing_poll(&mut self) {
-        if let Some(handle) = self.next_poll_abort_handle.take() {
-            handle.abort();
-        }
-        if let Some(handle) = self.in_flight_poll_abort_handle.take() {
-            handle.abort();
-        }
-    }
-
-    fn schedule_next_poll(&mut self, ctx: &mut ModelContext<Self>) {
-        let future_handle = ctx.spawn(
-            async move {
-                Timer::after(duration_with_jitter(POLLING_INTERVAL, 0.2)).await;
-            },
-            |model, _, ctx| {
-                model.poll_for_tasks(ctx);
-            },
-        );
-        self.next_poll_abort_handle = Some(future_handle.abort_handle());
-    }
-
-    fn poll_for_tasks(&mut self, ctx: &mut ModelContext<Self>) {
-        self.abort_existing_poll();
-        if !self.should_be_polling(ctx) {
-            return;
-        }
-
-        let ai_client = ServerApiProvider::as_ref(ctx).get_ai_client();
-
-        let future = ctx.spawn_with_retry_on_error(
-            move || {
-                let ai_client = ai_client.clone();
-                async move {
-                    ai_client
-                        .list_ambient_agent_tasks(100, TaskListFilter::default())
-                        .await
-                }
-            },
-            PERIODIC_POLL_RETRY_STRATEGY,
-            |model, result, ctx| {
-                let should_poll_again = !result.has_pending_retries();
-
-                if let RequestState::RequestSucceeded(tasks) = result {
-                    model.update_model_with_new_tasks(tasks, ctx);
-                }
-
-                if should_poll_again {
-                    model.schedule_next_poll(ctx);
-                }
-            },
-        );
-
-        self.in_flight_poll_abort_handle = Some(future.abort_handle());
     }
 
     // Update the model with new tasks retrieved from the server.
@@ -2105,7 +1937,6 @@ impl AgentConversationsModel {
     pub(crate) fn reset(&mut self) {
         self.tasks.clear();
         self.conversations.clear();
-        self.abort_existing_poll();
         self.abort_rtc_task_refresh_throttle();
         self.active_data_consumers_per_window.clear();
         self.task_fetch_state.clear();
