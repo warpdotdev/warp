@@ -2460,6 +2460,6 @@ impl Entity for AIExecutionProfilesModel {
 
 impl SingletonEntity for AIExecutionProfilesModel {}
 
-#[cfg(test)]
+#[cfg(all(test, not(feature = "agent_mode_evals")))]
 #[path = "profiles_tests.rs"]
 mod tests;

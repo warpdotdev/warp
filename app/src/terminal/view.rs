@@ -1176,6 +1176,7 @@ impl SizeUpdateBuilder {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
+    #[allow(dead_code)]
     fn for_viewer_size_report(last_size: SizeInfo, num_rows: usize, num_cols: usize) -> Self {
         // Viewer size reports don't change the sharer's actual pane size.
         Self {
@@ -1443,6 +1444,12 @@ pub enum ContextMenuAction {
         exchange_id: AIAgentExchangeId,
         conversation_id: AIConversationId,
     },
+    /// Fork the AI conversation from the selected text in this AI block.
+    ForkAIConversationFromSelectedText {
+        ai_block_view_id: EntityId,
+        exchange_id: AIAgentExchangeId,
+        conversation_id: AIConversationId,
+    },
     /// Save the AI block prompt as an agent mode workflow (saved prompt)
     SavePromptAsAgentModeWorkflow {
         ai_block_view_id: EntityId,
@@ -1527,6 +1534,9 @@ impl fmt::Debug for ContextMenuAction {
             ForkAIConversationFromBlock { .. } => f.write_str("ForkAIConversationFromBlock"),
             ForkAIConversationFromExactExchange { .. } => {
                 f.write_str("ForkAIConversationFromExactExchange")
+            }
+            ForkAIConversationFromSelectedText { .. } => {
+                f.write_str("ForkAIConversationFromSelectedText")
             }
             SavePromptAsAgentModeWorkflow { .. } => f.write_str("SavePromptAsAgentModeWorkflow"),
         }
@@ -16922,6 +16932,35 @@ impl TerminalView {
                         .into_item(),
                     ]);
                 }
+                if !cfg!(target_family = "wasm")
+                    && let BlockListMenuSource::RichContentTextRightClick {
+                        rich_content_view_id,
+                        ..
+                    } = menu_source
+                    && let Some(ai_metadata) =
+                        self.ai_block_metadata_for_view_id(*rich_content_view_id)
+                    && self
+                        .fork_selected_text_params(
+                            *rich_content_view_id,
+                            ai_metadata.exchange_id,
+                            ai_metadata.conversation_id,
+                            ctx,
+                        )
+                        .is_some()
+                {
+                    fields.extend([
+                        MenuItem::Separator,
+                        MenuItemFields::new("Fork selection in new pane")
+                            .with_on_select_action(TerminalAction::ContextMenu(
+                                ContextMenuAction::ForkAIConversationFromSelectedText {
+                                    ai_block_view_id: *rich_content_view_id,
+                                    exchange_id: ai_metadata.exchange_id,
+                                    conversation_id: ai_metadata.conversation_id,
+                                },
+                            ))
+                            .into_item(),
+                    ]);
+                }
                 fields
             }
             (
@@ -21191,6 +21230,42 @@ impl TerminalView {
         })
     }
 
+    fn ai_block_metadata_for_view_id(&self, view_id: EntityId) -> Option<&AIBlockMetadata> {
+        self.rich_content_views.iter().find_map(|rich_content| {
+            let ai_metadata = rich_content.ai_block_metadata()?;
+            if ai_metadata.ai_block_handle.id() == view_id {
+                return Some(ai_metadata);
+            }
+            None
+        })
+    }
+
+    fn fork_selected_text_params(
+        &self,
+        ai_block_view_id: EntityId,
+        exchange_id: AIAgentExchangeId,
+        conversation_id: AIConversationId,
+        ctx: &AppContext,
+    ) -> Option<ForkAIConversationParams> {
+        let initial_prompt = self
+            .ai_block_handle_by_view_id(ai_block_view_id)?
+            .as_ref(ctx)
+            .selected_text(ctx)
+            .filter(|text| !text.trim().is_empty())?;
+
+        Some(ForkAIConversationParams {
+            conversation_id,
+            fork_from_exchange: Some(ForkFromExchange {
+                exchange_id,
+                fork_from_exact_exchange: false,
+            }),
+            summarize_after_fork: false,
+            summarization_prompt: None,
+            initial_prompt: Some(initial_prompt),
+            destination: ForkedConversationDestination::SplitPane,
+        })
+    }
+
     /// Returns the last block's `EnvVarCollectionBlock` if it is uncompleted, scoped to the
     /// currently visible conversation.
     fn active_env_var_collection_block(
@@ -25432,6 +25507,20 @@ impl TerminalView {
                     }),
                     ctx,
                 );
+            }
+            ForkAIConversationFromSelectedText {
+                ai_block_view_id,
+                exchange_id,
+                conversation_id,
+            } => {
+                if let Some(params) = self.fork_selected_text_params(
+                    *ai_block_view_id,
+                    *exchange_id,
+                    *conversation_id,
+                    ctx,
+                ) {
+                    ctx.dispatch_global_action("workspace:fork_ai_conversation", params);
+                }
             }
             SavePromptAsAgentModeWorkflow { ai_block_view_id } => {
                 for rich_content in self.rich_content_views.iter() {
