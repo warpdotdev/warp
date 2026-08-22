@@ -104,9 +104,6 @@ pub enum FeatureFlag {
     /// Enable multiselect in Notebooks and Warp Text.
     RichTextMultiselect,
 
-    /// If enabled, the default input mode is set to waterfall for new users.
-    DefaultWaterfallMode,
-
     /// Makes the input editor's prompt selectable.
     SelectablePrompt,
 

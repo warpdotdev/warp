@@ -59,8 +59,6 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::ResizeFix,
         #[cfg(feature = "richtext_multiselect")]
         FeatureFlag::RichTextMultiselect,
-        #[cfg(feature = "default_waterfall_mode")]
-        FeatureFlag::DefaultWaterfallMode,
         #[cfg(feature = "settings_file")]
         FeatureFlag::SettingsFile,
         #[cfg(feature = "file_backed_execution_profiles")]
