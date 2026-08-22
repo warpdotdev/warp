@@ -39,7 +39,7 @@ use crate::ai::agent::conversation::{
 };
 use crate::ai::agent_conversations_model::entry::PrincipalType;
 use crate::ai::agent_conversations_model::{
-    AgentConversationEntry, AgentRunDisplayStatus, TaskFetchError,
+    AgentConversationEntry, AgentConversationsModel, AgentRunDisplayStatus, TaskFetchError,
 };
 use crate::ai::agent_management::details_action_buttons::{
     ActionButtonsConfig, AgentDetailsButtonEvent, ConversationActionButtonsRow,
@@ -382,7 +382,10 @@ impl ConversationDetailsData {
             total_tokens: (total_tokens > 0).then_some(total_tokens),
             charged_usage: usage_totals.charged_usage,
             run_time,
-            artifacts: conversation.artifacts().to_vec(),
+            // Parents of orchestrated conversations show artifacts for the
+            // whole subtree (their own + all descendants'), deduped.
+            artifacts: AgentConversationsModel::as_ref(app)
+                .aggregated_conversation_artifacts(conversation.id(), app),
             open_action: None,
             source_prompt: conversation.initial_query(),
             copy_link_url,
@@ -444,7 +447,9 @@ impl ConversationDetailsData {
             // whether to also show the short orchestrator label here.
             title: task.title.clone(),
             created_at: Some(task.created_at.with_timezone(&Local)),
-            artifacts: task.artifacts.clone(),
+            // Includes artifacts from child runs and the linked local
+            // conversation subtree, deduped.
+            artifacts: AgentConversationsModel::as_ref(app).aggregated_task_artifacts(task, app),
             credits,
             // GAP: cloud tasks are sourced from the REST `AmbientAgentTask`,
             // which doesn't yet carry a per-category charges breakdown
@@ -793,6 +798,12 @@ impl ConversationDetailsPanel {
             runner_platforms: HashMap::new(),
             runners_loading: false,
         }
+    }
+
+    /// Artifacts currently displayed in the panel. Lets callers skip a
+    /// refresh when freshly aggregated artifacts are unchanged.
+    pub(crate) fn current_artifacts(&self) -> &[Artifact] {
+        &self.data.artifacts
     }
 
     pub fn set_conversation_details(

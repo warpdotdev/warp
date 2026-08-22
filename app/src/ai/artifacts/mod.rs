@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::path::Path;
 #[cfg(feature = "local_fs")]
 use std::path::PathBuf;
@@ -275,6 +276,35 @@ impl TryFrom<warp_graphql::ai::AIConversationArtifact> for Artifact {
             warp_graphql::ai::AIConversationArtifact::Unknown => Err(()),
         }
     }
+}
+
+impl Artifact {
+    /// Stable identity key used to dedupe the same artifact reported by
+    /// multiple conversations/runs (e.g. a child's PR copied to the parent
+    /// on fork/handoff).
+    fn identity(&self) -> &str {
+        match self {
+            Artifact::Plan { document_uid, .. } => document_uid,
+            Artifact::PullRequest { url, .. } | Artifact::ExternalReference { url, .. } => url,
+            Artifact::Screenshot { artifact_uid, .. } | Artifact::File { artifact_uid, .. } => {
+                artifact_uid
+            }
+        }
+    }
+}
+
+/// Merges borrowed artifact lists into a flat, order-preserving list deduped
+/// by [`Artifact::identity`]; the first occurrence wins. Only kept artifacts
+/// are cloned.
+pub fn merge_artifacts<'a>(lists: impl IntoIterator<Item = &'a [Artifact]>) -> Vec<Artifact> {
+    let mut seen = HashSet::new();
+    let mut merged = Vec::new();
+    for artifact in lists.into_iter().flatten() {
+        if seen.insert(artifact.identity()) {
+            merged.push(artifact.clone());
+        }
+    }
+    merged
 }
 
 /// Parse GitHub PR URL to extract repo and number.
