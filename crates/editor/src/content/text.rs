@@ -15,7 +15,7 @@ use markdown_parser::markdown_parser::{
 use markdown_parser::weight::CustomWeight;
 use markdown_parser::{
     CodeBlockText, FormattedImage, FormattedTextLine, FormattedTextStyles, Hyperlink,
-    parse_markdown,
+    parse_inline_markdown, parse_inline_markdown_with_source_map,
 };
 pub use markdown_parser::{
     FormattedTable, FormattedTableAlignment, FormattedTextFragment, FormattedTextInline,
@@ -46,13 +46,7 @@ pub fn inline_to_text(inline: &[FormattedTextFragment]) -> String {
         .collect()
 }
 
-/// Build per-cell source↔rendered offset maps for every cell in `table`, using the raw
-/// tab-and-newline-separated `source` text as the source of truth for each cell's pre-parse bytes.
-///
-/// We pass `source` in rather than deriving it from `table` because the parser has already stripped
-/// escape backslashes, consolidated fragments, and potentially normalized table shape. Walking the
-/// raw source alongside each cell's parsed fragments gives exact source spans without having to
-/// reproduce marker syntax in this crate.
+/// Build per-cell source↔rendered offset maps from parser-owned inline source mappings.
 pub fn table_cell_offset_maps(
     table: &FormattedTable,
     source: &str,
@@ -68,13 +62,14 @@ pub fn table_cell_offset_maps(
         .map(|(row_idx, row)| {
             row.iter()
                 .enumerate()
-                .map(|(col_idx, cell)| {
+                .map(|(col_idx, _)| {
                     let cell_source = source_rows
                         .get(row_idx)
                         .and_then(|row_cells| row_cells.get(col_idx))
                         .copied()
                         .unwrap_or("");
-                    TableCellOffsetMap::from_inline_and_source(cell_source, cell)
+                    let parsed = parse_inline_markdown_with_source_map(cell_source);
+                    TableCellOffsetMap::from_source_map(parsed.source_map)
                 })
                 .collect()
         })
@@ -200,44 +195,7 @@ impl<'a> std::ops::AddAssign<&'a Self> for TextSummary {
 }
 
 fn parse_table_cell_markdown_inline(cell: &str) -> FormattedTextInline {
-    let Ok(parsed) = parse_markdown(cell) else {
-        return vec![FormattedTextFragment::plain_text(cell)];
-    };
-
-    let mut inline = Vec::new();
-    for line in parsed.lines {
-        match line {
-            FormattedTextLine::Line(fragments) => inline.extend(fragments),
-            FormattedTextLine::Heading(header) => inline.extend(header.text),
-            FormattedTextLine::OrderedList(item) => inline.extend(item.indented_text.text),
-            FormattedTextLine::UnorderedList(item) => inline.extend(item.text),
-            FormattedTextLine::TaskList(item) => inline.extend(item.text),
-            FormattedTextLine::CodeBlock(block) => {
-                inline.push(FormattedTextFragment::plain_text(block.code));
-            }
-            FormattedTextLine::Table(table) => {
-                inline.push(FormattedTextFragment::plain_text(
-                    table.to_internal_format(),
-                ));
-            }
-            FormattedTextLine::Image(image) => {
-                inline.push(FormattedTextFragment::plain_text(image.alt_text));
-            }
-            FormattedTextLine::LineBreak => {
-                inline.push(FormattedTextFragment::plain_text("\n"));
-            }
-            FormattedTextLine::HorizontalRule => {
-                inline.push(FormattedTextFragment::plain_text("---"));
-            }
-            FormattedTextLine::Embedded(_) => {}
-        }
-    }
-
-    if inline.is_empty() {
-        vec![FormattedTextFragment::plain_text(cell)]
-    } else {
-        inline
-    }
+    parse_inline_markdown(cell)
 }
 
 impl std::ops::AddAssign<Self> for TextSummary {

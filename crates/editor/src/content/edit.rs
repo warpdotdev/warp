@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Result, anyhow};
 use itertools::Itertools;
-use markdown_parser::{Hyperlink, TableAlignment};
+use markdown_parser::{FormattedTextInline, Hyperlink, TableAlignment};
 use num_traits::SaturatingSub;
 use rangemap::RangeSet;
 use rayon::iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator};
@@ -29,6 +29,7 @@ use super::buffer::{StyledBufferBlock, StyledBufferRun, StyledTextBlock};
 use super::mermaid_diagram::{mermaid_asset_source, mermaid_diagram_layout};
 use super::text::{
     BufferBlockItem, BufferBlockStyle, CodeBlockType, FormattedTable, TableBlockCache,
+    TextStylesWithMetadata,
 };
 use crate::parallel_util::Last;
 use crate::render::layout::{InlineTextLayoutInput, TextLayout, add_link_to_style_and_font};
@@ -259,6 +260,46 @@ struct TableCellTextLayout {
     text_layout: InlineTextLayoutInput,
 }
 
+fn table_cell_runs(cell_inline: &FormattedTextInline) -> Vec<StyledBufferRun> {
+    let mut runs: Vec<StyledBufferRun> = Vec::new();
+    let mut pending_line_breaks = String::new();
+    let mut pending_styles = TextStylesWithMetadata::default();
+
+    for fragment in cell_inline {
+        let text_styles = fragment.styles.clone().into();
+        if fragment.text == "\n" {
+            pending_line_breaks.push('\n');
+            pending_styles = text_styles;
+            continue;
+        }
+
+        let mut run = std::mem::take(&mut pending_line_breaks);
+        run.push_str(&fragment.text);
+        match runs.last_mut() {
+            Some(previous) if previous.text_styles == text_styles => previous.run.push_str(&run),
+            _ => runs.push(StyledBufferRun {
+                run,
+                text_styles,
+                block_style: BufferBlockStyle::PlainText,
+            }),
+        }
+    }
+
+    if !pending_line_breaks.is_empty() {
+        if let Some(previous) = runs.last_mut() {
+            previous.run.push_str(&pending_line_breaks);
+        } else {
+            runs.push(StyledBufferRun {
+                run: pending_line_breaks,
+                text_styles: pending_styles,
+                block_style: BufferBlockStyle::PlainText,
+            });
+        }
+    }
+
+    runs
+}
+
 /// The first table layout pass measures each cell without a column-width constraint so we can
 /// compute shared column widths before the final pass applies alignment-sensitive layout. We also
 /// keep the styled text inputs from this pass so the second pass can reuse them directly.
@@ -284,18 +325,15 @@ fn measure_table_cells(
         };
         let mut row_text_layouts = Vec::with_capacity(row.len());
         for (col_idx, cell_inline) in row.iter().enumerate() {
-            let runs: Vec<StyledBufferRun> = cell_inline
-                .iter()
-                .map(|fragment| StyledBufferRun {
-                    run: fragment.text.clone(),
-                    text_styles: fragment.styles.clone().into(),
-                    block_style: BufferBlockStyle::PlainText,
-                })
-                .collect();
+            let runs = table_cell_runs(cell_inline);
             let mut line = LayOutArgs::new();
             line.highlighted_urls = highlight_urls(&runs);
             for run in &runs {
-                line.layout_run(layout, run, &paragraph_style);
+                if line.layout_run(layout, run, &paragraph_style) {
+                    // Table cells are laid out as one text frame instead of separate paragraphs,
+                    // so retain inline newlines that `layout_run` normally reports to its caller.
+                    line.text.push('\n');
+                }
             }
             let text_layout = InlineTextLayoutInput {
                 text: line.text,

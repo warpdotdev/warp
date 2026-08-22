@@ -4,6 +4,7 @@ use std::path::PathBuf;
 #[cfg(not(target_arch = "wasm32"))]
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use markdown_parser::{FormattedTable, FormattedTextFragment, TableAlignment};
 use string_offset::CharOffset;
 use warp_core::features::FeatureFlag;
 use warpui_core::assets::asset_cache::{AssetCache, AssetSource, AssetState};
@@ -14,6 +15,7 @@ use warpui_core::{App, SingletonEntity};
 
 use super::{
     BlockLocation, LayOutArgs, layout_mermaid_diagram_block, layout_table_block, layout_text_block,
+    measure_table_cells, table_cell_runs,
 };
 use crate::content::buffer::{StyledBufferRun, StyledTextBlock};
 use crate::content::edit::{
@@ -839,6 +841,65 @@ fn test_layout_table_block_caches_cell_text_frames() {
                 table.cell_text_frames[0][1].max_width()
                     <= table.column_widths[1].as_f32() - table.config.style.cell_padding * 2.0
             );
+        });
+    })
+}
+
+#[test]
+fn test_layout_table_block_preserves_inline_newlines() {
+    App::test((), |app| async move {
+        app.read(|ctx| {
+            let layout_cache = LayoutCache::new();
+            let text_layout = TextLayout::new(
+                &layout_cache,
+                ctx.font_cache().text_layout_system(),
+                &TEST_STYLES,
+                f32::MAX,
+            );
+            let table = FormattedTable {
+                headers: vec![vec![FormattedTextFragment::plain_text("Header")]],
+                alignments: vec![TableAlignment::Left],
+                rows: vec![
+                    vec![vec![
+                        FormattedTextFragment::plain_text("A"),
+                        FormattedTextFragment::plain_text("\n"),
+                        FormattedTextFragment::plain_text("B"),
+                    ]],
+                    vec![vec![
+                        FormattedTextFragment::plain_text("A"),
+                        FormattedTextFragment::plain_text("\n"),
+                    ]],
+                    vec![vec![
+                        FormattedTextFragment::plain_text("A"),
+                        FormattedTextFragment::plain_text("\n"),
+                        FormattedTextFragment::plain_text("\n"),
+                    ]],
+                ],
+            };
+
+            let styled_runs = table_cell_runs(&vec![
+                FormattedTextFragment::plain_text("A"),
+                FormattedTextFragment::plain_text("\n"),
+                FormattedTextFragment::bold("B"),
+            ]);
+            assert_eq!(
+                styled_runs
+                    .iter()
+                    .map(|run| run.run.as_str())
+                    .collect::<Vec<_>>(),
+                vec!["A", "\nB"]
+            );
+
+            let table_style = text_layout.rich_text_styles().table_style;
+            let header_style = text_layout.paragraph_styles(&BufferBlockStyle::PlainText);
+            let body_style = text_layout.paragraph_styles(&BufferBlockStyle::PlainText);
+            let (_, cells) =
+                measure_table_cells(&table, &text_layout, &table_style, header_style, body_style);
+
+            assert_eq!(cells[0][0].text_layout.text, "Header");
+            assert_eq!(cells[1][0].text_layout.text, "A\nB");
+            assert_eq!(cells[2][0].text_layout.text, "A\n");
+            assert_eq!(cells[3][0].text_layout.text, "A\n\n");
         });
     })
 }
