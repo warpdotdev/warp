@@ -224,7 +224,7 @@ impl RequestParams {
         }
     }
 
-    pub fn new(
+    pub(crate) fn new(
         terminal_view_id: Option<EntityId>,
         session_context: SessionContext,
         request_input: &RequestInput,

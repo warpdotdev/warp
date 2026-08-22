@@ -1351,7 +1351,7 @@ fn test_ai_autonomy_settings_resolve_each_windows_own_team() {
 }
 
 #[test]
-fn test_ai_autonomy_settings_for_a_teamless_window_impose_nothing() {
+fn test_ai_autonomy_settings_for_a_teamless_window_fall_back_to_the_workspace() {
     let team = team_enforcing_execute_commands(&team_for_test(), ActionPermission::AlwaysAsk);
     let mut workspace = workspace_for_test(&team);
     workspace
@@ -1377,9 +1377,8 @@ fn test_ai_autonomy_settings_for_a_teamless_window_impose_nothing() {
                 UserWorkspaces::as_ref(ctx)
                     .ai_autonomy_settings_for_scope(&scope)
                     .execute_commands_setting,
-                None,
-                "a window on no team should be governed by no policy, rather than borrow the \
-                 workspace layer or the user's only team"
+                Some(ActionPermission::AlwaysAllow),
+                "a window on no team falls back to the workspace policy"
             );
         });
     })

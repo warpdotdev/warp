@@ -1021,41 +1021,17 @@ impl UserWorkspaces {
 
 
     /// The AI autonomy policy that applies to `scope`'s team.
-    ///
-    /// A scope carrying no team yields no overrides: a window that is not pointed at a team
-    /// is governed by no team's policy, and substituting another team's would be worse than
-    /// substituting none. The workspace layer is read only when the user belongs to no team
-    /// at all, which is the one case where it is genuinely team-neutral.
     pub(crate) fn ai_autonomy_settings_for_scope<S: TeamScope + ?Sized>(
         &self,
         scope: &S,
     ) -> AiAutonomySettings {
-        match self.team_from_scope(scope) {
+        match scope.team_uid().and_then(|id| self.team_from_uid(id)) {
             Some(team) => AiAutonomySettings::from(&team.settings.ai_autonomy),
-            None if self.has_any_team() => AiAutonomySettings::default(),
             None => self
                 .current_workspace()
                 .map(|workspace| workspace.settings.ai_autonomy_settings.clone())
                 .unwrap_or_default(),
         }
-    }
-
-    /// Resolves a scope's team. Private on purpose: a caller outside this type that could
-    /// turn a scope into a whole [`Team`] could carry that team somewhere the scope never
-    /// reached. Leaf settings are resolved by the getters here, which hand back the setting.
-    fn team_from_scope<S: TeamScope + ?Sized>(&self, scope: &S) -> Option<&Team> {
-        scope
-            .team_uid()
-            .and_then(|team_uid| self.team_from_uid(team_uid))
-    }
-
-    /// Whether the user belongs to any team, in any of their workspaces. Distinguishes the
-    /// genuinely-teamless user, for whom workspace settings are team-neutral, from a user
-    /// whose workspace settings are some team's settings in disguise.
-    fn has_any_team(&self) -> bool {
-        self.workspaces
-            .iter()
-            .any(|workspace| !workspace.teams.is_empty())
     }
 
     /// Returns the sandboxed agent settings enforced by the workspace, if any.

@@ -2474,7 +2474,7 @@ impl AISettings {
         self.is_any_ai_enabled(app)
     }
 
-    pub fn is_command_allowlist_editable(
+    pub(crate) fn is_command_allowlist_editable(
         &self,
         scope: &impl TeamScope,
         app: &AppContext,
@@ -2486,7 +2486,7 @@ impl AISettings {
         self.is_any_ai_enabled(app) && !set_by_workspace
     }
 
-    pub fn is_directory_allowlist_editable(
+    pub(crate) fn is_directory_allowlist_editable(
         &self,
         scope: &impl TeamScope,
         app: &AppContext,
@@ -2498,7 +2498,7 @@ impl AISettings {
         self.is_any_ai_enabled(app) && !set_by_workspace
     }
 
-    pub fn is_execute_commands_permissions_editable(
+    pub(crate) fn is_execute_commands_permissions_editable(
         &self,
         scope: &impl TeamScope,
         app: &AppContext,
@@ -2510,7 +2510,7 @@ impl AISettings {
         self.is_any_ai_enabled(app) && !set_by_workspace
     }
 
-    pub fn is_write_to_pty_permissions_editable(
+    pub(crate) fn is_write_to_pty_permissions_editable(
         &self,
         scope: &impl TeamScope,
         app: &AppContext,
@@ -2521,7 +2521,7 @@ impl AISettings {
         self.is_any_ai_enabled(app) && !set_by_workspace
     }
 
-    pub fn is_computer_use_permissions_editable(
+    pub(crate) fn is_computer_use_permissions_editable(
         &self,
         scope: &impl TeamScope,
         app: &AppContext,
@@ -2532,7 +2532,7 @@ impl AISettings {
         self.is_any_ai_enabled(app) && !set_by_workspace
     }
 
-    pub fn is_read_files_permissions_editable(
+    pub(crate) fn is_read_files_permissions_editable(
         &self,
         scope: &impl TeamScope,
         app: &AppContext,
@@ -2544,7 +2544,7 @@ impl AISettings {
         self.is_any_ai_enabled(app) && !set_by_workspace
     }
 
-    pub fn is_code_diffs_permissions_editable(
+    pub(crate) fn is_code_diffs_permissions_editable(
         &self,
         scope: &impl TeamScope,
         app: &AppContext,

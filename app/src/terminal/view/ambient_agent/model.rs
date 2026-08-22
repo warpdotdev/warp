@@ -195,7 +195,7 @@ pub struct AmbientAgentViewModel {
 }
 
 impl AmbientAgentViewModel {
-    pub fn new(
+    pub(crate) fn new(
         terminal_view_id: EntityId,
         team_context_resolver: TeamContextResolver,
         ctx: &mut ModelContext<Self>,
