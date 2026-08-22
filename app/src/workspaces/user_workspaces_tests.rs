@@ -1,3 +1,5 @@
+use std::cell::Cell;
+use std::rc::Rc;
 use std::time::Duration;
 
 use mockall::Sequence;
@@ -1159,7 +1161,7 @@ fn team_named(uid: i64, name: &str) -> Team {
     team
 }
 
-/// The two teams every ambiguity test below is built from, in workspace order.
+/// Two teams in workspace order, so a test can tell the default apart from a chosen team.
 fn platform_and_security() -> (Team, Team, Workspace) {
     let platform = team_named(123, "Platform");
     let security = team_named(456, "Security");
@@ -1169,229 +1171,118 @@ fn platform_and_security() -> (Team, Team, Workspace) {
 }
 
 #[test]
-fn resolve_requested_team_uses_the_sole_team_when_none_is_requested() {
-    let team = team_for_test();
-    let workspace = workspace_for_test(&team);
-
-    App::test((), |mut app| async move {
-        initialize_window_team_test_app(&mut app, vec![workspace]);
-
-        app.read(|ctx| {
-            assert_eq!(
-                UserWorkspaces::as_ref(ctx).resolve_requested_team(None),
-                Ok(Some(team.uid))
-            );
-        });
-    })
-}
-
-#[test]
-fn resolve_requested_team_is_teamless_when_the_user_is_on_no_team() {
+fn is_window_registered_distinguishes_absent_from_teamless() {
     App::test((), |mut app| async move {
         initialize_window_team_test_app(&mut app, vec![]);
 
+        let window_id = WindowId::new();
         app.read(|ctx| {
-            assert_eq!(
-                UserWorkspaces::as_ref(ctx).resolve_requested_team(None),
-                Ok(None),
-                "a user with no teams is genuinely teamless, not ambiguous"
+            assert!(!UserWorkspaces::as_ref(ctx).is_window_registered(window_id));
+        });
+
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.register_window(window_id, None, ctx);
+        });
+
+        app.read(|ctx| {
+            let user_workspaces = UserWorkspaces::as_ref(ctx);
+            assert!(
+                user_workspaces.is_window_registered(window_id),
+                "a teamless window is registered even though it has no team uid"
             );
+            assert_eq!(user_workspaces.team_uid_for_window(window_id), None);
         });
     })
 }
 
 #[test]
-fn resolve_requested_team_refuses_to_choose_between_two_teams() {
+fn switching_a_window_to_a_team_overwrites_and_announces_it() {
     let (platform, security, workspace) = platform_and_security();
 
     App::test((), |mut app| async move {
         initialize_window_team_test_app(&mut app, vec![workspace]);
 
-        app.read(|ctx| {
-            let error = UserWorkspaces::as_ref(ctx)
-                .resolve_requested_team(None)
-                .expect_err("two teams and no requested team is ambiguous");
-            let TeamResolutionError::NoTeamSelected { available, .. } = &error else {
-                panic!("expected NoTeamSelected, got {error:?}");
-            };
-            assert_eq!(
-                available,
-                &vec![
-                    TeamChoice {
-                        name: platform.name.clone(),
-                        uid: platform.uid,
-                    },
-                    TeamChoice {
-                        name: security.name.clone(),
-                        uid: security.uid,
-                    },
-                ]
-            );
-
-            // Refusing is only acceptable because the refusal says how to proceed, so the
-            // message's content is part of the contract rather than presentation.
-            let message = error.to_string();
-            assert!(message.contains("--team"), "{message}");
-            assert!(message.contains("WARP_TEAM"), "{message}");
-            for team in [&platform, &security] {
-                assert!(message.contains(&team.name), "{message}");
-                assert!(message.contains(&team.uid.to_string()), "{message}");
-            }
+        let window_id = WindowId::new();
+        let changes = Rc::new(Cell::new(0));
+        let changes_for_subscription = changes.clone();
+        app.update(|ctx| {
+            ctx.subscribe_to_model(&UserWorkspaces::handle(ctx), move |_, event, _| {
+                if matches!(event, UserWorkspacesEvent::WindowTeamChanged { .. }) {
+                    changes_for_subscription.set(changes_for_subscription.get() + 1);
+                }
+            });
         });
-    })
-}
 
-#[test]
-fn resolve_requested_team_matches_a_name_ignoring_case_and_surrounding_space() {
-    let (_, security, workspace) = platform_and_security();
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.register_window(window_id, Some(platform.uid), ctx);
+        });
+        let changes_after_register = changes.get();
 
-    App::test((), |mut app| async move {
-        initialize_window_team_test_app(&mut app, vec![workspace]);
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.switch_window_to_team(window_id, security.uid, ctx);
+        });
 
         app.read(|ctx| {
             assert_eq!(
-                UserWorkspaces::as_ref(ctx).resolve_requested_team(Some("  sEcUrItY ")),
-                Ok(Some(security.uid))
+                UserWorkspaces::as_ref(ctx).team_uid_for_window(window_id),
+                Some(security.uid),
+                "switching must overwrite, unlike the insert-only registration paths"
             );
         });
+        assert_eq!(
+            changes.get(),
+            changes_after_register + 1,
+            "the switch must announce itself so scoped consumers resync"
+        );
     })
 }
 
 #[test]
-fn resolve_requested_team_matches_a_team_uid() {
-    let (_, security, workspace) = platform_and_security();
-
-    App::test((), |mut app| async move {
-        initialize_window_team_test_app(&mut app, vec![workspace]);
-
-        app.read(|ctx| {
-            assert_eq!(
-                UserWorkspaces::as_ref(ctx).resolve_requested_team(Some(&security.uid.to_string())),
-                Ok(Some(security.uid))
-            );
-        });
-    })
-}
-
-#[test]
-fn resolve_requested_team_rejects_a_team_the_user_is_not_on() {
-    let (platform, security, workspace) = platform_and_security();
-
-    App::test((), |mut app| async move {
-        initialize_window_team_test_app(&mut app, vec![workspace]);
-
-        app.read(|ctx| {
-            let error = UserWorkspaces::as_ref(ctx)
-                .resolve_requested_team(Some("Growth"))
-                .expect_err("naming a team the user is not on must not fall back to another");
-            let TeamResolutionError::UnknownTeam { requested, .. } = &error else {
-                panic!("expected UnknownTeam, got {error:?}");
-            };
-            assert_eq!(requested, "Growth");
-
-            let message = error.to_string();
-            for team in [&platform, &security] {
-                assert!(message.contains(&team.name), "{message}");
-            }
-        });
-    })
-}
-
-/// `WARP_TEAM= warp` clears the variable for one command and `--team "$TEAM"` expands to a
-/// blank value when the variable is unset; clap surfaces both as `Some("")`. Reading either
-/// as a team that matches nothing would turn a no-op into a refusal to start.
-#[test]
-fn resolve_requested_team_treats_a_blank_value_as_absent() {
+fn switching_a_window_to_its_current_team_announces_nothing() {
     let team = team_for_test();
     let workspace = workspace_for_test(&team);
 
     App::test((), |mut app| async move {
         initialize_window_team_test_app(&mut app, vec![workspace]);
 
-        app.read(|ctx| {
-            for blank in ["", "   "] {
-                assert_eq!(
-                    UserWorkspaces::as_ref(ctx).resolve_requested_team(Some(blank)),
-                    Ok(Some(team.uid)),
-                    "{blank:?} should behave as if --team were not passed at all"
-                );
-            }
+        let window_id = WindowId::new();
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.register_window(window_id, Some(team.uid), ctx);
         });
+
+        let changes = Rc::new(Cell::new(0));
+        let changes_for_subscription = changes.clone();
+        app.update(|ctx| {
+            ctx.subscribe_to_model(&UserWorkspaces::handle(ctx), move |_, event, _| {
+                if matches!(event, UserWorkspacesEvent::WindowTeamChanged { .. }) {
+                    changes_for_subscription.set(changes_for_subscription.get() + 1);
+                }
+            });
+        });
+
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.switch_window_to_team(window_id, team.uid, ctx);
+        });
+
+        assert_eq!(changes.get(), 0);
     })
 }
 
+/// The switcher's own visibility rule, which the TUI indicator reuses rather than
+/// reimplementing so the two front-ends cannot disagree about who counts as multi-team.
 #[test]
-fn resolve_requested_team_treats_a_blank_value_as_absent_when_ambiguous() {
-    let (_, _, workspace) = platform_and_security();
+fn can_switch_teams_only_with_more_than_one_team() {
+    let (_, _, two_team_workspace) = platform_and_security();
+    let one_team_workspace = workspace_for_test(&team_for_test());
 
     App::test((), |mut app| async move {
-        initialize_window_team_test_app(&mut app, vec![workspace]);
+        initialize_window_team_test_app(&mut app, vec![one_team_workspace]);
+        app.read(|ctx| assert!(!UserWorkspaces::as_ref(ctx).can_switch_teams()));
 
-        app.read(|ctx| {
-            for blank in ["", "   "] {
-                let error = UserWorkspaces::as_ref(ctx)
-                    .resolve_requested_team(Some(blank))
-                    .expect_err("two teams and no requested team is ambiguous");
-                assert!(
-                    matches!(error, TeamResolutionError::NoTeamSelected { .. }),
-                    "{blank:?} should be ambiguous rather than unknown, got {error:?}"
-                );
-            }
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.update_workspaces(vec![two_team_workspace], ctx);
         });
-    })
-}
-
-/// A user whose teams all live in another workspace has a named current workspace and no
-/// teams in it, so the message must say which set it searched rather than claiming the user
-/// is on no team at all.
-#[test]
-fn unknown_team_message_names_the_current_workspace_restriction() {
-    let mut workspace = workspace_for_test(&team_for_test());
-    workspace.teams.clear();
-
-    App::test((), |mut app| async move {
-        initialize_window_team_test_app(&mut app, vec![workspace]);
-
-        app.read(|ctx| {
-            let message = UserWorkspaces::as_ref(ctx)
-                .resolve_requested_team(Some("Platform"))
-                .expect_err("a workspace with no teams can match no requested team")
-                .to_string();
-
-            assert!(message.contains("current workspace"), "{message}");
-            assert!(
-                !message.contains("You are not on any team."),
-                "the message must not claim the user has no teams anywhere: {message}"
-            );
-        });
-    })
-}
-
-#[test]
-fn resolve_requested_team_rejects_a_name_two_teams_share() {
-    let first = team_named(123, "Platform");
-    let second = team_named(456, "Platform");
-    let mut workspace = workspace_for_test(&first);
-    workspace.teams.push(second.clone());
-
-    App::test((), |mut app| async move {
-        initialize_window_team_test_app(&mut app, vec![workspace]);
-
-        app.read(|ctx| {
-            let error = UserWorkspaces::as_ref(ctx)
-                .resolve_requested_team(Some("Platform"))
-                .expect_err("a shared name names two teams, so it names neither");
-            let TeamResolutionError::AmbiguousTeamName { matches, .. } = &error else {
-                panic!("expected AmbiguousTeamName, got {error:?}");
-            };
-            assert_eq!(matches.len(), 2);
-
-            // A uid is the only thing that can disambiguate, so both must be offered.
-            let message = error.to_string();
-            for team in [&first, &second] {
-                assert!(message.contains(&team.uid.to_string()), "{message}");
-            }
-        });
+        app.read(|ctx| assert!(UserWorkspaces::as_ref(ctx).can_switch_teams()));
     })
 }
 

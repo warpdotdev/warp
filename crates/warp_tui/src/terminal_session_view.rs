@@ -35,19 +35,20 @@ use warp::tui_export::{
     ModelEvent, ParsedSlashCommandInput, PersistenceWriter, PillBarActionKind,
     PillBarInteractionEvent, PillBarPillKind, PillSwitchOutcome, PtyIntent, PtyIntentEvent,
     QueuedQueryEvent, QueuedQueryModel, RepoDetectionSessionType, RepoDetectionSource,
-    ServerConversationToken, SessionSettings, Sessions, SessionsEvent, ShellCommandExecutorEvent,
-    SizeInfo, SizeUpdate, SkillReference, SlashCommandDataSource as _, SlashCommandKind,
-    SlashCommandSelectionBehavior, StartAgentExecutorEvent, StartAgentRequest, StaticCommand,
-    TelemetryEvent, TerminalModel, TerminalSurface, TerminalSurfaceInit, TranscriptScope,
-    TuiMcpAction, TuiMcpManager, TuiMcpServerId, TuiMcpVariableValue, TuiOnboardingMarker,
-    TuiOnboardingMarkers, TuiOnboardingMarkersEvent, TuiSlashCommandDataSource,
-    TuiSlashCommandDataSourceArgs, TuiUpArrowHistoryItemKind, TuiUserInfoManager,
-    TuiUserInfoManagerEvent, TuiZeroStateDataSource, UserTakeOverReason, WAKEUP_THROTTLE_PERIOD,
-    WarpConfig, WarpConfigUpdateEvent, block_context_from_terminal_model,
-    build_slash_command_mixer, detect_possible_git_repo, export_conversation_markdown,
-    loaded_subtree_rollup, log_out_tui, maybe_build_ai_query_upsert_event,
-    prepare_conversation_block_restoration, record_autodetection_toggle_from_slash_command,
-    record_saved_prompt_accepted, record_static_slash_command_accepted, saved_prompt_text_for_id,
+    ServerConversationToken, ServerId, SessionSettings, Sessions, SessionsEvent,
+    ShellCommandExecutorEvent, SizeInfo, SizeUpdate, SkillReference, SlashCommandDataSource as _,
+    SlashCommandKind, SlashCommandSelectionBehavior, StartAgentExecutorEvent, StartAgentRequest,
+    StaticCommand, TelemetryEvent, TerminalModel, TerminalSurface, TerminalSurfaceInit,
+    TranscriptScope, TuiMcpAction, TuiMcpManager, TuiMcpServerId, TuiMcpVariableValue,
+    TuiOnboardingMarker, TuiOnboardingMarkers, TuiOnboardingMarkersEvent,
+    TuiSlashCommandDataSource, TuiSlashCommandDataSourceArgs, TuiTeamScope,
+    TuiUpArrowHistoryItemKind, TuiUserInfoManager, TuiUserInfoManagerEvent, TuiZeroStateDataSource,
+    UserTakeOverReason, WAKEUP_THROTTLE_PERIOD, WarpConfig, WarpConfigUpdateEvent,
+    block_context_from_terminal_model, build_slash_command_mixer, detect_possible_git_repo,
+    export_conversation_markdown, loaded_subtree_rollup, log_out_tui,
+    maybe_build_ai_query_upsert_event, prepare_conversation_block_restoration,
+    record_autodetection_toggle_from_slash_command, record_saved_prompt_accepted,
+    record_static_slash_command_accepted, saved_prompt_text_for_id,
     slash_command_selection_behavior, throttle,
 };
 use warp_core::channel::{Channel, ChannelState};
@@ -128,6 +129,7 @@ use crate::skills_menu::{TuiSkillMenuEvent, TuiSkillMenuModel};
 use crate::slash_commands::TuiSlashCommandModel;
 use crate::statusline_config_view::{TuiStatuslineConfigEvent, TuiStatuslineConfigView};
 use crate::tab_bar::{TuiTabBarConfig, TuiTabBarEvent, TuiTabBarView};
+use crate::team_menu::{TuiTeamMenuEvent, TuiTeamMenuModel};
 use crate::telemetry::{
     TuiConversationMenuTelemetryEvent, TuiConversationRestoreTelemetryEvent,
     TuiConversationRestoreTelemetryState, TuiConversationRestoreTelemetryTarget,
@@ -685,6 +687,7 @@ pub(crate) struct TuiTerminalSessionView {
     api_keys_menu: ModelHandle<TuiApiKeysMenuModel>,
     conversation_menu: ModelHandle<TuiConversationMenuModel>,
     model_menu: ModelHandle<TuiModelMenuModel>,
+    team_menu: ModelHandle<TuiTeamMenuModel>,
     skills_menu: ModelHandle<TuiSkillMenuModel>,
     mcp_menu: ModelHandle<TuiMcpMenuModel>,
     mcp_install_flow: ModelHandle<TuiMcpInstallFlowModel>,
@@ -1694,6 +1697,17 @@ impl TuiTerminalSessionView {
         ctx.subscribe_to_model(&model_menu, |_, _, _: &TuiModelMenuEvent, ctx| {
             ctx.notify();
         });
+        let team_menu = ctx.add_model(|ctx| {
+            TuiTeamMenuModel::new(
+                input_editor_model.clone(),
+                suggestions_mode.clone(),
+                window_id,
+                ctx,
+            )
+        });
+        ctx.subscribe_to_model(&team_menu, |_, _, _: &TuiTeamMenuEvent, ctx| {
+            ctx.notify();
+        });
         let skills_menu = ctx.add_model(|ctx| {
             TuiSkillMenuModel::new(
                 input_editor_model.clone(),
@@ -1791,6 +1805,7 @@ impl TuiTerminalSessionView {
             TuiInlineMenu::new(api_keys_menu.clone()),
             TuiInlineMenu::new(conversation_menu.clone()),
             TuiInlineMenu::new(model_menu.clone()),
+            TuiInlineMenu::new(team_menu.clone()),
             TuiInlineMenu::new(skills_menu.clone()),
             TuiInlineMenu::new(mcp_menu.clone()),
             TuiInlineMenu::new(mcp_install_flow.clone()),
@@ -1937,6 +1952,9 @@ impl TuiTerminalSessionView {
             }
             TuiInputViewEvent::AcceptedModel(id) => {
                 view.handle_accepted_model(id, ctx);
+            }
+            TuiInputViewEvent::AcceptedTeam(team_uid) => {
+                view.handle_accepted_team(*team_uid, ctx);
             }
             TuiInputViewEvent::AcceptedMcp(action) => {
                 view.handle_accepted_mcp_action(*action, ctx);
@@ -2261,6 +2279,7 @@ impl TuiTerminalSessionView {
             api_keys_menu,
             conversation_menu,
             model_menu,
+            team_menu,
             skills_menu,
             mcp_menu,
             mcp_install_flow,
@@ -4301,6 +4320,13 @@ impl TuiTerminalSessionView {
         });
         self.model_menu.update(ctx, |menu, ctx| menu.dismiss(ctx));
     }
+
+    fn handle_accepted_team(&mut self, team_uid: ServerId, ctx: &mut ViewContext<Self>) {
+        TuiTeamScope::handle(ctx).update(ctx, |team_scope, ctx| {
+            team_scope.switch_to_team(team_uid, ctx);
+        });
+        self.team_menu.update(ctx, |menu, ctx| menu.dismiss(ctx));
+    }
     fn handle_accepted_mcp_action(&mut self, action: TuiMcpAction, ctx: &mut ViewContext<Self>) {
         match action {
             TuiMcpAction::Enable(id) => {
@@ -4614,6 +4640,10 @@ impl TuiTerminalSessionView {
             }
             SlashCommandKind::Model => {
                 self.model_menu.update(ctx, |menu, ctx| menu.open(ctx));
+                record_static_slash_command_accepted(command.name, true, ctx);
+            }
+            SlashCommandKind::Team => {
+                self.team_menu.update(ctx, |menu, ctx| menu.open(ctx));
                 record_static_slash_command_accepted(command.name, true, ctx);
             }
             SlashCommandKind::InvokeSkill => {

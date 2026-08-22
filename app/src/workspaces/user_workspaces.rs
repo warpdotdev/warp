@@ -254,124 +254,6 @@ impl TeamScope for TeamContext<'_> {
     }
 }
 
-/// One of the user's teams, as offered back to them when Warp cannot pick one for itself.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TeamChoice {
-    pub name: String,
-    pub uid: ServerId,
-}
-
-/// Why [`UserWorkspaces::resolve_requested_team`] could not name exactly one team.
-///
-/// Every variant is a refusal rather than a fallback. The front-ends that resolve a team this
-/// way have no team switcher, so a wrong guess is neither visible nor correctable: it would
-/// apply some other team's admin policy with nothing on screen to say so. The `Display`
-/// rendering is therefore part of the contract, not presentation — each message names the
-/// teams and the flag that resolves the situation.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum TeamResolutionError {
-    /// The requested name or uid matches none of the user's teams.
-    UnknownTeam {
-        requested: String,
-        workspace: Option<String>,
-        available: Vec<TeamChoice>,
-    },
-    /// The requested name matches more than one team, so only a uid can disambiguate.
-    AmbiguousTeamName {
-        requested: String,
-        matches: Vec<TeamChoice>,
-    },
-    /// No team was requested and the user is on more than one.
-    NoTeamSelected {
-        workspace: Option<String>,
-        available: Vec<TeamChoice>,
-    },
-}
-
-impl TeamResolutionError {
-    fn write_choices(f: &mut std::fmt::Formatter<'_>, choices: &[TeamChoice]) -> std::fmt::Result {
-        let name_width = choices
-            .iter()
-            .map(|choice| choice.name.chars().count())
-            .max()
-            .unwrap_or_default();
-        for choice in choices {
-            writeln!(f, "  {:<name_width$}  {}", choice.name, choice.uid)?;
-        }
-        Ok(())
-    }
-}
-
-impl std::fmt::Display for TeamResolutionError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::UnknownTeam {
-                requested,
-                workspace,
-                available,
-            } => {
-                match workspace {
-                    Some(workspace) => writeln!(
-                        f,
-                        "No team matching \"{requested}\" in your current workspace \
-                         (\"{workspace}\")."
-                    )?,
-                    None => writeln!(f, "No team matching \"{requested}\".")?,
-                }
-                if available.is_empty() {
-                    return match workspace {
-                        Some(_) => write!(
-                            f,
-                            "You are not on any team in it, and only teams in your current \
-                             workspace can be named with --team."
-                        ),
-                        None => write!(f, "You are not on any team."),
-                    };
-                }
-                writeln!(f, "\nTeams you can name with --team:")?;
-                Self::write_choices(f, available)
-            }
-            Self::AmbiguousTeamName { requested, matches } => {
-                writeln!(
-                    f,
-                    "More than one of your teams is named \"{requested}\". Pass a team id \
-                     to --team instead:"
-                )?;
-                Self::write_choices(f, matches)
-            }
-            Self::NoTeamSelected {
-                workspace,
-                available,
-            } => {
-                match workspace {
-                    Some(workspace) => writeln!(
-                        f,
-                        "You are on more than one team in workspace \"{workspace}\", so Warp \
-                         cannot tell which team's settings this session should use."
-                    )?,
-                    None => writeln!(
-                        f,
-                        "You are on more than one team, so Warp cannot tell which team's \
-                         settings this session should use."
-                    )?,
-                }
-                writeln!(
-                    f,
-                    "Choosing for you would apply one team's admin policy with nothing on \
-                     screen to say so, so Warp will not guess."
-                )?;
-                writeln!(
-                    f,
-                    "\nRe-run with --team (or set WARP_TEAM), naming a team by name or id:"
-                )?;
-                Self::write_choices(f, available)
-            }
-        }
-    }
-}
-
-impl std::error::Error for TeamResolutionError {}
-
 impl UserWorkspaces {
     #[cfg(any(test, all(feature = "tui", feature = "test-util")))]
     pub fn mock(
@@ -539,85 +421,38 @@ impl UserWorkspaces {
         self.window_team_uids.get(&window_id).copied().flatten()
     }
 
-    /// Resolves the team a front-end with no team switcher should scope its single window to,
-    /// so it can [`Self::register_window`] with the answer.
+    /// Whether `window_id` has a team assignment at all, teamless included.
     ///
-    /// `requested` is a team name or team uid, typically from a command-line flag; it matches
-    /// a uid exactly, otherwise a name ignoring case and surrounding whitespace. Blank counts
-    /// as absent rather than as a team nothing matches. When it is absent, the user's teams
-    /// decide: none means the session is genuinely teamless, exactly one is unambiguous, and
-    /// more than one is [`TeamResolutionError::NoTeamSelected`].
-    ///
-    /// Only the current workspace's teams are considered, since that is the only place a
-    /// window's team can live: [`Self::team_from_uid`] looks nowhere else, and
-    /// `reconcile_window_team_assignments` moves any window off a team the current workspace
-    /// does not contain.
-    ///
-    /// This never falls back to an arbitrary team; see [`TeamResolutionError`] for why.
-    pub fn resolve_requested_team(
-        &self,
-        requested: Option<&str>,
-    ) -> Result<Option<ServerId>, TeamResolutionError> {
-        let teams = self
-            .current_workspace()
-            .map(|workspace| workspace.teams.as_slice())
-            .unwrap_or_default();
-
-        // `WARP_TEAM= warp` is the ordinary way to clear an exported variable for one
-        // command, and `--team "$TEAM"` expands to a blank value when the variable is unset.
-        // Both mean "no team requested", so neither may be read as a team that happens to
-        // match nothing -- that would turn a no-op into a refusal to start.
-        let requested = requested
-            .map(str::trim)
-            .filter(|requested| !requested.is_empty());
-
-        let Some(requested) = requested else {
-            return match teams {
-                [] => Ok(None),
-                [team] => Ok(Some(team.uid)),
-                _ => Err(TeamResolutionError::NoTeamSelected {
-                    workspace: self.current_workspace_name(),
-                    available: Self::team_choices(teams),
-                }),
-            };
-        };
-
-        if let Some(team) = teams.iter().find(|team| team.uid.to_string() == requested) {
-            return Ok(Some(team.uid));
-        }
-
-        let requested_name = requested.to_lowercase();
-        let matches = teams
-            .iter()
-            .filter(|team| team.name.trim().to_lowercase() == requested_name)
-            .collect::<Vec<_>>();
-        match matches.as_slice() {
-            [team] => Ok(Some(team.uid)),
-            [] => Err(TeamResolutionError::UnknownTeam {
-                requested: requested.to_owned(),
-                workspace: self.current_workspace_name(),
-                available: Self::team_choices(teams),
-            }),
-            _ => Err(TeamResolutionError::AmbiguousTeamName {
-                requested: requested.to_owned(),
-                matches: Self::team_choices(matches.iter().copied()),
-            }),
-        }
+    /// [`Self::team_uid_for_window`] answers `None` both for a window that was never
+    /// registered and for one registered with no team, so it cannot be used to decide whether
+    /// a default still needs applying.
+    pub fn is_window_registered(&self, window_id: WindowId) -> bool {
+        self.window_team_uids.contains_key(&window_id)
     }
 
-    fn current_workspace_name(&self) -> Option<String> {
-        self.current_workspace()
-            .map(|workspace| workspace.name.clone())
-    }
-
-    fn team_choices<'a>(teams: impl IntoIterator<Item = &'a Team>) -> Vec<TeamChoice> {
-        teams
-            .into_iter()
-            .map(|team| TeamChoice {
-                name: team.name.clone(),
-                uid: team.uid,
-            })
-            .collect()
+    /// Moves an already-registered window onto `team_uid`, overwriting whatever it was on.
+    ///
+    /// This is the only path that overwrites a window's team, and it exists for front-ends
+    /// that switch teams in place. The GUI has no such path: its team switcher opens a *new*
+    /// window scoped to the chosen team ([`crate::root_view::NewWorkspaceSource::TeamSwitched`])
+    /// rather than re-scoping the current one, so [`Self::register_window`] and
+    /// [`Self::set_team_for_window`] can stay insert-only. Keep it that way — a single
+    /// greppable overwrite is worth more than symmetry for a field that decides which team's
+    /// admin policy applies.
+    ///
+    /// No-ops when the window is already on `team_uid`, so callers may call it unconditionally.
+    pub fn switch_window_to_team(
+        &mut self,
+        window_id: WindowId,
+        team_uid: ServerId,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        if self.team_uid_for_window(window_id) == Some(team_uid) {
+            return;
+        }
+        self.window_team_uids.insert(window_id, Some(team_uid));
+        ctx.emit(UserWorkspacesEvent::WindowTeamChanged { window_id });
+        ctx.notify();
     }
 
     /// Returns `true` when the user belongs to more than one team in the current

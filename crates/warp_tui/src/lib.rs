@@ -61,6 +61,7 @@ mod skills_menu;
 mod slash_commands;
 mod statusline_config_view;
 pub mod tab_bar;
+mod team_menu;
 mod terminal_background;
 mod terminal_block;
 mod terminal_content_element;
