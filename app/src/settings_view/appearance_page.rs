@@ -95,7 +95,7 @@ use crate::workspace::header_toolbar_editor::HeaderToolbarInlineEditor;
 use crate::workspace::tab_settings::{
     DirectoryTabColor, HideTitleBarSearchBarInVerticalTabs, PreserveActiveTabColor,
     ShowCodeReviewButton, ShowIndicatorsButton, ShowVerticalTabPanelInRestoredWindows,
-    TabCloseButtonPosition, TabSettings, TabSettingsChangedEvent,
+    TabCloseButtonPosition, TabGroupAutoColor, TabSettings, TabSettingsChangedEvent,
     UseLatestUserPromptAsConversationTitleInTabNames, UseVerticalTabs,
     WorkspaceDecorationVisibility, canonical_directory_key,
 };
@@ -459,6 +459,17 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
         flags::PRESERVE_ACTIVE_TAB_COLOR_FLAG,
     ));
 
+    if FeatureFlag::GroupedTabs.is_enabled() {
+        toggle_binding_pairs.push(ToggleSettingActionPair::new(
+            "tab group auto color",
+            builder(SettingsAction::AppearancePageToggle(
+                AppearancePageAction::ToggleTabGroupAutoColor,
+            )),
+            context,
+            flags::TAB_GROUP_AUTO_COLOR_FLAG,
+        ));
+    }
+
     toggle_binding_pairs.push(ToggleSettingActionPair::new(
         "custom padding in alt-screen",
         builder(SettingsAction::AppearancePageToggle(
@@ -526,6 +537,7 @@ pub enum AppearancePageAction {
     ToggleTabIndicators,
     ToggleShowCodeReviewButton,
     TogglePreserveActiveTabColor,
+    ToggleTabGroupAutoColor,
     ToggleVerticalTabs,
     ToggleShowVerticalTabPanelInRestoredWindows,
     ToggleHideTitleBarSearchBarInVerticalTabs,
@@ -708,6 +720,7 @@ impl TypedActionView for AppearanceSettingsPageView {
             ToggleTabIndicators => self.toggle_tab_indicators(ctx),
             ToggleShowCodeReviewButton => self.toggle_show_code_review_button(ctx),
             TogglePreserveActiveTabColor => self.toggle_preserve_active_tab_color(ctx),
+            ToggleTabGroupAutoColor => self.toggle_tab_group_auto_color(ctx),
             ToggleVerticalTabs => self.toggle_vertical_tabs(ctx),
             ToggleShowVerticalTabPanelInRestoredWindows => {
                 self.toggle_show_vertical_tab_panel_in_restored_windows(ctx)
@@ -1540,6 +1553,10 @@ impl AppearanceSettingsPageView {
             tab_settings_widgets.push(Box::new(TabCloseButtonPositionWidget::default()));
         }
         tab_settings_widgets.push(Box::new(PreserveActiveTabColorWidget::default()));
+
+        if FeatureFlag::GroupedTabs.is_enabled() {
+            tab_settings_widgets.push(Box::new(TabGroupAutoColorWidget::default()));
+        }
 
         if FeatureFlag::VerticalTabs.is_enabled() {
             tab_settings_widgets.push(Box::new(VerticalTabsWidget::default()));
@@ -2498,6 +2515,12 @@ impl AppearanceSettingsPageView {
                     .show_code_review_button
                     .set_value(new_value, ctx)
             );
+        });
+    }
+
+    fn toggle_tab_group_auto_color(&mut self, ctx: &mut ViewContext<Self>) {
+        TabSettings::handle(ctx).update(ctx, |settings, ctx| {
+            report_if_error!(settings.tab_group_auto_color.toggle_and_save_value(ctx));
         });
     }
 
@@ -4981,6 +5004,54 @@ impl SettingsWidget for PreserveActiveTabColorWidget {
                 })
                 .finish(),
             None,
+        )
+    }
+}
+
+#[derive(Default)]
+struct TabGroupAutoColorWidget {
+    switch_state: SwitchStateHandle,
+}
+
+impl SettingsWidget for TabGroupAutoColorWidget {
+    type View = AppearanceSettingsPageView;
+
+    fn search_terms(&self) -> &str {
+        "tab group color auto assign distinct random"
+    }
+
+    fn render(
+        &self,
+        view: &Self::View,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
+        let tab_settings = TabSettings::as_ref(app);
+
+        render_body_item::<AppearancePageAction>(
+            "Assign new tab groups a distinct color".into(),
+            None,
+            LocalOnlyIconState::for_setting(
+                TabGroupAutoColor::storage_key(),
+                TabGroupAutoColor::sync_to_cloud(),
+                &mut view.local_only_icon_tooltip_states.borrow_mut(),
+                app,
+            ),
+            ToggleState::Enabled,
+            appearance,
+            appearance
+                .ui_builder()
+                .switch(self.switch_state.clone())
+                .check(*tab_settings.tab_group_auto_color)
+                .build()
+                .on_click(move |ctx, _, _| {
+                    ctx.dispatch_typed_action(AppearancePageAction::ToggleTabGroupAutoColor);
+                })
+                .finish(),
+            Some(
+                "When enabled, each new tab group is automatically assigned a color not already used by another group."
+                    .to_string(),
+            ),
         )
     }
 }
