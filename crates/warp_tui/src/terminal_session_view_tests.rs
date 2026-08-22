@@ -7246,7 +7246,7 @@ fn set_teams_and_register_window(
 }
 
 #[test]
-fn active_team_is_hidden_unless_the_user_is_on_more_than_one_team() {
+fn active_team_is_rendered_for_a_single_team_user() {
     App::test((), |mut app| async move {
         let fixture = focus_test_fixture(&mut app);
         let (view, _) = add_focus_test_session(&mut app, &fixture, true);
@@ -7257,15 +7257,8 @@ fn active_team_is_hidden_unless_the_user_is_on_more_than_one_team() {
         set_teams_and_register_window(&mut app, &["Solo"], window_id);
         let rendered = render_session(&mut app, &view, 100, 24).join("\n");
         assert!(
-            !rendered.contains("Solo"),
-            "a single-team user has nothing to disambiguate, got:\n{rendered}"
-        );
-
-        set_teams_and_register_window(&mut app, &[], window_id);
-        let rendered = render_session(&mut app, &view, 100, 24).join("\n");
-        assert!(
-            !rendered.contains("Solo"),
-            "a teamless user should show no team, got:\n{rendered}"
+            rendered.contains("Solo"),
+            "a single-team user's active team should be shown, got:\n{rendered}"
         );
     });
 }
@@ -7313,27 +7306,6 @@ fn active_team_is_hidden_when_disabled() {
         assert!(
             !rendered.contains("Platform"),
             "a disabled team item must stay hidden, got:\n{rendered}"
-        );
-    });
-}
-
-#[test]
-fn active_team_appears_when_a_second_team_arrives() {
-    App::test((), |mut app| async move {
-        let fixture = focus_test_fixture(&mut app);
-        let (view, _) = add_focus_test_session(&mut app, &fixture, true);
-        set_enabled_statusline_items(&mut app, vec![TuiStatuslineItem::Team]);
-
-        let window_id = app.read(|ctx| view.as_ref(ctx).window_id);
-        set_teams_and_register_window(&mut app, &["Platform"], window_id);
-        let rendered = render_session(&mut app, &view, 100, 24).join("\n");
-        assert!(!rendered.contains("Platform"), "got:\n{rendered}");
-
-        set_teams_and_register_window(&mut app, &["Platform", "Security"], window_id);
-        let rendered = render_session(&mut app, &view, 100, 24).join("\n");
-        assert!(
-            rendered.contains("Platform"),
-            "the item should appear once there is more than one team, got:\n{rendered}"
         );
     });
 }

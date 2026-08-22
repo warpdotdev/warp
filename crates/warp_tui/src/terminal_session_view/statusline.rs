@@ -408,9 +408,6 @@ impl TuiTerminalSessionView {
         ctx: &AppContext,
     ) -> Option<Box<dyn TuiElement>> {
         let user_workspaces = UserWorkspaces::as_ref(ctx);
-        if !user_workspaces.can_switch_teams() {
-            return None;
-        }
         let team_name = user_workspaces
             .team_for_window(self.window_id)?
             .name
