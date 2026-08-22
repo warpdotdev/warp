@@ -473,14 +473,24 @@ fi
 # below (which determines UNIVERSAL_BINARY's final value), so the
 # settings-schema defaults further down can fail clearly instead of hitting
 # an exec format error.
-case "$(uname -m)" in
-  arm64|aarch64) HOST_ARCH="aarch64" ;;
-  x86_64) HOST_ARCH="x86_64" ;;
-  *)
-    echo "Error: Unsupported host architecture: $(uname -m)" >&2
-    exit 1
-    ;;
-esac
+#
+# `uname -m` reports the architecture of the running process, not the
+# hardware: inside a Rosetta-translated x86_64 shell on Apple Silicon it
+# reports x86_64 even though the hardware can execute arm64 binaries
+# directly. `hw.optional.arm64` reflects the actual hardware instead, so
+# check it first.
+if [[ "$(sysctl -n hw.optional.arm64 2>/dev/null)" == "1" ]]; then
+  HOST_ARCH="aarch64"
+else
+  case "$(uname -m)" in
+    arm64|aarch64) HOST_ARCH="aarch64" ;;
+    x86_64) HOST_ARCH="x86_64" ;;
+    *)
+      echo "Error: Unsupported host architecture: $(uname -m)" >&2
+      exit 1
+      ;;
+  esac
+fi
 
 # Set artifact-specific configuration.
 if [[ "$ARTIFACT" == cli || "$ARTIFACT" == warpctrl ]]; then

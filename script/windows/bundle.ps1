@@ -65,12 +65,23 @@ if ($ARCH -eq 'arm64') {
 # Resolve it once so the settings-schema default below (which assumes the
 # just-built binary is executable) can fail clearly instead of the process
 # simply failing to start.
-$HOST_ARCH = if ($env:PROCESSOR_ARCHITECTURE -eq 'AMD64') {
+#
+# PROCESSOR_ARCHITECTURE reports the architecture of the running process, not
+# the host: an x64 PowerShell process running under WOW64 on a Windows-on-ARM
+# machine reports AMD64 even though the host is natively ARM64.
+# PROCESSOR_ARCHITEW6432 carries the true native host architecture in that
+# case, so prefer it when present.
+$NATIVE_PROCESSOR_ARCHITECTURE = if ($env:PROCESSOR_ARCHITEW6432) {
+    $env:PROCESSOR_ARCHITEW6432
+} else {
+    $env:PROCESSOR_ARCHITECTURE
+}
+$HOST_ARCH = if ($NATIVE_PROCESSOR_ARCHITECTURE -eq 'AMD64') {
     'x64'
-} elseif ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64') {
+} elseif ($NATIVE_PROCESSOR_ARCHITECTURE -eq 'ARM64') {
     'arm64'
 } else {
-    throw "Unsupported host architecture: $env:PROCESSOR_ARCHITECTURE"
+    throw "Unsupported host architecture: $NATIVE_PROCESSOR_ARCHITECTURE"
 }
 $CAN_EXECUTE_ARCH = -not ($ARCH -eq 'arm64' -and $HOST_ARCH -eq 'x64')
 
