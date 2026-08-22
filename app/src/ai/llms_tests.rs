@@ -1,6 +1,7 @@
 use std::cell::Cell;
 use std::rc::Rc;
 
+use warp_core::telemetry::testing::MockTelemetryContextProvider;
 use warpui::App;
 
 use super::*;
@@ -284,6 +285,65 @@ fn models_without_a_host_fall_back_to_the_provider_icon() {
         model_leading_icon(&llm, ModelIconFlags::default()),
         Icon::Agent
     );
+}
+
+// -- is_using_api_key_for_provider: xAI Grok single-sourcing --
+
+fn add_api_key_manager_for_test(app: &mut App) {
+    app.update(|ctx| {
+        warpui_extras::secure_storage::register_noop("test", ctx);
+        MockTelemetryContextProvider::register(ctx);
+        ctx.add_singleton_model(ApiKeyManager::new);
+    });
+}
+
+#[test]
+fn xai_key_connected_requires_usable_grok_access_token() {
+    App::test((), |mut app| async move {
+        // Solo user (no workspace) with BYO enabled via the solo flag and an
+        // authenticated session, so BYO credentials are permitted.
+        let _guard = FeatureFlag::SoloUserByok.override_enabled(true);
+        app.add_singleton_model(|_| AuthStateProvider::new_for_test());
+        app.add_singleton_model(UserWorkspaces::default_mock);
+        add_api_key_manager_for_test(&mut app);
+
+        // A stored Grok token with a blank access token is not usable, so the
+        // picker must not report the xAI provider as connected — matching the
+        // request-time token attach and the credit gate, which both key off
+        // `has_grok_subscription()`.
+        ApiKeyManager::handle(&app).update(&mut app, |manager, ctx| {
+            manager.set_grok_tokens(
+                Some(ai::api_keys::GrokTokens {
+                    access_token: "   ".to_string(),
+                    ..Default::default()
+                }),
+                ctx,
+            );
+        });
+        app.read(|ctx| {
+            assert!(
+                !is_using_api_key_for_provider(&LLMProvider::Xai, ctx),
+                "a blank Grok access token must not report as a connected xAI key",
+            );
+        });
+
+        // A usable access token reports as connected.
+        ApiKeyManager::handle(&app).update(&mut app, |manager, ctx| {
+            manager.set_grok_tokens(
+                Some(ai::api_keys::GrokTokens {
+                    access_token: "grok-usable-token".to_string(),
+                    ..Default::default()
+                }),
+                ctx,
+            );
+        });
+        app.read(|ctx| {
+            assert!(
+                is_using_api_key_for_provider(&LLMProvider::Xai, ctx),
+                "a usable Grok access token must report as a connected xAI key",
+            );
+        });
+    });
 }
 
 // -- build_custom_llm_infos / display label tests --

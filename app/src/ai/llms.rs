@@ -24,8 +24,10 @@ use crate::workspaces::user_workspaces::{UserWorkspaces, UserWorkspacesEvent};
 
 /// Checks if a user's' API key is being used for the given provider.
 /// Returns `true` if BYO API key is enabled and a key exists for the provider.
-/// For xAI, a connected Grok subscription counts: its OAuth access token is
-/// sent like a BYO key (see `ApiKeyManager::api_keys_for_request`).
+/// For xAI, a connected Grok subscription counts only when it has a usable
+/// OAuth access token (`has_grok_subscription`), the same predicate the credit
+/// gate and request-time token attach use. A stored token with a blank access
+/// token is not usable, so it must not report as connected.
 pub fn is_using_api_key_for_provider(provider: &LLMProvider, app: &AppContext) -> bool {
     if !UserWorkspaces::as_ref(app).is_byo_api_key_enabled(app) {
         return false;
@@ -36,7 +38,7 @@ pub fn is_using_api_key_for_provider(provider: &LLMProvider, app: &AppContext) -
         LLMProvider::OpenAI => manager.keys().openai.is_some(),
         LLMProvider::Anthropic => manager.keys().anthropic.is_some(),
         LLMProvider::Google => manager.keys().google.is_some(),
-        LLMProvider::Xai => manager.grok_tokens().is_some(),
+        LLMProvider::Xai => manager.has_grok_subscription(),
         LLMProvider::Unknown => false,
     }
 }
