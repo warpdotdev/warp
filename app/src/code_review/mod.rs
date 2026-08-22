@@ -25,6 +25,7 @@ pub(crate) mod diff_selector;
 pub(crate) mod file_invalidation_queue;
 
 use code_review_view::CodeReviewAction;
+use warp_completer::completer::PathSeparators;
 use warpui::keymap::{EditableBinding, FixedBinding};
 use warpui::{
     AppContext, Entity, EntityId, ModelContext, SingletonEntity, WeakViewHandle, WindowId, id,
@@ -59,6 +60,23 @@ pub enum DiffSetScope {
 /// The keystroke that submits in the code review panel. Meant to mirror the keystroke for
 /// [`EditorViewEvent::CmdEnter`].
 pub const CODE_REVIEW_SUBMIT_KEYSTROKE: &str = "cmdorctrl-enter";
+
+/// Formats a git-style repo-relative path for display in the active shell session.
+///
+/// Git always reports repo-relative paths with `/`, even on Windows. Paths stay in that
+/// form internally (they are fed back to git and to path lookups); this rewrites the
+/// separators purely at UI boundaries so a native Windows session renders `\`.
+pub(crate) fn format_path_for_display(path: &str, separators: &PathSeparators) -> String {
+    path.chars()
+        .map(|character| {
+            if separators.all.contains(&character) {
+                separators.main
+            } else {
+                character
+            }
+        })
+        .collect()
+}
 
 /// Register keybindings for code review functionality.
 pub fn init(app: &mut AppContext) {
@@ -194,3 +212,7 @@ impl SingletonEntity for GlobalCodeReviewModel {}
 impl Entity for GlobalCodeReviewModel {
     type Event = GlobalCodeReviewEvent;
 }
+
+#[cfg(test)]
+#[path = "mod_tests.rs"]
+mod tests;
