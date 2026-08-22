@@ -75,7 +75,6 @@ use warpui_core::platform::TerminationMode;
 use warpui_core::platform::keyboard::KeyCode;
 use warpui_core::{
     AppContext, Entity, EntityId, ModelHandle, TuiView, TypedActionView, ViewContext, ViewHandle,
-    WindowId,
 };
 
 use crate::agent_block::upgrade_url;
@@ -730,9 +729,6 @@ pub(crate) struct TuiTerminalSessionView {
     /// — the same `MouseStateHandle` pattern as [`UsageToggle`].
     model_label_hover: MouseStateHandle,
     team_label_hover: MouseStateHandle,
-    /// The window this surface lives in, needed to resolve its team. Stored rather than read
-    /// from a `ViewContext` because the statusline renders from an `AppContext`.
-    window_id: WindowId,
     /// Hover and click state for the configured TODO statusline control.
     todo_list_mouse: MouseStateHandle,
     /// Hover and click state for the configured Voice statusline control.
@@ -2169,15 +2165,12 @@ impl TuiTerminalSessionView {
                 ctx.notify();
             }
         });
-        ctx.subscribe_to_model(&UserWorkspaces::handle(ctx), move |view, _, event, ctx| {
-            let is_this_window = match event {
-                UserWorkspacesEvent::TeamsChanged => true,
-                UserWorkspacesEvent::WindowTeamChanged { window_id } => {
-                    *window_id == view.window_id
-                }
-                _ => false,
-            };
-            if is_this_window {
+        ctx.subscribe_to_model(&UserWorkspaces::handle(ctx), |_, _, event, ctx| {
+            if matches!(
+                event,
+                UserWorkspacesEvent::WindowTeamChanged { window_id }
+                    if *window_id == ctx.window_id()
+            ) {
                 ctx.notify();
             }
         });
@@ -2325,7 +2318,6 @@ impl TuiTerminalSessionView {
             hidden_response_summary_exchange_ids: HashSet::new(),
             model_label_hover: MouseStateHandle::default(),
             team_label_hover: MouseStateHandle::default(),
-            window_id,
             todo_list_mouse: MouseStateHandle::default(),
             #[cfg(feature = "voice_input")]
             voice_input_mouse: MouseStateHandle::default(),

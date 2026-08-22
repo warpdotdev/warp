@@ -7252,7 +7252,7 @@ fn active_team_is_rendered_for_a_single_team_user() {
         let (view, _) = add_focus_test_session(&mut app, &fixture, true);
         set_enabled_statusline_items(&mut app, vec![TuiStatuslineItem::Team]);
 
-        let window_id = app.read(|ctx| view.as_ref(ctx).window_id);
+        let window_id = app.read(|ctx| view.window_id(ctx));
 
         set_teams_and_register_window(&mut app, &["Solo"], window_id);
         let rendered = render_session(&mut app, &view, 100, 24).join("\n");
@@ -7270,7 +7270,7 @@ fn active_team_is_rendered_and_follows_a_switch() {
         let (view, _) = add_focus_test_session(&mut app, &fixture, true);
         set_enabled_statusline_items(&mut app, vec![TuiStatuslineItem::Team]);
 
-        let window_id = app.read(|ctx| view.as_ref(ctx).window_id);
+        let window_id = app.read(|ctx| view.window_id(ctx));
         let team_uids =
             set_teams_and_register_window(&mut app, &["Platform", "Security"], window_id);
 
@@ -7299,7 +7299,7 @@ fn active_team_is_hidden_when_disabled() {
         let fixture = focus_test_fixture(&mut app);
         let (view, _) = add_focus_test_session(&mut app, &fixture, true);
 
-        let window_id = app.read(|ctx| view.as_ref(ctx).window_id);
+        let window_id = app.read(|ctx| view.window_id(ctx));
         set_teams_and_register_window(&mut app, &["Platform", "Security"], window_id);
 
         let rendered = render_session(&mut app, &view, 100, 24).join("\n");

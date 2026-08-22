@@ -409,7 +409,7 @@ impl TuiTerminalSessionView {
     ) -> Option<Box<dyn TuiElement>> {
         let user_workspaces = UserWorkspaces::as_ref(ctx);
         let team_name = user_workspaces
-            .team_for_window(self.window_id)?
+            .team_for_window(self.input_view.window_id(ctx))?
             .name
             .clone();
         let hovered = self
