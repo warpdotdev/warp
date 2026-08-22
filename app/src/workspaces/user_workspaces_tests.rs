@@ -71,8 +71,8 @@ use crate::workspaces::team_tester::TeamTesterStatus;
 use crate::workspaces::update_manager::TeamUpdateManager;
 use crate::workspaces::user_workspaces::UserWorkspaces;
 use crate::workspaces::workspace::{
-    AdminEnablementSetting, HostEnablementSetting, LlmHostSettings, MultiAdminPolicy,
-    PurchaseAddOnCreditsPolicy, Workspace,
+    AdminEnablementSetting, EnforceableSetting, HostEnablementSetting, LlmHostSettings,
+    MultiAdminPolicy, PurchaseAddOnCreditsPolicy, TeamLinkSharingSettings, Workspace,
 };
 
 #[derive(Default)]
@@ -1173,6 +1173,138 @@ fn test_team_contexts_represent_a_registered_teamless_window() {
                 .team_context(&weak_view, ctx)
                 .expect("a registered teamless window should resolve");
             assert_eq!(context.team_uid(), None);
+        });
+    })
+}
+
+fn team_link_sharing(anyone_with_link: bool, direct: bool) -> TeamLinkSharingSettings {
+    TeamLinkSharingSettings {
+        anyone_with_link_sharing_enabled: EnforceableSetting {
+            value: anyone_with_link,
+            is_enforced_by_workspace: false,
+        },
+        direct_link_sharing_enabled: EnforceableSetting {
+            value: direct,
+            is_enforced_by_workspace: false,
+        },
+    }
+}
+
+/// Team A permits both link-sharing channels; team B permits neither.
+fn a_sharing_team_and_a_restricted_team() -> (Team, Team) {
+    let (mut sharing_team, mut restricted_team) = two_teams();
+    sharing_team.settings.link_sharing = team_link_sharing(true, true);
+    restricted_team.settings.link_sharing = team_link_sharing(false, false);
+    (sharing_team, restricted_team)
+}
+
+#[test]
+fn test_link_sharing_resolves_each_windows_own_team() {
+    let (sharing_team, restricted_team) = a_sharing_team_and_a_restricted_team();
+    let mut workspace = workspace_for_test(&sharing_team);
+    workspace.teams.push(restricted_team.clone());
+    // Neither window may read this: it is one arbitrarily-chosen team's effective settings
+    // rather than workspace-level data, and it disagrees with both teams' policies.
+    workspace.settings.link_sharing_settings = LinkSharingSettings {
+        anyone_with_link_sharing_enabled: false,
+        direct_link_sharing_enabled: true,
+    };
+
+    App::test((), |mut app| async move {
+        initialize_window_team_test_app(&mut app, vec![workspace]);
+
+        let (sharing_window, sharing_view) = create_test_window(&mut app);
+        let (restricted_window, restricted_view) = create_test_window(&mut app);
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.set_team_for_window(sharing_window, sharing_team.uid, ctx);
+            user_workspaces.set_team_for_window(restricted_window, restricted_team.uid, ctx);
+        });
+
+        let sharing_view = sharing_view.downgrade();
+        let restricted_view = restricted_view.downgrade();
+        app.read(|ctx| {
+            let user_workspaces = UserWorkspaces::as_ref(ctx);
+            let sharing_scope = user_workspaces
+                .team_context(&sharing_view, ctx)
+                .expect("the window on the sharing team should resolve a scope");
+            let restricted_scope = user_workspaces
+                .team_context(&restricted_view, ctx)
+                .expect("the window on the restricted team should resolve a scope");
+
+            assert!(user_workspaces.is_anyone_with_link_sharing_enabled(&sharing_scope));
+            assert!(user_workspaces.is_direct_link_sharing_enabled(&sharing_scope));
+            assert!(
+                !user_workspaces.is_anyone_with_link_sharing_enabled(&restricted_scope),
+                "a second window on a restricting team should not inherit the first window's \
+                 policy"
+            );
+            assert!(!user_workspaces.is_direct_link_sharing_enabled(&restricted_scope));
+        });
+    })
+}
+
+#[test]
+fn test_link_sharing_for_a_teamless_window_ignores_the_users_other_teams() {
+    let (_, restricted_team) = a_sharing_team_and_a_restricted_team();
+    let mut workspace = workspace_for_test(&restricted_team);
+    workspace.settings.link_sharing_settings = LinkSharingSettings::default();
+
+    App::test((), |mut app| async move {
+        initialize_window_team_test_app(&mut app, vec![workspace]);
+
+        let (window_id, view) = create_test_window(&mut app);
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.register_window(window_id, None, ctx);
+        });
+
+        let view = view.downgrade();
+        app.read(|ctx| {
+            let user_workspaces = UserWorkspaces::as_ref(ctx);
+            let scope = user_workspaces
+                .team_context(&view, ctx)
+                .expect("a registered teamless window should resolve a scope");
+            assert_eq!(scope.team_uid(), None);
+
+            assert!(
+                user_workspaces.is_anyone_with_link_sharing_enabled(&scope),
+                "a window with no team is not on a team, so neither the restricting team's \
+                 policy nor the workspace's teams[0] settings may govern it"
+            );
+            assert!(user_workspaces.is_direct_link_sharing_enabled(&scope));
+        });
+    })
+}
+
+#[test]
+fn test_link_sharing_falls_back_to_the_workspace_for_a_user_on_no_team() {
+    let mut workspace = workspace_for_test(&team_for_test());
+    workspace.teams.clear();
+    workspace.settings.link_sharing_settings = LinkSharingSettings {
+        anyone_with_link_sharing_enabled: false,
+        direct_link_sharing_enabled: true,
+    };
+
+    App::test((), |mut app| async move {
+        initialize_window_team_test_app(&mut app, vec![workspace]);
+
+        let (window_id, view) = create_test_window(&mut app);
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.register_window(window_id, None, ctx);
+        });
+
+        let view = view.downgrade();
+        app.read(|ctx| {
+            let user_workspaces = UserWorkspaces::as_ref(ctx);
+            let scope = user_workspaces
+                .team_context(&view, ctx)
+                .expect("a registered teamless window should resolve a scope");
+
+            assert!(
+                !user_workspaces.is_anyone_with_link_sharing_enabled(&scope),
+                "a workspace with no teams has genuine workspace-level settings, which still \
+                 govern"
+            );
+            assert!(user_workspaces.is_direct_link_sharing_enabled(&scope));
         });
     })
 }

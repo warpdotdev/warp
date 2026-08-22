@@ -977,6 +977,15 @@ pub struct LinkSharingSettings {
     pub direct_link_sharing_enabled: bool,
 }
 
+impl LinkSharingSettings {
+    /// The policy in force when neither a team nor a workspace governs link sharing: both
+    /// channels are permitted. Deliberately not `Default`, which is all-`false`.
+    pub(crate) const UNRESTRICTED: Self = Self {
+        anyone_with_link_sharing_enabled: true,
+        direct_link_sharing_enabled: true,
+    };
+}
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct EnterpriseSecretRegex {
     pub pattern: String,
