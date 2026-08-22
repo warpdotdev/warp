@@ -265,15 +265,6 @@ fn build_and_link_sentry() {
     };
     let sentry_framework_path = format!("{frameworks_dir}/{sentry_dir}/macos-arm64_arm64e_x86_64");
 
-    // Deliberately not tracked with `cargo:rerun-if-changed`: this directory is what
-    // `download_sentry_framework` above just wrote, so watching it for changes is
-    // self-referential. On a cold checkout the download/extraction can leave the
-    // directory's mtime newer than the timestamp Cargo stamps for this build script run,
-    // which then makes the very next build consider it stale and needlessly re-run this
-    // build script (and everything depending on it). The pinned `cocoa_sentry_version` in
-    // `download_sentry_framework` lives in this file, so a version bump already forces a
-    // re-run via the `build.rs` rerun-if-changed above.
-
     // Link the Sentry framework, and compile our objc logic that interfaces with it.
     println!("cargo:rustc-link-search=framework=app/{sentry_framework_path}");
     println!("cargo:rustc-link-lib=framework=Sentry");
