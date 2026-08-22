@@ -980,6 +980,18 @@ impl ConversationDetailsPanel {
             ArtifactButtonsRowEvent::DownloadFile { artifact_uid } => {
                 crate::ai::artifacts::download_file_artifact(artifact_uid, ctx);
             }
+            ArtifactButtonsRowEvent::OpenRecording { artifact_uid } => {
+                // Recordings are only produced by cloud runs, so a task id (and thus the
+                // durable Oz run-viewer URL) is only available in Task mode. Conversation
+                // mode has no backing run and passes None, letting open_recording_artifact
+                // fall back to a short-lived signed URL -- acceptable because local
+                // conversations don't carry recordings.
+                let task_id = match &self.data.mode {
+                    PanelMode::Task { task_id, .. } => *task_id,
+                    PanelMode::Conversation { .. } => None,
+                };
+                crate::ai::artifacts::open_recording_artifact(artifact_uid, task_id, ctx);
+            }
         }
     }
 

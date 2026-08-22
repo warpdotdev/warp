@@ -1435,6 +1435,7 @@ type FileArtifact {
   filepath: String!
   mimeType: String!
   sizeBytes: Int
+  title: String
 }
 
 """
