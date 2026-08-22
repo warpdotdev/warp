@@ -261,6 +261,18 @@ pub(crate) enum GeminiEnterpriseBackgroundHost<'a> {
     Enabled(&'a LlmHostSettings),
 }
 
+impl<'a> GeminiEnterpriseBackgroundHost<'a> {
+    /// The configuration to mint from, for a caller that needs to know only whether minting
+    /// happens and not why it does not. Anything that reports the outcome to a user should
+    /// match on the variants instead, since the two non-minting cases are not interchangeable.
+    pub(crate) fn settings_to_mint_from(self) -> Option<&'a LlmHostSettings> {
+        match self {
+            Self::Enabled(settings) => Some(settings),
+            Self::NoneEnabled | Self::Conflicting => None,
+        }
+    }
+}
+
 impl UserWorkspaces {
     #[cfg(any(test, all(feature = "tui", feature = "test-util")))]
     pub fn mock(
@@ -1190,10 +1202,9 @@ impl UserWorkspaces {
         &self,
         app: &AppContext,
     ) -> bool {
-        matches!(
-            self.gemini_enterprise_host_for_any_enabling_team(app),
-            GeminiEnterpriseBackgroundHost::Enabled(_)
-        )
+        self.gemini_enterprise_host_for_any_enabling_team(app)
+            .settings_to_mint_from()
+            .is_some()
     }
 
     /// Returns the AI autonomy settings that are enforced by the workspace for all its members.
