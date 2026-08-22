@@ -4,6 +4,7 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 
 use ordered_float::OrderedFloat;
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Deserializer, Serialize};
 use warp_core::command::ExitCode;
 
@@ -33,7 +34,12 @@ pub(super) const UNENCODED_KV_MARKER: char = 'k';
 pub type HookSessionId = Option<u64>;
 
 /// Enum representing all possible JSON payloads for Warp's DCS's.
-#[derive(Serialize, Debug, Deserialize)]
+///
+/// Serialization derives the internally tagged form
+/// (`{"hook": "...", "value": {...}}`). Deserialization is hand-written
+/// below and must accept exactly that form; it avoids the generic buffering
+/// machinery that serde generates for internally tagged enums.
+#[derive(Serialize, Debug)]
 #[allow(clippy::upper_case_acronyms)]
 #[serde(tag = "hook")]
 pub(super) enum DProtoHook {
@@ -78,6 +84,94 @@ pub(super) enum DProtoHook {
     ExitShell {
         value: ExitShellValue,
     },
+}
+
+/// The variant names of [`DProtoHook`], used for unknown-variant errors.
+const DPROTO_HOOK_VARIANTS: &[&str] = &[
+    "CommandFinished",
+    "Precmd",
+    "Preexec",
+    "Bootstrapped",
+    "PreInteractiveSSHSession",
+    "SSH",
+    "InitShell",
+    "InputBuffer",
+    "Clear",
+    "InitSubshell",
+    "SourcedRcFileForWarp",
+    "FinishUpdate",
+    "ExitShell",
+];
+
+/// The envelope shape of a serialized hook: the `hook` tag plus the `value`
+/// payload, which is parsed once the tag is known.
+#[derive(Deserialize)]
+struct RawDProtoHook {
+    hook: String,
+    value: serde_json::Value,
+}
+
+/// Parses a buffered JSON value into a hook payload type.
+fn parse_hook_value<T: DeserializeOwned, E: serde::de::Error>(
+    value: serde_json::Value,
+) -> Result<T, E> {
+    serde_json::from_value(value).map_err(E::custom)
+}
+
+impl<'de> Deserialize<'de> for DProtoHook {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let raw = RawDProtoHook::deserialize(deserializer)?;
+        Ok(match raw.hook.as_str() {
+            "CommandFinished" => DProtoHook::CommandFinished {
+                value: parse_hook_value::<_, D::Error>(raw.value)?,
+            },
+            "Precmd" => DProtoHook::Precmd {
+                value: parse_hook_value::<_, D::Error>(raw.value)?,
+            },
+            "Preexec" => DProtoHook::Preexec {
+                value: parse_hook_value::<_, D::Error>(raw.value)?,
+            },
+            "Bootstrapped" => DProtoHook::Bootstrapped {
+                value: parse_hook_value::<_, D::Error>(raw.value)?,
+            },
+            "PreInteractiveSSHSession" => DProtoHook::PreInteractiveSSHSession {
+                value: parse_hook_value::<_, D::Error>(raw.value)?,
+            },
+            "SSH" => DProtoHook::SSH {
+                value: parse_hook_value::<_, D::Error>(raw.value)?,
+            },
+            "InitShell" => DProtoHook::InitShell {
+                value: parse_hook_value::<_, D::Error>(raw.value)?,
+            },
+            "InputBuffer" => DProtoHook::InputBuffer {
+                value: parse_hook_value::<_, D::Error>(raw.value)?,
+            },
+            "Clear" => DProtoHook::Clear {
+                value: parse_hook_value::<_, D::Error>(raw.value)?,
+            },
+            "InitSubshell" => DProtoHook::InitSubshell {
+                value: parse_hook_value::<_, D::Error>(raw.value)?,
+            },
+            "SourcedRcFileForWarp" => DProtoHook::SourcedRcFileForWarp {
+                value: parse_hook_value::<_, D::Error>(raw.value)?,
+            },
+            "FinishUpdate" => DProtoHook::FinishUpdate {
+                value: parse_hook_value::<_, D::Error>(raw.value)?,
+            },
+            "ExitShell" => DProtoHook::ExitShell {
+                value: parse_hook_value::<_, D::Error>(raw.value)?,
+            },
+            unknown => {
+                return Err(serde::de::Error::unknown_variant(
+                    unknown,
+                    DPROTO_HOOK_VARIANTS,
+                ));
+            }
+        })
+    }
 }
 
 impl DProtoHook {
@@ -596,104 +690,210 @@ pub struct PreexecValue {
 
 /// Received from the pty after the shell has finished executing Warp's
 /// bootstrap script.
-#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+///
+/// Deserialization is hand-written through [`RawBootstrappedValue`] below,
+/// which applies the per-field string conversions in one place instead of
+/// through per-field `deserialize_with` wrappers.
+#[derive(Clone, Debug, Default, Serialize, PartialEq, Eq)]
 pub struct BootstrappedValue {
-    #[serde(default)]
     pub session_id: HookSessionId,
 
-    #[serde(deserialize_with = "empty_string_is_none")]
     pub histfile: Option<String>,
 
-    #[serde(deserialize_with = "trim_null_byte_deserializer", default)]
     pub shell: String,
 
-    #[serde(deserialize_with = "empty_string_is_none")]
     pub home_dir: Option<String>,
 
-    #[serde(deserialize_with = "empty_string_is_none")]
     pub path: Option<String>,
 
     /// `CDPATH` from the shell, colon-separated.
-    #[serde(deserialize_with = "empty_string_is_none", default)]
     pub cdpath: Option<String>,
 
-    #[serde(deserialize_with = "empty_string_is_none", default)]
     pub editor: Option<String>,
 
-    #[serde(deserialize_with = "empty_string_is_none")]
     pub aliases: Option<String>,
 
-    #[serde(deserialize_with = "empty_string_is_none")]
     pub abbreviations: Option<String>,
 
-    #[serde(deserialize_with = "empty_string_is_none")]
     pub function_names: Option<String>,
 
-    #[serde(deserialize_with = "empty_string_is_none")]
     pub env_var_names: Option<String>,
 
-    #[serde(deserialize_with = "empty_string_is_none")]
     pub builtins: Option<String>,
 
-    #[serde(deserialize_with = "empty_string_is_none")]
     pub keywords: Option<String>,
 
-    #[serde(deserialize_with = "empty_string_is_none")]
     pub shell_version: Option<String>,
 
     /// A list of options enabled for the shell by the end of bootstrap.  Will
     /// be None if the shell doesn't support listing options via builtin.
-    #[serde(deserialize_with = "parse_shell_options_list_deserializer", default)]
     pub shell_options: Option<HashSet<String>>,
 
     /// The time at which we started sourcing the user rcfiles, measured in
     /// seconds since epoch.
-    #[serde(deserialize_with = "parse_float_from_string_deserializer", default)]
     pub rcfiles_start_time: Option<OrderedFloat<f64>>,
 
     /// The time at which we finished sourcing the user rcfiles, measured in
     /// seconds since epoch.
-    #[serde(deserialize_with = "parse_float_from_string_deserializer", default)]
     pub rcfiles_end_time: Option<OrderedFloat<f64>>,
 
     /// Tags for known shell configurations/plugins, especially ones that are
     /// incompatible with Warp.
-    #[serde(deserialize_with = "parse_shell_options_list_deserializer", default)]
     pub shell_plugins: Option<HashSet<String>>,
 
     /// Whether the shell's native vi mode implementation is on.
-    #[serde(deserialize_with = "empty_string_is_none", default)]
     pub vi_mode_enabled: Option<String>,
 
     /// The operating system category (e.g. MacOS, Linux, Windows).
-    #[serde(deserialize_with = "empty_string_is_none", default)]
     pub os_category: Option<String>,
 
-    #[serde(deserialize_with = "empty_string_is_none", default)]
     pub linux_distribution: Option<String>,
 
-    #[serde(deserialize_with = "empty_string_is_none", default)]
     pub wsl_name: Option<String>,
 
     /// The full path to the running shell binary (e.g. "/usr/bin/zsh").
-    #[serde(deserialize_with = "empty_string_is_none", default)]
     pub shell_path: Option<String>,
 }
 
-/// Custom serde deserializer that parses a float from a string.
-fn parse_float_from_string_deserializer<'de, D>(
-    deserializer: D,
-) -> Result<Option<OrderedFloat<f64>>, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    let s = String::deserialize(deserializer)?;
-    if s.is_empty() {
-        return Ok(None);
+/// An optional string field of [`RawBootstrappedValue`]. It distinguishes a
+/// missing field from a present string, so the conversions below can mirror
+/// the `#[serde(default)]` behavior of the former derived deserializer.
+#[derive(Debug, Default)]
+enum RawBootstrappedField {
+    #[default]
+    Missing,
+    Present(String),
+}
+
+impl<'de> Deserialize<'de> for RawBootstrappedField {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        String::deserialize(deserializer).map(Self::Present)
     }
-    Ok(Some(
-        s.parse::<f64>().map_err(serde::de::Error::custom)?.into(),
-    ))
+}
+
+impl RawBootstrappedField {
+    /// Mirrors the `empty_string_is_none` field deserializer, with a missing
+    /// field mapping to `None`.
+    fn empty_string_to_none(self) -> Option<String> {
+        match self {
+            Self::Missing => None,
+            Self::Present(s) => empty_string_to_none(s),
+        }
+    }
+
+    /// Mirrors the `trim_null_byte_deserializer` field deserializer, with a
+    /// missing field mapping to an empty string.
+    fn trimmed(self) -> String {
+        match self {
+            Self::Missing => String::new(),
+            Self::Present(s) => trim_null_byte(s),
+        }
+    }
+
+    /// Mirrors the former `parse_shell_options_list_deserializer` field
+    /// deserializer, with a missing field mapping to `None`.
+    fn shell_options(self) -> Option<HashSet<String>> {
+        match self {
+            Self::Missing => None,
+            Self::Present(s) => Some(parse_shell_options_list(s)),
+        }
+    }
+
+    /// Mirrors the former `parse_float_from_string_deserializer` field
+    /// deserializer, with a missing field mapping to `None`. A non-empty
+    /// string that does not parse as a float is an error, exactly as in the
+    /// former field deserializer.
+    fn float_from_string<E: serde::de::Error>(self) -> Result<Option<OrderedFloat<f64>>, E> {
+        match self {
+            Self::Missing => Ok(None),
+            Self::Present(s) => {
+                if s.is_empty() {
+                    return Ok(None);
+                }
+                Ok(Some(s.parse::<f64>().map_err(E::custom)?.into()))
+            }
+        }
+    }
+}
+
+/// The raw wire shape of [`BootstrappedValue`]. Fields without a
+/// `#[serde(default)]` attribute are required, exactly as in the former
+/// derived deserializer.
+#[derive(Deserialize)]
+struct RawBootstrappedValue {
+    #[serde(default)]
+    session_id: HookSessionId,
+    histfile: String,
+    #[serde(default)]
+    shell: RawBootstrappedField,
+    home_dir: String,
+    path: String,
+    #[serde(default)]
+    cdpath: RawBootstrappedField,
+    #[serde(default)]
+    editor: RawBootstrappedField,
+    aliases: String,
+    abbreviations: String,
+    function_names: String,
+    env_var_names: String,
+    builtins: String,
+    keywords: String,
+    shell_version: String,
+    #[serde(default)]
+    shell_options: RawBootstrappedField,
+    #[serde(default)]
+    rcfiles_start_time: RawBootstrappedField,
+    #[serde(default)]
+    rcfiles_end_time: RawBootstrappedField,
+    #[serde(default)]
+    shell_plugins: RawBootstrappedField,
+    #[serde(default)]
+    vi_mode_enabled: RawBootstrappedField,
+    #[serde(default)]
+    os_category: RawBootstrappedField,
+    #[serde(default)]
+    linux_distribution: RawBootstrappedField,
+    #[serde(default)]
+    wsl_name: RawBootstrappedField,
+    #[serde(default)]
+    shell_path: RawBootstrappedField,
+}
+
+impl<'de> Deserialize<'de> for BootstrappedValue {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let raw = RawBootstrappedValue::deserialize(deserializer)?;
+        Ok(Self {
+            session_id: raw.session_id,
+            histfile: empty_string_to_none(raw.histfile),
+            shell: raw.shell.trimmed(),
+            home_dir: empty_string_to_none(raw.home_dir),
+            path: empty_string_to_none(raw.path),
+            cdpath: raw.cdpath.empty_string_to_none(),
+            editor: raw.editor.empty_string_to_none(),
+            aliases: empty_string_to_none(raw.aliases),
+            abbreviations: empty_string_to_none(raw.abbreviations),
+            function_names: empty_string_to_none(raw.function_names),
+            env_var_names: empty_string_to_none(raw.env_var_names),
+            builtins: empty_string_to_none(raw.builtins),
+            keywords: empty_string_to_none(raw.keywords),
+            shell_version: empty_string_to_none(raw.shell_version),
+            shell_options: raw.shell_options.shell_options(),
+            rcfiles_start_time: raw.rcfiles_start_time.float_from_string()?,
+            rcfiles_end_time: raw.rcfiles_end_time.float_from_string()?,
+            shell_plugins: raw.shell_plugins.shell_options(),
+            vi_mode_enabled: raw.vi_mode_enabled.empty_string_to_none(),
+            os_category: raw.os_category.empty_string_to_none(),
+            linux_distribution: raw.linux_distribution.empty_string_to_none(),
+            wsl_name: raw.wsl_name.empty_string_to_none(),
+            shell_path: raw.shell_path.empty_string_to_none(),
+        })
+    }
 }
 
 fn parse_float_from_string(s: String) -> Option<OrderedFloat<f64>> {
@@ -832,24 +1032,17 @@ fn empty_string_is_none<'de, D>(deserializer: D) -> Result<Option<String>, D::Er
 where
     D: Deserializer<'de>,
 {
-    let s = String::deserialize(deserializer)?;
-    let trimmed = trim_null_byte(s);
-    if trimmed.is_empty() {
-        Ok(None)
-    } else {
-        Ok(Some(trimmed))
-    }
+    Ok(empty_string_to_none(String::deserialize(deserializer)?))
 }
 
-fn parse_shell_options_list_deserializer<'de, D>(
-    deserializer: D,
-) -> Result<Option<HashSet<String>>, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    let s = String::deserialize(deserializer)?;
-    let options: HashSet<String> = parse_shell_options_list(s);
-    Ok(Some(options))
+/// Trims the string and maps an empty result to `None`.
+fn empty_string_to_none(s: String) -> Option<String> {
+    let trimmed = trim_null_byte(s);
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed)
+    }
 }
 
 fn parse_shell_options_list(s: String) -> HashSet<String> {
@@ -901,3 +1094,7 @@ impl PendingHook {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "dcs_hooks_tests.rs"]
+mod tests;
