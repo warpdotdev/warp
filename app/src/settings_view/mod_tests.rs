@@ -1,6 +1,13 @@
-use settings_page::{FilteredPageType, MatchData, PageType, SettingsWidget, search_terms_match};
+use pathfinder_geometry::vector::vec2f;
+use settings_page::{
+    Category, CategoryHeader, FilteredPageType, MatchData, PageTitle, PageType, SettingsWidget,
+    categories_with_visible_content, search_terms_match,
+};
 use warpui::elements::Empty;
-use warpui::{App, AppContext, Element, Entity, View};
+use warpui::platform::WindowStyle;
+use warpui::{
+    App, AppContext, Element, Entity, Presenter, TypedActionView, View, WindowInvalidation,
+};
 
 use super::*;
 use crate::appearance::Appearance;
@@ -107,8 +114,8 @@ fn subpage_display_names_are_correct() {
         "Environments"
     );
     assert_eq!(
-        SettingsSection::OzCloudAPIKeys.to_string(),
-        "Oz Cloud API Keys"
+        SettingsSection::WarpCloudAgentAPIKeys.to_string(),
+        "API keys"
     );
 }
 
@@ -140,8 +147,14 @@ const ALL_SECTIONS: &[SettingsSection] = &[
     SettingsSection::CodeIndexing,
     SettingsSection::EditorAndCodeReview,
     SettingsSection::CloudEnvironments,
-    SettingsSection::OzCloudAPIKeys,
+    SettingsSection::WarpCloudAgentAPIKeys,
 ];
+
+/// Sections whose user-facing Display label has deliberately diverged from the
+/// slug it was seeded from, because the slug is a stored contract that the
+/// rename must not follow.
+const SECTIONS_WITH_RENAMED_DISPLAY_LABELS: &[SettingsSection] =
+    &[SettingsSection::WarpCloudAgentAPIKeys];
 
 #[test]
 fn all_sections_list_is_exhaustive() {
@@ -168,7 +181,7 @@ fn all_sections_list_is_exhaustive() {
             | SettingsSection::CodeIndexing
             | SettingsSection::EditorAndCodeReview
             | SettingsSection::CloudEnvironments
-            | SettingsSection::OzCloudAPIKeys => section,
+            | SettingsSection::WarpCloudAgentAPIKeys => section,
         };
         ALL_SECTIONS.contains(&known)
     }
@@ -202,15 +215,33 @@ fn slugs_are_unique_across_sections() {
 fn slugs_were_seeded_from_the_display_labels_they_replaced() {
     // Slugs were seeded from the Display strings that used to double as the
     // persistence key, so no data migration was needed. Display is now free to
-    // diverge; if it does, update this test rather than the slugs, which are a
-    // stored contract.
+    // diverge; when it does, list the section in
+    // SECTIONS_WITH_RENAMED_DISPLAY_LABELS rather than moving the slug, which
+    // is a stored contract.
     for section in ALL_SECTIONS {
+        if SECTIONS_WITH_RENAMED_DISPLAY_LABELS.contains(section) {
+            continue;
+        }
         assert_eq!(
             section.slug(),
             section.to_string(),
             "{section:?} slug diverged from the Display label it was seeded from"
         );
     }
+}
+
+#[test]
+fn renamed_sections_keep_the_slug_they_were_seeded_with() {
+    // The section dropped "Oz" from what the user reads, but persisted sessions
+    // and `surface.settings.open --page` still speak the original slug.
+    assert_eq!(
+        SettingsSection::WarpCloudAgentAPIKeys.to_string(),
+        "API keys"
+    );
+    assert_eq!(
+        SettingsSection::WarpCloudAgentAPIKeys.slug(),
+        "Oz Cloud API Keys"
+    );
 }
 
 #[test]
@@ -253,7 +284,11 @@ fn from_slug_accepts_legacy_spellings() {
     );
     assert_eq!(
         SettingsSection::from_slug("OzCloudAPIKeys"),
-        Some(SettingsSection::OzCloudAPIKeys)
+        Some(SettingsSection::WarpCloudAgentAPIKeys)
+    );
+    assert_eq!(
+        SettingsSection::from_slug("Oz Cloud API Keys"),
+        Some(SettingsSection::WarpCloudAgentAPIKeys)
     );
 }
 
@@ -319,7 +354,7 @@ fn realistic_nav_items() -> Vec<SettingsNavItem> {
             "Cloud platform",
             vec![
                 SettingsSection::CloudEnvironments,
-                SettingsSection::OzCloudAPIKeys,
+                SettingsSection::WarpCloudAgentAPIKeys,
             ],
         )),
         SettingsNavItem::Page(SettingsSection::Teams),
@@ -373,7 +408,7 @@ fn collapsed_umbrella_is_a_single_nav_stop() {
         NavStop::CollapsedUmbrella {
             nav_index: 4,
             first_subpage: SettingsSection::CloudEnvironments,
-            last_subpage: SettingsSection::OzCloudAPIKeys,
+            last_subpage: SettingsSection::WarpCloudAgentAPIKeys,
         }
     ));
     assert!(matches!(stops[5], NavStop::Section(SettingsSection::Teams)));
@@ -892,6 +927,236 @@ fn empty_query_after_reapply_shows_all_widgets() {
                 5,
                 "an empty query restores every widget on the subpage"
             );
+        });
+    });
+}
+
+struct NeverRendersWidget {
+    terms: &'static str,
+}
+
+impl SettingsWidget for NeverRendersWidget {
+    type View = TestSettingsView;
+
+    fn search_terms(&self) -> &str {
+        self.terms
+    }
+
+    fn should_render(&self, _: &AppContext) -> bool {
+        false
+    }
+
+    fn render(&self, _: &Self::View, _: &Appearance, _: &AppContext) -> Box<dyn Element> {
+        Empty::new().finish()
+    }
+}
+
+#[test]
+fn category_whose_sole_widget_cannot_render_has_no_visible_content_before_any_filter_pass() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            let children: Vec<Box<dyn SettingsWidget<View = TestSettingsView>>> =
+                vec![Box::new(NeverRendersWidget {
+                    terms: "cloud handoff",
+                })];
+            let page =
+                PageType::new_categorized(vec![Category::new("Cloud Handoff", children)], None);
+
+            let FilteredPageType::Categorized { categories, .. } = page.get_filtered() else {
+                panic!("expected Categorized page");
+            };
+            assert_eq!(
+                categories.len(),
+                1,
+                "the untouched filter includes every widget index, so the category is still present here"
+            );
+            assert!(
+                categories_with_visible_content(categories, ctx).is_empty(),
+                "the category's sole widget can't render right now, so it has nothing visible to show"
+            );
+        });
+    });
+}
+
+#[test]
+fn category_whose_sole_widget_cannot_render_has_no_visible_content_after_an_empty_query() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            let children: Vec<Box<dyn SettingsWidget<View = TestSettingsView>>> =
+                vec![Box::new(NeverRendersWidget {
+                    terms: "cloud handoff",
+                })];
+            let mut page =
+                PageType::new_categorized(vec![Category::new("Cloud Handoff", children)], None);
+            page.update_filter("", ctx);
+
+            let FilteredPageType::Categorized { categories, .. } = page.get_filtered() else {
+                panic!("expected Categorized page");
+            };
+            assert!(
+                categories.is_empty(),
+                "an empty-query filter pass already drops a category with no should_render widgets"
+            );
+        });
+    });
+}
+
+/// A no-observable-output trailing-element closure, for testing attachment and visibility only.
+fn stub_trailing_element(_: &TestSettingsView, _: &Appearance, _: &AppContext) -> Box<dyn Element> {
+    Empty::new().finish()
+}
+
+/// An Uncategorized page with one widget plus a title trailing element.
+fn uncategorized_page_with_title_trailing_element() -> PageType<TestSettingsView> {
+    let widgets: Vec<Box<dyn SettingsWidget<View = TestSettingsView>>> =
+        vec![Box::new(StubWidget {
+            terms: "unrelated child setting",
+        })];
+    PageType::new_uncategorized(
+        widgets,
+        Some(PageTitle::new("Page").with_trailing_element(stub_trailing_element)),
+    )
+}
+
+#[test]
+fn title_trailing_element_is_present_regardless_of_widget_filter() {
+    // The title trailing element takes no part in search: it must be present whether or not any
+    // body widget matches, and must never affect MatchData.
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            let mut page = uncategorized_page_with_title_trailing_element();
+            let match_data = page.update_filter("totally unrelated query", ctx);
+            assert!(!match_data.is_truthy());
+
+            let FilteredPageType::Uncategorized { widgets, title, .. } = page.get_filtered() else {
+                panic!("expected Uncategorized page");
+            };
+            assert!(widgets.is_empty());
+            assert!(title.is_some_and(|t| t.trailing_element.is_some()));
+        });
+    });
+}
+
+/// A Categorized page with one category holding two child widgets and a trailing element.
+fn categorized_page_with_trailing() -> PageType<TestSettingsView> {
+    let children: Vec<Box<dyn SettingsWidget<View = TestSettingsView>>> = vec![
+        Box::new(StubWidget {
+            terms: "child one settings",
+        }),
+        Box::new(StubWidget {
+            terms: "child two settings",
+        }),
+    ];
+    let category = Category::with_header(
+        CategoryHeader::new("Master").with_trailing_element(stub_trailing_element),
+        children,
+    );
+    PageType::new_categorized(vec![category], None)
+}
+
+/// The number of widgets and whether the trailing element is present for the sole category of a
+/// `categorized_page_with_trailing`-shaped page.
+fn categorized_widget_and_trailing_state<V: View>(page: &PageType<V>) -> Vec<(usize, bool)> {
+    let FilteredPageType::Categorized { categories, .. } = page.get_filtered() else {
+        panic!("expected Categorized page");
+    };
+    categories
+        .into_iter()
+        .map(|c| (c.widgets.len(), c.trailing_element.is_some()))
+        .collect()
+}
+
+#[test]
+fn category_trailing_element_renders_alongside_a_matching_child() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            let mut page = categorized_page_with_trailing();
+            let match_data = page.update_filter("child one", ctx);
+            assert!(match_data.is_truthy());
+            assert_eq!(
+                categorized_widget_and_trailing_state(&page),
+                vec![(1, true)]
+            );
+        });
+    });
+}
+
+#[test]
+fn category_and_its_trailing_element_are_dropped_when_no_child_matches() {
+    // The trailing element takes no part in search, so visibility is decided purely by the
+    // children: a query can't resurface the category through the accessory.
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            let mut page = categorized_page_with_trailing();
+            let match_data = page.update_filter("totally unrelated query", ctx);
+            assert!(!match_data.is_truthy());
+            assert_eq!(categorized_widget_and_trailing_state(&page), vec![]);
+        });
+    });
+}
+
+#[test]
+fn category_with_trailing_element_shows_everything_on_empty_query() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            let mut page = categorized_page_with_trailing();
+            let match_data = page.update_filter("", ctx);
+            assert!(match_data.is_truthy());
+            assert_eq!(
+                categorized_widget_and_trailing_state(&page),
+                vec![(2, true)]
+            );
+        });
+    });
+}
+
+/// Renders a `categorized_page_with_trailing` page, whose category has no subtitle (a
+/// `render_sub_header` header, not `render_sub_header_with_description`).
+struct CategoryHeaderTrailingElementTestView;
+
+impl Entity for CategoryHeaderTrailingElementTestView {
+    type Event = ();
+}
+
+impl View for CategoryHeaderTrailingElementTestView {
+    fn ui_name() -> &'static str {
+        "CategoryHeaderTrailingElementTestView"
+    }
+
+    fn render(&self, app: &AppContext) -> Box<dyn Element> {
+        categorized_page_with_trailing().render(&TestSettingsView, app)
+    }
+}
+
+impl TypedActionView for CategoryHeaderTrailingElementTestView {
+    type Action = ();
+}
+
+/// Regression test: a category header with a trailing element and no subtitle used to panic flex
+/// layout (see `render_header_with_trailing_element`'s `Shrinkable` fix).
+#[test]
+fn category_header_with_trailing_element_and_no_subtitle_does_not_panic_flex_layout() {
+    App::test((), |mut app| async move {
+        let app = &mut app;
+        app.add_singleton_model(|_| Appearance::mock());
+
+        let (window_id, _view) = app.add_window(WindowStyle::NotStealFocus, |_| {
+            CategoryHeaderTrailingElementTestView
+        });
+        let root_view_id = app
+            .root_view_id(window_id)
+            .expect("window should have a root view");
+
+        let mut presenter = Presenter::new(window_id);
+        let invalidation = WindowInvalidation {
+            updated: [root_view_id].into_iter().collect(),
+            ..Default::default()
+        };
+
+        app.update(move |ctx| {
+            presenter.invalidate(invalidation, ctx);
+            // Panicked here before the fix.
+            presenter.build_scene(vec2f(800., 600.), 1., None, ctx);
         });
     });
 }

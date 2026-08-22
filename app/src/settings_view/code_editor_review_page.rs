@@ -16,7 +16,8 @@ use warpui::{
 #[cfg(feature = "local_fs")]
 use super::features::external_editor::ExternalEditorView;
 use super::settings_page::{
-    MatchData, PageType, SettingsPageMeta, SettingsPageViewHandle, SettingsWidget, render_body_item,
+    MatchData, PageTitle, PageType, SettingsPageMeta, SettingsPageViewHandle, SettingsWidget,
+    render_body_item,
 };
 use super::{
     LocalOnlyIconState, SettingsAction, SettingsSection, ToggleSettingActionPair, ToggleState,
@@ -74,7 +75,7 @@ impl EditorAndCodeReviewPageView {
             Box::new(AutoSaveToggleWidget::default()),
         ]);
 
-        PageType::new_uncategorized(widgets, Some(PAGE_TITLE))
+        PageType::new_uncategorized(widgets, Some(PageTitle::new(PAGE_TITLE)))
     }
 }
 

@@ -27,7 +27,7 @@ use repo_metadata::{RepoMetadataModel, RepositoryIdentifier};
 use session_sharing_protocol::sharer::SessionRetentionReason;
 use tracing::Instrument as _;
 use uuid::Uuid;
-use warp_cli::agent::{Harness, OutputFormat};
+use warp_cli::agent::{Harness, OutputFormat, RepositoryHeadOverride};
 use warp_cli::mcp::MCPSpec;
 use warp_cli::share::ShareRequest;
 use warp_cli::skill::SkillSpec;
@@ -51,6 +51,7 @@ use crate::ai::agent_sdk::driver::harness::{
     HarnessCleanupDisposition, HarnessKind, HarnessRunner, ResumePayload, SavePoint,
     ThirdPartyHarness, ThirdPartyHarnessTelemetryEvent, harness_model_env_vars, task_env_vars,
 };
+use crate::ai::agent_sdk::retry::{is_transient_graphql_or_http_error, with_bounded_retry_using};
 use crate::ai::agent_sdk::setup_observability::{SetupClientEventReporter, SetupStep};
 use crate::ai::ambient_agents::task::HarnessModelConfig;
 use crate::ai::ambient_agents::{
@@ -167,13 +168,32 @@ where
 
 const MCP_SERVER_STARTUP_TIMEOUT: Duration = Duration::from_secs(20);
 const HARNESS_SAVE_INTERVAL: Duration = Duration::from_secs(30);
+/// Attempt budget for resolving one managed MCP server's client config
+/// (`ManagedMcpClient::create_managed_mcp_client_config`) in
+/// [`AgentDriver::resolve_mcp_specs_with_local_uuids`].
+///
+/// A transient warp-server 5xx during this call otherwise fails the whole run (see
+/// `AgentDriverError::ManagedMcpResolutionFailed`), so this needs a larger budget than the
+/// shared [`crate::server::retry_strategies::MAX_ATTEMPTS`] default (~2s), which is too short
+/// to ride out even a brief backend blip. Against the shared exponential backoff schedule
+/// (500ms, 1s, 2s, 4s, 8s), 6 attempts sum to ~15.5s nominal (~20s with jitter): more than
+/// double the shortest fully-failed window observed in a real incident (a 503 storm from
+/// dying Cloud Run instances, ~6s with zero successful responses inside a ~30s degraded-
+/// capacity period), while staying well under the ~35s a run had before it was marked
+/// FAILED in that incident.
+const MANAGED_MCP_RESOLVE_MAX_ATTEMPTS: usize = 6;
 /// Timeout for individual harness auth preflight commands.
 const PREFLIGHT_CHECK_TIMEOUT: Duration = Duration::from_secs(30);
 pub(crate) const WARP_DRIVE_SYNC_TIMEOUT: Duration = Duration::from_secs(60);
 /// Maximum time to wait for an automatic error resume before propagating the error.
 /// If no follow-up status arrives within this window, the driver terminates with the
 /// original error so the CLI does not hang indefinitely.
-const AUTO_RESUME_TIMEOUT: Duration = Duration::from_secs(120);
+///
+/// This is re-armed per recovery attempt: a recovery that lands flips the conversation
+/// back to `InProgress`, which cancels the deadline, and a subsequent failure schedules a
+/// fresh one. So it bounds a single attempt, not the whole recovery chain — but a single
+/// attempt's wait (including the recovery backoff) still has to fit inside it.
+pub(crate) const AUTO_RESUME_TIMEOUT: Duration = Duration::from_secs(120);
 /// Signals to Claude child-harness hooks that Warp already owns the background
 /// message-listener lifecycle, so the plugin should reuse the shared state
 /// files instead of spawning and cleaning up its own listener.
@@ -183,9 +203,14 @@ const AUTO_RESUME_TIMEOUT: Duration = Duration::from_secs(120);
 /// invocations keep working.
 pub(crate) const OZ_MESSAGE_LISTENER_MANAGED_EXTERNALLY_ENV: &str =
     "OZ_MESSAGE_LISTENER_MANAGED_EXTERNALLY";
+/// Warp-branded name for the same signal, injected alongside the `OZ_` one with the same value.
+pub(crate) const WARP_MESSAGE_LISTENER_MANAGED_EXTERNALLY_ENV: &str =
+    "WARP_MESSAGE_LISTENER_MANAGED_EXTERNALLY";
 /// Optional root directory for the per-session Claude message-listener state
 /// that Warp and the Claude hook scripts share.
 pub(crate) const OZ_MESSAGE_LISTENER_STATE_ROOT_ENV: &str = "OZ_MESSAGE_LISTENER_STATE_ROOT";
+/// Warp-branded name for the same state root, injected alongside the `OZ_` one.
+pub(crate) const WARP_MESSAGE_LISTENER_STATE_ROOT_ENV: &str = "WARP_MESSAGE_LISTENER_STATE_ROOT";
 // Keep exporting the legacy `OZ_PARENT_*` names to child hooks until the
 // external Claude plugin has fully migrated to the canonical
 // `OZ_MESSAGE_LISTENER_*` names.
@@ -458,6 +483,10 @@ pub struct AgentDriverOptions {
     /// Additional per-task repositories supplied by the server, such as a webhook's
     /// originating repository. Empty for local runs.
     pub additional_source_repos: Vec<SourceRepo>,
+    /// Overrides for repository HEADs in the agent's session.
+    pub repository_head_overrides: Vec<RepositoryHeadOverride>,
+    /// Whether origin remotes should be removed from environment repositories.
+    pub remove_repository_origins: bool,
     /// Selected execution harness for this run.
     pub selected_harness: Harness,
     /// Model config for the selected harness. Only used for non-Oz harnesses.
@@ -542,6 +571,8 @@ pub struct AgentDriver {
     environment: Option<AmbientAgentEnvironment>,
     /// Additional per-task repositories supplied by the server.
     additional_source_repos: Vec<SourceRepo>,
+    repository_head_overrides: Vec<RepositoryHeadOverride>,
+    remove_repository_origins: bool,
 
     // End-of-run snapshot upload controls.
     snapshot_disabled: bool,
@@ -830,6 +861,8 @@ impl AgentDriver {
             cloud_providers,
             environment,
             additional_source_repos,
+            repository_head_overrides,
+            remove_repository_origins,
             selected_harness,
             third_party_harness_model_config,
             snapshot_disabled,
@@ -991,6 +1024,8 @@ impl AgentDriver {
             cloud_providers,
             environment,
             additional_source_repos,
+            repository_head_overrides,
+            remove_repository_origins,
             snapshot_disabled: snapshot_disabled_value,
             snapshot_upload_timeout: snapshot_upload_timeout
                 .unwrap_or(snapshot::DEFAULT_SNAPSHOT_UPLOAD_TIMEOUT),
@@ -1040,6 +1075,8 @@ impl AgentDriver {
             cloud_providers: Vec::new(),
             environment: None,
             additional_source_repos: Vec::new(),
+            repository_head_overrides: Vec::new(),
+            remove_repository_origins: false,
             snapshot_disabled: false,
             snapshot_upload_timeout: snapshot::DEFAULT_SNAPSHOT_UPLOAD_TIMEOUT,
             snapshot_script_timeout: snapshot::DEFAULT_DECLARATIONS_SCRIPT_TIMEOUT,
@@ -1445,13 +1482,19 @@ impl AgentDriver {
                     resolved.local_uuids.push(*uuid);
                 }
                 MCPSpec::Uuid(uuid) => {
-                    let client_config = managed_mcp_client
-                        .create_managed_mcp_client_config(uuid.to_string())
-                        .await
-                        .map_err(|err| AgentDriverError::ManagedMcpResolutionFailed {
+                    let client_config = with_bounded_retry_using(
+                        &format!("resolve managed MCP server '{uuid}'"),
+                        MANAGED_MCP_RESOLVE_MAX_ATTEMPTS,
+                        is_transient_graphql_or_http_error,
+                        || managed_mcp_client.create_managed_mcp_client_config(uuid.to_string()),
+                    )
+                    .await
+                    .map_err(|err| {
+                        AgentDriverError::ManagedMcpResolutionFailed {
                             uid: *uuid,
                             message: format!("{err:#}"),
-                        })?;
+                        }
+                    })?;
                     let installations = Self::installations_from_managed_client_config_json(
                         &client_config.mcp_config_json,
                         task_id,
@@ -1478,10 +1521,17 @@ impl AgentDriver {
                     // the server owns the set of recognized ids, and the
                     // backing integration may be disconnected or the feature
                     // disabled between dispatch and run setup — so resolution
-                    // failures skip the server instead of failing the run.
-                    let client_config = match managed_mcp_client
-                        .create_managed_mcp_client_config(id.clone())
-                        .await
+                    // failures skip the server instead of failing the run. A
+                    // transient failure still gets the same retry budget as the
+                    // UUID case first, so a brief backend blip doesn't silently
+                    // drop the server from an otherwise-healthy run.
+                    let client_config = match with_bounded_retry_using(
+                        &format!("resolve well-known MCP server '{id}'"),
+                        MANAGED_MCP_RESOLVE_MAX_ATTEMPTS,
+                        is_transient_graphql_or_http_error,
+                        || managed_mcp_client.create_managed_mcp_client_config(id.clone()),
+                    )
+                    .await
                     {
                         Ok(client_config) => client_config,
                         Err(err) => {
@@ -2689,9 +2739,20 @@ impl AgentDriver {
             .await?;
         let mut environment_skill_repos = Vec::new();
 
-        let environment_opt = foreground.spawn(|me, _| me.environment.clone()).await?;
-        let additional_source_repos = foreground
-            .spawn(|me, _| me.additional_source_repos.clone())
+        let (
+            environment_opt,
+            additional_source_repos,
+            repository_head_overrides,
+            remove_repository_origins,
+        ) = foreground
+            .spawn(|me, _| {
+                (
+                    me.environment.clone(),
+                    me.additional_source_repos.clone(),
+                    me.repository_head_overrides.clone(),
+                    me.remove_repository_origins,
+                )
+            })
             .await?;
         let mut setup_commands = environment_opt
             .as_ref()
@@ -2744,11 +2805,15 @@ impl AgentDriver {
                     let working_dir = me.working_dir.clone();
                     me.terminal_driver.update(ctx, |_, ctx| {
                         environment::prepare_environment(
-                            source_repos_for_prepare,
-                            setup_commands,
                             working_dir,
                             false, /* is_sandbox */
                             harness,
+                            environment::RepositoryPreparationOptions::new(
+                                source_repos_for_prepare,
+                                setup_commands,
+                                repository_head_overrides,
+                                remove_repository_origins,
+                            ),
                             setup_events_for_environment,
                             ctx,
                         )
