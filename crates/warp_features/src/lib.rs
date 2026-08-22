@@ -653,9 +653,6 @@ pub enum FeatureFlag {
     /// Gates populating/reading oz updates from channel versions in the changelog model.
     OzChangelogUpdates,
 
-    /// Enables image upload for ambient agents.
-    AmbientAgentsImageUpload,
-
     /// Enables image attachment support for cloud mode conversations.
     CloudModeImageContext,
 
