@@ -227,6 +227,9 @@ pub enum Effect {
         location: &'static std::panic::Location<'static>,
         arg: Box<dyn Any>,
     },
+    Deferred {
+        callback: Box<dyn FnOnce(&mut AppContext)>,
+    },
 }
 
 pub trait AnyView {
