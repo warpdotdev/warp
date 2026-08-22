@@ -823,6 +823,138 @@ fn test_streamed_agent_update_matches_reset_with_markdown_for_code_block() {
 }
 
 #[test]
+fn test_streamed_agent_update_lowers_gfm_table_to_table_block() {
+    // A GFM table streamed into a plan document via
+    // `apply_streamed_agent_update` must lower into a `Table` block during
+    // streaming (not only after a full `reset_with_markdown`), so the table
+    // renders live in the GUI plan pane. `update_to_new_markdown` must honor
+    // the same `MarkdownTables` gate as `Buffer::from_markdown`. Verifies spec
+    // invariants 1, 2 (APP-4917). Before the gate fix this test failed: the
+    // streamed document parsed with the plain `parse_markdown` (no table
+    // lowering), so its buffer held literal `|` text and no `<table>` block,
+    // and its serialized markdown diverged from the reset path.
+    let table_content = "| Feature | Owner | Status |\n| :--- | :---: | ---: |\n| Tables | **Agent** | `done` |\n| Notes | _User_ | 7 |\n| Escapes | a \\| b | 9 |";
+
+    App::test((), |mut app| async move {
+        // MarkdownTables ships on by default via the `markdown_tables` Cargo
+        // feature; override explicitly so the assertion is deterministic.
+        let _flag = warp_core::features::FeatureFlag::MarkdownTables.override_enabled(true);
+        initialize_app_for_ai_document_tests(&mut app);
+        let model_handle = app.add_model(|_ctx| AIDocumentModel::new_for_test());
+
+        let conversation_id = AIConversationId::new();
+
+        // Create a streaming document with empty content, then stream the full
+        // table into it the way an agent's CreateDocuments tool call would.
+        let doc_id = model_handle.update(&mut app, |model, ctx| {
+            model.create_document("Streaming Table", "", conversation_id, None, ctx)
+        });
+        model_handle.update(&mut app, |model, ctx| {
+            model.apply_streamed_agent_update(&doc_id, "Streaming Table", table_content, ctx);
+        });
+
+        // A document created with the same content goes through the full
+        // `reset_with_markdown` path (which already honors the gate), so it is
+        // the parity reference for the streamed document.
+        let reset_doc_id = model_handle.update(&mut app, |model, ctx| {
+            model.create_document("Reset Table", table_content, conversation_id, None, ctx)
+        });
+
+        let (streamed_debug, streamed_markdown, reset_markdown) =
+            model_handle.read(&app, |model, app_ctx| {
+                let streamed_editor = model
+                    .documents
+                    .get(&doc_id)
+                    .expect("streamed document should exist")
+                    .editor
+                    .clone();
+                let streamed_debug = streamed_editor.as_ref(app_ctx).debug_buffer(app_ctx);
+                let streamed_markdown = model
+                    .get_document_content(&doc_id, app_ctx)
+                    .expect("streamed document should have content");
+                let reset_markdown = model
+                    .get_document_content(&reset_doc_id, app_ctx)
+                    .expect("reset document should have content");
+                (streamed_debug, streamed_markdown, reset_markdown)
+            });
+
+        // The streamed document lowered the GFM table into a `Table` block
+        // (the buffer's debug representation emits `<table>` for a
+        // `BufferBlockStyle::Table` block marker).
+        assert!(
+            streamed_debug.contains("<table>"),
+            "streamed GFM table should lower to a Table block, got debug:\n{streamed_debug}"
+        );
+
+        // The streamed document is byte-for-byte parity with the reset path.
+        assert_eq!(
+            streamed_markdown.trim(),
+            reset_markdown.trim(),
+            "streamed and reset table markdown should match"
+        );
+    });
+}
+
+#[test]
+fn test_streamed_agent_update_table_falls_back_when_markdown_tables_disabled() {
+    // With `MarkdownTables` disabled, the streamed table does not lower into a
+    // `Table` block: it falls back to the ordinary Markdown parser's non-table
+    // rendering (literal pipe text) with no content loss and no panic, matching
+    // the full-reset path's flag-off behavior. Verifies spec invariants 7, 8
+    // (APP-4917).
+    let table_content = "| Feature | Owner |\n| --- | --- |\n| Tables | Agent |";
+
+    App::test((), |mut app| async move {
+        let _flag = warp_core::features::FeatureFlag::MarkdownTables.override_enabled(false);
+        initialize_app_for_ai_document_tests(&mut app);
+        let model_handle = app.add_model(|_ctx| AIDocumentModel::new_for_test());
+
+        let conversation_id = AIConversationId::new();
+        let doc_id = model_handle.update(&mut app, |model, ctx| {
+            model.create_document("Streaming Table", "", conversation_id, None, ctx)
+        });
+        model_handle.update(&mut app, |model, ctx| {
+            model.apply_streamed_agent_update(&doc_id, "Streaming Table", table_content, ctx);
+        });
+        let reset_doc_id = model_handle.update(&mut app, |model, ctx| {
+            model.create_document("Reset Table", table_content, conversation_id, None, ctx)
+        });
+
+        let (streamed_debug, streamed_markdown, reset_markdown) =
+            model_handle.read(&app, |model, app_ctx| {
+                let streamed_editor = model
+                    .documents
+                    .get(&doc_id)
+                    .expect("streamed document should exist")
+                    .editor
+                    .clone();
+                let streamed_debug = streamed_editor.as_ref(app_ctx).debug_buffer(app_ctx);
+                let streamed_markdown = model
+                    .get_document_content(&doc_id, app_ctx)
+                    .expect("streamed document should have content");
+                let reset_markdown = model
+                    .get_document_content(&reset_doc_id, app_ctx)
+                    .expect("reset document should have content");
+                (streamed_debug, streamed_markdown, reset_markdown)
+            });
+
+        assert!(
+            !streamed_debug.contains("<table>"),
+            "no Table block should be produced with MarkdownTables disabled, got debug:\n{streamed_debug}"
+        );
+        // No content loss: the cell text is still present.
+        assert!(streamed_markdown.contains("Feature"));
+        assert!(streamed_markdown.contains("Agent"));
+        // The streamed and reset paths agree with the flag off.
+        assert_eq!(
+            streamed_markdown.trim(),
+            reset_markdown.trim(),
+            "streamed and reset fallback markdown should match"
+        );
+    });
+}
+
+#[test]
 fn test_plan_markdown_content_preserves_copyable_structure() {
     App::test((), |mut app| async move {
         initialize_app_for_ai_document_tests(&mut app);
