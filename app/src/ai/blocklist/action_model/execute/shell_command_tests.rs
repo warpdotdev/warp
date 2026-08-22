@@ -12,6 +12,7 @@ use crate::terminal::model::session::Sessions;
 use crate::terminal::model::session::active_session::ActiveSession;
 use crate::terminal::model::terminal_model::{BlockIndex, TerminalModel};
 use crate::terminal::model_events::{ModelEvent, ModelEventDispatcher};
+use crate::workspaces::user_workspaces::UserWorkspaces;
 
 /// Locks in the contract that `ShellCommandExecutor`'s requested-command finish
 /// detector reacts only to `BlockMetadataReceived` (precmd) and not to
@@ -37,6 +38,8 @@ fn block_working_directory_updated_does_not_drain_finish_senders() {
                 terminal_model.clone(),
                 &model_event_dispatcher,
                 terminal_view_id,
+                // The subject here is block-finish detection, not team policy.
+                UserWorkspaces::teamless_context_resolver_for_test(),
                 ctx,
             )
         });

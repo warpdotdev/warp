@@ -1553,6 +1553,7 @@ impl TuiTerminalSessionView {
                 &model_events,
                 get_relevant_files_controller,
                 terminal_surface_id,
+                terminal_surface.clone(),
                 ctx,
             )
         });

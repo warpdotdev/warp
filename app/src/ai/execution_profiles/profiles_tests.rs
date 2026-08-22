@@ -34,7 +34,7 @@ use crate::settings::{AISettings, AgentModeCommandExecutionPredicate, PrivacySet
 use crate::test_util::settings::initialize_settings_for_tests;
 use crate::workspaces::team_tester::TeamTesterStatus;
 use crate::workspaces::user_profiles::UserProfiles;
-use crate::workspaces::user_workspaces::UserWorkspaces;
+use crate::workspaces::user_workspaces::{TeamContext, UserWorkspaces};
 use crate::{LaunchMode, TuiEntryPoint};
 
 fn mock_server_metadata(uid: ServerId) -> ServerMetadata {
@@ -236,6 +236,8 @@ fn tui_default_denylist_overrides_agent_decides_command_execution() {
                 false,
                 Some(false),
                 Some(terminal_view_id),
+                // The subject here is the profile's own denylist, not team policy.
+                &TeamContext::teamless_for_test(),
                 ctx,
             );
             assert!(!result.is_allowed());

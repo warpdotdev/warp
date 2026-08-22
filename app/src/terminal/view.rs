@@ -3546,6 +3546,7 @@ impl TerminalView {
                 &model_events_handle,
                 get_relevant_files_controller.clone(),
                 terminal_view_id,
+                terminal_view.clone(),
                 ctx,
             )
         });

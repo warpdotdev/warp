@@ -4,7 +4,12 @@ use uuid::Uuid;
 use warp_core::execution_mode::ExecutionMode;
 use warp_core::settings::Setting as _;
 use warp_util::path::EscapeChar;
-use warpui::{App, EntityId, ModelHandle, SingletonEntity};
+use warpui::elements::Empty;
+use warpui::platform::WindowStyle;
+use warpui::{
+    App, AppContext, Element, Entity, EntityId, ModelHandle, SingletonEntity, TypedActionView,
+    View, ViewHandle, WindowId,
+};
 
 use super::{BlocklistAIHistoryModel, BlocklistAIPermissions};
 use crate::ai::active_agent_views_model::ActiveAgentViewsModel;
@@ -22,13 +27,13 @@ use crate::auth::AuthStateProvider;
 use crate::cloud_object::model::persistence::CloudModel;
 use crate::network::NetworkStatus;
 use crate::server::cloud_objects::update_manager::UpdateManager;
+use crate::server::ids::ServerId;
 use crate::server::sync_queue::SyncQueue;
 use crate::settings::{AISettings, AgentModeCommandExecutionPredicate, PrivacySettings};
 use crate::terminal::cli_agent_sessions::CLIAgentSessionsModel;
 use crate::test_util::settings::initialize_settings_for_tests_with_mode;
 use crate::workspaces::team_tester::TeamTesterStatus;
-use crate::workspaces::user_workspaces::UserWorkspaces;
-use crate::workspaces::workspace::SandboxedAgentSettings;
+use crate::workspaces::user_workspaces::{TeamContext, UserWorkspaces};
 use crate::{
     AgentNotificationsModel, GlobalResourceHandles, GlobalResourceHandlesProvider, LaunchMode,
 };
@@ -38,8 +43,37 @@ struct PermissionsTestState {
     permissions: ModelHandle<BlocklistAIPermissions>,
     history: ModelHandle<BlocklistAIHistoryModel>,
     terminal_view_id: EntityId,
+    /// The surface the permission checks are made on behalf of. Team-scoped policy resolves
+    /// through it, so tests mint a scope from this rather than naming a team.
+    terminal_view: ViewHandle<TerminalSurfaceTestView>,
+    /// The window the surface lives in. A test that cares which team governs the surface
+    /// points this window at that team.
+    window_id: WindowId,
     user_workspaces: ModelHandle<UserWorkspaces>,
     profile_model: ModelHandle<AIExecutionProfilesModel>,
+}
+
+/// Stands in for the terminal surface the permission checks are made on behalf of. Only its
+/// identity and its window matter here, so it renders nothing.
+#[derive(Default)]
+struct TerminalSurfaceTestView;
+
+impl Entity for TerminalSurfaceTestView {
+    type Event = ();
+}
+
+impl View for TerminalSurfaceTestView {
+    fn ui_name() -> &'static str {
+        "TerminalSurfaceTestView"
+    }
+
+    fn render(&self, _: &AppContext) -> Box<dyn Element> {
+        Empty::new().finish()
+    }
+}
+
+impl TypedActionView for TerminalSurfaceTestView {
+    type Action = ();
 }
 
 fn initialize_permissions_test(app: &mut App) -> PermissionsTestState {
@@ -68,7 +102,6 @@ fn initialize_permissions_test_with_mode(
     app.add_singleton_model(|_| ActiveAgentViewsModel::new());
     app.add_singleton_model(AgentNotificationsModel::new);
     let permissions = app.add_singleton_model(BlocklistAIPermissions::new);
-    let terminal_view_id = EntityId::new();
     app.add_singleton_model(|_| AuthStateProvider::new_for_test());
     app.add_singleton_model(SyncQueue::mock);
     app.add_singleton_model(|_| NetworkStatus::new());
@@ -82,6 +115,12 @@ fn initialize_permissions_test_with_mode(
     app.add_singleton_model(PrivacySettings::mock);
     let user_workspaces = app.add_singleton_model(UserWorkspaces::default_mock);
 
+    // A real view in a real window, because team-scoped policy resolves through the surface's
+    // window; a bare `EntityId` belongs to no window and so reads as being on no team.
+    let (window_id, terminal_view) =
+        app.add_window(WindowStyle::NotStealFocus, |_| TerminalSurfaceTestView);
+    let terminal_view_id = terminal_view.id();
+
     let conversation_id = history.update(app, |history_model, ctx| {
         history_model.start_new_conversation(terminal_view_id, false, false, false, ctx)
     });
@@ -91,9 +130,31 @@ fn initialize_permissions_test_with_mode(
         permissions,
         history,
         terminal_view_id,
+        terminal_view,
+        window_id,
         user_workspaces,
         profile_model,
     }
+}
+
+/// Points the surface's window at `team_uid`, so team-scoped policy reads resolve to that team.
+fn place_surface_on_team(
+    user_workspaces: &ModelHandle<UserWorkspaces>,
+    window_id: WindowId,
+    team_uid: ServerId,
+    app: &mut App,
+) {
+    user_workspaces.update(app, |user_workspaces, ctx| {
+        user_workspaces.set_team_for_window(window_id, team_uid, ctx);
+    });
+}
+
+/// Mints the surface's scope the way the enforcement path does, at the point of the read.
+fn team_scope_for<'a>(
+    terminal_view: &ViewHandle<TerminalSurfaceTestView>,
+    app: &'a AppContext,
+) -> TeamContext<'a> {
+    (UserWorkspaces::team_context_resolver(terminal_view.downgrade()))(app)
 }
 
 #[test]
@@ -506,6 +567,7 @@ fn test_can_write_files_mcp_config_always_denied() {
 fn test_can_autoexecute_command_workspace_settings_override_profile() {
     App::test((), |mut app| async move {
         let PermissionsTestState {
+            terminal_view,
             convo_id,
             permissions,
             user_workspaces,
@@ -532,6 +594,7 @@ fn test_can_autoexecute_command_workspace_settings_override_profile() {
                 false,
                 None,
                 Some(terminal_view_id),
+                &team_scope_for(&terminal_view, ctx),
                 ctx,
             );
             assert!(result.is_allowed());
@@ -563,6 +626,7 @@ fn test_can_autoexecute_command_workspace_settings_override_profile() {
                 false,
                 None,
                 Some(terminal_view_id),
+                &team_scope_for(&terminal_view, ctx),
                 ctx,
             );
             assert!(!result.is_allowed());
@@ -580,6 +644,7 @@ fn test_can_autoexecute_command_workspace_settings_override_profile() {
 fn test_can_autoexecute_command_denylist_precedence() {
     App::test((), |mut app| async move {
         let PermissionsTestState {
+            terminal_view,
             convo_id,
             permissions,
             user_workspaces,
@@ -606,6 +671,7 @@ fn test_can_autoexecute_command_denylist_precedence() {
                 false,
                 None,
                 Some(terminal_view_id),
+                &team_scope_for(&terminal_view, ctx),
                 ctx,
             );
             assert!(!result.is_allowed());
@@ -639,6 +705,7 @@ fn test_can_autoexecute_command_denylist_precedence() {
                 false,
                 None,
                 Some(terminal_view_id),
+                &team_scope_for(&terminal_view, ctx),
                 ctx,
             );
             assert!(!result.is_allowed());
@@ -656,6 +723,7 @@ fn test_can_autoexecute_command_denylist_precedence() {
                 false,
                 None,
                 Some(terminal_view_id),
+                &team_scope_for(&terminal_view, ctx),
                 ctx,
             );
             assert!(
@@ -675,6 +743,7 @@ fn test_can_autoexecute_command_denylist_precedence() {
 fn test_can_autoexecute_command_denylist_matches_env_prefixed_commands() {
     App::test((), |mut app| async move {
         let PermissionsTestState {
+            terminal_view,
             convo_id,
             permissions,
             profile_model,
@@ -708,6 +777,7 @@ fn test_can_autoexecute_command_denylist_matches_env_prefixed_commands() {
                     false,
                     None,
                     Some(terminal_view_id),
+                    &team_scope_for(&terminal_view, ctx),
                     ctx,
                 );
                 assert!(
@@ -730,6 +800,7 @@ fn test_can_autoexecute_command_denylist_matches_env_prefixed_commands() {
                 false,
                 None,
                 Some(terminal_view_id),
+                &team_scope_for(&terminal_view, ctx),
                 ctx,
             );
             assert!(matches!(
@@ -746,6 +817,7 @@ fn test_can_autoexecute_command_denylist_matches_env_prefixed_commands() {
 fn test_can_autoexecute_command_allowlist_precedence() {
     App::test((), |mut app| async move {
         let PermissionsTestState {
+            terminal_view,
             convo_id,
             permissions,
             user_workspaces,
@@ -777,6 +849,7 @@ fn test_can_autoexecute_command_allowlist_precedence() {
                 false,
                 None,
                 Some(terminal_view_id),
+                &team_scope_for(&terminal_view, ctx),
                 ctx,
             );
             assert!(result.is_allowed());
@@ -812,6 +885,7 @@ fn test_can_autoexecute_command_allowlist_precedence() {
                 false,
                 None,
                 Some(terminal_view_id),
+                &team_scope_for(&terminal_view, ctx),
                 ctx,
             );
             assert!(!result.is_allowed());
@@ -830,6 +904,7 @@ fn test_can_autoexecute_command_allowlist_precedence() {
                 false,
                 None,
                 Some(terminal_view_id),
+                &team_scope_for(&terminal_view, ctx),
                 ctx,
             );
             assert!(result.is_allowed());
@@ -847,6 +922,7 @@ fn test_can_autoexecute_command_allowlist_precedence() {
                 false,
                 None,
                 Some(terminal_view_id),
+                &team_scope_for(&terminal_view, ctx),
                 ctx,
             );
             assert!(
@@ -866,6 +942,7 @@ fn test_can_autoexecute_command_allowlist_precedence() {
 fn test_can_autoexecute_command_auto_approve_bypasses_user_denylist_but_not_workspace_denylist() {
     App::test((), |mut app| async move {
         let PermissionsTestState {
+            terminal_view,
             convo_id,
             permissions,
             history,
@@ -908,6 +985,7 @@ fn test_can_autoexecute_command_auto_approve_bypasses_user_denylist_but_not_work
                 false,
                 None,
                 Some(terminal_view_id),
+                &team_scope_for(&terminal_view, ctx),
                 ctx,
             );
             assert!(matches!(
@@ -924,6 +1002,7 @@ fn test_can_autoexecute_command_auto_approve_bypasses_user_denylist_but_not_work
                 false,
                 None,
                 Some(terminal_view_id),
+                &team_scope_for(&terminal_view, ctx),
                 ctx,
             );
             assert!(matches!(
@@ -940,6 +1019,7 @@ fn test_can_autoexecute_command_auto_approve_bypasses_user_denylist_but_not_work
 fn test_can_autoexecute_command_auto_approve_respects_local_denylist_when_bypass_disabled() {
     App::test((), |mut app| async move {
         let PermissionsTestState {
+            terminal_view,
             convo_id,
             permissions,
             history,
@@ -975,6 +1055,7 @@ fn test_can_autoexecute_command_auto_approve_respects_local_denylist_when_bypass
                 false,
                 None,
                 Some(terminal_view_id),
+                &team_scope_for(&terminal_view, ctx),
                 ctx,
             );
             assert!(matches!(
@@ -991,6 +1072,7 @@ fn test_can_autoexecute_command_auto_approve_respects_local_denylist_when_bypass
                 false,
                 None,
                 Some(terminal_view_id),
+                &team_scope_for(&terminal_view, ctx),
                 ctx,
             );
             assert!(matches!(
@@ -1007,6 +1089,7 @@ fn test_can_autoexecute_command_auto_approve_respects_local_denylist_when_bypass
 fn test_can_autoexecute_command_auto_approve_allows_non_denylisted() {
     App::test((), |mut app| async move {
         let PermissionsTestState {
+            terminal_view,
             convo_id,
             permissions,
             history,
@@ -1028,6 +1111,7 @@ fn test_can_autoexecute_command_auto_approve_allows_non_denylisted() {
                 true,        // read-only command
                 Some(false), // not risky
                 Some(terminal_view_id),
+                &team_scope_for(&terminal_view, ctx),
                 ctx,
             );
             assert!(result.is_allowed());
@@ -1410,15 +1494,17 @@ fn test_sandboxed_mode_allows_read_write_files() {
 fn test_sandboxed_denylist_used_in_sandboxed_mode() {
     App::test((), |mut app| async move {
         let PermissionsTestState {
+            terminal_view,
             convo_id,
             history,
             permissions,
             user_workspaces,
             terminal_view_id,
+            window_id,
             ..
         } = initialize_permissions_test_sandboxed(&mut app);
 
-        user_workspaces.update(&mut app, |model, ctx| {
+        let team_uids = user_workspaces.update(&mut app, |model, ctx| {
             model.setup_test_workspace(ctx);
             // Regular workspace denylist blocks "git .*".
             model.update_ai_autonomy_settings(
@@ -1429,18 +1515,10 @@ fn test_sandboxed_denylist_used_in_sandboxed_mode() {
                 },
                 ctx,
             );
-            // Sandboxed denylist blocks "rm .*" instead.
-            model.update_sandboxed_agent_settings(
-                |settings| {
-                    *settings = Some(SandboxedAgentSettings {
-                        execute_commands_denylist: Some(vec![
-                            AgentModeCommandExecutionPredicate::new_regex("rm .*").unwrap(),
-                        ]),
-                    });
-                },
-                ctx,
-            );
+            // The team's sandboxed denylist blocks "rm .*" instead.
+            model.update_team_sandboxed_agent_denylists(&[vec!["rm .*"]], ctx)
         });
+        place_surface_on_team(&user_workspaces, window_id, team_uids[0], &mut app);
 
         history.update(&mut app, |history, ctx| {
             history.toggle_autoexecute_override(&convo_id, terminal_view_id, ctx);
@@ -1463,6 +1541,7 @@ fn test_sandboxed_denylist_used_in_sandboxed_mode() {
                 false,
                 None,
                 Some(terminal_view_id),
+                &team_scope_for(&terminal_view, ctx),
                 ctx,
             );
             assert!(matches!(
@@ -1480,6 +1559,7 @@ fn test_sandboxed_denylist_used_in_sandboxed_mode() {
                 false,
                 None,
                 Some(terminal_view_id),
+                &team_scope_for(&terminal_view, ctx),
                 ctx,
             );
             assert!(!result.is_allowed());
@@ -1491,6 +1571,214 @@ fn test_sandboxed_denylist_used_in_sandboxed_mode() {
                     )
                 ),
                 "rm file.txt should be denied by the sandboxed denylist"
+            );
+        });
+    })
+}
+
+/// The sandbox enforces the rules of the team whose context the agent is running in, and only
+/// those: another team the user also belongs to does not get a say.
+#[test]
+fn test_sandboxed_denylist_is_the_surfaces_own_team() {
+    App::test((), |mut app| async move {
+        let PermissionsTestState {
+            terminal_view,
+            convo_id,
+            history,
+            permissions,
+            user_workspaces,
+            terminal_view_id,
+            window_id,
+            ..
+        } = initialize_permissions_test_sandboxed(&mut app);
+
+        let team_uids = user_workspaces.update(&mut app, |model, ctx| {
+            model.setup_test_workspace(ctx);
+            model.update_team_sandboxed_agent_denylists(&[vec!["rm .*"], vec!["curl .*"]], ctx)
+        });
+        place_surface_on_team(&user_workspaces, window_id, team_uids[0], &mut app);
+
+        history.update(&mut app, |history, ctx| {
+            history.toggle_autoexecute_override(&convo_id, terminal_view_id, ctx);
+        });
+        app.update(|ctx| {
+            AISettings::handle(ctx).update(ctx, |settings, ctx| {
+                settings
+                    .auto_approve_bypasses_command_denylist
+                    .set_value(false, ctx)
+                    .expect("setting should update");
+            });
+        });
+
+        permissions.read(&app, |model, ctx| {
+            assert!(
+                matches!(
+                    model.can_autoexecute_command(
+                        &convo_id,
+                        "rm file.txt",
+                        EscapeChar::Backslash,
+                        false,
+                        None,
+                        Some(terminal_view_id),
+                        &team_scope_for(&terminal_view, ctx),
+                        ctx,
+                    ),
+                    CommandExecutionPermission::Denied(
+                        CommandExecutionPermissionDeniedReason::ExplicitlyDenylisted
+                    )
+                ),
+                "the window's own team denylists 'rm'"
+            );
+            assert!(
+                model
+                    .can_autoexecute_command(
+                        &convo_id,
+                        "curl https://example.com",
+                        EscapeChar::Backslash,
+                        false,
+                        None,
+                        Some(terminal_view_id),
+                        &team_scope_for(&terminal_view, ctx),
+                        ctx,
+                    )
+                    .is_allowed(),
+                "the other team's denylist must not reach a surface running in this team"
+            );
+        });
+    })
+}
+
+/// The denylist is admin policy, not a fact captured when the agent launched, so the team's
+/// rules changing mid-run takes effect on the next permission check.
+#[test]
+fn test_sandboxed_denylist_resolves_at_each_check() {
+    App::test((), |mut app| async move {
+        let PermissionsTestState {
+            terminal_view,
+            convo_id,
+            history,
+            permissions,
+            user_workspaces,
+            terminal_view_id,
+            window_id,
+            ..
+        } = initialize_permissions_test_sandboxed(&mut app);
+
+        let team_uids = user_workspaces.update(&mut app, |model, ctx| {
+            model.setup_test_workspace(ctx);
+            model.update_team_sandboxed_agent_denylists(&[vec![]], ctx)
+        });
+        place_surface_on_team(&user_workspaces, window_id, team_uids[0], &mut app);
+
+        history.update(&mut app, |history, ctx| {
+            history.toggle_autoexecute_override(&convo_id, terminal_view_id, ctx);
+        });
+        app.update(|ctx| {
+            AISettings::handle(ctx).update(ctx, |settings, ctx| {
+                settings
+                    .auto_approve_bypasses_command_denylist
+                    .set_value(false, ctx)
+                    .expect("setting should update");
+            });
+        });
+
+        permissions.read(&app, |model, ctx| {
+            assert!(
+                model
+                    .can_autoexecute_command(
+                        &convo_id,
+                        "rm file.txt",
+                        EscapeChar::Backslash,
+                        false,
+                        None,
+                        Some(terminal_view_id),
+                        &team_scope_for(&terminal_view, ctx),
+                        ctx,
+                    )
+                    .is_allowed(),
+                "the surface's team does not denylist 'rm' yet"
+            );
+        });
+
+        user_workspaces.update(&mut app, |model, ctx| {
+            model.update_team_sandboxed_agent_denylists(&[vec!["rm .*"]], ctx);
+        });
+
+        permissions.read(&app, |model, ctx| {
+            assert!(
+                matches!(
+                    model.can_autoexecute_command(
+                        &convo_id,
+                        "rm file.txt",
+                        EscapeChar::Backslash,
+                        false,
+                        None,
+                        Some(terminal_view_id),
+                        &team_scope_for(&terminal_view, ctx),
+                        ctx,
+                    ),
+                    CommandExecutionPermission::Denied(
+                        CommandExecutionPermissionDeniedReason::ExplicitlyDenylisted
+                    )
+                ),
+                "the team added the entry mid-run, which the next check must honor"
+            );
+        });
+    })
+}
+
+/// Auto-approve may bypass the user's own denylist, but never the organization's — and the
+/// organization's is the surface's team's.
+#[test]
+fn test_sandboxed_denylist_is_not_bypassed_by_auto_approve() {
+    App::test((), |mut app| async move {
+        let PermissionsTestState {
+            terminal_view,
+            convo_id,
+            history,
+            permissions,
+            user_workspaces,
+            terminal_view_id,
+            window_id,
+            ..
+        } = initialize_permissions_test_sandboxed(&mut app);
+
+        let team_uids = user_workspaces.update(&mut app, |model, ctx| {
+            model.setup_test_workspace(ctx);
+            model.update_team_sandboxed_agent_denylists(&[vec!["rm .*"], vec!["curl .*"]], ctx)
+        });
+        place_surface_on_team(&user_workspaces, window_id, team_uids[0], &mut app);
+
+        history.update(&mut app, |history, ctx| {
+            history.toggle_autoexecute_override(&convo_id, terminal_view_id, ctx);
+        });
+        app.update(|ctx| {
+            AISettings::handle(ctx).update(ctx, |settings, ctx| {
+                settings
+                    .auto_approve_bypasses_command_denylist
+                    .set_value(true, ctx)
+                    .expect("setting should update");
+            });
+        });
+
+        permissions.read(&app, |model, ctx| {
+            assert!(
+                matches!(
+                    model.can_autoexecute_command(
+                        &convo_id,
+                        "rm file.txt",
+                        EscapeChar::Backslash,
+                        false,
+                        None,
+                        Some(terminal_view_id),
+                        &team_scope_for(&terminal_view, ctx),
+                        ctx,
+                    ),
+                    CommandExecutionPermission::Denied(
+                        CommandExecutionPermissionDeniedReason::ExplicitlyDenylisted
+                    )
+                ),
+                "a sandboxed process never lets auto-approve bypass its team's denylist"
             );
         });
     })
@@ -1580,6 +1868,7 @@ fn test_get_org_execute_commands_denylist() {
 fn test_empty_org_denylist_allows_user_entries() {
     App::test((), |mut app| async move {
         let PermissionsTestState {
+            terminal_view,
             convo_id,
             permissions,
             user_workspaces,
@@ -1614,6 +1903,7 @@ fn test_empty_org_denylist_allows_user_entries() {
                 false,
                 None,
                 Some(terminal_view_id),
+                &team_scope_for(&terminal_view, ctx),
                 ctx,
             );
             assert!(
@@ -1628,6 +1918,7 @@ fn test_empty_org_denylist_allows_user_entries() {
 fn test_denylist_matches_multiline_commands() {
     App::test((), |mut app| async move {
         let PermissionsTestState {
+            terminal_view,
             convo_id,
             permissions,
             profile_model,
@@ -1653,6 +1944,7 @@ fn test_denylist_matches_multiline_commands() {
                 false,
                 None,
                 Some(terminal_view_id),
+                &team_scope_for(&terminal_view, ctx),
                 ctx,
             );
             assert!(!result.is_allowed());
@@ -1673,6 +1965,7 @@ fn test_denylist_matches_multiline_commands() {
                 false,
                 None,
                 Some(terminal_view_id),
+                &team_scope_for(&terminal_view, ctx),
                 ctx,
             );
             assert!(
@@ -1696,6 +1989,7 @@ fn test_denylist_matches_multiline_commands() {
                 false,
                 None,
                 Some(terminal_view_id),
+                &team_scope_for(&terminal_view, ctx),
                 ctx,
             );
             assert!(
@@ -1719,6 +2013,7 @@ fn test_denylist_matches_multiline_commands() {
                 false,
                 None,
                 Some(terminal_view_id),
+                &team_scope_for(&terminal_view, ctx),
                 ctx,
             );
             assert!(

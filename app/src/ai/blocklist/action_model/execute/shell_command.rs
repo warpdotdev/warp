@@ -34,6 +34,7 @@ use crate::terminal::model::block::{
 use crate::terminal::model::session::active_session::ActiveSession;
 use crate::terminal::model_events::{ModelEvent, ModelEventDispatcher};
 use crate::terminal::shell::ShellType;
+use crate::workspaces::user_workspaces::TeamContextResolver;
 use crate::{TelemetryEvent, send_telemetry_from_ctx};
 
 pub struct ShellCommandExecutor {
@@ -45,6 +46,12 @@ pub struct ShellCommandExecutor {
     force_refresh_senders: HashMap<BlockSelector, oneshot::Sender<()>>,
     terminal_model: Arc<FairMutex<TerminalModel>>,
     terminal_view_id: EntityId,
+    /// Resolves the team governing this executor's surface.
+    ///
+    /// The scope is resolved here rather than handed down from the action executor because
+    /// reaching this model goes through `ModelHandle::update`, which takes the context mutably;
+    /// a borrowed [`TeamContext`] minted above that hop cannot cross it.
+    team_context_resolver: TeamContextResolver,
     /// Sender to notify when user hands control back to agent after TransferShellCommandControlToUser.
     control_handback_sender: Option<oneshot::Sender<()>>,
 }
@@ -56,11 +63,12 @@ impl ShellCommandExecutor {
     /// `ShellCommandDelay::OnCompletion`, which would otherwise wait indefinitely.  
     pub const MAX_AGENT_DELAY_DURATION: Duration = Duration::from_secs(120);
 
-    pub fn new(
+    pub(crate) fn new(
         active_session: ModelHandle<ActiveSession>,
         terminal_model: Arc<FairMutex<TerminalModel>>,
         model_event_dispatcher: &ModelHandle<ModelEventDispatcher>,
         terminal_view_id: EntityId,
+        team_context_resolver: TeamContextResolver,
         ctx: &mut ModelContext<Self>,
     ) -> Self {
         ctx.subscribe_to_model(model_event_dispatcher, Self::handle_terminal_model_event);
@@ -71,6 +79,7 @@ impl ShellCommandExecutor {
             block_finished_senders: HashMap::new(),
             force_refresh_senders: HashMap::new(),
             terminal_view_id,
+            team_context_resolver,
             control_handback_sender: None,
         }
     }
@@ -125,6 +134,7 @@ impl ShellCommandExecutor {
                 else {
                     return false;
                 };
+                let team_context = (self.team_context_resolver)(ctx);
                 let autoexecution_permission = blocklist_permissions.can_autoexecute_command(
                     &input.conversation_id,
                     command,
@@ -132,6 +142,7 @@ impl ShellCommandExecutor {
                     is_read_only.unwrap_or(false),
                     *is_risky,
                     Some(self.terminal_view_id),
+                    &team_context,
                     ctx,
                 );
                 if let CommandExecutionPermission::Allowed(reason) = autoexecution_permission {

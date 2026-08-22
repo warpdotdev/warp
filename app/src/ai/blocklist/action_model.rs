@@ -44,7 +44,9 @@ use itertools::Itertools;
 use parking_lot::FairMutex;
 use preprocess::{PendingPreprocessedActions, PreprocessId};
 pub(crate) use recording_telemetry::RecordingTelemetryEvent;
-use warpui::{AppContext, Entity, EntityId, ModelContext, ModelHandle, SingletonEntity};
+use warpui::{
+    AppContext, Entity, EntityId, ModelContext, ModelHandle, SingletonEntity, WeakViewHandle,
+};
 
 use self::execute::search_codebase::SearchCodebaseExecutor;
 use self::execute::{
@@ -70,6 +72,7 @@ use crate::ai::get_relevant_files::controller::GetRelevantFilesController;
 use crate::terminal::TerminalModel;
 use crate::terminal::model::session::active_session::ActiveSession;
 use crate::terminal::model_events::ModelEventDispatcher;
+use crate::workspaces::user_workspaces::UserWorkspaces;
 use crate::{TelemetryEvent, send_telemetry_from_ctx};
 
 /// The status of an action from an AI output.
@@ -257,14 +260,19 @@ pub struct BlocklistAIActionModel {
 }
 
 impl BlocklistAIActionModel {
-    pub fn new(
+    /// `terminal_surface` is the view this action model acts on behalf of. It is stored as a
+    /// resolver rather than as a team, so the team-scoped policy its executors enforce follows
+    /// the surface between windows.
+    pub fn new<T: Entity>(
         terminal_model: Arc<FairMutex<TerminalModel>>,
         active_session: ModelHandle<ActiveSession>,
         model_event_dispatcher: &ModelHandle<ModelEventDispatcher>,
         get_relevant_files_controller: ModelHandle<GetRelevantFilesController>,
         terminal_view_id: EntityId,
+        terminal_surface: WeakViewHandle<T>,
         ctx: &mut ModelContext<Self>,
     ) -> Self {
+        let team_context_resolver = UserWorkspaces::team_context_resolver(terminal_surface);
         let executor = ctx.add_model(|ctx| {
             BlocklistAIActionExecutor::new(
                 terminal_model,
@@ -272,6 +280,7 @@ impl BlocklistAIActionModel {
                 model_event_dispatcher,
                 get_relevant_files_controller,
                 terminal_view_id,
+                team_context_resolver,
                 ctx,
             )
         });

@@ -207,7 +207,7 @@ use crate::view_components::compactible_action_button::CompactibleActionButton;
 use crate::view_components::find::FindEvent;
 use crate::workspace::{ForkAIConversationParams, ForkedConversationDestination, WorkspaceAction};
 use crate::workspaces::user_profiles::{UserProfileWithUID, UserProfiles};
-use crate::workspaces::user_workspaces::UserWorkspaces;
+use crate::workspaces::user_workspaces::{TeamContextResolver, UserWorkspaces};
 use crate::{
     AIAgentTodoList, Appearance, FileEdit, LLMPreferences, PrivacySettings, ToastStack,
     send_telemetry_from_ctx,
@@ -1105,6 +1105,9 @@ pub struct AIBlock {
     #[cfg(feature = "local_fs")]
     resolved_blocklist_image_sources: view_impl::common::ResolvedBlocklistImageSources,
     terminal_view_handle: WeakViewHandle<TerminalView>,
+    /// Resolves the team governing this block's surface. Built from the handle above rather
+    /// than stored as a team, so a policy read follows the surface between windows.
+    team_context_resolver: TeamContextResolver,
 
     ask_user_question_view: Option<ViewHandle<AskUserQuestionView>>,
 }
@@ -1572,6 +1575,9 @@ impl AIBlock {
             resolved_code_block_paths: Default::default(),
             #[cfg(feature = "local_fs")]
             resolved_blocklist_image_sources: Default::default(),
+            team_context_resolver: UserWorkspaces::team_context_resolver(
+                terminal_view_handle.clone(),
+            ),
             terminal_view_handle,
             ask_user_question_view: None,
         };
@@ -2777,6 +2783,7 @@ impl AIBlock {
             })
         {
             if is_agent_mode_autonomy_allowed(ctx) {
+                let team_context = (self.team_context_resolver)(ctx);
                 let autoexecute_decision = escape_char.map(|escape_char| {
                     BlocklistAIPermissions::as_ref(ctx).can_autoexecute_command(
                         &self.client_ids.conversation_id,
@@ -2785,6 +2792,7 @@ impl AIBlock {
                         is_read_only,
                         is_risky,
                         Some(self.terminal_view_id),
+                        &team_context,
                         ctx,
                     )
                 });

@@ -109,6 +109,7 @@ use crate::util::image::{
 };
 #[cfg(feature = "local_fs")]
 use crate::util::openable_file_type::is_binary_file;
+use crate::workspaces::user_workspaces::TeamContextResolver;
 
 /// Types of actions that can be executed in parallel.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -291,6 +292,7 @@ impl BlocklistAIActionExecutor {
         model_event_dispatcher: &ModelHandle<ModelEventDispatcher>,
         get_relevant_files_controller: ModelHandle<GetRelevantFilesController>,
         terminal_view_id: EntityId,
+        team_context_resolver: TeamContextResolver,
         ctx: &mut ModelContext<Self>,
     ) -> Self {
         let read_files_executor =
@@ -311,6 +313,7 @@ impl BlocklistAIActionExecutor {
                 terminal_model.clone(),
                 model_event_dispatcher,
                 terminal_view_id,
+                team_context_resolver,
                 ctx,
             )
         });
