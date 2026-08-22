@@ -187,6 +187,60 @@ fn handle_onboarding_credit_purchase_event(
     }
 }
 
+/// Whether `event` can have changed the AI autonomy policy applying to `window_id`.
+///
+/// Matched exhaustively rather than with a wildcard so that a new event has to be
+/// considered here. Missing one leaves onboarding offering the user an autonomy choice
+/// their team's admins have already taken away.
+fn autonomy_enforcement_may_have_changed(event: &UserWorkspacesEvent, window_id: WindowId) -> bool {
+    match event {
+        // The teams and their settings were re-read from the server. This covers the first
+        // fetch after onboarding opened, and an admin changing the policy elsewhere.
+        UserWorkspacesEvent::TeamsChanged
+        | UserWorkspacesEvent::CurrentWorkspaceChanged
+        | UserWorkspacesEvent::UpdateWorkspaceSettingsSuccess => true,
+        // Windows are independent, so a team switch elsewhere leaves this one's policy alone.
+        UserWorkspacesEvent::WindowTeamChanged {
+            window_id: changed_window_id,
+        } => *changed_window_id == window_id,
+        UserWorkspacesEvent::AddDomainRestrictionsSuccess
+        | UserWorkspacesEvent::AddDomainRestrictionsRejected(_)
+        | UserWorkspacesEvent::DeleteDomainRestrictionSuccess
+        | UserWorkspacesEvent::DeleteDomainRestrictionRejected(_)
+        | UserWorkspacesEvent::EmailInviteSent
+        | UserWorkspacesEvent::EmailInviteRejected(_)
+        | UserWorkspacesEvent::ToggleInviteLinksSuccess
+        | UserWorkspacesEvent::ToggleInviteLinksRejected(_)
+        | UserWorkspacesEvent::ResetInviteLinks
+        | UserWorkspacesEvent::ResetInviteLinksRejected(_)
+        | UserWorkspacesEvent::DeleteTeamInvite
+        | UserWorkspacesEvent::DeleteTeamInviteRejected(_)
+        | UserWorkspacesEvent::GenerateUpgradeLink(_)
+        | UserWorkspacesEvent::GenerateUpgradeLinkRejected(_)
+        | UserWorkspacesEvent::GenerateStripeBillingPortalLink(_)
+        | UserWorkspacesEvent::GenerateStripeBillingPortalLinkRejected(_)
+        | UserWorkspacesEvent::ToggleTeamDiscoverabilitySuccess
+        | UserWorkspacesEvent::ToggleTeamDiscoverabilityRejected(_)
+        | UserWorkspacesEvent::JoinTeamWithTeamDiscoverySuccess
+        | UserWorkspacesEvent::JoinTeamWithTeamDiscoveryRejected(_)
+        | UserWorkspacesEvent::FetchDiscoverableTeamsSuccess(_)
+        | UserWorkspacesEvent::FetchDiscoverableTeamsRejected(_)
+        | UserWorkspacesEvent::TransferTeamOwnershipSuccess
+        | UserWorkspacesEvent::TransferTeamOwnershipRejected(_)
+        | UserWorkspacesEvent::SetTeamMemberRoleSuccess
+        | UserWorkspacesEvent::SetTeamMemberRoleRejected(_)
+        | UserWorkspacesEvent::RemoveUserFromTeamSuccess
+        | UserWorkspacesEvent::RemoveUserFromTeamRejected(_)
+        | UserWorkspacesEvent::UpdateWorkspaceSettingsRejected(_)
+        | UserWorkspacesEvent::AiOveragesUpdated
+        | UserWorkspacesEvent::PurchaseAddonCreditsSuccess
+        | UserWorkspacesEvent::PurchaseAddonCreditsCheckoutRequired { .. }
+        | UserWorkspacesEvent::PurchaseAddonCreditsRejected(_)
+        | UserWorkspacesEvent::CodebaseContextEnablementChanged
+        | UserWorkspacesEvent::SunsettedToBuildDataUpdated => false,
+    }
+}
+
 /// Whether the team selected in `ctx`'s window imposes any AI autonomy policy, which is
 /// what decides whether onboarding offers the user an autonomy choice at all.
 ///
@@ -2268,16 +2322,7 @@ impl RootView {
         ctx.subscribe_to_model(
             &UserWorkspaces::handle(ctx),
             move |_, _user_workspaces, event, ctx| {
-                let autonomy_enforcement_may_have_changed = match event {
-                    UserWorkspacesEvent::UpdateWorkspaceSettingsSuccess => true,
-                    // Windows are independent, so a team switch elsewhere leaves this
-                    // window's enforcement untouched.
-                    UserWorkspacesEvent::WindowTeamChanged { window_id } => {
-                        *window_id == ctx.window_id()
-                    }
-                    _ => false,
-                };
-                if autonomy_enforcement_may_have_changed {
+                if autonomy_enforcement_may_have_changed(event, ctx.window_id()) {
                     let workspace_enforces_autonomy = team_enforces_autonomy(ctx);
                     onboarding_view_for_workspaces.update(ctx, |onboarding_view, ctx| {
                         onboarding_view

@@ -1064,6 +1064,9 @@ impl UserWorkspaces {
     ///
     /// The tier policy is billing entitlement, which belongs to the paying workspace rather
     /// than to any team, so it is read from the workspace either way.
+    ///
+    /// Callers are on render and per-action paths, so this asks each team's settings the
+    /// question directly rather than lowering them into [`AiAutonomySettings`] first.
     pub fn all_teams_allow_ai_autonomy(&self) -> bool {
         let tier_allows_autonomy = self.current_workspace().is_none_or(|workspace| {
             workspace
@@ -1072,6 +1075,9 @@ impl UserWorkspaces {
                 .ai_autonomy_policy
                 .is_some_and(|policy| policy.is_enabled)
         });
+        if tier_allows_autonomy {
+            return true;
+        }
 
         let mut teams = self
             .workspaces
@@ -1080,18 +1086,19 @@ impl UserWorkspaces {
             .peekable();
 
         if teams.peek().is_none() {
-            return Self::autonomy_allowed_by_policy(&self.ai_autonomy_settings())
-                || tier_allows_autonomy;
+            return self.current_workspace().is_some_and(|workspace| {
+                Self::autonomy_allowed_by_policy(&workspace.settings.ai_autonomy_settings)
+            });
         }
 
-        teams.all(|team| {
-            Self::autonomy_allowed_by_policy(&AiAutonomySettings::from(&team.settings.ai_autonomy))
-                || tier_allows_autonomy
-        })
+        teams.all(|team| team.settings.ai_autonomy.configures_any_policy())
     }
 
     /// Whether an admin has configured any autonomy policy at all. An admin who has set
     /// something has implicitly allowed autonomy, whatever the tier policy says.
+    ///
+    /// The team-layer counterpart is [`TeamAiAutonomySettings::configures_any_policy`],
+    /// which must read the same set of fields.
     fn autonomy_allowed_by_policy(settings: &AiAutonomySettings) -> bool {
         settings.apply_code_diffs_setting.is_some()
             || settings.read_files_setting.is_some()
