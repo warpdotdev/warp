@@ -437,22 +437,17 @@ impl CommandExecutor for InBandCommandExecutor {
 }
 
 /// Returns `true` if `command` is an in-band command string -- either one executed via
-/// `InBandCommandExecutor` (`warp_run_generator_command`/`Warp-Run-GeneratorCommand`), or the
-/// native-shell-completions generator function declared in zsh/bash/fish's bootstrap scripts
-/// (`warp_run_generator_command_native_completions`), which is dispatched directly by
-/// `PtyController::run_native_shell_completions` rather than through this executor. PowerShell's
-/// native completions now go through the same path as the other three shells (the
-/// `Warp-Run-GeneratorCommand-NativeCompletions` function in pwsh.ps1), so its command string is
-/// recognized here by the `Warp-Run-GeneratorCommand` prefix below just like any other.
+/// `InBandCommandExecutor` (`warp_run_generator_command`/`Warp-Run-GeneratorCommand`), or a
+/// native-shell-completions generator (`warp_run_generator_command_native_completions`, or
+/// PowerShell's `Warp-Run-GeneratorCommand-NativeCompletions`) that `PtyController` dispatches
+/// directly rather than through this executor.
 ///
 /// In-band commands are prefixed with a leading space for Fish, which is done to omit them from
 /// fish's command history.  Thus we strip leading whitespace before matching the `command`.
 ///
-/// This intentionally matches on the prefix alone (not `"<name> "` with a trailing space), the
-/// same convention the shell scripts themselves use for their own generator-command detection
-/// (e.g. zsh's `_is_warp_generator_command`, a substring match on `warp_run_generator_command`)
-/// -- so any current or future generator function name built on this prefix is recognized here
-/// without needing a matching change on both sides.
+/// Matches on the prefix alone (not `"<name> "`), the same convention the shell scripts use for
+/// their own generator detection, so any generator function built on this prefix is recognized
+/// without a matching change on both sides.
 pub fn is_in_band_command(command: &str) -> bool {
     let trimmed = command.trim_start();
     trimmed.starts_with("Warp-Run-GeneratorCommand")

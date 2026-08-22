@@ -1522,14 +1522,11 @@ fn should_show_completions_in_ai_input(buffer_text: &str) -> bool {
     }
 }
 
-/// Whether a completions request should be answered by asking the user's shell to compute
-/// native completions for the current buffer, rather than through Warp's own completion specs.
+/// Whether a completions request should be answered by asking the user's shell to compute native
+/// completions for the current buffer, rather than through Warp's own completion specs.
 ///
-/// Always `false` for AI input mode, regardless of the other conditions: AI input is prose, not
-/// a shell command line, so there's no command spec to match against there in the first place
-/// (completions in that mode are file paths only, see `suggest_file_path_completions_only` at
-/// the call site) -- there is never anything in that mode that should be handed to the shell for
-/// completion.
+/// Always `false` for AI input mode: that's prose, not a shell command line, so there's no command
+/// spec to hand to the shell.
 fn should_use_native_shell_completions(
     is_feature_enabled_or_forced: bool,
     buffer_text_is_multiline: bool,
@@ -1541,18 +1538,11 @@ fn should_use_native_shell_completions(
         && !is_ai_input
 }
 
-/// Strips control characters (`char::is_control`: C0, C1, and DEL) from text about to be
-/// inserted as an accepted shell completion match/prefix. A completion candidate is plain
-/// text sourced from the shell's own completion machinery, not typed or pasted by the user,
-/// so a literal control character in it (e.g. a newline in a real but pathological filename)
-/// is never something the user intended to insert into the buffer -- unlike a deliberate
-/// multi-line paste, which the editor otherwise supports. Left uninserted, a raw newline in
-/// particular puts the editor into a stuck multi-row state (`Ctrl+U` only clears the current
-/// logical row) and silently disables native shell completions for the rest of that buffer
-/// (`should_use_native_shell_completions` bails on a multiline buffer). A BEL or ESC is less
-/// disruptive -- it renders as a harmless box glyph rather than restructuring the editor --
-/// but is stripped for the same reason: an accepted match's text should never smuggle a
-/// control character into the buffer, whichever one it is.
+/// Strips control characters (C0, C1, DEL) from an accepted completion match/prefix before it's
+/// inserted. A completion candidate comes from the shell's machinery, not the user, so a literal
+/// control char (e.g. a newline in a pathological filename) is never intended input. A raw newline
+/// in particular wedges the editor into a stuck multi-row state and disables native completions for
+/// the rest of the buffer; BEL/ESC are less disruptive but stripped for consistency.
 fn strip_control_characters(text: &str) -> Cow<'_, str> {
     if text.chars().any(|c| c.is_control()) {
         text.chars()
@@ -1581,22 +1571,16 @@ fn completions_fallback_strategy_for_trigger(
 }
 
 /// When, if ever, a completions request asks the user's shell to compute native completions,
-/// relative to consulting Warp's own bundled completion specs. Kept as one explicit, named
-/// decision -- rather than an artifact of statement order in `run_completions_async` -- so the
-/// tradeoff is reviewable and testable.
+/// relative to consulting Warp's own bundled completion specs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum NativeCompletionsDispatch {
-    /// Native shell completions aren't in use for this request; only the bundled spec results
-    /// (if any) are shown, and the shell is never asked.
+    /// Native shell completions aren't in use; only the bundled spec results are shown.
     Skip,
-    /// Ask the shell up front, before/without the bundled spec pass, and use its answer
-    /// unconditionally. Used under the `ForceNativeShellCompletions` pref, where the shell wins
-    /// regardless of the specs -- dispatching up front lets it compute concurrently rather than
-    /// after the spec pass, which is best for latency.
+    /// Ask the shell up front and use its answer unconditionally (the `ForceNativeShellCompletions`
+    /// pref). Dispatching up front lets it compute concurrently with the spec pass, for latency.
     UpFront,
-    /// Consult the bundled specs first and ask the shell only if they come back empty. The
-    /// shipping flag-only configuration: the user's shell isn't made to pay for a foreground
-    /// round trip on a keystroke a bundled spec ultimately answers.
+    /// Consult the bundled specs first and ask the shell only if they come back empty. The shipping
+    /// flag-only configuration, so the shell isn't asked on a keystroke a bundled spec answers.
     OnlyIfSpecsEmpty,
 }
 
@@ -1625,10 +1609,8 @@ fn bundled_specs_are_empty(spec_suggestions: Option<&SuggestionResults>) -> bool
 
 /// Builds [`SuggestionResults`] from a shell's native-completions reply. The shell's own reported
 /// span (`shell_replacement_span`) is preferred when present, since the whitespace-delimited token
-/// heuristic below assumes the token being completed is whitespace-delimited -- which doesn't hold
-/// for e.g. a `$_.` member-access completion in PowerShell, where the shell replaces a zero-length
-/// or sub-token span within a larger, non-whitespace-delimited expression. Not every shell reports
-/// a span yet, so the heuristic remains the fallback.
+/// heuristic below doesn't hold for e.g. a `$_.` member-access completion in PowerShell. Not every
+/// shell reports a span, so the heuristic remains the fallback.
 fn native_shell_suggestion_results(
     shell_results: Vec<ShellCompletion>,
     shell_replacement_span: Option<Span>,
@@ -12392,10 +12374,9 @@ impl Input {
 
         let native_shell_completions_feature_enabled =
             FeatureFlag::NativeShellCompletions.is_enabled() || force_native_shell_completions;
-        // Native completions run the shell's own completion engine through a foreground in-band
-        // generator command, which is too costly to fire on every keystroke -- so they're
-        // reserved for an explicit Tab/keybinding trigger. An as-you-type keystroke keeps Warp's
-        // own bundled-spec behavior instead and never asks the shell.
+        // Native completions run the shell's own engine through a foreground in-band generator
+        // command, too costly to fire on every keystroke, so they're reserved for an explicit
+        // Tab/keybinding trigger; an as-you-type keystroke keeps Warp's bundled-spec behavior.
         let use_native_shell_completions = completions_trigger != CompletionsTrigger::AsYouType
             && should_use_native_shell_completions(
                 native_shell_completions_feature_enabled,
@@ -12432,20 +12413,17 @@ impl Input {
 
         let cursor_position = cursor_position.as_usize();
 
-        // How this request factors the shell's native completions in relative to Warp's own
-        // bundled specs (see `NativeCompletionsDispatch`). Bound once so the enum -- not a
-        // re-derivation from the raw feature/pref booleans -- owns each branch below.
+        // How this request factors in the shell's native completions
+        // (see `NativeCompletionsDispatch`).
         let dispatch = native_completions_dispatch(
             use_native_shell_completions,
             force_native_shell_completions,
         );
 
-        // In the shipping flag-only configuration, run Warp's own bundled completion specs first
-        // and ask the shell for native completions only if they come back empty -- so the user's
-        // shell isn't made to pay for a foreground round trip on a keystroke a bundled spec
-        // ultimately answers. This needs a two-phase spawn (the generator dispatch below needs the
-        // `ViewContext`, which the background spec-pass future doesn't have), so it's handled
-        // separately from the up-front/no-native cases that follow.
+        // Shipping flag-only configuration: run the bundled specs first and ask the shell only if
+        // they come back empty, so the shell isn't asked on a keystroke a bundled spec answers.
+        // This needs a two-phase spawn -- the generator dispatch needs the `ViewContext` the
+        // background spec-pass future lacks -- so it's separate from the cases below.
         if dispatch == NativeCompletionsDispatch::OnlyIfSpecsEmpty {
             let completion_session = completion_context.session.clone();
             let abort_handle = ctx
@@ -12495,13 +12473,10 @@ impl Input {
             return;
         }
 
-        // Either native shell completions aren't in use (`Skip`) or the `ForceNativeShellCompletions`
-        // pref is set (`UpFront`) -- the two cases deliberately share this single up-front-or-none
-        // spawn. Under force, dispatch the generator up front so the shell computes concurrently
-        // with the spec pass (whose result is then discarded) -- the `!force_native_shell_completions`
-        // guard when selecting results below is what preserves the pref's "native or nothing"
-        // semantics (a bundled spec is never substituted under force, even if native returns
-        // nothing).
+        // `Skip` and `UpFront` share this single up-front-or-none spawn. Under force, dispatch the
+        // generator up front so the shell computes concurrently with the spec pass (whose result is
+        // discarded); the `!force_native_shell_completions` guard when selecting results below is
+        // what preserves the pref's "native or nothing" semantics.
         let dispatch_native_up_front = dispatch == NativeCompletionsDispatch::UpFront;
         let native_results_fut = if dispatch_native_up_front {
             // If we're using native shell completions, construct a future that
@@ -12573,9 +12548,8 @@ impl Input {
     }
 
     /// Dispatches the native-shell-completions generator after the bundled spec pass came back
-    /// empty -- the second phase of the flag-only path (see the `OnlyIfSpecsEmpty` handling in
-    /// `run_completions_async`). Runs from the spec pass's foreground `on_resolve` because
-    /// dispatching the request needs the `ViewContext`.
+    /// empty (the second phase of the `OnlyIfSpecsEmpty` path), from the spec pass's foreground
+    /// `on_resolve` because dispatching needs the `ViewContext`.
     fn dispatch_native_shell_completions_after_empty_specs(
         &mut self,
         buffer_text: String,
@@ -12584,11 +12558,9 @@ impl Input {
         editor_snapshot: EditorSnapshot,
         ctx: &mut ViewContext<Self>,
     ) {
-        // If the buffer moved on while the spec pass was running, this request is stale: don't ask
-        // the shell for it, and leave `completions_abort_handle` alone -- a newer request may
-        // already own it (an abort issued just after the spec pass resolved can arrive too late to
-        // stop this callback). Mirrors `handle_completion_suggestions_results`'s own staleness
-        // check, which rejects the result if it still gets through.
+        // If the buffer moved on while the spec pass ran, this request is stale: don't ask the
+        // shell, and leave `completions_abort_handle` alone (a newer request may already own it).
+        // Mirrors `handle_completion_suggestions_results`'s own staleness check.
         let current_editor_model = self
             .editor
             .read(ctx, |editor, ctx| editor.snapshot_model(ctx));
@@ -12605,13 +12577,11 @@ impl Input {
             results_tx,
         });
 
-        // `spawn`, not `spawn_abortable`: no on-abort cancellation is needed here. By this phase
-        // the bundled spec pass -- whose own in-band generator commands the first phase's
-        // `on_abort` cancels -- has already completed, and the native generator this awaits does
-        // not run through the session command executor that `cancel_active_commands` acts on (it
-        // goes straight through `PtyController::run_native_shell_completions`, which dedupes a
-        // superseded request itself). Aborting this phase only needs to stop stale results from
-        // rendering, which dropping the future does.
+        // `spawn`, not `spawn_abortable`: no on-abort cancellation is needed. The bundled spec pass
+        // (whose in-band generators the first phase's `on_abort` cancels) has completed, and
+        // the native generator this awaits goes straight through
+        // `PtyController::run_native_shell_completions`, which dedupes superseded requests itself.
+        // Dropping the future is enough to stop stale results from rendering.
         let abort_handle = ctx
             .spawn(
                 async move {
@@ -12976,13 +12946,10 @@ impl Input {
         self.editor.update(ctx, |input, ctx| {
             let cursor_end_offset = input.end_byte_index_of_last_selection(ctx);
 
-            // Add a space to the end if the end of the selection/replacement
-            // is at the end of the buffer and the completion result doesn't end with a slash
-            // or an equals sign. A trailing slash means more of a path is expected next; a
-            // trailing equals sign (e.g. `--color=`) means an option's value is expected
-            // directly afterward, with no space, the same convention shells themselves follow
-            // when completing this shape (confirmed for zsh's `_arguments`-driven `-S '='`
-            // completions).
+            // Add a space to the end if the end of the selection/replacement is at the end of the
+            // buffer and the completion result doesn't end with a slash or an equals sign. A
+            // trailing slash means more of a path follows; a trailing `=` (e.g. `--color=`) means a
+            // value follows directly, as shells' own `-S '='` completions do.
             // If completions as you type is turned on and classic completions is off, then
             // _don't_ add a space.
             let is_classic_completions_enabled = self.is_classic_completions_enabled(ctx);

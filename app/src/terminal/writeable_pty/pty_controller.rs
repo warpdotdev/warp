@@ -61,9 +61,8 @@ enum PtyWrite {
         mode: AIAgentPtyWriteMode,
     },
     RunNativeShellCompletions {
-        /// The generator-command line to write to the PTY, computed by
-        /// `ShellType::native_completions_generator_command`. Run as an in-band foreground command
-        /// for all four shells.
+        /// The generator-command line (from `ShellType::native_completions_generator_command`),
+        /// run as an in-band foreground command.
         command: String,
         shell_type: ShellType,
         results_tx: async_channel::Sender<(Vec<ShellCompletion>, Option<Span>)>,
@@ -313,11 +312,9 @@ impl<T: EventLoopSender> PtyController<T> {
         }
 
         if let Some(write) = self.pending_writes.pop_front() {
-            // `RunNativeShellCompletions` must be treated like `Command` here: it runs the
-            // generator command as a foreground in-band command (for all four shells, PowerShell
-            // included), which puts the shell into a state -- e.g. zsh's `select`, or simply a
-            // running command -- where draining the next queued write immediately would deliver it
-            // before the shell is back at a prompt, where it can be consumed and lost.
+            // `RunNativeShellCompletions` must be treated like `Command`: it runs the generator as
+            // a foreground in-band command, which puts the shell into a state (zsh's `select`, or a
+            // running command) where draining the next queued write immediately could lose it.
             let is_command = matches!(
                 &write,
                 PtyWrite::Command { .. } | PtyWrite::RunNativeShellCompletions { .. }
@@ -651,10 +648,9 @@ impl<T: EventLoopSender> PtyController<T> {
             } => {
                 self.in_flight_native_completions_results_tx = Some(results_tx);
 
-                // Write the generator command exactly as any other in-band command: the shell's
-                // own bootstrap logic (matched by name -- see
-                // `ShellType::native_completions_generator_command`) hides it from history and
-                // treats its output as in-band rather than a new block.
+                // Write the generator command like any other in-band command: the shell's bootstrap
+                // (matched by name, see `ShellType::native_completions_generator_command`) hides it
+                // from history and treats its output as in-band.
                 let terminal_model = self.terminal_model.clone();
                 (
                     Cow::Owned(bytes_to_execute_command(
@@ -732,9 +728,8 @@ impl<T: EventLoopSender> PtyController<T> {
             let _ = results_tx.try_send((Vec::new(), None));
             return;
         };
-        // Hex-encode the buffer text here -- the single place that turns buffer text into a
-        // generator payload -- so `ShellType`'s builder stays a pure command-string builder with
-        // no encoding (or `hex`) dependency of its own.
+        // Hex-encode the buffer text here -- the single place that turns buffer text into a payload
+        // -- so `ShellType`'s builder stays a pure command-string builder with no `hex` dependency.
         let command =
             shell_type.native_completions_generator_command(&hex::encode(buffer_text.as_bytes()));
 
