@@ -1422,7 +1422,7 @@ impl AIBlock {
                 .with_icon(Icon::Diff)
                 .with_size(ButtonSize::Small)
                 .on_click(|ctx| {
-                    ctx.dispatch_typed_action(AIBlockAction::ToggleCodeReviewPane);
+                    ctx.dispatch_typed_action(AIBlockAction::ReviewAgentChanges);
                 })
         });
 
@@ -6237,6 +6237,13 @@ pub enum AIBlockEvent {
     ToggleCodeReviewPane {
         entrypoint: CodeReviewPaneEntrypoint,
     },
+    /// The agent block footer's "Review changes" control was activated. Unlike
+    /// [`Self::ToggleCodeReviewPane`], the destination depends on whether the
+    /// agent's accepted edits are still in the working tree — see
+    /// `TerminalView::review_agent_changes`.
+    ReviewAgentChanges {
+        entrypoint: CodeReviewPaneEntrypoint,
+    },
     DismissedPassiveBlock,
     OpenAIDocumentPane {
         document_id: AIDocumentId,
@@ -6378,7 +6385,7 @@ pub enum AIBlockAction {
         message_id: MessageId,
         pinned_to_bottom: bool,
     },
-    ToggleCodeReviewPane,
+    ReviewAgentChanges,
     DismissSuggestionsSection,
     DisableRuleSuggestions,
     /// Copy the debug ID to clipboard
@@ -6956,8 +6963,8 @@ impl TypedActionView for AIBlock {
                     state.toggle_expansion();
                 }
             }
-            AIBlockAction::ToggleCodeReviewPane => {
-                ctx.emit(AIBlockEvent::ToggleCodeReviewPane {
+            AIBlockAction::ReviewAgentChanges => {
+                ctx.emit(AIBlockEvent::ReviewAgentChanges {
                     entrypoint: CodeReviewPaneEntrypoint::AgentModeRunning,
                 });
             }
