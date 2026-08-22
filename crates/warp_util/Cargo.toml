@@ -11,6 +11,7 @@ license.workspace = true
 
 [dependencies]
 anyhow.workspace = true
+async-fs.workspace = true
 command.workspace = true
 content_inspector = "0.2.4"
 parking_lot.workspace = true
@@ -29,6 +30,7 @@ serde.workspace = true
 serde_json.workspace = true
 pin-project.workspace = true
 futures-util.workspace = true
+futures-lite.workspace = true
 log.workspace = true
 warp_errors.workspace = true
 
@@ -39,5 +41,5 @@ windows.workspace = true
 gloo.workspace = true
 
 [dev-dependencies]
-futures-lite.workspace = true
+tempfile.workspace = true
 warpui_core.workspace = true

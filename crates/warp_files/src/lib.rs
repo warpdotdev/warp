@@ -313,6 +313,16 @@ impl RepoPathMappingState {
     }
 }
 
+/// Caps the file-editor buffer load path (`FileModel::open`, `read_content_for_file`, and the
+/// autoreload loop in `reload_file_paths`) — the highest-blast-radius read in the app, since it
+/// runs for any file a user opens for editing or that changes on disk while open. 100 MiB is
+/// generous for even sizeable source files, logs, or generated code, while sitting two orders of
+/// magnitude below the 1 GiB cap `crates/warp_files` previously used elsewhere and nowhere near
+/// the multi-GiB pathological range that motivated APP-4801. There is no existing editor/buffer
+/// size limit in this codebase to align with instead (checked `text_file_reader.rs` and the
+/// generic editor view).
+const MAX_EDITOR_FILE_BYTES: u64 = 100 * 1024 * 1024;
+
 pub struct FileModel {
     file_state: FileState,
     abort_handles: HashMap<FileId, SpawnedFutureHandle>,
@@ -447,9 +457,10 @@ impl FileModel {
         let file_path_buf = file_path.to_owned();
         let future = ctx.spawn(
             async move {
-                let contents = async_fs::read_to_string(&file_path_buf)
-                    .await
-                    .map_err(FileLoadError::from);
+                let contents =
+                    warp_util::file::read_to_string_capped(&file_path_buf, MAX_EDITOR_FILE_BYTES)
+                        .await
+                        .map_err(FileLoadError::from);
                 (file_id, contents)
             },
             move |me, (file_id, load_result), ctx| {
@@ -518,12 +529,11 @@ impl FileModel {
     }
 
     pub async fn read_content_for_file(file_path: &Path) -> Result<String, FileLoadError> {
-        if !Self::file_exists(file_path).await {
-            return Err(FileLoadError::DoesNotExist);
+        match warp_util::file::read_to_string_capped(file_path, MAX_EDITOR_FILE_BYTES).await {
+            Ok(content) => Ok(content),
+            Err(err) if err.kind() == io::ErrorKind::NotFound => Err(FileLoadError::DoesNotExist),
+            Err(err) => Err(FileLoadError::from(err)),
         }
-        async_fs::read_to_string(file_path)
-            .await
-            .map_err(FileLoadError::from)
     }
 
     /// Asynchronously reads specific lines from a file using BufReader.
@@ -1141,43 +1151,32 @@ impl FileModel {
         }
 
         // Autoreload modified files.
-        ctx.spawn(
-            async move {
-                let mut res = Vec::new();
-                for file_path in matching_files {
-                    if let Ok(content) = async_fs::read_to_string(&file_path).await {
-                        res.push((file_path, content));
+        ctx.spawn(read_reload_contents(matching_files), move |me, res, ctx| {
+            for (file_path, content) in res {
+                let mut emitted_event = false;
+                for (file_id, file_state) in me.file_state.local_iter_mut() {
+                    // Only set the new version of a file if it has opt-in to receiving updates.
+                    if file_state.should_receive_update_for_path(&file_path) {
+                        let new_version = ContentVersion::new();
+                        ctx.emit(FileModelEvent::FileUpdated {
+                            id: *file_id,
+                            content: content.clone(),
+                            base_version: file_state.version.expect("Version should be some"),
+                            new_version,
+                        });
+                        emitted_event = true;
+                        file_state.version = Some(new_version);
                     }
                 }
-                res
-            },
-            move |me, res, ctx| {
-                for (file_path, content) in res {
-                    let mut emitted_event = false;
-                    for (file_id, file_state) in me.file_state.local_iter_mut() {
-                        // Only set the new version of a file if it has opt-in to receiving updates.
-                        if file_state.should_receive_update_for_path(&file_path) {
-                            let new_version = ContentVersion::new();
-                            ctx.emit(FileModelEvent::FileUpdated {
-                                id: *file_id,
-                                content: content.clone(),
-                                base_version: file_state.version.expect("Version should be some"),
-                                new_version,
-                            });
-                            emitted_event = true;
-                            file_state.version = Some(new_version);
-                        }
-                    }
 
-                    if !emitted_event {
-                        log::warn!(
-                            "{} is changed but there is no handler for the update event",
-                            file_path.display()
-                        );
-                    }
+                if !emitted_event {
+                    log::warn!(
+                        "{} is changed but there is no handler for the update event",
+                        file_path.display()
+                    );
                 }
-            },
-        );
+            }
+        });
     }
 
     /// Falls back to individual file watchers for all files that were expecting to use the given repository.
@@ -1221,6 +1220,20 @@ impl FileModel {
             }
         }
     }
+}
+
+/// Reads the current content of each of `file_paths` for the autoreload loop, silently omitting
+/// any that fail to read (including files rejected by the size cap) so the caller applies
+/// exactly the files that succeeded.
+async fn read_reload_contents(file_paths: Vec<PathBuf>) -> Vec<(PathBuf, String)> {
+    let mut res = Vec::new();
+    for file_path in file_paths {
+        match warp_util::file::read_to_string_capped(&file_path, MAX_EDITOR_FILE_BYTES).await {
+            Ok(content) => res.push((file_path, content)),
+            Err(err) => log::debug!("Failed to autoreload {}: {err}", file_path.display()),
+        }
+    }
+    res
 }
 
 impl Entity for FileModel {

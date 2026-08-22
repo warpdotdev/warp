@@ -401,6 +401,11 @@ impl ParseableConfig for AlacrittyConfig {
     }
 }
 
+/// Alacritty configs are hand-written TOML, realistically at most a few KiB even with nested
+/// imports; 1 MiB leaves generous headroom while still rejecting the pathological on-disk sizes
+/// that motivated APP-4801.
+const MAX_ALACRITTY_CONFIG_FILE_BYTES: u64 = 1024 * 1024;
+
 impl AlacrittyConfig {
     /// Reads Alacritty configs asynchronously and folds in any imported configs up to a given depth.
     #[async_recursion]
@@ -413,16 +418,20 @@ impl AlacrittyConfig {
             );
             return Ok(vec![AlacrittyConfig::default()]);
         }
-        let contents = match async_fs::read_to_string(path.clone()).await {
-            Ok(string) => string,
-            Err(e) => {
-                if e.kind() == ErrorKind::NotFound {
-                    return Err(ConfigError::FileNotFoundError);
-                } else {
-                    return Err(ConfigError::FileIOError(e));
+        let contents =
+            match warp_util::file::read_to_string_capped(&path, MAX_ALACRITTY_CONFIG_FILE_BYTES)
+                .await
+            {
+                Ok(string) => string,
+                Err(e) => {
+                    if e.kind() == ErrorKind::NotFound {
+                        return Err(ConfigError::FileNotFoundError);
+                    } else {
+                        log::warn!("Failed to read Alacritty configuration at {path:?}: {e}");
+                        return Err(ConfigError::FileIOError(e));
+                    }
                 }
-            }
-        };
+            };
 
         let Ok(mut out) = toml::from_str::<AlacrittyConfig>(contents.as_str()) else {
             return Err(ConfigError::MalformattedFileError(path));

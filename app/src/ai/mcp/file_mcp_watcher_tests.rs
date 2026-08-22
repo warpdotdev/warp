@@ -260,3 +260,23 @@ async fn parse_outcomes_distinguish_missing_invalid_and_valid_configs() {
         _ => panic!("valid config should produce one server"),
     }
 }
+
+#[tokio::test]
+async fn oversized_config_reports_read_error_not_missing() {
+    // Regression for APP-4801: an oversized config file must surface as a `Read` error, not
+    // `Missing`, which would silently drop the user's already-configured servers.
+    let directory = tempfile::tempdir().expect("temporary directory should be created");
+    let path = directory.path().join(".mcp.json");
+    std::fs::write(
+        &path,
+        vec![b'a'; super::MAX_MCP_CONFIG_FILE_BYTES as usize + 1],
+    )
+    .expect("oversized config should be written");
+
+    match parse_mcp_config_file(&path, MCPProvider::Warp).await {
+        FileMCPConfigParseOutcome::Error(diagnostic) => {
+            assert_eq!(diagnostic.kind, FileMCPConfigDiagnosticKind::Read);
+        }
+        _ => panic!("expected a Read diagnostic for an oversized config"),
+    }
+}

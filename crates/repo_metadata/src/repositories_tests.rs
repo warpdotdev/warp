@@ -210,3 +210,77 @@ fn test_find_git_repo_with_worktree() {
         });
     });
 }
+
+#[test]
+#[cfg(feature = "local_fs")]
+fn test_find_git_repo_tolerates_long_gitdir_path() {
+    // Compatibility regression: a Windows long-path installation can produce a `gitdir:`
+    // line well beyond a few KiB. Pad the gitfile with trailing whitespace (trimmed away
+    // during parsing, so the resolved path itself stays short and valid) to push the total
+    // file size past the old 4 KiB cap while keeping it under the new 1 MiB cap. This must
+    // still resolve to the worktree's git dir -- a tight cap would make a valid worktree look
+    // like "not a gitfile" and silently walk past the real repository.
+    VirtualFS::test("find_git_repo_long_gitdir", |dirs, mut vfs| {
+        vfs.mkdir("main_repo/.git/objects");
+        vfs.mkdir("main_repo/.git/worktrees/wt1");
+        vfs.with_files(vec![
+            Stub::FileWithContent("main_repo/.git/HEAD", "ref: refs/heads/main"),
+            Stub::FileWithContent("main_repo/.git/worktrees/wt1/HEAD", "ref: refs/heads/main"),
+        ]);
+
+        vfs.mkdir("checkout_wt1/src");
+        let padded_gitdir_line = format!(
+            "gitdir: ../main_repo/.git/worktrees/wt1\n{}",
+            " ".repeat(8_000)
+        );
+        assert!(
+            padded_gitdir_line.len() > 4096,
+            "padded content must exceed the old 4 KiB cap"
+        );
+        vfs.with_files(vec![Stub::FileWithContent(
+            "checkout_wt1/.git",
+            padded_gitdir_line.as_str(),
+        )]);
+
+        let worktree_root = dirs.tests().join("checkout_wt1");
+        let expected_gitdir = dirs.tests().join("main_repo/.git/worktrees/wt1");
+
+        App::test((), |mut _app| async move {
+            let result = super::find_git_repo(worktree_root.as_path()).await;
+            assert!(
+                result.is_some(),
+                "a long (but sub-1MiB) gitdir line should still resolve"
+            );
+            let info = result.unwrap();
+            let actual = std::fs::canonicalize(&info.git_dir_path).expect("canonicalize gitdir");
+            let expected = std::fs::canonicalize(&expected_gitdir).expect("canonicalize expected");
+            assert_eq!(actual, expected);
+        });
+    });
+}
+
+#[test]
+#[cfg(feature = "local_fs")]
+fn test_find_git_repo_skips_oversized_gitfile() {
+    // Regression for APP-4801: an oversized `.git` file must be treated the same as an
+    // unreadable one (not a valid gitfile), not read wholesale into memory.
+    VirtualFS::test("find_git_repo_oversized_gitfile", |dirs, mut vfs| {
+        vfs.mkdir("checkout/src");
+        let oversized_gitdir_line =
+            format!("gitdir: {}", "a".repeat(super::MAX_GITFILE_BYTES as usize));
+        vfs.with_files(vec![Stub::FileWithContent(
+            "checkout/.git",
+            oversized_gitdir_line.as_str(),
+        )]);
+
+        let checkout_root = dirs.tests().join("checkout");
+
+        App::test((), |mut _app| async move {
+            let result = super::find_git_repo(checkout_root.as_path()).await;
+            assert!(
+                result.is_none(),
+                "an oversized .git file should not be treated as a valid gitfile"
+            );
+        });
+    });
+}
