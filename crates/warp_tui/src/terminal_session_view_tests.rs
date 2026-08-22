@@ -28,9 +28,10 @@ use warp::tui_export::{
     OutputStatusUpdateCallback, ParsedSlashCommandInput, PtyIntent, PtyIntentEvent, ServerOutputId,
     Session, Shared, SizeInfo, SizeUpdate, SlashCommandDataSource as _, SlashCommandKind, TaskId,
     TranscriptScope, TuiMcpAction, TuiMcpServerId, TuiOnboardingMarker, TuiOnboardingMarkers,
-    TuiUpArrowHistoryItemKind, UserTakeOverReason, WarpConfig, WarpConfigUpdateEvent,
-    export_conversation_markdown, forkable_tui_conversation_for_test, queue_tui_permission_action,
-    register_tui_session_view_test_singletons, set_tui_default_team_admin_for_test, slash_commands,
+    TuiUpArrowHistoryItemKind, UserTakeOverReason, UserWorkspaces, WarpConfig,
+    WarpConfigUpdateEvent, export_conversation_markdown, forkable_tui_conversation_for_test,
+    queue_tui_permission_action, register_tui_session_view_test_singletons,
+    set_tui_default_team_admin_for_test, set_tui_teams_for_test, slash_commands,
 };
 use warp_core::channel::{Channel, ChannelState};
 use warp_core::features::FeatureFlag;
@@ -7219,4 +7220,95 @@ fn resume_shell_commands_use_shared_tui_launcher() {
         super::tui_resume_shell_command(Channel::Preview, "conversation-token"),
         "warp-preview --resume conversation-token"
     );
+}
+
+/// Seeds `names` as the user's teams and puts `window_id` on the first, standing in for what
+/// `TuiTeamScope` does once a workspaces-metadata response lands.
+fn set_teams_and_register_window(
+    app: &mut App,
+    names: &[&str],
+    window_id: warpui::WindowId,
+) -> Vec<warp::tui_export::ServerId> {
+    app.update(|ctx| {
+        let team_uids = set_tui_teams_for_test(names, ctx);
+        let starting_team = team_uids.first().copied();
+        UserWorkspaces::handle(ctx).update(ctx, |workspaces, ctx| {
+            workspaces.register_window(window_id, starting_team, ctx);
+        });
+        team_uids
+    })
+}
+
+/// Enables the team statusline item, which ships available but off.
+fn enable_team_statusline_item(app: &mut App) {
+    app.update(|ctx| {
+        let mut config = AISettings::as_ref(ctx).tui_statusline.normalized();
+        if !config.enabled.contains(&TuiStatuslineItem::Team) {
+            config.enabled.push(TuiStatuslineItem::Team);
+        }
+        AISettings::handle(ctx).update(ctx, |settings, ctx| {
+            settings
+                .tui_statusline
+                .set_value(config, ctx)
+                .expect("failed to enable the team statusline item");
+        });
+    });
+}
+
+/// The team item mirrors the GUI's title-bar pill: it exists to disambiguate, so it stays
+/// hidden for the single-team and teamless users who have nothing to disambiguate.
+#[test]
+fn active_team_is_hidden_unless_the_user_is_on_more_than_one_team() {
+    App::test((), |mut app| async move {
+        let fixture = focus_test_fixture(&mut app);
+        let (view, _) = add_focus_test_session(&mut app, &fixture, true);
+        enable_team_statusline_item(&mut app);
+
+        let window_id = app.read(|ctx| view.as_ref(ctx).window_id);
+
+        set_teams_and_register_window(&mut app, &["Solo"], window_id);
+        let rendered = render_session(&mut app, &view, 100, 24).join("\n");
+        assert!(
+            !rendered.contains("Solo"),
+            "a single-team user has nothing to disambiguate, got:\n{rendered}"
+        );
+
+        set_teams_and_register_window(&mut app, &[], window_id);
+        let rendered = render_session(&mut app, &view, 100, 24).join("\n");
+        assert!(
+            !rendered.contains("Solo"),
+            "a teamless user should show no team, got:\n{rendered}"
+        );
+    });
+}
+
+#[test]
+fn active_team_is_rendered_and_follows_a_switch() {
+    App::test((), |mut app| async move {
+        let fixture = focus_test_fixture(&mut app);
+        let (view, _) = add_focus_test_session(&mut app, &fixture, true);
+        enable_team_statusline_item(&mut app);
+
+        let window_id = app.read(|ctx| view.as_ref(ctx).window_id);
+        let team_uids =
+            set_teams_and_register_window(&mut app, &["Platform", "Security"], window_id);
+
+        let rendered = render_session(&mut app, &view, 100, 24).join("\n");
+        assert!(
+            rendered.contains("Platform"),
+            "a multi-team user's active team should be shown, got:\n{rendered}"
+        );
+
+        // Switching must repaint, not wait for some unrelated redraw.
+        app.update(|ctx| {
+            UserWorkspaces::handle(ctx).update(ctx, |workspaces, ctx| {
+                workspaces.switch_window_to_team(window_id, team_uids[1], ctx);
+            });
+        });
+        let rendered = render_session(&mut app, &view, 100, 24).join("\n");
+        assert!(
+            rendered.contains("Security") && !rendered.contains("Platform"),
+            "the statusline should follow the window's team, got:\n{rendered}"
+        );
+    });
 }

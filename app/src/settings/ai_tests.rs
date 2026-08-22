@@ -99,6 +99,7 @@ fn tui_statusline_normalization_preserves_custom_order_and_appends_missing_items
             TuiStatuslineItem::Model,
             TuiStatuslineItem::AutoApprove,
             TuiStatuslineItem::VimModeIndicator,
+            TuiStatuslineItem::Team,
             TuiStatuslineItem::WorkingDirectory,
             TuiStatuslineItem::GitBranchStatus,
             TuiStatuslineItem::GitDiffStatus,
@@ -120,6 +121,34 @@ fn tui_statusline_normalization_preserves_custom_order_and_appends_missing_items
             TuiStatuslineItem::ContextWindowUsage,
         ]
     );
+}
+
+/// A config saved before the team item existed must gain it rather than silently keeping a
+/// catalog that can never show it.
+#[test]
+fn tui_statusline_normalization_adds_the_team_item_to_an_older_config() {
+    let config = TuiStatuslineConfig {
+        order: vec![TuiStatuslineItem::Model, TuiStatuslineItem::GitBranch],
+        enabled: vec![TuiStatuslineItem::Model],
+    }
+    .normalized();
+
+    assert!(config.order.contains(&TuiStatuslineItem::Team));
+    assert!(
+        !config.is_enabled(TuiStatuslineItem::Team),
+        "an existing config's enabled set is the user's choice and must not gain items"
+    );
+}
+
+/// The team item ships available but off, so `tui_statusline_default_matches_figma` stays the
+/// single authority on the default set. Turning it on by default is a design question, not a
+/// consequence of adding the item, and would need that Figma expectation changed deliberately.
+#[test]
+fn tui_statusline_default_offers_the_team_item_without_enabling_it() {
+    let config = TuiStatuslineConfig::default();
+
+    assert!(config.order.contains(&TuiStatuslineItem::Team));
+    assert!(!config.is_enabled(TuiStatuslineItem::Team));
 }
 
 #[test]
