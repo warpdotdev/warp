@@ -121,7 +121,7 @@ use super::prompt_render_helper::{
     should_render_prompt_using_editor_decorator_elements,
 };
 use super::safe_mode_settings::{
-    SafeModeSettings, SafeModeSettingsChangedEvent, get_secret_obfuscation_mode,
+    SafeModeSettings, SafeModeSettingsChangedEvent, get_secret_obfuscation_mode_for_window,
 };
 use super::session_settings::{SessionSettings, SessionSettingsChangedEvent};
 use super::settings::{SpacingMode, TerminalSettings, TerminalSettingsChangedEvent};
@@ -174,7 +174,7 @@ use crate::ai::blocklist::handoff::{
     HandoffLaunchAttachments, PendingCloudLaunch, suggest_handoff_environment,
 };
 use crate::ai::blocklist::prompt::prompt_alert::{PromptAlertEvent, PromptAlertView};
-use crate::ai::blocklist::telemetry_banner::should_collect_ai_ugc_telemetry;
+use crate::ai::blocklist::telemetry_banner::should_collect_ai_ugc_telemetry_for_team;
 use crate::ai::blocklist::{
     AttachmentType, BLOCK_CONTEXT_ATTACHMENT_REGEX, BlocklistAIActionModel,
     BlocklistAIContextEvent, BlocklistAIContextModel, BlocklistAIController,
@@ -3276,6 +3276,33 @@ impl Input {
         let safe_mode_settings = SafeModeSettings::handle(ctx);
         ctx.subscribe_to_model(&safe_mode_settings, |me, _, event, ctx| {
             me.handle_safe_mode_settings_changed_event(event, ctx)
+        });
+
+        // `create_terminal_model` mints the model before any window exists, so its initial
+        // obfuscation mode can only use the ambient (not-yet-per-team) default. Correct it now
+        // that this view's window is known, and keep it in sync with that window's current team
+        // afterwards: a team switch (or team policy data arriving late) must take effect without
+        // needing a Safe Mode settings change to trigger a resync.
+        model
+            .lock()
+            .set_obfuscate_secrets(get_secret_obfuscation_mode_for_window(ctx.window_id(), ctx));
+        ctx.subscribe_to_model(&UserWorkspaces::handle(ctx), |me, _, event, ctx| {
+            // Resolved fresh on every event (not captured at subscribe time): a cross-window
+            // tab drag moves this view without emitting `WindowTeamChanged`, so a captured
+            // window id would keep matching the window this terminal used to live in.
+            let window_id = ctx.window_id();
+            let team_policy_may_have_changed = match event {
+                UserWorkspacesEvent::WindowTeamChanged {
+                    window_id: changed_window_id,
+                } => *changed_window_id == window_id,
+                UserWorkspacesEvent::TeamsChanged => true,
+                _ => false,
+            };
+            if team_policy_may_have_changed {
+                me.model
+                    .lock()
+                    .set_obfuscate_secrets(get_secret_obfuscation_mode_for_window(window_id, ctx));
+            }
         });
 
         ctx.subscribe_to_model(&InputModeSettings::handle(ctx), |_, _, _, ctx| {
@@ -7215,9 +7242,10 @@ impl Input {
             SafeModeSettingsChangedEvent::SafeModeEnabled { .. }
             | SafeModeSettingsChangedEvent::HideSecretsInBlockList { .. }
             | SafeModeSettingsChangedEvent::SecretDisplayModeSetting { .. } => {
+                let window_id = ctx.window_id();
                 self.model
                     .lock()
-                    .set_obfuscate_secrets(get_secret_obfuscation_mode(ctx));
+                    .set_obfuscate_secrets(get_secret_obfuscation_mode_for_window(window_id, ctx));
             }
         }
     }
@@ -7668,8 +7696,8 @@ impl Input {
                         predicted_command: response.most_likely_action.clone(),
                     });
 
-                let should_collect_ugc = should_collect_ai_ugc_telemetry(
-                    ctx,
+                let should_collect_ugc = should_collect_ai_ugc_telemetry_for_team(
+                    UserWorkspaces::as_ref(ctx).team_for_view(ctx),
                     PrivacySettings::as_ref(ctx).is_telemetry_enabled,
                 );
                 send_telemetry_from_ctx!(
@@ -9496,9 +9524,11 @@ impl Input {
     ) {
         let input_buffer_text = self.buffer_text(ctx);
         let buffer_length = input_buffer_text.len();
-        let input =
-            should_collect_ai_ugc_telemetry(ctx, PrivacySettings::as_ref(ctx).is_telemetry_enabled)
-                .then_some(input_buffer_text);
+        let input = should_collect_ai_ugc_telemetry_for_team(
+            UserWorkspaces::as_ref(ctx).team_for_view(ctx),
+            PrivacySettings::as_ref(ctx).is_telemetry_enabled,
+        )
+        .then_some(input_buffer_text);
         let is_udi_enabled = InputSettings::as_ref(ctx).is_universal_developer_input_enabled(ctx);
         send_telemetry_from_ctx!(
             TelemetryEvent::AgentModeChangedInputType {
@@ -16294,6 +16324,23 @@ impl View for Input {
             INPUT_A11Y_HELPER,
             WarpA11yRole::TextareaRole,
         ))
+    }
+
+    fn on_window_transferred(
+        &mut self,
+        _source_window_id: WindowId,
+        target_window_id: WindowId,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        // A cross-window tab drag moves this view without updating `UserWorkspaces` or
+        // emitting `WindowTeamChanged`, so the subscription above won't fire on its own;
+        // resolve the new window's team here so redaction follows the tab immediately.
+        self.model
+            .lock()
+            .set_obfuscate_secrets(get_secret_obfuscation_mode_for_window(
+                target_window_id,
+                ctx,
+            ));
     }
 
     fn on_focus(&mut self, focus_ctx: &FocusContext, ctx: &mut ViewContext<Self>) {

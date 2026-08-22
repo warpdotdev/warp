@@ -167,6 +167,7 @@ mod team_settings_conversion {
         let owned = |xs: &[&str]| xs.iter().map(|s| s.to_string()).collect();
         gqlws::StringListSettingInfo {
             values: owned(values),
+            is_configured: !values.is_empty() || !workspace.is_empty() || !team.is_empty(),
             workspace_entries: owned(workspace),
             team_entries: owned(team),
         }
@@ -204,6 +205,7 @@ mod team_settings_conversion {
                         name: Some("api-key".to_string()),
                         pattern: "sk-.*".to_string(),
                     }],
+                    is_configured: true,
                     workspace_entries: vec![gqlws::SecretRedactionRegex {
                         name: None,
                         pattern: "ws-secret".to_string(),
@@ -372,6 +374,44 @@ mod team_settings_conversion {
         assert_eq!(
             settings.sandboxed_agent.execute_commands_denylist.values,
             vec!["danger".to_string()]
+        );
+    }
+
+    #[test]
+    fn is_configured_distinguishes_unconfigured_from_explicit_empty_and_non_empty() {
+        // The wire format collapses "never configured" and "explicitly configured to
+        // empty" to the same empty `values` array. `is_configured` is the only signal
+        // that tells them apart, so pin all three states through the real conversion
+        // path rather than relying on `values` alone.
+        fn list_with(values: &[&str], is_configured: bool) -> gqlws::StringListSettingInfo {
+            gqlws::StringListSettingInfo {
+                values: values.iter().map(|s| s.to_string()).collect(),
+                is_configured,
+                workspace_entries: vec![],
+                team_entries: vec![],
+            }
+        }
+
+        let mut gql_settings = sample_gql_team_settings();
+        gql_settings.ai_permissions.remote_session_regex_list = list_with(&[], false);
+        gql_settings.ai_autonomy.read_files_allowlist = list_with(&[], true);
+        gql_settings.ai_autonomy.execute_commands_allowlist = list_with(&["ls", "pwd"], true);
+
+        let settings = TeamSettings::from(gql_settings);
+
+        let unconfigured = settings.ai_permissions.remote_session_regex_list;
+        assert!(!unconfigured.is_configured);
+        assert_eq!(unconfigured.configured_values(), None);
+
+        let explicitly_empty = settings.ai_autonomy.read_files_allowlist;
+        assert!(explicitly_empty.is_configured);
+        assert_eq!(explicitly_empty.configured_values(), Some([].as_slice()));
+
+        let non_empty = settings.ai_autonomy.execute_commands_allowlist;
+        assert!(non_empty.is_configured);
+        assert_eq!(
+            non_empty.configured_values(),
+            Some(["ls".to_string(), "pwd".to_string()].as_slice())
         );
     }
 

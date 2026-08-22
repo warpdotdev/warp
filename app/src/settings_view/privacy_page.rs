@@ -27,7 +27,7 @@ use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
 use warpui::ui_components::switch::{SwitchStateHandle, TooltipConfig};
 use warpui::{
     Action, AppContext, Element, Entity, ModelHandle, SingletonEntity, TypedActionView,
-    UpdateModel, View, ViewContext, ViewHandle, id,
+    UpdateModel, View, ViewContext, ViewHandle, WeakViewHandle, id,
 };
 
 use super::privacy::{AddRegexModal, AddRegexModalEvent};
@@ -55,10 +55,8 @@ use crate::ui_components::buttons::icon_button;
 use crate::ui_components::icons::Icon;
 use crate::util::links::PRIVACY_POLICY_URL;
 use crate::view_components::{Dropdown, DropdownItem};
-use crate::workspaces::user_workspaces::UserWorkspaces;
-use crate::workspaces::workspace::{
-    AdminEnablementSetting, CustomerType, UgcCollectionEnablementSetting,
-};
+use crate::workspaces::user_workspaces::{TeamRenderContext, UserWorkspaces};
+use crate::workspaces::workspace::{AdminEnablementSetting, UgcCollectionEnablementSetting};
 
 const FONT_SIZE: f32 = 12.;
 
@@ -143,6 +141,13 @@ impl PrivacyPageView {
             me.update_secret_display_dropdown(ctx);
             ctx.notify();
         });
+        // The page's team-derived reads resolve `TeamRenderContext` fresh on every render, but
+        // that only takes effect if a render actually happens. A window team change (including
+        // reconciliation away from a removed team) or an update to team policy both notify on
+        // `UserWorkspaces` without otherwise touching this view, so observe it directly.
+        ctx.observe(&UserWorkspaces::handle(ctx), |_, _, ctx| {
+            ctx.notify();
+        });
 
         let add_regex_body = ctx.add_typed_action_view(AddRegexModal::new);
         ctx.subscribe_to_view(&add_regex_body, |me, _, event, ctx| {
@@ -201,7 +206,7 @@ impl PrivacyPageView {
         });
 
         let mut privacy_page_view = Self {
-            page: Self::build_page(),
+            page: Self::build_page(ctx),
             local_only_icon_tooltip_states: Default::default(),
             added_user_secret_regex_list_button_handles: Default::default(),
             pending_regex_removals: Default::default(),
@@ -218,12 +223,12 @@ impl PrivacyPageView {
         privacy_page_view
     }
 
-    fn build_page() -> PageType<Self> {
+    fn build_page(ctx: &mut ViewContext<Self>) -> PageType<Self> {
         let mut widgets: Vec<Box<dyn SettingsWidget<View = Self>>> = vec![
-            Box::new(SecretRedactionWidget::default()),
-            Box::new(AppAnalyticsWidget::default()),
-            Box::new(CrashReportsWidget::default()),
-            Box::new(CloudConversationStorageWidget::default()),
+            Box::new(SecretRedactionWidget::new(ctx)),
+            Box::new(AppAnalyticsWidget::new(ctx)),
+            Box::new(CrashReportsWidget::new(ctx)),
+            Box::new(CloudConversationStorageWidget::new(ctx)),
         ];
         if ContextFlag::NetworkLogConsole.is_enabled() {
             widgets.push(Box::new(NetworkLogWidget::default()));
@@ -523,11 +528,19 @@ impl TypedActionView for PrivacyPageView {
                     self.process_pending_removals(ctx);
                 }
 
+                let idx = *idx;
+                let workspaces = UserWorkspaces::as_ref(ctx);
+                let team_context = workspaces.team_context_for_view(ctx);
+
                 let privacy_settings_handle = PrivacySettings::handle(ctx);
-                ctx.update_model(&privacy_settings_handle, |privacy_settings, ctx| {
-                    let workspaces = UserWorkspaces::as_ref(ctx);
-                    let enterprise_regex_list =
-                        workspaces.get_enterprise_secret_redaction_regex_list();
+                ctx.update_model(&privacy_settings_handle, move |privacy_settings, ctx| {
+                    let enterprise_regex_list = team_context
+                        .as_ref()
+                        .map(|context| {
+                            UserWorkspaces::as_ref(ctx)
+                                .enterprise_secret_redaction_regexes_for_context(context)
+                        })
+                        .unwrap_or_default();
                     let current_patterns: Vec<&str> = enterprise_regex_list
                         .iter()
                         .map(|s| s.pattern.as_str())
@@ -545,7 +558,7 @@ impl TypedActionView for PrivacyPageView {
                             .filter(|r| !current_patterns.contains(&r.pattern))
                             .collect();
 
-                    if let Some(regex) = recommended_regexes.get(*idx)
+                    if let Some(regex) = recommended_regexes.get(idx)
                         && let Ok(pattern) = Regex::new(regex.pattern)
                     {
                         let mut new_user_secret_regex_list =
@@ -640,8 +653,8 @@ impl From<ViewHandle<PrivacyPageView>> for SettingsPageViewHandle {
     }
 }
 
-#[derive(Default)]
 struct SecretRedactionWidget {
+    view_handle: WeakViewHandle<PrivacyPageView>,
     switch_state: SwitchStateHandle,
     add_regex_button_mouse_state: MouseStateHandle,
     add_recommended_button_mouse_states: RefCell<Vec<MouseStateHandle>>,
@@ -651,6 +664,18 @@ struct SecretRedactionWidget {
 }
 
 impl SecretRedactionWidget {
+    fn new(ctx: &ViewContext<PrivacyPageView>) -> Self {
+        Self {
+            view_handle: ctx.handle(),
+            switch_state: Default::default(),
+            add_regex_button_mouse_state: Default::default(),
+            add_recommended_button_mouse_states: Default::default(),
+            add_all_button_mouse_state: Default::default(),
+            personal_tab_mouse_state: Default::default(),
+            enterprise_tab_mouse_state: Default::default(),
+        }
+    }
+
     /// Ensures there's enough mouse states for the recommended regexes to be added.
     fn ensure_recommended_regex_mouse_states(&self, count: usize) {
         while self.add_recommended_button_mouse_states.borrow().len() < count {
@@ -748,12 +773,19 @@ impl SecretRedactionWidget {
         view: &PrivacyPageView,
         app: &AppContext,
     ) -> Box<dyn Element> {
-        if !privacy_settings.is_enterprise_secret_redaction_enabled() {
+        let team_render_ctx =
+            UserWorkspaces::as_ref(app).team_render_context_for_view_handle(&self.view_handle, app);
+        if !team_render_ctx
+            .as_ref()
+            .is_some_and(TeamRenderContext::is_enterprise_secret_redaction_enabled)
+        {
             return Empty::new().finish();
         }
 
-        let workspaces = UserWorkspaces::as_ref(app);
-        let enterprise_regex_list = workspaces.get_enterprise_secret_redaction_regex_list();
+        let enterprise_regex_list = team_render_ctx
+            .as_ref()
+            .map(TeamRenderContext::enterprise_secret_redaction_regexes)
+            .unwrap_or(&[]);
         let enterprise_count = enterprise_regex_list.len();
 
         // Count personal regexes excluding pending removals
@@ -904,8 +936,12 @@ impl SecretRedactionWidget {
         appearance: &Appearance,
         app: &AppContext,
     ) -> Box<dyn Element> {
-        let workspaces = UserWorkspaces::as_ref(app);
-        let enterprise_regex_list = workspaces.get_enterprise_secret_redaction_regex_list();
+        let team_render_ctx =
+            UserWorkspaces::as_ref(app).team_render_context_for_view_handle(&self.view_handle, app);
+        let enterprise_regex_list = team_render_ctx
+            .as_ref()
+            .map(TeamRenderContext::enterprise_secret_redaction_regexes)
+            .unwrap_or(&[]);
         let ui_builder = appearance.ui_builder();
         let description_text_color = description_text_color(appearance.theme()).into_solid();
 
@@ -923,7 +959,7 @@ impl SecretRedactionWidget {
         let mut column = Flex::column();
 
         for enterprise_regex in enterprise_regex_list {
-            let content = self.render_regex_content(&enterprise_regex, appearance);
+            let content = self.render_regex_content(enterprise_regex, appearance);
             let item = self.render_regex_item(
                 Flex::row()
                     .with_cross_axis_alignment(CrossAxisAlignment::Center)
@@ -946,7 +982,8 @@ impl SecretRedactionWidget {
     ) -> Box<dyn Element> {
         let privacy_settings = PrivacySettings::as_ref(app);
         let ui_builder = appearance.ui_builder();
-        let workspaces = UserWorkspaces::as_ref(app);
+        let team_render_ctx =
+            UserWorkspaces::as_ref(app).team_render_context_for_view_handle(&self.view_handle, app);
 
         let mut column = Flex::column();
 
@@ -981,8 +1018,10 @@ impl SecretRedactionWidget {
         }
 
         // Get a list of regexes that are recommended but not currently in use
-        let enterprise_regex_list_with_titles =
-            workspaces.get_enterprise_secret_redaction_regex_list();
+        let enterprise_regex_list_with_titles = team_render_ctx
+            .as_ref()
+            .map(TeamRenderContext::enterprise_secret_redaction_regexes)
+            .unwrap_or(&[]);
         let current_patterns: Vec<&str> = enterprise_regex_list_with_titles
             .iter()
             .map(|r| r.pattern.as_str())
@@ -1165,7 +1204,11 @@ impl SettingsWidget for SecretRedactionWidget {
         let privacy_settings = PrivacySettings::as_ref(app);
         let description_text_color = description_text_color(appearance.theme()).into_solid();
         let ui_builder = appearance.ui_builder();
-        let is_enterprise_enabled = privacy_settings.is_enterprise_secret_redaction_enabled();
+        let team_render_ctx =
+            UserWorkspaces::as_ref(app).team_render_context_for_view_handle(&self.view_handle, app);
+        let is_enterprise_enabled = team_render_ctx
+            .as_ref()
+            .is_some_and(TeamRenderContext::is_enterprise_secret_redaction_enabled);
 
         let local_only_icon_state = LocalOnlyIconState::for_setting(
             SafeModeEnabled::storage_key(),
@@ -1336,8 +1379,10 @@ impl SettingsWidget for SecretRedactionWidget {
                     .finish(),
             );
 
-            let workspaces = UserWorkspaces::as_ref(app);
-            let enterprise_regex_list = workspaces.get_enterprise_secret_redaction_regex_list();
+            let enterprise_regex_list = team_render_ctx
+                .as_ref()
+                .map(TeamRenderContext::enterprise_secret_redaction_regexes)
+                .unwrap_or(&[]);
 
             if is_enterprise_enabled && !enterprise_regex_list.is_empty() {
                 column.add_child(self.render_tab_bar(
@@ -1370,14 +1415,23 @@ impl SettingsWidget for SecretRedactionWidget {
     }
 }
 
-#[derive(Default)]
 struct AppAnalyticsWidget {
+    view_handle: WeakViewHandle<PrivacyPageView>,
     switch_state: SwitchStateHandle,
     docs_link_mouse_state: MouseStateHandle,
     zdr_badge_mouse_state: MouseStateHandle,
 }
 
 impl AppAnalyticsWidget {
+    fn new(ctx: &ViewContext<PrivacyPageView>) -> Self {
+        Self {
+            view_handle: ctx.handle(),
+            switch_state: Default::default(),
+            docs_link_mouse_state: Default::default(),
+            zdr_badge_mouse_state: Default::default(),
+        }
+    }
+
     fn render_zero_data_retention_badge(&self, appearance: &Appearance) -> Box<dyn Element> {
         let ui_builder = appearance.ui_builder();
 
@@ -1421,7 +1475,10 @@ impl AppAnalyticsWidget {
     }
 
     fn should_show_zdr_badge(&self, app: &AppContext) -> bool {
-        let setting = UserWorkspaces::as_ref(app).get_ugc_collection_enablement_setting();
+        let setting = UserWorkspaces::as_ref(app)
+            .team_render_context_for_view_handle(&self.view_handle, app)
+            .map(|ctx| ctx.ugc_collection_enablement_setting().clone())
+            .unwrap_or_default();
         matches!(setting, UgcCollectionEnablementSetting::Disable)
     }
 }
@@ -1439,8 +1496,10 @@ impl SettingsWidget for AppAnalyticsWidget {
         if !ChannelState::is_telemetry_available() {
             return false;
         }
-        let privacy_settings = PrivacySettings::as_ref(app);
-        !privacy_settings.is_telemetry_force_enabled()
+        !UserWorkspaces::as_ref(app)
+            .team_render_context_for_view_handle(&self.view_handle, app)
+            .as_ref()
+            .is_some_and(TeamRenderContext::is_telemetry_force_enabled)
     }
 
     fn render(
@@ -1453,9 +1512,11 @@ impl SettingsWidget for AppAnalyticsWidget {
         let ui_builder = appearance.ui_builder();
         let description_text_color = description_text_color(appearance.theme()).into_solid();
 
-        let is_enterprise = UserWorkspaces::as_ref(app)
-            .current_workspace()
-            .is_some_and(|w| w.billing_metadata.customer_type == CustomerType::Enterprise);
+        let team_render_ctx =
+            UserWorkspaces::as_ref(app).team_render_context_for_view_handle(&self.view_handle, app);
+        let is_enterprise = team_render_ctx
+            .as_ref()
+            .is_some_and(TeamRenderContext::is_enterprise_customer);
         // Keep the old description for enterprise users because we do not collect block input/output for them.
         let description = if is_enterprise {
             TELEMETRY_DESCRIPTION_OLD
@@ -1463,9 +1524,10 @@ impl SettingsWidget for AppAnalyticsWidget {
             TELEMETRY_DESCRIPTION
         };
 
-        let org_setting = UserWorkspaces::handle(app)
-            .as_ref(app)
-            .get_ugc_collection_enablement_setting();
+        let org_setting = team_render_ctx
+            .as_ref()
+            .map(|ctx| ctx.ugc_collection_enablement_setting().clone())
+            .unwrap_or_default();
 
         let (is_toggleable, is_checked) = match org_setting {
             UgcCollectionEnablementSetting::Enable => (false, true),
@@ -1565,9 +1627,18 @@ impl SettingsWidget for AppAnalyticsWidget {
     }
 }
 
-#[derive(Default)]
 struct CrashReportsWidget {
+    view_handle: WeakViewHandle<PrivacyPageView>,
     switch_state: SwitchStateHandle,
+}
+
+impl CrashReportsWidget {
+    fn new(ctx: &ViewContext<PrivacyPageView>) -> Self {
+        Self {
+            view_handle: ctx.handle(),
+            switch_state: Default::default(),
+        }
+    }
 }
 
 impl SettingsWidget for CrashReportsWidget {
@@ -1583,8 +1654,10 @@ impl SettingsWidget for CrashReportsWidget {
         if !ChannelState::is_crash_reporting_available() {
             return false;
         }
-        let privacy_settings = PrivacySettings::as_ref(app);
-        !privacy_settings.is_telemetry_force_enabled()
+        !UserWorkspaces::as_ref(app)
+            .team_render_context_for_view_handle(&self.view_handle, app)
+            .as_ref()
+            .is_some_and(TeamRenderContext::is_telemetry_force_enabled)
     }
 
     fn render(
@@ -1640,9 +1713,18 @@ impl SettingsWidget for CrashReportsWidget {
     }
 }
 
-#[derive(Default)]
 struct CloudConversationStorageWidget {
+    view_handle: WeakViewHandle<PrivacyPageView>,
     switch_state: SwitchStateHandle,
+}
+
+impl CloudConversationStorageWidget {
+    fn new(ctx: &ViewContext<PrivacyPageView>) -> Self {
+        Self {
+            view_handle: ctx.handle(),
+            switch_state: Default::default(),
+        }
+    }
 }
 
 impl SettingsWidget for CloudConversationStorageWidget {
@@ -1664,8 +1746,10 @@ impl SettingsWidget for CloudConversationStorageWidget {
             return false;
         }
 
-        let privacy_settings = PrivacySettings::as_ref(app);
-        !privacy_settings.is_telemetry_force_enabled()
+        !UserWorkspaces::as_ref(app)
+            .team_render_context_for_view_handle(&self.view_handle, app)
+            .as_ref()
+            .is_some_and(TeamRenderContext::is_telemetry_force_enabled)
     }
 
     fn render(
@@ -1676,8 +1760,10 @@ impl SettingsWidget for CloudConversationStorageWidget {
     ) -> Box<dyn Element> {
         let ui_builder = appearance.ui_builder();
         let privacy_settings = PrivacySettings::as_ref(app);
-        let org_setting =
-            UserWorkspaces::as_ref(app).get_cloud_conversation_storage_enablement_setting();
+        let org_setting = UserWorkspaces::as_ref(app)
+            .team_render_context_for_view_handle(&self.view_handle, app)
+            .map(|ctx| ctx.cloud_conversation_storage_enablement_setting().clone())
+            .unwrap_or_default();
 
         let (toggle_state, is_checked) = match org_setting {
             AdminEnablementSetting::Enable => (ToggleState::Disabled, true),
@@ -2024,3 +2110,7 @@ mod styles {
 fn description_text_color(theme: &WarpTheme) -> warp_core::ui::theme::Fill {
     theme.sub_text_color(theme.surface_2())
 }
+
+#[cfg(test)]
+#[path = "privacy_page_tests.rs"]
+mod tests;

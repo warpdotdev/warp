@@ -3864,14 +3864,26 @@ type ComputerUseSettingInfo {
   isEnforcedByWorkspace: Boolean!
 }
 
+"""
+A list setting split by the layer that contributed each entry. `values` is the
+authoritative combined result; `workspaceEntries`/`teamEntries` exist so
+clients can present workspace-contributed entries separately from
+team-defined ones. All three are always present (as an empty list at minimum).
+
+`isConfigured` is true when the workspace or team explicitly configured this
+list, including an explicit empty override; it is false when `values` is
+empty only because nothing was ever configured.
+"""
 type StringListSettingInfo {
   values: [String!]!
+  isConfigured: Boolean!
   workspaceEntries: [String!]!
   teamEntries: [String!]!
 }
 
 type SecretRedactionRegexListInfo {
   values: [SecretRedactionRegex!]!
+  isConfigured: Boolean!
   workspaceEntries: [SecretRedactionRegex!]!
   teamEntries: [SecretRedactionRegex!]!
 }

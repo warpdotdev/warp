@@ -537,8 +537,9 @@ impl MCPServersEditPageView {
         templatable_mcp_server: &TemplatableMCPServer,
     ) -> Result<(), String> {
         let safe_mode_enabled = *SafeModeSettings::as_ref(ctx).safe_mode_enabled.value();
-        let enterprise_enforced =
-            UserWorkspaces::as_ref(ctx).is_enterprise_secret_redaction_enabled();
+        let user_workspaces = UserWorkspaces::as_ref(ctx);
+        let enterprise_enforced = user_workspaces
+            .is_enterprise_secret_redaction_enabled_for_team(user_workspaces.team_for_view(ctx));
         let contains_secrets =
             !find_secrets_in_text(&templatable_mcp_server.template.json).is_empty();
 

@@ -45,7 +45,7 @@ use crate::search::external_secrets::view::ExternalSecretsMenu;
 use crate::server::cloud_objects::update_manager::{FetchSingleObjectOption, UpdateManager};
 use crate::server::ids::{ServerId, SyncId};
 use crate::terminal::model::secrets::SecretLevel;
-use crate::terminal::safe_mode_settings::get_secret_obfuscation_mode;
+use crate::terminal::safe_mode_settings::get_secret_obfuscation_mode_for_window;
 use crate::ui_components::breadcrumb::{BreadcrumbState, render_breadcrumbs};
 use crate::ui_components::buttons::icon_button;
 use crate::ui_components::icons::Icon;
@@ -389,7 +389,8 @@ impl EnvVarCollectionView {
             return;
         }
 
-        let should_validate = get_secret_obfuscation_mode(ctx).should_redact_secret();
+        let should_validate =
+            get_secret_obfuscation_mode_for_window(ctx.window_id(), ctx).should_redact_secret();
 
         let validation_error = if should_validate {
             Self::validate_field_content(text)
@@ -405,7 +406,8 @@ impl EnvVarCollectionView {
 
     /// Updates validation state for the title field
     pub(super) fn update_title_validation(&mut self, text: &str, ctx: &mut ViewContext<Self>) {
-        let should_validate = get_secret_obfuscation_mode(ctx).should_redact_secret();
+        let should_validate =
+            get_secret_obfuscation_mode_for_window(ctx.window_id(), ctx).should_redact_secret();
 
         let validation_error = if should_validate {
             Self::validate_field_content(text)
@@ -423,7 +425,8 @@ impl EnvVarCollectionView {
         text: &str,
         ctx: &mut ViewContext<Self>,
     ) {
-        let should_validate = get_secret_obfuscation_mode(ctx).should_redact_secret();
+        let should_validate =
+            get_secret_obfuscation_mode_for_window(ctx.window_id(), ctx).should_redact_secret();
 
         let validation_error = if should_validate {
             Self::validate_field_content(text)

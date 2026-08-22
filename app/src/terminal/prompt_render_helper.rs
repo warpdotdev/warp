@@ -15,7 +15,6 @@ use warpui::{AppContext, EntityId, ModelAsRef, ModelHandle, SingletonEntity, Vie
 use super::input::InputRenderStateModel;
 use super::model::block::Block;
 use super::model::blocks::CachedPromptData;
-use super::safe_mode_settings::get_secret_obfuscation_mode;
 use super::session_settings::SessionSettings;
 use super::settings::TerminalSettings;
 use super::shell::ShellType;
@@ -499,7 +498,7 @@ impl PromptRenderHelper {
             let mut size_info = app.model(&self.input_render_state_model_handle).size_info();
             size_info.padding_x_px = Pixels::zero();
 
-            let obfuscate_secrets: ObfuscateSecrets = get_secret_obfuscation_mode(app);
+            let obfuscate_secrets: ObfuscateSecrets = model.obfuscate_secrets();
 
             let lprompt_top = lprompt_grid_top.map(|grid| {
                 Self::prompt_block_grid_to_prompt_and_padding(

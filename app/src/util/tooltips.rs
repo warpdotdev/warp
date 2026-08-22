@@ -7,10 +7,9 @@ use warpui::elements::{
     Border, Container, CornerRadius, Flex, MouseStateHandle, ParentElement, Radius, Text,
 };
 use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
-use warpui::{AppContext, Element, EventContext, SingletonEntity};
+use warpui::{AppContext, Element, EventContext};
 
 use crate::appearance::Appearance;
-use crate::settings::PrivacySettings;
 use crate::terminal::model::secrets::SecretLevel;
 use crate::ui_components::blended_colors;
 
@@ -57,12 +56,16 @@ pub enum TooltipRedaction {
 
 /// Render a tooltip with one or more links and optional redaction messaging.
 ///
+/// `is_enterprise_secret_redaction_enabled` should reflect the current window's team policy
+/// (see [`crate::workspaces::user_workspaces::UserWorkspaces::is_enterprise_secret_redaction_enabled_for_team`]),
+/// not the process-global ambient setting, so callers must resolve it per-window before calling.
+///
 /// This is generic over the click handler type to support different action dispatch mechanisms.
 pub fn render_tooltip<OnClick>(
     tooltip_links: impl IntoIterator<Item = TooltipLink<OnClick>>,
     redaction: TooltipRedaction,
+    is_enterprise_secret_redaction_enabled: bool,
     appearance: &Appearance,
-    app: &AppContext,
 ) -> Box<dyn Element>
 where
     OnClick: 'static + Fn(&mut EventContext),
@@ -194,7 +197,7 @@ where
 
     // If enterprise secret redaction is enabled, add additional messaging and padding to the tooltip.
     let is_enterprise_secret_redaction_enabled =
-        is_secret && PrivacySettings::as_ref(app).is_enterprise_secret_redaction_enabled();
+        is_secret && is_enterprise_secret_redaction_enabled;
     let tooltip_element = if is_enterprise_secret_redaction_enabled {
         let tooltip_column = Flex::column()
             .with_child(tooltip.finish())

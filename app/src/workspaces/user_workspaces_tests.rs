@@ -71,8 +71,9 @@ use crate::workspaces::team_tester::TeamTesterStatus;
 use crate::workspaces::update_manager::TeamUpdateManager;
 use crate::workspaces::user_workspaces::UserWorkspaces;
 use crate::workspaces::workspace::{
-    AdminEnablementSetting, HostEnablementSetting, LlmHostSettings, MultiAdminPolicy,
-    PurchaseAddOnCreditsPolicy, Workspace,
+    AdminEnablementSetting, EnforceableSetting, EnterpriseSecretRegex, HostEnablementSetting,
+    LlmHostSettings, MultiAdminPolicy, PurchaseAddOnCreditsPolicy, SplitListSetting,
+    TeamSecretRedactionSettings, TelemetrySettings, Workspace,
 };
 
 #[derive(Default)]
@@ -1177,6 +1178,277 @@ fn test_team_contexts_represent_a_registered_teamless_window() {
     })
 }
 
+/// Every PR 3D `_for_team` accessor must be keyed by the team it's asked about, not by
+/// whichever team happens to be "current" for the process -- this is the acceptance
+/// criterion the multi-team-context spec calls out for Group 3 PRs: two windows on
+/// different teams must see independent, correct values concurrently.
+#[test]
+fn test_privacy_policy_for_team_reflects_each_windows_own_team_concurrently() {
+    let (mut team_a, team_b) = two_teams();
+    // team_b is left at its neutral default: telemetry not force-enabled, redaction disabled.
+    team_a.settings.telemetry_settings = TelemetrySettings {
+        force_enabled: true,
+    };
+    team_a.settings.secret_redaction = TeamSecretRedactionSettings {
+        enabled: EnforceableSetting {
+            value: true,
+            is_enforced_by_workspace: false,
+        },
+        regexes: SplitListSetting {
+            values: vec![EnterpriseSecretRegex {
+                pattern: "team-a-secret".to_string(),
+                name: None,
+            }],
+            ..Default::default()
+        },
+    };
+
+    let mut workspace = workspace_for_test(&team_a);
+    workspace.teams.push(team_b.clone());
+
+    App::test((), |mut app| async move {
+        initialize_window_team_test_app(&mut app, vec![workspace]);
+
+        let (window_a, _view_a) = create_test_window(&mut app);
+        let (window_b, _view_b) = create_test_window(&mut app);
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.set_team_for_window(window_a, team_a.uid, ctx);
+            user_workspaces.set_team_for_window(window_b, team_b.uid, ctx);
+        });
+
+        app.read(|ctx| {
+            let user_workspaces = UserWorkspaces::as_ref(ctx);
+            let resolved_team_a = user_workspaces.team_for_window(window_a);
+            let resolved_team_b = user_workspaces.team_for_window(window_b);
+
+            assert!(
+                user_workspaces.is_telemetry_force_enabled_for_team(resolved_team_a),
+                "window A's own team force-enables telemetry"
+            );
+            assert!(
+                !user_workspaces.is_telemetry_force_enabled_for_team(resolved_team_b),
+                "window B's team does not force-enable telemetry, even though window A's does concurrently"
+            );
+
+            assert!(
+                user_workspaces.is_enterprise_secret_redaction_enabled_for_team(resolved_team_a),
+                "window A's own team enables enterprise secret redaction"
+            );
+            assert!(
+                !user_workspaces.is_enterprise_secret_redaction_enabled_for_team(resolved_team_b),
+                "window B's team does not enable enterprise secret redaction, even though window A's does concurrently"
+            );
+
+            assert_eq!(
+                user_workspaces
+                    .enterprise_secret_redaction_regex_list_for_team(resolved_team_a)
+                    .iter()
+                    .map(|regex| regex.pattern.as_str())
+                    .collect::<Vec<_>>(),
+                vec!["team-a-secret"],
+                "window A's own regex list should be returned"
+            );
+            assert!(
+                user_workspaces
+                    .enterprise_secret_redaction_regex_list_for_team(resolved_team_b)
+                    .is_empty(),
+                "window B has no enterprise regexes of its own"
+            );
+        });
+    })
+}
+
+/// A window with no team must not silently fall back to any other team's policy, per the
+/// no-default-team rule in the multi-team-context spec.
+#[test]
+fn test_privacy_policy_for_team_returns_safe_defaults_without_a_team() {
+    App::test((), |mut app| async move {
+        initialize_window_team_test_app(&mut app, vec![]);
+
+        app.read(|ctx| {
+            let user_workspaces = UserWorkspaces::as_ref(ctx);
+            assert!(!user_workspaces.is_telemetry_force_enabled_for_team(None));
+            assert!(!user_workspaces.is_enterprise_secret_redaction_enabled_for_team(None));
+            assert!(
+                user_workspaces
+                    .enterprise_secret_redaction_regex_list_for_team(None)
+                    .is_empty()
+            );
+        });
+    })
+}
+
+#[test]
+fn test_privacy_render_context_reads_each_windows_own_team() {
+    let (mut team_a, team_b) = two_teams();
+    team_a.settings.telemetry_settings.force_enabled = true;
+    team_a.settings.secret_redaction.enabled.value = true;
+    team_a.settings.secret_redaction.regexes.values = vec![EnterpriseSecretRegex {
+        pattern: "team-a-secret".to_string(),
+        name: None,
+    }];
+    team_a.settings.ugc_collection.value = UgcCollectionEnablementSetting::Disable;
+    team_a.settings.cloud_conversation_storage.value = AdminEnablementSetting::Enable;
+    team_a.billing_metadata.customer_type = CustomerType::Enterprise;
+    // team_b keeps default settings: telemetry not forced, secret redaction disabled,
+    // ugc/cloud-conversation-storage respecting the user, and a non-enterprise customer type.
+
+    let mut workspace = workspace_for_test(&team_a);
+    workspace.teams.push(team_b.clone());
+
+    App::test((), |mut app| async move {
+        initialize_window_team_test_app(&mut app, vec![workspace]);
+
+        let (window_a, view_a) = create_test_window(&mut app);
+        let (window_b, view_b) = create_test_window(&mut app);
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.set_team_for_window(window_a, team_a.uid, ctx);
+            user_workspaces.set_team_for_window(window_b, team_b.uid, ctx);
+        });
+
+        let weak_a = view_a.downgrade();
+        let weak_b = view_b.downgrade();
+
+        app.read(|ctx| {
+            let user_workspaces = UserWorkspaces::as_ref(ctx);
+            let render_a = user_workspaces
+                .team_render_context_for_view_handle(&weak_a, ctx)
+                .expect("window A should resolve a render context");
+            let render_b = user_workspaces
+                .team_render_context_for_view_handle(&weak_b, ctx)
+                .expect("window B should resolve a render context");
+
+            assert!(render_a.is_telemetry_force_enabled());
+            assert!(!render_b.is_telemetry_force_enabled());
+
+            assert!(render_a.is_enterprise_secret_redaction_enabled());
+            assert!(!render_b.is_enterprise_secret_redaction_enabled());
+
+            assert_eq!(render_a.enterprise_secret_redaction_regexes().len(), 1);
+            assert_eq!(
+                render_a.enterprise_secret_redaction_regexes()[0].pattern,
+                "team-a-secret"
+            );
+            assert!(render_b.enterprise_secret_redaction_regexes().is_empty());
+
+            assert!(matches!(
+                render_a.ugc_collection_enablement_setting(),
+                UgcCollectionEnablementSetting::Disable
+            ));
+            assert!(matches!(
+                render_b.ugc_collection_enablement_setting(),
+                UgcCollectionEnablementSetting::RespectUserSetting
+            ));
+
+            assert_eq!(
+                render_a.cloud_conversation_storage_enablement_setting(),
+                &AdminEnablementSetting::Enable
+            );
+            assert_eq!(
+                render_b.cloud_conversation_storage_enablement_setting(),
+                &AdminEnablementSetting::RespectUserSetting
+            );
+
+            assert!(render_a.is_enterprise_customer());
+            assert!(!render_b.is_enterprise_customer());
+        });
+    })
+}
+
+#[test]
+fn test_enterprise_secret_redaction_regexes_for_context_reads_captured_team() {
+    let (mut team_a, team_b) = two_teams();
+    team_a.settings.secret_redaction.regexes.values = vec![EnterpriseSecretRegex {
+        pattern: "team-a-secret".to_string(),
+        name: None,
+    }];
+
+    let mut workspace = workspace_for_test(&team_a);
+    workspace.teams.push(team_b.clone());
+
+    App::test((), |mut app| async move {
+        initialize_window_team_test_app(&mut app, vec![workspace]);
+
+        let (window_a, view_a) = create_test_window(&mut app);
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.set_team_for_window(window_a, team_a.uid, ctx);
+        });
+
+        let context_a = view_a
+            .update(&mut app, |_, ctx| {
+                UserWorkspaces::as_ref(ctx).team_context_for_view(ctx)
+            })
+            .expect("a window assigned to team A should mint a context");
+
+        app.read(|ctx| {
+            let regexes = UserWorkspaces::as_ref(ctx)
+                .enterprise_secret_redaction_regexes_for_context(&context_a);
+            assert_eq!(regexes.len(), 1);
+            assert_eq!(regexes[0].pattern, "team-a-secret");
+        });
+    })
+}
+
+/// The terminal secret scanner compiles one process-wide regex list rather than one per team
+/// (see the doc comment on `enterprise_secret_redaction_regexes_for_open_windows`), so it must
+/// be the union of every team the user currently has *any* window open on -- not
+/// `current_workspace()`'s workspace-wide baseline, which would have applied one team's
+/// patterns to every terminal (or dropped a team's own patterns from its own terminal
+/// entirely). A team present in the workspace but with no open window must not contribute.
+#[test]
+fn test_enterprise_secret_redaction_regexes_for_open_windows_unions_open_windows_teams() {
+    let mut team_a = team_for_test();
+    team_a.settings.secret_redaction.regexes.values = vec![EnterpriseSecretRegex {
+        pattern: "team-a-secret".to_string(),
+        name: None,
+    }];
+    let mut team_b = team_for_test();
+    team_b.uid = 456.into();
+    team_b.settings.secret_redaction.regexes.values = vec![EnterpriseSecretRegex {
+        pattern: "team-b-secret".to_string(),
+        name: None,
+    }];
+    let mut team_c_no_window = team_for_test();
+    team_c_no_window.uid = 789.into();
+    team_c_no_window.settings.secret_redaction.regexes.values = vec![EnterpriseSecretRegex {
+        pattern: "team-c-secret".to_string(),
+        name: None,
+    }];
+
+    let mut workspace = workspace_for_test(&team_a);
+    workspace.teams.push(team_b.clone());
+    workspace.teams.push(team_c_no_window.clone());
+
+    App::test((), |mut app| async move {
+        initialize_window_team_test_app(&mut app, vec![workspace]);
+
+        let (window_a, _view_a) = create_test_window(&mut app);
+        let (window_b, _view_b) = create_test_window(&mut app);
+        // A second window also on team A: its pattern must not be duplicated in the union.
+        let (window_a2, _view_a2) = create_test_window(&mut app);
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.set_team_for_window(window_a, team_a.uid, ctx);
+            user_workspaces.set_team_for_window(window_b, team_b.uid, ctx);
+            user_workspaces.set_team_for_window(window_a2, team_a.uid, ctx);
+        });
+
+        app.read(|ctx| {
+            let mut patterns: Vec<String> = UserWorkspaces::as_ref(ctx)
+                .enterprise_secret_redaction_regexes_for_open_windows()
+                .into_iter()
+                .map(|regex| regex.pattern)
+                .collect();
+            patterns.sort_unstable();
+            assert_eq!(
+                patterns,
+                vec!["team-a-secret".to_string(), "team-b-secret".to_string()],
+                "the union must include every open window's team exactly once, and must not \
+                 include team C's pattern since no window has it open"
+            );
+        });
+    })
+}
+
 #[test]
 fn test_spaces_for_window_orders_selected_team_shared_and_personal() {
     let _flag = FeatureFlag::SharedWithMe.override_enabled(true);
@@ -2186,6 +2458,7 @@ fn gql_team_settings() -> GqlTeamSettings {
     fn str_list() -> GqlStringListSettingInfo {
         GqlStringListSettingInfo {
             values: vec![],
+            is_configured: false,
             workspace_entries: vec![],
             team_entries: vec![],
         }
@@ -2206,6 +2479,7 @@ fn gql_team_settings() -> GqlTeamSettings {
             enabled: bool_info(false),
             regexes: GqlSecretRedactionRegexListInfo {
                 values: vec![],
+                is_configured: false,
                 workspace_entries: vec![],
                 team_entries: vec![],
             },

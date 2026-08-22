@@ -85,7 +85,7 @@ use crate::settings::AISettings;
 use crate::settings::app_installation_detection::{
     UserAppInstallDetectionSettings, UserAppInstallStatus,
 };
-use crate::terminal::safe_mode_settings::get_secret_obfuscation_mode;
+use crate::terminal::safe_mode_settings::get_secret_obfuscation_mode_for_window;
 use crate::ui_components::breadcrumb::{BreadcrumbState, render_breadcrumbs};
 use crate::ui_components::buttons::{accent_icon_button, icon_button};
 use crate::ui_components::dialog::{Dialog, dialog_styles};
@@ -1582,7 +1582,7 @@ impl WorkflowView {
         let workflow = &self.create_workflow_object_from_input(ctx);
 
         // Block saving if secrets are detected in the workflow when secret redaction is enabled.
-        if self.workflow_contains_secrets(ctx) {
+        if self.workflow_contains_secrets(ctx.window_id(), ctx) {
             self.display_error_toast(
                 "This workflow cannot be saved because it contains secrets".to_string(),
                 ctx,
@@ -1654,8 +1654,8 @@ impl WorkflowView {
         }
     }
 
-    fn workflow_contains_secrets(&self, app: &AppContext) -> bool {
-        let secret_redaction = get_secret_obfuscation_mode(app);
+    fn workflow_contains_secrets(&self, window_id: WindowId, app: &AppContext) -> bool {
+        let secret_redaction = get_secret_obfuscation_mode_for_window(window_id, app);
         if secret_redaction.should_redact_secret() {
             let name_secrets = find_secrets_in_text(&self.name_editor.as_ref(app).buffer_text(app));
             if !name_secrets.is_empty() {
@@ -1748,7 +1748,7 @@ impl WorkflowView {
         // Autofill button should be disabled when there is no content or when there are secrets in the workflow.
         self.content_editor.as_ref(app).is_empty(app)
             || self.show_enum_creation_dialog
-            || self.workflow_contains_secrets(app)
+            || self.workflow_contains_secrets(self.content_editor.window_id(app), app)
     }
 
     fn clear_content_formatting(&mut self, num_chars_content: usize, ctx: &mut ViewContext<Self>) {

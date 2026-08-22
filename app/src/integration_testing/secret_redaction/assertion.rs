@@ -4,7 +4,7 @@ use warpui::integration::{AssertionCallback, AssertionOutcome};
 use crate::ai::agent::redaction::redact_secrets;
 use crate::ai::blocklist::block::secret_redaction::find_secrets_in_text;
 use crate::integration_testing::view_getters::single_terminal_view;
-use crate::terminal::safe_mode_settings::get_secret_obfuscation_mode;
+use crate::terminal::safe_mode_settings::get_secret_obfuscation_mode_for_window;
 
 pub fn assert_secret_tooltip_open(open: bool) -> AssertionCallback {
     Box::new(move |app, window_id| {
@@ -31,7 +31,7 @@ pub fn assert_secrets_redacted_for_ai(
     Box::new(move |app, window_id| {
         let terminal_view = single_terminal_view(app, window_id);
         terminal_view.read(app, |_view, ctx| {
-            let secret_redaction_mode = get_secret_obfuscation_mode(ctx);
+            let secret_redaction_mode = get_secret_obfuscation_mode_for_window(window_id, ctx);
 
             // Test that we properly detect secrets in the input
             let detected_secrets = find_secrets_in_text(&test_text);

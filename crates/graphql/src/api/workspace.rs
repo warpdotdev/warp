@@ -376,6 +376,7 @@ pub struct ComputerUseSettingInfo {
 #[derive(cynic::QueryFragment, Debug, Clone)]
 pub struct StringListSettingInfo {
     pub values: Vec<String>,
+    pub is_configured: bool,
     pub workspace_entries: Vec<String>,
     pub team_entries: Vec<String>,
 }
@@ -383,6 +384,7 @@ pub struct StringListSettingInfo {
 #[derive(cynic::QueryFragment, Debug, Clone)]
 pub struct SecretRedactionRegexListInfo {
     pub values: Vec<SecretRedactionRegex>,
+    pub is_configured: bool,
     pub workspace_entries: Vec<SecretRedactionRegex>,
     pub team_entries: Vec<SecretRedactionRegex>,
 }

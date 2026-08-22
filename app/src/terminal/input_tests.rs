@@ -107,9 +107,13 @@ use crate::test_util::settings::initialize_settings_for_tests;
 use crate::themes::theme::AnsiColorIdentifier;
 use crate::warp_managed_paths_watcher::WarpManagedPathsWatcher;
 use crate::workspace::{ActiveSession, OneTimeModalModel, ToastStack, WorkspaceRegistry};
+use crate::workspaces::team::{Team, TeamVisibility};
 use crate::workspaces::team_tester::TeamTesterStatus;
 use crate::workspaces::update_manager::TeamUpdateManager;
 use crate::workspaces::user_workspaces::UserWorkspaces;
+use crate::workspaces::workspace::{
+    EnforceableSetting, TeamSecretRedactionSettings, TeamSettings, Workspace,
+};
 use crate::{
     AgentNotificationsModel, GlobalResourceHandles, GlobalResourceHandlesProvider,
     ReferralThemeStatus, experiments,
@@ -9755,5 +9759,102 @@ fn hotkey_opens_ai_command_search_even_when_hash_trigger_disabled() {
             1,
             "the AI Command Search hotkey must still open the panel when the '#' trigger is disabled"
         );
+    });
+}
+
+fn team_with_redaction_enabled(uid: i64, enabled: bool) -> Team {
+    Team {
+        uid: uid.into(),
+        name: format!("team-{uid}"),
+        color: None,
+        invite_link: None,
+        members: vec![],
+        pending_email_invites: vec![],
+        invite_link_domain_restrictions: vec![],
+        billing_metadata: Default::default(),
+        stripe_customer_id: None,
+        settings: TeamSettings {
+            secret_redaction: TeamSecretRedactionSettings {
+                enabled: EnforceableSetting {
+                    value: enabled,
+                    is_enforced_by_workspace: false,
+                },
+                regexes: Default::default(),
+            },
+            ..Default::default()
+        },
+        is_eligible_for_discovery: false,
+        has_billing_history: false,
+        visibility: TeamVisibility::Open,
+    }
+}
+
+fn workspace_with_teams(teams: Vec<Team>) -> Workspace {
+    Workspace {
+        uid: "workspace_uid123456789".to_string().into(),
+        name: "test".to_string(),
+        stripe_customer_id: None,
+        teams,
+        billing_metadata: Default::default(),
+        bonus_grants_purchased_this_month: Default::default(),
+        billing_cycle_usage: None,
+        has_billing_history: false,
+        settings: Default::default(),
+        invite_link_domain_restrictions: vec![],
+        pending_email_invites: vec![],
+        is_eligible_for_discovery: false,
+        members: vec![],
+        total_requests_used_since_last_refresh: 0,
+    }
+}
+
+/// Regression test for a lifecycle gap where dragging a terminal's tab between windows moved
+/// the view tree without updating `UserWorkspaces` or emitting `WindowTeamChanged`, leaving
+/// `Input`'s redaction subscription keyed to the window the terminal used to live in. Two
+/// windows carry opposite enterprise-redaction policies; after simulating the drag (a
+/// `transfer_view_tree_to_window` call, exactly as the real tab-drag handoff performs), the
+/// terminal's obfuscation mode must reflect its *new* window's team, not its old one's.
+#[test]
+fn tab_drag_between_windows_with_opposite_redaction_policies_follows_target_window() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let team_redacted = team_with_redaction_enabled(123, true);
+        let team_unredacted = team_with_redaction_enabled(456, false);
+        let workspace = workspace_with_teams(vec![team_redacted.clone(), team_unredacted.clone()]);
+        let workspace_uid = workspace.uid;
+
+        let (window_a, terminal) =
+            add_window_with_bootstrapped_terminal_and_window_id(&mut app, None, None).await;
+        let tips_model = app.add_model(|_| TipsCompleted::default());
+        let (window_b, _other_terminal) = app.add_window(WindowStyle::NotStealFocus, move |ctx| {
+            TerminalView::new_for_test(tips_model, None, ctx)
+        });
+
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.update_workspaces(vec![workspace], ctx);
+            user_workspaces.set_current_workspace_uid(workspace_uid, ctx);
+            user_workspaces.set_team_for_window(window_a, team_redacted.uid, ctx);
+            user_workspaces.set_team_for_window(window_b, team_unredacted.uid, ctx);
+        });
+
+        terminal.read(&app, |view, _| {
+            assert!(
+                view.model.lock().obfuscate_secrets().should_redact_secret(),
+                "window A's team requires redaction before the drag"
+            );
+        });
+
+        let terminal_view_id = terminal.read(&app, |view, _| view.id());
+        app.update(|ctx| {
+            ctx.transfer_view_tree_to_window(terminal_view_id, window_a, window_b);
+        });
+
+        terminal.read(&app, |view, _| {
+            assert!(
+                !view.model.lock().obfuscate_secrets().should_redact_secret(),
+                "after the drag, redaction must follow window B's team, not window A's"
+            );
+        });
     });
 }

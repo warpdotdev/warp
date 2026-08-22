@@ -157,15 +157,15 @@ pub struct PrivacySettings {
     /// but they both used to support additive behavior.
     /// It's a [Vec<CustomSecretRegex>], but also a user setting.
     pub user_secret_regex_list: CustomSecretRegexList,
-    /// List of enterprise-level secret regexes provided by the organization.
-    /// These are kept separate from user-level secrets to support additive behavior.
-    pub enterprise_secret_regex_list: Vec<CustomSecretRegex>,
     /// Whether or not the user's organization has forced telemetry on, in which case we ignore any
     /// user local/cloud settings. If false, we fall back to the user's settings.
-    /// This is populated by the server when teams data is fetched.
+    /// This is populated by `UserWorkspaces` (ambiently, not per-team) when teams data is fetched.
     pub is_telemetry_force_enabled: bool,
     /// Whether or not the user's organization has enabled enterprise secret redaction.
-    /// This is populated by the server when teams data is fetched.
+    /// This is populated by `UserWorkspaces` (ambiently, not per-team) when teams data is
+    /// fetched. The corresponding enterprise regex list is intentionally not cached here --
+    /// see [`crate::terminal::secret_regex_updater::CustomSecretRegexUpdater`], which reads it
+    /// straight from `UserWorkspaces`.
     pub is_enterprise_secret_redaction_enabled: bool,
 }
 
@@ -303,7 +303,6 @@ impl PrivacySettings {
             has_initialized_default_secret_regexes,
             is_telemetry_force_enabled: false,
             is_enterprise_secret_redaction_enabled: false,
-            enterprise_secret_regex_list: Vec::new(),
         }
     }
 
@@ -319,51 +318,28 @@ impl PrivacySettings {
         self.is_enterprise_secret_redaction_enabled
     }
 
-    pub fn set_enterprise_secret_redaction_settings(
+    /// Updates the ambient (not per-team) flag mirroring whether the user's organization
+    /// enforces enterprise secret redaction. See the field doc comment on
+    /// [`Self::is_enterprise_secret_redaction_enabled`] for why the enterprise regex list is no
+    /// longer a `PrivacySettings` field.
+    pub fn set_is_enterprise_secret_redaction_enabled(
         &mut self,
         enabled: bool,
-        enterprise_regexes: Vec<EnterpriseSecretRegex>,
-        change_event_reason: ChangeEventReason,
         ctx: &mut ModelContext<Self>,
     ) {
-        if enabled {
+        if enabled && !self.is_enterprise_secret_redaction_enabled {
             // First time: Force enable secret redaction setting (safe mode).
-            if !self.is_enterprise_secret_redaction_enabled {
-                let safe_mode_settings = SafeModeSettings::handle(ctx);
-                ctx.update_model(&safe_mode_settings, |safe_mode_settings, ctx| {
-                    let _ = safe_mode_settings.safe_mode_enabled.set_value(true, ctx);
-                });
-            }
-
-            // Convert EnterpriseSecretRegex to CustomSecretRegex for internal use
-            let mut enterprise_secrets = Vec::new();
-            for enterprise_regex in enterprise_regexes {
-                match Regex::new(&enterprise_regex.pattern) {
-                    Ok(regex) => {
-                        enterprise_secrets.push(CustomSecretRegex {
-                            pattern: regex,
-                            name: enterprise_regex.name,
-                        });
-                    }
-                    _ => {
-                        report_error!(
-                            "Invalid enterprise secret regex pattern",
-                            extra: { "pattern" => %enterprise_regex.pattern }
-                        );
-                    }
-                }
-            }
-            self.enterprise_secret_regex_list = enterprise_secrets;
-        } else {
-            // Clear enterprise secrets when disabled
-            self.enterprise_secret_regex_list.clear();
+            let safe_mode_settings = SafeModeSettings::handle(ctx);
+            ctx.update_model(&safe_mode_settings, |safe_mode_settings, ctx| {
+                let _ = safe_mode_settings.safe_mode_enabled.set_value(true, ctx);
+            });
         }
 
         self.is_enterprise_secret_redaction_enabled = enabled;
-
-        ctx.emit(PrivacySettingsChangedEvent::CustomSecretRegexList {
-            change_event_reason,
-        });
+        // Always notify, even when `enabled` is unchanged: callers of this setter (see
+        // `UserWorkspaces::notify_and_emit_teams_changed`) call it on every teams refresh, and an
+        // observer like the privacy page can have other team-derived data change (e.g. the
+        // enterprise regex list) without this flag flipping.
         ctx.notify();
     }
 
@@ -468,7 +444,6 @@ impl PrivacySettings {
             has_initialized_default_secret_regexes: HasInitializedDefaultSecretRegexes::new(None),
             is_telemetry_force_enabled: false,
             is_enterprise_secret_redaction_enabled: false,
-            enterprise_secret_regex_list: Vec::new(),
         }
     }
 

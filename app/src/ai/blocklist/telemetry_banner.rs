@@ -11,6 +11,7 @@ use crate::settings_view::SettingsSection;
 use crate::terminal::view::TerminalAction;
 use crate::ui_components::buttons::icon_button;
 use crate::ui_components::icons::Icon;
+use crate::workspaces::team::Team;
 use crate::workspaces::user_workspaces::UserWorkspaces;
 use crate::workspaces::workspace::UgcCollectionEnablementSetting;
 use crate::{Appearance, FeatureFlag, WorkspaceAction};
@@ -184,16 +185,11 @@ impl Entity for TelemetryBanner {
     type Event = ();
 }
 
-/// Returns `true` if we should collect UGC (user-generated content) telemetry for AI features.
-///
-/// This should apply to telemetry events that include user-generated content, like queries or
-/// outputs, but need not be checked for regular metadata telemetry events.
-///
-/// For example, a metadata event that records if a user toggled Pair/Dispatch mode does not
-/// require this check, but an event that logs the input buffer for natural language detection
-/// _does_ need to check this.
-pub fn should_collect_ai_ugc_telemetry(app: &AppContext, is_telemetry_enabled: bool) -> bool {
-    match UserWorkspaces::as_ref(app).get_ugc_collection_enablement_setting() {
+fn should_collect_ai_ugc_telemetry_for_setting(
+    setting: UgcCollectionEnablementSetting,
+    is_telemetry_enabled: bool,
+) -> bool {
+    match setting {
         UgcCollectionEnablementSetting::Disable => false,
         UgcCollectionEnablementSetting::Enable => true,
         UgcCollectionEnablementSetting::RespectUserSetting => {
@@ -204,4 +200,36 @@ pub fn should_collect_ai_ugc_telemetry(app: &AppContext, is_telemetry_enabled: b
                 || FeatureFlag::AgentModeAnalytics.is_enabled()
         }
     }
+}
+
+/// Returns `true` if we should collect UGC (user-generated content) telemetry for AI features.
+///
+/// This should apply to telemetry events that include user-generated content, like queries or
+/// outputs, but need not be checked for regular metadata telemetry events.
+///
+/// For example, a metadata event that records if a user toggled Pair/Dispatch mode does not
+/// require this check, but an event that logs the input buffer for natural language detection
+/// _does_ need to check this.
+///
+/// This reads the ambient, workspace-wide UGC setting rather than any specific team's; prefer
+/// [`should_collect_ai_ugc_telemetry_for_team`] whenever a `ViewContext` (and thus a window) is
+/// available.
+pub fn should_collect_ai_ugc_telemetry(app: &AppContext, is_telemetry_enabled: bool) -> bool {
+    should_collect_ai_ugc_telemetry_for_setting(
+        UserWorkspaces::as_ref(app).get_ugc_collection_enablement_setting(),
+        is_telemetry_enabled,
+    )
+}
+
+/// [`should_collect_ai_ugc_telemetry`], scoped to `team`'s own effective UGC-collection setting
+/// rather than the ambient workspace-wide baseline. `None` (no-team) respects the user's
+/// setting, matching the neutral default a team without an override would have.
+pub fn should_collect_ai_ugc_telemetry_for_team(
+    team: Option<&Team>,
+    is_telemetry_enabled: bool,
+) -> bool {
+    let setting = team
+        .map(|team| team.settings.ugc_collection.value.clone())
+        .unwrap_or_default();
+    should_collect_ai_ugc_telemetry_for_setting(setting, is_telemetry_enabled)
 }

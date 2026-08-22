@@ -4,7 +4,7 @@ use std::sync::Arc;
 use anyhow::Result;
 use regex::Regex;
 use warp_core::features::FeatureFlag;
-use warp_core::settings::{ChangeEventReason, Setting};
+use warp_core::settings::Setting;
 use warp_errors::report_error;
 use warp_graphql::workspace::FeatureModelChoice;
 use warpui::{
@@ -254,6 +254,37 @@ impl TeamScope for TeamContext<'_> {
     }
 }
 
+impl<'a> TeamRenderContext<'a> {
+    /// Window-scoped privacy policy reads for the privacy settings page. Prefer these over
+    /// `UserWorkspaces::is_telemetry_force_enabled` and its siblings, which read the
+    /// process-global current workspace rather than this context's team.
+    pub(crate) fn is_telemetry_force_enabled(&self) -> bool {
+        self.team.settings.telemetry_settings.force_enabled
+    }
+
+    pub(crate) fn is_enterprise_secret_redaction_enabled(&self) -> bool {
+        self.team.settings.secret_redaction.enabled.value
+    }
+
+    pub(crate) fn enterprise_secret_redaction_regexes(&self) -> &'a [EnterpriseSecretRegex] {
+        &self.team.settings.secret_redaction.regexes.values
+    }
+
+    pub(crate) fn ugc_collection_enablement_setting(&self) -> &'a UgcCollectionEnablementSetting {
+        &self.team.settings.ugc_collection.value
+    }
+
+    pub(crate) fn cloud_conversation_storage_enablement_setting(
+        &self,
+    ) -> &'a AdminEnablementSetting {
+        &self.team.settings.cloud_conversation_storage.value
+    }
+
+    pub(crate) fn is_enterprise_customer(&self) -> bool {
+        self.team.billing_metadata.customer_type == CustomerType::Enterprise
+    }
+}
+
 impl UserWorkspaces {
     #[cfg(any(test, all(feature = "tui", feature = "test-util")))]
     pub fn mock(
@@ -479,6 +510,18 @@ impl UserWorkspaces {
         Some(TeamContext { team_uid })
     }
 
+    /// A captured context's enterprise secret-redaction regexes, for operations that read
+    /// team policy after crossing into a model, where a [`TeamRenderContext`] borrow
+    /// would not survive.
+    pub(crate) fn enterprise_secret_redaction_regexes_for_context(
+        &self,
+        context: &TeamContext,
+    ) -> Vec<EnterpriseSecretRegex> {
+        self.team_for_context(context)
+            .map(|team| team.settings.secret_redaction.regexes.values.clone())
+            .unwrap_or_default()
+    }
+
     /// Returns the windows whose team assignment changed.
     #[must_use]
     fn reconcile_window_team_assignments(&mut self) -> Vec<WindowId> {
@@ -685,6 +728,63 @@ impl UserWorkspaces {
                     .map(Workspace::is_custom_llm_enabled)
             })
             .unwrap_or(false)
+    }
+
+    /// Whether `team`'s effective policy force-enables telemetry, ignoring the user's local
+    /// telemetry setting. `None` (no-team) returns `false` rather than falling back to any
+    /// other team's or the workspace's value, per the no-default-team rule: there is no
+    /// single "current" team to fall back to once two windows can select different teams.
+    ///
+    /// Sources `team.settings`, the server's already-effective per-team value, rather than
+    /// `current_workspace().settings`, which is the workspace-wide admin baseline a team can
+    /// override. Prefer this over [`Self::is_telemetry_force_enabled`] whenever a specific
+    /// team is known (e.g. via a resolved `TeamContext`/`TeamRenderContext`).
+    #[allow(dead_code)] // Only tests call this today; remove once a Group 1 migration PR has a real call site.
+    pub fn is_telemetry_force_enabled_for_team(&self, team: Option<&Team>) -> bool {
+        team.is_some_and(|team| team.settings.telemetry_settings.force_enabled)
+    }
+
+    /// Whether `team`'s effective policy enables enterprise secret redaction. See
+    /// [`Self::is_telemetry_force_enabled_for_team`] for why `None` returns `false` and why
+    /// this sources `team.settings` rather than the workspace-wide baseline.
+    #[allow(dead_code)] // Only tests call this today; remove once a Group 1 migration PR has a real call site.
+    pub fn is_enterprise_secret_redaction_enabled_for_team(&self, team: Option<&Team>) -> bool {
+        team.is_some_and(|team| team.settings.secret_redaction.enabled.value)
+    }
+
+    /// `team`'s effective enterprise secret-redaction regex list. Returns an empty list for
+    /// `None` (no-team); see [`Self::is_telemetry_force_enabled_for_team`].
+    #[allow(dead_code)] // Only tests call this today; remove once a Group 1 migration PR has a real call site.
+    pub fn enterprise_secret_redaction_regex_list_for_team(
+        &self,
+        team: Option<&Team>,
+    ) -> Vec<EnterpriseSecretRegex> {
+        team.map(|team| team.settings.secret_redaction.regexes.values.clone())
+            .unwrap_or_default()
+    }
+
+    /// The union of enterprise secret-redaction regex patterns for every team the user
+    /// currently has a window open on, deduplicated by pattern.
+    ///
+    /// The terminal secret scanner compiles this into a single process-wide pattern list
+    /// rather than a per-team one: the grid scanner runs per-cell, per-visible-row, per-frame,
+    /// per-terminal, and multiplying that hot path by N compiled patterns per team is not
+    /// affordable. Scoping the union to the teams actually in view (rather than
+    /// `current_workspace()`, the workspace-wide ambient baseline) means a team's own rules
+    /// are never absent from its own terminal, and a team nobody has a window open on doesn't
+    /// leave its patterns lingering in every terminal's scan.
+    pub(crate) fn enterprise_secret_redaction_regexes_for_open_windows(
+        &self,
+    ) -> Vec<EnterpriseSecretRegex> {
+        let mut seen_patterns = HashSet::new();
+        self.window_team_uids
+            .values()
+            .filter_map(|team_uid| *team_uid)
+            .filter_map(|team_uid| self.team_from_uid(team_uid))
+            .flat_map(|team| team.settings.secret_redaction.regexes.values.iter())
+            .filter(|regex| seen_patterns.insert(regex.pattern.clone()))
+            .cloned()
+            .collect()
     }
 
     /// The add-on credits purchase policy for the current viewer context: the
@@ -1219,10 +1319,8 @@ impl UserWorkspaces {
         // the app initialization flow. So, we update it manually whenever teams data changes.
         PrivacySettings::handle(ctx).update(ctx, |settings, ctx| {
             settings.set_is_telemetry_force_enabled(self.is_telemetry_force_enabled());
-            settings.set_enterprise_secret_redaction_settings(
+            settings.set_is_enterprise_secret_redaction_enabled(
                 self.is_enterprise_secret_redaction_enabled(),
-                self.get_enterprise_secret_redaction_regex_list(),
-                ChangeEventReason::CloudSync,
                 ctx,
             );
         });
@@ -1863,18 +1961,30 @@ impl UserWorkspaces {
             .unwrap_or_default()
     }
 
+    /// The workspace-wide (not per-team) telemetry force-enable baseline. Ambient: it does not
+    /// consider which window or team is asking, so a window on a team that overrides this
+    /// baseline will not see that override reflected here. Kept only for callers that have not
+    /// yet been migrated to resolve a specific team; prefer
+    /// [`Self::is_telemetry_force_enabled_for_team`] when a `TeamContext`/`TeamRenderContext` is
+    /// available.
     pub fn is_telemetry_force_enabled(&self) -> bool {
         self.current_workspace()
             .map(|workspace| workspace.settings.telemetry_settings.force_enabled)
             .unwrap_or(false)
     }
 
+    /// The workspace-wide (not per-team) enterprise secret-redaction baseline. See
+    /// [`Self::is_telemetry_force_enabled`] for why this is ambient; prefer
+    /// [`Self::is_enterprise_secret_redaction_enabled_for_team`] when a team is known.
     pub fn is_enterprise_secret_redaction_enabled(&self) -> bool {
         self.current_workspace()
             .map(|workspace| workspace.settings.secret_redaction_settings.enabled)
             .unwrap_or(false)
     }
 
+    /// The workspace-wide (not per-team) enterprise secret-redaction regex list. See
+    /// [`Self::is_telemetry_force_enabled`] for why this is ambient; prefer
+    /// [`Self::enterprise_secret_redaction_regex_list_for_team`] when a team is known.
     pub fn get_enterprise_secret_redaction_regex_list(&self) -> Vec<EnterpriseSecretRegex> {
         self.current_workspace()
             .map(|workspace| workspace.settings.secret_redaction_settings.regexes.clone())

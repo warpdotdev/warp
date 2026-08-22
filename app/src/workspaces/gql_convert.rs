@@ -1116,6 +1116,7 @@ impl From<GqlWorkspaceSettings> for WorkspaceSettings {
 fn split_string_list(info: GqlStringListSettingInfo) -> SplitListSetting<String> {
     SplitListSetting {
         values: info.values,
+        is_configured: info.is_configured,
         workspace_entries: info.workspace_entries,
         team_entries: info.team_entries,
     }
@@ -1175,6 +1176,7 @@ impl From<GqlTeamSettings> for TeamSettings {
                 },
                 regexes: SplitListSetting {
                     values: map_regexes(gql_team_settings.secret_redaction.regexes.values),
+                    is_configured: gql_team_settings.secret_redaction.regexes.is_configured,
                     workspace_entries: map_regexes(
                         gql_team_settings.secret_redaction.regexes.workspace_entries,
                     ),

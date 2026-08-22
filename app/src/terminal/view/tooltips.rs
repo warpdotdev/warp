@@ -5,16 +5,16 @@ use warpui::elements::{
     ChildAnchor, Dismiss, MouseStateHandle, OffsetPositioning, PositionedElementAnchor,
     PositionedElementOffsetBounds, Stack,
 };
-use warpui::{AppContext, Element, EventContext};
+use warpui::{AppContext, Element, EventContext, SingletonEntity};
 
 use super::{GridHighlightedLink, TerminalAction, TerminalView};
 use crate::appearance::Appearance;
 use crate::terminal::TerminalModel;
 use crate::terminal::links::directly_open_link_keybinding_string;
 use crate::terminal::model::{ObfuscateSecrets, Secret};
-use crate::terminal::safe_mode_settings::get_secret_obfuscation_mode;
 use crate::terminal::view::SecretTooltip;
 use crate::util::tooltips::{TooltipLink, TooltipRedaction};
+use crate::workspaces::user_workspaces::UserWorkspaces;
 
 cfg_if::cfg_if! {
     if #[cfg(feature = "local_fs")] {
@@ -122,7 +122,7 @@ impl TerminalView {
                         handle.get_inner().id()
                     );
 
-                    if matches!(get_secret_obfuscation_mode(app), ObfuscateSecrets::Yes) {
+                    if matches!(model.obfuscate_secrets(), ObfuscateSecrets::Yes) {
                         let is_redacted = model
                             .secret_from_handle(tooltip)
                             .is_some_and(Secret::is_obfuscated);
@@ -166,7 +166,7 @@ impl TerminalView {
                     element_id = tooltip_info.position_id.to_owned();
                     is_agent_conversation = *is_agent_mode;
 
-                    if matches!(get_secret_obfuscation_mode(app), ObfuscateSecrets::Yes) {
+                    if matches!(model.obfuscate_secrets(), ObfuscateSecrets::Yes) {
                         let is_obfuscated = tooltip_info.is_obfuscated;
 
                         if is_obfuscated {
@@ -285,7 +285,7 @@ impl TerminalView {
             links.extend(show_in_file_explorer);
         }
 
-        let secret_redaction = get_secret_obfuscation_mode(app);
+        let secret_redaction = model.obfuscate_secrets();
 
         // Get the secret level from the current tooltip
         let secret_level = self.open_secret_tool_tip.as_ref().and_then(|tooltip| {
@@ -311,8 +311,18 @@ impl TerminalView {
             }
             (_, _, _) => TooltipRedaction::NoRedaction,
         };
+        let user_workspaces = UserWorkspaces::as_ref(app);
+        let is_enterprise_secret_redaction_enabled = user_workspaces
+            .is_enterprise_secret_redaction_enabled_for_team(
+                user_workspaces.team_for_view_handle(&self.view_handle, app),
+            );
         stack.add_positioned_overlay_child(
-            render_tooltip(links, redaction, appearance, app),
+            render_tooltip(
+                links,
+                redaction,
+                is_enterprise_secret_redaction_enabled,
+                appearance,
+            ),
             OffsetPositioning::offset_from_save_position_element(
                 element_id,
                 // Add a small buffer between the tooltip and the top of the cell.
@@ -328,8 +338,8 @@ impl TerminalView {
 fn render_tooltip(
     tooltip_links: impl IntoIterator<Item = GridTooltipLink>,
     redaction: TooltipRedaction,
+    is_enterprise_secret_redaction_enabled: bool,
     appearance: &Appearance,
-    app: &AppContext,
 ) -> Box<dyn Element> {
     // Convert GridTooltipLink to shared TooltipLink
     let shared_links = tooltip_links.into_iter().map(|link| {
@@ -344,8 +354,12 @@ fn render_tooltip(
         }
     });
 
-    let tooltip_content =
-        crate::util::tooltips::render_tooltip(shared_links, redaction, appearance, app);
+    let tooltip_content = crate::util::tooltips::render_tooltip(
+        shared_links,
+        redaction,
+        is_enterprise_secret_redaction_enabled,
+        appearance,
+    );
 
     Dismiss::new(tooltip_content)
         .on_dismiss(|ctx, _app| {

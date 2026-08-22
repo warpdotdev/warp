@@ -44,16 +44,14 @@ use crate::send_telemetry_from_ctx;
 use crate::server::block::{Block as ServerBlock, DisplaySetting};
 use crate::server::server_api::block::BlockClient;
 use crate::server::telemetry::TelemetryEvent;
-use crate::settings::{
-    AISettings, EnforceMinimumContrast, FontSettings, FontSettingsChangedEvent, PrivacySettings,
-};
+use crate::settings::{AISettings, EnforceMinimumContrast, FontSettings, FontSettingsChangedEvent};
 use crate::settings_view::SettingsSection;
 use crate::terminal::TerminalModel;
 use crate::terminal::grid_renderer::{self};
 use crate::terminal::ligature_settings::{LigatureSettings, should_use_ligature_rendering};
 use crate::terminal::model::ObfuscateSecrets;
 use crate::terminal::model::terminal_model::BlockIndex;
-use crate::terminal::safe_mode_settings::get_secret_obfuscation_mode;
+use crate::terminal::safe_mode_settings::get_secret_obfuscation_mode_for_window;
 use crate::themes::theme::WarpTheme;
 use crate::ui_components::icons::Icon;
 use crate::util::bindings::CustomAction;
@@ -138,6 +136,12 @@ pub struct ShareBlockModal {
     embed_display_handles: EmbedDisplayHandles,
     embed_display_options: Vec<(String, DisplaySetting)>,
     show_prompt: bool,
+    /// The user's manual redact-secrets choice for this share, seeded from the window's ambient
+    /// obfuscation mode when the modal opens and updated by `ToggleObfuscateSecrets`. This is
+    /// only the *fallback* used when the window's team does not currently mandate redaction --
+    /// see [`Self::effective_obfuscate_secrets`], which is what every read site (rendering,
+    /// `save_block`) must use instead of this field directly. Reading this field directly would
+    /// let a stale, no-longer-applicable choice survive a team change or window transfer.
     obfuscate_secrets: ObfuscateSecrets,
     /// We abort the block title generation requests early if the user updated the title text field
     /// before the request completes, rendering the current pending banner request irrelevant.
@@ -236,6 +240,15 @@ impl ShareBlockModal {
             }
         });
 
+        // `effective_obfuscate_secrets`/`is_enterprise_secret_redaction_enabled` resolve fresh on
+        // every render, but that only takes effect if a render actually happens: a window's team
+        // changing (including a cross-window tab drag) notifies on `UserWorkspaces` without
+        // otherwise touching this view, so observe it directly (mirrors the same fix in
+        // `PrivacyPageView::new`).
+        ctx.observe(&UserWorkspaces::handle(ctx), |_, _, ctx| {
+            ctx.notify();
+        });
+
         Self {
             model,
             block_client,
@@ -248,8 +261,31 @@ impl ShareBlockModal {
             embed_display_handles,
             embed_display_options,
             show_prompt: false,
-            obfuscate_secrets: get_secret_obfuscation_mode(ctx),
+            obfuscate_secrets: get_secret_obfuscation_mode_for_window(ctx.window_id(), ctx),
             title_generation_future_handle: None,
+        }
+    }
+
+    /// Whether the window this modal is showing in currently belongs to a team that mandates
+    /// enterprise secret redaction. Resolved fresh from the live window/team on every call --
+    /// never cache this, since a stale answer here is what let an open modal keep redaction
+    /// optional after its window moved into a team that requires it.
+    fn is_enterprise_secret_redaction_enabled(&self, app: &AppContext) -> bool {
+        let user_workspaces = UserWorkspaces::as_ref(app);
+        user_workspaces.is_enterprise_secret_redaction_enabled_for_team(
+            user_workspaces.team_for_window(self.block_title_editor.window_id(app)),
+        )
+    }
+
+    /// The obfuscation mode that must actually be used for rendering the preview and for the
+    /// upload in [`Self::save_block`]. When the window's current team mandates redaction, this
+    /// is resolved fresh (never `self.obfuscate_secrets`, which may be stale from before a team
+    /// change or window transfer); otherwise it falls back to the user's own toggle choice.
+    fn effective_obfuscate_secrets(&self, app: &AppContext) -> ObfuscateSecrets {
+        if self.is_enterprise_secret_redaction_enabled(app) {
+            get_secret_obfuscation_mode_for_window(self.block_title_editor.window_id(app), app)
+        } else {
+            self.obfuscate_secrets
         }
     }
 
@@ -312,6 +348,10 @@ impl ShareBlockModal {
     pub fn save_block(&mut self, share_type: ShareBlockType, ctx: &mut ViewContext<Self>) {
         let block_title = self.block_title_editor.as_ref(ctx).buffer_text(ctx);
         let display_setting = self.current_display_setting();
+        // Resolved fresh here, not read from `self.obfuscate_secrets`: this is the value that
+        // actually gets uploaded, so it must reflect the window's *current* team policy even if
+        // the modal has been open since before a team change or a cross-window tab drag.
+        let obfuscate_secrets = self.effective_obfuscate_secrets(ctx);
 
         let server_block = {
             let model = match &self.model {
@@ -341,12 +381,7 @@ impl ShareBlockModal {
                 }
             }
 
-            ServerBlock::new(
-                block,
-                self.show_prompt,
-                &display_setting,
-                self.obfuscate_secrets,
-            )
+            ServerBlock::new(block, self.show_prompt, &display_setting, obfuscate_secrets)
         };
 
         self.request_state = ShareRequestState::Pending(share_type);
@@ -356,7 +391,7 @@ impl ShareBlockModal {
                 share_type,
                 display_setting: display_setting.clone(),
                 show_prompt: self.show_prompt,
-                redact_secrets: self.obfuscate_secrets.is_visually_obfuscated(),
+                redact_secrets: obfuscate_secrets.is_visually_obfuscated(),
             },
             ctx
         );
@@ -425,7 +460,7 @@ impl ShareBlockModal {
         ctx.focus_self();
         self.model = Some(model);
         self.selected_block = Some(block_id);
-        self.obfuscate_secrets = get_secret_obfuscation_mode(ctx);
+        self.obfuscate_secrets = get_secret_obfuscation_mode_for_window(ctx.window_id(), ctx);
         if self.obfuscate_secrets.is_visually_obfuscated() {
             self.scan_selected_block_for_secrets(ctx);
         }
@@ -988,10 +1023,14 @@ impl ShareBlockModal {
         }
 
         let enforce_minimum_contrast = *FontSettings::as_ref(app).enforce_minimum_contrast;
+        // Resolved once here and reused below for both the preview and the checkbox, rather than
+        // reading the possibly-stale `self.obfuscate_secrets`/cached enterprise flag directly.
+        let is_enterprise_secret_redaction_enabled =
+            self.is_enterprise_secret_redaction_enabled(app);
+        let obfuscate_secrets = self.effective_obfuscate_secrets(app);
         let single_block = match &self.model {
             Some(model) => {
                 let cell_height = model.lock().block_list().size().cell_height_px();
-                let obfuscate_secrets = self.obfuscate_secrets;
                 let mut single_block = SingleBlock::new(
                     model.clone(),
                     theme.clone(),
@@ -1029,33 +1068,32 @@ impl ShareBlockModal {
         column.add_child(Shrinkable::new(1., single_block).finish());
 
         if !link_generated {
-            let redact_secrets_checkbox =
-                if PrivacySettings::as_ref(app).is_enterprise_secret_redaction_enabled() {
-                    // Force check the checkbox if enterprise secret redaction is enabled.
-                    appearance
-                        .ui_builder()
-                        .checkbox(
-                            self.mouse_state_handles.redact_secrets_mouse_state.clone(),
-                            Some(CHECKBOX_SIZE),
-                        )
-                        .check(true)
-                        .build()
-                        .disable()
-                        .finish()
-                } else {
-                    appearance
-                        .ui_builder()
-                        .checkbox(
-                            self.mouse_state_handles.redact_secrets_mouse_state.clone(),
-                            Some(CHECKBOX_SIZE),
-                        )
-                        .check(self.obfuscate_secrets.is_visually_obfuscated())
-                        .build()
-                        .on_click(move |ctx, _, _| {
-                            ctx.dispatch_typed_action(ShareBlockModalAction::ToggleObfuscateSecrets)
-                        })
-                        .finish()
-                };
+            let redact_secrets_checkbox = if is_enterprise_secret_redaction_enabled {
+                // Force check the checkbox if enterprise secret redaction is enabled.
+                appearance
+                    .ui_builder()
+                    .checkbox(
+                        self.mouse_state_handles.redact_secrets_mouse_state.clone(),
+                        Some(CHECKBOX_SIZE),
+                    )
+                    .check(true)
+                    .build()
+                    .disable()
+                    .finish()
+            } else {
+                appearance
+                    .ui_builder()
+                    .checkbox(
+                        self.mouse_state_handles.redact_secrets_mouse_state.clone(),
+                        Some(CHECKBOX_SIZE),
+                    )
+                    .check(obfuscate_secrets.is_visually_obfuscated())
+                    .build()
+                    .on_click(move |ctx, _, _| {
+                        ctx.dispatch_typed_action(ShareBlockModalAction::ToggleObfuscateSecrets)
+                    })
+                    .finish()
+            };
 
             let redact_secrets_description = appearance
                 .ui_builder()

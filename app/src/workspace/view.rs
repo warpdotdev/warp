@@ -23126,10 +23126,12 @@ impl Workspace {
         if *safe_mode_settings.safe_mode_enabled.value() {
             context.set.insert(flags::SAFE_MODE_FLAG);
         }
-        if !privacy_settings.is_telemetry_force_enabled()
+        let user_workspaces = UserWorkspaces::as_ref(app);
+        let window_team = user_workspaces.team_for_window(self.window_id);
+        if !user_workspaces.is_telemetry_force_enabled_for_team(window_team)
             && matches!(
-                UserWorkspaces::as_ref(app).get_cloud_conversation_storage_enablement_setting(),
-                AdminEnablementSetting::RespectUserSetting
+                window_team.map(|team| team.settings.cloud_conversation_storage.value.clone()),
+                None | Some(AdminEnablementSetting::RespectUserSetting)
             )
         {
             context

@@ -2558,7 +2558,10 @@ impl RichTextEditorView {
             });
         }
 
-        let tooltip_content = render_tooltip(links, TooltipRedaction::NoRedaction, appearance, ctx);
+        // `is_enterprise_secret_redaction_enabled` is only surfaced for secret redaction; this is
+        // a plain file-path tooltip (`NoRedaction`), so the value here is never read.
+        let tooltip_content =
+            render_tooltip(links, TooltipRedaction::NoRedaction, false, appearance);
 
         let hoverable = Hoverable::new(Default::default(), move |_| tooltip_content)
             .with_cursor(Cursor::PointingHand)

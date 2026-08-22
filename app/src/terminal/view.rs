@@ -454,7 +454,6 @@ use crate::terminal::model::terminal_model::{
 use crate::terminal::model::{ObfuscateSecrets, RespectObfuscatedSecrets, SecretHandle};
 use crate::terminal::model_events::{AnsiHandlerEvent, ModelEvent, ModelEventDispatcher};
 use crate::terminal::recorder::PtyRecorder;
-use crate::terminal::safe_mode_settings::get_secret_obfuscation_mode;
 use crate::terminal::session_settings::{
     DEFAULT_THRESHOLD_FOR_LONG_RUNNING_NOTIFICATION, NotificationsMode, NotificationsSettings,
     SessionSettings, SessionSettingsChangedEvent, ToolbarChipSelection,
@@ -23880,7 +23879,12 @@ impl TerminalView {
             terminal_view_id: self.view_id,
             spawning_command_for_subshell_sessions: self
                 .spawning_command_for_subshell_sessions(app),
-            obfuscate_secrets: get_secret_obfuscation_mode(app),
+            // `model.obfuscate_secrets()` is kept current-team-aware by `Input`'s Safe
+            // Mode/team-change subscriptions; reading it here (rather than recomputing
+            // ambiently) keeps this render in sync with the rest of the terminal's own
+            // rendering, which reads the same cached value (see `block_list_element.rs`,
+            // `alt_screen_element.rs`).
+            obfuscate_secrets: model.obfuscate_secrets(),
             hovered_secret: self.hovered_secret,
             horizontal_clipped_scroll_state: self.horizontal_clipped_scroll_state.clone(),
             ai_render_context: self.ai_render_context.clone(),
@@ -24771,10 +24775,16 @@ impl TerminalView {
                 .and_then(|item| item.block_index)
                 == Some(hovered_block_index);
 
+            let user_workspaces = UserWorkspaces::as_ref(app);
+            let is_enterprise_secret_redaction_enabled = user_workspaces
+                .is_enterprise_secret_redaction_enabled_for_team(
+                    user_workspaces.team_for_view_handle(&self.view_handle, app),
+                );
             element = element.with_hovered_index(
                 hovered_block_index,
                 model,
                 should_render_tooltip_below_button,
+                is_enterprise_secret_redaction_enabled,
                 app,
             );
         }

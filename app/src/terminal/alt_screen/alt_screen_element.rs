@@ -40,7 +40,6 @@ use crate::terminal::model::index::Point;
 use crate::terminal::model::mouse::{MouseAction, MouseButton, MouseState};
 use crate::terminal::model::selection::{SelectAction, SelectionPoint};
 use crate::terminal::model::terminal_model::WithinModel;
-use crate::terminal::safe_mode_settings::get_secret_obfuscation_mode;
 use crate::terminal::shared_session::presence_manager::{
     MUTED_PARTICIPANT_COLOR, PresenceManager, text_selection_color,
 };
@@ -321,7 +320,6 @@ impl AltScreenElement {
         &self,
         local_position: Vector2F,
         is_synthetic: bool,
-        app: &AppContext,
         ctx: &mut EventContext,
     ) -> bool {
         if self.active_session_state != ActiveSessionState::Active {
@@ -340,7 +338,14 @@ impl AltScreenElement {
             col: point.col,
             row: point.row,
         });
-        if get_secret_obfuscation_mode(app).is_visually_obfuscated() {
+        // `grid_render_params.obfuscate_secrets` was already resolved for this render from the
+        // terminal's own maintained obfuscation mode (see `get_terminal_view_render_context`);
+        // reading it here instead of recomputing keeps hover behavior consistent with `paint`.
+        if self
+            .grid_render_params
+            .obfuscate_secrets
+            .is_visually_obfuscated()
+        {
             let secret_handle = self
                 .model
                 .lock()
@@ -710,8 +715,10 @@ impl Element for AltScreenElement {
         let alt_screen_matches = find_run.map(|run| run.matches().iter().rev());
         let focused_match_range = find_run.and_then(|run| run.focused_match_range());
 
-        let obfuscate_secrets =
-            get_secret_obfuscation_mode(app).and(&grid.get_secret_obfuscation());
+        let obfuscate_secrets = self
+            .grid_render_params
+            .obfuscate_secrets
+            .and(&grid.get_secret_obfuscation());
 
         let mut sampler = model.alt_screen().bg_color_sampler.lock();
         sampler.reset();
@@ -937,7 +944,7 @@ impl Element for AltScreenElement {
                 ..
             } => {
                 if in_bounds {
-                    self.mouse_moved(to_local(*position), *is_synthetic, app, ctx)
+                    self.mouse_moved(to_local(*position), *is_synthetic, ctx)
                 } else {
                     self.mouse_out(ctx)
                 }

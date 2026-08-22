@@ -1053,13 +1053,31 @@ pub struct EnforceableSetting<T> {
 /// server's `StringListSettingInfo` / `SecretRedactionRegexListInfo`). `values`
 /// is the authoritative merged result; `workspace_entries` / `team_entries` are
 /// preserved so future admin UI can present the layers separately.
+///
+/// The server keeps `nil` (nothing configured) and an explicit empty override distinct, but
+/// GraphQL normalizes both to an empty `values` array. `is_configured` preserves that
+/// distinction; use [`Self::configured_values`] rather than reading `values` directly whenever
+/// an unconfigured list must fall back to another source instead of being treated as an
+/// explicit "allow/include nothing".
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct SplitListSetting<T> {
     pub values: Vec<T>,
     #[serde(default)]
+    pub is_configured: bool,
+    #[serde(default)]
     pub workspace_entries: Vec<T>,
     #[serde(default)]
     pub team_entries: Vec<T>,
+}
+
+impl<T> SplitListSetting<T> {
+    /// The effective organization-configured list, or `None` when the workspace and team left
+    /// this list unconfigured. Distinguishes that case from an explicit empty override, which
+    /// returns `Some(&[])` -- a distinction `values` alone cannot make once the wire format has
+    /// collapsed both to an empty array.
+    pub fn configured_values(&self) -> Option<&[T]> {
+        self.is_configured.then_some(self.values.as_slice())
+    }
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]

@@ -81,7 +81,7 @@ use crate::settings::{
     FontSettings, FontSettingsChangedEvent, NotebookFontSize, decrease_notebook_font_size,
     increase_notebook_font_size,
 };
-use crate::terminal::safe_mode_settings::get_secret_obfuscation_mode;
+use crate::terminal::safe_mode_settings::get_secret_obfuscation_mode_for_window;
 use crate::throttle::throttle;
 use crate::ui_components::icons::{self, Icon};
 #[cfg(target_family = "wasm")]
@@ -788,7 +788,7 @@ impl NotebookView {
         let content = Arc::new(self.content(ctx));
 
         // Block saving if secrets are detected in the notebook when secret redaction is enabled.
-        let secret_redaction = get_secret_obfuscation_mode(ctx);
+        let secret_redaction = get_secret_obfuscation_mode_for_window(ctx.window_id(), ctx);
         if secret_redaction.should_redact_secret() {
             let content_escaped = ESCAPE_PUNCTUATION_REGEX
                 .replace_all(&content, "$1")
@@ -1720,7 +1720,7 @@ impl NotebookView {
         let title: Arc<String> = self.title.as_ref(ctx).buffer_text(ctx).into();
 
         // Block saving if secrets are detected in the notebook title when secret redaction is enabled.
-        let secret_redaction = get_secret_obfuscation_mode(ctx);
+        let secret_redaction = get_secret_obfuscation_mode_for_window(ctx.window_id(), ctx);
         if secret_redaction.should_redact_secret() {
             let title_escaped = ESCAPE_PUNCTUATION_REGEX
                 .replace_all(&title, "$1")

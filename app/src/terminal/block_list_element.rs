@@ -67,9 +67,7 @@ use crate::appearance::Appearance;
 use crate::drive::settings::WarpDriveSettings;
 use crate::features::FeatureFlag;
 use crate::pane_group::SplitPaneState;
-use crate::settings::{
-    AISettings, DebugSettings, EnforceMinimumContrast, PrivacySettings, TerminalSpacing,
-};
+use crate::settings::{AISettings, DebugSettings, EnforceMinimumContrast, TerminalSpacing};
 use crate::terminal::alt_screen::{should_intercept_mouse, should_intercept_scroll};
 use crate::terminal::block_list_viewport::AutoscrollBehavior;
 use crate::terminal::blockgrid_renderer::BlockGridParams;
@@ -84,7 +82,6 @@ use crate::terminal::model::escape_sequences::{
 use crate::terminal::model::index::Point as IndexPoint;
 use crate::terminal::model::selection::{SelectAction, SelectionPoint};
 use crate::terminal::model::terminal_model::BlockIndex;
-use crate::terminal::safe_mode_settings::get_secret_obfuscation_mode;
 use crate::terminal::view::TerminalAction;
 use crate::terminal::warpify::SubshellSource;
 use crate::terminal::{SizeInfo, grid_renderer, should_right_click_paste};
@@ -1055,11 +1052,13 @@ impl BlockListElement {
     }
 
     /// Returns an updated version of the [`BlockListElement`] that renders the toolbelt on top of the hovered block.
+    #[allow(clippy::too_many_arguments)]
     pub fn with_hovered_index(
         mut self,
         block_index: BlockIndex,
         model: &TerminalModel,
         should_render_tooltip_below_button: bool,
+        is_enterprise_secret_redaction_enabled: bool,
         app: &AppContext,
     ) -> Self {
         self.hovered_block_index = Some(block_index);
@@ -1212,7 +1211,7 @@ impl BlockListElement {
             )
             .with_uniform_padding(4.);
 
-            let element = if PrivacySettings::as_ref(app).is_enterprise_secret_redaction_enabled()
+            let element = if is_enterprise_secret_redaction_enabled
                 && model
                     .block_list()
                     .block_at(block_index)
@@ -1825,7 +1824,7 @@ impl BlockListElement {
 
     /// Handle a mouse move event when we've determined the mouse is over the block list (and not
     /// obscured by any modals or other elements).
-    fn mouse_over(&self, position: Vector2F, app: &AppContext, ctx: &mut EventContext) {
+    fn mouse_over(&self, position: Vector2F, ctx: &mut EventContext) {
         let snackbar_hovered = self
             .snackbar_header_state()
             .header_rect()
@@ -1863,7 +1862,10 @@ impl BlockListElement {
             block_list_point.and_then(|point| viewport.block_list_point_to_grid_point(point))
         };
 
-        let secret_redaction = get_secret_obfuscation_mode(app);
+        // Reads the terminal's own maintained obfuscation mode (kept current-team-aware by
+        // `Input`'s Safe Mode/team-change subscriptions) rather than recomputing ambiently, so
+        // hover behavior always matches what `paint` below actually rendered.
+        let secret_redaction = self.model.lock().obfuscate_secrets();
         let secret_handle = if secret_redaction.should_redact_secret() {
             grid_point.and_then(|grid_point| {
                 self.model
@@ -1928,14 +1930,14 @@ impl BlockListElement {
         is_hovering && !is_covered
     }
 
-    fn mouse_moved(&self, position: Vector2F, app: &AppContext, ctx: &mut EventContext) -> bool {
+    fn mouse_moved(&self, position: Vector2F, ctx: &mut EventContext) -> bool {
         let is_hovering = self.is_directly_hovering(position, ctx);
         let was_hovering = self.mouse_states.hover_state.read_and_update(is_hovering);
 
         if is_hovering {
             // If the mouse is over the block list, we need to further process the MouseMove event
             // in order to properly react.
-            self.mouse_over(position, app, ctx);
+            self.mouse_over(position, ctx);
 
             // Allow the event to propagate to the parent in case it also wants to handle it.
             false
@@ -3762,7 +3764,9 @@ impl Element for BlockListElement {
         // Align the grid origin to start exactly at the top of the first visible block
         grid_origin += vec2f(0., viewport.offset_to_top_of_first_block(app).as_f32());
 
-        let obfuscate_secrets = get_secret_obfuscation_mode(app);
+        // See the comment on the `mouse_over` call site above for why this reads the model's
+        // maintained value instead of recomputing ambiently.
+        let obfuscate_secrets = model.obfuscate_secrets();
 
         let grid_render_params = GridRenderParams {
             warp_theme: self.warp_theme.clone(),
@@ -4695,7 +4699,7 @@ impl Element for BlockListElement {
                 };
                 self.mouse_dragged(*position, is_selecting_blocks, modifiers, ctx, app)
             }
-            Event::MouseMoved { position, .. } => self.mouse_moved(*position, app, ctx),
+            Event::MouseMoved { position, .. } => self.mouse_moved(*position, ctx),
             Event::TypedCharacters { chars } => self.typed_characters(chars, ctx),
             Event::MiddleMouseDown { position, .. } => self.middle_mouse_down(*position, ctx),
             Event::SetMarkedText {
