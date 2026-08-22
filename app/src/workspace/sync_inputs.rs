@@ -142,6 +142,28 @@ impl SyncedInputState {
         self.sync_state_by_window.insert(window_id, None);
     }
 
+    pub fn remove_pane_group_from_sync(
+        &mut self,
+        window_id: WindowId,
+        pane_group_id: EntityId,
+        pane_group_count: usize,
+    ) -> bool {
+        let Some(sync_state) = self.sync_state_by_window.get_mut(&window_id) else {
+            return false;
+        };
+
+        let Some(SyncedPanes::AllPanesInPaneGroups { pane_group_ids }) = sync_state else {
+            return false;
+        };
+
+        if !pane_group_ids.remove(&pane_group_id) {
+            return false;
+        }
+
+        *sync_state = Self::normalized_synced_panes(pane_group_ids.clone(), pane_group_count);
+        true
+    }
+
     fn get_state(&self, window_id: WindowId) -> Option<&SyncedPanes> {
         self.sync_state_by_window
             .get(&window_id)
@@ -185,5 +207,61 @@ impl SyncedInputState {
             }) => tab_ids.contains(&pane_group_id),
             None => false,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn removing_synced_pane_group_disables_empty_tab_sync_state() {
+        let window_id = WindowId::new();
+        let pane_group_id = EntityId::new();
+        let mut state = SyncedInputState::new();
+
+        state.toggle_sync_terminal_inputs_in_tab(pane_group_id, std::iter::empty(), 2, window_id);
+
+        assert!(state.should_sync_this_pane_group(pane_group_id, window_id));
+        assert!(state.remove_pane_group_from_sync(window_id, pane_group_id, 2));
+        assert!(!state.is_syncing_any_inputs(window_id));
+    }
+
+    #[test]
+    fn removing_one_synced_pane_group_keeps_other_tab_sync_state() {
+        let window_id = WindowId::new();
+        let first_pane_group_id = EntityId::new();
+        let second_pane_group_id = EntityId::new();
+        let all_pane_group_ids = [first_pane_group_id, second_pane_group_id];
+        let mut state = SyncedInputState::new();
+
+        state.toggle_sync_terminal_inputs_in_tab(
+            first_pane_group_id,
+            all_pane_group_ids.into_iter(),
+            3,
+            window_id,
+        );
+        state.toggle_sync_terminal_inputs_in_tab(
+            second_pane_group_id,
+            all_pane_group_ids.into_iter(),
+            3,
+            window_id,
+        );
+
+        assert!(state.remove_pane_group_from_sync(window_id, first_pane_group_id, 3));
+        assert!(!state.should_sync_this_pane_group(first_pane_group_id, window_id));
+        assert!(state.should_sync_this_pane_group(second_pane_group_id, window_id));
+    }
+
+    #[test]
+    fn removing_pane_group_does_not_disable_global_sync_state() {
+        let window_id = WindowId::new();
+        let pane_group_id = EntityId::new();
+        let mut state = SyncedInputState::new();
+
+        state.toggle_sync_all_terminal_inputs_in_all_tabs(window_id);
+
+        assert!(!state.remove_pane_group_from_sync(window_id, pane_group_id, 0));
+        assert!(state.is_syncing_all_inputs(window_id));
     }
 }
