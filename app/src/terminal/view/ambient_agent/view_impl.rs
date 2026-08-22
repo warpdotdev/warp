@@ -904,6 +904,8 @@ impl TerminalView {
                 appearance,
                 &ui_state.error_selection_handle,
                 &ui_state.error_selected_text,
+                ambient_agent_model.can_retry_setup(),
+                &ui_state.retry_button_mouse_state,
                 app,
             )
         } else {
