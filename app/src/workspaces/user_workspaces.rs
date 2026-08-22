@@ -220,9 +220,6 @@ impl TeamScope for TeamContextForOperation {
 
 #[cfg(test)]
 impl TeamContextForOperation {
-    // Nothing constructs a test context yet; remove this `#[allow(dead_code)]` once a Group 1
-    // migration PR has a real call site.
-    #[allow(dead_code)]
     pub(crate) fn new_for_test(team_uid: ServerId) -> Self {
         Self {
             team_uid: Some(team_uid),
@@ -477,7 +474,9 @@ impl UserWorkspaces {
     /// Same borrow discipline, so a caller still re-resolves on every read and follows the
     /// window. Unlike [`Self::team_context`] it cannot fail: a `WindowId` names a window
     /// whether or not this model has a team assignment for it, and a window with no team
-    /// selected yields a scope whose `team_uid()` is `None`.
+    /// selected yields a scope whose `team_uid()` is `None`. A window assigned to a team that
+    /// has since left the workspace also yields `None`, because the team is resolved here
+    /// rather than by the getter.
     ///
     /// A stored `WindowId` is weaker evidence than a live [`ViewContext`]: dragging a tab
     /// between windows re-parents the pane and the models it owns, so whoever stores one owes
@@ -947,9 +946,15 @@ impl UserWorkspaces {
     /// member key is used.
     ///
     /// A scope with no team is not on a team, so no team policy restricts it and the plan's
-    /// entitlement alone decides. A scope naming a team that has left the current workspace is
-    /// on a team whose policy cannot be read, so the restriction stands rather than resolving
-    /// to some other team's `team_byo`.
+    /// entitlement alone decides.
+    ///
+    /// The `Some(_)` arm denies rather than falling back when the named team cannot be found,
+    /// so a scope can never inherit some other team's `team_byo`. No scope this module hands
+    /// out reaches it: [`Self::team_context_for_window`] resolves the uid through
+    /// [`Self::team_from_uid`] before storing it, so a team that has left the workspace is
+    /// already indistinguishable from teamless by the time a getter sees it. The arm exists
+    /// for [`TeamContextForOperation`], which carries a uid captured earlier and can outlive
+    /// the team it names.
     pub(crate) fn are_member_byo_keys_allowed_for_scope<S: TeamScope + ?Sized>(
         &self,
         scope: &S,

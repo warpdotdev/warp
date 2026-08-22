@@ -1390,6 +1390,37 @@ fn member_byo_policy_resolved_from_a_view_handle_matches_its_window() {
     })
 }
 
+/// A [`TeamContextForOperation`] captures a uid and can outlive the team it names, which is
+/// the only way a scope reaches the `Some(_)` deny arm. The restriction then stands: resolving
+/// to some other team's `team_byo` is exactly what this migration exists to stop, so the
+/// no-team-means-unrestricted branch must not swallow a team that merely cannot be read.
+///
+/// A window scope cannot reach this state -- `team_context_for_window` resolves the team
+/// before building the scope, so a departed team is already indistinguishable from teamless.
+#[test]
+fn member_byo_policy_denies_a_scope_naming_a_team_outside_the_workspace() {
+    let (team_a, _team_b) = two_teams_with_opposing_byo_policy();
+    let workspace = workspace_for_test(&team_a);
+
+    App::test((), |mut app| async move {
+        initialize_window_team_test_app(&mut app, vec![workspace]);
+
+        let departed_team_scope = TeamContextForOperation::new_for_test(9999.into());
+        app.read(|ctx| {
+            let user_workspaces = UserWorkspaces::as_ref(ctx);
+            assert!(user_workspaces.is_managed_byok_byoe_enabled());
+            assert!(
+                !user_workspaces.are_member_byo_keys_allowed_for_scope(&departed_team_scope),
+                "a team whose policy cannot be read must not inherit another team's"
+            );
+            assert!(
+                !user_workspaces.are_member_byo_endpoints_allowed_for_scope(&departed_team_scope),
+                "a team whose policy cannot be read must not inherit another team's"
+            );
+        });
+    })
+}
+
 /// A window whose team leaves the workspace is reconciled onto the remaining team, and the
 /// policy read has to move with it rather than keep answering for the departed team.
 #[test]

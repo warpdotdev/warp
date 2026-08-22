@@ -302,8 +302,30 @@ fn apply_team_byo_policy_gates_member_credentials_by_the_requesting_windows_team
                 disallowed.custom_model_providers.is_none(),
                 "team B's policy disallows members from using their own custom endpoints"
             );
+
+            // The decision has to survive on the params, not be inferred from them. This is
+            // the state the Grok refresh path re-injected into: `api_keys` is still `Some(..)`
+            // because Bedrock and GEAP survived, so a caller reading only the stripped value
+            // cannot tell that member credentials were disallowed.
+            assert!(
+                allowed.member_byo_credentials_allowed,
+                "the permissive team's decision must be recorded on the params"
+            );
+            assert!(
+                !disallowed.member_byo_credentials_allowed,
+                "the restrictive team's decision must be recorded on the params"
+            );
         });
     });
+}
+
+/// [`RequestParams::new`] has no window, so the team decision is unknown until
+/// `apply_team_byo_policy` runs. For a credential gate that has to read as "not permitted":
+/// the Grok refresh path ANDs this flag into its own BYO check, and a `true` default would let
+/// any params that skipped the policy step put a member credential back on the request.
+#[test]
+fn request_params_do_not_allow_member_credentials_until_the_policy_has_been_applied() {
+    assert!(!RequestParams::new_for_test().member_byo_credentials_allowed);
 }
 
 /// A window `UserWorkspaces` has never been told about is on no team, so no team policy

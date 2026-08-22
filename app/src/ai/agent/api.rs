@@ -140,6 +140,17 @@ pub struct RequestParams {
     pub planning_enabled: bool,
     should_redact_secrets: bool,
 
+    /// Whether the requesting window's team allows members to use their own provider
+    /// credentials, as decided by [`Self::apply_team_byo_policy`].
+    ///
+    /// `false` until that runs: [`Self::new`] has no window to resolve a team from, and for a
+    /// credential gate "not yet known" has to mean "not permitted".
+    ///
+    /// Any path that re-populates [`Self::api_keys`] after the strip must gate on this rather
+    /// than on plan entitlement alone. Stripping a credential the caller then puts back is not
+    /// enforcement, and `api_keys` staying `Some(..)` for the surviving org-level credentials
+    /// is not a signal that member credentials are allowed.
+    pub member_byo_credentials_allowed: bool,
     /// User-provided API keys for AI providers (BYO API Key).
     pub api_keys: Option<warp_multi_agent_api::request::settings::ApiKeys>,
     /// User-provided custom model providers (BYOK endpoints).
@@ -207,6 +218,7 @@ impl RequestParams {
             mcp_context: None,
             planning_enabled: false,
             should_redact_secrets: false,
+            member_byo_credentials_allowed: false,
             api_keys: None,
             custom_model_providers: None,
             custom_model_routers: None,
@@ -405,6 +417,7 @@ impl RequestParams {
             mcp_context,
             planning_enabled: true,
             should_redact_secrets,
+            member_byo_credentials_allowed: false,
             api_keys,
             custom_model_providers,
             custom_model_routers,
@@ -433,10 +446,14 @@ impl RequestParams {
     ///
     /// Only member-provided credentials are stripped. Team-managed keys, AWS Bedrock and
     /// Gemini Enterprise credentials are not member BYO and survive a restrictive policy.
+    /// Because those keep `api_keys` populated, the decision is also recorded on
+    /// [`Self::member_byo_credentials_allowed`]: a later re-population of `api_keys` cannot
+    /// infer it from the stripped value.
     pub(crate) fn apply_team_byo_policy(&mut self, scope: &impl TeamScope, app: &AppContext) {
         let user_workspaces = UserWorkspaces::as_ref(app);
-        if self.api_keys.is_some() && !user_workspaces.are_member_byo_keys_allowed_for_scope(scope)
-        {
+        self.member_byo_credentials_allowed =
+            user_workspaces.are_member_byo_keys_allowed_for_scope(scope);
+        if self.api_keys.is_some() && !self.member_byo_credentials_allowed {
             let api_key_manager = ApiKeyManager::as_ref(app);
             #[cfg(not(target_family = "wasm"))]
             let geap_binding = crate::ai::geap_credentials::current_geap_policy(app).mint_binding();

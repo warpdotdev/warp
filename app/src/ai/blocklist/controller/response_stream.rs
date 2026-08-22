@@ -535,7 +535,16 @@ impl ResponseStream {
                 .get_llm_info(&params.model)
                 .is_some_and(|info| info.provider == LLMProvider::Xai);
             if uses_grok_subscription {
-                let byo_allowed = UserWorkspaces::as_ref(ctx).is_byo_api_key_enabled(ctx);
+                // Both halves of the BYO gate, because this branch puts a member credential
+                // back into params that `apply_team_byo_policy` already stripped: the plan
+                // must permit BYO, and the requesting window's team must allow members to use
+                // their own. Reading only the plan entitlement here would re-inject the Grok
+                // token whenever an org-level credential kept `api_keys` populated -- which is
+                // exactly the managed deployment where the team restriction is set. Gating
+                // before `begin_expired_grok_refresh` also stops the background refresh loop
+                // for a token the team disallows sending.
+                let byo_allowed = params.member_byo_credentials_allowed
+                    && UserWorkspaces::as_ref(ctx).is_byo_api_key_enabled(ctx);
                 // Reserve + start the shared refresh on `ApiKeyManager`'s context;
                 // the in-flight guard is released there even if this stream is
                 // dropped mid-refresh. `None` means the token is already usable.
