@@ -690,15 +690,6 @@ impl<T: EventLoopSender> PtyController<T> {
                 });
         }
 
-        // PowerShell's kill-buffer chord (`Alt+2`, an ESC-prefixed two-byte sequence -- see
-        // `ShellType::kill_buffer_bytes`) is not reliably disambiguated by PSReadLine when it
-        // arrives concatenated with the command text that follows it in a single write/read:
-        // empirically, PSReadLine sometimes fails to recognize the chord at all in that case,
-        // leaving the existing buffer untouched and the command text typed literally on top of
-        // it. Splitting the chord into its own pty write -- even with no explicit delay before
-        // the second write -- reliably avoids this. The other three shells use a single,
-        // unambiguous control byte for this (no escape-sequence parsing involved), so no split
-        // is needed for them.
         if let Some(shell_type) = shell_type_for_split
             && let Some((kill_buffer, rest)) = split_kill_buffer_write(&bytes_to_write, shell_type)
         {
@@ -771,18 +762,16 @@ impl<T: EventLoopSender> Entity for PtyController<T> {
     type Event = PtyControllerEvent;
 }
 
-/// If `shell_type`'s kill-buffer bytes are the prefix of `bytes` (the full output of
-/// `bytes_to_execute_command`, which prepends them) and something follows them, returns
-/// `Some((kill_buffer_bytes, rest))` so the chord can be written to the pty as its own write,
-/// separate from the rest. Returns `None` when no split is needed or possible, in which case
-/// `bytes` should be sent as a single write. See the call site in `send_write_to_event_loop` for
-/// why this is currently only needed for PowerShell.
+/// Splits `shell_type`'s kill-buffer chord off the front of `bytes` (the output of
+/// `bytes_to_execute_command`, which prepends it), returning `Some((kill_buffer_bytes, rest))`, or
+/// `None` when there is nothing to split.
 ///
-/// The kill-buffer prefix is validated, not assumed: `bytes` is expected to start with the chord,
-/// but splitting at the chord length without checking would miscut unrelated data if a caller ever
-/// handed this something else -- a silent, hard-to-trace error. A non-matching prefix returns
-/// `None` and the write goes out whole: an unsplit write is a known, survivable failure mode; a
-/// mis-split is not.
+/// Only PowerShell needs this. Its kill-buffer chord is an ESC-prefixed sequence that PSReadLine
+/// can fail to disambiguate when it arrives in the same read as the command text, leaving the
+/// command typed on top of the buffer; writing the chord separately avoids it. The other three
+/// shells use a single unambiguous control byte. The prefix is validated rather than assumed: a
+/// non-matching prefix returns `None` (write whole) so a caller that passes something else is
+/// never mis-cut.
 fn split_kill_buffer_write(bytes: &[u8], shell_type: ShellType) -> Option<(&[u8], &[u8])> {
     if shell_type != ShellType::PowerShell {
         return None;
