@@ -63,6 +63,18 @@ pub struct AgentConfigSnapshot {
     /// This is server-populated for per-task sources such as a GitHub webhook's origin repo.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub additional_source_repos: Option<Vec<SourceRepo>>,
+    /// Authoritative run-scoped repository materialization plan for a Factory-owned run.
+    /// `Some(list)`, including an empty list, is the eager repository membership and is not
+    /// combined with the environment's repositories or `additional_source_repos`. `None`
+    /// means this is a legacy task: eagerly prepare the environment's repositories plus
+    /// `additional_source_repos`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_repos_to_clone: Option<Vec<SourceRepo>>,
+    /// Repositories attached to the run's Factory that remain deferred after
+    /// `source_repos_to_clone` is computed. Used only to build the on-demand-clone hidden
+    /// instruction; never merged into any eager repository list.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub deferred_source_repos: Vec<SourceRepo>,
 }
 
 /// Configuration for a third-party execution harness.
@@ -150,6 +162,8 @@ impl AgentConfigSnapshot {
             harness,
             harness_auth_secrets,
             additional_source_repos,
+            source_repos_to_clone,
+            deferred_source_repos,
         } = self;
 
         name.is_none()
@@ -165,6 +179,8 @@ impl AgentConfigSnapshot {
             && harness.is_none()
             && harness_auth_secrets.is_none()
             && additional_source_repos.is_none()
+            && source_repos_to_clone.is_none()
+            && deferred_source_repos.is_empty()
     }
 }
 

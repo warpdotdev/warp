@@ -460,6 +460,8 @@ impl AmbientAgentRunner {
                     harness: harness_override,
                     harness_auth_secrets,
                     additional_source_repos: None,
+                    source_repos_to_clone: None,
+                    deferred_source_repos: Vec::new(),
                 },
             );
 

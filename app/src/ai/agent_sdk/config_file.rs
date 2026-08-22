@@ -189,6 +189,8 @@ pub fn merge_with_precedence(
         harness: cli.harness,
         harness_auth_secrets: cli.harness_auth_secrets,
         additional_source_repos: None,
+        source_repos_to_clone: None,
+        deferred_source_repos: Vec::new(),
     }
 }
 

@@ -427,6 +427,8 @@ fn build_merged_config_and_task(
         harness: harness_override,
         harness_auth_secrets: None,
         additional_source_repos: None,
+        source_repos_to_clone: None,
+        deferred_source_repos: Vec::new(),
     };
 
     let runtime_mcp_specs = match merged_config.mcp_servers.as_ref() {
@@ -524,6 +526,8 @@ fn build_server_side_task(
         harness: harness_override,
         harness_auth_secrets: None,
         additional_source_repos: None,
+        source_repos_to_clone: None,
+        deferred_source_repos: Vec::new(),
     };
 
     let skill = resolved_skill.as_ref().map(|s| s.parsed_skill.clone());
@@ -1059,6 +1063,8 @@ impl AgentDriverRunner {
                     cloud_providers: Vec::new(),
                     environment: None,
                     additional_source_repos: Vec::new(),
+                    source_repos_to_clone: None,
+                    deferred_source_repos: Vec::new(),
                     repository_head_overrides: args.repository_head_overrides.clone(),
                     remove_repository_origins: args.remove_repository_origins,
                     selected_harness: args.harness,
@@ -1131,12 +1137,9 @@ impl AgentDriverRunner {
             )
             .await?;
         driver::environment::validate_repository_head_overrides(
-            &driver::environment::merge_repos_deduped(
-                driver_options
-                    .environment
-                    .as_ref()
-                    .map(crate::ai::cloud_environments::AmbientAgentEnvironment::effective_repos)
-                    .unwrap_or_default(),
+            &driver::environment::resolve_eager_source_repos(
+                driver_options.environment.as_ref(),
+                driver_options.source_repos_to_clone.clone(),
                 driver_options.additional_source_repos.clone(),
             )?,
             &driver_options.repository_head_overrides,
@@ -1322,6 +1325,8 @@ impl AgentDriverRunner {
             task_harness,
             task_harness_model_config,
             additional_source_repos,
+            source_repos_to_clone,
+            deferred_source_repos,
         ) = match task_metadata_result {
             Ok(Some(task_metadata)) => {
                 // The task's harness is stored on the snapshot; if absent, it's the default Oz.
@@ -1333,6 +1338,13 @@ impl AgentDriverRunner {
                     .map(|h| h.harness_type)
                     .unwrap_or(Harness::Oz);
                 let task_harness_model_config = task_harness_config.and_then(|h| h.model_config());
+                let source_repos_to_clone = agent_config_snapshot
+                    .as_ref()
+                    .and_then(|config| config.source_repos_to_clone.clone());
+                let deferred_source_repos = agent_config_snapshot
+                    .as_ref()
+                    .map(|config| config.deferred_source_repos.clone())
+                    .unwrap_or_default();
                 let additional_source_repos = agent_config_snapshot
                     .and_then(|config| config.additional_source_repos)
                     .unwrap_or_default();
@@ -1342,9 +1354,11 @@ impl AgentDriverRunner {
                     Some(task_harness),
                     task_harness_model_config,
                     additional_source_repos,
+                    source_repos_to_clone,
+                    deferred_source_repos,
                 )
             }
-            Ok(None) => (None, None, None, None, Vec::new()),
+            Ok(None) => (None, None, None, None, Vec::new(), None, Vec::new()),
             Err(err) => return Err(AgentDriverError::TaskMetadataFetchFailed(err)),
         };
 
@@ -1363,6 +1377,8 @@ impl AgentDriverRunner {
         driver_options.task_id = parsed_task_id;
         driver_options.parent_run_id = parent_run_id;
         driver_options.additional_source_repos = additional_source_repos;
+        driver_options.source_repos_to_clone = source_repos_to_clone;
+        driver_options.deferred_source_repos = deferred_source_repos;
         driver_options.secrets = secrets;
         // CLI flags continue to take precedence so users can still override per-invocation.
         if driver_options.third_party_harness_model_config.is_none() {

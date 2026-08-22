@@ -117,6 +117,8 @@ impl IntegrationCommandRunner {
                     harness: None,
                     harness_auth_secrets: None,
                     additional_source_repos: None,
+                    source_repos_to_clone: None,
+                    deferred_source_repos: Vec::new(),
                 },
             );
 
@@ -432,6 +434,8 @@ impl IntegrationCommandRunner {
                     harness: None,
                     harness_auth_secrets: None,
                     additional_source_repos: None,
+                    source_repos_to_clone: None,
+                    deferred_source_repos: Vec::new(),
                 },
             );
 
