@@ -327,34 +327,32 @@ impl View for ExternalEditorView {
             .with_child(code_panels_editor)
             .with_child(default_layout);
 
-        if FeatureFlag::TabbedEditorView.is_enabled() {
-            column.add_child(render_body_item::<ExternalEditorAction>(
-                TABBED_FILE_VIEWER_TOGGLE_HEADER.into(),
-                None,
-                LocalOnlyIconState::for_setting(
-                    PreferTabbedEditorView::storage_key(),
-                    PreferTabbedEditorView::sync_to_cloud(),
-                    &mut self.local_only_icon_states.borrow_mut(),
-                    app,
-                ),
-                ToggleState::Enabled,
-                appearance,
-                appearance
-                    .ui_builder()
-                    .switch(self.tabbed_editor_view_mouse_state.clone())
-                    .check(
-                        *EditorSettings::as_ref(app)
-                            .prefer_tabbed_editor_view
-                            .value(),
-                    )
-                    .build()
-                    .on_click(|ctx, _, _| {
-                        ctx.dispatch_typed_action(ExternalEditorAction::ToggleTabbedEditorView);
-                    })
-                    .finish(),
-                Some(TABBED_FILE_VIEWER_TOGGLE_DESCRIPTION.into()),
-            ));
-        }
+        column.add_child(render_body_item::<ExternalEditorAction>(
+            TABBED_FILE_VIEWER_TOGGLE_HEADER.into(),
+            None,
+            LocalOnlyIconState::for_setting(
+                PreferTabbedEditorView::storage_key(),
+                PreferTabbedEditorView::sync_to_cloud(),
+                &mut self.local_only_icon_states.borrow_mut(),
+                app,
+            ),
+            ToggleState::Enabled,
+            appearance,
+            appearance
+                .ui_builder()
+                .switch(self.tabbed_editor_view_mouse_state.clone())
+                .check(
+                    *EditorSettings::as_ref(app)
+                        .prefer_tabbed_editor_view
+                        .value(),
+                )
+                .build()
+                .on_click(|ctx, _, _| {
+                    ctx.dispatch_typed_action(ExternalEditorAction::ToggleTabbedEditorView);
+                })
+                .finish(),
+            Some(TABBED_FILE_VIEWER_TOGGLE_DESCRIPTION.into()),
+        ));
 
         column.add_child(render_body_item::<ExternalEditorAction>(
             "Open Markdown files in Warp's Markdown Viewer by default".to_string(),
