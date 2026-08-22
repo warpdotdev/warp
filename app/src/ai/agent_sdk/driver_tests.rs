@@ -1991,6 +1991,29 @@ fn warp_skill_dirs_env_relative_entries_resolve_against_working_dir() {
 
 // ── QUALITY-1801: buffered child event vs. ambient-run teardown ─────────────
 
+/// Polls `condition` on a short interval until it returns true, or panics with an
+/// actionable message after `timeout` elapses. Used to deterministically await
+/// scheduled async work (e.g. a `ctx.spawn`ed eligibility check) without guessing a
+/// fixed sleep duration that a loaded test runner could exceed.
+async fn poll_until(
+    app: &App,
+    timeout: Duration,
+    description: &str,
+    mut condition: impl FnMut(&App) -> bool,
+) {
+    let deadline = instant::Instant::now() + timeout;
+    loop {
+        if condition(app) {
+            return;
+        }
+        assert!(
+            instant::Instant::now() < deadline,
+            "timed out after {timeout:?} waiting for: {description}"
+        );
+        Timer::after(Duration::from_millis(5)).await;
+    }
+}
+
 /// Creates a conversation on `terminal_id` and attaches an in-flight mock response
 /// stream to it (mirroring an in-progress parent turn), registered through
 /// `ai_controller`. Returns the conversation and stream so the caller can drive the
@@ -2246,9 +2269,23 @@ fn ambient_driver_with_idle_window_still_injects_buffered_child_event() {
         });
         // The re-check first goes through an async dormant-Claude-wake eligibility
         // check (`maybe_prepare_local_claude_wake`) that resolves `Ok(None)` for a
-        // non-child conversation like this one and falls back to direct injection;
-        // yield so that spawned check resolves before asserting.
-        Timer::after(Duration::from_millis(20)).await;
+        // non-child conversation like this one and falls back to direct injection.
+        // Poll for that scheduled work to land instead of guessing a fixed sleep
+        // duration a loaded test runner could exceed.
+        poll_until(
+            &app,
+            Duration::from_secs(2),
+            "the buffered event to be injected as an InProgress follow-up",
+            |app| {
+                BlocklistAIHistoryModel::handle(app).read(app, |history, _| {
+                    matches!(
+                        history.conversation(&conversation_id).map(|c| c.status()),
+                        Some(ConversationStatus::InProgress)
+                    )
+                })
+            },
+        )
+        .await;
 
         // The buffered event should have been injected as a real follow-up: the
         // conversation is back `InProgress` and the queue has been drained.
