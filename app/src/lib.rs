@@ -1857,6 +1857,9 @@ pub(crate) fn initialize_app(
     #[cfg(feature = "local_tty")]
     terminal::available_shells::register(ctx);
 
+    #[cfg(windows)]
+    crate::platform::windows::jump_list::register(ctx);
+
     // Add truly global actions that don't depend on the existence of any view here
     ctx.add_global_action("app:toggle_user_ps1", move |_args: &(), ctx| {
         SessionSettings::handle(ctx).update(ctx, |session_settings, ctx| {
@@ -3055,13 +3058,48 @@ fn on_close_window_cancelled(
     }
 }
 
-fn is_cloud_agent_web_home_launch_url(url: &Url) -> bool {
-    url.scheme() == ChannelState::url_scheme()
-        && url.host_str() == Some("action")
-        && url.path() == "/new_cloud_agent_conversation"
-        && url
-            .query_pairs()
-            .any(|(key, value)| key == "source" && value == "web_home")
+fn is_launch_intent_url(url: &Url) -> bool {
+    if url.scheme() != ChannelState::url_scheme() {
+        return false;
+    }
+    match url.host_str() {
+        Some("action") => {
+            url.path() == "/new_window"
+                || (url.path() == "/new_cloud_agent_conversation"
+                    && url
+                        .query_pairs()
+                        .any(|(key, value)| key == "source" && value == "web_home"))
+        }
+        Some("tab_config") => true,
+        _ => false,
+    }
+}
+
+/// Opens windows from launch args. A launch-intent URL drives window creation
+/// itself, so restore is skipped when it opens one; a stale deeplink falls
+/// back to the persisted session.
+fn open_from_launch_args(ctx: &mut warpui::AppContext, urls: &[Url], app_state: Option<AppState>) {
+    let has_launch_intent = urls.iter().any(is_launch_intent_url);
+
+    if has_launch_intent {
+        for url in urls.iter() {
+            uri::handle_incoming_uri(url, ctx);
+        }
+        if ctx.window_ids().count() > 0 {
+            return;
+        }
+    }
+
+    ctx.dispatch_global_action(
+        "root_view:open_from_restored",
+        &OpenFromRestoredArg { app_state },
+    );
+
+    if !has_launch_intent {
+        for url in urls.iter() {
+            uri::handle_incoming_uri(url, ctx);
+        }
+    }
 }
 
 #[::tracing::instrument(skip_all, fields(tags.cloud_agent = true))]
@@ -3085,24 +3123,9 @@ fn launch(ctx: &mut warpui::AppContext, app_state: Option<AppState>, launch_mode
         // before reaching launch().
         LaunchMode::Tui { .. } => unreachable!("LaunchMode::Tui is handled before launch()"),
         LaunchMode::App { .. } | LaunchMode::Test { .. } => {
-            let should_skip_restore = launch_mode
-                .args()
-                .urls
-                .iter()
-                .any(is_cloud_agent_web_home_launch_url);
-            let app_state = if should_skip_restore { None } else { app_state };
-            // Attempt to restore windows from the persisted application state.
-            let arg = OpenFromRestoredArg { app_state };
-            ctx.dispatch_global_action("root_view:open_from_restored", &arg);
+            let args = launch_mode.args();
+            open_from_launch_args(ctx, &args.urls, app_state);
 
-            // Process any URLs that were provided on the command line (which may be
-            // file:// URLs or ones using our custom URL scheme).
-            for url in launch_mode.args().urls.iter() {
-                uri::handle_incoming_uri(url, ctx);
-            }
-
-            // If, after session restoration and command-line argument handling, we
-            // haven't opened any windows, open a new window.
             if ctx.window_ids().count() == 0 {
                 ctx.dispatch_global_action("root_view:open_new", &());
             }

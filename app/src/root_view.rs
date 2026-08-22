@@ -1631,6 +1631,11 @@ pub enum NewWorkspaceSource {
     NotebookFromFilePath {
         file_path: Option<PathBuf>,
     },
+    /// Opens a new window whose first tab is the given Tab Config.
+    TabConfig {
+        tab_config: crate::tab_configs::TabConfig,
+        previous_active_window: Option<WindowId>,
+    },
     NotebookById {
         id: SyncId,
         settings: OpenWarpDriveObjectSettings,
@@ -1695,6 +1700,10 @@ impl NewWorkspaceSource {
     pub fn team_uid(&self, ctx: &AppContext) -> Option<ServerId> {
         let source_window_id = match self {
             Self::Empty {
+                previous_active_window,
+                ..
+            } => *previous_active_window,
+            Self::TabConfig {
                 previous_active_window,
                 ..
             } => *previous_active_window,

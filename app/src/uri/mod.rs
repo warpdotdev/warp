@@ -799,8 +799,7 @@ fn find_matching_config_name<'a>(
 ///   stem, so both `warp://tab_config/my_tab` and
 ///   `warp://tab_config/my_tab.toml` work.
 /// - When `?new_window=true` (or no Warp window is open) the tab config opens
-///   in a brand-new window. Otherwise it opens as a new tab in the active
-///   window.
+///   in a brand-new window. Otherwise it opens as a new tab in the active window.
 fn handle_tab_config_uri(primary_window_id: Option<WindowId>, url: &Url, ctx: &mut AppContext) {
     let Some(desired) = get_launch_config_path(url.path()) else {
         log::warn!("couldn't turn tab config link '{}' into name", url.path());
@@ -823,25 +822,32 @@ fn handle_tab_config_uri(primary_window_id: Option<WindowId>, url: &Url, ctx: &m
         primary_window_id.filter(|id| WorkspaceRegistry::as_ref(ctx).get(*id, ctx).is_some())
     };
 
-    let workspace = match target_window_id {
-        Some(window_id) => WorkspaceRegistry::as_ref(ctx).get(window_id, ctx),
-        None => {
-            let new_window_id = open_new_window_get_handles(None, ctx).0;
-            WorkspaceRegistry::as_ref(ctx).get(new_window_id, ctx)
+    match target_window_id {
+        Some(window_id) => {
+            let Some(workspace) = WorkspaceRegistry::as_ref(ctx).get(window_id, ctx) else {
+                log::warn!(
+                    "no workspace available to open tab config '{}'",
+                    config.name
+                );
+                return;
+            };
+            workspace.update(ctx, |workspace, ctx| {
+                workspace.open_tab_config(config, ctx);
+            });
         }
-    };
-
-    let Some(workspace) = workspace else {
-        log::warn!(
-            "no workspace available to open tab config '{}'",
-            config.name
-        );
-        return;
-    };
-
-    workspace.update(ctx, |workspace, ctx| {
-        workspace.open_tab_config(config, ctx);
-    });
+        None => {
+            // No existing window: open a new one whose first tab is the config,
+            // rather than a homepage tab plus the config as a second tab. Carry
+            // the active window along so the new window inherits its team context.
+            open_new_with_workspace_source(
+                NewWorkspaceSource::TabConfig {
+                    tab_config: config,
+                    previous_active_window: primary_window_id,
+                },
+                ctx,
+            );
+        }
+    }
 }
 
 /// Case-insensitive match against each tab config's file stem. Tab config

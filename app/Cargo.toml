@@ -418,6 +418,12 @@ windows = { workspace = true, features = [
     "Win32_System_LibraryLoader",
     "Win32_System_WindowsProgramming",
     "Win32_UI_WindowsAndMessaging",
+    "Win32_UI_Shell",
+    "Win32_UI_Shell_Common",
+    "Win32_UI_Shell_PropertiesSystem",
+    "Win32_System_Com_StructuredStorage",
+    "Win32_System_Variant",
+    "Win32_Storage_EnhancedStorage",
 ] }
 windows-registry = { workspace = true }
 windows-result = { workspace = true }

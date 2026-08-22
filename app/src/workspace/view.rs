@@ -4075,6 +4075,18 @@ impl Workspace {
             NewWorkspaceSource::NotebookFromFilePath { file_path } => {
                 self.add_tab_for_file_notebook(file_path, ctx);
             }
+            NewWorkspaceSource::TabConfig { tab_config, .. } => {
+                if tab_config.params.is_empty() {
+                    // The config becomes the window's sole tab.
+                    self.open_tab_config(tab_config, ctx);
+                } else {
+                    // The params modal needs a live workspace behind it; seed a
+                    // default tab and let `open_tab_config` add the config once
+                    // params are submitted.
+                    self.configure_empty_workspace(None, None, ctx);
+                    self.open_tab_config(tab_config, ctx);
+                }
+            }
             NewWorkspaceSource::NotebookById { id, settings } => {
                 self.add_tab_for_cloud_notebook(id, &settings, ctx);
             }
@@ -4183,7 +4195,8 @@ impl Workspace {
             | NewWorkspaceSource::AgentSession { .. }
             | NewWorkspaceSource::AmbientAgent
             | NewWorkspaceSource::TeamSwitched { .. }
-            | NewWorkspaceSource::NotebookFromFilePath { .. } => should_default_open,
+            | NewWorkspaceSource::NotebookFromFilePath { .. }
+            | NewWorkspaceSource::TabConfig { .. } => should_default_open,
             #[cfg(not(target_family = "wasm"))]
             NewWorkspaceSource::SharedSessionAsViewer { .. }
             | NewWorkspaceSource::FromCloudConversationId { .. }
