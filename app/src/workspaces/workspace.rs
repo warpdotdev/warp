@@ -1073,6 +1073,26 @@ pub struct SplitListSetting<T> {
     pub team_entries: Vec<T>,
 }
 
+impl<T> SplitListSetting<T> {
+    /// Whether an admin layer configured this list, as far as the client can tell.
+    ///
+    /// Empty `values` does not mean nobody configured one. Allowlists merge by
+    /// intersection server-side, so two layers with disjoint allowlists produce empty
+    /// `values` while both entry lists are populated — an override that permits nothing,
+    /// not an absent one. Reading only `values` there would drop a deny-by-default policy
+    /// and fall through to whatever the user's own profile allows.
+    ///
+    /// One case remains indistinguishable: a layer that explicitly configured an empty
+    /// list leaves all three empty and so reads as unconfigured. The server separates that
+    /// with `StringListSettingInfo.isConfigured`, which the client's vendored schema copy
+    /// predates.
+    pub fn is_configured(&self) -> bool {
+        !(self.values.is_empty()
+            && self.workspace_entries.is_empty()
+            && self.team_entries.is_empty())
+    }
+}
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct TeamAiPermissionsSettings {
     pub allow_ai_in_remote_sessions: EnforceableSetting<bool>,
@@ -1098,17 +1118,29 @@ pub struct TeamAiAutonomySettings {
     pub execute_commands_denylist: SplitListSetting<String>,
 }
 
+impl TeamAiAutonomySettings {
+    /// Whether an admin configured any of the policies that count as evidence autonomy is
+    /// in use — the same fields the lowered [`AiAutonomySettings`] is inspected for.
+    ///
+    /// Answers without lowering on purpose. Lowering compiles every allow- and denylist
+    /// entry into a regex, and the callers asking this question are on render and
+    /// per-action paths that would pay for that on every frame and then discard it.
+    pub fn configures_any_policy(&self) -> bool {
+        self.apply_code_diffs.value.is_some()
+            || self.read_files.value.is_some()
+            || self.read_files_allowlist.is_configured()
+            || self.execute_commands.value.is_some()
+            || self.execute_commands_allowlist.is_configured()
+            || self.execute_commands_denylist.is_configured()
+    }
+}
+
 impl From<&TeamAiAutonomySettings> for AiAutonomySettings {
     /// Lowers a team's effective autonomy policy into the shape enforcement reads.
     ///
-    /// Two asymmetries between the layers are resolved here:
-    ///
-    /// An empty list becomes "no override". The team wire shape has no null list, so it
-    /// cannot distinguish an admin enforcing an empty allowlist — which the workspace
-    /// shape expresses as `Some(vec![])`, overriding whatever the user's profile lists —
-    /// from an admin configuring no list at all. Nothing can recover the difference on
-    /// this side, and reading it as "no override" is what an admin who has configured
-    /// nothing means.
+    /// A list counts as an override when any admin layer configured it, which is not the
+    /// same question as whether the merged result is empty — see
+    /// [`SplitListSetting::is_configured`].
     ///
     /// `create_plans` is dropped. It exists only on the team side; `AIExecutionProfile`
     /// carries no create-plans permission for it to override, so there is nothing to
@@ -1118,10 +1150,10 @@ impl From<&TeamAiAutonomySettings> for AiAutonomySettings {
             list: &SplitListSetting<String>,
             convert: impl FnOnce(Vec<String>) -> Vec<T>,
         ) -> Option<Vec<T>> {
-            if list.values.is_empty() {
-                None
-            } else {
+            if list.is_configured() {
                 Some(convert(list.values.clone()))
+            } else {
+                None
             }
         }
 

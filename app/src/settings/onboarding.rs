@@ -15,13 +15,12 @@ use crate::workspaces::user_workspaces::{TeamContextForOperation, UserWorkspaces
 use crate::workspaces::workspace::FtueAccountClass;
 
 /// `team_context` scopes the admin autonomy policy this consults before writing the user's
-/// chosen permissions, and is captured by the caller from the window applying them.
+/// chosen permissions. It comes from the caller because this runs on an [`AppContext`] and
+/// so cannot resolve a scope itself.
 ///
-/// It is captured here rather than when the user made the choices, because a logged-out
-/// window has no team: the paths that defer this work until after login are waiting for
-/// the very thing that gives the window a team, so the team to respect is the one it has
-/// once the write actually happens. From that point the scope is fixed for the whole write
-/// rather than re-read per setting.
+/// Callers should capture it as they call rather than when the user made the choices: a
+/// logged-out window has no team, and the paths that defer this work until after login are
+/// waiting for the very thing that gives the window one.
 pub(crate) fn apply_account_first_onboarding_settings(
     selected_settings: &SelectedSettings,
     account_class: Option<FtueAccountClass>,
