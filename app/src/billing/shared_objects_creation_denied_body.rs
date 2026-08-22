@@ -17,9 +17,9 @@ const BUTTON_PADDING: f32 = 12.;
 const BUTTON_FONT_SIZE: f32 = 14.;
 const BUTTON_BORDER_RADIUS: f32 = 4.;
 
-const DEFAULT_DELINQUENT_ADMIN_MODAL_SUBHEADER: &str = "Shared drive objects have been restricted due to a subscription payment issue.\n\nPlease update your payment information to restore access.";
-const DEFAULT_DELINQUENT_ADMIN_ENTERPRISE_MODAL_SUBHEADER: &str = "Shared drive objects have been restricted due to a subscription payment issue.\n\nPlease contact support@warp.dev to restore access.";
-const DEFAULT_DELINQUENT_MODAL_SUBHEADER: &str = "Shared drive objects have been restricted due to a subscription payment issue.\n\nPlease contact a team admin to restore access.";
+const DEFAULT_DELINQUENT_ADMIN_MODAL_SUBHEADER: &str = "Shared drive objects have been restricted due to a subscription payment issue.\n\nUpdate your payment information or contact billing@warp.dev for help.";
+const DEFAULT_DELINQUENT_ADMIN_ENTERPRISE_MODAL_SUBHEADER: &str = "Shared drive objects have been restricted due to a subscription payment issue.\n\nContact your Account Executive for help.";
+const DEFAULT_DELINQUENT_MODAL_SUBHEADER: &str = "Shared drive objects have been restricted due to a subscription payment issue.\n\nContact a team admin for help.";
 const DEFAULT_ADMIN_PROSUMER_MODAL_SUBHEADER: &str = "Warp's Pro plan comes with a limited number of shared drive objects.\n\nFor access to unlimited shared drive objects, upgrade to the Turbo plan.";
 const DEFAULT_PROSUMER_MODAL_SUBHEADER: &str = "Warp's Pro plan comes with a limited number of shared drive objects.\n\nFor access to unlimited shared drive objects, contact a team admin to upgrade to the Turbo plan.";
 const DEFAULT_ADMIN_MODAL_SUBHEADER: &str = "Warp's free plan comes with a limited number of shared drive objects.\n\nFor access to unlimited shared drive objects, upgrade to a paid plan.";
@@ -101,16 +101,16 @@ impl View for SharedObjectsCreationDeniedBody {
                     (true, true, _) => {
                         if is_stripe_paid_plan {
                             format!(
-                                "Shared {object_type}s have been restricted due to a subscription payment issue.\n\nPlease update your payment information to restore access."
+                                "Shared {object_type}s have been restricted due to a subscription payment issue.\n\nUpdate your payment information or contact billing@warp.dev for help."
                             )
                         } else {
                             format!(
-                                "Shared {object_type}s have been restricted due to a subscription payment issue.\n\nPlease contact support@warp.dev to restore access."
+                                "Shared {object_type}s have been restricted due to a subscription payment issue.\n\nContact your Account Executive for help."
                             )
                         }
                     }
                     (true, false, _) => format!(
-                        "Shared {object_type}s have been restricted due to a subscription payment issue.\n\nPlease contact a team admin to restore access."
+                        "Shared {object_type}s have been restricted due to a subscription payment issue.\n\nContact a team admin for help."
                     ),
                     (false, true, CustomerType::Prosumer) => {
                         format!(

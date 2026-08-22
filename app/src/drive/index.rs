@@ -195,12 +195,12 @@ const PAYMENT_ISSUE_BANNER_LINE_1: &str =
     "Shared objects have been restricted due to a subscription payment issue.";
 
 const PAYMENT_ISSUE_BANNER_LINE_2_ADMIN: &str =
-    "Please update your payment information to restore access.";
+    "Update your payment information or contact billing@warp.dev for help.";
 
 const PAYMENT_ISSUE_BANNER_LINE_2_ADMIN_ENTERPRISE: &str =
-    "Please contact support@warp.dev to restore access.";
+    "Contact your Account Executive for help.";
 
-const PAYMENT_ISSUE_BANNER_LINE_2_NONADMIN: &str = "Please contact a team admin to restore access.";
+const PAYMENT_ISSUE_BANNER_LINE_2_NONADMIN: &str = "Contact a team admin for help.";
 
 /// Struct to hold different state-related information on per-space basis.
 /// Currently, we only have 1 space (1 Team), but as we're working on personal space, and add

@@ -66,10 +66,9 @@ const ADDITIONAL_ADDON_CREDITS_DESCRIPTION_FOR_TEAM: &str =
     "Purchased add-on credits are added to your team's shared credit pool.";
 const MANAGED_AUTO_RELOAD_HEADER: &str = "Auto-reload is enabled";
 
-const ADDON_CREDITS_DELINQUENT_WARNING_STRING: &str =
-    "Restricted due to billing issue. Update your payment method to purchase add-on credits.";
+const ADDON_CREDITS_DELINQUENT_WARNING_STRING: &str = "Restricted due to billing issue. Update your payment information or contact billing@warp.dev for help.";
 const ADDON_CREDITS_NON_ADMIN_DELINQUENT_WARNING_STRING: &str =
-    "Restricted due to billing issue. Contact your team admin to update their payment method.";
+    "Restricted due to billing issue. Contact a team admin for help.";
 const RESTRICTED_BILLING_USAGE_WARNING_STRING: &str = "Auto reload is disabled due to recent failed reload. Please update your payment method and try again.";
 const RESTRICTED_BILLING_USAGE_NON_ADMIN_WARNING_STRING: &str = "Auto reload is disabled due to recent failed reload. Contact your team admin to update their payment method.";
 
