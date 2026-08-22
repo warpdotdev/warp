@@ -2328,6 +2328,9 @@ pub(crate) fn initialize_app(
     // CloudViewModel subscribes to UpdateManager so that it can be notified when objects are
     // created on the server.
     ctx.add_singleton_model(CloudViewModel::new);
+    ctx.add_singleton_model(
+        ai::blocklist::agent_run_sleep_guard_model::AgentRunSleepGuardModel::new,
+    );
 
     // AIDocumentModel subscribes to UpdateManager so that it can be notified when notebooks are created on the server.
     ctx.add_singleton_model(AIDocumentModel::new);

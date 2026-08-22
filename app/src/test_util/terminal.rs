@@ -108,6 +108,9 @@ pub fn initialize_app_for_terminal_view(app: &mut App) {
     app.add_singleton_model(LocalWorkflows::new);
     app.add_singleton_model(|_| History::default());
     app.add_singleton_model(|_| BlocklistAIHistoryModel::new_for_test());
+    app.add_singleton_model(
+        crate::ai::blocklist::agent_run_sleep_guard_model::AgentRunSleepGuardModel::new,
+    );
     // QueuedQueryModel subscribes to history events; register after the
     // history model is in place.
     app.add_singleton_model(QueuedQueryModel::new);
