@@ -1,7 +1,7 @@
 //! The "Editor and Code Review" settings page, shown under the Code umbrella.
 
 use warp_core::features::FeatureFlag;
-use warp_core::settings::ToggleableSetting as _;
+use warp_core::settings::{Setting as _, ToggleableSetting as _};
 use warp_errors::report_if_error;
 use warpui::elements::Element;
 #[cfg(feature = "local_fs")]
@@ -17,15 +17,16 @@ use warpui::{
 use super::features::external_editor::ExternalEditorView;
 use super::settings_page::{
     MatchData, PageTitle, PageType, SettingsPageMeta, SettingsPageViewHandle, SettingsWidget,
-    render_body_item,
+    render_body_item, render_dropdown_item,
 };
 use super::{
     LocalOnlyIconState, SettingsAction, SettingsSection, ToggleSettingActionPair, ToggleState,
     flags,
 };
 use crate::appearance::Appearance;
-use crate::settings::CodeSettings;
+use crate::settings::{AppEditorSettings, CodeEditorLineNumberMode, CodeSettings};
 use crate::terminal::general_settings::GeneralSettings;
+use crate::view_components::{Dropdown, DropdownItem};
 use crate::workspace::tab_settings::TabSettings;
 use crate::{TelemetryEvent, send_telemetry_from_ctx};
 
@@ -35,28 +36,39 @@ pub struct EditorAndCodeReviewPageView {
     page: PageType<Self>,
     #[cfg(feature = "local_fs")]
     external_editor_view: Option<ViewHandle<ExternalEditorView>>,
+    code_editor_line_number_mode_dropdown: ViewHandle<Dropdown<EditorAndCodeReviewPageAction>>,
 }
 
 impl EditorAndCodeReviewPageView {
     pub fn new(ctx: &mut ViewContext<Self>) -> Self {
-        // `ctx` is only needed to build the external editor child view, which
-        // does not exist without a local filesystem.
-        #[cfg(not(feature = "local_fs"))]
-        let _ = &ctx;
-
         #[cfg(feature = "local_fs")]
         let external_editor_view = FeatureFlag::OpenWarpNewSettingsModes
             .is_enabled()
             .then(|| ctx.add_typed_action_view(ExternalEditorView::new));
 
+        let code_editor_line_number_mode_dropdown = ctx.add_typed_action_view(Dropdown::new);
+        Self::update_code_editor_line_number_mode_dropdown(
+            code_editor_line_number_mode_dropdown.clone(),
+            ctx,
+        );
+
+        ctx.subscribe_to_model(&AppEditorSettings::handle(ctx), |me, _, _, ctx| {
+            Self::update_code_editor_line_number_mode_dropdown(
+                me.code_editor_line_number_mode_dropdown.clone(),
+                ctx,
+            );
+            ctx.notify();
+        });
+
         Self {
-            page: Self::build_page(),
+            page: Self::build_page(ctx),
             #[cfg(feature = "local_fs")]
             external_editor_view,
+            code_editor_line_number_mode_dropdown,
         }
     }
 
-    fn build_page() -> PageType<Self> {
+    fn build_page(ctx: &mut ViewContext<Self>) -> PageType<Self> {
         #[cfg(feature = "local_fs")]
         let mut widgets: Vec<Box<dyn SettingsWidget<View = Self>>> =
             vec![Box::new(ExternalEditorCodeWidget)];
@@ -75,7 +87,49 @@ impl EditorAndCodeReviewPageView {
             Box::new(AutoSaveToggleWidget::default()),
         ]);
 
+        if AppEditorSettings::as_ref(ctx)
+            .code_editor_line_number_mode
+            .is_supported_on_current_platform()
+        {
+            widgets.push(Box::new(CodeEditorLineNumberModeWidget::default()));
+        }
+
         PageType::new_uncategorized(widgets, Some(PageTitle::new(PAGE_TITLE)))
+    }
+
+    fn update_code_editor_line_number_mode_dropdown(
+        dropdown: ViewHandle<Dropdown<EditorAndCodeReviewPageAction>>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        dropdown.update(ctx, |dropdown, ctx| {
+            let values = [
+                CodeEditorLineNumberMode::Absolute,
+                CodeEditorLineNumberMode::Relative,
+            ];
+
+            let current_value = *AppEditorSettings::as_ref(ctx)
+                .code_editor_line_number_mode
+                .value();
+
+            let selected_index = values
+                .iter()
+                .position(|val| *val == current_value)
+                .unwrap_or(0);
+
+            dropdown.set_items(
+                values
+                    .into_iter()
+                    .map(|val| {
+                        DropdownItem::new(
+                            val.dropdown_item_label(),
+                            EditorAndCodeReviewPageAction::SetCodeEditorLineNumberMode(val),
+                        )
+                    })
+                    .collect(),
+                ctx,
+            );
+            dropdown.set_selected_by_index(selected_index, ctx);
+        });
     }
 }
 
@@ -93,9 +147,8 @@ impl View for EditorAndCodeReviewPageView {
     }
 }
 
-/// Every setting on this page is a boolean toggle.
 #[allow(clippy::enum_variant_names)]
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum EditorAndCodeReviewPageAction {
     ToggleCodeReviewPanel,
     ToggleShowCodeReviewDiffStats,
@@ -105,6 +158,7 @@ pub enum EditorAndCodeReviewPageAction {
     ToggleShowHiddenFiles,
     ToggleFormatOnSave,
     ToggleAutoSave,
+    SetCodeEditorLineNumberMode(CodeEditorLineNumberMode),
 }
 
 impl TypedActionView for EditorAndCodeReviewPageView {
@@ -178,6 +232,23 @@ impl TypedActionView for EditorAndCodeReviewPageView {
                     ctx
                 );
                 ctx.notify();
+            }
+            EditorAndCodeReviewPageAction::SetCodeEditorLineNumberMode(mode) => {
+                AppEditorSettings::handle(ctx).update(ctx, |editor_settings, ctx| {
+                    report_if_error!(
+                        editor_settings
+                            .code_editor_line_number_mode
+                            .set_value(*mode, ctx)
+                    );
+                    ctx.notify();
+                });
+                send_telemetry_from_ctx!(
+                    TelemetryEvent::FeaturesPageAction {
+                        action: "SetCodeEditorLineNumberMode".to_string(),
+                        value: format!("{mode:?}"),
+                    },
+                    ctx
+                );
             }
         }
     }
@@ -634,6 +705,34 @@ impl SettingsWidget for AutoSaveToggleWidget {
                 "Automatically saves changes in the Warp text editor as you type and when the editor loses focus."
                     .into(),
             ),
+        )
+    }
+}
+
+#[derive(Default)]
+struct CodeEditorLineNumberModeWidget {}
+
+impl SettingsWidget for CodeEditorLineNumberModeWidget {
+    type View = EditorAndCodeReviewPageView;
+
+    fn search_terms(&self) -> &str {
+        "line number relative line vim gutter code editor"
+    }
+
+    fn render(
+        &self,
+        view: &Self::View,
+        appearance: &Appearance,
+        _app: &AppContext,
+    ) -> Box<dyn Element> {
+        render_dropdown_item(
+            appearance,
+            "Code editor line numbers:",
+            None,
+            None,
+            LocalOnlyIconState::Hidden,
+            None,
+            &view.code_editor_line_number_mode_dropdown,
         )
     }
 }
