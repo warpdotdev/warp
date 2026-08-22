@@ -376,6 +376,24 @@ pub fn classify_driver_error(error: &AgentDriverError) -> (AgentTaskState, TaskS
                 ),
             )
         }
+
+        // A Warp-controlled runtime limit is an infrastructure error for the current
+        // execution, not a task outcome — report plain ERROR with no error code rather
+        // than `infrastructure_timeout`, which describes stale-task cleanup elsewhere.
+        AgentDriverError::SandboxDeadlineReached => (
+            AgentTaskState::Error,
+            TaskStatusUpdate::message(error.to_string()),
+        ),
+
+        // SIGTERM reaches the client from externally-originating shutdowns —
+        // server-initiated instance teardown, container-runtime stops, self-hosted
+        // worker termination — and the client cannot distinguish which initiated
+        // it. Unlike `SandboxDeadlineReached`, Warp did not necessarily impose the
+        // limit, so report FAILED rather than ERROR.
+        AgentDriverError::TerminatedBySignal => (
+            AgentTaskState::Failed,
+            TaskStatusUpdate::message(error.to_string()),
+        ),
     }
 }
 
