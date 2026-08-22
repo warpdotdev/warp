@@ -725,10 +725,19 @@ async fn generate_suggestions_for_argument_type(
 
                     let results = generator.on_complete(&output_string);
 
+                    // Generators emit raw values; shell-escape so the buffer-insertion path
+                    // produces a single shell token (e.g. `new file test.csv` becomes
+                    // `new\ file\ test.csv` for POSIX shells).
+                    let shell_family = ctx.shell_family().unwrap_or(ShellFamily::Posix);
                     let internal_suggestions = results
                         .suggestions
                         .into_iter()
                         .map(Into::into)
+                        .map(|mut suggestion: Suggestion| {
+                            suggestion.replacement =
+                                shell_family.escape(&suggestion.replacement).into();
+                            suggestion
+                        })
                         .filter_map(|suggestion: Suggestion| {
                             let match_type = matcher
                                 .get_match_type(parsed_token.as_str(), suggestion.display.as_str());
