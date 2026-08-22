@@ -112,6 +112,7 @@ impl LocalAgentTaskSyncModel {
     /// Resolves once the task has no pending or in-flight `update_agent_task`
     /// calls in this model's queue. Resolves immediately when the task is
     /// already idle. Callers should bound the wait with a timeout.
+    #[cfg_attr(target_family = "wasm", allow(dead_code))]
     pub fn wait_for_idle(
         &mut self,
         task_id: AmbientAgentTaskId,
@@ -133,6 +134,7 @@ impl LocalAgentTaskSyncModel {
     /// The most recent terminal task state the server acknowledged for this
     /// task, if any. Only reflects updates delivered through this model, not
     /// direct `update_agent_task` calls made elsewhere.
+    #[cfg_attr(target_family = "wasm", allow(dead_code))]
     pub fn confirmed_terminal_state(&self, task_id: &AmbientAgentTaskId) -> Option<AgentTaskState> {
         self.confirmed_terminal_states.get(task_id).copied()
     }
