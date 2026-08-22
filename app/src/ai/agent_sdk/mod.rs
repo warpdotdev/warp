@@ -72,7 +72,9 @@ use crate::cloud_object::model::persistence::CloudModel;
 use crate::send_telemetry_sync_from_app_ctx;
 use crate::server::ids::{ServerId, SyncId};
 use crate::server::server_api::ServerApiProvider;
-use crate::server::server_api::ai::{AIClient, AgentConfigSnapshot, GitCredential};
+use crate::server::server_api::ai::{
+    AIClient, AgentConfigSnapshot, GitCredential, TaskGitCredentialsError,
+};
 use crate::terminal::view::ConversationRestorationInNewPaneType;
 use crate::workflows::workflow::Workflow;
 
@@ -848,11 +850,12 @@ impl AgentDriverRunner {
     async fn fetch_task_git_credentials(
         task_id_str: String,
         ai_client: Arc<dyn AIClient>,
-    ) -> anyhow::Result<Vec<GitCredential>> {
+    ) -> Result<Vec<GitCredential>, TaskGitCredentialsError> {
         let workload_token = warp_isolation_platform::issue_workload_token(Some(
             std::time::Duration::from_secs(5 * 60),
         ))
-        .await?
+        .await
+        .map_err(|error| TaskGitCredentialsError::Request(error.into()))?
         .token;
         ai_client
             .get_task_git_credentials(task_id_str, workload_token)
@@ -906,9 +909,18 @@ impl AgentDriverRunner {
             })
             .await?;
 
-        let credentials = match Self::fetch_task_git_credentials(task_id_str, ai_client).await {
+        let credentials = match driver::git_credentials::fetch_with_retry(
+            "Git credentials bootstrap",
+            &driver::git_credentials::GIT_CREDENTIALS_BOOTSTRAP_BACKOFF,
+            || Self::fetch_task_git_credentials(task_id_str.clone(), Arc::clone(&ai_client)),
+            |delay| async move {
+                warpui::r#async::Timer::after(delay).await;
+            },
+        )
+        .await
+        {
             Ok(credentials) => credentials,
-            Err(err)
+            Err(TaskGitCredentialsError::Request(err))
                 if err
                     .downcast_ref::<IsolationPlatformError>()
                     .is_some_and(|err| {
@@ -919,14 +931,7 @@ impl AgentDriverRunner {
                 return Ok(());
             }
             Err(err) => {
-                log::warn!("Failed to fetch git credentials before skill resolution: {err:#}");
-                tracing::warn!(
-                    error = ?err,
-                    "Failed to fetch git credentials before skill resolution"
-                );
-                return Err(AgentDriverError::SkillResolutionFailed(format!(
-                    "Failed to fetch git credentials before skill resolution: {err:#}"
-                )));
+                return Err(AgentDriverError::GitCredentialsFetchFailed(err));
             }
         };
         if credentials.is_empty() {

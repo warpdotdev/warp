@@ -1,8 +1,12 @@
+use std::collections::BTreeMap;
+
 use warp_graphql::ai::{AgentTaskState, PlatformErrorCode};
+use warp_graphql::platform_error::PlatformErrorInfo;
 
 use super::classify_driver_error;
 use crate::ai::agent_sdk::driver::AgentDriverError;
 use crate::ai::agent_sdk::driver::terminal::{BootstrapError, ShareSessionError};
+use crate::server::server_api::ai::TaskGitCredentialsError;
 
 fn assert_state_and_code(
     error: AgentDriverError,
@@ -15,6 +19,76 @@ fn assert_state_and_code(
         update.error_code, expected_code,
         "unexpected error_code for {error}"
     );
+}
+
+#[test]
+fn retryable_dependency_credentials_failure_is_error_with_structured_metadata() {
+    let (state, update) = classify_driver_error(&AgentDriverError::GitCredentialsFetchFailed(
+        TaskGitCredentialsError::Platform {
+            message: "External dependency is unavailable.".to_string(),
+            detail: Some("Repository access could not be resolved.".to_string()),
+            info: PlatformErrorInfo {
+                code: PlatformErrorCode::ResourceUnavailable,
+                retryable: true,
+                metadata: BTreeMap::from([
+                    ("provider".to_string(), "github".to_string()),
+                    ("resource".to_string(), "installation".to_string()),
+                ]),
+                debug: None,
+            },
+        },
+    ));
+
+    assert_eq!(state, AgentTaskState::Error);
+    assert_eq!(
+        update.error_code,
+        Some(PlatformErrorCode::ResourceUnavailable)
+    );
+    let platform_error = update.platform_error.expect("structured platform error");
+    assert!(platform_error.retryable);
+    assert_eq!(platform_error.metadata["provider"], "github");
+    assert_eq!(platform_error.metadata["resource"], "installation");
+    assert!(
+        update
+            .message
+            .contains("Repository access could not be resolved")
+    );
+}
+
+#[test]
+fn user_credentials_failure_remains_failed() {
+    let (state, update) = classify_driver_error(&AgentDriverError::GitCredentialsFetchFailed(
+        TaskGitCredentialsError::Platform {
+            message: "Repository was not found.".to_string(),
+            detail: None,
+            info: PlatformErrorInfo {
+                code: PlatformErrorCode::ResourceNotFound,
+                retryable: false,
+                metadata: BTreeMap::from([
+                    ("provider".to_string(), "github".to_string()),
+                    ("resource".to_string(), "repository".to_string()),
+                ]),
+                debug: None,
+            },
+        },
+    ));
+
+    assert_eq!(state, AgentTaskState::Failed);
+    assert_eq!(update.error_code, Some(PlatformErrorCode::ResourceNotFound));
+    assert!(!update.platform_error.unwrap().retryable);
+}
+
+#[test]
+fn credential_request_error_redacts_internal_cause_from_status() {
+    let internal = "token=not-for-production";
+    let (state, update) = classify_driver_error(&AgentDriverError::GitCredentialsFetchFailed(
+        TaskGitCredentialsError::Request(anyhow::anyhow!(internal)),
+    ));
+
+    assert_eq!(state, AgentTaskState::Error);
+    assert_eq!(update.error_code, Some(PlatformErrorCode::InternalError));
+    assert!(update.platform_error.unwrap().retryable);
+    assert!(!update.message.contains(internal));
 }
 
 // --- Infrastructure errors → ERROR ---

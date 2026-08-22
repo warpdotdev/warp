@@ -338,11 +338,14 @@ enum AgentTaskState {
 
 """Status message for an agent task."""
 type AgentTaskStatusMessage {
+  """Structured platform error information, when the status represents an error."""
+  error: PlatformErrorInfo
   """
   Machine-readable error code from the platform error catalog.
   Only present when the status message represents an error.
+  Deprecated in favor of error.
   """
-  errorCode: PlatformErrorCode
+  errorCode: PlatformErrorCode @deprecated(reason: "Use error instead")
 
   """The status message text."""
   message: String!
@@ -354,19 +357,22 @@ type AgentTaskStatusMessage {
   retrying without addressing the underlying cause (e.g. insufficient credits,
   invalid configuration) will not succeed.
   """
-  retryable: Boolean
+  retryable: Boolean @deprecated(reason: "Use error.retryable instead")
 }
 
 input AgentTaskStatusMessageInput {
+  """Structured platform error information supplied by the client."""
+  error: PlatformErrorInput
   """
   Machine-readable error code from the platform error catalog.
   Only set when the status message represents an error.
-  The server derives retryability from the error code.
+  Deprecated in favor of error.
   """
-  errorCode: PlatformErrorCode
+  errorCode: PlatformErrorCode @deprecated(reason: "Use error instead")
 
   """The status message text."""
   message: String!
+
 }
 
 enum AgentVisibility {
@@ -4590,6 +4596,35 @@ known type that the client can query even if new types of errors that implement
 type UserFacingError implements Response {
   error: UserFacingErrorInterface!
   responseContext: ResponseContext!
+}
+
+type PlatformError implements UserFacingErrorInterface {
+  detail: String
+  info: PlatformErrorInfo!
+  message: String!
+}
+
+type PlatformErrorInfo {
+  code: PlatformErrorCode!
+  debug: String
+  metadata: [PlatformErrorMetadata!]!
+  retryable: Boolean!
+}
+input PlatformErrorInput {
+  code: PlatformErrorCode!
+  debug: String
+  metadata: [PlatformErrorMetadataInput!]!
+  retryable: Boolean!
+}
+
+type PlatformErrorMetadata {
+  key: String!
+  value: String!
+}
+
+input PlatformErrorMetadataInput {
+  key: String!
+  value: String!
 }
 
 """

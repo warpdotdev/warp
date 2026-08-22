@@ -21,6 +21,7 @@ use warp_core::features::FeatureFlag;
 use warp_errors::report_error;
 use warp_graphql::ai::{AgentTaskState, PlatformErrorCode};
 use warp_graphql::client::Operation;
+use warp_graphql::error::{UserFacingError, UserFacingErrorInterface};
 use warp_graphql::mutations::confirm_file_artifact_upload::{
     ConfirmFileArtifactUpload, ConfirmFileArtifactUploadInput, ConfirmFileArtifactUploadResult,
     ConfirmFileArtifactUploadVariables,
@@ -69,6 +70,7 @@ use warp_graphql::mutations::update_merkle_tree::{
     MerkleTreeNode, UpdateMerkleTree, UpdateMerkleTreeInput, UpdateMerkleTreeResult,
     UpdateMerkleTreeVariables,
 };
+use warp_graphql::platform_error::PlatformErrorInfo;
 use warp_graphql::queries::codebase_context_config::{
     CodebaseContextConfigQuery, CodebaseContextConfigResult, CodebaseContextConfigVariables,
 };
@@ -113,6 +115,7 @@ use warp_graphql::queries::task_git_credentials::{
     TaskGitCredentials, TaskGitCredentialsInput, TaskGitCredentialsResult,
     TaskGitCredentialsVariables,
 };
+use warp_isolation_platform::IsolationPlatformError;
 use warp_multi_agent_api::ConversationData;
 
 use super::ServerApi;
@@ -166,6 +169,149 @@ const AI_ASSISTANT_REQUEST_TIMEOUT_SECONDS: u64 = 30;
 pub struct TaskStatusUpdate {
     pub message: String,
     pub error_code: Option<PlatformErrorCode>,
+    pub platform_error: Option<PlatformErrorInfo>,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum TaskGitCredentialsError {
+    #[error("{message}")]
+    Platform {
+        message: String,
+        detail: Option<String>,
+        info: PlatformErrorInfo,
+    },
+    #[error("{message}")]
+    Unstructured { message: String },
+    #[error("Failed to fetch task git credentials")]
+    Request(#[source] anyhow::Error),
+}
+
+impl TaskGitCredentialsError {
+    fn from_user_facing(error: UserFacingError) -> Self {
+        let UserFacingError {
+            error,
+            response_context,
+        } = error;
+        match error {
+            UserFacingErrorInterface::PlatformError(error) => Self::Platform {
+                message: error.message,
+                detail: error.detail,
+                info: error.info.into(),
+            },
+            error => Self::Unstructured {
+                message: get_user_facing_error_message(UserFacingError {
+                    error,
+                    response_context,
+                }),
+            },
+        }
+    }
+
+    pub fn retryable(&self) -> bool {
+        match self {
+            Self::Platform { info, .. } => info.retryable,
+            Self::Request(error) => {
+                !error
+                    .downcast_ref::<IsolationPlatformError>()
+                    .is_some_and(|error| {
+                        matches!(error, IsolationPlatformError::NoIsolationPlatformDetected)
+                    })
+            }
+            Self::Unstructured { .. } => false,
+        }
+    }
+
+    pub(crate) fn task_status(&self) -> (AgentTaskState, TaskStatusUpdate) {
+        match self {
+            Self::Platform {
+                message,
+                detail,
+                info,
+            } => {
+                let message = match detail {
+                    Some(detail) if !detail.is_empty() => format!("{message} ({detail})"),
+                    _ => message.clone(),
+                };
+                let state = match info.code {
+                    PlatformErrorCode::AuthenticationRequired
+                    | PlatformErrorCode::InternalError
+                    | PlatformErrorCode::ResourceUnavailable => AgentTaskState::Error,
+                    PlatformErrorCode::BudgetExceeded
+                    | PlatformErrorCode::ContentPolicyViolation
+                    | PlatformErrorCode::EnvironmentSetupFailed
+                    | PlatformErrorCode::ExternalAuthenticationRequired
+                    | PlatformErrorCode::FeatureNotAvailable
+                    | PlatformErrorCode::InsufficientCredits
+                    | PlatformErrorCode::IntegrationDisabled
+                    | PlatformErrorCode::IntegrationNotConfigured
+                    | PlatformErrorCode::InvalidRequest
+                    | PlatformErrorCode::NotAuthorized
+                    | PlatformErrorCode::ResourceNotFound => AgentTaskState::Failed,
+                };
+                (
+                    state,
+                    TaskStatusUpdate {
+                        message,
+                        error_code: Some(info.code),
+                        platform_error: Some(info.clone().without_debug()),
+                    },
+                )
+            }
+            Self::Unstructured { message } => (
+                AgentTaskState::Failed,
+                TaskStatusUpdate {
+                    message: message.clone(),
+                    error_code: Some(PlatformErrorCode::InvalidRequest),
+                    platform_error: Some(PlatformErrorInfo::new(
+                        PlatformErrorCode::InvalidRequest,
+                        false,
+                    )),
+                },
+            ),
+            Self::Request(_) => (
+                AgentTaskState::Error,
+                TaskStatusUpdate {
+                    message: self.to_string(),
+                    error_code: Some(PlatformErrorCode::InternalError),
+                    platform_error: Some(PlatformErrorInfo::new(
+                        PlatformErrorCode::InternalError,
+                        true,
+                    )),
+                },
+            ),
+        }
+    }
+}
+
+fn parse_task_git_credentials_result(
+    result: TaskGitCredentialsResult,
+) -> Result<Vec<GitCredential>, TaskGitCredentialsError> {
+    match result {
+        TaskGitCredentialsResult::TaskGitCredentialsOutput(output) => Ok(output
+            .credentials
+            .into_iter()
+            .map(|credential| GitCredential {
+                token: credential.token,
+                username: credential.username,
+                email: credential.email,
+                host: credential.host,
+            })
+            .collect()),
+        TaskGitCredentialsResult::UserFacingError(error) => {
+            Err(TaskGitCredentialsError::from_user_facing(error))
+        }
+        TaskGitCredentialsResult::Unknown => Err(TaskGitCredentialsError::Request(anyhow!(
+            "Unknown taskGitCredentials response"
+        ))),
+    }
+}
+
+fn agent_task_status_message_input(update: TaskStatusUpdate) -> AgentTaskStatusMessageInput {
+    AgentTaskStatusMessageInput {
+        message: update.message,
+        error_code: update.error_code,
+        error: update.platform_error.map(Into::into),
+    }
 }
 fn public_api_user_query_mode(mode: UserQueryMode) -> &'static str {
     match mode {
@@ -191,6 +337,7 @@ impl TaskStatusUpdate {
         Self {
             message: message.into(),
             error_code: None,
+            platform_error: None,
         }
     }
 
@@ -199,6 +346,7 @@ impl TaskStatusUpdate {
         Self {
             message: message.into(),
             error_code: Some(error_code),
+            platform_error: None,
         }
     }
 }
@@ -1425,7 +1573,7 @@ pub trait AIClient: 'static + Send + Sync {
         &self,
         task_id: String,
         workload_token: String,
-    ) -> anyhow::Result<Vec<GitCredential>, anyhow::Error>;
+    ) -> Result<Vec<GitCredential>, TaskGitCredentialsError>;
 
     async fn get_task_attachments(
         &self,
@@ -2155,10 +2303,7 @@ impl AIClient for ServerApi {
                 task_state,
                 session_id: session_id.map(|id| id.to_string().into()),
                 conversation_id: conversation_id.map(|id| id.into()),
-                status_message: status_message.map(|update| AgentTaskStatusMessageInput {
-                    message: update.message,
-                    error_code: update.error_code,
-                }),
+                status_message: status_message.map(agent_task_status_message_input),
                 session_debug_until: session_debug_until.map(Into::into),
             },
             request_context: get_request_context(),
@@ -2646,7 +2791,7 @@ impl AIClient for ServerApi {
         &self,
         task_id: String,
         workload_token: String,
-    ) -> anyhow::Result<Vec<GitCredential>, anyhow::Error> {
+    ) -> Result<Vec<GitCredential>, TaskGitCredentialsError> {
         let variables = TaskGitCredentialsVariables {
             input: TaskGitCredentialsInput {
                 task_id: cynic::Id::new(task_id),
@@ -2655,29 +2800,12 @@ impl AIClient for ServerApi {
             request_context: get_request_context(),
         };
         let operation = TaskGitCredentials::build(variables);
-        let response = self.send_graphql_request(operation, None).await?;
+        let response = self
+            .send_graphql_request(operation, None)
+            .await
+            .map_err(TaskGitCredentialsError::Request)?;
 
-        match response.task_git_credentials {
-            TaskGitCredentialsResult::TaskGitCredentialsOutput(output) => {
-                let credentials = output
-                    .credentials
-                    .into_iter()
-                    .map(|c| GitCredential {
-                        token: c.token,
-                        username: c.username,
-                        email: c.email,
-                        host: c.host,
-                    })
-                    .collect();
-                Ok(credentials)
-            }
-            TaskGitCredentialsResult::UserFacingError(error) => {
-                Err(anyhow!(get_user_facing_error_message(error)))
-            }
-            TaskGitCredentialsResult::Unknown => {
-                Err(anyhow!("Failed to fetch task git credentials"))
-            }
-        }
+        parse_task_git_credentials_result(response.task_git_credentials)
     }
 
     #[tracing::instrument(skip_all, err, fields(tags.cloud_agent = true))]

@@ -1,4 +1,159 @@
+use futures::executor::block_on;
+use warp_graphql::ai::PlatformErrorCode;
+use warp_graphql::platform_error::PlatformErrorInfo;
+
 use super::*;
+
+fn dependency_error(retryable: bool) -> TaskGitCredentialsError {
+    TaskGitCredentialsError::Platform {
+        message: "GitHub is temporarily unavailable.".to_string(),
+        detail: Some("Repository access could not be resolved.".to_string()),
+        info: PlatformErrorInfo {
+            code: PlatformErrorCode::ResourceUnavailable,
+            retryable,
+            metadata: std::collections::BTreeMap::from([
+                ("provider".to_string(), "github".to_string()),
+                ("resource".to_string(), "installation".to_string()),
+            ]),
+            debug: None,
+        },
+    }
+}
+
+#[test]
+fn fetch_with_retry_retries_request_layer_failures() {
+    let mut attempts = 0usize;
+    let credentials = block_on(fetch_with_retry(
+        "test bootstrap",
+        &GIT_CREDENTIALS_BOOTSTRAP_BACKOFF,
+        || {
+            attempts += 1;
+            std::future::ready(if attempts == 1 {
+                Err(TaskGitCredentialsError::Request(anyhow::anyhow!(
+                    "transient request failure"
+                )))
+            } else {
+                Ok(Vec::new())
+            })
+        },
+        |_| std::future::ready(()),
+    ))
+    .expect("request-layer failure should be retried");
+
+    assert_eq!(attempts, 2);
+    assert!(credentials.is_empty());
+}
+
+#[test]
+fn fetch_with_retry_succeeds_after_retryable_dependency_failures() {
+    let mut attempts = 0usize;
+    let mut delays = Vec::new();
+    let credentials = block_on(fetch_with_retry(
+        "test bootstrap",
+        &GIT_CREDENTIALS_BOOTSTRAP_BACKOFF,
+        || {
+            attempts += 1;
+            std::future::ready(if attempts < 3 {
+                Err(dependency_error(true))
+            } else {
+                Ok(vec![GitCredential {
+                    token: "secret-token".to_string(),
+                    username: None,
+                    email: None,
+                    host: "github.com".to_string(),
+                }])
+            })
+        },
+        |delay| {
+            delays.push(delay);
+            std::future::ready(())
+        },
+    ))
+    .expect("retryable dependency should eventually succeed");
+
+    assert_eq!(attempts, 3);
+    assert_eq!(delays, GIT_CREDENTIALS_BOOTSTRAP_BACKOFF[..2]);
+    assert_eq!(credentials.len(), 1);
+}
+
+#[test]
+fn fetch_with_retry_exhausts_bounded_dependency_attempts() {
+    let mut attempts = 0usize;
+    let result = block_on(fetch_with_retry(
+        "test refresh",
+        &GIT_CREDENTIALS_BOOTSTRAP_BACKOFF,
+        || {
+            attempts += 1;
+            std::future::ready(Err(dependency_error(true)))
+        },
+        |_| std::future::ready(()),
+    ));
+    let error = match result {
+        Err(error) => error,
+        Ok(_) => panic!("retryable dependency should stop after the bounded attempts"),
+    };
+
+    assert!(matches!(
+        error,
+        TaskGitCredentialsError::Platform {
+            info: PlatformErrorInfo {
+                retryable: true,
+                ..
+            },
+            ..
+        }
+    ));
+    assert_eq!(attempts, GIT_CREDENTIALS_BOOTSTRAP_BACKOFF.len() + 1);
+}
+
+#[test]
+fn fetch_with_retry_fails_fast_for_non_retryable_user_error() {
+    let mut attempts = 0usize;
+    let result = block_on(fetch_with_retry(
+        "test bootstrap",
+        &GIT_CREDENTIALS_BOOTSTRAP_BACKOFF,
+        || {
+            attempts += 1;
+            std::future::ready(Err(TaskGitCredentialsError::Unstructured {
+                message: "Unable to access task git credentials".to_string(),
+            }))
+        },
+        |_| std::future::ready(()),
+    ));
+    let error = match result {
+        Err(error) => error,
+        Ok(_) => panic!("user error should fail fast"),
+    };
+
+    assert!(matches!(
+        error,
+        TaskGitCredentialsError::Unstructured { .. }
+    ));
+    assert_eq!(attempts, 1);
+}
+
+#[test]
+fn fetch_with_retry_fails_fast_without_isolation_platform() {
+    let mut attempts = 0usize;
+    let result = block_on(fetch_with_retry(
+        "test bootstrap",
+        &GIT_CREDENTIALS_BOOTSTRAP_BACKOFF,
+        || {
+            attempts += 1;
+            std::future::ready(Err(TaskGitCredentialsError::Request(anyhow::anyhow!(
+                warp_isolation_platform::IsolationPlatformError::NoIsolationPlatformDetected
+            ))))
+        },
+        |_| std::future::ready(()),
+    ));
+    let error = match result {
+        Err(error) => error,
+        Ok(_) => panic!("missing isolation platform should fail fast"),
+    };
+
+    assert!(matches!(error, TaskGitCredentialsError::Request(_)));
+    assert_eq!(attempts, 1);
+}
 
 #[test]
 fn write_gh_hosts_yml_uses_gh_cli_filename() -> Result<()> {
