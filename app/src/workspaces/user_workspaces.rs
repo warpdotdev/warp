@@ -170,6 +170,13 @@ pub struct CreateTeamResponse {
 ///
 /// This is scope, not authority: the server still authorizes every request made under it.
 ///
+/// Prefer [`TeamContext`] when reasonable: convert a `ViewContext` to a `WeakViewHandle`,
+/// carry the handle through moved futures and callbacks, and mint the render context only at
+/// the point of use, so a policy read reflects the window's team at that moment. Reach for
+/// this type instead when the work's *destination* must not move once chosen -- e.g. creating
+/// a Drive object in the team the user was in when they clicked New -- and be ready to justify
+/// that choice; pinning is deliberate, not the default.
+///
 /// Only [`UserWorkspaces::team_context_for_operation`] mints one, always from a real window;
 /// there is no way to fabricate one without a window (there is deliberately no `teamless()`
 /// constructor). Its `team_uid` can still be `None` -- that means the minting window itself
