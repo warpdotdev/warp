@@ -44,6 +44,7 @@ impl ShellCommand {
                     } => Some(
                         NamedArgument {
                             name: flag.name.as_str(),
+                            name_span: flag.name_span,
                             parsed_token: parsed_expression.value(),
                         }
                         .spanned(parsed_expression.span),
@@ -67,6 +68,10 @@ impl ShellCommand {
 #[derive(Debug)]
 pub struct NamedArgument<'a> {
     pub name: &'a str,
+    /// The span of the flag token that owns this value (the `-s` in `ln -s foo`). Used to tell one
+    /// multi-valued option apart from a repeated single-valued one when resolving which declared
+    /// argument a value fills.
+    pub name_span: Span,
     pub parsed_token: &'a ParsedToken,
 }
 

@@ -22,7 +22,7 @@ use crate::signatures::testing::{
 cfg_if::cfg_if! {
     if #[cfg(not(feature = "v2"))] {
         use std::collections::HashSet;
-        use crate::signatures::testing::add_content_signature;
+        use crate::signatures::testing::{add_content_signature, ln_signature};
     }
 }
 
@@ -991,6 +991,76 @@ pub fn test_multiple_required_args_for_option() {
         complete_at_end_of_line("test --required-args arg-1-1 a", &ctx),
         vec!["arg-2-1", "arg-2-2"]
     );
+}
+
+/// An option whose declared arguments differ must offer the argument at the position being
+/// completed, not the last one. Completing the *first* value of `--required-args` (a fragment is
+/// present, so it routes through `complete_option`) must offer the first argument's suggestions.
+/// Before the fix, `.last()` offered the second argument's suggestions -- the "wrong candidates"
+/// symptom seen live on `master` (e.g. `cargo fmt -- --print-config m` offering file paths instead
+/// of its verbosity enum). The trailing-space and last-value forms are already covered above.
+#[cfg(not(feature = "v2"))]
+#[test]
+pub fn test_option_first_arg_resolves_by_position() {
+    let registry = create_test_command_registry([test_signature()]);
+    let ctx = FakeCompletionContext::new(registry);
+
+    assert_eq!(
+        complete_at_end_of_line("test --required-args a", &ctx),
+        vec!["arg-1-1", "arg-1-2"]
+    );
+}
+
+/// Regression test for the `ln -s ~/` routing: `ln`'s `-s` declares `[source_file (files+folders
+/// template), link_name (bare)]`, so completing the first value must resolve `source_file`. With no
+/// file-path fallback (as in the native-completions dispatch), the bare `link_name` yields nothing
+/// -- the "empty-then-native" symptom -- so this pins that the templated first argument is used.
+#[cfg(not(feature = "v2"))]
+#[test]
+pub fn test_option_arg_resolves_templated_source_file() {
+    let home = TypedPathBuf::from(TEST_WORK_DIR);
+    let path_ctx = MockPathCompletionContext::new(home.clone())
+        .with_home_directory(home.to_string_lossy().to_string())
+        .with_entries_in_pwd([
+            EngineDirEntry::test_file("bar"),
+            EngineDirEntry::test_dir("baz"),
+        ]);
+    let ctx = FakeCompletionContext::new(create_test_command_registry([ln_signature()]))
+        .with_path_completion_context(path_ctx);
+
+    // No file-path fallback, matching the native-completions dispatch: a bare argument produces
+    // nothing, so only a resolved template yields results.
+    let complete_no_fallback = |line: &str| {
+        suggestions_for_test(
+            line,
+            line.len(),
+            CompleterOptions {
+                match_strategy: MatchStrategy::CaseInsensitive,
+                fallback_strategy: CompletionsFallbackStrategy::None,
+                suggest_file_path_completions_only: false,
+                parse_quotes_as_literals: false,
+            },
+            &ctx,
+        )
+        .into_iter()
+        .flat_map(|res| res.suggestions)
+        .filter_map(|s| match s.suggestion_type() {
+            SuggestionType::Option(..) => None,
+            _ => Some(s.suggestion.display.to_string()),
+        })
+        .collect::<Vec<_>>()
+    };
+
+    // A fragment (`~/`) is present, so this routes through `complete_option`; the first value must
+    // resolve `source_file`'s template (previously `.last()` chose the bare `link_name` -> empty).
+    assert_eq!(complete_no_fallback("ln -s ~/"), vec!["bar", "baz/"]);
+
+    // Trailing space (no fragment) already resolved correctly through the parser's index-aware
+    // missing-value branch -- pinned so checking only this form wouldn't mask the bug above.
+    assert_eq!(complete_no_fallback("ln -s "), vec!["bar", "baz/"]);
+
+    // The positional path was never affected: `ln ~/` resolves the top-level `source_file`.
+    assert_eq!(complete_no_fallback("ln ~/"), vec!["bar", "baz/"]);
 }
 
 #[test]

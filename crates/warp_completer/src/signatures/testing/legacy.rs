@@ -945,6 +945,53 @@ pub fn ls_signature() -> Signature {
     }
 }
 
+/// Models `ln`: the `-s` option (and the top-level positionals) declare a templated `source_file`
+/// (files and folders) followed by a bare `link_name`. Completing the first value must resolve the
+/// template, not the bare last argument -- the shape behind the `ln -s ~/` routing bug.
+pub fn ln_signature() -> Signature {
+    let source_and_link_args = || {
+        vec![
+            Argument {
+                display_name: Some("source_file".to_string()),
+                description: None,
+                is_variadic: false,
+                is_command: false,
+                argument_types: vec![ArgumentType::Template(Template {
+                    type_name: warp_command_signatures::TemplateType::FilesAndFolders,
+                    filter_name: None,
+                })],
+                optional: IsArgumentOptional::Required,
+                skip_generator_validation: false,
+            },
+            Argument {
+                display_name: Some("link_name".to_string()),
+                description: None,
+                is_variadic: false,
+                is_command: false,
+                argument_types: vec![],
+                optional: IsArgumentOptional::Required,
+                skip_generator_validation: false,
+            },
+        ]
+    };
+    Signature {
+        name: "ln".to_string(),
+        alias_generator: None,
+        description: Some("testing...".to_string()),
+        priority: Priority::default(),
+        arguments: Some(source_and_link_args()),
+        subcommands: None,
+        options: Some(vec![Opt {
+            exact_string: vec!["-s".to_string()],
+            description: None,
+            arguments: Some(source_and_link_args()),
+            required: false,
+            priority: Priority::Default,
+        }]),
+        parser_directives: Default::default(),
+    }
+}
+
 pub fn add_content_signature() -> Signature {
     Signature {
         name: "Add-Content".to_string(),
