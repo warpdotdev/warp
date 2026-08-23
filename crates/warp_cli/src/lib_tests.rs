@@ -2982,6 +2982,7 @@ fn secret_create_codex_api_key_accepts_base_url_and_value_file() {
         "--description",
         "OpenAI key for Codex",
         "--team",
+        "team-uid-1234567890ab",
     ])
     .unwrap();
 
@@ -3001,7 +3002,10 @@ fn secret_create_codex_api_key_accepts_base_url_and_value_file() {
         api_key_args.common.description.as_deref(),
         Some("OpenAI key for Codex")
     );
-    assert!(api_key_args.common.scope.team);
+    assert_eq!(
+        api_key_args.common.scope.team.as_deref(),
+        Some("team-uid-1234567890ab")
+    );
     assert!(!api_key_args.common.scope.personal);
     assert_eq!(
         api_key_args

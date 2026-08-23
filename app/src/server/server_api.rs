@@ -565,6 +565,38 @@ impl ServerApi {
         )
     }
 
+    /// Like [`Self::send_graphql_request`], additionally sending `team_uid` (when present) in
+    /// [`warp_server_client::base_client::TEAM_UID_HEADER`]. Used by current-window-selected-team
+    /// requests so the server can filter or validate against the same team the caller resolved.
+    pub fn send_graphql_request_with_team_header<
+        'a,
+        QF,
+        O: warp_graphql::client::Operation<QF> + Send + 'a,
+    >(
+        &'a self,
+        operation: O,
+        team_uid: Option<&str>,
+        timeout: Option<Duration>,
+    ) -> BoxFuture<'a, Result<QF>>
+    where
+        QF: 'a,
+    {
+        let extra_headers = team_uid
+            .map(|uid| {
+                vec![(
+                    warp_server_client::base_client::TEAM_UID_HEADER.to_string(),
+                    uid.to_string(),
+                )]
+            })
+            .unwrap_or_default();
+        warp_server_client::graphql_helpers::send_graphql_request_with_headers(
+            &self.base_client,
+            operation,
+            timeout,
+            extra_headers,
+        )
+    }
+
     /// Opens an SSE stream to the agent event-push endpoint.
     ///
     /// The returned `EventSourceStream` yields `reqwest_eventsource::Event`

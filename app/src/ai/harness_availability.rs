@@ -212,7 +212,12 @@ impl HarnessAvailabilityModel {
             move || {
                 let api = api.clone();
                 let agent_harness = agent_harness.clone();
-                async move { api.list_harness_auth_secrets(agent_harness).await }
+                // TODO(multi-team): key this cache by team as well as harness and pass the
+                // caller's selected team here instead of `None`. This model is a process-global
+                // singleton consumed by several call sites that only hold `AppContext` (no
+                // window), so deciding how team scope should propagate needs the same kind of
+                // design review as the Group 3 architectural-state migrations.
+                async move { api.list_harness_auth_secrets(agent_harness, None).await }
             },
             OUT_OF_BAND_REQUEST_RETRY_STRATEGY,
             is_transient_graphql_or_http_error,

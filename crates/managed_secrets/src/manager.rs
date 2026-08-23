@@ -10,10 +10,7 @@ use warp_graphql::queries::task_secrets::ManagedSecretValue as GqlManagedSecretV
 use warpui_core::{Entity, SingletonEntity};
 
 use crate::ManagedSecretValue;
-use crate::client::{
-    IdentityTokenOptions, ManagedSecretConfigs, ManagedSecretsClient, SecretOwner,
-    TaskIdentityToken,
-};
+use crate::client::{IdentityTokenOptions, ManagedSecretsClient, SecretOwner, TaskIdentityToken};
 use crate::envelope::UploadKey;
 use crate::gcp::{self, GcpWorkloadIdentityFederationError, GcpWorkloadIdentityFederationToken};
 
@@ -55,19 +52,17 @@ impl ManagedSecretManager {
 
             value.validate_field_sizes(&name)?;
 
-            // We retrieve all upload keys on demand. These should potentially be fetched and stored
-            // ahead of time instead.
-            let configs = client.get_managed_secret_configs().await?;
+            // We retrieve the upload key on demand. This should potentially be fetched and
+            // stored ahead of time instead.
+            let public_key = owner_public_key(client.as_ref(), &owner).await?;
 
             let Some(actor) = actor_provider.actor_uid() else {
                 return Err(anyhow::anyhow!("No authenticated user"));
             };
 
             // Chain errors so that we don't hold an `UploadKey` handle across an `.await`.
-            let encrypted_value = owner_public_key(&configs, &owner)
-                .and_then(|public_key| {
-                    UploadKey::import_public_keyset(public_key).map_err(anyhow::Error::from)
-                })
+            let encrypted_value = UploadKey::import_public_keyset(&public_key)
+                .map_err(anyhow::Error::from)
                 .and_then(|public_key| {
                     public_key
                         .encrypt_secret(&actor, &name, &value)
@@ -122,19 +117,17 @@ impl ManagedSecretManager {
             }
 
             let encrypted_value = if let Some(value) = value {
-                // We retrieve all upload keys on demand. These should potentially be fetched and stored
-                // ahead of time instead.
-                let configs = client.get_managed_secret_configs().await?;
+                // We retrieve the upload key on demand. This should potentially be fetched and
+                // stored ahead of time instead.
+                let public_key = owner_public_key(client.as_ref(), &owner).await?;
 
                 let Some(actor) = actor_provider.actor_uid() else {
                     return Err(anyhow::anyhow!("No authenticated user"));
                 };
 
                 // Chain errors so that we don't hold an `UploadKey` handle across an `.await`.
-                let encrypted = owner_public_key(&configs, &owner)
-                    .and_then(|public_key| {
-                        UploadKey::import_public_keyset(public_key).map_err(anyhow::Error::from)
-                    })
+                let encrypted = UploadKey::import_public_keyset(&public_key)
+                    .map_err(anyhow::Error::from)
                     .and_then(|public_key| {
                         public_key
                             .encrypt_secret(&actor, &name, &value)
@@ -152,11 +145,14 @@ impl ManagedSecretManager {
         }
     }
 
-    /// List all managed secrets accessible to the current user.
-    pub fn list_secrets(&self) -> impl Future<Output = anyhow::Result<Vec<ManagedSecret>>> + use<> {
+    /// List managed secrets, scoped to personal secrets plus `team_uid`'s when given.
+    pub fn list_secrets(
+        &self,
+        team_uid: Option<String>,
+    ) -> impl Future<Output = anyhow::Result<Vec<ManagedSecret>>> + use<> {
         let client = self.client.clone();
         async move {
-            let secrets = client.list_secrets().await?;
+            let secrets = client.list_secrets(team_uid.as_deref()).await?;
             Ok(secrets)
         }
     }
@@ -269,22 +265,22 @@ impl ManagedSecretManager {
     }
 }
 
-/// Find the public upload key corresponding to `owner`.
-/// Returns an error if there's no such key in `configs`.
-fn owner_public_key<'a>(
-    configs: &'a ManagedSecretConfigs,
+/// Fetches the public upload key for `owner`'s target: the personal config for
+/// [`SecretOwner::CurrentUser`], or the named team's config for [`SecretOwner::Team`].
+async fn owner_public_key(
+    client: &dyn ManagedSecretsClient,
     owner: &SecretOwner,
-) -> Result<&'a str, anyhow::Error> {
+) -> Result<String, anyhow::Error> {
     match owner {
-        SecretOwner::CurrentUser => configs
-            .user_secrets
-            .as_ref()
-            .and_then(|config| config.public_key.as_deref())
+        SecretOwner::CurrentUser => client
+            .get_personal_managed_secret_config()
+            .await?
+            .and_then(|config| config.public_key)
             .ok_or_else(|| anyhow::anyhow!("No public key for user")),
-        SecretOwner::Team { team_uid } => configs
-            .team_secrets
-            .get(team_uid)
-            .and_then(|config| config.public_key.as_deref())
+        SecretOwner::Team { team_uid } => client
+            .get_team_managed_secret_config(team_uid)
+            .await?
+            .and_then(|config| config.public_key)
             .ok_or_else(|| anyhow::anyhow!("No public key for team {team_uid}")),
     }
 }

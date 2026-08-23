@@ -3,7 +3,7 @@ use std::path::PathBuf;
 
 use clap::{Args, Subcommand, ValueEnum};
 
-use crate::scope::ObjectScope;
+pub use crate::scope::TeamScopeArgs as SecretScope;
 
 /// Secret-related subcommands.
 #[derive(Debug, Clone, Subcommand)]
@@ -57,7 +57,7 @@ pub struct CreateSecretArgs {
     pub description: Option<String>,
 
     #[clap(flatten)]
-    pub scope: ObjectScope,
+    pub scope: SecretScope,
 }
 
 /// Provider-specific secret creation subcommands.
@@ -101,7 +101,7 @@ pub struct CommonSecretCreateArgs {
     pub description: Option<String>,
 
     #[clap(flatten)]
-    pub scope: ObjectScope,
+    pub scope: SecretScope,
 }
 
 /// Arguments for creating an Anthropic API key secret.
@@ -193,7 +193,7 @@ pub struct DeleteSecretArgs {
     pub force: bool,
 
     #[clap(flatten)]
-    pub scope: ObjectScope,
+    pub scope: SecretScope,
 }
 
 #[derive(Debug, Clone, Args)]
@@ -212,12 +212,13 @@ pub struct UpdateSecretArgs {
     pub description: Option<String>,
 
     #[clap(flatten)]
-    pub scope: ObjectScope,
+    pub scope: SecretScope,
 }
 
 #[derive(Debug, Clone, Args)]
 pub struct ListSecretsArgs {
-    // TODO: consider flags to filter secrets.
+    #[clap(flatten)]
+    pub scope: SecretScope,
 }
 
 #[derive(Debug, Clone, Args)]
