@@ -44,6 +44,7 @@ use warp_core::context_flag::ContextFlag;
 use warp_core::telemetry::TelemetryEvent;
 use warp_errors::{AnyhowErrorExt, ErrorExt, register_error, report_error};
 use warp_managed_secrets::client::ManagedSecretsClient;
+use warp_server_client::HttpStatusError;
 use warp_server_client::auth::{AuthClientImpl, AuthEvent, EXPERIMENT_ID_HEADER};
 use warp_server_client::base_client::{
     AmbientHeaderPolicy, AuthenticatedGraphqlConfig, BaseClient, GraphqlRoutingConfig,
@@ -378,14 +379,55 @@ pub enum TranscribeError {
     ServerOverloaded,
 
     #[error("Internal error occurred at transport layer.")]
-    Transport,
+    Transport(#[source] reqwest::Error),
+
+    #[error("Failed with status code {0}")]
+    ErrorStatus(http::StatusCode),
 
     #[error("Failed to deserialize JSON.")]
-    Deserialization,
+    Deserialization(#[source] DeserializationError),
 
     #[error(transparent)]
     Other(#[from] anyhow::Error),
 }
+
+impl TranscribeError {
+    fn from_json_error(err: reqwest::Error) -> Self {
+        if err.is_decode() {
+            #[cfg(not(target_family = "wasm"))]
+            {
+                use std::error::Error as _;
+                let mut source = err.source();
+                while let Some(underlying) = source {
+                    if underlying.is::<hyper::Error>() {
+                        return TranscribeError::Transport(err);
+                    }
+                    source = underlying.source();
+                }
+            }
+            return TranscribeError::Deserialization(DeserializationError::Transport(err));
+        }
+        TranscribeError::Transport(err)
+    }
+}
+
+impl ErrorExt for TranscribeError {
+    fn is_actionable(&self) -> bool {
+        match self {
+            TranscribeError::Transport(error) => error.is_actionable(),
+            TranscribeError::ErrorStatus(status) => {
+                !status.is_server_error() && *status != http::StatusCode::TOO_MANY_REQUESTS
+            }
+            TranscribeError::Other(error) => error.is_actionable(),
+            TranscribeError::Deserialization(error) => match error {
+                DeserializationError::Json(_) => true,
+                DeserializationError::Transport(error) => error.is_actionable(),
+            },
+            TranscribeError::QuotaLimit | TranscribeError::ServerOverloaded => false,
+        }
+    }
+}
+register_error!(TranscribeError);
 
 /// An API wrapper struct with methods to requests to warp-server.
 ///
@@ -676,7 +718,11 @@ impl ServerApi {
         }
     }
 
-    /// Converts a non-success public API response into the most specific client error available.
+    /// Converts a non-success public API response into the most specific client error
+    /// available. The returned error always carries an [`HttpStatusError`] in its chain
+    /// (via [`anyhow::Error::context`]) so callers retrying through
+    /// [`is_transient_http_error`](super::retry_strategies::is_transient_http_error) fail
+    /// fast on a deterministic 4xx instead of defaulting to a transient retry.
     async fn error_from_response(response: http_client::Response) -> anyhow::Error {
         let status = response.status();
         let is_at_capacity = response
@@ -692,28 +738,32 @@ impl ServerApi {
 
         // Get the response text first since we may need to try multiple deserializations.
         let response_text = response.text().await.unwrap_or_default();
+        let status_error = HttpStatusError {
+            status: status.as_u16(),
+            body: response_text.clone(),
+        };
 
         // Check for AT_CAPACITY error code header.
         if is_at_capacity
             && let Ok(capacity_error) =
                 serde_json::from_str::<CloudAgentCapacityError>(&response_text)
         {
-            return capacity_error.into();
+            return anyhow::Error::new(status_error).context(capacity_error);
         }
         if status == StatusCode::TOO_MANY_REQUESTS && is_out_of_credits {
             let user_display_message = serde_json::from_str::<OutOfCreditsResponse>(&response_text)
                 .ok()
                 .and_then(|r| r.user_display_message);
-            return AIApiError::QuotaLimit {
+            return anyhow::Error::new(status_error).context(AIApiError::QuotaLimit {
                 user_display_message,
-            }
-            .into();
+            });
         }
 
         // Try to deserialize error response as { "error": "message" }
         match serde_json::from_str::<ClientError>(&response_text) {
-            Ok(error_response) => error_response.into(),
-            Err(_) => anyhow!("API request failed with status {status}"),
+            Ok(error_response) => anyhow::Error::new(status_error).context(error_response),
+            Err(_) => anyhow::Error::new(status_error)
+                .context(format!("API request failed with status {status}")),
         }
     }
 
@@ -1121,7 +1171,7 @@ impl ServerApi {
                         Ok(output_response) => Ok(output_response),
                         Err(e) => {
                             log::warn!("Failed to deserialize response: {e:?}");
-                            Err(TranscribeError::Deserialization)
+                            Err(TranscribeError::from_json_error(e))
                         }
                     }
                 } else if res.status() == http::StatusCode::TOO_MANY_REQUESTS {
@@ -1136,13 +1186,14 @@ impl ServerApi {
                         Err(TranscribeError::ServerOverloaded)
                     }
                 } else {
-                    log::warn!("Non-success status code received: {}", res.status());
-                    Err(TranscribeError::Transport)
+                    let status = res.status();
+                    log::warn!("Non-success status code received: {status}");
+                    Err(TranscribeError::ErrorStatus(status))
                 }
             }
             Err(e) => {
                 log::warn!("Error while sending request: {e:?}");
-                Err(TranscribeError::Transport)
+                Err(TranscribeError::Transport(e))
             }
         }
     }
@@ -1416,3 +1467,7 @@ impl Entity for ServerApiProvider {
 }
 
 impl SingletonEntity for ServerApiProvider {}
+
+#[cfg(test)]
+#[path = "server_api_tests.rs"]
+mod tests;

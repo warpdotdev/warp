@@ -34,7 +34,7 @@ use crate::ai::mcp::TemplatableMCPServerManager;
 use crate::server::server_api::AIApiError;
 use crate::settings::AISettings;
 use crate::terminal::safe_mode_settings::get_secret_obfuscation_mode;
-use crate::workspaces::user_workspaces::UserWorkspaces;
+use crate::workspaces::user_workspaces::{TeamScope, UserWorkspaces};
 
 /// Unique, server-generated conversation-scoped token to be roundtripped to the API when sending
 /// requests that follow-up within a given conversation.
@@ -224,12 +224,13 @@ impl RequestParams {
         }
     }
 
-    pub fn new(
+    pub(crate) fn new(
         terminal_view_id: Option<EntityId>,
         session_context: SessionContext,
         request_input: &RequestInput,
         conversation: ConversationData,
         metadata: Option<RequestMetadata>,
+        scope: &impl TeamScope,
         app: &AppContext,
     ) -> Self {
         let ai_settings = AISettings::as_ref(app);
@@ -355,7 +356,7 @@ impl RequestParams {
         let is_ambient_agent = conversation.ambient_agent_task_id.is_some();
         let computer_use_enabled = FeatureFlag::AgentModeComputerUse.is_enabled()
             && BlocklistAIPermissions::as_ref(app)
-                .get_computer_use_setting(app, terminal_view_id)
+                .get_computer_use_setting(terminal_view_id, scope, app)
                 .is_enabled()
             && computer_use::is_supported_on_current_platform()
             && (FeatureFlag::LocalComputerUse.is_enabled() || is_ambient_agent);

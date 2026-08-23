@@ -309,6 +309,10 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::SummarizationConversationCommand,
         #[cfg(feature = "mcp_grouped_server_context")]
         FeatureFlag::MCPGroupedServerContext,
+        #[cfg(feature = "well_known_mcp_ids")]
+        FeatureFlag::WellKnownMcpIds,
+        #[cfg(feature = "factory_mcp")]
+        FeatureFlag::FactoryMcp,
         #[cfg(feature = "web_search_ui")]
         FeatureFlag::WebSearchUI,
         #[cfg(feature = "web_fetch_ui")]
@@ -425,6 +429,8 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::IncrementalAutoReload,
         #[cfg(feature = "wait_for_events_parent_registration")]
         FeatureFlag::WaitForEventsParentRegistration,
+        #[cfg(feature = "orchestration_unified_stack")]
+        FeatureFlag::OrchestrationUnifiedStack,
         #[cfg(feature = "pending_user_query_indicator")]
         FeatureFlag::PendingUserQueryIndicator,
         #[cfg(feature = "queue_slash_command")]

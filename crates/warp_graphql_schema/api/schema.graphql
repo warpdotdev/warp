@@ -1241,6 +1241,7 @@ input DomainCaptureSettingsInput {
 type EmailInvite {
   email: String!
   expired: Boolean!
+  teamUid: ID
 }
 
 enum EmbeddingConfig {
@@ -3777,6 +3778,14 @@ type Team {
   Required for features that key off the team's domain (e.g. domain capture, SSO).
   """
   domain: String
+
+  """
+  inviteLink is the server-owned invite-by-link URL for this team. It is null
+  only when invite links are disabled for this team (`is_invite_link_enabled`
+  is false). A caller who lacks visibility into the team does not get null:
+  the query raises a NotAuthorized error instead.
+  """
+  inviteLink: String
   managedSecrets: ManagedSecretConfig
   memberSpendLimits: [MemberSpendLimit!]
   members: [TeamMember!]!
@@ -3788,6 +3797,19 @@ type Team {
   """
   settings: TeamSettings!
   uid: ID!
+
+  """
+  Team visibility governs which workspace members can discover and join a team.
+  It is a new axis, orthogonal to workspace-level discoverability (is_discoverable).
+  Existing teams default to OPEN.
+  """
+  visibility: TeamVisibility!
+}
+
+enum TeamVisibility {
+  HIDDEN
+  OPEN
+  PRIVATE
 }
 
 """
@@ -4723,13 +4745,6 @@ type Workspace {
   hasBillingHistory is the equivalent of the v1 hasBillingHistory field in the Team type.
   """
   hasBillingHistory: Boolean!
-
-  """
-  inviteCode is equivalent to inviteCode field in the v1 Team type. Unlike v1, inviteCode
-  is a string instead of a nested object since the only value actually used by the client
-  is the code itself.
-  """
-  inviteCode: String
   inviteLinkDomainRestrictions: [InviteLinkDomainRestriction!]!
   isEligibleForDiscovery: Boolean!
   memberSpendLimits: [MemberSpendLimit!]

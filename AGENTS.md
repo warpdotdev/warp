@@ -142,6 +142,12 @@ for itself.
   declaration if necessary, but do not repeat that where the const is *referenced*. Another
   example is function call sites. Function doc comments explain what they do. Do not repeat
   the explanation at the call site.
+- **Container docs describe the whole, member docs describe the parts**: A field's, variant's,
+  or parameter's own doc comment is where that member gets explained. A container's item-level
+  doc comment (struct, enum, trait) describes the item as a whole and must not enumerate or
+  re-explain its members. Do not name members in the container's doc comment just to describe
+  them, and do not restate in a member's doc comment what the container's doc comment already
+  said. Behavior genuinely shared by several members belongs in exactly one place, not both.
 - **Don't enumerate function call sites in doc comments**: Function doc comments should
   document their behavior and NOT their callers, e.g. it should never say things like,
   "this is used by [certain callers]" or "this is used when...".

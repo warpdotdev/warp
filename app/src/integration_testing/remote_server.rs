@@ -255,9 +255,9 @@ pub fn write_file_via_remote_server(
             std::thread::spawn(move || {
                 let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
                 let result = rt.block_on(handle.write_file(path.clone(), content));
-                if let Err(e) = &result {
+                if let Err(e) = result {
                     report_error!(
-                        anyhow::anyhow!("{e}").context("write_file_via_remote_server failed"),
+                        anyhow::Error::new(e).context("write_file_via_remote_server failed"),
                         extra: { "path" => %path }
                     );
                 }

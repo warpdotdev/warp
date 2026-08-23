@@ -21,10 +21,10 @@ use warpui::{
 };
 
 use super::settings_page::{
-    Category, HEADER_FONT_SIZE, HEADER_PADDING, LocalOnlyIconState, MatchData, PageType,
-    SettingsPageEvent, SettingsPageMeta, SettingsPageViewHandle, SettingsWidget, ToggleState,
-    add_setting, render_alternating_color_list, render_body_item, render_dropdown_item,
-    render_page_title,
+    Category, CategoryHeader, HEADER_FONT_SIZE, HEADER_PADDING, LocalOnlyIconState, MatchData,
+    PageType, SettingsPageEvent, SettingsPageMeta, SettingsPageViewHandle, SettingsWidget,
+    ToggleState, add_setting, render_alternating_color_list, render_body_item,
+    render_dropdown_item, render_page_title,
 };
 use super::{SettingsAction, SettingsSection, ToggleSettingActionPair, flags};
 use crate::appearance::Appearance;
@@ -150,8 +150,11 @@ impl WarpifyPageView {
     fn build_page(ctx: &mut ViewContext<Self>) -> PageType<Self> {
         let mut categories = vec![
             Category::new("", vec![Box::new(TitleWidget::default())]),
-            Category::new("Subshells", vec![Box::new(SubshellsWidget::default())])
-                .with_subtitle("Subshells supported: bash, zsh, and fish."),
+            Category::with_header(
+                CategoryHeader::new("Subshells")
+                    .with_subtitle("Subshells supported: bash, zsh, and fish."),
+                vec![Box::new(SubshellsWidget::default())],
+            ),
         ];
 
         let warpify_settings = WarpifySettings::as_ref(ctx);
@@ -159,10 +162,10 @@ impl WarpifyPageView {
             .enable_ssh_warpification
             .is_supported_on_current_platform()
         {
-            categories.push(
-                Category::new("SSH", vec![Box::new(SSHWidget::default())])
-                    .with_subtitle("Warpify your interactive SSH sessions."),
-            );
+            categories.push(Category::with_header(
+                CategoryHeader::new("SSH").with_subtitle("Warpify your interactive SSH sessions."),
+                vec![Box::new(SSHWidget::default())],
+            ));
         }
         PageType::new_categorized(categories, None)
     }

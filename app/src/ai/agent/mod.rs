@@ -18,12 +18,13 @@ use std::ops::{AddAssign, Deref, DerefMut, Range};
 use std::sync::Arc;
 use std::time::Duration;
 
-// Re-export types that were moved to the ai crate.
+// Re-export types that were moved to the ai and ai_types crates.
 pub use ai::agent::action::*;
 pub use ai::agent::action_result::*;
 use ai::agent::orchestration_config::{OrchestrationConfig, OrchestrationConfigStatus};
 pub use ai::agent::{AIAgentCitation, FileLocations};
 use ai::skills::ParsedSkill;
+pub use ai_types::{AIAgentActionId, EntrypointType, PassiveSuggestionTriggerType};
 use chrono::{DateTime, Local, TimeDelta};
 use comment::ReviewComment;
 use derivative::Derivative;
@@ -1034,43 +1035,6 @@ pub struct SuggestedAgentModeWorkflow {
     pub name: String,
     pub prompt: String,
     pub logging_id: SuggestedLoggingId,
-}
-
-/// A ID for an AI action generated as part of an [`AIAgentOutput`].
-///
-/// The internal ID itself should be opaque to all callers. This ID may be relayed back to the AI with
-/// the `AIAgentActionResult` from the action.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct AIAgentActionId(String);
-
-impl From<String> for AIAgentActionId {
-    fn from(value: String) -> Self {
-        AIAgentActionId(value)
-    }
-}
-
-impl From<AIAgentActionId> for String {
-    fn from(value: AIAgentActionId) -> Self {
-        value.0
-    }
-}
-
-impl Display for AIAgentActionId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.0.fmt(f)
-    }
-}
-
-impl From<crate::persistence::model::AIAgentActionId> for AIAgentActionId {
-    fn from(value: crate::persistence::model::AIAgentActionId) -> Self {
-        Self(value.0)
-    }
-}
-
-impl From<AIAgentActionId> for crate::persistence::model::AIAgentActionId {
-    fn from(value: AIAgentActionId) -> Self {
-        crate::persistence::model::AIAgentActionId(value.0)
-    }
 }
 
 /// An "action" included in an AI output.
@@ -2549,37 +2513,6 @@ pub enum StaticQueryType {
     Deploy,
     SomethingElse,
     EvaluationSuite,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[allow(clippy::enum_variant_names)]
-pub enum EntrypointType {
-    PromptSuggestion {
-        is_static: bool,
-        is_coding: bool,
-    },
-    ZeroStateAgentModePromptSuggestion,
-    InitProjectRules,
-    TriggerPassiveSuggestion {
-        trigger: Option<PassiveSuggestionTriggerType>,
-    },
-    UserInitiated,
-    AgentInitiated,
-    SharedSession,
-    CloneRepository,
-    ResumeConversation,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[allow(clippy::enum_variant_names)]
-pub enum PassiveSuggestionTriggerType {
-    /// Used for unit test generation.
-    FilesChanged,
-    /// Used for unit test generation.
-    CommandRun,
-
-    ShellCommandCompleted,
-    AgentResponseCompleted,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]

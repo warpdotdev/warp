@@ -1,4 +1,5 @@
 use std::collections::{HashMap, HashSet};
+use std::rc::Rc;
 use std::sync::Arc;
 
 use anyhow::Result;
@@ -12,6 +13,8 @@ use warpui::{
     WindowId,
 };
 
+#[cfg(test)]
+use super::team::TeamVisibility;
 use super::team::{DiscoverableTeam, MembershipRole, Team};
 #[cfg(test)]
 use super::workspace::WorkspaceMemberUsageInfo;
@@ -37,7 +40,9 @@ use crate::settings::{
     AISettings, AISettingsChangedEvent, CodeSettings, CodeSettingsChangedEvent, PrivacySettings,
 };
 #[cfg(test)]
-use crate::workspaces::workspace::{AIAutonomyPolicy, WorkspaceMember, WorkspaceSettings};
+use crate::workspaces::workspace::{
+    AIAutonomyPolicy, SplitListSetting, WorkspaceMember, WorkspaceSettings,
+};
 use crate::workspaces::workspace::{
     AiAutonomySettings, AiOverages, PurchaseAddOnCreditsPolicy, SandboxedAgentSettings,
     UsageBasedPricingSettings,
@@ -73,6 +78,8 @@ pub enum UserWorkspacesEvent {
     TransferTeamOwnershipRejected(anyhow::Error),
     SetTeamMemberRoleSuccess,
     SetTeamMemberRoleRejected(anyhow::Error),
+    RemoveUserFromTeamSuccess,
+    RemoveUserFromTeamRejected(anyhow::Error),
     UpdateWorkspaceSettingsSuccess,
     UpdateWorkspaceSettingsRejected(anyhow::Error),
     AiOveragesUpdated,
@@ -151,6 +158,95 @@ pub struct CreateTeamResponse {
     pub workspace: Workspace,
     pub team: Team,
 }
+
+/// The team an operation is scoped to, captured once from the window that started it.
+///
+/// A logical operation carries its `TeamContextForOperation` from start to finish instead of
+/// asking a window which team is selected now, so concurrent windows on different teams stay
+/// independent and a later team switch cannot retarget work already in flight.
+///
+/// Deliberately neither `Clone` nor `Copy`. Moves make the handoff between the parts of an
+/// operation explicit and reviewable, whereas copies let a scope leak sideways into work
+/// that never established it. Wanting to duplicate one is a sign the second consumer is
+/// really a separate operation that should capture its own scope; if the parts genuinely
+/// share a lifetime, restructure so they share the single owner instead.
+///
+/// This is scope, not authority: the server still authorizes every request made under it.
+///
+/// Prefer [`TeamContext`] when reasonable: convert a `ViewContext` to a `WeakViewHandle`,
+/// carry the handle through moved futures and callbacks, and mint the render context only at
+/// the point of use, so a policy read reflects the window's team at that moment. Reach for
+/// this type instead when the work's *destination* must not move once chosen -- e.g. creating
+/// a Drive object in the team the user was in when they clicked New -- and be ready to justify
+/// that choice; pinning is deliberate, not the default.
+///
+/// Only [`UserWorkspaces::team_context_for_operation`] mints one, always from a real window;
+/// there is no way to fabricate one without a window (there is deliberately no `teamless()`
+/// constructor). Its `team_uid` can still be `None` -- that means the minting window itself
+/// has no team selected, and a getter that accepts this scope should act as if the operation
+/// is not on a team. It must not read some other team's settings as a substitute: see
+/// [`TeamScope`]'s contract. Code with no window at all (e.g. background GEAP token refresh)
+/// is not this type's job -- it needs its own accessor that reads across every one of the
+/// user's teams explicitly, in the shape of `UserWorkspaces::teams_allow_codebase_context`.
+pub(crate) struct TeamContextForOperation {
+    team_uid: Option<ServerId>,
+}
+
+/// Reads a [`TeamContextForOperation`] or [`TeamContext`]'s team, regardless of which one a
+/// caller was handed. Implemented only by those two types — see their docs for what each one
+/// promises about when it was resolved and what it can be used for.
+///
+/// The contract every settings getter built on this trait must follow: take a scope directly
+/// (`&impl TeamScope` or `&dyn TeamScope`), never an optional one (`Option<&dyn TeamScope>`).
+/// A caller with no scope to give has to confront that rather than pass `None` and inherit
+/// some fallback. `team_uid() == None` means the scope's own window/operation has no team, and
+/// the getter must act as if the operation is not on a team -- not substitute another team's
+/// settings. `current_workspace().settings` is a safe fallback only when the user belongs to
+/// no team at all: whenever the user has one or more teams, it is one arbitrarily-chosen
+/// team's effective settings (`GetEffectiveWorkspaceSettingsForWorkspace` server-side), not
+/// workspace-level data. Code with no window at all must not construct a scope to route around
+/// this; it should read across every team explicitly, the way
+/// `UserWorkspaces::teams_allow_codebase_context` does.
+#[allow(dead_code)]
+pub trait TeamScope {
+    fn team_uid(&self) -> Option<ServerId>;
+}
+
+impl TeamScope for TeamContextForOperation {
+    fn team_uid(&self) -> Option<ServerId> {
+        self.team_uid
+    }
+}
+
+#[cfg(test)]
+impl TeamContextForOperation {
+    // Nothing constructs a test context yet; remove this `#[allow(dead_code)]` once a Group 1
+    // migration PR has a real call site.
+    #[allow(dead_code)]
+    pub(crate) fn new_for_test(team_uid: ServerId) -> Self {
+        Self {
+            team_uid: Some(team_uid),
+        }
+    }
+}
+
+/// The team a view renders as, borrowed for the duration of a single read.
+///
+/// It is resolved at the point of use so policy reads follow the view between windows.
+pub struct TeamContext<'a> {
+    #[allow(dead_code)]
+    team_uid: Option<&'a ServerId>,
+}
+
+impl TeamScope for TeamContext<'_> {
+    fn team_uid(&self) -> Option<ServerId> {
+        self.team_uid.copied()
+    }
+}
+
+/// Resolves a [`TeamContext`] on demand from a view captured up front. See
+/// [`UserWorkspaces::team_context_resolver`] for when this is the right tool.
+pub type TeamContextResolver = Rc<dyn for<'a> Fn(&'a AppContext) -> TeamContext<'a>>;
 
 impl UserWorkspaces {
     #[cfg(any(test, all(feature = "tui", feature = "test-util")))]
@@ -319,6 +415,20 @@ impl UserWorkspaces {
         self.window_team_uids.get(&window_id).copied().flatten()
     }
 
+    pub fn switch_window_to_team(
+        &mut self,
+        window_id: WindowId,
+        team_uid: ServerId,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        if self.team_uid_for_window(window_id) == Some(team_uid) {
+            return;
+        }
+        self.window_team_uids.insert(window_id, Some(team_uid));
+        ctx.emit(UserWorkspacesEvent::WindowTeamChanged { window_id });
+        ctx.notify();
+    }
+
     /// Returns `true` when the user belongs to more than one team in the current
     /// workspace, meaning the team-switcher pill and dropdown should be shown.
     /// Single-team and no-workspace users return `false` so their UI is unchanged.
@@ -345,6 +455,57 @@ impl UserWorkspaces {
             .and_then(|window_id| self.team_for_window(window_id))
     }
 
+    /// Captures the team selected in `ctx`'s window as an operation's
+    /// [`TeamContextForOperation`]. This is the only way application code mints one. Always
+    /// succeeds -- a window with no team selected still yields a scope, just one whose
+    /// `team_uid()` is `None`; see [`TeamScope`]'s contract for what that means to a getter.
+    pub(crate) fn team_context_for_operation<T: Entity>(
+        &self,
+        ctx: &ViewContext<T>,
+    ) -> TeamContextForOperation {
+        TeamContextForOperation {
+            team_uid: self.team_uid_for_window(ctx.window_id()),
+        }
+    }
+
+    /// Captures `view` as a reusable source of [`TeamContext`], for consumers that cannot name
+    /// a view at the boundaries where they need one.
+    ///
+    /// Reach for this only when that is genuinely the case -- a model or executor several
+    /// layers below the view that owns it, such as `BlocklistAIActionModel` and the action
+    /// executors it builds, whose methods receive an [`AppContext`] and no handle. Threading a
+    /// `WeakViewHandle` of the owning view's type through those layers would make each of them
+    /// generic over a view they otherwise know nothing about.
+    ///
+    /// A view resolving *itself* is not that case: it should hold a `WeakViewHandle<Self>` and
+    /// call [`Self::team_context`] at the point of use, which costs the same one field and
+    /// keeps the resolution target visible in the struct rather than captured in a closure.
+    ///
+    /// The captured handle is resolved on each call, so the scope still follows the view's
+    /// window; it is the handle that is fixed here, not the team.
+    pub fn team_context_resolver<T: Entity>(view: WeakViewHandle<T>) -> TeamContextResolver {
+        Rc::new(move |app| Self::as_ref(app).team_context(&view, app))
+    }
+
+    /// A resolver for tests that build a model without a window to resolve against.
+    #[cfg(any(test, feature = "test-util"))]
+    pub fn teamless_context_resolver_for_test() -> TeamContextResolver {
+        Rc::new(|_| TeamContext { team_uid: None })
+    }
+
+    /// Resolves `view`'s window team for one read. See [`TeamContext`].
+    ///
+    /// A view that has left its window resolves the same way as a window with no team: to no
+    /// team. Both mean there is no team to govern the read, and a caller on a render path has
+    /// no better answer to give than that.
+    pub(crate) fn team_context<'a, T: Entity>(
+        &'a self,
+        view: &WeakViewHandle<T>,
+        app: &AppContext,
+    ) -> TeamContext<'a> {
+        let team_uid = self.team_for_view_handle(view, app).map(|team| &team.uid);
+        TeamContext { team_uid }
+    }
     /// Returns the windows whose team assignment changed.
     #[must_use]
     fn reconcile_window_team_assignments(&mut self) -> Vec<WindowId> {
@@ -876,12 +1037,18 @@ impl UserWorkspaces {
         }
     }
 
-    /// Returns the AI autonomy settings that are enforced by the workspace for all its members.
-    /// If a setting is `None`, the workspace doesn't enforce a particular setting.
-    pub fn ai_autonomy_settings(&self) -> AiAutonomySettings {
-        self.current_workspace()
-            .map(|workspace| workspace.settings.ai_autonomy_settings.clone())
-            .unwrap_or_default()
+    /// The AI autonomy policy that applies to `scope`'s team.
+    pub(crate) fn ai_autonomy_settings<S: TeamScope + ?Sized>(
+        &self,
+        scope: &S,
+    ) -> AiAutonomySettings {
+        match scope.team_uid().and_then(|id| self.team_from_uid(id)) {
+            Some(team) => AiAutonomySettings::from(&team.settings.ai_autonomy),
+            None => self
+                .current_workspace()
+                .map(|workspace| workspace.settings.ai_autonomy_settings.clone())
+                .unwrap_or_default(),
+        }
     }
 
     /// Returns the sandboxed agent settings enforced by the workspace, if any.
@@ -890,32 +1057,32 @@ impl UserWorkspaces {
             .and_then(|workspace| workspace.settings.sandboxed_agent_settings.clone())
     }
 
-    /// Returns true iff AI autonomy features are allowed for this client.
+    /// Returns true iff AI autonomy features are allowed for `scope`'s team.
     /// TODO: This should be deleted soon. AI autonomy settings have been moved into organization
     /// settings (see `ai_autonomy_settings` above), but there could be an interim time where we
     /// have not set up the org settings yet for an enterprise that previously had the entire
     /// feature set disabled. To capture that case, we'll see if all the settings are `None`;
     /// if so, we'll fall back to their billing metadata's value. Once we've migrated everyone
     /// into org settings, we should remove `is_enabled` from the policy and delete this function.
-    pub fn is_ai_autonomy_allowed(&self) -> bool {
-        self.current_workspace().is_none_or(|workspace| {
-            let settings = &workspace.settings.ai_autonomy_settings;
-            let all_settings_none = settings.apply_code_diffs_setting.is_none()
-                && settings.read_files_setting.is_none()
-                && settings.read_files_allowlist.is_none()
-                && settings.execute_commands_setting.is_none()
-                && settings.execute_commands_allowlist.is_none()
-                && settings.execute_commands_denylist.is_none();
+    pub fn is_ai_autonomy_allowed<S: TeamScope + ?Sized>(&self, scope: &S) -> bool {
+        let settings = self.ai_autonomy_settings(scope);
+        let all_settings_none = settings.apply_code_diffs_setting.is_none()
+            && settings.read_files_setting.is_none()
+            && settings.read_files_allowlist.is_none()
+            && settings.execute_commands_setting.is_none()
+            && settings.execute_commands_allowlist.is_none()
+            && settings.execute_commands_denylist.is_none();
 
-            if all_settings_none {
-                workspace
-                    .billing_metadata
-                    .tier
-                    .ai_autonomy_policy
-                    .is_some_and(|policy| policy.is_enabled)
-            } else {
-                true
-            }
+        if !all_settings_none {
+            return true;
+        }
+
+        self.current_workspace().is_none_or(|workspace| {
+            workspace
+                .billing_metadata
+                .tier
+                .ai_autonomy_policy
+                .is_some_and(|policy| policy.is_enabled)
         })
     }
 
@@ -1168,6 +1335,21 @@ impl UserWorkspaces {
         self.notify_and_emit_teams_changed(ctx);
     }
 
+    fn on_remove_user_from_team(
+        &mut self,
+        result: Result<WorkspacesMetadataWithPricing>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        match result {
+            Err(err) => ctx.emit(UserWorkspacesEvent::RemoveUserFromTeamRejected(err)),
+            Ok(result) => {
+                self.on_workspaces_updated(Ok(result), ctx);
+                ctx.emit(UserWorkspacesEvent::RemoveUserFromTeamSuccess);
+            }
+        };
+        ctx.notify();
+    }
+
     pub fn remove_user_from_team(
         &mut self,
         user_uid: UserUid,
@@ -1182,7 +1364,7 @@ impl UserWorkspaces {
                     .remove_user_from_team(user_uid, team_uid, entrypoint)
                     .await
             },
-            Self::on_workspaces_updated,
+            Self::on_remove_user_from_team,
         );
     }
 
@@ -1813,18 +1995,10 @@ impl UserWorkspaces {
             .unwrap_or(false)
     }
 
-    /// Returns the codebase context settings, taking into account the organization,
-    /// global AI settings, and codebase-specific settings.
-    /// Prefer this function to determine whether to show indexing-related functionality.
+    /// Returns whether codebase context is enabled across all of the user's teams.
     pub fn is_codebase_context_enabled(&self, app: &AppContext) -> bool {
-        // If the organization has an explicit setting, respect it and make user toggle irrelevant.
-        // - Enable: forced ON by org, regardless of user preference.
-        // - Disable: forced OFF by org.
-        // - RespectUserSetting: respect the user setting.
-        let org_setting = self.team_allows_codebase_context();
         let ai_globally_enabled = AISettings::as_ref(app).is_any_ai_enabled(app);
-
-        match org_setting {
+        match self.teams_allow_codebase_context() {
             AdminEnablementSetting::Enable => ai_globally_enabled,
             AdminEnablementSetting::Disable => false,
             AdminEnablementSetting::RespectUserSetting => {
@@ -1848,13 +2022,43 @@ impl UserWorkspaces {
             .unwrap_or_default()
     }
 
-    /// Returns only the organization-specific codebase context enablement setting.
-    /// Do not use this function to determine whether codebase context is generally enabled --
-    /// use `is_codebase_context_enabled` instead.
-    pub fn team_allows_codebase_context(&self) -> AdminEnablementSetting {
-        self.current_workspace()
-            .map(|workspace| workspace.settings.codebase_context_settings.setting.clone())
-            .unwrap_or_default()
+    pub fn teams_allow_codebase_context(&self) -> AdminEnablementSetting {
+        let mut team_settings = self
+            .workspaces
+            .iter()
+            .flat_map(|workspace| workspace.teams.iter())
+            .map(|team| &team.settings.codebase_context.value)
+            .peekable();
+
+        if team_settings.peek().is_none() {
+            return self
+                .current_workspace()
+                .map(|workspace| workspace.settings.codebase_context_settings.setting.clone())
+                .unwrap_or_default();
+        }
+
+        // TODO(isaiah): Enforce codebase-indexing policy per team and window.
+        let mut respects_user_setting = false;
+        for setting in team_settings {
+            match setting {
+                AdminEnablementSetting::Enable => {}
+                AdminEnablementSetting::Disable => return AdminEnablementSetting::Disable,
+                AdminEnablementSetting::RespectUserSetting => respects_user_setting = true,
+            }
+        }
+
+        if respects_user_setting {
+            AdminEnablementSetting::RespectUserSetting
+        } else {
+            AdminEnablementSetting::Enable
+        }
+    }
+
+    pub fn team_disabling_codebase_context(&self) -> Option<&Team> {
+        self.workspaces
+            .iter()
+            .flat_map(|workspace| workspace.teams.iter())
+            .find(|team| team.settings.codebase_context.value == AdminEnablementSetting::Disable)
     }
 
     /// Updates whether or not session sharing is enabled based on the current team's tier policy.
@@ -1882,6 +2086,18 @@ impl UserWorkspaces {
 }
 
 #[cfg(test)]
+fn split_test_list(values: Option<Vec<String>>) -> SplitListSetting<String> {
+    match values {
+        Some(values) => SplitListSetting {
+            team_entries: values.clone(),
+            values,
+            ..Default::default()
+        },
+        None => Default::default(),
+    }
+}
+
+#[cfg(test)]
 impl UserWorkspaces {
     /// Creates a test workspace with a team and sets it as the current workspace.
     /// Returns the workspace UID and admin UID for use in tests.
@@ -1902,12 +2118,13 @@ impl UserWorkspaces {
                 color: None,
                 billing_metadata: BillingMetadata::default(),
                 members: vec![],
-                invite_code: None,
+                invite_link: None,
                 pending_email_invites: vec![],
                 invite_link_domain_restrictions: vec![],
                 stripe_customer_id: None,
                 is_eligible_for_discovery: false,
                 has_billing_history: false,
+                visibility: TeamVisibility::Open,
             }],
             members: vec![WorkspaceMember {
                 uid: owner_uid,
@@ -1925,7 +2142,6 @@ impl UserWorkspaces {
             billing_cycle_usage: None,
             has_billing_history: false,
             settings: workspace_settings,
-            invite_code: None,
             invite_link_domain_restrictions: vec![],
             pending_email_invites: vec![],
             is_eligible_for_discovery: false,
@@ -1974,6 +2190,37 @@ impl UserWorkspaces {
         self.update_current_workspace(
             |workspace| {
                 f(&mut workspace.settings.ai_autonomy_settings);
+                let settings = &workspace.settings.ai_autonomy_settings;
+                let team_settings = &mut workspace
+                    .teams
+                    .first_mut()
+                    .expect("test workspace should have a team")
+                    .settings
+                    .ai_autonomy;
+                team_settings.apply_code_diffs.value = settings.apply_code_diffs_setting;
+                team_settings.read_files.value = settings.read_files_setting;
+                team_settings.execute_commands.value = settings.execute_commands_setting;
+                team_settings.write_to_pty.value = settings.write_to_pty_setting;
+                team_settings.computer_use.value = settings.computer_use_setting;
+                team_settings.read_files_allowlist =
+                    split_test_list(settings.read_files_allowlist.as_ref().map(|items| {
+                        items
+                            .iter()
+                            .map(|path| path.display().to_string())
+                            .collect()
+                    }));
+                team_settings.execute_commands_allowlist = split_test_list(
+                    settings
+                        .execute_commands_allowlist
+                        .as_ref()
+                        .map(|items| items.iter().map(ToString::to_string).collect()),
+                );
+                team_settings.execute_commands_denylist = split_test_list(
+                    settings
+                        .execute_commands_denylist
+                        .as_ref()
+                        .map(|items| items.iter().map(ToString::to_string).collect()),
+                );
             },
             ctx,
         );

@@ -1,6 +1,5 @@
 //! Ambient agent task types and utilities.
 
-use anyhow::anyhow;
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
 #[cfg(not(target_family = "wasm"))]
 pub use cloud_object_models::HarnessModelConfig;
@@ -50,6 +49,11 @@ pub enum AgentSource {
     GitHubWebhook,
     CloudMode,
     Orchestration,
+    Jira,
+    GitLabWebhook,
+    RunScorer,
+    Autofix,
+    BenchmarkTrial,
 }
 
 impl AgentSource {
@@ -68,6 +72,13 @@ impl AgentSource {
             AgentSource::GitHubWebhook => "GITHUB_WEBHOOK",
             AgentSource::CloudMode => "CLOUD_MODE",
             AgentSource::Orchestration => "ORCHESTRATION",
+            AgentSource::Jira => "JIRA",
+            AgentSource::GitLabWebhook => "GITLAB_WEBHOOK",
+            AgentSource::RunScorer => "RUN_SCORER",
+            // The server surfaces the internal AUTOFIX task source under the public
+            // name SELF_IMPROVEMENT (mirrors AgentWebhook/"API" above).
+            AgentSource::Autofix => "SELF_IMPROVEMENT",
+            AgentSource::BenchmarkTrial => "BENCHMARK_TRIAL",
         }
     }
 
@@ -83,13 +94,23 @@ impl AgentSource {
             AgentSource::GitHubAction => "GitHub Action",
             AgentSource::GitHubWebhook => "GitHub",
             AgentSource::Orchestration => "Orchestration",
+            AgentSource::Jira => "Jira",
+            AgentSource::GitLabWebhook => "GitLab",
+            AgentSource::RunScorer => "Scorer",
+            AgentSource::Autofix => "Self-improvement",
+            AgentSource::BenchmarkTrial => "Benchmark",
         }
     }
 
     /// Returns true when tasks from this source must not accept user-triggered cloud follow-ups.
     pub fn blocks_cloud_followups(&self) -> bool {
         match self {
-            AgentSource::GitHubAction | AgentSource::GitHubWebhook => true,
+            AgentSource::GitHubAction
+            | AgentSource::GitHubWebhook
+            | AgentSource::GitLabWebhook
+            | AgentSource::RunScorer
+            | AgentSource::Autofix
+            | AgentSource::BenchmarkTrial => true,
             AgentSource::Linear
             | AgentSource::AgentWebhook
             | AgentSource::Slack
@@ -98,7 +119,8 @@ impl AgentSource {
             | AgentSource::Interactive
             | AgentSource::WebApp
             | AgentSource::CloudMode
-            | AgentSource::Orchestration => false,
+            | AgentSource::Orchestration
+            | AgentSource::Jira => false,
         }
     }
 
@@ -110,13 +132,18 @@ impl AgentSource {
             | AgentSource::Slack
             | AgentSource::Interactive
             | AgentSource::WebApp
-            | AgentSource::CloudMode => true,
+            | AgentSource::CloudMode
+            | AgentSource::Jira => true,
             AgentSource::Cli
             | AgentSource::ScheduledAgent
             | AgentSource::AgentWebhook
             | AgentSource::GitHubAction
             | AgentSource::GitHubWebhook
-            | AgentSource::Orchestration => false,
+            | AgentSource::Orchestration
+            | AgentSource::GitLabWebhook
+            | AgentSource::RunScorer
+            | AgentSource::Autofix
+            | AgentSource::BenchmarkTrial => false,
         }
     }
 }
@@ -158,8 +185,15 @@ where
             "GITHUB_WEBHOOK" => Some(AgentSource::GitHubWebhook),
             "CLOUD_MODE" => Some(AgentSource::CloudMode),
             "ORCHESTRATION" => Some(AgentSource::Orchestration),
+            "JIRA" => Some(AgentSource::Jira),
+            "GITLAB_WEBHOOK" => Some(AgentSource::GitLabWebhook),
+            "RUN_SCORER" => Some(AgentSource::RunScorer),
+            // The server surfaces the internal AUTOFIX task source under the public
+            // name SELF_IMPROVEMENT; accept both spellings.
+            "AUTOFIX" | "SELF_IMPROVEMENT" => Some(AgentSource::Autofix),
+            "BENCHMARK_TRIAL" => Some(AgentSource::BenchmarkTrial),
             _ => {
-                report_error!(anyhow!("Unknown AmbientAgentSource: {}", s));
+                log::warn!("Unknown AmbientAgentSource: {s}");
                 None
             }
         },

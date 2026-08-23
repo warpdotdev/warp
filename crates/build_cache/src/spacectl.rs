@@ -11,6 +11,7 @@
 //!    checks whether each mode supported by `spacectl` applies to the current directory
 //! 2. To set up caches, by running `spacectl cache mount --dry_run=false --mode=...`. This
 //!    configures *only* the requested cache modes
+use std::borrow::Cow;
 use std::future::Future;
 use std::path::{Path, PathBuf};
 
@@ -105,6 +106,11 @@ fn mount_command(cache_root: &Path, cwd: &Path, modes: &[String]) -> Command {
         duration_ms = tracing::field::Empty,
         disk_usage_total = tracing::field::Empty,
         disk_usage_used = tracing::field::Empty,
+        mount_error = tracing::field::Empty,
+        // These fields are interpreted by `tracing-opentelemetry`:
+        // https://docs.rs/tracing-opentelemetry/0.33.0/tracing_opentelemetry/#special-fields
+        otel.status_code = tracing::field::Empty,
+        otel.status_description = tracing::field::Empty,
     )
 )]
 pub(super) async fn run_spacectl_mount<F, Fut>(
@@ -169,9 +175,30 @@ where
             }
         }
         Err(err) => {
-            tracing::error!(error = ?err);
+            let diagnostic = mount_error_diagnostic(&err);
+            let diagnostic: &str = diagnostic.as_ref();
+            span.record("mount_error", diagnostic);
+            span.record("otel.status_code", "ERROR");
+            span.record("otel.status_description", err.to_string());
+            tracing::error!(error = ?err, "spacectl cache mount failed");
             failed_invocation(scope, modes, relative_cache_dir, err, duration)
         }
+    }
+}
+fn mount_error_diagnostic(error: &CacheSetupError) -> Cow<'_, str> {
+    match error {
+        CacheSetupError::NonzeroExit { stderr, .. } if !stderr.is_empty() => Cow::Borrowed(stderr),
+        CacheSetupError::NonzeroExit { exit_code, .. } => match exit_code {
+            Some(exit_code) => Cow::Owned(format!(
+                "spacectl exited unsuccessfully with exit code {exit_code}"
+            )),
+            None => Cow::Borrowed("spacectl exited unsuccessfully without an exit code"),
+        },
+        CacheSetupError::RootCreationFailed
+        | CacheSetupError::SpawnFailed
+        | CacheSetupError::JsonParseFailed
+        | CacheSetupError::Timeout
+        | CacheSetupError::EnvExportFailed => Cow::Owned(error.to_string()),
     }
 }
 

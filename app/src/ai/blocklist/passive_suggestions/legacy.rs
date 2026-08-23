@@ -239,9 +239,9 @@ impl PassiveSuggestionsModel {
             return;
         }
 
-        if should_generate_unit_test_suggestion(block_completed, ctx) {
+        if should_generate_unit_test_suggestion(block_completed, &self.terminal_model, ctx) {
             self.generate_unit_test_suggestion(block_completed.clone(), ctx);
-        } else if should_generate_prompt_suggestions(block_completed, ctx) {
+        } else if should_generate_prompt_suggestions(block_completed, &self.terminal_model, ctx) {
             self.generate_prompt_suggestions(block_completed.clone(), ctx);
         }
     }
@@ -251,11 +251,26 @@ impl PassiveSuggestionsModel {
         block_completed: UserBlockCompleted,
         ctx: &mut ModelContext<Self>,
     ) {
-        let block_id = block_completed.serialized_block.id.clone();
-        let command = block_completed.command.clone();
+        let block_id = block_completed
+            .serialized_block
+            .get_with(|compute| {
+                let model = self.terminal_model.lock();
+                compute(model.block_list())
+            })
+            .id
+            .clone();
+        let command = block_completed
+            .command
+            .get_with(|compute| {
+                let model = self.terminal_model.lock();
+                compute(model.block_list())
+            })
+            .to_owned();
         let start_ts_ms = Utc::now().timestamp_millis();
 
-        if let Some(suggestion) = fetch_static_prompt_suggestion(&block_completed) {
+        if let Some(suggestion) =
+            fetch_static_prompt_suggestion(&block_completed, &self.terminal_model)
+        {
             ctx.emit(PassiveSuggestionsEvent::PromptSuggestionsGenerated {
                 prompt_suggestion: suggestion.clone(),
                 block_id: block_id.clone(),
@@ -322,12 +337,11 @@ impl PassiveSuggestionsModel {
 
         #[cfg(not(target_family = "wasm"))]
         {
-            let Some(current_dir) = block_completed
-                .serialized_block
-                .pwd
-                .as_ref()
-                .map(PathBuf::from)
-            else {
+            let serialized_block = block_completed.serialized_block.get_with(|compute| {
+                let model = self.terminal_model.lock();
+                compute(model.block_list())
+            });
+            let Some(current_dir) = serialized_block.pwd.as_ref().map(PathBuf::from) else {
                 return;
             };
 
@@ -388,6 +402,7 @@ impl PassiveSuggestionsModel {
             .cloned();
         let shell = self.active_session.as_ref(ctx).shell_launch_data(ctx);
 
+        let scope = self.ai_controller.as_ref(ctx).team_context(ctx);
         let can_read_file = BlocklistAIPermissions::as_ref(ctx)
             .can_read_files(
                 None,
@@ -402,6 +417,7 @@ impl PassiveSuggestionsModel {
                     })
                     .collect(),
                 Some(self.terminal_view_id),
+                &scope,
                 ctx,
             )
             .is_allowed();
@@ -573,9 +589,18 @@ impl Entity for PassiveSuggestionsModel {
 
 fn should_generate_prompt_suggestions(
     block_completed: &UserBlockCompleted,
+    terminal_model: &FairMutex<TerminalModel>,
     ctx: &ModelContext<PassiveSuggestionsModel>,
 ) -> bool {
-    if block_completed.command.trim().is_empty() {
+    let command_is_empty = block_completed
+        .command
+        .get_with(|compute| {
+            let model = terminal_model.lock();
+            compute(model.block_list())
+        })
+        .trim()
+        .is_empty();
+    if command_is_empty {
         return false;
     }
     if !NetworkStatus::as_ref(ctx).is_online() {
@@ -588,15 +613,28 @@ fn should_generate_prompt_suggestions(
 
 fn should_generate_unit_test_suggestion(
     block_completed: &UserBlockCompleted,
+    terminal_model: &FairMutex<TerminalModel>,
     ctx: &ModelContext<PassiveSuggestionsModel>,
 ) -> bool {
     let enabled = AISettings::as_ref(ctx).is_code_suggestions_enabled(ctx)
         && UserWorkspaces::as_ref(ctx).is_code_suggestions_toggleable();
 
+    let command = block_completed.command.get_with(|compute| {
+        let model = terminal_model.lock();
+        compute(model.block_list())
+    });
+
     enabled
-        && block_completed.command.starts_with("git")
-        && block_completed.command.contains("commit")
-        && block_completed.serialized_block.exit_code.was_successful()
+        && command.starts_with("git")
+        && command.contains("commit")
+        && block_completed
+            .serialized_block
+            .get_with(|compute| {
+                let model = terminal_model.lock();
+                compute(model.block_list())
+            })
+            .exit_code
+            .was_successful()
 }
 
 fn passive_code_diffs_enabled(ctx: &ModelContext<PassiveSuggestionsModel>) -> bool {
@@ -607,28 +645,47 @@ fn passive_code_diffs_enabled(ctx: &ModelContext<PassiveSuggestionsModel>) -> bo
     is_prompt_suggestions_enabled && is_code_suggestions_enabled && is_toggleable
 }
 
-fn fetch_static_prompt_suggestion(block: &UserBlockCompleted) -> Option<AgentModePromptSuggestion> {
-    if !block.serialized_block.exit_code.was_successful() {
+fn fetch_static_prompt_suggestion(
+    block: &UserBlockCompleted,
+    terminal_model: &FairMutex<TerminalModel>,
+) -> Option<AgentModePromptSuggestion> {
+    let was_successful = block
+        .serialized_block
+        .get_with(|compute| {
+            let model = terminal_model.lock();
+            compute(model.block_list())
+        })
+        .exit_code
+        .was_successful();
+    if !was_successful {
         return None;
     }
-    static_suggested_query(&block.command).map(AgentModePromptSuggestion::Success)
+    let command = block.command.get_with(|compute| {
+        let model = terminal_model.lock();
+        compute(model.block_list())
+    });
+    static_suggested_query(command).map(AgentModePromptSuggestion::Success)
 }
 
 fn build_prompt_suggestions_request(
     block: &UserBlockCompleted,
     execution_context: WarpAiExecutionContext,
-    terminal_model: &Arc<FairMutex<TerminalModel>>,
+    terminal_model: &FairMutex<TerminalModel>,
 ) -> Option<GenerateAMQuerySuggestionsRequest> {
-    let exit_code = block.serialized_block.exit_code;
-    let working_dir = block.serialized_block.pwd.as_ref();
+    let serialized_block = block.serialized_block.get_with(|compute| {
+        let model = terminal_model.lock();
+        compute(model.block_list())
+    });
+    let exit_code = serialized_block.exit_code;
+    let working_dir = serialized_block.pwd.as_ref();
     let (processed_input, processed_output) = {
         let model = terminal_model.lock();
-        let terminal_width = model.block_list().size().columns();
-        let Some(current_block) = model.block_list().block_with_id(&block.serialized_block.id)
-        else {
+        let block_list = model.block_list();
+        let terminal_width = block_list.size().columns();
+        let Some(current_block) = block_list.block_with_id(&serialized_block.id) else {
             report_error!(
                 "Failed to fetch prompt suggestions, could not find block with ID",
-                extra: { "block_id" => ?block.serialized_block.id }
+                extra: { "block_id" => ?serialized_block.id }
             );
             return None;
         };

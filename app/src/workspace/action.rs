@@ -9,6 +9,7 @@ use warpui::accessibility::AccessibilityVerbosity;
 use warpui::geometry::rect::RectF;
 use warpui::geometry::vector::Vector2F;
 use warpui::platform::Cursor;
+use warpui::platform::keyboard::KeyCode;
 use warpui::{EntityId, WeakViewHandle, WindowId};
 
 use super::global_actions::{ForkFromExchange, ForkedConversationDestination};
@@ -304,6 +305,10 @@ pub enum WorkspaceAction {
     DecreaseZoom,
     ResetZoom,
     ActivateTabByNumber(usize),
+    SetTabShortcutModifierKey {
+        key_code: KeyCode,
+        pressed: bool,
+    },
     OpenPalette {
         mode: PaletteMode,
         source: PaletteSource,
@@ -933,6 +938,7 @@ impl WorkspaceAction {
             ContinueThirdPartyConversationLocally { .. } => true,
             ActivateTab(_)
             | ActivateTabByNumber(_)
+            | SetTabShortcutModifierKey { .. }
             | ActivatePrevTab
             | ActivateNextTab
             | ActivateLastTab
