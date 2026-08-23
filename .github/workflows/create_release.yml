@@ -2042,7 +2042,7 @@ jobs:
 
   build_windows_tui_binaries:
     name: Build Release Binary (Windows TUI ${{ matrix.arch }})
-    runs-on: windows-latest-large
+    runs-on: ${{ matrix.runner }}
     needs: prepare_release
     if: ${{ inputs.build_windows != false }}
     timeout-minutes: 150
@@ -2051,7 +2051,9 @@ jobs:
       matrix:
         include:
           - arch: x64
+            runner: windows-latest-large
           - arch: arm64
+            runner: windows-arm-latest-large
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
 
@@ -2063,11 +2065,6 @@ jobs:
           ref: ${{ needs.prepare_release.outputs.release_branch }}
           install_release_deps: true
           ssh_key: ${{ secrets.WARP_CHANNEL_CONFIG_ACCESS_SSH_KEY }}
-
-      - name: Add arm64 target
-        if: ${{ matrix.arch == 'arm64' }}
-        run: rustup target add aarch64-pc-windows-msvc
-        shell: bash
 
       - name: Get channel configuration
         id: get-config
@@ -2115,7 +2112,7 @@ jobs:
   # parallel), then adds the canonical schema and signs it.
   release_windows_tui:
     name: Build Release (Windows TUI ${{ matrix.arch }})
-    runs-on: windows-latest-large
+    runs-on: ${{ matrix.runner }}
     needs: [prepare_release, build_windows_binaries, build_windows_tui_binaries]
     if: ${{ inputs.build_windows != false }}
     timeout-minutes: 150
@@ -2125,8 +2122,10 @@ jobs:
         include:
           - arch: x64
             release_arch: x86_64
+            runner: windows-latest-large
           - arch: arm64
             release_arch: aarch64
+            runner: windows-arm-latest-large
     env:
       TRUSTED_SIGNING_ENDPOINT: https://eus.codesigning.azure.net/
       TRUSTED_SIGNING_ACCOUNT: warpdotdev
@@ -2195,6 +2194,10 @@ jobs:
           file-digest: SHA256
           timestamp-rfc3161: http://timestamp.acs.microsoft.com
           timestamp-digest: SHA256
+          # The action's dependency cache is not keyed by runner architecture, so x64 and arm64
+          # legs of this matrix can clobber each other's cached tools when they run concurrently
+          # (Azure/artifact-signing-action#146).
+          cache-dependencies: false
       - name: Build sign-tool command for Inno Setup
         id: setup_signing
         shell: pwsh
@@ -2269,7 +2272,7 @@ jobs:
           - arch: x64
             runner: windows-latest-large
           - arch: arm64
-            runner: windows-latest-large
+            runner: windows-arm-latest-large
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
 
@@ -2281,11 +2284,6 @@ jobs:
           ref: ${{ needs.prepare_release.outputs.release_branch }}
           install_release_deps: true
           ssh_key: ${{ secrets.WARP_CHANNEL_CONFIG_ACCESS_SSH_KEY }}
-
-      - name: Add arm64 target
-        if: ${{ matrix.arch == 'arm64' }}
-        run: rustup target add aarch64-pc-windows-msvc
-        shell: bash
 
       - name: Get channel configuration
         id: get-config
@@ -2344,7 +2342,7 @@ jobs:
           - arch: x64
             runner: windows-latest-large
           - arch: arm64
-            runner: windows-latest-large
+            runner: windows-arm-latest-large
     env:
       TRUSTED_SIGNING_ENDPOINT: https://eus.codesigning.azure.net/
       TRUSTED_SIGNING_ACCOUNT: warpdotdev
@@ -2407,6 +2405,10 @@ jobs:
           file-digest: SHA256
           timestamp-rfc3161: http://timestamp.acs.microsoft.com
           timestamp-digest: SHA256
+          # The action's dependency cache is not keyed by runner architecture, so x64 and arm64
+          # legs of this matrix can clobber each other's cached tools when they run concurrently
+          # (Azure/artifact-signing-action#146).
+          cache-dependencies: false
 
       # The azure/artifact-signing-action above downloads signtool.exe and the Trusted Signing dlib.
       # We locate them so ISCC can call signtool during compilation to sign the inner setup engine
