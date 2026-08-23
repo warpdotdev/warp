@@ -832,16 +832,8 @@ jobs:
     name: Check CI results
     timeout-minutes: 3
     runs-on: ubuntu-slim
-    # Always run this job on a draft PR, even though `params` was skipped
-    # there - GitHub treats a skipped required check as a pass, so this
-    # gather job must run and explicitly report a non-passing result in that
-    # case rather than skip itself (the checks below already treat a skipped
-    # `params` job as a failure).
-    #
-    # `params` also skips for the repo-sync/* carve-out and the
-    # non-warpdotdev-owner case above; those are left alone here by design,
-    # so this job (and therefore the required check) still skips - and still
-    # counts as passing - for them, matching that path's no-CI-needed intent.
+    # This must run unconditionally on drafts so a draft PR is never treated as passing CI; the
+    # repo-sync/* and non-warpdotdev-owner skips above remain a deliberate exception to that.
     if: >-
       !cancelled() &&
       (needs.params.result != 'skipped' || github.event.pull_request.draft == true)
