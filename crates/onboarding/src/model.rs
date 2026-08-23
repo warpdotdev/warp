@@ -3,10 +3,7 @@ use warp_core::send_telemetry_from_ctx;
 use warpui_core::{Entity, ModelContext};
 
 use crate::OnboardingIntention;
-use crate::slides::{
-    AgentAutonomy, AgentDevelopmentSettings, OfferVariant, OnboardingModelInfo,
-    ProjectOnboardingSettings,
-};
+use crate::slides::{AgentAutonomy, AgentDevelopmentSettings, OfferVariant, OnboardingModelInfo};
 use crate::telemetry::OnboardingEvent;
 
 /// UI customization settings chosen during the "Customize your UI" onboarding slide.
@@ -73,7 +70,6 @@ pub enum SelectedSettings {
     },
     AgentDrivenDevelopment {
         agent_settings: AgentDevelopmentSettings,
-        project_settings: ProjectOnboardingSettings,
         ui_customization: Option<UICustomizationSettings>,
     },
 }
@@ -118,10 +114,6 @@ pub(crate) enum OnboardingStep {
     Agent,
     AiAccess,
     ThirdParty,
-    /// Unreachable in the current flow: the third-party slide advances straight
-    /// to Customize/ThemePicker, so nothing routes into the project slide.
-    #[allow(dead_code)]
-    Project,
     ThemePicker,
     PostAuthOffer,
 }
@@ -300,13 +292,10 @@ pub(crate) struct OnboardingStateModel {
     step: OnboardingStep,
     intention: OnboardingIntention,
     agent_settings: AgentDevelopmentSettings,
-    project_settings: ProjectOnboardingSettings,
     ui_customization: UICustomizationSettings,
     models: Vec<OnboardingModelInfo>,
     /// Whether the workspace enforces autonomy settings, hiding the user selection UI.
     workspace_enforces_autonomy: bool,
-    /// Whether the AgentView feature flag is enabled.
-    agent_modality_enabled: bool,
     /// The AI setup selected on the "Choose your AI setup" slide.
     ai_setup_choice: AiSetupChoice,
     /// The access method selected on the "Choose how to access AI" slide.
@@ -338,18 +327,15 @@ impl OnboardingStateModel {
         models: Vec<OnboardingModelInfo>,
         default_model_id: LLMId,
         workspace_enforces_autonomy: bool,
-        agent_modality_enabled: bool,
         auth_state: OnboardingAuthState,
     ) -> Self {
         Self {
             step: OnboardingStep::Intro,
             intention: OnboardingIntention::AgentDrivenDevelopment,
             agent_settings: AgentDevelopmentSettings::new(default_model_id),
-            project_settings: ProjectOnboardingSettings::default(),
             ui_customization: UICustomizationSettings::agent_defaults(),
             models,
             workspace_enforces_autonomy,
-            agent_modality_enabled,
             ai_setup_choice: AiSetupChoice::default(),
             ai_access_choice: AiAccessChoice::default(),
             auth_state,
@@ -451,7 +437,6 @@ impl OnboardingStateModel {
                         // Agent intention always has notifications enabled (no toggle shown).
                         show_agent_notifications: true,
                     },
-                    project_settings: self.project_settings.clone(),
                     ui_customization,
                 }
             }
@@ -470,16 +455,8 @@ impl OnboardingStateModel {
         &self.agent_settings
     }
 
-    pub(crate) fn project_settings(&self) -> &ProjectOnboardingSettings {
-        &self.project_settings
-    }
-
     pub(crate) fn workspace_enforces_autonomy(&self) -> bool {
         self.workspace_enforces_autonomy
-    }
-
-    pub(crate) fn agent_modality_enabled(&self) -> bool {
-        self.agent_modality_enabled
     }
 
     pub(crate) fn ai_setup_choice(&self) -> AiSetupChoice {
@@ -1064,40 +1041,6 @@ impl OnboardingStateModel {
         ctx.notify();
     }
 
-    pub(crate) fn set_project_selected_local_folder(
-        &mut self,
-        path: Option<String>,
-        ctx: &mut ModelContext<Self>,
-    ) {
-        if path.is_some() {
-            send_telemetry_from_ctx!(OnboardingEvent::FolderSelected, ctx);
-        }
-        self.project_settings = ProjectOnboardingSettings::from_path(path);
-        ctx.notify();
-    }
-
-    pub(crate) fn toggle_project_initialize_projects_automatically(
-        &mut self,
-        ctx: &mut ModelContext<Self>,
-    ) {
-        if let ProjectOnboardingSettings::Project {
-            initialize_projects_automatically,
-            ..
-        } = &mut self.project_settings
-        {
-            let new_value = !*initialize_projects_automatically;
-            send_telemetry_from_ctx!(
-                OnboardingEvent::SettingChanged {
-                    setting: "initialize_project".to_string(),
-                    value: new_value.to_string(),
-                },
-                ctx
-            );
-            *initialize_projects_automatically = new_value;
-            ctx.notify();
-        }
-    }
-
     fn send_completion_telemetry(&self, ctx: &mut ModelContext<Self>) {
         if warp_core::features::FeatureFlag::AccountFirstOnboarding.is_enabled() {
             send_telemetry_from_ctx!(
@@ -1122,17 +1065,12 @@ impl OnboardingStateModel {
             ),
         };
 
-        let has_project_path = matches!(
-            self.project_settings,
-            ProjectOnboardingSettings::Project { .. }
-        );
-
         send_telemetry_from_ctx!(
             OnboardingEvent::OnboardingSlidesCompleted {
                 intention,
                 model,
                 autonomy,
-                has_project_path,
+                has_project_path: false,
                 ai_access,
             },
             ctx
@@ -1163,8 +1101,7 @@ impl OnboardingStateModel {
                 | OnboardingStep::AiSetup
                 | OnboardingStep::Agent
                 | OnboardingStep::AiAccess
-                | OnboardingStep::ThirdParty
-                | OnboardingStep::Project => Some(OnboardingStep::Intro),
+                | OnboardingStep::ThirdParty => Some(OnboardingStep::Intro),
             }
         } else {
             match self.step {
@@ -1184,7 +1121,6 @@ impl OnboardingStateModel {
                 OnboardingStep::AiAccess => Some(OnboardingStep::Agent),
                 OnboardingStep::Agent => Some(OnboardingStep::AiSetup),
                 OnboardingStep::ThirdParty => Some(OnboardingStep::AiSetup),
-                OnboardingStep::Project => Some(OnboardingStep::ThirdParty),
                 OnboardingStep::ThemePicker => Some(OnboardingStep::Customize),
                 OnboardingStep::PostAuthOffer => None,
             }
@@ -1226,8 +1162,7 @@ impl OnboardingStateModel {
                 | OnboardingStep::AiSetup
                 | OnboardingStep::Agent
                 | OnboardingStep::AiAccess
-                | OnboardingStep::ThirdParty
-                | OnboardingStep::Project => self.set_step(OnboardingStep::Intro, ctx),
+                | OnboardingStep::ThirdParty => self.set_step(OnboardingStep::Intro, ctx),
             }
         } else {
             match self.step {
@@ -1252,7 +1187,6 @@ impl OnboardingStateModel {
                         self.set_step(OnboardingStep::ThemePicker, ctx)
                     }
                 }
-                OnboardingStep::Project => self.set_step(OnboardingStep::ThemePicker, ctx),
                 OnboardingStep::ThemePicker => {}
                 OnboardingStep::PostAuthOffer => {}
             }
@@ -1286,7 +1220,6 @@ impl OnboardingStateModel {
             OnboardingStep::Customize => "customize",
             OnboardingStep::Agent => "agent",
             OnboardingStep::ThirdParty => "third_party",
-            OnboardingStep::Project => "project",
         };
         send_telemetry_from_ctx!(
             OnboardingEvent::SlideViewed {
@@ -1311,8 +1244,7 @@ impl OnboardingStateModel {
                 | OnboardingStep::AiSetup
                 | OnboardingStep::Agent
                 | OnboardingStep::AiAccess
-                | OnboardingStep::ThirdParty
-                | OnboardingStep::Project => (0, 3),
+                | OnboardingStep::ThirdParty => (0, 3),
                 OnboardingStep::Customize => (0, 3),
                 OnboardingStep::ThemePicker => (1, 3),
                 OnboardingStep::PostAuthOffer => (0, 0),
@@ -1347,8 +1279,6 @@ impl OnboardingStateModel {
                 }
             }
             OnboardingStep::ThirdParty => 2,
-            // Unreachable in the new flow; keep the legacy position.
-            OnboardingStep::Project => 3,
             OnboardingStep::ThemePicker => step_count - 1,
             OnboardingStep::PostAuthOffer => 0,
         };
@@ -1365,7 +1295,6 @@ impl OnboardingStateModel {
             OnboardingStep::Agent => "agent",
             OnboardingStep::AiAccess => "ai_access",
             OnboardingStep::ThirdParty => "third_party",
-            OnboardingStep::Project => "project",
             OnboardingStep::PostAuthOffer => self
                 .offer_variant
                 .expect("offer variant is selected before entering the post-auth offer")

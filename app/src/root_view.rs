@@ -2204,7 +2204,6 @@ impl RootView {
                 models,
                 default_model_id,
                 enforces_autonomy,
-                FeatureFlag::AgentView.is_enabled(),
                 auth_state,
                 ctx,
             );

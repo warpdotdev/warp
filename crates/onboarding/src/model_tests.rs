@@ -49,7 +49,6 @@ fn add_model(app: &mut App) -> ModelHandle<OnboardingStateModel> {
             Vec::new(),
             LLMId::from("auto"),
             false,
-            true,
             OnboardingAuthState::FreeUser,
         )
     })

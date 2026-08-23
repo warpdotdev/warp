@@ -17,7 +17,7 @@ use crate::model::{
 use crate::slides::{
     AgentSlide, AiAccessSlide, AiAccessSlideEvent, AiSetupSlide, CustomizeUISlide, IntentionSlide,
     IntroSlide, IntroSlideEvent, OfferSlide, OfferSlideEvent, OfferVariant, OnboardingModelInfo,
-    OnboardingSlide, ProjectSlide, ThemePickerSlide, ThemePickerSlideEvent, ThirdPartySlide,
+    OnboardingSlide, ThemePickerSlide, ThemePickerSlideEvent, ThirdPartySlide,
 };
 use crate::telemetry::OnboardingEvent;
 
@@ -97,7 +97,6 @@ pub struct AgentOnboardingView {
     ai_access_slide: Option<ViewHandle<AiAccessSlide>>,
     offer_slide: Option<ViewHandle<OfferSlide>>,
     third_party_slide: Option<ViewHandle<ThirdPartySlide>>,
-    project_slide: Option<ViewHandle<ProjectSlide>>,
     skippable: bool,
     close_button: button::Button,
     no_ai_confirm_button: button::Button,
@@ -156,7 +155,6 @@ impl AgentOnboardingView {
         models: Vec<OnboardingModelInfo>,
         default_model_id: LLMId,
         workspace_enforces_autonomy: bool,
-        agent_modality_enabled: bool,
         auth_state: OnboardingAuthState,
         ctx: &mut ViewContext<Self>,
     ) -> Self {
@@ -166,7 +164,6 @@ impl AgentOnboardingView {
                 models,
                 default_model_id,
                 workspace_enforces_autonomy,
-                agent_modality_enabled,
                 auth_state,
             )
         });
@@ -293,13 +290,6 @@ impl AgentOnboardingView {
             Some(ctx.add_typed_action_view(move |ctx| ThirdPartySlide::new(onboarding_state, ctx)))
         };
 
-        let project_slide = if account_first {
-            None
-        } else {
-            let onboarding_state = onboarding_state.clone();
-            Some(ctx.add_typed_action_view(move |_| ProjectSlide::new(onboarding_state)))
-        };
-
         // When the app regains focus (e.g. user returning from the upgrade page in the
         // browser), notify the parent to refresh models and workspace/billing metadata.
         // Debounced to avoid excessive API calls from rapid alt-tabbing.
@@ -330,7 +320,6 @@ impl AgentOnboardingView {
             ai_access_slide,
             offer_slide,
             third_party_slide,
-            project_slide,
             skippable,
             close_button: button::Button::default(),
             no_ai_confirm_button: button::Button::default(),
@@ -830,9 +819,6 @@ impl View for AgentOnboardingView {
                     .expect("fallback slide exists"),
             )
             .finish(),
-            OnboardingStep::Project => {
-                ChildView::new(self.project_slide.as_ref().expect("fallback slide exists")).finish()
-            }
             OnboardingStep::PostAuthOffer => {
                 ChildView::new(self.offer_slide.as_ref().expect("offer slide exists")).finish()
             }
@@ -984,13 +970,6 @@ impl TypedActionView for AgentOnboardingView {
                 }),
             OnboardingStep::ThirdParty => self
                 .third_party_slide
-                .as_ref()
-                .expect("fallback slide exists")
-                .update(ctx, |slide, ctx| {
-                    dispatch_onboarding_action_to_slide(slide, *action, ctx)
-                }),
-            OnboardingStep::Project => self
-                .project_slide
                 .as_ref()
                 .expect("fallback slide exists")
                 .update(ctx, |slide, ctx| {

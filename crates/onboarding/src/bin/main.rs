@@ -154,13 +154,11 @@ impl OnboardingMainView {
             },
         ];
         let onboarding_view = ctx.add_typed_action_view(move |ctx| {
-            // agent_modality_enabled is false for demo purposes
             AgentOnboardingView::new(
                 themes.clone(),
                 true,
                 models.clone(),
                 default_model_id.clone(),
-                false,
                 false,
                 onboarding::OnboardingAuthState::LoggedOut,
                 ctx,
