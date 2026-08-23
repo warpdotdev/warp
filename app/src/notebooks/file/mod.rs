@@ -213,6 +213,10 @@ impl FileState {
     }
 }
 
+/// Keymap context identifier present only while this pane can toggle between rendered and raw
+/// Markdown, so the toggle binding is inert on panes that have no such mode.
+pub const MARKDOWN_TOGGLEABLE_CONTEXT: &str = "FileNotebookView_MarkdownToggleable";
+
 pub fn init(app: &mut AppContext) {
     use warpui::keymap::macros::*;
 
@@ -230,6 +234,13 @@ pub fn init(app: &mut AppContext) {
             FileNotebookAction::ReloadFile,
         )
         .with_context_predicate(id!("FileNotebookView")),
+        EditableBinding::new(
+            "notebookview:show_raw_markdown",
+            "Show raw Markdown",
+            FileNotebookAction::ToggleMarkdownDisplayMode(MarkdownDisplayMode::Raw),
+        )
+        .with_context_predicate(id!(MARKDOWN_TOGGLEABLE_CONTEXT))
+        .with_key_binding("cmdorctrl-e"),
     ])
 }
 
@@ -1012,6 +1023,14 @@ impl Entity for FileNotebookView {
 impl View for FileNotebookView {
     fn ui_name() -> &'static str {
         "FileNotebookView"
+    }
+
+    fn keymap_context(&self, _app: &AppContext) -> warpui::keymap::Context {
+        let mut context = Self::default_keymap_context();
+        if self.shows_markdown_toggle() {
+            context.set.insert(MARKDOWN_TOGGLEABLE_CONTEXT);
+        }
+        context
     }
 
     fn accessibility_contents(&self, _ctx: &AppContext) -> Option<AccessibilityContent> {

@@ -476,3 +476,53 @@ fn test_file_notebook_mermaid_context_menu_does_not_show_copy_image() {
         });
     });
 }
+
+/// The toggle binding is scoped by keymap context rather than filtered inside the handler, so the
+/// context identifier must be absent on panes that have no rendered/raw mode to switch between.
+#[test]
+fn test_markdown_toggle_keymap_context() {
+    App::test((), |mut app| async move {
+        init_app(&mut app);
+        let (_, handle) = app.add_window(WindowStyle::NotStealFocus, FileNotebookView::new);
+        let session = Arc::new(Session::test());
+
+        app.read(|ctx| {
+            assert!(
+                !handle
+                    .as_ref(ctx)
+                    .keymap_context(ctx)
+                    .set
+                    .contains(super::MARKDOWN_TOGGLEABLE_CONTEXT),
+                "an empty pane has no rendered/raw mode to toggle"
+            );
+        });
+
+        handle.update(&mut app, |file_notebook, ctx| {
+            file_notebook.open_local("../README.md", Some(session.clone()), ctx);
+        });
+        app.read(|ctx| {
+            assert!(
+                handle
+                    .as_ref(ctx)
+                    .keymap_context(ctx)
+                    .set
+                    .contains(super::MARKDOWN_TOGGLEABLE_CONTEXT),
+                "a Markdown pane should expose the toggle context"
+            );
+        });
+
+        handle.update(&mut app, |file_notebook, ctx| {
+            file_notebook.open_local("../Cargo.toml", Some(session), ctx);
+        });
+        app.read(|ctx| {
+            assert!(
+                !handle
+                    .as_ref(ctx)
+                    .keymap_context(ctx)
+                    .set
+                    .contains(super::MARKDOWN_TOGGLEABLE_CONTEXT),
+                "a non-Markdown pane should not expose the toggle context"
+            );
+        });
+    });
+}
