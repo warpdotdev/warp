@@ -993,12 +993,6 @@ pub fn test_multiple_required_args_for_option() {
     );
 }
 
-/// An option whose declared arguments differ must offer the argument at the position being
-/// completed, not the last one. Completing the *first* value of `--required-args` (a fragment is
-/// present, so it routes through `complete_option`) must offer the first argument's suggestions.
-/// Before the fix, `.last()` offered the second argument's suggestions -- the "wrong candidates"
-/// symptom seen live on `master` (e.g. `cargo fmt -- --print-config m` offering file paths instead
-/// of its verbosity enum). The trailing-space and last-value forms are already covered above.
 #[cfg(not(feature = "v2"))]
 #[test]
 pub fn test_option_first_arg_resolves_by_position() {
@@ -1011,10 +1005,42 @@ pub fn test_option_first_arg_resolves_by_position() {
     );
 }
 
-/// Regression test for the `ln -s ~/` routing: `ln`'s `-s` declares `[source_file (files+folders
-/// template), link_name (bare)]`, so completing the first value must resolve `source_file`. With no
-/// file-path fallback (as in the native-completions dispatch), the bare `link_name` yields nothing
-/// -- the "empty-then-native" symptom -- so this pins that the templated first argument is used.
+#[cfg(not(feature = "v2"))]
+#[test]
+pub fn test_option_equals_form_resolves_first_arg() {
+    let registry = create_test_command_registry([test_signature()]);
+    let ctx = FakeCompletionContext::new(registry);
+
+    assert_eq!(
+        complete_at_end_of_line("test --required-args=a", &ctx),
+        vec!["arg-1-1", "arg-1-2"]
+    );
+}
+
+#[cfg(not(feature = "v2"))]
+#[test]
+pub fn test_repeated_option_resolves_args_per_instance() {
+    let registry = create_test_command_registry([test_signature()]);
+    let ctx = FakeCompletionContext::new(registry);
+
+    // Each occurrence counts its own values: the second `--required-args` resolves its first value
+    // to the first argument and its second value to the second argument.
+    assert_eq!(
+        complete_at_end_of_line(
+            "test --required-args arg-1-1 arg-2-1 --required-args a",
+            &ctx
+        ),
+        vec!["arg-1-1", "arg-1-2"]
+    );
+    assert_eq!(
+        complete_at_end_of_line(
+            "test --required-args arg-1-1 arg-2-1 --required-args arg-1-1 a",
+            &ctx
+        ),
+        vec!["arg-2-1", "arg-2-2"]
+    );
+}
+
 #[cfg(not(feature = "v2"))]
 #[test]
 pub fn test_option_arg_resolves_templated_source_file() {
@@ -1028,8 +1054,8 @@ pub fn test_option_arg_resolves_templated_source_file() {
     let ctx = FakeCompletionContext::new(create_test_command_registry([ln_signature()]))
         .with_path_completion_context(path_ctx);
 
-    // No file-path fallback, matching the native-completions dispatch: a bare argument produces
-    // nothing, so only a resolved template yields results.
+    // With the file-path fallback off, a bare (untemplated) argument yields nothing, so a result
+    // appears only when a template is resolved -- what makes the misresolution observable here.
     let complete_no_fallback = |line: &str| {
         suggestions_for_test(
             line,
@@ -1051,15 +1077,8 @@ pub fn test_option_arg_resolves_templated_source_file() {
         .collect::<Vec<_>>()
     };
 
-    // A fragment (`~/`) is present, so this routes through `complete_option`; the first value must
-    // resolve `source_file`'s template (previously `.last()` chose the bare `link_name` -> empty).
     assert_eq!(complete_no_fallback("ln -s ~/"), vec!["bar", "baz/"]);
-
-    // Trailing space (no fragment) already resolved correctly through the parser's index-aware
-    // missing-value branch -- pinned so checking only this form wouldn't mask the bug above.
     assert_eq!(complete_no_fallback("ln -s "), vec!["bar", "baz/"]);
-
-    // The positional path was never affected: `ln ~/` resolves the top-level `source_file`.
     assert_eq!(complete_no_fallback("ln ~/"), vec!["bar", "baz/"]);
 }
 

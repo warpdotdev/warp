@@ -945,9 +945,8 @@ pub fn ls_signature() -> Signature {
     }
 }
 
-/// Models `ln`: the `-s` option (and the top-level positionals) declare a templated `source_file`
-/// (files and folders) followed by a bare `link_name`. Completing the first value must resolve the
-/// template, not the bare last argument -- the shape behind the `ln -s ~/` routing bug.
+/// Models `ln`: the `-s` option and the top-level positionals both declare a templated
+/// `source_file` (files and folders) followed by a bare `link_name`.
 pub fn ln_signature() -> Signature {
     let source_and_link_args = || {
         vec![
