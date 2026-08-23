@@ -1023,8 +1023,6 @@ pub fn test_repeated_option_resolves_args_per_instance() {
     let registry = create_test_command_registry([test_signature()]);
     let ctx = FakeCompletionContext::new(registry);
 
-    // Each occurrence counts its own values: the second `--required-args` resolves its first value
-    // to the first argument and its second value to the second argument.
     assert_eq!(
         complete_at_end_of_line(
             "test --required-args arg-1-1 arg-2-1 --required-args a",
@@ -1041,15 +1039,10 @@ pub fn test_repeated_option_resolves_args_per_instance() {
     );
 }
 
-/// A multi-typed option -- a static enum first, a path template last -- must offer the first
-/// argument's enum when completing the first value, not the last argument's paths. Modeled on the
-/// `rustfmt --print-config <emit> <file>` shape.
 #[cfg(not(feature = "v2"))]
 #[test]
 pub fn test_option_first_value_offers_enum_not_path() {
     let pwd = TypedPathBuf::from(TEST_WORK_DIR);
-    // The pwd holds entries the path-typed last argument would return, so a regression that
-    // resolves it instead of the enum would surface them here.
     let path_ctx = MockPathCompletionContext::new(pwd.clone()).with_entries_in_pwd([
         EngineDirEntry::test_dir("minimize"),
         EngineDirEntry::test_file("default.bak"),
@@ -1059,8 +1052,6 @@ pub fn test_option_first_value_offers_enum_not_path() {
     ]))
     .with_path_completion_context(path_ctx);
 
-    // With the file-path fallback off, every result comes from the option's own arguments, so a
-    // first value resolved to the path-typed last argument would show cwd entries, not the enum.
     let complete_no_fallback = |line: &str| {
         suggestions_for_test(
             line,
@@ -1082,14 +1073,11 @@ pub fn test_option_first_value_offers_enum_not_path() {
         .collect::<Vec<_>>()
     };
 
-    // Trailing space resolves the first value by index through the parser -- it offers the enum.
     assert_eq!(
         complete_no_fallback("rustfmt --print-config "),
         vec!["default", "minimal", "current"]
     );
 
-    // A typed fragment routes through `complete_option`; it must still resolve the first argument
-    // and offer the enum, never the last argument's cwd paths.
     assert_eq!(
         complete_no_fallback("rustfmt --print-config min"),
         vec!["minimal"]
