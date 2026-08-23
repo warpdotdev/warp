@@ -15467,10 +15467,11 @@ impl Workspace {
                         Some((prompt, attachments))
                     })
                 });
+                let scope = UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx);
                 model_handle.update(ctx, |model, ctx| {
                     model.set_environment_id(Some(env_id), ctx);
                     if let Some((prompt, attachments)) = pending {
-                        model.spawn_agent(prompt, attachments, ctx);
+                        model.spawn_agent(prompt, attachments, &scope, ctx);
                     }
                 });
             }

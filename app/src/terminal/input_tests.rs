@@ -1524,10 +1524,7 @@ fn attach_ambient_view_model_builds_composer_selectors_for_fresh_cloud_pane_in_v
 
         let input = terminal.read(&app, |view, _| view.input().clone());
         input.update(&mut app, |input, ctx| {
-            let team_context_resolver = UserWorkspaces::team_context_resolver(ctx.handle());
-            let view_model = ctx.add_model(|ctx| {
-                AmbientAgentViewModel::new(terminal_view_id, team_context_resolver, ctx)
-            });
+            let view_model = ctx.add_model(|ctx| AmbientAgentViewModel::new(terminal_view_id, ctx));
             input.attach_ambient_agent_view_model(view_model, ctx);
 
             assert!(
@@ -1571,10 +1568,7 @@ fn attach_ambient_view_model_skips_composer_selectors_for_actual_shared_session_
 
         let input = terminal.read(&app, |view, _| view.input().clone());
         input.update(&mut app, |input, ctx| {
-            let team_context_resolver = UserWorkspaces::team_context_resolver(ctx.handle());
-            let view_model = ctx.add_model(|ctx| {
-                AmbientAgentViewModel::new(terminal_view_id, team_context_resolver, ctx)
-            });
+            let view_model = ctx.add_model(|ctx| AmbientAgentViewModel::new(terminal_view_id, ctx));
             input.attach_ambient_agent_view_model(view_model, ctx);
 
             assert!(
@@ -1616,10 +1610,7 @@ fn cloud_mode_host_selector_shown_when_connected_workers_present() {
 
         let input = terminal.read(&app, |view, _| view.input().clone());
         input.update(&mut app, |input, ctx| {
-            let team_context_resolver = UserWorkspaces::team_context_resolver(ctx.handle());
-            let view_model = ctx.add_model(|ctx| {
-                AmbientAgentViewModel::new(terminal_view_id, team_context_resolver, ctx)
-            });
+            let view_model = ctx.add_model(|ctx| AmbientAgentViewModel::new(terminal_view_id, ctx));
             input.attach_ambient_agent_view_model(view_model, ctx);
         });
 

@@ -34,7 +34,7 @@ use crate::terminal::model::block::{
 use crate::terminal::model::session::active_session::ActiveSession;
 use crate::terminal::model_events::{ModelEvent, ModelEventDispatcher};
 use crate::terminal::shell::ShellType;
-use crate::workspaces::user_workspaces::TeamContextResolver;
+use crate::workspaces::user_workspaces::TeamContext;
 use crate::{TelemetryEvent, send_telemetry_from_ctx};
 
 pub struct ShellCommandExecutor {
@@ -108,10 +108,9 @@ impl ShellCommandExecutor {
     pub(super) fn should_autoexecute(
         &self,
         input: ExecuteActionInput,
-        team_context_resolver: &TeamContextResolver,
-        ctx: &mut ModelContext<Self>,
+        scope: &TeamContext<'_>,
+        ctx: &ModelContext<Self>,
     ) -> bool {
-        let scope = team_context_resolver(ctx);
         let blocklist_permissions = BlocklistAIPermissions::as_ref(ctx);
         match &input.action.action {
             AIAgentActionType::RequestCommandOutput {
@@ -135,7 +134,7 @@ impl ShellCommandExecutor {
                     is_read_only.unwrap_or(false),
                     *is_risky,
                     Some(self.terminal_view_id),
-                    &scope,
+                    scope,
                     ctx,
                 );
                 if let CommandExecutionPermission::Allowed(reason) = autoexecution_permission {
@@ -162,7 +161,7 @@ impl ShellCommandExecutor {
                     let should_autoexecute = match blocklist_permissions.can_write_to_pty(
                         &input.conversation_id,
                         Some(self.terminal_view_id),
-                        &scope,
+                        scope,
                         ctx,
                     ) {
                         WriteToPtyPermission::AlwaysAllow => true,

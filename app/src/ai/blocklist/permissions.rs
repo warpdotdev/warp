@@ -238,7 +238,7 @@ impl BlocklistAIPermissions {
                 ..Default::default()
             }
         } else {
-            UserWorkspaces::as_ref(ctx).ai_autonomy_settings_for_scope(scope)
+            UserWorkspaces::as_ref(ctx).ai_autonomy_settings(scope)
         }
     }
 
@@ -1258,16 +1258,7 @@ pub(crate) fn is_agent_mode_autonomy_allowed<S: TeamScope + ?Sized>(
     scope: &S,
     ctx: &AppContext,
 ) -> bool {
-    let user_workspaces = UserWorkspaces::as_ref(ctx);
-    let settings = user_workspaces.ai_autonomy_settings_for_scope(scope);
-    UserWorkspaces::autonomy_allowed_by_policy(&settings)
-        || user_workspaces.current_workspace().is_none_or(|workspace| {
-            workspace
-                .billing_metadata
-                .tier
-                .ai_autonomy_policy
-                .is_some_and(|policy| policy.is_enabled)
-        })
+    UserWorkspaces::as_ref(ctx).is_ai_autonomy_allowed(scope)
 }
 
 #[cfg(test)]

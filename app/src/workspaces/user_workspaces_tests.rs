@@ -51,9 +51,7 @@ use warpui_extras::user_preferences;
 
 use super::*;
 use crate::ai::blocklist::is_agent_mode_autonomy_allowed;
-use crate::ai::execution_profiles::{
-    ActionPermission, ComputerUsePermission, WriteToPtyPermission,
-};
+use crate::ai::execution_profiles::ActionPermission;
 use crate::ai::llms::LLMModelHost;
 use crate::auth::AuthManager;
 use crate::cloud_object::model::persistence::CloudModel;
@@ -78,8 +76,7 @@ use crate::workspaces::update_manager::TeamUpdateManager;
 use crate::workspaces::user_workspaces::UserWorkspaces;
 use crate::workspaces::workspace::{
     AdminEnablementSetting, EnforceableSetting, HostEnablementSetting, LlmHostSettings,
-    MultiAdminPolicy, PurchaseAddOnCreditsPolicy, SplitListSetting, TeamAiAutonomySettings,
-    Workspace,
+    MultiAdminPolicy, PurchaseAddOnCreditsPolicy, SplitListSetting, Workspace,
 };
 
 #[derive(Default)]
@@ -1332,14 +1329,14 @@ fn test_ai_autonomy_settings_resolve_each_windows_own_team() {
             let user_workspaces = UserWorkspaces::as_ref(ctx);
             assert_eq!(
                 user_workspaces
-                    .ai_autonomy_settings_for_scope(&scope_a)
+                    .ai_autonomy_settings(&scope_a)
                     .execute_commands_setting,
                 Some(ActionPermission::AlwaysAsk),
                 "the window on team A should read team A's policy"
             );
             assert_eq!(
                 user_workspaces
-                    .ai_autonomy_settings_for_scope(&scope_b)
+                    .ai_autonomy_settings(&scope_b)
                     .execute_commands_setting,
                 Some(ActionPermission::AlwaysAllow),
                 "the window on team B should read team B's policy"
@@ -1373,7 +1370,7 @@ fn test_ai_autonomy_settings_for_a_teamless_window_fall_back_to_the_workspace() 
         app.read(|ctx| {
             assert_eq!(
                 UserWorkspaces::as_ref(ctx)
-                    .ai_autonomy_settings_for_scope(&scope)
+                    .ai_autonomy_settings(&scope)
                     .execute_commands_setting,
                 Some(ActionPermission::AlwaysAllow),
                 "a window on no team falls back to the workspace policy"
@@ -1406,7 +1403,7 @@ fn test_ai_autonomy_settings_fall_back_to_the_workspace_for_a_user_with_no_teams
         app.read(|ctx| {
             assert_eq!(
                 UserWorkspaces::as_ref(ctx)
-                    .ai_autonomy_settings_for_scope(&scope)
+                    .ai_autonomy_settings(&scope)
                     .execute_commands_setting,
                 Some(ActionPermission::AlwaysAllow),
                 "with no teams at all the workspace layer is genuinely team-neutral, so it is \
@@ -1442,7 +1439,7 @@ fn test_a_captured_autonomy_scope_does_not_follow_its_window_to_another_team() {
         app.read(|ctx| {
             assert_eq!(
                 UserWorkspaces::as_ref(ctx)
-                    .ai_autonomy_settings_for_scope(&captured)
+                    .ai_autonomy_settings(&captured)
                     .execute_commands_setting,
                 Some(ActionPermission::AlwaysAsk),
             );
@@ -1457,7 +1454,7 @@ fn test_a_captured_autonomy_scope_does_not_follow_its_window_to_another_team() {
             let user_workspaces = UserWorkspaces::as_ref(ctx);
             assert_eq!(
                 user_workspaces
-                    .ai_autonomy_settings_for_scope(&captured)
+                    .ai_autonomy_settings(&captured)
                     .execute_commands_setting,
                 None,
                 "the captured scope's team is gone, so it imposes no policy rather than \
@@ -1467,7 +1464,7 @@ fn test_a_captured_autonomy_scope_does_not_follow_its_window_to_another_team() {
             let resolved = user_workspaces.team_context(&weak_view, ctx);
             assert_eq!(
                 user_workspaces
-                    .ai_autonomy_settings_for_scope(&resolved)
+                    .ai_autonomy_settings(&resolved)
                     .execute_commands_setting,
                 Some(ActionPermission::AlwaysAllow),
                 "a freshly resolved scope follows the window onto team B"
@@ -1498,7 +1495,7 @@ fn test_an_unconfigured_team_list_setting_is_not_an_override() {
         });
 
         app.read(|ctx| {
-            let settings = UserWorkspaces::as_ref(ctx).ai_autonomy_settings_for_scope(&scope);
+            let settings = UserWorkspaces::as_ref(ctx).ai_autonomy_settings(&scope);
             assert!(
                 !settings.has_override_for_execute_commands_allowlist(),
                 "an admin who has configured no allowlist entries is not enforcing an empty \
@@ -1537,7 +1534,7 @@ fn test_a_team_list_setting_overrides_with_its_merged_values() {
         });
 
         app.read(|ctx| {
-            let settings = UserWorkspaces::as_ref(ctx).ai_autonomy_settings_for_scope(&scope);
+            let settings = UserWorkspaces::as_ref(ctx).ai_autonomy_settings(&scope);
             assert!(settings.has_override_for_execute_commands_allowlist());
             let allowlist = settings
                 .execute_commands_allowlist
@@ -1584,7 +1581,7 @@ fn test_disjoint_admin_allowlists_are_an_override_that_permits_nothing() {
         });
 
         app.read(|ctx| {
-            let settings = UserWorkspaces::as_ref(ctx).ai_autonomy_settings_for_scope(&scope);
+            let settings = UserWorkspaces::as_ref(ctx).ai_autonomy_settings(&scope);
             assert!(
                 settings.has_override_for_execute_commands_allowlist(),
                 "both layers configured an allowlist, so the intersection being empty is an \
@@ -1600,108 +1597,6 @@ fn test_disjoint_admin_allowlists_are_an_override_that_permits_nothing() {
             );
         });
     })
-}
-
-/// [`TeamAiAutonomySettings::configures_any_policy`] exists so the windowless aggregate does
-/// not have to lower the team shape on a render path. It only helps if it agrees with the
-/// lowered check for every field, including the list fields whose override rule is subtle.
-#[test]
-fn test_team_autonomy_configuration_agrees_with_the_lowered_policy() {
-    let configured_list = SplitListSetting {
-        values: vec!["ls".to_string()],
-        workspace_entries: vec!["ls".to_string()],
-        team_entries: vec!["ls".to_string()],
-    };
-    let intersected_to_nothing = SplitListSetting {
-        values: vec![],
-        workspace_entries: vec!["ls".to_string()],
-        team_entries: vec!["git status".to_string()],
-    };
-
-    let cases = [
-        ("nothing configured", TeamAiAutonomySettings::default()),
-        (
-            "apply_code_diffs",
-            TeamAiAutonomySettings {
-                apply_code_diffs: autonomy_setting(ActionPermission::AlwaysAsk),
-                ..Default::default()
-            },
-        ),
-        (
-            "read_files",
-            TeamAiAutonomySettings {
-                read_files: autonomy_setting(ActionPermission::AlwaysAsk),
-                ..Default::default()
-            },
-        ),
-        (
-            "execute_commands",
-            TeamAiAutonomySettings {
-                execute_commands: autonomy_setting(ActionPermission::AlwaysAsk),
-                ..Default::default()
-            },
-        ),
-        (
-            "read_files_allowlist",
-            TeamAiAutonomySettings {
-                read_files_allowlist: configured_list.clone(),
-                ..Default::default()
-            },
-        ),
-        (
-            "execute_commands_allowlist intersected to nothing",
-            TeamAiAutonomySettings {
-                execute_commands_allowlist: intersected_to_nothing,
-                ..Default::default()
-            },
-        ),
-        (
-            "execute_commands_denylist",
-            TeamAiAutonomySettings {
-                execute_commands_denylist: configured_list,
-                ..Default::default()
-            },
-        ),
-        // None of the next three counts as evidence of autonomy in the lowered check, so
-        // both implementations must ignore them. `write_to_pty` and `computer_use` are the
-        // likeliest to drift: the lowering does carry them into `AiAutonomySettings`, so
-        // they read as omissions from the check rather than as fields it has no view of.
-        (
-            "write_to_pty only",
-            TeamAiAutonomySettings {
-                write_to_pty: EnforceableSetting {
-                    value: Some(WriteToPtyPermission::AlwaysAsk),
-                    is_enforced_by_workspace: false,
-                },
-                ..Default::default()
-            },
-        ),
-        (
-            "computer_use only",
-            TeamAiAutonomySettings {
-                computer_use: EnforceableSetting {
-                    value: Some(ComputerUsePermission::AlwaysAsk),
-                    is_enforced_by_workspace: false,
-                },
-                ..Default::default()
-            },
-        ),
-        (
-            "create_plans only",
-            TeamAiAutonomySettings {
-                create_plans: autonomy_setting(ActionPermission::AlwaysAsk),
-                ..Default::default()
-            },
-        ),
-    ];
-
-    for (name, team_settings) in cases {
-        assert_eq!(
-            team_settings.configures_any_policy(),
-            UserWorkspaces::autonomy_allowed_by_policy(&AiAutonomySettings::from(&team_settings)),
-            "the unlowered and lowered checks disagree for: {name}"
-        );
-    }
 }
 
 /// The tier policy is the interim fallback for a team whose admins enforce nothing, and it

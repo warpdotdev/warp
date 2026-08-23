@@ -211,8 +211,7 @@ fn apply_agent_settings(
         );
     });
 
-    let team_autonomy_settings =
-        UserWorkspaces::as_ref(app).ai_autonomy_settings_for_scope(team_context);
+    let team_autonomy_settings = UserWorkspaces::as_ref(app).ai_autonomy_settings(team_context);
 
     AISettings::handle(app).update(app, |settings, ctx| {
         report_if_error!(

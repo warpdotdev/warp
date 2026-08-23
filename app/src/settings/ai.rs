@@ -2480,7 +2480,7 @@ impl AISettings {
         app: &AppContext,
     ) -> bool {
         let set_by_workspace = UserWorkspaces::as_ref(app)
-            .ai_autonomy_settings_for_scope(scope)
+            .ai_autonomy_settings(scope)
             .has_override_for_execute_commands_allowlist();
 
         self.is_any_ai_enabled(app) && !set_by_workspace
@@ -2492,7 +2492,7 @@ impl AISettings {
         app: &AppContext,
     ) -> bool {
         let set_by_workspace = UserWorkspaces::as_ref(app)
-            .ai_autonomy_settings_for_scope(scope)
+            .ai_autonomy_settings(scope)
             .has_override_for_read_files_allowlist();
 
         self.is_any_ai_enabled(app) && !set_by_workspace
@@ -2504,7 +2504,7 @@ impl AISettings {
         app: &AppContext,
     ) -> bool {
         let set_by_workspace = UserWorkspaces::as_ref(app)
-            .ai_autonomy_settings_for_scope(scope)
+            .ai_autonomy_settings(scope)
             .has_override_for_execute_commands();
 
         self.is_any_ai_enabled(app) && !set_by_workspace
@@ -2516,7 +2516,7 @@ impl AISettings {
         app: &AppContext,
     ) -> bool {
         let set_by_workspace = UserWorkspaces::as_ref(app)
-            .ai_autonomy_settings_for_scope(scope)
+            .ai_autonomy_settings(scope)
             .has_override_for_write_to_pty();
         self.is_any_ai_enabled(app) && !set_by_workspace
     }
@@ -2527,7 +2527,7 @@ impl AISettings {
         app: &AppContext,
     ) -> bool {
         let set_by_workspace = UserWorkspaces::as_ref(app)
-            .ai_autonomy_settings_for_scope(scope)
+            .ai_autonomy_settings(scope)
             .has_override_for_computer_use();
         self.is_any_ai_enabled(app) && !set_by_workspace
     }
@@ -2538,7 +2538,7 @@ impl AISettings {
         app: &AppContext,
     ) -> bool {
         let set_by_workspace = UserWorkspaces::as_ref(app)
-            .ai_autonomy_settings_for_scope(scope)
+            .ai_autonomy_settings(scope)
             .has_override_for_read_files();
 
         self.is_any_ai_enabled(app) && !set_by_workspace
@@ -2550,7 +2550,7 @@ impl AISettings {
         app: &AppContext,
     ) -> bool {
         let set_by_workspace = UserWorkspaces::as_ref(app)
-            .ai_autonomy_settings_for_scope(scope)
+            .ai_autonomy_settings(scope)
             .has_override_for_code_diffs();
 
         self.is_any_ai_enabled(app) && !set_by_workspace

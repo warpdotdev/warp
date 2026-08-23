@@ -148,7 +148,7 @@ impl AgentProfilesPageView {
         let ai_autonomy_settings = {
             let user_workspaces = workspace.as_ref(ctx);
             let scope = user_workspaces.team_context(&self_handle, ctx);
-            user_workspaces.ai_autonomy_settings_for_scope(&scope)
+            user_workspaces.ai_autonomy_settings(&scope)
         };
         ctx.subscribe_to_model(&workspace, |me, workspace, event, ctx| {
             if let UserWorkspacesEvent::TeamsChanged = event {
@@ -157,8 +157,7 @@ impl AgentProfilesPageView {
 
                 let is_any_ai_enabled = AISettings::as_ref(ctx).is_any_ai_enabled(ctx);
                 let scope = me.team_context(ctx);
-                let ai_autonomy_settings =
-                    workspace.as_ref(ctx).ai_autonomy_settings_for_scope(&scope);
+                let ai_autonomy_settings = workspace.as_ref(ctx).ai_autonomy_settings(&scope);
 
                 update_editor_interaction_state(
                     me.command_denylist_editor.as_ref(ctx).editor().clone(),
@@ -417,7 +416,7 @@ impl AgentProfilesPageView {
                     let is_enabled = AISettings::as_ref(ctx).is_any_ai_enabled(ctx);
                     let scope = me.team_context(ctx);
                     let ai_autonomy_settings =
-                        UserWorkspaces::as_ref(ctx).ai_autonomy_settings_for_scope(&scope);
+                        UserWorkspaces::as_ref(ctx).ai_autonomy_settings(&scope);
 
                     update_editor_interaction_state(
                         me.command_execution_allowlist_editor
@@ -2589,7 +2588,7 @@ impl AgentsWidget {
         let mut widget_children = vec![permissions_subheader];
 
         if UserWorkspaces::as_ref(app)
-            .ai_autonomy_settings_for_scope(&scope)
+            .ai_autonomy_settings(&scope)
             .has_any_overrides()
         {
             widget_children.push(

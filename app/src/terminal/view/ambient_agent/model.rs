@@ -46,7 +46,7 @@ use crate::server::server_api::ai::{
 };
 use crate::terminal::CLIAgent;
 use crate::terminal::view::ambient_agent::{SetupCommandGroupId, SetupCommandState};
-use crate::workspaces::user_workspaces::TeamContextResolver;
+use crate::workspaces::user_workspaces::TeamScope;
 
 /// Tracks progress timestamps for each step during ambient agent spawning.
 #[derive(Debug, Clone)]
@@ -128,7 +128,6 @@ enum LocalToCloudHandoffState {
 /// Model to track the state of an ambient agent run.
 pub struct AmbientAgentViewModel {
     status: Status,
-    team_context_resolver: TeamContextResolver,
 
     /// The request with which the cloud agent was spawned, if it was spawned.
     request: Option<SpawnAgentRequest>,
@@ -195,11 +194,7 @@ pub struct AmbientAgentViewModel {
 }
 
 impl AmbientAgentViewModel {
-    pub(crate) fn new(
-        terminal_view_id: EntityId,
-        team_context_resolver: TeamContextResolver,
-        ctx: &mut ModelContext<Self>,
-    ) -> Self {
+    pub(crate) fn new(terminal_view_id: EntityId, ctx: &mut ModelContext<Self>) -> Self {
         ctx.subscribe_to_model(&CloudModel::handle(ctx), |me, _, event, ctx| {
             me.handle_cloud_model_event(event, ctx);
         });
@@ -243,7 +238,6 @@ impl AmbientAgentViewModel {
 
         Self {
             status: Status::Composing,
-            team_context_resolver,
             request: None,
             terminal_view_id,
             environment_id: None,
@@ -1010,13 +1004,16 @@ impl AmbientAgentViewModel {
     /// host (`WARP_CLOUD_MODE_DEFAULT_HOST`), and the pane's currently-selected env
     /// and harness. Shared by `spawn_agent` and the local-to-cloud handoff path so
     /// both flows route to the same worker host and inherit the same defaults.
-    pub(crate) fn build_default_spawn_config(&self, ctx: &AppContext) -> AgentConfigSnapshot {
+    pub(crate) fn build_default_spawn_config(
+        &self,
+        scope: &impl TeamScope,
+        ctx: &AppContext,
+    ) -> AgentConfigSnapshot {
         let selected_harness = self.selected_harness();
         let computer_use_enabled = if selected_harness == Harness::Oz {
             // If the harness is Oz, determine computer use based on workspace AI autonomy settings.
-            let scope = (self.team_context_resolver)(ctx);
             let CloudAgentComputerUseState { enabled, .. } =
-                resolve_cloud_agent_computer_use_state(&scope, ctx);
+                resolve_cloud_agent_computer_use_state(scope, ctx);
             Some(enabled)
         } else {
             None
@@ -1066,9 +1063,10 @@ impl AmbientAgentViewModel {
         &mut self,
         prompt: String,
         attachments: Vec<AttachmentInput>,
+        scope: &impl TeamScope,
         ctx: &mut ModelContext<Self>,
     ) {
-        let config = Some(self.build_default_spawn_config(ctx));
+        let config = Some(self.build_default_spawn_config(scope, ctx));
 
         let (prompt, mode) = extract_user_query_mode(prompt);
         let request = SpawnAgentRequest {

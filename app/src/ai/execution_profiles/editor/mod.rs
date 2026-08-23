@@ -1371,8 +1371,7 @@ impl ExecutionProfileEditorView {
     fn update_all_editor_interaction_states(view: &Self, ctx: &mut ViewContext<Self>) {
         let is_any_ai_enabled = AISettings::as_ref(ctx).is_any_ai_enabled(ctx);
         let scope = view.team_context(ctx);
-        let ai_autonomy_settings =
-            UserWorkspaces::as_ref(ctx).ai_autonomy_settings_for_scope(&scope);
+        let ai_autonomy_settings = UserWorkspaces::as_ref(ctx).ai_autonomy_settings(&scope);
 
         Self::update_editor_interaction_state(
             view.command_denylist_editor.as_ref(ctx).editor().clone(),

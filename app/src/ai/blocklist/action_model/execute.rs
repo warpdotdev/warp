@@ -967,35 +967,36 @@ impl BlocklistAIActionExecutor {
             | AIAgentActionType::ReadShellCommandOutput { .. }
             | AIAgentActionType::TransferShellCommandControlToUser { .. } => {
                 self.shell_command_executor.update(ctx, |executor, ctx| {
-                    executor.should_autoexecute(input, &team_context_resolver, ctx)
+                    executor.should_autoexecute(input, &team_context_resolver(ctx), ctx)
                 })
             }
             AIAgentActionType::ReadFiles(_) => {
                 self.read_files_executor.update(ctx, |executor, ctx| {
-                    executor.should_autoexecute(input, &team_context_resolver, ctx)
+                    executor.should_autoexecute(input, &team_context_resolver(ctx), ctx)
                 })
             }
             AIAgentActionType::UploadArtifact(_) => {
                 self.upload_artifact_executor.update(ctx, |executor, ctx| {
-                    executor.should_autoexecute(input, &team_context_resolver, ctx)
+                    executor.should_autoexecute(input, &team_context_resolver(ctx), ctx)
                 })
             }
             AIAgentActionType::SearchCodebase(_) => {
                 self.search_codebase_executor.update(ctx, |executor, ctx| {
-                    executor.should_autoexecute(input, &team_context_resolver, ctx)
+                    executor.should_autoexecute(input, &team_context_resolver(ctx), ctx)
                 })
             }
-            AIAgentActionType::RequestFileEdits { .. } => self
-                .request_file_edits_executor
-                .update(ctx, |executor, ctx| {
-                    executor.should_autoexecute(input, &team_context_resolver, ctx)
-                }),
+            AIAgentActionType::RequestFileEdits { .. } => {
+                self.request_file_edits_executor
+                    .update(ctx, |executor, ctx| {
+                        executor.should_autoexecute(input, &team_context_resolver(ctx), ctx)
+                    })
+            }
             AIAgentActionType::Grep { .. } => self.grep_executor.update(ctx, |executor, ctx| {
-                executor.should_autoexecute(input, &team_context_resolver, ctx)
+                executor.should_autoexecute(input, &team_context_resolver(ctx), ctx)
             }),
             AIAgentActionType::FileGlob { .. } | AIAgentActionType::FileGlobV2 { .. } => {
                 self.file_glob_executor.update(ctx, |executor, ctx| {
-                    executor.should_autoexecute(input, &team_context_resolver, ctx)
+                    executor.should_autoexecute(input, &team_context_resolver(ctx), ctx)
                 })
             }
             AIAgentActionType::CallMCPTool { .. } => self
@@ -1025,11 +1026,12 @@ impl BlocklistAIActionExecutor {
             AIAgentActionType::UseComputer(_) => self
                 .use_computer_executor
                 .update(ctx, |executor, ctx| executor.should_autoexecute(input, ctx)),
-            AIAgentActionType::RequestComputerUse(_) => self
-                .request_computer_use_executor
-                .update(ctx, |executor, ctx| {
-                    executor.should_autoexecute(input, &team_context_resolver, ctx)
-                }),
+            AIAgentActionType::RequestComputerUse(_) => {
+                self.request_computer_use_executor
+                    .update(ctx, |executor, ctx| {
+                        executor.should_autoexecute(input, &team_context_resolver(ctx), ctx)
+                    })
+            }
             AIAgentActionType::StartRecording { .. } => self
                 .start_recording_executor
                 .update(ctx, |executor, ctx| executor.should_autoexecute(input, ctx)),

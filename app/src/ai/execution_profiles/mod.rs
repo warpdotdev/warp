@@ -66,7 +66,7 @@ pub fn resolve_cloud_agent_computer_use_state(
     }
 
     let autonomy_setting = UserWorkspaces::as_ref(ctx)
-        .ai_autonomy_settings_for_scope(scope)
+        .ai_autonomy_settings(scope)
         .computer_use_setting;
     let user_preference = *AISettings::as_ref(ctx).cloud_agent_computer_use_enabled;
 

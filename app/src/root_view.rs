@@ -189,17 +189,11 @@ fn handle_onboarding_credit_purchase_event(
 
 /// Whether the team selected in `ctx`'s window imposes any AI autonomy policy, which is
 /// what decides whether onboarding offers the user an autonomy choice at all.
-///
-/// Resolved from the view's handle at each call rather than captured once: this describes
-/// where the window is pointed now, and a window can be switched to another team while
-/// onboarding is up. A view that is no longer in a window reads as teamless, the same
-/// answer a genuinely teamless window gives.
 fn team_enforces_autonomy(ctx: &ViewContext<RootView>) -> bool {
-    let view = ctx.handle();
     let user_workspaces = UserWorkspaces::as_ref(ctx);
-    let scope = user_workspaces.team_context(&view, ctx);
+    let scope = user_workspaces.team_context(&ctx.handle(), ctx);
     user_workspaces
-        .ai_autonomy_settings_for_scope(&scope)
+        .ai_autonomy_settings(&scope)
         .has_any_overrides()
 }
 
@@ -2206,7 +2200,7 @@ impl RootView {
         let themes = onboarding_theme_picker_themes();
         // Resolved against the root view rather than inside the closure below: the view being
         // constructed there is not in a window yet, so it cannot resolve its own team.
-        let workspace_enforces_autonomy = team_enforces_autonomy(ctx);
+        let enforces_autonomy = team_enforces_autonomy(ctx);
         let onboarding_view = ctx.add_typed_action_view(move |ctx| {
             let (models, default_model_id) =
                 build_onboarding_models(LLMPreferences::as_ref(ctx), ctx);
@@ -2218,7 +2212,7 @@ impl RootView {
                 false, // Always use unskippable onboarding.
                 models,
                 default_model_id,
-                workspace_enforces_autonomy,
+                enforces_autonomy,
                 FeatureFlag::AgentView.is_enabled(),
                 auth_state,
                 ctx,
@@ -2265,14 +2259,7 @@ impl RootView {
         ctx.subscribe_to_model(
             &UserWorkspaces::handle(ctx),
             move |_, _user_workspaces, event, ctx| {
-                let autonomy_enforcement_may_have_changed = match event {
-                    UserWorkspacesEvent::TeamsChanged => true,
-                    UserWorkspacesEvent::WindowTeamChanged { window_id } => {
-                        *window_id == ctx.window_id()
-                    }
-                    _ => false,
-                };
-                if autonomy_enforcement_may_have_changed {
+                if matches!(event, UserWorkspacesEvent::UpdateWorkspaceSettingsSuccess) {
                     let workspace_enforces_autonomy = team_enforces_autonomy(ctx);
                     onboarding_view_for_workspaces.update(ctx, |onboarding_view, ctx| {
                         onboarding_view

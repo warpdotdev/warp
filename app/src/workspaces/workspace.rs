@@ -1074,18 +1074,19 @@ pub struct SplitListSetting<T> {
 }
 
 impl<T> SplitListSetting<T> {
-    /// Whether an admin layer configured this list, as far as the client can tell.
+    /// Whether an admin layer configured this list.
     ///
-    /// Empty `values` does not mean nobody configured one. Allowlists merge by
-    /// intersection server-side, so two layers with disjoint allowlists produce empty
-    /// `values` while both entry lists are populated — an override that permits nothing,
-    /// not an absent one. Reading only `values` there would drop a deny-by-default policy
-    /// and fall through to whatever the user's own profile allows.
+    /// Empty `values` does not answer that: the two allowlists merge by intersection
+    /// server-side, so layers configuring `["ls"]` and `["git status"]` yield empty `values`
+    /// with both entry lists populated. Reading `values` alone would call that unconfigured
+    /// and fall back to the user's own profile allowlist, granting exemptions neither admin
+    /// granted. The denylists and regex lists merge by union, where empty `values` already
+    /// implies empty entries, so the entry checks are inert for them.
     ///
-    /// One case remains indistinguishable: a layer that explicitly configured an empty
-    /// list leaves all three empty and so reads as unconfigured. The server separates that
-    /// with `StringListSettingInfo.isConfigured`, which the client's vendored schema copy
-    /// predates.
+    /// Clearing a list stores it as unset rather than empty -- that is how an admin reverts
+    /// to no constraint -- so "configured but empty" does not arise. If that changes,
+    /// `StringListSettingInfo.isConfigured` answers this directly, once the vendored schema
+    /// copy is re-pulled to include it.
     pub fn is_configured(&self) -> bool {
         !(self.values.is_empty()
             && self.workspace_entries.is_empty()
@@ -1116,22 +1117,6 @@ pub struct TeamAiAutonomySettings {
     pub read_files_allowlist: SplitListSetting<String>,
     pub execute_commands_allowlist: SplitListSetting<String>,
     pub execute_commands_denylist: SplitListSetting<String>,
-}
-
-impl TeamAiAutonomySettings {
-    /// Whether an admin configured any of the policies that count as evidence autonomy is
-    /// in use — the same fields the lowered [`AiAutonomySettings`] is inspected for.
-    ///
-    /// Answers without lowering on purpose: lowering compiles every allow- and denylist
-    /// entry into a regex, and this question does not need one.
-    pub fn configures_any_policy(&self) -> bool {
-        self.apply_code_diffs.value.is_some()
-            || self.read_files.value.is_some()
-            || self.read_files_allowlist.is_configured()
-            || self.execute_commands.value.is_some()
-            || self.execute_commands_allowlist.is_configured()
-            || self.execute_commands_denylist.is_configured()
-    }
 }
 
 impl From<&TeamAiAutonomySettings> for AiAutonomySettings {
