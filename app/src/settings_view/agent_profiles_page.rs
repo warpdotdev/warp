@@ -522,11 +522,26 @@ impl AgentProfilesPageView {
             }
         });
 
-        let current_permission = BlocklistAIPermissions::as_ref(ctx).active_permissions_profile(
-            None,
-            &team_context,
-            ctx,
-        );
+        let (
+            current_permission,
+            code_diffs_editable,
+            read_files_editable,
+            execute_commands_editable,
+            write_to_pty_editable,
+            org_denylist,
+        ) = {
+            let scope = UserWorkspaces::as_ref(ctx).team_context(&self_handle, ctx);
+            let permissions = BlocklistAIPermissions::as_ref(ctx);
+            let ai_settings = AISettings::as_ref(ctx);
+            (
+                permissions.active_permissions_profile(None, &scope, ctx),
+                ai_settings.is_code_diffs_permissions_editable(&scope, ctx),
+                ai_settings.is_read_files_permissions_editable(&scope, ctx),
+                ai_settings.is_execute_commands_permissions_editable(&scope, ctx),
+                ai_settings.is_write_to_pty_permissions_editable(&scope, ctx),
+                BlocklistAIPermissions::get_org_execute_commands_denylist(&scope, ctx),
+            )
+        };
 
         let apply_code_diffs_dropdown_menu = ctx.add_typed_action_view(|ctx| {
             let mut dropdown = Dropdown::new(ctx);
@@ -555,7 +570,7 @@ impl AgentProfilesPageView {
         Self::refresh_execution_profile_dropdown_menu(
             &apply_code_diffs_dropdown_menu,
             current_permission.apply_code_diffs,
-            !AISettings::as_ref(ctx).is_code_diffs_permissions_editable(&team_context, ctx),
+            !code_diffs_editable,
             ctx,
         );
 
@@ -585,7 +600,7 @@ impl AgentProfilesPageView {
         Self::refresh_execution_profile_dropdown_menu(
             &read_files_dropdown_menu,
             current_permission.read_files,
-            !AISettings::as_ref(ctx).is_read_files_permissions_editable(&team_context, ctx),
+            !read_files_editable,
             ctx,
         );
 
@@ -615,7 +630,7 @@ impl AgentProfilesPageView {
         Self::refresh_execution_profile_dropdown_menu(
             &execute_commands_dropdown_menu,
             current_permission.execute_commands,
-            !AISettings::as_ref(ctx).is_execute_commands_permissions_editable(&team_context, ctx),
+            !execute_commands_editable,
             ctx,
         );
 
@@ -647,7 +662,7 @@ impl AgentProfilesPageView {
         Self::refresh_write_to_pty_dropdown_menu(
             &write_to_pty_autonomy_dropdown_menu,
             current_permission.write_to_pty,
-            !AISettings::as_ref(ctx).is_write_to_pty_permissions_editable(&team_context, ctx),
+            !write_to_pty_editable,
             ctx,
         );
 
@@ -763,8 +778,6 @@ impl AgentProfilesPageView {
             }
         });
 
-        let org_denylist =
-            BlocklistAIPermissions::get_org_execute_commands_denylist(&team_context, ctx);
         let command_denylist_mouse_state_handles = current_permission
             .command_denylist
             .iter()

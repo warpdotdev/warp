@@ -1131,7 +1131,7 @@ fn test_window_team_reconciliation_moves_rendering_but_not_a_captured_context() 
             assert_eq!(
                 UserWorkspaces::as_ref(ctx)
                     .team_context(&weak_view, ctx)
-                    .and_then(|context| context.team_uid()),
+                    .team_uid(),
                 Some(team_a.uid),
             );
         });
@@ -1144,7 +1144,7 @@ fn test_window_team_reconciliation_moves_rendering_but_not_a_captured_context() 
             assert_eq!(
                 UserWorkspaces::as_ref(ctx)
                     .team_context(&weak_view, ctx)
-                    .and_then(|context| context.team_uid()),
+                    .team_uid(),
                 Some(team_b.uid),
                 "a freshly resolved render context should follow the window to team B"
             );
@@ -1282,9 +1282,7 @@ fn test_team_contexts_represent_a_registered_teamless_window() {
 
         let weak_view = view.downgrade();
         app.read(|ctx| {
-            let context = UserWorkspaces::as_ref(ctx)
-                .team_context(&weak_view, ctx)
-                .expect("a registered teamless window should resolve");
+            let context = UserWorkspaces::as_ref(ctx).team_context(&weak_view, ctx);
             assert_eq!(context.team_uid(), None);
         });
     })
@@ -1737,12 +1735,8 @@ fn test_ai_autonomy_allowed_uses_the_scoped_team() {
 
         app.read(|ctx| {
             let user_workspaces = UserWorkspaces::as_ref(ctx);
-            let scope_a = user_workspaces
-                .team_context(&view_a, ctx)
-                .expect("window A should have a team context");
-            let scope_b = user_workspaces
-                .team_context(&view_b, ctx)
-                .expect("window B should have a team context");
+            let scope_a = user_workspaces.team_context(&view_a, ctx);
+            let scope_b = user_workspaces.team_context(&view_b, ctx);
             assert!(
                 is_agent_mode_autonomy_allowed(&scope_a, ctx),
                 "team A configures autonomy, so its window should allow autonomy"
@@ -1773,9 +1767,7 @@ fn test_ai_autonomy_allowed_uses_the_workspace_tier_fallback() {
         let view = view.downgrade();
 
         app.read(|ctx| {
-            let scope = UserWorkspaces::as_ref(ctx)
-                .team_context(&view, ctx)
-                .expect("window should have a team context");
+            let scope = UserWorkspaces::as_ref(ctx).team_context(&view, ctx);
             assert!(is_agent_mode_autonomy_allowed(&scope, ctx));
         });
     })
@@ -1798,9 +1790,7 @@ fn test_ai_autonomy_falls_back_to_the_workspace_layer_with_no_teams() {
         let view = view.downgrade();
 
         app.read(|ctx| {
-            let scope = UserWorkspaces::as_ref(ctx)
-                .team_context(&view, ctx)
-                .expect("teamless window should have a team context");
+            let scope = UserWorkspaces::as_ref(ctx).team_context(&view, ctx);
             assert!(
                 is_agent_mode_autonomy_allowed(&scope, ctx),
                 "a user with no teams reads the workspace layer, which is team-neutral for them"

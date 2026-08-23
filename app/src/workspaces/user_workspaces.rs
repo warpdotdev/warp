@@ -244,6 +244,8 @@ impl TeamScope for TeamContext<'_> {
     }
 }
 
+/// Resolves a [`TeamContext`] on demand from a view captured up front. See
+/// [`UserWorkspaces::team_context_resolver`] for when this is the right tool.
 pub type TeamContextResolver = Rc<dyn for<'a> Fn(&'a AppContext) -> TeamContext<'a>>;
 
 impl UserWorkspaces {
@@ -466,8 +468,21 @@ impl UserWorkspaces {
         }
     }
 
-    /// A [`TeamContext`] source for consumers that have no view handle of their own -- models
-    /// and executors, which must resolve against the view that owns them.
+    /// Captures `view` as a reusable source of [`TeamContext`], for consumers that cannot name
+    /// a view at the boundaries where they need one.
+    ///
+    /// Reach for this only when that is genuinely the case -- a model or executor several
+    /// layers below the view that owns it, such as `BlocklistAIActionModel` and the action
+    /// executors it builds, whose methods receive an [`AppContext`] and no handle. Threading a
+    /// `WeakViewHandle` of the owning view's type through those layers would make each of them
+    /// generic over a view they otherwise know nothing about.
+    ///
+    /// A view resolving *itself* is not that case: it should hold a `WeakViewHandle<Self>` and
+    /// call [`Self::team_context`] at the point of use, which costs the same one field and
+    /// keeps the resolution target visible in the struct rather than captured in a closure.
+    ///
+    /// The captured handle is resolved on each call, so the scope still follows the view's
+    /// window; it is the handle that is fixed here, not the team.
     pub fn team_context_resolver<T: Entity>(view: WeakViewHandle<T>) -> TeamContextResolver {
         Rc::new(move |app| Self::as_ref(app).team_context(&view, app))
     }
