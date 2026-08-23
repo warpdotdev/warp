@@ -399,6 +399,9 @@ impl SearchCodebaseExecutor {
                             GetRelevantFilesError::Missing => {
                                 "The current directory isn't within a git repository, which is necessary to search for relevant files.".to_owned()
                             }
+                            GetRelevantFilesError::NotAuthorizedForTeam => {
+                                "Codebase search isn't available for this window's team.".to_owned()
+                            }
                         };
                     ActionExecution::Sync(AIAgentActionResultType::SearchCodebase(
                         SearchCodebaseResult::Failed {

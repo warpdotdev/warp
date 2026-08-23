@@ -1978,13 +1978,57 @@ impl UserWorkspaces {
 
     /// Returns whether codebase context is enabled across all of the user's teams.
     pub fn is_codebase_context_enabled(&self, app: &AppContext) -> bool {
+        Self::resolve_codebase_context_enabled(self.teams_allow_codebase_context(), app)
+    }
+
+    /// Like [`Self::is_codebase_context_enabled`], but evaluated for a specific team scope
+    /// (`None` for a no-team/personal scope) instead of assumed from the current workspace's
+    /// shared settings blob. Codebase-indexing decisions that create, sync, retrieve, or
+    /// expose an index on behalf of a particular window or conversation must go through this,
+    /// so that two windows on different teams in the same workspace get independently correct
+    /// answers instead of both reading the same workspace-wide setting.
+    pub fn is_codebase_context_enabled_for_team(
+        &self,
+        team: Option<&Team>,
+        app: &AppContext,
+    ) -> bool {
+        let org_setting = team.map_or_else(
+            || self.teams_allow_codebase_context(),
+            |team| team.settings.codebase_context.value.clone(),
+        );
+        Self::resolve_codebase_context_enabled(org_setting, app)
+    }
+
+    /// Shared resolution from an org (workspace/team) `AdminEnablementSetting` plus global AI
+    /// enablement and the user's own toggle to a final enabled/disabled answer.
+    fn resolve_codebase_context_enabled(
+        org_setting: AdminEnablementSetting,
+        app: &AppContext,
+    ) -> bool {
         let ai_globally_enabled = AISettings::as_ref(app).is_any_ai_enabled(app);
-        match self.teams_allow_codebase_context() {
+        match org_setting {
             AdminEnablementSetting::Enable => ai_globally_enabled,
             AdminEnablementSetting::Disable => false,
             AdminEnablementSetting::RespectUserSetting => {
                 ai_globally_enabled && *CodeSettings::as_ref(app).codebase_context_enabled.value()
             }
+        }
+    }
+
+    /// Whether codebase indexing is enabled for at least one team scope known to the current
+    /// workspace (or the no-team scope, for a workspace with no teams). Use this only to decide
+    /// whether shared background indexing infrastructure should run at all; it is not an
+    /// authorization check for any specific window or request, which must use
+    /// [`Self::is_codebase_context_enabled_for_team`] instead.
+    pub fn is_codebase_context_enabled_for_any_known_team(&self, app: &AppContext) -> bool {
+        match self
+            .current_workspace()
+            .map(|workspace| workspace.teams.as_slice())
+        {
+            Some(teams) if !teams.is_empty() => teams
+                .iter()
+                .any(|team| self.is_codebase_context_enabled_for_team(Some(team), app)),
+            _ => self.is_codebase_context_enabled_for_team(None, app),
         }
     }
 

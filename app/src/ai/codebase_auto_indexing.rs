@@ -22,23 +22,29 @@ impl CodebaseAutoIndexingSurface {
     }
 }
 
+/// Whether shared background indexing infrastructure should run *at all* for `surface`. This is
+/// a process-wide gate, not an authorization check for any specific window or repo: it is true
+/// as soon as at least one team scope known to the workspace allows codebase context, even
+/// though a denied scope must still be individually rejected wherever indexing is created,
+/// synced, or exposed (see `UserWorkspaces::is_codebase_context_enabled_for_team`).
 pub(crate) fn should_use_codebase_indexing(
     surface: CodebaseAutoIndexingSurface,
     ctx: &AppContext,
 ) -> bool {
     codebase_indexing_enabled(
         surface,
-        UserWorkspaces::as_ref(ctx).is_codebase_context_enabled(ctx),
+        UserWorkspaces::as_ref(ctx).is_codebase_context_enabled_for_any_known_team(ctx),
     )
 }
 
+/// See [`should_use_codebase_indexing`]: process-wide gate, not per-window authorization.
 pub(crate) fn should_auto_index_codebase(
     surface: CodebaseAutoIndexingSurface,
     ctx: &AppContext,
 ) -> bool {
     codebase_auto_indexing_enabled(
         surface,
-        UserWorkspaces::as_ref(ctx).is_codebase_context_enabled(ctx),
+        UserWorkspaces::as_ref(ctx).is_codebase_context_enabled_for_any_known_team(ctx),
         *CodeSettings::as_ref(ctx).auto_indexing_enabled,
     )
 }
