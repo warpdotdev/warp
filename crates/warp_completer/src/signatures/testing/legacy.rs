@@ -945,45 +945,47 @@ pub fn ls_signature() -> Signature {
     }
 }
 
-/// Models `ln`: the `-s` option and the top-level positionals both declare a templated
-/// `source_file` (files and folders) followed by a bare `link_name`.
-pub fn ln_signature() -> Signature {
-    let source_and_link_args = || {
-        vec![
-            Argument {
-                display_name: Some("source_file".to_string()),
-                description: None,
-                is_variadic: false,
-                is_command: false,
-                argument_types: vec![ArgumentType::Template(Template {
-                    type_name: warp_command_signatures::TemplateType::FilesAndFolders,
-                    filter_name: None,
-                })],
-                optional: IsArgumentOptional::Required,
-                skip_generator_validation: false,
-            },
-            Argument {
-                display_name: Some("link_name".to_string()),
-                description: None,
-                is_variadic: false,
-                is_command: false,
-                argument_types: vec![],
-                optional: IsArgumentOptional::Required,
-                skip_generator_validation: false,
-            },
-        ]
-    };
+/// Models the `rustfmt --print-config <emit> <file>` shape: a single option whose first argument
+/// is a static enum and whose last argument is a path template -- two arguments of different
+/// types. Completing the first value must offer the enum, not the last argument's paths.
+pub fn enum_then_path_option_signature() -> Signature {
     Signature {
-        name: "ln".to_string(),
+        name: "rustfmt".to_string(),
         alias_generator: None,
         description: Some("testing...".to_string()),
         priority: Priority::default(),
-        arguments: Some(source_and_link_args()),
+        arguments: None,
         subcommands: None,
         options: Some(vec![Opt {
-            exact_string: vec!["-s".to_string()],
+            exact_string: vec!["--print-config".to_string()],
             description: None,
-            arguments: Some(source_and_link_args()),
+            arguments: Some(vec![
+                Argument {
+                    display_name: Some("emit".to_string()),
+                    description: None,
+                    is_variadic: false,
+                    is_command: false,
+                    argument_types: vec![
+                        create_argument_suggestion("default"),
+                        create_argument_suggestion("minimal"),
+                        create_argument_suggestion("current"),
+                    ],
+                    optional: IsArgumentOptional::Required,
+                    skip_generator_validation: false,
+                },
+                Argument {
+                    display_name: Some("file".to_string()),
+                    description: None,
+                    is_variadic: false,
+                    is_command: false,
+                    argument_types: vec![ArgumentType::Template(Template {
+                        type_name: warp_command_signatures::TemplateType::FilesAndFolders,
+                        filter_name: None,
+                    })],
+                    optional: IsArgumentOptional::Required,
+                    skip_generator_validation: false,
+                },
+            ]),
             required: false,
             priority: Priority::Default,
         }]),

@@ -22,7 +22,7 @@ use crate::signatures::testing::{
 cfg_if::cfg_if! {
     if #[cfg(not(feature = "v2"))] {
         use std::collections::HashSet;
-        use crate::signatures::testing::{add_content_signature, ln_signature};
+        use crate::signatures::testing::{add_content_signature, enum_then_path_option_signature};
     }
 }
 
@@ -1041,21 +1041,26 @@ pub fn test_repeated_option_resolves_args_per_instance() {
     );
 }
 
+/// A multi-typed option -- a static enum first, a path template last -- must offer the first
+/// argument's enum when completing the first value, not the last argument's paths. Modeled on the
+/// `rustfmt --print-config <emit> <file>` shape.
 #[cfg(not(feature = "v2"))]
 #[test]
-pub fn test_option_arg_resolves_templated_source_file() {
-    let home = TypedPathBuf::from(TEST_WORK_DIR);
-    let path_ctx = MockPathCompletionContext::new(home.clone())
-        .with_home_directory(home.to_string_lossy().to_string())
-        .with_entries_in_pwd([
-            EngineDirEntry::test_file("bar"),
-            EngineDirEntry::test_dir("baz"),
-        ]);
-    let ctx = FakeCompletionContext::new(create_test_command_registry([ln_signature()]))
-        .with_path_completion_context(path_ctx);
+pub fn test_option_first_value_offers_enum_not_path() {
+    let pwd = TypedPathBuf::from(TEST_WORK_DIR);
+    // The pwd holds entries the path-typed last argument would return, so a regression that
+    // resolves it instead of the enum would surface them here.
+    let path_ctx = MockPathCompletionContext::new(pwd.clone()).with_entries_in_pwd([
+        EngineDirEntry::test_dir("minimize"),
+        EngineDirEntry::test_file("default.bak"),
+    ]);
+    let ctx = FakeCompletionContext::new(create_test_command_registry([
+        enum_then_path_option_signature(),
+    ]))
+    .with_path_completion_context(path_ctx);
 
-    // With the file-path fallback off, a bare (untemplated) argument yields nothing, so a result
-    // appears only when a template is resolved -- what makes the misresolution observable here.
+    // With the file-path fallback off, every result comes from the option's own arguments, so a
+    // first value resolved to the path-typed last argument would show cwd entries, not the enum.
     let complete_no_fallback = |line: &str| {
         suggestions_for_test(
             line,
@@ -1077,9 +1082,18 @@ pub fn test_option_arg_resolves_templated_source_file() {
         .collect::<Vec<_>>()
     };
 
-    assert_eq!(complete_no_fallback("ln -s ~/"), vec!["bar", "baz/"]);
-    assert_eq!(complete_no_fallback("ln -s "), vec!["bar", "baz/"]);
-    assert_eq!(complete_no_fallback("ln ~/"), vec!["bar", "baz/"]);
+    // Trailing space resolves the first value by index through the parser -- it offers the enum.
+    assert_eq!(
+        complete_no_fallback("rustfmt --print-config "),
+        vec!["default", "minimal", "current"]
+    );
+
+    // A typed fragment routes through `complete_option`; it must still resolve the first argument
+    // and offer the enum, never the last argument's cwd paths.
+    assert_eq!(
+        complete_no_fallback("rustfmt --print-config min"),
+        vec!["minimal"]
+    );
 }
 
 #[test]
