@@ -85,11 +85,6 @@ impl OnboardingVisual {
         self
     }
 
-    pub fn with_rects(mut self, rects: Vec<Rect>) -> Self {
-        self.rects = rects;
-        self
-    }
-
     pub fn compute_contained_size(constraint: SizeConstraint) -> Vector2F {
         // Maintain the old image’s aspect ratio so the right-side layout stays stable.
         const ASPECT_RATIO: f32 = 1.5;

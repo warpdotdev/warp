@@ -29,7 +29,7 @@ use warpui::ui_components::switch::SwitchStateHandle;
 use warpui::units::IntoPixels;
 use warpui::{
     Action, AppContext, Entity, ModelHandle, SingletonEntity, TypedActionView, UpdateModel, View,
-    ViewContext, ViewHandle, WindowId, id,
+    ViewContext, ViewHandle, WindowId,
 };
 
 use super::directory_color_add_picker::{DirectoryColorAddPicker, DirectoryColorAddPickerEvent};
@@ -39,10 +39,7 @@ use super::settings_page::{
     ToggleState, build_reset_button, render_body_item, render_body_item_label,
     render_dropdown_item,
 };
-use super::{
-    SettingActionPairContexts, SettingActionPairDescriptions, SettingsAction, SettingsSection,
-    ToggleSettingActionPair, flags,
-};
+use super::{SettingsAction, SettingsSection, ToggleSettingActionPair, flags};
 use crate::appearance::{Appearance, AppearanceEvent};
 use crate::channel::{Channel, ChannelState};
 use crate::context_chips::ChipAvailability;
@@ -318,30 +315,6 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
                 .is_supported_on_current_platform(),
         ),
     );
-
-    if !FeatureFlag::OpenWarpNewSettingsModes.is_enabled() {
-        toggle_binding_pairs.push(
-            ToggleSettingActionPair::custom(
-                SettingActionPairDescriptions::new(
-                    "Show code review button in tab bar",
-                    "Hide code review button in tab bar",
-                ),
-                builder(SettingsAction::AppearancePageToggle(
-                    AppearancePageAction::ToggleShowCodeReviewButton,
-                )),
-                SettingActionPairContexts::new(
-                    context.to_owned() & !id!(flags::SHOW_CODE_REVIEW_BUTTON_FLAG),
-                    context.to_owned() & id!(flags::SHOW_CODE_REVIEW_BUTTON_FLAG),
-                ),
-                None,
-            )
-            .is_supported_on_current_platform(
-                TabSettings::as_ref(app)
-                    .show_code_review_button
-                    .is_supported_on_current_platform(),
-            ),
-        );
-    }
 
     toggle_binding_pairs.push(
         ToggleSettingActionPair::new(
@@ -1526,9 +1499,6 @@ impl AppearanceSettingsPageView {
         let tab_settings = TabSettings::as_ref(ctx);
         let mut tab_settings_widgets: Vec<Box<dyn SettingsWidget<View = Self>>> =
             vec![Box::new(TabIndicatorWidget::default())];
-        if !FeatureFlag::OpenWarpNewSettingsModes.is_enabled() {
-            tab_settings_widgets.push(Box::new(CodeReviewButtonWidget::default()));
-        }
         if FeatureFlag::FullScreenZenMode.is_enabled()
             && tab_settings
                 .workspace_decoration_visibility

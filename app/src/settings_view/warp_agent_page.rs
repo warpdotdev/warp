@@ -4106,10 +4106,6 @@ impl SettingsWidget for ConversationLayoutPreferenceWidget {
         "other preferred layout opening existing agent conversations new tab split pane"
     }
 
-    fn should_render(&self, _app: &AppContext) -> bool {
-        FeatureFlag::OpenWarpNewSettingsModes.is_enabled()
-    }
-
     fn render(
         &self,
         view: &Self::View,

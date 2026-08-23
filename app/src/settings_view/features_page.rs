@@ -2785,20 +2785,6 @@ impl FeaturesPageView {
         general_widgets.push(Box::new(SnackbarHeaderWidget::default()));
         general_widgets.push(Box::new(LinkTooltipWidget::default()));
 
-        #[cfg(feature = "local_fs")]
-        {
-            if !FeatureFlag::OpenWarpNewSettingsModes.is_enabled() {
-                let external_editor_settings =
-                    crate::util::file::external_editor::EditorSettings::as_ref(ctx);
-                if external_editor_settings
-                    .open_file_editor
-                    .is_supported_on_current_platform()
-                {
-                    general_widgets.push(Box::new(ExternalEditorWidget::default()));
-                }
-            }
-        }
-
         if general_settings
             .show_warning_before_quitting
             .is_supported_on_current_platform()
@@ -2834,12 +2820,6 @@ impl FeaturesPageView {
             .is_supported_on_current_platform()
         {
             general_widgets.push(Box::new(MouseScrollMultiplierWidget::default()));
-        }
-
-        if FeatureFlag::AutoOpenCodeReviewPane.is_enabled()
-            && !FeatureFlag::OpenWarpNewSettingsModes.is_enabled()
-        {
-            general_widgets.push(Box::new(AutoOpenCodeReviewPaneWidget::default()));
         }
 
         if DefaultTerminal::can_warp_become_default() {

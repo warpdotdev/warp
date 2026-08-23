@@ -2301,7 +2301,6 @@ impl SettingsPageMeta for CodeIndexingPageView {
 
     fn should_render(&self, _ctx: &AppContext) -> bool {
         FeatureFlag::FullSourceCodeEmbedding.is_enabled()
-            || FeatureFlag::OpenWarpNewSettingsModes.is_enabled()
     }
 
     fn on_page_selected(&mut self, _: bool, ctx: &mut ViewContext<Self>) {

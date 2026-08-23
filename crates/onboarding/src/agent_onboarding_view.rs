@@ -508,11 +508,7 @@ impl AgentOnboardingView {
         ctx.focus_self();
 
         // Preload customize-slide images so they're ready when the user reaches that slide.
-        if FeatureFlag::AccountFirstOnboarding.is_enabled()
-            || FeatureFlag::OpenWarpNewSettingsModes.is_enabled()
-        {
-            Self::preload_onboarding_images(ctx);
-        }
+        Self::preload_onboarding_images(ctx);
 
         send_telemetry_from_ctx!(OnboardingEvent::OnboardingStarted, ctx);
         send_telemetry_from_ctx!(

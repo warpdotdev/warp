@@ -252,7 +252,6 @@ fn account_first_settings_enable_agent_for_authenticated_users_and_apply_ui_choi
 /// account and on once they have one.
 #[test]
 fn apply_onboarding_settings_gates_third_party_ai_on_account() {
-    let _flag = FeatureFlag::OpenWarpNewSettingsModes.override_enabled(true);
     App::test((), |mut app| async move {
         initialize_settings_for_tests(&mut app);
         app.add_singleton_model(|_| AuthStateProvider::new_for_test());
