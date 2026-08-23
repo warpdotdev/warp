@@ -166,6 +166,12 @@ jobs:
         run: rustup target add ${{ matrix.arch }}-apple-darwin
         shell: bash
 
+      # Install go toolchain, which is needed for bundling a pprof binary.
+      - name: Setup Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version: stable
+
       - name: Get channel configuration
         id: get-config
         uses: ./.github/actions/get_channel_config/
@@ -282,6 +288,12 @@ jobs:
           ref: ${{ needs.prepare_release.outputs.release_branch }}
           install_release_deps: true
           ssh_key: ${{ secrets.WARP_CHANNEL_CONFIG_ACCESS_SSH_KEY }}
+
+      # Install go toolchain, which is needed for bundling a pprof binary.
+      - name: Setup Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version: stable
 
       - name: Get channel configuration
         id: get-config
