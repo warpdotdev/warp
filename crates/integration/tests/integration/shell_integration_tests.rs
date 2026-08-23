@@ -73,6 +73,7 @@ integration_tests! {
     // Tests bash-specific behavior.
     test_bash_bootstraps_with_prompt_command_array,
     test_bash_bootstraps_with_prompt_command_array_that_sets_ps1,
+    test_bash_honor_ps1_nested_expansion_does_not_leak_prompt_command,
     // Test runs only on zsh.
     test_color_overrides_in_prompt_dont_crash,
     // Tests zsh-specific behavior with nounset option.
