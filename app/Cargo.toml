@@ -169,13 +169,14 @@ qrcode.workspace = true
 rand.workspace = true
 rangemap.workspace = true
 rayon.workspace = true
-regex-automata = "0.4.6"
+regex-automata.workspace = true
 regex.workspace = true
 reqwest.workspace = true
 rust-embed.workspace = true
 sentry-log = { workspace = true, optional = true }
 inventory = "0.3"
 schemars = "1"
+secret_redaction.workspace = true
 serde.workspace = true
 serde_bytes.workspace = true
 serde-bytes-repr.workspace = true
