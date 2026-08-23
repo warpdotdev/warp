@@ -235,6 +235,8 @@ $null = New-Module -Name Warp-Module -ScriptBlock {
                 rcfiles_start_time = "$rcStartTime"
                 rcfiles_end_time = "$rcEndTime"
                 shell_plugins = ''
+                # The user's preference, not the session's live edit mode, which Warp overrides.
+                vi_mode_enabled = $(if ($script:viEditModeOverridden) { '1' } else { '' })
                 os_category = $osCategory
                 linux_distribution = "$linuxDistribution"
                 shell_path = (Get-Process -Id $PID).Path
@@ -350,7 +352,35 @@ $null = New-Module -Name Warp-Module -ScriptBlock {
     # it is set to $false.
     $script:commandNotFound = $false
 
+    # Set when Warp turns off PSReadLine's vi edit mode for this session, so that the
+    # 'Bootstrapped' payload can still report the user's preference for vi keybindings.
+    # See Warp-Configure-PSReadLine for why the edit mode is overridden.
+    $script:viEditModeOverridden = $false
+
     function Warp-Configure-PSReadLine {
+        # Warp drives PSReadLine over the PTY with two chords that are a bare Escape plus a
+        # printable character: 'Alt+1' reports and drains the input buffer on every prompt, and
+        # 'Alt+2' clears it ahead of every submitted command. Under 'EditMode Vi' those bytes are
+        # live vi input rather than inert filler, because Escape is bound to ViCommandMode and the
+        # digits to DigitArgument. Whenever the two halves of a chord arrive in separate reads
+        # (which ConPTY does readily) the editor is left in vi command mode, and the command Warp
+        # writes next runs as vi edits instead of being inserted: 'echo hello' gets submitted as
+        # 'o hello'. Emacs edit mode binds nothing to Escape, and neither does the 'Windows' mode
+        # PSReadLine defaults to on Windows, which is why only vi is overridden. Nothing the user
+        # can see changes, since their keystrokes go through Warp's input editor rather than
+        # PSReadLine's. fish resolves the same conflict the same way, by resetting
+        # 'fish_key_bindings' to the defaults on every precmd.
+        #
+        # Reasserting this on every prompt, rather than once after the user's profile is sourced,
+        # also covers an edit mode set later in the session. The check matters: changing the edit
+        # mode resets every key handler, so applying it to a session already in Emacs mode would
+        # drop bindings registered elsewhere. That reset is also why this has to precede the
+        # Set-PSReadLineKeyHandler calls below.
+        if ((Get-PSReadLineOption).EditMode -eq 'Vi') {
+            $script:viEditModeOverridden = $true
+            Set-PSReadLineOption -EditMode Emacs
+        }
+
         # Set-PSReadLineKeyHandler is the PowerShell equivalent of zsh's bindkey.
         Set-PSReadLineKeyHandler -Chord 'Alt+2' -Function BackwardDeleteLine
 
@@ -956,6 +986,12 @@ $null = New-Module -Name Warp-Module -ScriptBlock {
 
     function Warp-Finish-Bootstrap {
         param([decimal]$rcStartTime, [decimal]$rcEndTime)
+        # Sourcing the user's profiles can reconfigure PSReadLine out from under the bootstrap's
+        # own Warp-Precmd call, which ran before them: 'Set-PSReadLineOption -EditMode Vi' resets
+        # every key handler and so unbinds Warp's chords. Reconfiguring here, rather than waiting
+        # for the first prompt, also means the payload Warp-Bootstrapped sends below reports it.
+        Warp-Configure-PSReadLine
+
         # This is the closest we can get in PowerShell to a proper preexec hook. We wrap the
         # invocation of PSConsoleHostReadline, and call our preexec hook before returning the
         # returned value. This allows us to preserve the any custom implementations of
