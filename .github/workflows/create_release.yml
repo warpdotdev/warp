@@ -539,7 +539,7 @@ jobs:
           install_release_deps: true
           ssh_key: ${{ secrets.WARP_CHANNEL_CONFIG_ACCESS_SSH_KEY }}
 
-      # Install go toolchain, as it may be needed for some build steps.
+      # Install go toolchain, which is needed for bundling a pprof binary.
       - name: Setup Go
         uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
