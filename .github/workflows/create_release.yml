@@ -139,7 +139,7 @@ jobs:
 
   release_macos_single_arch:
     name: Build Release (macOS ${{ matrix.dmg_name_suffix }})
-    runs-on: ${{ matrix.runner }}
+    runs-on: macos-26-xlarge
     needs: prepare_release
     if: ${{ inputs.build_macos != false }}
     timeout-minutes: 60
@@ -149,10 +149,8 @@ jobs:
         include:
           - arch: aarch64
             dmg_name_suffix: arm64
-            runner: macos-26-xlarge
           - arch: x86_64
             dmg_name_suffix: x86_64
-            runner: macos-26-large
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
 
@@ -167,12 +165,6 @@ jobs:
       - name: Ensure rust target is installed
         run: rustup target add ${{ matrix.arch }}-apple-darwin
         shell: bash
-
-      # Install go toolchain, as it may be needed for some build steps.
-      - name: Setup Go
-        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
-        with:
-          go-version: stable
 
       - name: Get channel configuration
         id: get-config
@@ -290,12 +282,6 @@ jobs:
           ref: ${{ needs.prepare_release.outputs.release_branch }}
           install_release_deps: true
           ssh_key: ${{ secrets.WARP_CHANNEL_CONFIG_ACCESS_SSH_KEY }}
-
-      # Install go toolchain, as it may be needed for some build steps.
-      - name: Setup Go
-        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
-        with:
-          go-version: stable
 
       - name: Get channel configuration
         id: get-config
@@ -740,12 +726,6 @@ jobs:
           install_release_deps: true
           ssh_key: ${{ secrets.WARP_CHANNEL_CONFIG_ACCESS_SSH_KEY }}
 
-      # Install go toolchain, as it may be needed for some build steps.
-      - name: Setup Go
-        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
-        with:
-          go-version: stable
-
       - name: Get channel configuration
         id: get-config
         uses: ./.github/actions/get_channel_config/
@@ -886,7 +866,8 @@ jobs:
           config_file: ${{ env.CONFIG_FILE }}
           channel: ${{ inputs.channel }}
 
-      # Namespace's User Bundled Cache persists target/ between jobs on the same profile.
+      # Remove cached _bundle_ output that can be shared across different _jobs_.  This won't
+      # remove any incremental build artifacts, only the final bundled output.
       - name: Clean stale bundle output
         run: |
           if [[ -d target ]]; then
@@ -987,7 +968,8 @@ jobs:
           name: settings-schema-linux-${{ steps.get-config.outputs.channel }}
           path: .release-artifacts/settings-schema-linux
 
-      # Namespace's User Bundled Cache persists target/ between jobs on the same profile.
+      # Remove cached _bundle_ output that can be shared across different _jobs_.  This won't
+      # remove any incremental build artifacts, only the final bundled output.
       - name: Clean stale bundle output
         run: |
           if [[ -d target ]]; then
@@ -1255,7 +1237,8 @@ jobs:
           config_file: ${{ env.CONFIG_FILE }}
           channel: ${{ inputs.channel }}
 
-      # Namespace's User Bundled Cache persists target/ between jobs on the same profile.
+      # Remove cached _bundle_ output that can be shared across different _jobs_.  This won't
+      # remove any incremental build artifacts, only the final bundled output.
       - name: Clean stale bundle output
         run: |
           if [[ -d target ]]; then
