@@ -235,10 +235,9 @@ impl NumberShortcutButtons {
     }
 
     fn has_descendent_focus(&self, app: &AppContext) -> bool {
-        self.self_handle.window_id(app).is_some_and(|window_id| {
-            !app.check_view_focused(window_id, &self.self_handle.id())
-                && app.check_view_or_child_focused(window_id, &self.self_handle.id())
-        })
+        let window_id = self.self_handle.window_id(app);
+        !app.check_view_focused(window_id, &self.self_handle.id())
+            && app.check_view_or_child_focused(window_id, &self.self_handle.id())
     }
 
     fn keyboard_shortcuts_enabled(&self, app: &AppContext) -> bool {

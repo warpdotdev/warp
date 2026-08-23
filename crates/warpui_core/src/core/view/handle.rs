@@ -39,7 +39,7 @@ impl<T: Entity> ViewHandle<T> {
     }
 
     pub fn downgrade(&self) -> WeakViewHandle<T> {
-        WeakViewHandle::new(self.view_id)
+        WeakViewHandle::new(self.window_id, self.view_id)
     }
 
     /// Convert a ViewHandle to a reference of the underlying View.
@@ -240,13 +240,15 @@ impl Drop for AnyViewHandle {
 /// holding a strong reference via `ViewHandle` would create a reference cycle
 /// that prevents the application from ever dropping the view.
 pub struct WeakViewHandle<T> {
+    window_id: WindowId,
     view_id: EntityId,
     view_type: PhantomData<T>,
 }
 
 impl<T: Entity> WeakViewHandle<T> {
-    pub(super) fn new(view_id: EntityId) -> Self {
+    pub(super) fn new(window_id: WindowId, view_id: EntityId) -> Self {
         Self {
+            window_id,
             view_id,
             view_type: PhantomData,
         }
@@ -273,15 +275,25 @@ impl<T: Entity> WeakViewHandle<T> {
         self.view_id
     }
 
-    /// Returns the current window this view belongs to, if any.
-    pub fn window_id(&self, app: &AppContext) -> Option<WindowId> {
-        app.view_to_window.get(&self.view_id).copied()
+    /// Returns the current window this view belongs to.
+    ///
+    /// This looks up the window from the view_to_window mapping, which may differ
+    /// from the window where the view was originally created if the view has been
+    /// transferred between windows. Same fallback as [`ViewHandle::window_id`]: if the
+    /// view isn't in the mapping yet -- as is the case for a view resolving this from its
+    /// own constructor -- this falls back to the window the handle was created in.
+    pub fn window_id(&self, app: &AppContext) -> WindowId {
+        app.view_to_window
+            .get(&self.view_id)
+            .copied()
+            .unwrap_or(self.window_id)
     }
 }
 
 impl<T> Clone for WeakViewHandle<T> {
     fn clone(&self) -> Self {
         Self {
+            window_id: self.window_id,
             view_id: self.view_id,
             view_type: PhantomData,
         }
@@ -291,6 +303,7 @@ impl<T> Clone for WeakViewHandle<T> {
 impl<T> Debug for WeakViewHandle<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct(&format!("WeakViewHandle<{}>", core::any::type_name::<T>()))
+            .field("window_id", &self.window_id)
             .field("view_id", &self.view_id)
             .finish()
     }

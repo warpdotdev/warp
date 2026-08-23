@@ -82,7 +82,7 @@ impl<'a, T: Entity> ViewContext<'a, T> {
     }
 
     pub fn handle(&self) -> WeakViewHandle<T> {
-        WeakViewHandle::new(self.view_id)
+        WeakViewHandle::new(self.window_id, self.view_id)
     }
 
     pub fn window_id(&self) -> WindowId {
@@ -347,9 +347,10 @@ impl<'a, T: Entity> ViewContext<'a, T> {
         config: SaveFilePickerConfiguration,
     ) {
         let view_id = self.view_id;
+        let window_id = self.window_id;
         self.app.open_save_file_picker(
             move |path, app| {
-                let weak = WeakViewHandle::<T>::new(view_id);
+                let weak = WeakViewHandle::<T>::new(window_id, view_id);
                 if let Some(handle) = weak.upgrade(app) {
                     app.update_view(&handle, |view, ctx| {
                         callback(path, view, ctx);

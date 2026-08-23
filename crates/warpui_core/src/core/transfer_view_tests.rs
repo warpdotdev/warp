@@ -514,6 +514,178 @@ fn test_weak_view_handle_upgrade_after_transfer() {
 }
 
 #[test]
+fn test_weak_view_handle_window_id_resolves_during_own_construction() {
+    // Registration in `view_to_window` only happens after the constructor returns
+    // (see `add_view`/`add_typed_action_view_internal`), so a view resolving its own
+    // window from inside its constructor exercises `WeakViewHandle::window_id`'s
+    // fallback to the window the handle was created in.
+    struct RootView;
+
+    impl Entity for RootView {
+        type Event = ();
+    }
+
+    impl View for RootView {
+        fn render(&self, _: &AppContext) -> Box<dyn Element> {
+            Empty::new().finish()
+        }
+
+        fn ui_name() -> &'static str {
+            "RootView"
+        }
+    }
+
+    impl TypedActionView for RootView {
+        type Action = ();
+    }
+
+    struct TestView {
+        window_id_from_constructor: WindowId,
+    }
+
+    impl Entity for TestView {
+        type Event = ();
+    }
+
+    impl View for TestView {
+        fn render(&self, _: &AppContext) -> Box<dyn Element> {
+            Empty::new().finish()
+        }
+
+        fn ui_name() -> &'static str {
+            "TestView"
+        }
+    }
+
+    impl TypedActionView for TestView {
+        type Action = ();
+    }
+
+    App::test((), |mut app| async move {
+        let (window_id, _) = app.add_window(WindowStyle::NotStealFocus, |_| RootView);
+
+        let view = app.add_view(window_id, |ctx| {
+            let self_handle = ctx.handle();
+            TestView {
+                window_id_from_constructor: self_handle.window_id(ctx),
+            }
+        });
+
+        view.read(&app, |view, _| {
+            assert_eq!(
+                view.window_id_from_constructor, window_id,
+                "a view resolving its own window from its constructor should get the real \
+                 window, not a missing one"
+            );
+        });
+    });
+}
+
+#[test]
+fn test_weak_view_handle_window_id_prefers_live_lookup_over_birth_window() {
+    // The stored birth window is only a fallback; once a view has been transferred, its
+    // weak handle must resolve to the *current* window, exactly like `ViewHandle::window_id`.
+    struct TestView {
+        self_handle: Option<WeakViewHandle<Self>>,
+    }
+
+    impl Entity for TestView {
+        type Event = ();
+    }
+
+    impl View for TestView {
+        fn render(&self, _: &AppContext) -> Box<dyn Element> {
+            Empty::new().finish()
+        }
+
+        fn ui_name() -> &'static str {
+            "TestView"
+        }
+    }
+
+    impl TypedActionView for TestView {
+        type Action = ();
+    }
+
+    App::test((), |mut app| async move {
+        let (source_window_id, _) = app.add_window(WindowStyle::NotStealFocus, |_| TestView {
+            self_handle: None,
+        });
+        let (target_window_id, _) = app.add_window(WindowStyle::NotStealFocus, |_| TestView {
+            self_handle: None,
+        });
+
+        let view = app.add_view(source_window_id, |ctx| TestView {
+            self_handle: Some(ctx.handle()),
+        });
+        let view_id = view.id();
+
+        let success = app
+            .update(|ctx| ctx.transfer_view_to_window(view_id, source_window_id, target_window_id));
+        assert!(success, "transfer should succeed");
+
+        view.read(&app, |view, ctx| {
+            assert_eq!(
+                view.self_handle.as_ref().unwrap().window_id(ctx),
+                target_window_id,
+                "a transferred view's weak handle should resolve to its current window, not \
+                 the birth window captured when the handle was created"
+            );
+        });
+    });
+}
+
+#[test]
+fn test_weak_view_handle_window_id_falls_back_to_birth_window_after_view_dropped() {
+    // `upgrade` must keep failing for a dropped view -- that's a liveness check, unaffected
+    // by this change. `window_id` has no liveness contract, though: once the view is gone,
+    // its `view_to_window` entry is gone too, so it falls back to the handle's birth window,
+    // same as `ViewHandle::window_id` would for a handle whose view left `view_to_window`.
+    struct TestView;
+
+    impl Entity for TestView {
+        type Event = ();
+    }
+
+    impl View for TestView {
+        fn render(&self, _: &AppContext) -> Box<dyn Element> {
+            Empty::new().finish()
+        }
+
+        fn ui_name() -> &'static str {
+            "TestView"
+        }
+    }
+
+    impl TypedActionView for TestView {
+        type Action = ();
+    }
+
+    App::test((), |mut app| async move {
+        let (window_id, _) = app.add_window(WindowStyle::NotStealFocus, |_| TestView);
+
+        let view = app.add_view(window_id, |_| TestView);
+        let weak = view.downgrade();
+
+        drop(view);
+        // Trigger cleanup via app.update, which calls flush_effects -> remove_dropped_items.
+        app.update(|_| {});
+
+        app.read(|ctx| {
+            assert!(
+                weak.upgrade(ctx).is_none(),
+                "upgrade must still fail for a dropped view"
+            );
+            assert_eq!(
+                weak.window_id(ctx),
+                window_id,
+                "window_id should fall back to the birth window once the view is dropped"
+            );
+        });
+    });
+}
+
+#[test]
 fn test_transfer_nonexistent_view_returns_false() {
     #[derive(Default)]
     struct TestView;

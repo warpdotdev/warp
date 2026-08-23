@@ -450,9 +450,7 @@ impl UserWorkspaces {
         view_handle: &WeakViewHandle<T>,
         ctx: &AppContext,
     ) -> Option<&Team> {
-        view_handle
-            .window_id(ctx)
-            .and_then(|window_id| self.team_for_window(window_id))
+        self.team_for_window(view_handle.window_id(ctx))
     }
 
     /// Captures the team selected in `ctx`'s window as an operation's
@@ -495,9 +493,10 @@ impl UserWorkspaces {
 
     /// Resolves `view`'s window team for one read. See [`TeamContext`].
     ///
-    /// A view that has left its window resolves the same way as a window with no team: to no
-    /// team. Both mean there is no team to govern the read, and a caller on a render path has
-    /// no better answer to give than that.
+    /// `view`'s window id always resolves -- [`WeakViewHandle::window_id`] falls back to the
+    /// window it was created in when there's no live mapping. The scope is teamless whenever
+    /// [`Self::team_for_window`] can't resolve a current team for that id, not only when none
+    /// is assigned.
     pub(crate) fn team_context<'a, T: Entity>(
         &'a self,
         view: &WeakViewHandle<T>,
