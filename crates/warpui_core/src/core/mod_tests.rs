@@ -22,6 +22,40 @@ mod transfer_view_tests;
 mod ref_count_tests;
 
 #[test]
+fn test_window_id_for_view() {
+    #[derive(Default)]
+    struct TestView;
+
+    impl Entity for TestView {
+        type Event = ();
+    }
+
+    impl View for TestView {
+        fn render(&self, _: &AppContext) -> Box<dyn Element> {
+            Empty::new().finish()
+        }
+
+        fn ui_name() -> &'static str {
+            "TestView"
+        }
+    }
+
+    impl TypedActionView for TestView {
+        type Action = ();
+    }
+
+    App::test((), |mut app| async move {
+        let (window_id, _) = app.add_window(WindowStyle::NotStealFocus, |_| TestView);
+        let view = app.add_view(window_id, |_| TestView);
+
+        app.read(|ctx| {
+            assert_eq!(ctx.window_id_for_view(view.id()), Some(window_id));
+            assert_eq!(ctx.window_id_for_view(EntityId::new()), None);
+        });
+    });
+}
+
+#[test]
 fn test_subscribe_and_emit_from_model() {
     #[derive(Default)]
     struct Model {
