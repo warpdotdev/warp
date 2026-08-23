@@ -441,7 +441,7 @@ async fn complete_option(
 ) -> Vec<MatchedSuggestion> {
     // Resolve the option's argument at the position of the value being completed, mirroring
     // `complete_positional`, instead of always taking the last declared argument. An option can
-    // declare several arguments of differing types (e.g. `ln -s <source_file> <link_name>`), so
+    // declare several arguments of differing types (e.g. `jq --rawfile <name> <file>`), so
     // `.last()` offers the wrong argument's completions for any value but the last. A variadic
     // argument at or before this index absorbs the value, since a variadic argument need not be the
     // last one declared.
