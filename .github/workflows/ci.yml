@@ -832,9 +832,12 @@ jobs:
     name: Check CI results
     timeout-minutes: 3
     runs-on: ubuntu-latest
-    # Always run this job, as it needs to check the results of all of the other
-    # jobs. If we skipped CI checks (e.g. on a draft PR), also skip this one.
-    if: ${{ !cancelled() && needs.params.result != 'skipped' }}
+    # Always run this job, even if `params` (and therefore everything else) was
+    # skipped, e.g. on a draft PR. GitHub treats a skipped required check as a
+    # pass, so this gather job must run and explicitly report a non-passing
+    # result in that case rather than skip itself - the checks below already
+    # treat a skipped `params` job as a failure.
+    if: ${{ !cancelled() }}
     needs:
       - params
       - database-migration
