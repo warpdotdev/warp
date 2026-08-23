@@ -91,10 +91,9 @@ use crate::workspace::WorkspaceAction;
 use crate::workspace::header_toolbar_editor::HeaderToolbarInlineEditor;
 use crate::workspace::tab_settings::{
     DirectoryTabColor, HideTitleBarSearchBarInVerticalTabs, PreserveActiveTabColor,
-    ShowCodeReviewButton, ShowIndicatorsButton, ShowVerticalTabPanelInRestoredWindows,
-    TabCloseButtonPosition, TabSettings, TabSettingsChangedEvent,
-    UseLatestUserPromptAsConversationTitleInTabNames, UseVerticalTabs,
-    WorkspaceDecorationVisibility, canonical_directory_key,
+    ShowIndicatorsButton, ShowVerticalTabPanelInRestoredWindows, TabCloseButtonPosition,
+    TabSettings, TabSettingsChangedEvent, UseLatestUserPromptAsConversationTitleInTabNames,
+    UseVerticalTabs, WorkspaceDecorationVisibility, canonical_directory_key,
 };
 use crate::{send_telemetry_from_ctx, themes};
 
@@ -4858,51 +4857,6 @@ impl SettingsWidget for TabIndicatorWidget {
                 .build()
                 .on_click(move |ctx, _, _| {
                     ctx.dispatch_typed_action(AppearancePageAction::ToggleTabIndicators);
-                })
-                .finish(),
-            None,
-        )
-    }
-}
-
-#[derive(Default)]
-struct CodeReviewButtonWidget {
-    switch_state: SwitchStateHandle,
-}
-
-impl SettingsWidget for CodeReviewButtonWidget {
-    type View = AppearanceSettingsPageView;
-
-    fn search_terms(&self) -> &str {
-        "code review button tab bar"
-    }
-
-    fn render(
-        &self,
-        view: &Self::View,
-        appearance: &Appearance,
-        app: &AppContext,
-    ) -> Box<dyn Element> {
-        let tab_settings = TabSettings::as_ref(app);
-
-        render_body_item::<AppearancePageAction>(
-            "Show code review button".into(),
-            None,
-            LocalOnlyIconState::for_setting(
-                ShowCodeReviewButton::storage_key(),
-                ShowCodeReviewButton::sync_to_cloud(),
-                &mut view.local_only_icon_tooltip_states.borrow_mut(),
-                app,
-            ),
-            ToggleState::Enabled,
-            appearance,
-            appearance
-                .ui_builder()
-                .switch(self.switch_state.clone())
-                .check(*tab_settings.show_code_review_button)
-                .build()
-                .on_click(move |ctx, _, _| {
-                    ctx.dispatch_typed_action(AppearancePageAction::ToggleShowCodeReviewButton);
                 })
                 .finish(),
             None,
