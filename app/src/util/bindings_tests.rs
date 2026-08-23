@@ -160,3 +160,48 @@ fn test_terminal_page_scroll_bindings_are_editable() {
         });
     });
 }
+
+/// Both halves of the Markdown rendered/raw toggle are registered separately, from different views
+/// with different actions. They share a binding name so that a rebind in Settings reaches both
+/// directions rather than leaving one stuck on the old shortcut.
+#[test]
+fn test_markdown_toggle_rebind_applies_to_both_directions() {
+    App::test((), |mut app| async move {
+        app.update(crate::code::view::init);
+        app.update(crate::notebooks::file::init);
+
+        app.update(|ctx| {
+            use crate::notebooks::file::MARKDOWN_TOGGLE_BINDING_NAME;
+
+            let triggers = |ctx: &warpui::AppContext| {
+                ctx.editable_bindings()
+                    .filter(|binding| binding.name == MARKDOWN_TOGGLE_BINDING_NAME)
+                    .map(|binding| trigger_to_keystroke(binding.trigger))
+                    .collect::<Vec<_>>()
+            };
+
+            assert_eq!(
+                vec![
+                    Keystroke::parse("cmdorctrl-e").ok(),
+                    Keystroke::parse("cmdorctrl-e").ok(),
+                ],
+                triggers(ctx),
+                "both directions should be registered under the shared name"
+            );
+
+            ctx.set_custom_trigger(
+                MARKDOWN_TOGGLE_BINDING_NAME.to_owned(),
+                Trigger::Keystrokes(vec![Keystroke::parse("cmd-shift-M").unwrap()]),
+            );
+
+            assert_eq!(
+                vec![
+                    Keystroke::parse("cmd-shift-M").ok(),
+                    Keystroke::parse("cmd-shift-M").ok(),
+                ],
+                triggers(ctx),
+                "rebinding the shared name should move both directions"
+            );
+        });
+    });
+}

@@ -45,7 +45,10 @@ use crate::code::{EditorTabBarDropTargetData, ImmediateSaveError, SaveOutcome, S
 use crate::editor::InteractionState;
 use crate::input::Vector2F;
 use crate::menu::{MenuItem, MenuItemFields};
-use crate::notebooks::file::{MarkdownDisplayMode, renders_in_warp_notebook_viewer};
+use crate::notebooks::file::{
+    MARKDOWN_TOGGLE_BINDING_DESCRIPTION, MARKDOWN_TOGGLE_BINDING_NAME, MarkdownDisplayMode,
+    renders_in_warp_notebook_viewer,
+};
 use crate::pane_group::focus_state::PaneFocusHandle;
 use crate::pane_group::pane::view::header::components::{
     CenteredHeaderEdgeWidth, render_pane_header_buttons, render_pane_header_title_text,
@@ -132,8 +135,8 @@ pub fn init(app: &mut AppContext) {
         // target sets `local_fs`.
         #[cfg(feature = "local_fs")]
         EditableBinding::new(
-            "code_view:render_markdown",
-            "Show rendered Markdown",
+            MARKDOWN_TOGGLE_BINDING_NAME,
+            MARKDOWN_TOGGLE_BINDING_DESCRIPTION,
             CodeViewAction::RenderMarkdown,
         )
         .with_context_predicate(id!(MARKDOWN_TOGGLEABLE_CONTEXT))

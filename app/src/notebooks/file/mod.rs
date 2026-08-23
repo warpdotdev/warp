@@ -217,6 +217,16 @@ impl FileState {
 /// Markdown, so the toggle binding is inert on panes that have no such mode.
 pub const MARKDOWN_TOGGLEABLE_CONTEXT: &str = "FileNotebookView_MarkdownToggleable";
 
+/// Name and description shared by both halves of the Markdown rendered/raw toggle.
+///
+/// The two halves dispatch different actions from different views, so they have to be registered
+/// separately. They share a name because custom triggers are stored and applied by name, so a
+/// rebind in Settings has to reach both directions; they share a description because the settings
+/// page collapses duplicates on the name/description pair and would otherwise list two rows
+/// fighting over the same shortcut.
+pub const MARKDOWN_TOGGLE_BINDING_NAME: &str = "markdown:toggle_display_mode";
+pub const MARKDOWN_TOGGLE_BINDING_DESCRIPTION: &str = "Toggle rendered Markdown";
+
 pub fn init(app: &mut AppContext) {
     use warpui::keymap::macros::*;
 
@@ -235,8 +245,8 @@ pub fn init(app: &mut AppContext) {
         )
         .with_context_predicate(id!("FileNotebookView")),
         EditableBinding::new(
-            "notebookview:show_raw_markdown",
-            "Show raw Markdown",
+            MARKDOWN_TOGGLE_BINDING_NAME,
+            MARKDOWN_TOGGLE_BINDING_DESCRIPTION,
             FileNotebookAction::ToggleMarkdownDisplayMode(MarkdownDisplayMode::Raw),
         )
         .with_context_predicate(id!(MARKDOWN_TOGGLEABLE_CONTEXT))
