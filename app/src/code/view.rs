@@ -126,6 +126,11 @@ pub fn init(app: &mut AppContext) {
         )
         .with_context_predicate(id!("CodeEditorView"))
         .with_key_binding("cmdorctrl-r u"),
+        // Guarded to match the action it dispatches, like the rest of this file's
+        // filesystem-backed actions. The guard is always true in practice: this module is
+        // path-swapped to `wasm.rs` for wasm targets (see `code/mod.rs`), and every non-wasm
+        // target sets `local_fs`.
+        #[cfg(feature = "local_fs")]
         EditableBinding::new(
             "code_view:render_markdown",
             "Show rendered Markdown",
