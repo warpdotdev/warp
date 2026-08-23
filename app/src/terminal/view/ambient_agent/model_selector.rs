@@ -22,7 +22,11 @@ use crate::ai::custom_model_routers::is_custom_router_id;
 use crate::ai::execution_profiles::model_menu_items::is_auto;
 use crate::ai::harness_availability::{HarnessAvailabilityEvent, HarnessAvailabilityModel};
 use crate::ai::harness_display::icon_for as harness_icon_for;
-use crate::ai::llms::{LLMId, LLMPreferences, LLMPreferencesEvent};
+use crate::ai::llms::{
+    LLMId, LLMInfo, LLMPreferences, LLMPreferencesEvent, ModelIconFlags, model_leading_icon,
+    should_show_bedrock_icon_for_model,
+    should_show_gemini_enterprise_agent_platform_icon_for_model,
+};
 use crate::editor::{
     EditorView, Event as EditorEvent, PropagateAndNoOpEscapeKey, PropagateAndNoOpNavigationKeys,
     SingleLineEditorOptions, TextOptions,
@@ -507,11 +511,13 @@ impl ModelSelector {
             .chain(other_choices)
             .map(|llm| {
                 let display_name = llm.menu_display_name();
-                let leading_icon = if is_custom_router_id(llm.id.as_str()) {
-                    Icon::Dataflow
-                } else {
-                    llm.provider.icon().unwrap_or(Icon::Agent)
-                };
+                // Custom-endpoint models are filtered out of this list above (see the
+                // `continue` in the loop building `auto_choices`/`other_choices`), so this is
+                // always false here. Computed explicitly (rather than hardcoded) so a future
+                // change to that filter can't silently start misattributing a third-party
+                // provider's icon to a user-aliased endpoint.
+                let is_custom_endpoint = llm_preferences.custom_llm_info_for_id(&llm.id).is_some();
+                let leading_icon = oz_model_icon(llm, is_custom_endpoint, ctx);
                 let fields = MenuItemFields::new(display_name)
                     .with_icon(leading_icon)
                     .with_icon_size_override(ITEM_ICON_SIZE)
@@ -637,6 +643,29 @@ fn render_search_footer(
         .finish()
 }
 
+/// Resolves the leading icon for an Oz Agent Mode model row in this selector's menu.
+///
+/// Delegates entirely to the shared [`model_leading_icon`] (the same function used by
+/// the inline `/model` picker and the execution-profile model menus) rather than
+/// re-implementing its own fallback, so all model-selection surfaces stay consistent —
+/// e.g. a Kimi model gets [`Icon::KimiLogo`] here too, not the generic agent glyph.
+/// Extracted to a standalone function so this can be unit tested without constructing
+/// a full `ModelSelector` view.
+fn oz_model_icon(llm: &LLMInfo, is_custom_endpoint: bool, ctx: &AppContext) -> Icon {
+    model_leading_icon(
+        llm,
+        ModelIconFlags {
+            is_custom_router: is_custom_router_id(llm.id.as_str()),
+            is_auto: is_auto(llm),
+            is_using_bedrock: should_show_bedrock_icon_for_model(llm, ctx),
+            is_using_gemini_enterprise: should_show_gemini_enterprise_agent_platform_icon_for_model(
+                llm, ctx,
+            ),
+            is_custom_endpoint,
+        },
+    )
+}
+
 impl Entity for ModelSelector {
     type Event = ModelSelectorEvent;
 }
@@ -715,3 +744,7 @@ impl View for ModelSelector {
         stack.finish()
     }
 }
+
+#[cfg(test)]
+#[path = "model_selector_tests.rs"]
+mod tests;

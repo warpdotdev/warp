@@ -381,6 +381,9 @@ impl ModelSearchItem {
         let is_using_bedrock = should_show_bedrock_icon_for_model(llm, app);
         let is_using_gemini_enterprise_agent_platform =
             should_show_gemini_enterprise_agent_platform_icon_for_model(llm, app);
+        let is_custom_endpoint = LLMPreferences::as_ref(app)
+            .custom_llm_info_for_id(&llm.id)
+            .is_some();
         let byo_key_source = byo_key_source_for_model(llm, app);
         let leading_icon = model_leading_icon(
             llm,
@@ -389,6 +392,7 @@ impl ModelSearchItem {
                 is_auto,
                 is_using_bedrock,
                 is_using_gemini_enterprise: is_using_gemini_enterprise_agent_platform,
+                is_custom_endpoint,
             },
         );
         let is_using_cloud_host = is_using_bedrock || is_using_gemini_enterprise_agent_platform;

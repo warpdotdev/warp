@@ -286,6 +286,124 @@ fn models_without_a_host_fall_back_to_the_provider_icon() {
     );
 }
 
+#[test]
+fn kimi_models_get_the_kimi_logo() {
+    // The server reports Kimi models with `LLMProvider::Unknown` (no
+    // dedicated provider variant exists yet), so they're detected by id.
+    for id in [
+        "kimi-k26-fireworks",
+        "kimi-k27-code-fireworks",
+        "KIMI-K3-Fireworks",
+    ] {
+        let llm = server_llm(id, None);
+        assert_eq!(
+            model_leading_icon(&llm, ModelIconFlags::default()),
+            Icon::KimiLogo,
+            "expected {id} to resolve to the Kimi logo"
+        );
+    }
+
+    // Also match when the `kimi` token lives in the base model name rather
+    // than the id.
+    let mut llm = server_llm("some-router-slug", None);
+    llm.base_model_name = "Kimi-K2-Instruct".to_string();
+    assert_eq!(
+        model_leading_icon(&llm, ModelIconFlags::default()),
+        Icon::KimiLogo
+    );
+}
+
+#[test]
+fn non_kimi_models_are_unaffected_by_kimi_detection() {
+    // A loose substring match would misfire on names that merely contain
+    // "kimi" somewhere other than as a leading token; the real check is
+    // conservative and shouldn't match these.
+    for id in ["gpt-test", "anti-kimi-router", "not-kimi-at-all", "kimichi"] {
+        let llm = server_llm(id, None);
+        assert_ne!(
+            model_leading_icon(&llm, ModelIconFlags::default()),
+            Icon::KimiLogo,
+            "expected {id} to NOT resolve to the Kimi logo"
+        );
+    }
+}
+
+#[test]
+fn precedence_branches_win_over_kimi_detection() {
+    // Custom-router, auto, and host-logo branches are checked before Kimi
+    // detection and must keep winning even for a Kimi-named model/router.
+    let llm = server_llm("kimi-k26-fireworks", None);
+
+    assert_eq!(
+        model_leading_icon(
+            &llm,
+            ModelIconFlags {
+                is_custom_router: true,
+                ..Default::default()
+            }
+        ),
+        Icon::Dataflow
+    );
+    assert_eq!(
+        model_leading_icon(
+            &llm,
+            ModelIconFlags {
+                is_auto: true,
+                ..Default::default()
+            }
+        ),
+        Icon::Agent
+    );
+    assert_eq!(
+        model_leading_icon(
+            &llm,
+            ModelIconFlags {
+                is_using_bedrock: true,
+                ..Default::default()
+            }
+        ),
+        Icon::Aws
+    );
+    assert_eq!(
+        model_leading_icon(
+            &llm,
+            ModelIconFlags {
+                is_using_gemini_enterprise: true,
+                ..Default::default()
+            }
+        ),
+        Icon::GeminiEnterpriseAgentPlatform
+    );
+}
+
+#[test]
+fn custom_endpoint_aliased_kimi_keeps_generic_presentation() {
+    // A custom endpoint's display label / alias is entirely user-controlled (see
+    // `custom_llm_info_from`), so it must never be eligible for the Kimi heuristic —
+    // otherwise a user could alias a proxy model "Kimi Proxy" and have it impersonate
+    // Moonshot AI's mark.
+    let mut llm = server_llm("kimi-proxy", None);
+    llm.base_model_name = "Kimi Proxy".to_string();
+
+    assert_eq!(
+        model_leading_icon(
+            &llm,
+            ModelIconFlags {
+                is_custom_endpoint: true,
+                ..Default::default()
+            }
+        ),
+        Icon::Agent
+    );
+
+    // Sanity check: without the custom-endpoint flag, this exact id/name would
+    // otherwise resolve to the Kimi logo, confirming the flag is what's suppressing it.
+    assert_eq!(
+        model_leading_icon(&llm, ModelIconFlags::default()),
+        Icon::KimiLogo
+    );
+}
+
 // -- build_custom_llm_infos / display label tests --
 
 fn endpoint(
