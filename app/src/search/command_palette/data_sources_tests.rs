@@ -32,7 +32,7 @@ use crate::settings::{AISettings, PrivacySettings};
 use crate::system::SystemStats;
 use crate::workflows::workflow::Workflow;
 use crate::workflows::{CloudWorkflowModel, WorkflowId};
-use crate::workspaces::team::Team;
+use crate::workspaces::team::{Team, TeamVisibility};
 use crate::workspaces::team_tester::TeamTesterStatus;
 use crate::workspaces::user_profiles::UserProfiles;
 use crate::workspaces::user_workspaces::UserWorkspaces;
@@ -84,7 +84,7 @@ fn team_for_test(uid: i64, name: &str) -> Team {
         uid: uid.into(),
         name: name.to_owned(),
         color: None,
-        invite_code: None,
+        invite_link: None,
         members: vec![],
         pending_email_invites: vec![],
         invite_link_domain_restrictions: vec![],
@@ -93,6 +93,7 @@ fn team_for_test(uid: i64, name: &str) -> Team {
         settings: Default::default(),
         is_eligible_for_discovery: false,
         has_billing_history: false,
+        visibility: TeamVisibility::Open,
     }
 }
 
@@ -107,7 +108,6 @@ fn workspace_for_test(teams: Vec<Team>) -> Workspace {
         billing_cycle_usage: None,
         has_billing_history: false,
         settings: Default::default(),
-        invite_code: None,
         invite_link_domain_restrictions: vec![],
         pending_email_invites: vec![],
         is_eligible_for_discovery: false,

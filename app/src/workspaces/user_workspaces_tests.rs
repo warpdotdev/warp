@@ -1,3 +1,5 @@
+use std::cell::Cell;
+use std::rc::Rc;
 use std::time::Duration;
 
 use mockall::Sequence;
@@ -33,7 +35,7 @@ use warp_graphql::workspace::{
     SecretRedactionSettingsInfo as GqlSecretRedactionSettingsInfo,
     StringListSettingInfo as GqlStringListSettingInfo, Team as GqlTeam,
     TeamMember as GqlTeamMember, TeamSettings as GqlTeamSettings,
-    TelemetrySettings as GqlTelemetrySettings,
+    TeamVisibility as GqlTeamVisibility, TelemetrySettings as GqlTelemetrySettings,
     UgcCollectionEnablementSetting as GqlUgcCollectionEnablementSetting,
     UgcCollectionSettingInfo as GqlUgcCollectionSettingInfo,
     UgcCollectionSettings as GqlUgcCollectionSettings,
@@ -42,7 +44,9 @@ use warp_graphql::workspace::{
     WriteToPtyAutonomyValue as GqlWriteToPtyAutonomyValue,
     WriteToPtySettingInfo as GqlWriteToPtySettingInfo,
 };
-use warpui::{AddSingletonModel, App, WindowId};
+use warpui::elements::Empty;
+use warpui::platform::WindowStyle;
+use warpui::{AddSingletonModel, App, Element, TypedActionView, View, ViewHandle, WindowId};
 use warpui_extras::user_preferences;
 
 use super::*;
@@ -64,13 +68,13 @@ use crate::system::SystemStats;
 use crate::workflows::workflow::Workflow;
 use crate::workflows::{CloudWorkflow, CloudWorkflowModel};
 use crate::workspaces::gql_convert::PLACEHOLDER_WORKSPACE_UID;
-use crate::workspaces::team::{Team, TeamMember};
+use crate::workspaces::team::{Team, TeamMember, TeamVisibility};
 use crate::workspaces::team_tester::TeamTesterStatus;
 use crate::workspaces::update_manager::TeamUpdateManager;
 use crate::workspaces::user_workspaces::UserWorkspaces;
 use crate::workspaces::workspace::{
-    AdminEnablementSetting, CodebaseContextSettings, HostEnablementSetting, LlmHostSettings,
-    MultiAdminPolicy, PurchaseAddOnCreditsPolicy, Workspace,
+    AdminEnablementSetting, HostEnablementSetting, LlmHostSettings, MultiAdminPolicy,
+    PurchaseAddOnCreditsPolicy, Workspace,
 };
 
 #[derive(Default)]
@@ -169,7 +173,7 @@ fn test_loading_all_spaces_after_switching_from_offline() {
         uid: 123.into(),
         name: "test".to_string(),
         color: None,
-        invite_code: None,
+        invite_link: None,
         members: vec![],
         pending_email_invites: vec![],
         invite_link_domain_restrictions: vec![],
@@ -178,6 +182,7 @@ fn test_loading_all_spaces_after_switching_from_offline() {
         settings: Default::default(),
         is_eligible_for_discovery: false,
         has_billing_history: false,
+        visibility: TeamVisibility::Open,
     };
 
     let workspace = Workspace {
@@ -190,7 +195,6 @@ fn test_loading_all_spaces_after_switching_from_offline() {
         billing_cycle_usage: None,
         has_billing_history: false,
         settings: Default::default(),
-        invite_code: None,
         invite_link_domain_restrictions: vec![],
         pending_email_invites: vec![],
         is_eligible_for_discovery: false,
@@ -305,7 +309,7 @@ fn team_for_test() -> Team {
         uid: 123.into(),
         name: "test".to_string(),
         color: None,
-        invite_code: None,
+        invite_link: None,
         members: vec![],
         pending_email_invites: vec![],
         invite_link_domain_restrictions: vec![],
@@ -314,6 +318,7 @@ fn team_for_test() -> Team {
         settings: Default::default(),
         is_eligible_for_discovery: false,
         has_billing_history: false,
+        visibility: TeamVisibility::Open,
     }
 }
 
@@ -735,7 +740,6 @@ fn workspace_for_test(team: &Team) -> Workspace {
         billing_cycle_usage: None,
         has_billing_history: false,
         settings: Default::default(),
-        invite_code: None,
         invite_link_domain_restrictions: vec![],
         pending_email_invites: vec![],
         is_eligible_for_discovery: false,
@@ -1029,6 +1033,259 @@ fn test_window_team_assignment_reconciles_when_current_workspace_changes() {
     })
 }
 
+#[derive(Default)]
+struct TeamContextTestView;
+
+impl Entity for TeamContextTestView {
+    type Event = ();
+}
+
+impl View for TeamContextTestView {
+    fn ui_name() -> &'static str {
+        "TeamContextTestView"
+    }
+
+    fn render(&self, _: &AppContext) -> Box<dyn Element> {
+        Empty::new().finish()
+    }
+}
+
+impl TypedActionView for TeamContextTestView {
+    type Action = ();
+}
+
+fn create_test_window(app: &mut App) -> (WindowId, ViewHandle<TeamContextTestView>) {
+    app.add_window(WindowStyle::NotStealFocus, |_| TeamContextTestView)
+}
+
+fn two_teams() -> (Team, Team) {
+    let team_a = team_for_test();
+    let mut team_b = team_for_test();
+    team_b.uid = 456.into();
+    team_b.name = "team-b".to_string();
+    (team_a, team_b)
+}
+
+#[test]
+fn test_team_context_for_operation_resolves_each_windows_own_team() {
+    let (team_a, team_b) = two_teams();
+    let mut workspace = workspace_for_test(&team_a);
+    workspace.teams.push(team_b.clone());
+
+    App::test((), |mut app| async move {
+        initialize_window_team_test_app(&mut app, vec![workspace]);
+
+        let (window_a, view_a) = create_test_window(&mut app);
+        let (window_b, view_b) = create_test_window(&mut app);
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.set_team_for_window(window_a, team_a.uid, ctx);
+            user_workspaces.set_team_for_window(window_b, team_b.uid, ctx);
+        });
+
+        let context_a = view_a.update(&mut app, |_, ctx| {
+            UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx)
+        });
+        let context_b = view_b.update(&mut app, |_, ctx| {
+            UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx)
+        });
+
+        assert_eq!(
+            context_a.team_uid(),
+            Some(team_a.uid),
+            "the view in window A should mint a context resolving to team A"
+        );
+        assert_eq!(
+            context_b.team_uid(),
+            Some(team_b.uid),
+            "the view in window B should mint a context resolving to team B"
+        );
+    })
+}
+
+/// A window only changes teams by reconciling away from a team that left the workspace, so
+/// that is also the only way to observe a captured context and a live render diverging.
+#[test]
+fn test_window_team_reconciliation_moves_rendering_but_not_a_captured_context() {
+    let (team_a, team_b) = two_teams();
+    let mut workspace = workspace_for_test(&team_a);
+    workspace.teams.push(team_b.clone());
+
+    App::test((), |mut app| async move {
+        initialize_window_team_test_app(&mut app, vec![workspace]);
+
+        let (window_id, view) = create_test_window(&mut app);
+        let weak_view = view.downgrade();
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.set_team_for_window(window_id, team_a.uid, ctx);
+        });
+
+        let context_a = view.update(&mut app, |_, ctx| {
+            UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx)
+        });
+
+        app.read(|ctx| {
+            assert_eq!(
+                UserWorkspaces::as_ref(ctx)
+                    .team_context(&weak_view, ctx)
+                    .and_then(|context| context.team_uid()),
+                Some(team_a.uid),
+            );
+        });
+
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.update_workspaces(vec![workspace_for_test(&team_b)], ctx);
+        });
+
+        app.read(|ctx| {
+            assert_eq!(
+                UserWorkspaces::as_ref(ctx)
+                    .team_context(&weak_view, ctx)
+                    .and_then(|context| context.team_uid()),
+                Some(team_b.uid),
+                "a freshly resolved render context should follow the window to team B"
+            );
+        });
+        assert_eq!(
+            context_a.team_uid(),
+            Some(team_a.uid),
+            "a context captured for team A should keep pointing at team A rather than follow \
+             the window onto team B"
+        );
+    })
+}
+
+fn team_named(uid: i64, name: &str) -> Team {
+    let mut team = team_for_test();
+    team.uid = uid.into();
+    team.name = name.to_owned();
+    team
+}
+
+/// Two teams in workspace order, so a test can tell the default apart from a chosen team.
+fn platform_and_security() -> (Team, Team, Workspace) {
+    let platform = team_named(123, "Platform");
+    let security = team_named(456, "Security");
+    let mut workspace = workspace_for_test(&platform);
+    workspace.teams.push(security.clone());
+    (platform, security, workspace)
+}
+
+#[test]
+fn switching_a_window_to_a_team_overwrites_and_announces_it() {
+    let (platform, security, workspace) = platform_and_security();
+
+    App::test((), |mut app| async move {
+        initialize_window_team_test_app(&mut app, vec![workspace]);
+
+        let window_id = WindowId::new();
+        let changes = Rc::new(Cell::new(0));
+        let changes_for_subscription = changes.clone();
+        app.update(|ctx| {
+            ctx.subscribe_to_model(&UserWorkspaces::handle(ctx), move |_, event, _| {
+                if matches!(event, UserWorkspacesEvent::WindowTeamChanged { .. }) {
+                    changes_for_subscription.set(changes_for_subscription.get() + 1);
+                }
+            });
+        });
+
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.register_window(window_id, Some(platform.uid), ctx);
+        });
+        let changes_after_register = changes.get();
+
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.switch_window_to_team(window_id, security.uid, ctx);
+        });
+
+        app.read(|ctx| {
+            assert_eq!(
+                UserWorkspaces::as_ref(ctx).team_uid_for_window(window_id),
+                Some(security.uid),
+                "switching must overwrite, unlike the insert-only registration paths"
+            );
+        });
+        assert_eq!(
+            changes.get(),
+            changes_after_register + 1,
+            "the switch must announce itself so scoped consumers resync"
+        );
+    })
+}
+
+#[test]
+fn switching_a_window_to_its_current_team_announces_nothing() {
+    let team = team_for_test();
+    let workspace = workspace_for_test(&team);
+
+    App::test((), |mut app| async move {
+        initialize_window_team_test_app(&mut app, vec![workspace]);
+
+        let window_id = WindowId::new();
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.register_window(window_id, Some(team.uid), ctx);
+        });
+
+        let changes = Rc::new(Cell::new(0));
+        let changes_for_subscription = changes.clone();
+        app.update(|ctx| {
+            ctx.subscribe_to_model(&UserWorkspaces::handle(ctx), move |_, event, _| {
+                if matches!(event, UserWorkspacesEvent::WindowTeamChanged { .. }) {
+                    changes_for_subscription.set(changes_for_subscription.get() + 1);
+                }
+            });
+        });
+
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.switch_window_to_team(window_id, team.uid, ctx);
+        });
+
+        assert_eq!(changes.get(), 0);
+    })
+}
+
+/// The switcher's own visibility rule, which the TUI indicator reuses rather than
+/// reimplementing so the two front-ends cannot disagree about who counts as multi-team.
+#[test]
+fn can_switch_teams_only_with_more_than_one_team() {
+    let (_, _, two_team_workspace) = platform_and_security();
+    let one_team_workspace = workspace_for_test(&team_for_test());
+
+    App::test((), |mut app| async move {
+        initialize_window_team_test_app(&mut app, vec![one_team_workspace]);
+        app.read(|ctx| assert!(!UserWorkspaces::as_ref(ctx).can_switch_teams()));
+
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.update_workspaces(vec![two_team_workspace], ctx);
+        });
+        app.read(|ctx| assert!(UserWorkspaces::as_ref(ctx).can_switch_teams()));
+    })
+}
+
+#[test]
+fn test_team_contexts_represent_a_registered_teamless_window() {
+    App::test((), |mut app| async move {
+        initialize_window_team_test_app(&mut app, vec![]);
+
+        let (window_id, view) = create_test_window(&mut app);
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.register_window(window_id, None, ctx);
+        });
+
+        let context = view.update(&mut app, |_, ctx| {
+            UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx)
+        });
+        assert_eq!(context.team_uid(), None);
+
+        let weak_view = view.downgrade();
+        app.read(|ctx| {
+            let context = UserWorkspaces::as_ref(ctx)
+                .team_context(&weak_view, ctx)
+                .expect("a registered teamless window should resolve");
+            assert_eq!(context.team_uid(), None);
+        });
+    })
+}
+
 #[test]
 fn test_spaces_for_window_orders_selected_team_shared_and_personal() {
     let _flag = FeatureFlag::SharedWithMe.override_enabled(true);
@@ -1126,14 +1383,12 @@ fn test_unassigned_window_is_initialized_after_workspace_metadata_loads() {
 }
 
 #[test]
-fn test_codebase_context_enabled_by_team_disabled_by_user() {
-    let team = team_for_test();
-
-    // Codebase context is governed by the workspace-level effective settings.
-    let mut workspace = workspace_for_test(&team);
-    workspace.settings.codebase_context_settings = CodebaseContextSettings {
-        setting: AdminEnablementSetting::Enable,
-    };
+fn test_codebase_context_enabled_when_all_teams_enable_it() {
+    let (mut team_a, mut team_b) = two_teams();
+    team_a.settings.codebase_context.value = AdminEnablementSetting::Enable;
+    team_b.settings.codebase_context.value = AdminEnablementSetting::Enable;
+    let mut workspace = workspace_for_test(&team_a);
+    workspace.teams.push(team_b);
 
     App::test((), |mut app| async move {
         initialize_app(
@@ -1146,110 +1401,105 @@ fn test_codebase_context_enabled_by_team_disabled_by_user() {
         );
 
         app.read(|ctx| {
-            let codebase_context_enabled = UserWorkspaces::as_ref(ctx)
-                .is_codebase_context_enabled(ctx);
-            assert!(codebase_context_enabled,
-            "codebase context should be on when it's enabled by the team, regardless of user setting");
-        });
-    })
-}
-
-#[test]
-fn test_codebase_context_enabled_by_team_and_user() {
-    let team = team_for_test();
-
-    let mut workspace = workspace_for_test(&team);
-    workspace.settings.codebase_context_settings = CodebaseContextSettings {
-        setting: AdminEnablementSetting::Enable,
-    };
-
-    App::test((), |mut app| async move {
-        initialize_app(
-            &mut app,
-            CachedResources {
-                workspaces: vec![workspace],
-            },
-            Arc::new(MockTeamClient::new()),
-            Arc::new(MockWorkspaceClient::new()),
-        );
-
-        app.read(|ctx| {
-            let codebase_context_enabled =
-                UserWorkspaces::as_ref(ctx).is_codebase_context_enabled(ctx);
-            assert!(
-                codebase_context_enabled,
-                "codebase context should be on when it's enabled by the team"
-            );
-        });
-    })
-}
-
-#[test]
-fn test_codebase_context_disabled_by_workspace() {
-    let team = team_for_test();
-
-    let mut workspace = workspace_for_test(&team);
-    workspace.settings.codebase_context_settings = CodebaseContextSettings {
-        setting: AdminEnablementSetting::Disable,
-    };
-
-    App::test((), |mut app| async move {
-        initialize_app(
-            &mut app,
-            CachedResources {
-                workspaces: vec![workspace],
-            },
-            Arc::new(MockTeamClient::new()),
-            Arc::new(MockWorkspaceClient::new()),
-        );
-
-        app.read(|ctx| {
-            let codebase_context_enabled =
-                UserWorkspaces::as_ref(ctx).is_codebase_context_enabled(ctx);
-            assert!(
-                !codebase_context_enabled,
-                "codebase context should be off when it's disabled by the workspace"
-            );
-        });
-    })
-}
-
-#[test]
-fn test_codebase_context_respect_user_setting() {
-    let team = team_for_test();
-
-    // Workspace defers codebase context to the user setting.
-    let mut workspace = workspace_for_test(&team);
-    workspace.settings.codebase_context_settings.setting =
-        AdminEnablementSetting::RespectUserSetting;
-
-    App::test((), |mut app| async move {
-        initialize_app(
-            &mut app,
-            CachedResources {
-                workspaces: vec![workspace],
-            },
-            Arc::new(MockTeamClient::new()),
-            Arc::new(MockWorkspaceClient::new()),
-        );
-
-        app.read(|ctx| {
-            let codebase_context_enabled = UserWorkspaces::as_ref(ctx)
-                .is_codebase_context_enabled(ctx);
-            // Should respect user setting, which defaults to true when AI is enabled
-            assert!(
-                codebase_context_enabled,
-                "codebase context should respect user setting when team setting is RespectUserSetting"
-            );
-
-            // Test that team_allows_codebase_context returns the correct setting
-            let team_setting = UserWorkspaces::as_ref(ctx)
-                .team_allows_codebase_context();
+            let user_workspaces = UserWorkspaces::as_ref(ctx);
             assert_eq!(
-                team_setting,
-                AdminEnablementSetting::RespectUserSetting,
-                "team_allows_codebase_context should return RespectUserSetting"
+                user_workspaces.teams_allow_codebase_context(),
+                AdminEnablementSetting::Enable
             );
+            assert!(user_workspaces.is_codebase_context_enabled(ctx));
+        });
+    })
+}
+
+#[test]
+fn test_codebase_context_disabled_when_any_team_disables_it() {
+    let (mut team_a, mut team_b) = two_teams();
+    team_a.settings.codebase_context.value = AdminEnablementSetting::Enable;
+    team_b.settings.codebase_context.value = AdminEnablementSetting::Disable;
+    let disabled_team_uid = team_b.uid;
+    let mut workspace = workspace_for_test(&team_a);
+    workspace.teams.push(team_b);
+
+    App::test((), |mut app| async move {
+        initialize_app(
+            &mut app,
+            CachedResources {
+                workspaces: vec![workspace],
+            },
+            Arc::new(MockTeamClient::new()),
+            Arc::new(MockWorkspaceClient::new()),
+        );
+
+        app.read(|ctx| {
+            let user_workspaces = UserWorkspaces::as_ref(ctx);
+            assert_eq!(
+                user_workspaces.teams_allow_codebase_context(),
+                AdminEnablementSetting::Disable
+            );
+            assert_eq!(
+                user_workspaces
+                    .team_disabling_codebase_context()
+                    .map(|team| team.uid),
+                Some(disabled_team_uid)
+            );
+            assert!(!user_workspaces.is_codebase_context_enabled(ctx));
+        });
+    })
+}
+
+#[test]
+fn test_codebase_context_respects_user_setting_when_any_team_does() {
+    let (mut team_a, mut team_b) = two_teams();
+    team_a.settings.codebase_context.value = AdminEnablementSetting::Enable;
+    team_b.settings.codebase_context.value = AdminEnablementSetting::RespectUserSetting;
+    let mut workspace = workspace_for_test(&team_a);
+    workspace.teams.push(team_b);
+
+    App::test((), |mut app| async move {
+        initialize_app(
+            &mut app,
+            CachedResources {
+                workspaces: vec![workspace],
+            },
+            Arc::new(MockTeamClient::new()),
+            Arc::new(MockWorkspaceClient::new()),
+        );
+
+        app.read(|ctx| {
+            let user_workspaces = UserWorkspaces::as_ref(ctx);
+            assert_eq!(
+                user_workspaces.teams_allow_codebase_context(),
+                AdminEnablementSetting::RespectUserSetting
+            );
+            assert!(user_workspaces.is_codebase_context_enabled(ctx));
+        });
+    })
+}
+
+#[test]
+fn test_codebase_context_uses_workspace_setting_without_teams() {
+    let team = team_for_test();
+    let mut workspace = workspace_for_test(&team);
+    workspace.teams.clear();
+    workspace.settings.codebase_context_settings.setting = AdminEnablementSetting::Disable;
+
+    App::test((), |mut app| async move {
+        initialize_app(
+            &mut app,
+            CachedResources {
+                workspaces: vec![workspace],
+            },
+            Arc::new(MockTeamClient::new()),
+            Arc::new(MockWorkspaceClient::new()),
+        );
+
+        app.read(|ctx| {
+            let user_workspaces = UserWorkspaces::as_ref(ctx);
+            assert_eq!(
+                user_workspaces.teams_allow_codebase_context(),
+                AdminEnablementSetting::Disable
+            );
+            assert!(!user_workspaces.is_codebase_context_enabled(ctx));
         });
     })
 }
@@ -1262,7 +1512,7 @@ fn test_joining_team_moves_objects() {
         uid: 123.into(),
         name: "test".to_string(),
         color: None,
-        invite_code: None,
+        invite_link: None,
         members: vec![],
         pending_email_invites: vec![],
         invite_link_domain_restrictions: vec![],
@@ -1271,6 +1521,7 @@ fn test_joining_team_moves_objects() {
         settings: Default::default(),
         is_eligible_for_discovery: false,
         has_billing_history: false,
+        visibility: TeamVisibility::Open,
     };
     let team_uid = team.uid;
     let workspace = Workspace {
@@ -1283,7 +1534,6 @@ fn test_joining_team_moves_objects() {
         billing_cycle_usage: None,
         has_billing_history: false,
         settings: Default::default(),
-        invite_code: None,
         invite_link_domain_restrictions: vec![],
         pending_email_invites: vec![],
         is_eligible_for_discovery: false,
@@ -1501,7 +1751,7 @@ fn test_leaving_team_moves_objects() {
         uid: 123.into(),
         name: "test".to_string(),
         color: None,
-        invite_code: None,
+        invite_link: None,
         members: vec![],
         pending_email_invites: vec![],
         invite_link_domain_restrictions: vec![],
@@ -1510,6 +1760,7 @@ fn test_leaving_team_moves_objects() {
         settings: Default::default(),
         is_eligible_for_discovery: false,
         has_billing_history: false,
+        visibility: TeamVisibility::Open,
     };
     let team_uid = team.uid;
     let workspace = Workspace {
@@ -1522,7 +1773,6 @@ fn test_leaving_team_moves_objects() {
         billing_cycle_usage: None,
         has_billing_history: false,
         settings: Default::default(),
-        invite_code: None,
         invite_link_domain_restrictions: vec![],
         pending_email_invites: vec![],
         is_eligible_for_discovery: false,
@@ -1736,6 +1986,163 @@ fn test_purchase_addon_credits_forwards_team_uid_when_present() {
     })
 }
 
+#[test]
+fn test_remove_user_from_team_rejected_emits_error_event_without_updating_workspaces() {
+    let team = team_for_test();
+    let team_uid = team.uid;
+    let workspace = workspace_for_test(&team);
+
+    App::test((), |mut app| async move {
+        let mut team_client = MockTeamClient::new();
+        team_client
+            .expect_remove_user_from_team()
+            .times(1)
+            .returning(|_, _, _| {
+                Err(anyhow::anyhow!(
+                    "missing response data for RemoveUserFromTeam: Not found: no rows in result set"
+                ))
+            });
+
+        app.add_singleton_model(|ctx| {
+            UserWorkspaces::mock(
+                Arc::new(team_client),
+                Arc::new(MockWorkspaceClient::new()),
+                vec![workspace],
+                ctx,
+            )
+        });
+
+        let user_workspaces_handle = UserWorkspaces::handle(&app);
+        let (sender, receiver) = async_channel::unbounded();
+        app.update(|ctx| {
+            let sender = sender.clone();
+            ctx.subscribe_to_model(
+                &user_workspaces_handle,
+                move |_, event: &UserWorkspacesEvent, _| {
+                    if let UserWorkspacesEvent::RemoveUserFromTeamRejected(err) = event {
+                        let _ = sender.try_send(err.to_string());
+                    }
+                },
+            );
+        });
+
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.remove_user_from_team(
+                UserUid::new("member-uid"),
+                team_uid,
+                CloudObjectEventEntrypoint::TeamSettings,
+                ctx,
+            );
+        });
+
+        warpui::r#async::Timer::after(Duration::from_millis(100)).await;
+
+        let error_message = receiver
+            .try_recv()
+            .expect("expected RemoveUserFromTeamRejected to be emitted");
+        assert!(
+            error_message.contains("no rows in result set"),
+            "the rejected event should carry the server's error message, got: {error_message}"
+        );
+
+        // A failed removal must not silently drop the team from local state.
+        app.read(|ctx| {
+            assert!(
+                UserWorkspaces::as_ref(ctx).has_teams(),
+                "a rejected removal should leave the existing team data untouched"
+            );
+        });
+    })
+}
+
+#[test]
+fn test_remove_user_from_team_success_emits_success_event_and_refreshes_members() {
+    let user_uid = UserUid::new("member-uid");
+    let mut team = team_for_test();
+    team.members.push(TeamMember {
+        uid: user_uid,
+        email: "member@example.com".to_string(),
+        role: MembershipRole::User,
+    });
+    let team_uid = team.uid;
+    let workspace = workspace_for_test(&team);
+
+    let mut updated_team = team.clone();
+    updated_team.members.clear();
+    let updated_workspace = workspace_for_test(&updated_team);
+
+    App::test((), |mut app| async move {
+        let mut team_client = MockTeamClient::new();
+        team_client
+            .expect_remove_user_from_team()
+            .times(1)
+            .returning(move |_, _, _| {
+                Ok(WorkspacesMetadataWithPricing {
+                    metadata: WorkspacesMetadataResponse {
+                        workspaces: vec![updated_workspace.clone()],
+                        joinable_teams: vec![],
+                        experiments: None,
+                        feature_model_choices: None,
+                        ai_credit_availability: None,
+                        user_purchase_policy: None,
+                    },
+                    pricing_info: None,
+                })
+            });
+
+        app.add_singleton_model(PrivacySettings::mock);
+        app.add_singleton_model(|ctx| {
+            UserWorkspaces::mock(
+                Arc::new(team_client),
+                Arc::new(MockWorkspaceClient::new()),
+                vec![workspace],
+                ctx,
+            )
+        });
+
+        let user_workspaces_handle = UserWorkspaces::handle(&app);
+        let (sender, receiver) = async_channel::unbounded();
+        app.update(|ctx| {
+            let sender = sender.clone();
+            ctx.subscribe_to_model(
+                &user_workspaces_handle,
+                move |_, event: &UserWorkspacesEvent, _| {
+                    if matches!(event, UserWorkspacesEvent::RemoveUserFromTeamSuccess) {
+                        let _ = sender.try_send(());
+                    }
+                },
+            );
+        });
+
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.remove_user_from_team(
+                user_uid,
+                team_uid,
+                CloudObjectEventEntrypoint::TeamSettings,
+                ctx,
+            );
+        });
+
+        warpui::r#async::Timer::after(Duration::from_millis(100)).await;
+
+        receiver
+            .try_recv()
+            .expect("expected RemoveUserFromTeamSuccess to be emitted");
+
+        // The acceptance criteria requires that a successful removal continues to
+        // refresh the member list, exactly like before this fix.
+        app.read(|ctx| {
+            let team = UserWorkspaces::as_ref(ctx)
+                .team_from_uid(team_uid)
+                .expect("team should still exist after removal");
+            assert!(
+                team.members.is_empty(),
+                "member list should refresh to reflect the removal"
+            );
+        });
+    })
+}
+
 fn gql_tier(purchase_policy: Option<GqlPurchaseAddOnCreditsPolicy>) -> GqlTier {
     GqlTier {
         name: "Free".to_string(),
@@ -1847,7 +2254,6 @@ fn gql_workspace(
             ambient_agent_settings: None,
         },
         has_billing_history: false,
-        invite_code: None,
         pending_email_invites: vec![],
         invite_link_domain_restrictions: vec![],
         is_eligible_for_discovery: false,
@@ -1973,6 +2379,8 @@ fn gql_team(uid: &str, name: &str, member_uids: &[&str]) -> GqlTeam {
             })
             .collect(),
         settings: gql_team_settings(),
+        invite_link: None,
+        visibility: GqlTeamVisibility::Open,
     }
 }
 

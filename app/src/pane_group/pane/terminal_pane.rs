@@ -1961,11 +1961,8 @@ fn launch_remote_child(
         Err(error) => {
             let error_message = error.user_message();
             report_error!(
-                "Failed to prepare remote child launch",
-                extra: {
-                    "conversation_id" => ?conversation_id,
-                    "error" => %error_message
-                }
+                anyhow::Error::new(error).context("Failed to prepare remote child launch"),
+                extra: { "conversation_id" => ?conversation_id }
             );
             BlocklistAIHistoryModel::handle(ctx).update(ctx, |history_model, ctx| {
                 history_model.update_conversation_status_with_error(

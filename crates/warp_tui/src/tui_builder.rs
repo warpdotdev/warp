@@ -282,10 +282,25 @@ impl TuiUiBuilder {
         )
     }
 
+    /// Theme-accent overlay shared by every read-only menu's card background
+    /// (`?` shortcuts, `/status`, `/usage`, etc).
+    fn read_only_menu_background_fill(&self) -> ThemeFill {
+        let accent = ThemeFill::from(self.warp_theme.terminal_colors().normal.cyan);
+        self.base_background().blend(&accent.with_opacity(10))
+    }
+
     /// Theme-accent overlay for shared read-only menus.
     pub(crate) fn read_only_menu_background(&self) -> Color {
-        let accent = ThemeFill::from(self.warp_theme.terminal_colors().normal.cyan);
-        cell_color(self.base_background().blend(&accent.with_opacity(10)))
+        cell_color(self.read_only_menu_background_fill())
+    }
+
+    /// The design's 60%-foreground texture over the usage card background.
+    pub(crate) fn usage_bar_empty_style(&self) -> TuiStyle {
+        let foreground = self.warp_theme.foreground();
+        TuiStyle::default().fg(cell_color(
+            self.read_only_menu_background_fill()
+                .blend(&foreground.with_opacity(60)),
+        ))
     }
 
     /// Pale-green overlay behind shell command rows in the transcript.

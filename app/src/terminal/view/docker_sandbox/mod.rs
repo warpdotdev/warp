@@ -22,7 +22,9 @@ use warpui::{SingletonEntity, View, ViewHandle};
 use super::TerminalView;
 #[cfg(not(target_family = "wasm"))]
 use crate::ai::agent_sdk::driver::{
-    WARP_DRIVE_SYNC_TIMEOUT, environment::prepare_environment, terminal::TerminalDriver,
+    WARP_DRIVE_SYNC_TIMEOUT,
+    environment::{RepositoryPreparationOptions, prepare_environment},
+    terminal::TerminalDriver,
 };
 #[cfg(not(target_family = "wasm"))]
 use crate::ai::agent_sdk::setup_observability::SetupClientEventReporter;
@@ -294,11 +296,15 @@ impl TerminalView {
                 let prepare_future = spawner
                     .spawn(|_, ctx| {
                         prepare_environment(
-                            source_repos,
-                            setup_commands,
                             DOCKER_SANDBOX_HOME_DIR.into(),
                             true, /* is_sandbox */
                             Harness::Oz,
+                            RepositoryPreparationOptions::new(
+                                source_repos,
+                                setup_commands,
+                                Vec::new(),
+                                false,
+                            ),
                             setup_events,
                             ctx,
                         )
@@ -327,10 +333,7 @@ impl TerminalView {
                     log::info!("Prepared Docker Sandbox environment");
                 }
                 Err(err) => {
-                    report_error!(
-                        "Docker Sandbox environment setup failed",
-                        extra: { "error" => %err }
-                    );
+                    log::warn!("Docker Sandbox environment setup failed: {err}");
                 }
             },
         );

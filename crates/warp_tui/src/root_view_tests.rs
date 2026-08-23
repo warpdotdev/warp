@@ -2,13 +2,17 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use anyhow::Result;
-use warp::tui_export::register_tui_session_view_test_singletons;
+use warp::tui_export::{
+    ServerId, UserWorkspaces, register_tui_session_view_test_singletons,
+    set_tui_workspace_teams_for_test,
+};
 use warp::{TuiLoginModel, TuiLoginPhase};
+use warp_core::user_preferences::GetUserPreferences as _;
 use warpui::platform::WindowStyle;
 use warpui::{AddWindowOptions, SingletonEntity, UpdateModel};
 use warpui_core::{App, TuiView as _, TypedActionView as _, WindowId};
 
-use super::{RootTuiAction, RootTuiView};
+use super::{LAST_TEAM_STORAGE_KEY, RootTuiAction, RootTuiView};
 use crate::cloud_run::TuiCloudRunState;
 use crate::session_registry::{TuiSessions, TuiSessionsEvent};
 use crate::test_fixtures::{add_test_semantic_selection, add_test_terminal_session};
@@ -20,9 +24,109 @@ fn add_root(app: &mut App) -> (WindowId, warpui_core::ViewHandle<RootTuiView>) {
                 window_style: WindowStyle::NotStealFocus,
                 ..Default::default()
             },
-            |_| RootTuiView::new(),
+            RootTuiView::new,
         )
     })
+}
+
+fn set_teams(app: &mut App, teams: &[(i64, &str)]) {
+    let teams = teams
+        .iter()
+        .map(|(uid, name)| ((*uid).into(), (*name).to_owned()))
+        .collect();
+    app.update(|ctx| set_tui_workspace_teams_for_test(teams, ctx));
+}
+
+fn window_team_uid(app: &App, window_id: WindowId) -> Option<ServerId> {
+    app.read(|ctx| UserWorkspaces::as_ref(ctx).team_uid_for_window(window_id))
+}
+
+#[test]
+fn root_registers_the_default_team_after_teams_arrive() {
+    App::test((), |mut app| async move {
+        register_tui_session_view_test_singletons(&mut app);
+        let (window_id, _) = add_root(&mut app);
+        assert_eq!(window_team_uid(&app, window_id), None);
+
+        set_teams(&mut app, &[(123, "Platform"), (456, "Security")]);
+
+        assert_eq!(window_team_uid(&app, window_id), Some(123.into()));
+    });
+}
+
+#[test]
+fn root_prefers_the_stored_team() {
+    App::test((), |mut app| async move {
+        register_tui_session_view_test_singletons(&mut app);
+        set_teams(&mut app, &[(123, "Platform"), (456, "Security")]);
+        app.update(|ctx| RootTuiView::store_last_team_uid(456.into(), ctx));
+        let (window_id, _) = add_root(&mut app);
+
+        assert_eq!(window_team_uid(&app, window_id), Some(456.into()));
+    });
+}
+
+#[test]
+fn root_registers_the_default_team_when_teams_are_already_loaded() {
+    App::test((), |mut app| async move {
+        register_tui_session_view_test_singletons(&mut app);
+        set_teams(&mut app, &[(123, "Platform"), (456, "Security")]);
+
+        let (window_id, _) = add_root(&mut app);
+
+        assert_eq!(window_team_uid(&app, window_id), Some(123.into()));
+    });
+}
+
+#[test]
+fn root_rejects_a_stale_stored_team() {
+    App::test((), |mut app| async move {
+        register_tui_session_view_test_singletons(&mut app);
+        set_teams(&mut app, &[(123, "Platform")]);
+        app.update(|ctx| RootTuiView::store_last_team_uid(999.into(), ctx));
+        let (window_id, _) = add_root(&mut app);
+
+        set_teams(&mut app, &[(123, "Platform")]);
+
+        assert_eq!(window_team_uid(&app, window_id), Some(123.into()));
+    });
+}
+
+#[test]
+fn switching_teams_moves_the_window_and_is_remembered() {
+    App::test((), |mut app| async move {
+        register_tui_session_view_test_singletons(&mut app);
+        set_teams(&mut app, &[(123, "Platform"), (456, "Security")]);
+        let (window_id, _) = add_root(&mut app);
+
+        app.update(|ctx| {
+            RootTuiView::switch_window_to_team(window_id, 456.into(), ctx);
+        });
+
+        assert_eq!(window_team_uid(&app, window_id), Some(456.into()));
+        app.read(|ctx| {
+            assert_eq!(RootTuiView::restore_last_team_uid(ctx), Some(456.into()));
+        });
+
+        set_teams(&mut app, &[(123, "Platform"), (456, "Security")]);
+        assert_eq!(window_team_uid(&app, window_id), Some(456.into()));
+    });
+}
+
+#[test]
+fn an_unreadable_stored_team_degrades_to_the_default() {
+    App::test((), |mut app| async move {
+        register_tui_session_view_test_singletons(&mut app);
+        set_teams(&mut app, &[(123, "Platform")]);
+        app.update(|ctx| {
+            let _ = ctx
+                .private_user_preferences()
+                .write_value(LAST_TEAM_STORAGE_KEY, "not-a-team-uid".to_owned());
+        });
+        let (window_id, _) = add_root(&mut app);
+
+        assert_eq!(window_team_uid(&app, window_id), Some(123.into()));
+    });
 }
 #[test]
 fn start_device_login_action_retries_from_failure() {

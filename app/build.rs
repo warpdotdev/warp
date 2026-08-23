@@ -265,10 +265,6 @@ fn build_and_link_sentry() {
     };
     let sentry_framework_path = format!("{frameworks_dir}/{sentry_dir}/macos-arm64_arm64e_x86_64");
 
-    // Make sure we re-run the build script if the framework directory changes (e.g.: it gets
-    // deleted).
-    println!("cargo:rerun-if-changed={sentry_framework_path}");
-
     // Link the Sentry framework, and compile our objc logic that interfaces with it.
     println!("cargo:rustc-link-search=framework=app/{sentry_framework_path}");
     println!("cargo:rustc-link-lib=framework=Sentry");

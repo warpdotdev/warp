@@ -896,15 +896,18 @@ impl AgentProfilesPageView {
     }
 
     fn build_page(ctx: &mut ViewContext<Self>) -> PageType<Self> {
-        let mut widgets: Vec<Box<dyn SettingsWidget<View = Self>>> = Vec::new();
-        if !FeatureFlag::UsageBasedPricing.is_enabled() {
-            widgets.push(Box::new(UsageWidget::new(ctx)));
-        }
-        widgets.push(Box::new(AgentsWidget::default()));
-
         // This page is multi-section: it renders its own subheader-sized
-        // section titles inside each widget, so it gets no page-level title.
-        PageType::new_uncategorized(widgets, None)
+        // section titles inside each widget, so it gets no page-level title,
+        // in either arm below.
+        if FeatureFlag::UsageBasedPricing.is_enabled() {
+            PageType::new_monolith(AgentsWidget::default(), None, true)
+        } else {
+            let widgets: Vec<Box<dyn SettingsWidget<View = Self>>> = vec![
+                Box::new(UsageWidget::new(ctx)),
+                Box::new(AgentsWidget::default()),
+            ];
+            PageType::new_uncategorized(widgets, None)
+        }
     }
 
     fn handle_context_window_editor_event(

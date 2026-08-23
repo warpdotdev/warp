@@ -1413,12 +1413,12 @@ impl AgentInputFooter {
                                 model.record_plugin_auto_failure(agent, remote_host);
                             });
                             log::error!("Failed plugin operation log: {}", err.log);
-                            report_error!(
-                                anyhow::anyhow!("{err}").context("Failed plugin operation"),
-                                extra: { "agent" => ?agent }
-                            );
                             let mut toast =
                                 DismissibleToast::error(format!("{error_label}: {err}"));
+                            report_error!(
+                                anyhow::Error::new(err).context("Failed plugin operation"),
+                                extra: { "agent" => ?agent }
+                            );
                             if let Some(log_path) = log_path {
                                 toast = toast.with_link(
                                     ToastLink::new("See logs for details".to_owned())
@@ -1682,7 +1682,7 @@ impl AgentInputFooter {
             .with_run_spacing(context_chips::spacing::UDI_ROW_RUN_SPACING)
             .finish();
         let content = EventHandler::new(content)
-            .on_right_mouse_down(|ctx, _, position| {
+            .on_right_mouse_down(|ctx, _, position, _| {
                 ctx.dispatch_typed_action(AgentInputFooterAction::ShowContextMenu { position });
                 DispatchEventResult::StopPropagation
             })
@@ -2414,7 +2414,7 @@ impl View for AgentInputFooter {
             .with_run_spacing(context_chips::spacing::UDI_ROW_RUN_SPACING)
             .finish();
         let content = EventHandler::new(content)
-            .on_right_mouse_down(|ctx, _, position| {
+            .on_right_mouse_down(|ctx, _, position, _| {
                 ctx.dispatch_typed_action(AgentInputFooterAction::ShowContextMenu { position });
                 DispatchEventResult::StopPropagation
             })

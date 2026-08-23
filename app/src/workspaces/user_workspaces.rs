@@ -12,6 +12,8 @@ use warpui::{
     WindowId,
 };
 
+#[cfg(test)]
+use super::team::TeamVisibility;
 use super::team::{DiscoverableTeam, MembershipRole, Team};
 #[cfg(test)]
 use super::workspace::WorkspaceMemberUsageInfo;
@@ -73,6 +75,8 @@ pub enum UserWorkspacesEvent {
     TransferTeamOwnershipRejected(anyhow::Error),
     SetTeamMemberRoleSuccess,
     SetTeamMemberRoleRejected(anyhow::Error),
+    RemoveUserFromTeamSuccess,
+    RemoveUserFromTeamRejected(anyhow::Error),
     UpdateWorkspaceSettingsSuccess,
     UpdateWorkspaceSettingsRejected(anyhow::Error),
     AiOveragesUpdated,
@@ -152,6 +156,96 @@ pub struct CreateTeamResponse {
     pub team: Team,
 }
 
+/// The team an operation is scoped to, captured once from the window that started it.
+///
+/// A logical operation carries its `TeamContextForOperation` from start to finish instead of
+/// asking a window which team is selected now, so concurrent windows on different teams stay
+/// independent and a later team switch cannot retarget work already in flight.
+///
+/// Deliberately neither `Clone` nor `Copy`. Moves make the handoff between the parts of an
+/// operation explicit and reviewable, whereas copies let a scope leak sideways into work
+/// that never established it. Wanting to duplicate one is a sign the second consumer is
+/// really a separate operation that should capture its own scope; if the parts genuinely
+/// share a lifetime, restructure so they share the single owner instead.
+///
+/// This is scope, not authority: the server still authorizes every request made under it.
+///
+/// Prefer [`TeamContext`] when reasonable: convert a `ViewContext` to a `WeakViewHandle`,
+/// carry the handle through moved futures and callbacks, and mint the render context only at
+/// the point of use, so a policy read reflects the window's team at that moment. Reach for
+/// this type instead when the work's *destination* must not move once chosen -- e.g. creating
+/// a Drive object in the team the user was in when they clicked New -- and be ready to justify
+/// that choice; pinning is deliberate, not the default.
+///
+/// Only [`UserWorkspaces::team_context_for_operation`] mints one, always from a real window;
+/// there is no way to fabricate one without a window (there is deliberately no `teamless()`
+/// constructor). Its `team_uid` can still be `None` -- that means the minting window itself
+/// has no team selected, and a getter that accepts this scope should act as if the operation
+/// is not on a team. It must not read some other team's settings as a substitute: see
+/// [`TeamScope`]'s contract. Code with no window at all (e.g. background GEAP token refresh)
+/// is not this type's job -- it needs its own accessor that reads across every one of the
+/// user's teams explicitly, in the shape of `UserWorkspaces::teams_allow_codebase_context`.
+// Nothing constructs or consumes one outside this module's own tests yet; remove this
+// `#[allow(dead_code)]`, and widen visibility to `pub`, once a Group 1 migration PR has a real
+// call site.
+#[allow(dead_code)]
+pub(crate) struct TeamContextForOperation {
+    team_uid: Option<ServerId>,
+}
+
+/// Reads a [`TeamContextForOperation`] or [`TeamContext`]'s team, regardless of which one a
+/// caller was handed. Implemented only by those two types — see their docs for what each one
+/// promises about when it was resolved and what it can be used for.
+///
+/// The contract every settings getter built on this trait must follow: take a scope directly
+/// (`&impl TeamScope` or `&dyn TeamScope`), never an optional one (`Option<&dyn TeamScope>`).
+/// A caller with no scope to give has to confront that rather than pass `None` and inherit
+/// some fallback. `team_uid() == None` means the scope's own window/operation has no team, and
+/// the getter must act as if the operation is not on a team -- not substitute another team's
+/// settings. `current_workspace().settings` is a safe fallback only when the user belongs to
+/// no team at all: whenever the user has one or more teams, it is one arbitrarily-chosen
+/// team's effective settings (`GetEffectiveWorkspaceSettingsForWorkspace` server-side), not
+/// workspace-level data. Code with no window at all must not construct a scope to route around
+/// this; it should read across every team explicitly, the way
+/// `UserWorkspaces::teams_allow_codebase_context` does.
+#[allow(dead_code)]
+pub(crate) trait TeamScope {
+    fn team_uid(&self) -> Option<ServerId>;
+}
+
+impl TeamScope for TeamContextForOperation {
+    fn team_uid(&self) -> Option<ServerId> {
+        self.team_uid
+    }
+}
+
+#[cfg(test)]
+impl TeamContextForOperation {
+    // Nothing constructs a test context yet; remove this `#[allow(dead_code)]` once a Group 1
+    // migration PR has a real call site.
+    #[allow(dead_code)]
+    pub(crate) fn new_for_test(team_uid: ServerId) -> Self {
+        Self {
+            team_uid: Some(team_uid),
+        }
+    }
+}
+
+/// The team a view renders as, borrowed for the duration of a single read.
+///
+/// It is resolved at the point of use so policy reads follow the view between windows.
+pub(crate) struct TeamContext<'a> {
+    #[allow(dead_code)]
+    team_uid: Option<&'a ServerId>,
+}
+
+impl TeamScope for TeamContext<'_> {
+    fn team_uid(&self) -> Option<ServerId> {
+        self.team_uid.copied()
+    }
+}
+
+pub(crate) type TeamContextResolver = Box<dyn for<'a> Fn(&'a AppContext) -> TeamContext<'a>>;
 impl UserWorkspaces {
     #[cfg(any(test, all(feature = "tui", feature = "test-util")))]
     pub fn mock(
@@ -319,6 +413,20 @@ impl UserWorkspaces {
         self.window_team_uids.get(&window_id).copied().flatten()
     }
 
+    pub fn switch_window_to_team(
+        &mut self,
+        window_id: WindowId,
+        team_uid: ServerId,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        if self.team_uid_for_window(window_id) == Some(team_uid) {
+            return;
+        }
+        self.window_team_uids.insert(window_id, Some(team_uid));
+        ctx.emit(UserWorkspacesEvent::WindowTeamChanged { window_id });
+        ctx.notify();
+    }
+
     /// Returns `true` when the user belongs to more than one team in the current
     /// workspace, meaning the team-switcher pill and dropdown should be shown.
     /// Single-team and no-workspace users return `false` so their UI is unchanged.
@@ -343,6 +451,46 @@ impl UserWorkspaces {
         view_handle
             .window_id(ctx)
             .and_then(|window_id| self.team_for_window(window_id))
+    }
+
+    /// Captures the team selected in `ctx`'s window as an operation's
+    /// [`TeamContextForOperation`]. This is the only way application code mints one. Always
+    /// succeeds -- a window with no team selected still yields a scope, just one whose
+    /// `team_uid()` is `None`; see [`TeamScope`]'s contract for what that means to a getter.
+    // Only tests call this today; remove once a Group 1 migration PR has a real call site.
+    #[allow(dead_code)]
+    pub(crate) fn team_context_for_operation<T: Entity>(
+        &self,
+        ctx: &ViewContext<T>,
+    ) -> TeamContextForOperation {
+        TeamContextForOperation {
+            team_uid: self.team_uid_for_window(ctx.window_id()),
+        }
+    }
+
+    pub(crate) fn team_context_resolver<T: Entity>(view: WeakViewHandle<T>) -> TeamContextResolver {
+        Box::new(move |app| {
+            let team_uid = Self::as_ref(app)
+                .team_for_view_handle(&view, app)
+                .map(|team| &team.uid);
+            TeamContext { team_uid }
+        })
+    }
+
+    /// Resolves `view`'s window team for one read. See [`TeamContext`].
+    #[allow(dead_code)]
+    pub(crate) fn team_context<'a, T: Entity>(
+        &'a self,
+        view: &WeakViewHandle<T>,
+        app: &AppContext,
+    ) -> Option<TeamContext<'a>> {
+        let window_id = view.window_id(app)?;
+        let team_uid = self.window_team_uids.get(&window_id)?;
+        let team_uid = match team_uid {
+            Some(team_uid) => Some(&self.team_from_uid(*team_uid)?.uid),
+            None => None,
+        };
+        Some(TeamContext { team_uid })
     }
 
     /// Returns the windows whose team assignment changed.
@@ -1168,6 +1316,21 @@ impl UserWorkspaces {
         self.notify_and_emit_teams_changed(ctx);
     }
 
+    fn on_remove_user_from_team(
+        &mut self,
+        result: Result<WorkspacesMetadataWithPricing>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        match result {
+            Err(err) => ctx.emit(UserWorkspacesEvent::RemoveUserFromTeamRejected(err)),
+            Ok(result) => {
+                self.on_workspaces_updated(Ok(result), ctx);
+                ctx.emit(UserWorkspacesEvent::RemoveUserFromTeamSuccess);
+            }
+        };
+        ctx.notify();
+    }
+
     pub fn remove_user_from_team(
         &mut self,
         user_uid: UserUid,
@@ -1182,7 +1345,7 @@ impl UserWorkspaces {
                     .remove_user_from_team(user_uid, team_uid, entrypoint)
                     .await
             },
-            Self::on_workspaces_updated,
+            Self::on_remove_user_from_team,
         );
     }
 
@@ -1813,18 +1976,10 @@ impl UserWorkspaces {
             .unwrap_or(false)
     }
 
-    /// Returns the codebase context settings, taking into account the organization,
-    /// global AI settings, and codebase-specific settings.
-    /// Prefer this function to determine whether to show indexing-related functionality.
+    /// Returns whether codebase context is enabled across all of the user's teams.
     pub fn is_codebase_context_enabled(&self, app: &AppContext) -> bool {
-        // If the organization has an explicit setting, respect it and make user toggle irrelevant.
-        // - Enable: forced ON by org, regardless of user preference.
-        // - Disable: forced OFF by org.
-        // - RespectUserSetting: respect the user setting.
-        let org_setting = self.team_allows_codebase_context();
         let ai_globally_enabled = AISettings::as_ref(app).is_any_ai_enabled(app);
-
-        match org_setting {
+        match self.teams_allow_codebase_context() {
             AdminEnablementSetting::Enable => ai_globally_enabled,
             AdminEnablementSetting::Disable => false,
             AdminEnablementSetting::RespectUserSetting => {
@@ -1848,13 +2003,43 @@ impl UserWorkspaces {
             .unwrap_or_default()
     }
 
-    /// Returns only the organization-specific codebase context enablement setting.
-    /// Do not use this function to determine whether codebase context is generally enabled --
-    /// use `is_codebase_context_enabled` instead.
-    pub fn team_allows_codebase_context(&self) -> AdminEnablementSetting {
-        self.current_workspace()
-            .map(|workspace| workspace.settings.codebase_context_settings.setting.clone())
-            .unwrap_or_default()
+    pub fn teams_allow_codebase_context(&self) -> AdminEnablementSetting {
+        let mut team_settings = self
+            .workspaces
+            .iter()
+            .flat_map(|workspace| workspace.teams.iter())
+            .map(|team| &team.settings.codebase_context.value)
+            .peekable();
+
+        if team_settings.peek().is_none() {
+            return self
+                .current_workspace()
+                .map(|workspace| workspace.settings.codebase_context_settings.setting.clone())
+                .unwrap_or_default();
+        }
+
+        // TODO(isaiah): Enforce codebase-indexing policy per team and window.
+        let mut respects_user_setting = false;
+        for setting in team_settings {
+            match setting {
+                AdminEnablementSetting::Enable => {}
+                AdminEnablementSetting::Disable => return AdminEnablementSetting::Disable,
+                AdminEnablementSetting::RespectUserSetting => respects_user_setting = true,
+            }
+        }
+
+        if respects_user_setting {
+            AdminEnablementSetting::RespectUserSetting
+        } else {
+            AdminEnablementSetting::Enable
+        }
+    }
+
+    pub fn team_disabling_codebase_context(&self) -> Option<&Team> {
+        self.workspaces
+            .iter()
+            .flat_map(|workspace| workspace.teams.iter())
+            .find(|team| team.settings.codebase_context.value == AdminEnablementSetting::Disable)
     }
 
     /// Updates whether or not session sharing is enabled based on the current team's tier policy.
@@ -1902,12 +2087,13 @@ impl UserWorkspaces {
                 color: None,
                 billing_metadata: BillingMetadata::default(),
                 members: vec![],
-                invite_code: None,
+                invite_link: None,
                 pending_email_invites: vec![],
                 invite_link_domain_restrictions: vec![],
                 stripe_customer_id: None,
                 is_eligible_for_discovery: false,
                 has_billing_history: false,
+                visibility: TeamVisibility::Open,
             }],
             members: vec![WorkspaceMember {
                 uid: owner_uid,
@@ -1925,7 +2111,6 @@ impl UserWorkspaces {
             billing_cycle_usage: None,
             has_billing_history: false,
             settings: workspace_settings,
-            invite_code: None,
             invite_link_domain_restrictions: vec![],
             pending_email_invites: vec![],
             is_eligible_for_discovery: false,
