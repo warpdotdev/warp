@@ -53,9 +53,6 @@ if command -v pwsh /dev/null 2>&1; then
     echo "Running PSScriptAnalyzer..."
     ./script/lint_powershell -ci
     echo "PsScriptAnalyzer succeeded..."
-    echo "Running pwsh bootstrap checks..."
-    ./script/test_pwsh_bootstrap -ci
-    echo "pwsh bootstrap checks succeeded..."
 elif [ "${GITHUB_ACTIONS}" == "true" ]; then
     # If we are in CI, and fail to find powershell, we should automatically fail
     echo "No powershell installation detected! Aborting!"

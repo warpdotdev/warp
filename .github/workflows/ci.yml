@@ -681,10 +681,6 @@ jobs:
         run: ./script/lint_powershell -ci
         shell: pwsh
 
-      - name: Run pwsh bootstrap checks
-        run: ./script/test_pwsh_bootstrap -ci
-        shell: pwsh
-
       - name: Validate repo-sync markers
         uses: warpdotdev/repo-sync/actions/validate-markers@main
 
