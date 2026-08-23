@@ -351,19 +351,9 @@ $null = New-Module -Name Warp-Module -ScriptBlock {
     # it is set to $false.
     $script:commandNotFound = $false
 
-    # Reports the user's vi preference in the 'Bootstrapped' payload even though the session's
-    # live edit mode is overridden. See Warp-Configure-PSReadLine.
     $script:viEditModeOverridden = $false
 
     function Warp-Configure-PSReadLine {
-        # The 'Alt+1' and 'Alt+2' chords below reach PSReadLine as a bare Escape plus a digit, and
-        # a chord split across reads -- which ConPTY readily produces -- never dispatches. Emacs
-        # swallows the stray Escape, but Vi binds it to ViCommandMode, so everything Warp writes
-        # next is reinterpreted as vi edits and 'echo hello' submits as 'o hello'. Only vi is
-        # overridden, because only vi corrupts the command; the milder stray-digit damage under
-        # the 'Windows' edit mode is GH #10891. The override costs a vi user nothing they can see,
-        # since a Warpified session's keystrokes go through Warp's input editor rather than
-        # PSReadLine's, and it must precede the bindings because it resets every key handler.
         if ((Get-PSReadLineOption).EditMode -eq 'Vi') {
             $script:viEditModeOverridden = $true
             Set-PSReadLineOption -EditMode Emacs
@@ -974,8 +964,6 @@ $null = New-Module -Name Warp-Module -ScriptBlock {
 
     function Warp-Finish-Bootstrap {
         param([decimal]$rcStartTime, [decimal]$rcEndTime)
-        # The profiles just sourced ran after the bootstrap's own Warp-Precmd, and setting the vi
-        # edit mode there unbinds Warp's chords by resetting every key handler.
         Warp-Configure-PSReadLine
 
         # This is the closest we can get in PowerShell to a proper preexec hook. We wrap the

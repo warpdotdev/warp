@@ -365,9 +365,7 @@ zle -N zle-line-init
 }
 
 /// Regression test for CORE-3804: a profile that selects PSReadLine's vi edit mode must not
-/// corrupt submitted commands. Warp's input-reporting and kill-buffer chords reach PSReadLine as
-/// a bare Escape plus a digit, which vi binds to ViCommandMode and DigitArgument, so before the
-/// fix a submitted `echo hello` arrived as `o hello`.
+/// corrupt submitted commands.
 pub fn test_pwsh_vi_edit_mode_does_not_corrupt_commands() -> Builder {
     new_builder()
         .set_should_run_test(|| {
@@ -390,8 +388,6 @@ pub fn test_pwsh_vi_edit_mode_does_not_corrupt_commands() -> Builder {
             ExpectedExitStatus::Success,
             "vi_edit_mode_ok",
         ))
-        // The leading token is what vi command mode eats first, so a second command guards the
-        // failure mode where only part of the text survives.
         .with_step(execute_command_for_single_terminal_in_tab(
             0,
             "Write-Output second_command_ok".to_string(),
