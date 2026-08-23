@@ -1,0 +1,107 @@
+#!/usr/bin/env -S pwsh -NoProfile
+
+<#
+.SYNOPSIS
+Asserts the PSReadLine invariants that Warp's PowerShell shell integration depends on.
+
+.DESCRIPTION
+Warp drives PSReadLine over the PTY with ESC-prefixed chords, which only survive a
+fragmented read in Emacs edit mode. Warp-Configure-PSReadLine therefore forces Emacs
+when the session is in vi, and because changing the edit mode resets every key handler,
+that reset has to happen before the chords are registered. Nothing about that ordering
+is self-evident from reading the function, so this pins it down.
+
+Warp-Configure-PSReadLine is extracted from the bootstrap script and run on its own
+rather than by sourcing the bootstrap, which would open runspace pools, take over the
+prompt and write OSC sequences to stdout.
+
+Run from the repository root, as script/lint_powershell is.
+#>
+
+param([switch]$ci)
+
+$bootstrapPath = './app/assets/bundled/bootstrap/pwsh.ps1'
+if (-not (Test-Path $bootstrapPath)) {
+    throw "Could not find '$bootstrapPath'. Run this from the repository root."
+}
+
+$ast = [System.Management.Automation.Language.Parser]::ParseFile(
+    (Resolve-Path $bootstrapPath).Path, [ref]$null, [ref]$null)
+$functionAst = $ast.Find({
+        param($node)
+        $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+        $node.Name -eq 'Warp-Configure-PSReadLine'
+    }, $true)
+if ($null -eq $functionAst) {
+    throw "Could not find Warp-Configure-PSReadLine in '$bootstrapPath'"
+}
+
+# The only function Warp-Configure-PSReadLine calls outside PSReadLine itself. The
+# handlers it registers call back into the bootstrap, but they are not invoked here.
+function Warp-Disable-PSPrediction {}
+. ([scriptblock]::Create($functionAst.Extent.Text))
+
+# Every chord Warp-Configure-PSReadLine is responsible for registering, and the handler
+# each one must end up on. Asserting the handler rather than merely that the chord is
+# bound matters: Emacs mode binds 'Alt+1' and 'Alt+2' to DigitArgument by default, so a
+# boundness check alone would pass on a session where Warp's handlers had been wiped.
+$warpChords = [ordered]@{
+    'Alt+1' = 'CustomAction'
+    'Alt+2' = 'BackwardDeleteLine'
+    'Alt+p' = 'CustomAction'
+    'Alt+w' = 'CustomAction'
+}
+
+function Get-BoundFunction([string]$chord) {
+    $handler = Get-PSReadLineKeyHandler -Bound | Where-Object { $_.Key -eq $chord } | Select-Object -First 1
+    if ($null -eq $handler) {
+        return $null
+    }
+    return $handler.Function
+}
+
+$failures = [System.Collections.Generic.List[string]]::new()
+function Assert-That([bool]$condition, [string]$message) {
+    if (-not $condition) {
+        $failures.Add($message)
+    }
+}
+
+# Vi is the mode that breaks Warp's chords, so it is the one that must be overridden.
+# Emacs and Windows must be left as the user configured them.
+$expectedModes = @{ Vi = 'Emacs'; Emacs = 'Emacs'; Windows = 'Windows' }
+foreach ($startMode in $expectedModes.Keys) {
+    Set-PSReadLineOption -EditMode $startMode
+    Warp-Configure-PSReadLine
+
+    $endMode = (Get-PSReadLineOption).EditMode
+    Assert-That ($endMode -eq $expectedModes[$startMode]) `
+        "Starting in '$startMode' edit mode, expected to end in '$($expectedModes[$startMode])' but got '$endMode'"
+
+    # Changing the edit mode resets every key handler, so a reset ordered after the
+    # registrations below would silently leave Warp without its chords.
+    foreach ($chord in $warpChords.Keys) {
+        $bound = Get-BoundFunction $chord
+        Assert-That ($bound -eq $warpChords[$chord]) `
+            "Starting in '$startMode' edit mode, expected '$chord' to be bound to '$($warpChords[$chord])' but got '$bound'"
+    }
+}
+
+# The edit mode is only reset when it has to be. A session already in Emacs keeps the
+# handlers registered around it; resetting unconditionally would drop them.
+Set-PSReadLineOption -EditMode Emacs
+Set-PSReadLineKeyHandler -Chord 'Alt+9' -Function CaptureScreen
+Warp-Configure-PSReadLine
+Assert-That ((Get-BoundFunction 'Alt+9') -eq 'CaptureScreen') `
+    "A key handler registered in an Emacs-mode session was dropped by Warp-Configure-PSReadLine"
+
+if ($failures.Count -gt 0) {
+    Write-Output "$($failures.Count) assertion(s) failed:"
+    $failures | ForEach-Object { Write-Output "  - $_" }
+    if ($ci) {
+        throw "pwsh bootstrap checks failed with $($failures.Count) problems"
+    }
+    exit 1
+}
+
+Write-Output 'pwsh bootstrap checks passed.'
