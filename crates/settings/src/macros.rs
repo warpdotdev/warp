@@ -822,10 +822,9 @@ pub use define_settings_group;
 #[macro_export]
 macro_rules! register_settings_events {
     ( $group:ident, $var:ident, $setting:ident, $handle:expr, $ctx:expr ) => {{
-        // The callback bodies must expand here, with the concrete setting
-        // type, so an inherent method on the setting (for example
-        // `current_value_is_syncable`) can shadow the `Setting` trait
-        // default, exactly as in the formerly expanded registration code.
+        // The callback bodies must expand here with the concrete setting type
+        // so an inherent method on the setting (for example
+        // `current_value_is_syncable`) can shadow the `Setting` trait default.
         $crate::registration::register_setting_events::<$setting, _>(
             $handle,
             $crate::registration::SettingCallbacks {

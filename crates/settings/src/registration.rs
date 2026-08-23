@@ -1,11 +1,8 @@
 //! Runtime support for wiring settings into the [`SettingsManager`].
 //!
-//! The `register_settings_events!` macro used to expand the full registration
-//! body for every setting. The macro now only builds [`SettingCallbacks`] (a
-//! set of small function pointers with concrete types) and calls
-//! [`register_setting_events`]. The registration body lives here in functions
-//! that are generic over the group model and the value type, so settings that
-//! share those types share one compiled instantiation.
+//! The registration body is generic over the group model and value type so
+//! settings that share those types share one compiled instantiation, while
+//! [`SettingCallbacks`] preserves setting-specific method resolution.
 
 use anyhow::{Result, anyhow};
 use serde::de::DeserializeOwned;
@@ -56,10 +53,10 @@ fn equals_serialized<S: Setting>(left: &str, right: &str) -> Result<bool> {
 /// Typed operations on one setting within its group model.
 ///
 /// The `register_settings_events!` macro constructs this struct at its
-/// expansion site, with the concrete group and setting types. This keeps the
-/// method resolution of the formerly expanded registration code: an inherent
-/// method on the setting type (for example `current_value_is_syncable`) can
-/// still shadow the [`Setting`] trait default.
+/// expansion site, with the concrete group and setting types. This keeps
+/// method resolution local to the concrete setting, so an inherent method
+/// (for example `current_value_is_syncable`) can shadow the [`Setting`] trait
+/// default.
 pub struct SettingCallbacks<G: Entity, V> {
     /// Applies an updated value with `set_value`, or with
     /// `set_value_from_cloud_sync` when the second argument is true.
