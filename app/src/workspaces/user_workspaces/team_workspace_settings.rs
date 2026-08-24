@@ -132,6 +132,7 @@ pub struct NotATeamMemberError {
 
 /// What windowless Gemini Enterprise credential minting should mint from. See
 /// [`UserWorkspaces::gemini_enterprise_host_for_any_enabling_team`].
+#[cfg(not(target_family = "wasm"))]
 pub(crate) enum GeminiEnterpriseBackgroundHost<'a> {
     /// No team of the user's enables Gemini Enterprise, so there is nothing to mint.
     NoneEnabled,
