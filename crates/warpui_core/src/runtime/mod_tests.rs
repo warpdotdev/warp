@@ -111,6 +111,7 @@ fn invalidation_driver_does_not_schedule_repaints_while_unfocused() {
         let timer = Rc::new(RefCell::new(None));
         let focused = Rc::new(Cell::new(true));
         let freeze_repaints_when_unfocused = Rc::new(Cell::new(true));
+        let failed = Rc::new(Cell::new(false));
 
         app.update(|ctx| {
             draw_and_schedule_repaint(
@@ -118,6 +119,7 @@ fn invalidation_driver_does_not_schedule_repaints_while_unfocused() {
                 &timer,
                 &focused,
                 &freeze_repaints_when_unfocused,
+                &failed,
                 ctx,
             )
         })
@@ -131,6 +133,7 @@ fn invalidation_driver_does_not_schedule_repaints_while_unfocused() {
                 &timer,
                 &focused,
                 &freeze_repaints_when_unfocused,
+                &failed,
                 ctx,
             )
         })
@@ -144,6 +147,7 @@ fn invalidation_driver_does_not_schedule_repaints_while_unfocused() {
                 &timer,
                 &focused,
                 &freeze_repaints_when_unfocused,
+                &failed,
                 ctx,
             )
         })
@@ -385,6 +389,46 @@ impl TuiTerminal for TestTerminal {
         &mut self.output
     }
 }
+struct FailingWriter {
+    attempts: Rc<Cell<usize>>,
+}
+
+impl Write for FailingWriter {
+    fn write(&mut self, _buffer: &[u8]) -> io::Result<usize> {
+        self.attempts.set(self.attempts.get() + 1);
+        Err(io::Error::new(
+            io::ErrorKind::BrokenPipe,
+            "terminal disconnected",
+        ))
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.attempts.set(self.attempts.get() + 1);
+        Err(io::Error::new(
+            io::ErrorKind::BrokenPipe,
+            "terminal disconnected",
+        ))
+    }
+}
+
+struct FailingTerminal {
+    size: TuiSize,
+    writer: FailingWriter,
+}
+
+impl TuiTerminal for FailingTerminal {
+    fn size(&self) -> io::Result<TuiSize> {
+        Ok(self.size)
+    }
+
+    fn poll_event(&mut self, _timeout: Duration) -> io::Result<Option<CrosstermEvent>> {
+        Ok(None)
+    }
+
+    fn writer(&mut self) -> &mut dyn Write {
+        &mut self.writer
+    }
+}
 
 fn window_options() -> AddWindowOptions {
     AddWindowOptions {
@@ -393,6 +437,141 @@ fn window_options() -> AddWindowOptions {
     }
 }
 
+#[test]
+fn terminal_disconnects_include_pipe_and_tty_errors() {
+    assert!(is_terminal_disconnect(&io::Error::new(
+        io::ErrorKind::BrokenPipe,
+        "closed pipe"
+    )));
+
+    #[cfg(unix)]
+    {
+        assert!(is_terminal_disconnect(&io::Error::from_raw_os_error(
+            libc::EIO
+        )));
+        assert!(is_terminal_disconnect(&io::Error::from_raw_os_error(
+            libc::ENXIO
+        )));
+    }
+
+    #[cfg(windows)]
+    assert!(is_terminal_disconnect(&io::Error::from_raw_os_error(233)));
+
+    assert!(!is_terminal_disconnect(&io::Error::other(
+        "unexpected failure"
+    )));
+}
+#[test]
+fn startup_errors_classify_terminal_disconnects() {
+    let disconnect = TuiDriverStartupError::from(io::Error::new(
+        io::ErrorKind::BrokenPipe,
+        "terminal disconnected",
+    ));
+    assert!(matches!(
+        disconnect,
+        TuiDriverStartupError::TerminalDisconnected(_)
+    ));
+
+    let unexpected = TuiDriverStartupError::from(io::Error::other("unexpected failure"));
+    assert!(matches!(unexpected, TuiDriverStartupError::Unexpected(_)));
+}
+
+#[test]
+fn disconnected_driver_cancels_repaints_and_stops_drawing() {
+    App::test((), |mut app| async move {
+        let (window_id, root) =
+            app.update(|ctx| ctx.add_tui_window(window_options(), |_| TextView));
+        let attempts = Rc::new(Cell::new(0));
+        let screen = Rc::new(RefCell::new(TuiScreen::new(
+            window_id,
+            root,
+            FailingTerminal {
+                size: TuiSize::new(20, 3),
+                writer: FailingWriter {
+                    attempts: attempts.clone(),
+                },
+            },
+        )));
+        let timer = Rc::new(RefCell::new(Some(app.update(|ctx| {
+            ctx.foreground_executor().spawn(async {
+                std::future::pending::<()>().await;
+            })
+        }))));
+        let focused = Rc::new(Cell::new(true));
+        let freeze_repaints_when_unfocused = Rc::new(Cell::new(false));
+        let failed = Rc::new(Cell::new(false));
+
+        let error = app
+            .update(|ctx| {
+                draw_and_schedule_repaint(
+                    &screen,
+                    &timer,
+                    &focused,
+                    &freeze_repaints_when_unfocused,
+                    &failed,
+                    ctx,
+                )
+            })
+            .unwrap_err();
+        app.update(|ctx| {
+            fail_tui_driver(error, TuiDriverIoOperation::DrawFrame, &failed, &timer, ctx);
+        });
+
+        assert!(failed.get());
+        assert!(timer.borrow().is_none());
+        assert_eq!(attempts.get(), 1);
+
+        app.update(|ctx| {
+            draw_and_schedule_repaint(
+                &screen,
+                &timer,
+                &focused,
+                &freeze_repaints_when_unfocused,
+                &failed,
+                ctx,
+            )
+        })
+        .unwrap();
+
+        assert_eq!(attempts.get(), 1);
+        assert!(app.termination_result().is_none());
+    });
+}
+
+#[test]
+fn unexpected_driver_failure_terminates_with_one_error() {
+    App::test((), |mut app| async move {
+        let timer: Rc<RefCell<Option<ForegroundTask>>> = Rc::default();
+        let failed = Rc::new(Cell::new(false));
+
+        app.update(|ctx| {
+            fail_tui_driver(
+                io::Error::other("first failure"),
+                TuiDriverIoOperation::ReadEvent,
+                &failed,
+                &timer,
+                ctx,
+            );
+            fail_tui_driver(
+                io::Error::other("second failure"),
+                TuiDriverIoOperation::DrawFrame,
+                &failed,
+                &timer,
+                ctx,
+            );
+        });
+
+        let error = app
+            .termination_result()
+            .expect("unexpected I/O should set a termination result")
+            .expect_err("unexpected I/O should terminate with an error");
+        assert_eq!(
+            error.to_string(),
+            "failed to read a terminal event",
+            "the first failure should win"
+        );
+    });
+}
 #[test]
 fn run_until_draws_view_text_and_exits_on_quit() {
     App::test((), |mut app| async move {

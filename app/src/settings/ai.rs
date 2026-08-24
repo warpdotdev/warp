@@ -2071,7 +2071,7 @@ define_settings_group!(AISettings, settings: [
     }
 
     // Whether Oz should add attribution (co-author line) to commit messages and PRs.
-    // This is the user-level preference; it may be overridden by the team-level
+    // This is the user-level preference; it may be overridden by the window's team's
     // `enable_warp_attribution` AdminEnablementSetting (see
     // `UserWorkspaces::get_agent_attribution_setting`).
     agent_attribution_enabled: AgentAttributionEnabled {

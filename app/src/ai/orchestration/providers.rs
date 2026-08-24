@@ -15,7 +15,7 @@ use crate::ai::connected_self_hosted_workers::WARP_WORKER_HOST;
 use crate::ai::harness_availability::{AuthSecretFetchState, HarnessAvailabilityModel};
 use crate::ai::llms::LLMInfo;
 use crate::ai::orchestration::config_state::AuthSecretSelection;
-use crate::workspaces::user_workspaces::UserWorkspaces;
+use crate::workspaces::user_workspaces::{TeamScope, UserWorkspaces};
 
 /// Env var override for the workspace default host (developer testing).
 /// Mirrors the single-agent ambient flow.
@@ -84,10 +84,13 @@ pub fn first_filtered_model_id(harness_type: &str, ctx: &AppContext) -> Option<S
     }
 }
 
-/// Resolves the workspace-configured default host slug, honoring the
+/// Resolves the default host slug configured for `scope`'s team, honoring the
 /// `WARP_CLOUD_MODE_DEFAULT_HOST` env var override for developer
 /// testing. Mirrors the single-agent ambient flow.
-pub fn resolve_default_host_slug(ctx: &AppContext) -> Option<String> {
+pub fn resolve_default_host_slug<S: TeamScope + ?Sized>(
+    scope: &S,
+    ctx: &AppContext,
+) -> Option<String> {
     if let Ok(slug) = std::env::var(DEFAULT_HOST_ENV_VAR) {
         let trimmed = slug.trim();
         if !trimmed.is_empty() {
@@ -95,15 +98,18 @@ pub fn resolve_default_host_slug(ctx: &AppContext) -> Option<String> {
         }
     }
     UserWorkspaces::as_ref(ctx)
-        .default_host_slug()
+        .default_host_slug(scope)
         .map(str::to_string)
         .filter(|s| !s.trim().is_empty())
 }
 
 /// Returns the user's last-selected custom host slug from
-/// `CloudAgentSettings.last_selected_host`, excluding `"warp"` and the
-/// workspace default (those are surfaced as separate menu rows).
-pub fn resolve_recent_host_slug(ctx: &AppContext) -> Option<String> {
+/// `CloudAgentSettings.last_selected_host`, excluding `"warp"` and
+/// `scope`'s team default (those are surfaced as separate menu rows).
+pub fn resolve_recent_host_slug<S: TeamScope + ?Sized>(
+    scope: &S,
+    ctx: &AppContext,
+) -> Option<String> {
     let last = CloudAgentSettings::as_ref(ctx)
         .last_selected_host
         .value()
@@ -112,7 +118,7 @@ pub fn resolve_recent_host_slug(ctx: &AppContext) -> Option<String> {
     if last.eq_ignore_ascii_case(ORCHESTRATION_WARP_WORKER_HOST) {
         return None;
     }
-    if resolve_default_host_slug(ctx).as_deref() == Some(last.as_str()) {
+    if resolve_default_host_slug(scope, ctx).as_deref() == Some(last.as_str()) {
         return None;
     }
     Some(last)

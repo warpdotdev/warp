@@ -29,7 +29,6 @@ use crate::terminal::cli_agent_sessions::CLIAgentSessionsModel;
 use crate::test_util::settings::initialize_settings_for_tests_with_mode;
 use crate::workspaces::team_tester::TeamTesterStatus;
 use crate::workspaces::user_workspaces::{TeamContextForOperation, UserWorkspaces};
-use crate::workspaces::workspace::SandboxedAgentSettings;
 use crate::{
     AgentNotificationsModel, GlobalResourceHandles, GlobalResourceHandlesProvider, LaunchMode,
 };
@@ -1471,14 +1470,10 @@ fn test_sandboxed_denylist_used_in_sandboxed_mode() {
                 },
                 ctx,
             );
-            // Sandboxed denylist blocks "rm .*" instead.
-            model.update_sandboxed_agent_settings(
-                |settings| {
-                    *settings = Some(SandboxedAgentSettings {
-                        execute_commands_denylist: Some(vec![
-                            AgentModeCommandExecutionPredicate::new_regex("rm .*").unwrap(),
-                        ]),
-                    });
+            // The team's sandboxed denylist blocks "rm .*" instead.
+            model.update_team_sandboxed_agent_denylist(
+                |denylist| {
+                    denylist.values = vec!["rm .*".to_string()];
                 },
                 ctx,
             );

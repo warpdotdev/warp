@@ -2024,8 +2024,111 @@ fn schedule_create_accepts_team_scope() {
         panic!("Expected `warp schedule create` subcommand");
     };
 
-    assert!(create_args.scope.team);
+    assert!(create_args.scope.is_team());
+    assert!(create_args.scope.requested_team_uid().is_none());
     assert!(!create_args.scope.personal);
+}
+
+#[test]
+fn schedule_create_accepts_team_scope_with_uid() {
+    let args = Args::try_parse_from([
+        "warp",
+        "schedule",
+        "create",
+        "--name",
+        "test",
+        "--cron",
+        "0 9 * * 1",
+        "--prompt",
+        "hello",
+        "--team=team_uid00000000000123",
+    ])
+    .unwrap();
+
+    let Some(Command::CommandLine(boxed_cmd)) = args.command else {
+        panic!("Expected `warp schedule create` command");
+    };
+    let CliCommand::Schedule(schedule_cmd) = boxed_cmd.as_ref() else {
+        panic!("Expected `warp schedule create` command");
+    };
+
+    let Some(ScheduleSubcommand::Create(create_args)) = schedule_cmd.subcommand() else {
+        panic!("Expected `warp schedule create` subcommand");
+    };
+
+    assert!(create_args.scope.is_team());
+    assert_eq!(
+        create_args.scope.requested_team_uid(),
+        Some("team_uid00000000000123")
+    );
+    assert!(!create_args.scope.personal);
+}
+
+#[test]
+fn schedule_create_rejects_detached_team_uid() {
+    assert!(
+        Args::try_parse_from([
+            "warp",
+            "schedule",
+            "create",
+            "--name",
+            "test",
+            "--cron",
+            "0 9 * * 1",
+            "--prompt",
+            "hello",
+            "--team",
+            "team_uid00000000000123",
+        ])
+        .is_err()
+    );
+}
+
+/// `--team` predates taking a uid, so a detached value must still reach the positional it
+/// always did rather than being read as the team.
+#[test]
+fn secret_delete_bare_team_leaves_the_name_positional_alone() {
+    warp_core::features::mark_initialized();
+
+    let args = Args::try_parse_from(["warp", "secret", "delete", "--team", "my-secret"]).unwrap();
+
+    let Some(Command::CommandLine(boxed_cmd)) = args.command else {
+        panic!("Expected `warp secret delete` command");
+    };
+    let CliCommand::Secret(SecretCommand::Delete(delete_args)) = boxed_cmd.as_ref() else {
+        panic!("Expected `warp secret delete` command");
+    };
+
+    assert_eq!(delete_args.name, "my-secret");
+    assert!(delete_args.scope.is_team());
+    assert!(delete_args.scope.requested_team_uid().is_none());
+}
+
+#[test]
+fn secret_delete_accepts_team_uid_alongside_the_name_positional() {
+    warp_core::features::mark_initialized();
+
+    let args = Args::try_parse_from([
+        "warp",
+        "secret",
+        "delete",
+        "--team=team_uid00000000000123",
+        "my-secret",
+    ])
+    .unwrap();
+
+    let Some(Command::CommandLine(boxed_cmd)) = args.command else {
+        panic!("Expected `warp secret delete` command");
+    };
+    let CliCommand::Secret(SecretCommand::Delete(delete_args)) = boxed_cmd.as_ref() else {
+        panic!("Expected `warp secret delete` command");
+    };
+
+    assert_eq!(delete_args.name, "my-secret");
+    assert_eq!(
+        delete_args.scope.requested_team_uid(),
+        Some("team_uid00000000000123")
+    );
 }
 
 #[test]
@@ -2055,7 +2158,7 @@ fn schedule_create_accepts_personal_scope() {
         panic!("Expected `warp schedule create` subcommand");
     };
 
-    assert!(!create_args.scope.team);
+    assert!(!create_args.scope.is_team());
     assert!(create_args.scope.personal);
 }
 
@@ -3001,7 +3104,7 @@ fn secret_create_codex_api_key_accepts_base_url_and_value_file() {
         api_key_args.common.description.as_deref(),
         Some("OpenAI key for Codex")
     );
-    assert!(api_key_args.common.scope.team);
+    assert!(api_key_args.common.scope.is_team());
     assert!(!api_key_args.common.scope.personal);
     assert_eq!(
         api_key_args

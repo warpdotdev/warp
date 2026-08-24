@@ -132,7 +132,6 @@ impl IntroSlide {
                     slide_name: "welcome".to_string(),
                     action: "get_started".to_string(),
                     account_class: None,
-                    experiment_arm: None,
                 },
                 ctx
             );

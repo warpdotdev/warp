@@ -34,6 +34,7 @@ use crate::ui_components::icons::Icon;
 use crate::view_components::action_button::{ActionButton, ActionButtonTheme, ButtonSize};
 use crate::view_components::alert::{Alert, AlertConfig};
 use crate::workspace::WorkspaceAction;
+use crate::workspaces::user_workspaces::UserWorkspaces;
 
 struct ManageDefaultsTheme;
 
@@ -129,11 +130,11 @@ impl InlineModelSelectorView {
         positioner: &ModelHandle<InlineMenuPositioner>,
         ctx: &mut ViewContext<Self>,
     ) -> Self {
-        let window_id = ctx.window_id();
+        let team_context = UserWorkspaces::team_context_resolver(ctx.handle());
         let data_source = ctx.add_model(move |_| {
             // Built without the ambient model; the setter (called below for construction and by
             // the lazy shared-session viewer path) is the single point that attaches it.
-            ModelSelectorDataSource::new(terminal_view_id, window_id, None)
+            ModelSelectorDataSource::new(terminal_view_id, team_context, None)
         });
 
         let tab_configs = TAB_CONFIGS.clone();

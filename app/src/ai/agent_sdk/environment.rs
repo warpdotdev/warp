@@ -740,7 +740,7 @@ impl EnvironmentCommandRunner {
         );
         let client_id = ClientId::default();
 
-        let owner = match super::common::resolve_owner(scope.team, scope.personal, ctx) {
+        let owner = match super::common::resolve_owner(&scope, ctx) {
             Ok(owner) => owner,
             Err(e) => {
                 super::report_fatal_error(e, ctx);

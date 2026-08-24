@@ -235,6 +235,7 @@ $null = New-Module -Name Warp-Module -ScriptBlock {
                 rcfiles_start_time = "$rcStartTime"
                 rcfiles_end_time = "$rcEndTime"
                 shell_plugins = ''
+                vi_mode_enabled = $(if ($script:viEditModeOverridden) { '1' } else { '' })
                 os_category = $osCategory
                 linux_distribution = "$linuxDistribution"
                 shell_path = (Get-Process -Id $PID).Path
@@ -350,7 +351,14 @@ $null = New-Module -Name Warp-Module -ScriptBlock {
     # it is set to $false.
     $script:commandNotFound = $false
 
+    $script:viEditModeOverridden = $false
+
     function Warp-Configure-PSReadLine {
+        if ((Get-PSReadLineOption).EditMode -eq 'Vi') {
+            $script:viEditModeOverridden = $true
+            Set-PSReadLineOption -EditMode Emacs
+        }
+
         # Set-PSReadLineKeyHandler is the PowerShell equivalent of zsh's bindkey.
         Set-PSReadLineKeyHandler -Chord 'Alt+2' -Function BackwardDeleteLine
 
@@ -956,6 +964,8 @@ $null = New-Module -Name Warp-Module -ScriptBlock {
 
     function Warp-Finish-Bootstrap {
         param([decimal]$rcStartTime, [decimal]$rcEndTime)
+        Warp-Configure-PSReadLine
+
         # This is the closest we can get in PowerShell to a proper preexec hook. We wrap the
         # invocation of PSConsoleHostReadline, and call our preexec hook before returning the
         # returned value. This allows us to preserve the any custom implementations of

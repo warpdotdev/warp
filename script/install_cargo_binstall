@@ -29,6 +29,8 @@ archive_sha256() {
             echo "c55962a0115f9716b709216de7f8bdd59d6ba8738779e60b051b4593f677717a" ;;
         cargo-binstall-x86_64-pc-windows-msvc.zip)
             echo "89706aa5215c164d8d091597a470fee72308ac87e8553af395ea77db844a888c" ;;
+        cargo-binstall-aarch64-pc-windows-msvc.zip)
+            echo "c6873e81457d9e44973a8e9a849795f2c83765fce0af8ad68b597b5b40dec418" ;;
     esac
 }
 
@@ -41,7 +43,17 @@ archive_for_platform() {
             echo "cargo-binstall-$(uname -m)-unknown-linux-musl.tgz" ;;
         *)
             if [ "${OS-}" = "Windows_NT" ]; then
-                echo "cargo-binstall-$(uname -m)-pc-windows-msvc.zip"
+                # uname -m is unreliable here: Git for Windows' MSYS runtime reports the
+                # emulated x86_64 host under WOW64, or "unknown" on a native arm64 host,
+                # rather than the real machine architecture. PROCESSOR_ARCHITEW6432 (set
+                # only under emulation, to the true native architecture) falling back to
+                # PROCESSOR_ARCHITECTURE reports it correctly in both cases.
+                case "${PROCESSOR_ARCHITEW6432:-${PROCESSOR_ARCHITECTURE-}}" in
+                    ARM64)
+                        echo "cargo-binstall-aarch64-pc-windows-msvc.zip" ;;
+                    AMD64)
+                        echo "cargo-binstall-x86_64-pc-windows-msvc.zip" ;;
+                esac
             fi
             ;;
     esac

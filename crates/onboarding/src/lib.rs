@@ -70,10 +70,7 @@ impl std::fmt::Display for SessionDefault {
 }
 
 pub use agent_onboarding_view::{AgentOnboardingAction, AgentOnboardingEvent, AgentOnboardingView};
-pub use model::{
-    ChooseHowToStartExperimentArm, CreditPackOption, CreditPurchaseState, OnboardingAuthState,
-    SelectedSettings, UICustomizationSettings,
-};
+pub use model::{OnboardingAuthState, SelectedSettings, UICustomizationSettings};
 pub use slides::OfferVariant;
 pub use telemetry::OnboardingEvent;
 

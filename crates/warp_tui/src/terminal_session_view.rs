@@ -1643,6 +1643,7 @@ impl TuiTerminalSessionView {
         let read_only_menu_selection = TuiSelectionHandle::default();
         let read_only_menu_viewport = TuiViewportedListState::new_at_end();
         read_only_menu_viewport.scroll_to_rows_from_top(0);
+        let slash_commands_team_context = UserWorkspaces::team_context_resolver(ctx.handle());
         let slash_commands_source = ctx.add_model(|ctx| {
             TuiSlashCommandDataSource::new(
                 TuiSlashCommandDataSourceArgs {
@@ -1650,6 +1651,7 @@ impl TuiTerminalSessionView {
                     cli_subagent_controller: cli_subagent_controller.clone(),
                     terminal_view_id: terminal_surface_id,
                     terminal_model: model.clone(),
+                    team_context_resolver: slash_commands_team_context,
                 },
                 ctx,
             )
@@ -1670,8 +1672,14 @@ impl TuiTerminalSessionView {
         });
         ctx.subscribe_to_model(&slash_commands, |_, _, _, ctx| ctx.notify());
         let window_id = ctx.window_id();
+        let api_keys_team_context = UserWorkspaces::team_context_resolver(ctx.handle());
         let api_keys_menu = ctx.add_model(|ctx| {
-            TuiApiKeysMenuModel::new(input_editor_model.clone(), suggestions_mode.clone(), ctx)
+            TuiApiKeysMenuModel::new(
+                input_editor_model.clone(),
+                suggestions_mode.clone(),
+                api_keys_team_context,
+                ctx,
+            )
         });
         ctx.subscribe_to_model(&api_keys_menu, |_, _, _: &TuiApiKeysMenuEvent, ctx| {
             ctx.notify();
@@ -1695,11 +1703,13 @@ impl TuiTerminalSessionView {
                 );
             }
         });
+        let model_menu_team_context = UserWorkspaces::team_context_resolver(ctx.handle());
         let model_menu = ctx.add_model(|ctx| {
             TuiModelMenuModel::new(
                 input_editor_model.clone(),
                 suggestions_mode.clone(),
                 terminal_surface_id,
+                model_menu_team_context,
                 ctx,
             )
         });
