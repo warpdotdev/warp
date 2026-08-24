@@ -227,6 +227,7 @@ fn test_loading_all_spaces_after_switching_from_offline() {
                         joinable_teams: vec![],
                         experiments: None,
                         feature_model_choices: None,
+                        team_feature_model_choices: HashMap::new(),
                         ai_credit_availability: None,
                         user_purchase_policy: None,
                     },
@@ -246,6 +247,7 @@ fn test_loading_all_spaces_after_switching_from_offline() {
                         joinable_teams: vec![],
                         experiments: None,
                         feature_model_choices: None,
+                        team_feature_model_choices: HashMap::new(),
                         ai_credit_availability: None,
                         user_purchase_policy: None,
                     },
@@ -386,6 +388,7 @@ fn test_aws_bedrock_credentials_respect_user_setting() {
                 joinable_teams: vec![],
                 experiments: None,
                 feature_model_choices: None,
+                team_feature_model_choices: HashMap::new(),
                 ai_credit_availability: None,
                 user_purchase_policy: None,
             },
@@ -444,6 +447,7 @@ fn test_aws_bedrock_credentials_enforced_by_admin() {
                 joinable_teams: vec![],
                 experiments: None,
                 feature_model_choices: None,
+                team_feature_model_choices: HashMap::new(),
                 ai_credit_availability: None,
                 user_purchase_policy: None,
             },
@@ -3127,6 +3131,7 @@ fn test_remove_user_from_team_success_emits_success_event_and_refreshes_members(
                         joinable_teams: vec![],
                         experiments: None,
                         feature_model_choices: None,
+                        team_feature_model_choices: HashMap::new(),
                         ai_credit_availability: None,
                         user_purchase_policy: None,
                     },
@@ -3409,6 +3414,11 @@ fn gql_team_settings() -> GqlTeamSettings {
 }
 
 fn gql_team(uid: &str, name: &str, member_uids: &[&str]) -> GqlTeam {
+    let empty_llms = GqlAvailableLlms {
+        default_id: String::new(),
+        choices: vec![],
+        preferred_codex_model_id: None,
+    };
     GqlTeam {
         // `ServerId` rejects anything but a 22-character id.
         uid: format!("{uid:0>22}").into(),
@@ -3425,6 +3435,13 @@ fn gql_team(uid: &str, name: &str, member_uids: &[&str]) -> GqlTeam {
         settings: gql_team_settings(),
         invite_link: None,
         visibility: GqlTeamVisibility::Open,
+        feature_model_choice: GqlFeatureModelChoice {
+            agent_mode: empty_llms.clone(),
+            planning: empty_llms.clone(),
+            coding: empty_llms.clone(),
+            cli_agent: empty_llms.clone(),
+            computer_use_agent: empty_llms,
+        },
     }
 }
 

@@ -46,7 +46,7 @@ use crate::ai::blocklist::{
 };
 use crate::ai::cloud_environments::CloudAmbientAgentEnvironment;
 use crate::ai::execution_profiles::resolve_cloud_agent_computer_use_state;
-use crate::ai::llms::{LLMId, LLMPreferences};
+use crate::ai::llms::{LLMId, LLMPreferences, ResolvedTeamScope};
 use crate::ai::orchestration::{
     CloudAgentStartupBlocker, CloudAgentStartupFailure, CloudAgentStartupIssue,
     classify_cloud_agent_startup_error, oz_run_url, resolve_default_environment_id,
@@ -540,9 +540,10 @@ pub fn prepare_handoff(
         .into_iter()
         .map(|environment| environment.id)
         .collect();
+    let scope = ResolvedTeamScope::from_scope(&controller.as_ref(ctx).team_context(ctx));
     let preferences = LLMPreferences::as_ref(ctx);
     let active_model_id = &preferences
-        .get_active_base_model(ctx, Some(terminal_surface_id))
+        .get_active_base_model(&scope, ctx, Some(terminal_surface_id))
         .id;
     let model_id = preferences.cloud_runnable_oz_model_id_or_fallback(active_model_id);
     let model_is_cloud_runnable =

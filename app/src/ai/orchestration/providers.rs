@@ -26,13 +26,18 @@ pub const ORCHESTRATION_ENV_NONE_LABEL: &str = "Empty environment";
 pub const ORCHESTRATION_RUNNER_NONE_LABEL: &str = "Use default";
 
 /// Returns Warp base-model choices for orchestration.
+///
+/// Reads the account's inherited/default team uid directly rather than a window's
+/// selection: this module is deliberately `AppContext`-backed with no GUI types (see the
+/// module doc), so it has no view/window to mint a real per-window `TeamScope` from.
 pub(crate) fn get_base_model_choices<'a>(
     llm_prefs: &'a LLMPreferences,
     app: &'a AppContext,
     is_local: bool,
 ) -> impl Iterator<Item = &'a LLMInfo> {
+    let team_uid = UserWorkspaces::as_ref(app).inherited_or_default_team_uid(None);
     llm_prefs
-        .get_base_llm_choices_for_agent_mode(app)
+        .get_base_llm_choices_for_agent_mode_for_team_uid(team_uid, app)
         .filter(move |llm| is_local || llm_prefs.custom_llm_info_for_id(&llm.id).is_none())
 }
 
@@ -75,8 +80,9 @@ pub fn first_filtered_model_id(harness_type: &str, ctx: &AppContext) -> Option<S
     match harness {
         Some(Harness::Oz) | None => {
             let llm_prefs = LLMPreferences::as_ref(ctx);
+            let team_uid = UserWorkspaces::as_ref(ctx).inherited_or_default_team_uid(None);
             llm_prefs
-                .get_base_llm_choices_for_agent_mode(ctx)
+                .get_base_llm_choices_for_agent_mode_for_team_uid(team_uid, ctx)
                 .next()
                 .map(|llm| llm.id.to_string())
         }

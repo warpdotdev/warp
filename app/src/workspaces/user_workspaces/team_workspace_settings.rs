@@ -240,6 +240,13 @@ impl UserWorkspaces {
         }
     }
 
+    /// [`Self::team_context`] for callers that already have a [`WindowId`] (e.g. a non-view
+    /// data source keyed by window) rather than a [`WeakViewHandle`], so they don't need to
+    /// mint or thread one just to resolve a scope.
+    pub fn team_context_for_window(&self, window_id: WindowId) -> TeamContext<'_> {
+        self.team_context_for_window_id(window_id)
+    }
+
     /// [`Self::team_context_for_view`] for tests, which build scopes for bare windows rather
     /// than standing up a view for each one. Production exchanges a view or a [`ViewContext`]
     /// for a scope; this is `#[cfg(test)]` precisely so that contract holds.

@@ -195,7 +195,7 @@ use crate::ai::conversation_export::export_conversation_markdown;
 use crate::ai::document::ai_document_model::{AIDocumentId, AIDocumentVersion};
 use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
 use crate::ai::harness_availability::HarnessAvailabilityModel;
-use crate::ai::llms::{LLMPreferences, LLMPreferencesEvent};
+use crate::ai::llms::{LLMPreferences, LLMPreferencesEvent, ResolvedTeamScope};
 use crate::ai::mcp::TemplatableMCPServerManager;
 use crate::ai::predict::next_command_model::{
     NextCommandModel, NextCommandModelEvent, NextCommandSuggestionState, ZeroStateSuggestionInfo,
@@ -3572,8 +3572,11 @@ impl Input {
                     .attachment_chips
                     .iter()
                     .any(|c| matches!(c.attachment_type, AttachmentType::Image));
-                let vision_supported =
-                    LLMPreferences::as_ref(ctx).vision_supported(ctx, Some(me.terminal_view_id));
+                let scope = ResolvedTeamScope::from_scope(
+                    &UserWorkspaces::as_ref(ctx).team_context_for_view(ctx),
+                );
+                let vision_supported = LLMPreferences::as_ref(ctx)
+                    .vision_supported(&scope, ctx, Some(me.terminal_view_id));
                 if has_image_chips && !vision_supported {
                     let window_id = ctx.window_id();
                     ToastStack::handle(ctx).update(ctx, |ts, ctx| {
@@ -4694,9 +4697,13 @@ impl Input {
     /// front instead of failing at spawn time.
     #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
     fn block_cloud_handoff_if_model_unsupported(&self, ctx: &mut ViewContext<Self>) -> bool {
-        if LLMPreferences::as_ref(ctx)
-            .is_active_base_model_cloud_runnable(self.terminal_view_id, ctx)
-        {
+        let scope =
+            ResolvedTeamScope::from_scope(&UserWorkspaces::as_ref(ctx).team_context_for_view(ctx));
+        if LLMPreferences::as_ref(ctx).is_active_base_model_cloud_runnable(
+            &scope,
+            self.terminal_view_id,
+            ctx,
+        ) {
             return false;
         }
         let window_id = ctx.window_id();
@@ -5175,10 +5182,14 @@ impl Input {
                     .id()
                     .clone();
 
+                let scope = ResolvedTeamScope::from_scope(
+                    &UserWorkspaces::as_ref(ctx).team_context_for_view(ctx),
+                );
                 match selected_tab {
                     InlineModelSelectorTab::BaseAgent => {
                         LLMPreferences::handle(ctx).update(ctx, |preferences, ctx| {
                             preferences.update_preferred_agent_mode_llm(
+                                &scope,
                                 id,
                                 self.terminal_view_id,
                                 ctx,
@@ -6175,7 +6186,9 @@ impl Input {
 
         let llm_prefs = LLMPreferences::as_ref(ctx);
 
-        let vision_supported = llm_prefs.vision_supported(ctx, Some(self.terminal_view_id));
+        let scope =
+            ResolvedTeamScope::from_scope(&UserWorkspaces::as_ref(ctx).team_context_for_view(ctx));
+        let vision_supported = llm_prefs.vision_supported(&scope, ctx, Some(self.terminal_view_id));
 
         let num_images_attached = self.ai_context_model.as_ref(ctx).pending_images().len();
 

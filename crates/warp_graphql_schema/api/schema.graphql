@@ -3778,6 +3778,7 @@ type Team {
   Required for features that key off the team's domain (e.g. domain capture, SSO).
   """
   domain: String
+  featureModelChoice: FeatureModelChoice!
 
   """
   inviteLink is the server-owned invite-by-link URL for this team. It is null

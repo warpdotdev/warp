@@ -14,6 +14,7 @@ use crate::AIExecutionProfilesModel;
 #[cfg(not(target_family = "wasm"))]
 use crate::ai::llms::LLMId;
 use crate::ai::llms::LLMPreferences;
+use crate::workspaces::user_workspaces::TeamScope;
 
 /// Server-side state prepared before a frontend creates the child's surface.
 #[cfg(not(target_family = "wasm"))]
@@ -56,8 +57,11 @@ pub fn prepare_local_oz_child_launch(
 }
 
 /// Copies the parent's execution profile and effective base model to a child
-/// surface before its first request is sent.
+/// surface before its first request is sent. `scope` is the launching window's
+/// team, resolved by the caller from its own `ViewContext`/`WeakViewHandle` -- both the
+/// parent and child surfaces live in that same window.
 pub fn inherit_child_agent_settings(
+    scope: &impl TeamScope,
     parent_surface_id: EntityId,
     child_surface_id: EntityId,
     ctx: &mut AppContext,
@@ -71,18 +75,25 @@ pub fn inherit_child_agent_settings(
     });
 
     let parent_base_model_id = LLMPreferences::as_ref(ctx)
-        .get_active_base_model(ctx, Some(parent_surface_id))
+        .get_active_base_model(scope, ctx, Some(parent_surface_id))
         .id
         .clone();
     LLMPreferences::handle(ctx).update(ctx, |preferences, ctx| {
-        preferences.update_preferred_agent_mode_llm(&parent_base_model_id, child_surface_id, ctx);
+        preferences.update_preferred_agent_mode_llm(
+            scope,
+            &parent_base_model_id,
+            child_surface_id,
+            ctx,
+        );
     });
 }
 
 /// Applies a non-empty run-wide model override after parent settings have
-/// been inherited.
+/// been inherited. `scope` is the launching window's team; see
+/// [`inherit_child_agent_settings`].
 #[cfg(not(target_family = "wasm"))]
 pub fn apply_child_agent_model_override(
+    scope: &impl TeamScope,
     child_surface_id: EntityId,
     model_id: Option<&str>,
     ctx: &mut AppContext,
@@ -92,6 +103,6 @@ pub fn apply_child_agent_model_override(
     };
     let model_id = LLMId::from(model_id);
     LLMPreferences::handle(ctx).update(ctx, |preferences, ctx| {
-        preferences.set_agent_mode_llm_override(child_surface_id, model_id, ctx);
+        preferences.set_agent_mode_llm_override(scope, child_surface_id, model_id, ctx);
     });
 }

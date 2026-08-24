@@ -384,6 +384,9 @@ impl Network {
         selection: Selection,
         input_replica_id: ReplicaId,
         terminal_view_id: warpui::EntityId,
+        // The sharing window's team, resolved by the caller (which already has the window id)
+        // rather than minted here from an ambient default.
+        team_uid: Option<crate::server::ids::ServerId>,
         universal_developer_input_context: UniversalDeveloperInputContext,
         lifetime: Lifetime,
         source: SharedSessionSource,
@@ -404,7 +407,7 @@ impl Network {
             }
         };
         let selected_model_id: String = crate::ai::llms::LLMPreferences::as_ref(ctx)
-            .get_active_base_model(ctx, Some(terminal_view_id))
+            .get_active_base_model_for_team_uid(team_uid, ctx, Some(terminal_view_id))
             .id
             .clone()
             .into();

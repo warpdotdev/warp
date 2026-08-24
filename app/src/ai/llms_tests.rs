@@ -389,14 +389,8 @@ fn custom_endpoint_usage_display_label_resolves_alias_name_and_generic_fallback(
         )],
         ..Default::default()
     };
-    let preferences = LLMPreferences {
-        models_by_feature: ModelsByFeature::default(),
-        agent_mode_models_unavailable: false,
-        last_update: None,
-        base_llm_for_terminal_view: HashMap::new(),
-        custom_llms: build_custom_llm_infos(&keys),
-        custom_model_routers: Vec::new(),
-    };
+    let preferences =
+        LLMPreferences::for_test(ModelsByFeature::default(), build_custom_llm_infos(&keys));
 
     assert_eq!(
         preferences.custom_endpoint_usage_display_label("uuid-alias"),
@@ -532,14 +526,8 @@ fn is_cloud_runnable_oz_model_id_classifies_ids() {
         )],
         ..Default::default()
     };
-    let preferences = LLMPreferences {
-        models_by_feature: ModelsByFeature::default(),
-        agent_mode_models_unavailable: false,
-        last_update: None,
-        base_llm_for_terminal_view: HashMap::new(),
-        custom_llms: build_custom_llm_infos(&keys),
-        custom_model_routers: Vec::new(),
-    };
+    let preferences =
+        LLMPreferences::for_test(ModelsByFeature::default(), build_custom_llm_infos(&keys));
 
     // Custom-endpoint (BYOK) UUID id — not cloud-runnable.
     assert!(
@@ -683,16 +671,24 @@ fn active_models_fall_back_to_usable_choice_or_custom_endpoint_when_default_disa
         llm_preferences.read(&app, |preferences, app| {
             // Falls back to the first usable hosted choice.
             assert_eq!(
-                preferences.get_active_base_model(app, None).id.as_str(),
+                preferences
+                    .get_active_base_model(&TeamlessScopeForTest, app, None)
+                    .id
+                    .as_str(),
                 "gpt-x"
             );
             assert_eq!(
-                preferences.get_active_coding_model(app, None).id.as_str(),
+                preferences
+                    .get_active_coding_model(&TeamlessScopeForTest, app, None)
+                    .id
+                    .as_str(),
                 "gpt-x"
             );
             // No usable hosted CLI choice → falls back to the custom endpoint.
             assert_eq!(
-                preferences.get_active_cli_agent_model(app, None).id,
+                preferences
+                    .get_active_cli_agent_model(&TeamlessScopeForTest, app, None)
+                    .id,
                 custom_model_id
             );
         });
@@ -720,17 +716,13 @@ fn with_model_picker_query_test_context(
                 None,
             )
             .expect("choices are non-empty");
-            let preferences = LLMPreferences {
-                models_by_feature: ModelsByFeature {
+            let preferences = LLMPreferences::for_test(
+                ModelsByFeature {
                     agent_mode,
                     ..Default::default()
                 },
-                agent_mode_models_unavailable: false,
-                last_update: None,
-                base_llm_for_terminal_view: HashMap::new(),
-                custom_llms: Vec::new(),
-                custom_model_routers: Vec::new(),
-            };
+                Vec::new(),
+            );
             f(&preferences, &scope(app_ctx), app_ctx);
         });
     });
@@ -774,12 +766,15 @@ fn active_models_use_default_when_usable() {
 
         llm_preferences.read(&app, |preferences, app| {
             assert_eq!(
-                preferences.get_active_base_model(app, None).id.as_str(),
+                preferences
+                    .get_active_base_model(&TeamlessScopeForTest, app, None)
+                    .id
+                    .as_str(),
                 "auto"
             );
             assert_eq!(
                 preferences
-                    .get_active_cli_agent_model(app, None)
+                    .get_active_cli_agent_model(&TeamlessScopeForTest, app, None)
                     .id
                     .as_str(),
                 "cli-agent-auto"
@@ -1051,17 +1046,13 @@ fn preferences_for_profile_model_tests() -> LLMPreferences {
         None,
     )
     .expect("choices are non-empty");
-    LLMPreferences {
-        models_by_feature: ModelsByFeature {
+    LLMPreferences::for_test(
+        ModelsByFeature {
             agent_mode,
             ..Default::default()
         },
-        agent_mode_models_unavailable: false,
-        last_update: None,
-        base_llm_for_terminal_view: HashMap::new(),
-        custom_llms: Vec::new(),
-        custom_model_routers: Vec::new(),
-    }
+        Vec::new(),
+    )
 }
 
 #[test]
@@ -1069,7 +1060,7 @@ fn shared_model_picker_query_orders_filters_and_marks_disabled_choices() {
     with_model_picker_query_test_context(|preferences, scope, app| {
         let all = query_model_picker_choices(
             preferences,
-            preferences.get_base_llm_choices_for_agent_mode(app),
+            preferences.get_base_llm_choices_for_agent_mode(&TeamlessScopeForTest, app),
             "",
             scope,
             app,
@@ -1086,7 +1077,7 @@ fn shared_model_picker_query_orders_filters_and_marks_disabled_choices() {
 
         let filtered = query_model_picker_choices(
             preferences,
-            preferences.get_base_llm_choices_for_agent_mode(app),
+            preferences.get_base_llm_choices_for_agent_mode(&TeamlessScopeForTest, app),
             "gpt 5",
             scope,
             app,
@@ -1154,7 +1145,7 @@ fn updating_active_profile_base_model_persists_and_updates_resolution() {
         preferences.read(&app, |preferences, ctx| {
             assert_eq!(
                 preferences
-                    .get_active_base_model(ctx, Some(surface_id))
+                    .get_active_base_model(&TeamlessScopeForTest, ctx, Some(surface_id))
                     .id
                     .as_str(),
                 "claude-opus"
@@ -1196,8 +1187,18 @@ fn selecting_a_custom_profile_default_clears_the_session_override() {
             profiles.set_base_model(&profile_id, Some(custom_model_id.clone()), ctx);
         });
         preferences.update(&mut app, |preferences, ctx| {
-            preferences.set_agent_mode_llm_override(surface_id, LLMId::from("claude-opus"), ctx);
-            preferences.update_preferred_agent_mode_llm(&custom_model_id, surface_id, ctx);
+            preferences.set_agent_mode_llm_override(
+                &TeamlessScopeForTest,
+                surface_id,
+                LLMId::from("claude-opus"),
+                ctx,
+            );
+            preferences.update_preferred_agent_mode_llm(
+                &TeamlessScopeForTest,
+                &custom_model_id,
+                surface_id,
+                ctx,
+            );
         });
 
         preferences.read(&app, |preferences, _| {
@@ -1212,7 +1213,7 @@ fn selecting_a_custom_profile_default_clears_the_session_override() {
         preferences.read(&app, |preferences, ctx| {
             assert_eq!(
                 preferences
-                    .get_active_base_model(ctx, Some(surface_id))
+                    .get_active_base_model(&TeamlessScopeForTest, ctx, Some(surface_id))
                     .id
                     .as_str(),
                 "auto"
@@ -1251,13 +1252,18 @@ fn explicit_child_model_pin_preserves_gui_behavior_and_only_emits_for_effective_
 
         let surface_id = EntityId::new();
         preferences.update(&mut app, |preferences, ctx| {
-            preferences.set_agent_mode_llm_override(surface_id, LLMId::from("auto"), ctx);
+            preferences.set_agent_mode_llm_override(
+                &TeamlessScopeForTest,
+                surface_id,
+                LLMId::from("auto"),
+                ctx,
+            );
         });
         assert_eq!(active_model_events.get(), 0);
         preferences.read(&app, |preferences, ctx| {
             assert_eq!(
                 preferences
-                    .get_active_base_model(ctx, Some(surface_id))
+                    .get_active_base_model(&TeamlessScopeForTest, ctx, Some(surface_id))
                     .id
                     .as_str(),
                 "auto"
@@ -1278,7 +1284,7 @@ fn explicit_child_model_pin_preserves_gui_behavior_and_only_emits_for_effective_
         preferences.read(&app, |preferences, ctx| {
             assert_eq!(
                 preferences
-                    .get_active_base_model(ctx, Some(surface_id))
+                    .get_active_base_model(&TeamlessScopeForTest, ctx, Some(surface_id))
                     .id
                     .as_str(),
                 "auto"
@@ -1286,11 +1292,21 @@ fn explicit_child_model_pin_preserves_gui_behavior_and_only_emits_for_effective_
         });
 
         preferences.update(&mut app, |preferences, ctx| {
-            preferences.set_agent_mode_llm_override(surface_id, LLMId::from("claude-opus"), ctx);
+            preferences.set_agent_mode_llm_override(
+                &TeamlessScopeForTest,
+                surface_id,
+                LLMId::from("claude-opus"),
+                ctx,
+            );
         });
         assert_eq!(active_model_events.get(), 1);
         preferences.update(&mut app, |preferences, ctx| {
-            preferences.set_agent_mode_llm_override(surface_id, LLMId::from("claude-opus"), ctx);
+            preferences.set_agent_mode_llm_override(
+                &TeamlessScopeForTest,
+                surface_id,
+                LLMId::from("claude-opus"),
+                ctx,
+            );
         });
         assert_eq!(active_model_events.get(), 1);
     });

@@ -1523,8 +1523,10 @@ fn attach_ambient_view_model_builds_composer_selectors_for_fresh_cloud_pane_in_v
         });
 
         let input = terminal.read(&app, |view, _| view.input().clone());
+        let weak_terminal = terminal.downgrade();
         input.update(&mut app, |input, ctx| {
-            let view_model = ctx.add_model(|ctx| AmbientAgentViewModel::new(terminal_view_id, ctx));
+            let view_model = ctx
+                .add_model(|ctx| AmbientAgentViewModel::new(terminal_view_id, weak_terminal, ctx));
             input.attach_ambient_agent_view_model(view_model, ctx);
 
             assert!(
@@ -1567,8 +1569,10 @@ fn attach_ambient_view_model_skips_composer_selectors_for_actual_shared_session_
         });
 
         let input = terminal.read(&app, |view, _| view.input().clone());
+        let weak_terminal = terminal.downgrade();
         input.update(&mut app, |input, ctx| {
-            let view_model = ctx.add_model(|ctx| AmbientAgentViewModel::new(terminal_view_id, ctx));
+            let view_model = ctx
+                .add_model(|ctx| AmbientAgentViewModel::new(terminal_view_id, weak_terminal, ctx));
             input.attach_ambient_agent_view_model(view_model, ctx);
 
             assert!(
@@ -1609,8 +1613,10 @@ fn cloud_mode_host_selector_shown_when_connected_workers_present() {
         });
 
         let input = terminal.read(&app, |view, _| view.input().clone());
+        let weak_terminal = terminal.downgrade();
         input.update(&mut app, |input, ctx| {
-            let view_model = ctx.add_model(|ctx| AmbientAgentViewModel::new(terminal_view_id, ctx));
+            let view_model = ctx
+                .add_model(|ctx| AmbientAgentViewModel::new(terminal_view_id, weak_terminal, ctx));
             input.attach_ambient_agent_view_model(view_model, ctx);
         });
 

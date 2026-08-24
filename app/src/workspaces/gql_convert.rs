@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 use anyhow::{Result, anyhow, bail};
@@ -37,7 +38,7 @@ use warp_graphql::workspace::{
     ByoEndpointModelMetadata as GqlByoEndpointModelMetadata,
     ByoFirstPartyKey as GqlByoFirstPartyKey,
     ComputerUseAutonomyValue as GqlComputerUseAutonomyValue, EmailInvite as GqlEmailInvite,
-    HostEnablementSetting as GqlHostEnablementSetting,
+    FeatureModelChoice, HostEnablementSetting as GqlHostEnablementSetting,
     InviteLinkDomainRestriction as GqlInviteLinkDomainRestriction,
     MembershipRole as GqlMembershipRole, StringListSettingInfo as GqlStringListSettingInfo,
     Team as GqlTeam, TeamByoSettings as GqlTeamByoSettings, TeamMember as GqlTeamMember,
@@ -1435,6 +1436,27 @@ impl From<GqlUser> for WorkspacesMetadataResponse {
             .first()
             .map(|gql_workspace| gql_workspace.feature_model_choice.clone());
 
+        // Every team the user belongs to, across every (in practice, the single, no-op)
+        // workspace -- the per-team half of the catalog fold; see `feature_model_choices`
+        // above for the workspace-level (resolved-teamless) half.
+        let team_feature_model_choices: HashMap<ServerId, FeatureModelChoice> = gql_user
+            .workspaces
+            .iter()
+            .flat_map(|gql_workspace| gql_workspace.teams.iter())
+            .filter(|gql_team| {
+                gql_team
+                    .members
+                    .iter()
+                    .any(|member| member.uid.inner() == gql_user.profile.uid)
+            })
+            .map(|gql_team| {
+                (
+                    ServerId::from_string_lossy(gql_team.uid.inner()),
+                    gql_team.feature_model_choice.clone(),
+                )
+            })
+            .collect();
+
         let workspaces: Vec<Workspace> = gql_user
             .workspaces
             .clone()
@@ -1478,6 +1500,7 @@ impl From<GqlUser> for WorkspacesMetadataResponse {
             joinable_teams,
             experiments,
             feature_model_choices,
+            team_feature_model_choices,
             ai_credit_availability: Some(gql_user.ai_credit_availability.into()),
             user_purchase_policy,
         }

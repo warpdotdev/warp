@@ -55,7 +55,9 @@ use crate::ai::execution_profiles::{
     AIExecutionProfile, AIExecutionProfileAppExt, ActionPermission, ExecutionProfileId,
     WriteToPtyPermission, long_context_pricing_warning_title,
 };
-use crate::ai::llms::{LLMContextWindow, LLMId, LLMPreferences, LLMPreferencesEvent};
+use crate::ai::llms::{
+    LLMContextWindow, LLMId, LLMPreferences, LLMPreferencesEvent, ResolvedTeamScope,
+};
 use crate::ai::mcp::TemplatableMCPServerManager;
 use crate::ai::paths::host_native_absolute_path;
 use crate::ai::{AIRequestUsageModel, AIRequestUsageModelEvent};
@@ -1000,10 +1002,13 @@ impl AgentProfilesPageView {
         Self::active_profile_data(app).context_window_display_value(app)
     }
 
-    fn initial_context_window_value(app: &AppContext) -> u32 {
-        Self::current_context_window_display_value(app).unwrap_or_else(|| {
-            LLMPreferences::as_ref(app)
-                .get_active_base_model(app, None)
+    fn initial_context_window_value(ctx: &ViewContext<Self>) -> u32 {
+        Self::current_context_window_display_value(ctx).unwrap_or_else(|| {
+            let scope = ResolvedTeamScope::from_scope(
+                &UserWorkspaces::as_ref(ctx).team_context_for_view(ctx),
+            );
+            LLMPreferences::as_ref(ctx)
+                .get_active_base_model(&scope, ctx, None)
                 .context_window
                 .default_max
         })
@@ -1056,11 +1061,13 @@ impl AgentProfilesPageView {
                 menu.set_enabled(ctx);
             }
 
+            let scope = ResolvedTeamScope::from_scope(
+                &UserWorkspaces::as_ref(ctx).team_context_for_view(ctx),
+            );
             let choices = LLMPreferences::as_ref(ctx)
-                .get_base_llm_choices_for_agent_mode(ctx)
+                .get_base_llm_choices_for_agent_mode(&scope, ctx)
                 .collect_vec();
 
-            let scope = UserWorkspaces::as_ref(ctx).team_context_for_view(ctx);
             let items = available_model_menu_items(
                 choices,
                 |llm| {
@@ -1076,7 +1083,7 @@ impl AgentProfilesPageView {
             );
             menu.set_rich_items(items, ctx);
 
-            let active = LLMPreferences::as_ref(ctx).get_active_base_model(ctx, None);
+            let active = LLMPreferences::as_ref(ctx).get_active_base_model(&scope, ctx, None);
             menu.set_selected_by_action(
                 AgentProfilesPageAction::SetBaseModel(active.id.clone()),
                 ctx,
@@ -1099,11 +1106,13 @@ impl AgentProfilesPageView {
                 menu.set_enabled(ctx);
             }
 
+            let scope = ResolvedTeamScope::from_scope(
+                &UserWorkspaces::as_ref(ctx).team_context_for_view(ctx),
+            );
             let choices = LLMPreferences::as_ref(ctx)
-                .get_coding_llm_choices(ctx)
+                .get_coding_llm_choices(&scope, ctx)
                 .collect_vec();
 
-            let scope = UserWorkspaces::as_ref(ctx).team_context_for_view(ctx);
             let items = available_model_menu_items(
                 choices,
                 |llm| {
@@ -1118,7 +1127,7 @@ impl AgentProfilesPageView {
                 ctx,
             );
             menu.set_rich_items(items, ctx);
-            let active = LLMPreferences::as_ref(ctx).get_active_coding_model(ctx, None);
+            let active = LLMPreferences::as_ref(ctx).get_active_coding_model(&scope, ctx, None);
 
             menu.set_selected_by_action(
                 AgentProfilesPageAction::SetCodingModel(active.id.clone()),
@@ -1587,8 +1596,11 @@ impl TypedActionView for AgentProfilesPageView {
                 ctx.notify();
             }
             AgentProfilesPageAction::SetCodingModel(id) => {
+                let scope = ResolvedTeamScope::from_scope(
+                    &UserWorkspaces::as_ref(ctx).team_context_for_view(ctx),
+                );
                 LLMPreferences::handle(ctx).update(ctx, |prefs, ctx| {
-                    prefs.update_preferred_coding_llm(id, None, ctx);
+                    prefs.update_preferred_coding_llm(&scope, id, None, ctx);
                 });
             }
             AgentProfilesPageAction::ContextWindowSliderDragged(value) => {

@@ -35,7 +35,7 @@ use warp::tui_export::{
     ModelEvent, ParsedSlashCommandInput, PersistenceWriter, PillBarActionKind,
     PillBarInteractionEvent, PillBarPillKind, PillSwitchOutcome, PtyIntent, PtyIntentEvent,
     QueuedQueryEvent, QueuedQueryModel, RepoDetectionSessionType, RepoDetectionSource,
-    ServerConversationToken, ServerId, SessionSettings, Sessions, SessionsEvent,
+    ResolvedTeamScope, ServerConversationToken, ServerId, SessionSettings, Sessions, SessionsEvent,
     ShellCommandExecutorEvent, SizeInfo, SizeUpdate, SkillReference, SlashCommandDataSource as _,
     SlashCommandKind, SlashCommandSelectionBehavior, StartAgentExecutorEvent, StartAgentRequest,
     StaticCommand, TelemetryEvent, TerminalModel, TerminalSurface, TerminalSurfaceInit,
@@ -1538,6 +1538,7 @@ impl TuiTerminalSessionView {
                 &model_events,
                 model.clone(),
                 terminal_surface_id,
+                terminal_surface.clone(),
                 conversation_selection.clone(),
                 ctx,
             )
@@ -1590,7 +1591,7 @@ impl TuiTerminalSessionView {
                 active_session.clone(),
                 model.clone(),
                 terminal_surface_id,
-                terminal_surface,
+                terminal_surface.clone(),
                 ctx,
             )
         });
@@ -1915,6 +1916,7 @@ impl TuiTerminalSessionView {
                 input_editor_model,
                 active_session.clone(),
                 terminal_surface_id,
+                terminal_surface,
                 ctx,
             )
         });
@@ -4354,8 +4356,11 @@ impl TuiTerminalSessionView {
     }
 
     fn handle_accepted_model(&mut self, id: &LLMId, ctx: &mut ViewContext<Self>) {
+        let scope = ResolvedTeamScope::from_scope(
+            &UserWorkspaces::as_ref(ctx).team_context_for_window(ctx.window_id()),
+        );
         LLMPreferences::handle(ctx).update(ctx, |preferences, ctx| {
-            preferences.update_preferred_agent_mode_llm(id, self.terminal_surface_id, ctx);
+            preferences.update_preferred_agent_mode_llm(&scope, id, self.terminal_surface_id, ctx);
         });
         self.model_menu.update(ctx, |menu, ctx| menu.dismiss(ctx));
     }

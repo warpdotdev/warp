@@ -15,7 +15,7 @@ use warpui::{
 use crate::ai::blocklist::agent_view::AgentViewController;
 use crate::ai::blocklist::block::cli_controller::{CLISubagentController, CLISubagentEvent};
 use crate::ai::blocklist::{BlocklistAIHistoryEvent, BlocklistAIHistoryModel};
-use crate::ai::llms::{LLMId, LLMPreferences, LLMPreferencesEvent};
+use crate::ai::llms::{LLMId, LLMPreferences, LLMPreferencesEvent, ResolvedTeamScope};
 use crate::features::FeatureFlag;
 use crate::search::data_source::{Query, QueryFilter};
 use crate::search::mixer::{SearchMixer, SearchMixerEvent};
@@ -453,14 +453,16 @@ impl InlineModelSelectorView {
     }
 
     fn active_model_id_for_current_tab(&self, ctx: &ViewContext<Self>) -> LLMId {
+        let scope =
+            ResolvedTeamScope::from_scope(&UserWorkspaces::as_ref(ctx).team_context_for_view(ctx));
         let llm_preferences = LLMPreferences::as_ref(ctx);
         match self.active_tab(ctx) {
             InlineModelSelectorTab::BaseAgent => llm_preferences
-                .get_active_base_model(ctx, Some(self.terminal_view_id))
+                .get_active_base_model(&scope, ctx, Some(self.terminal_view_id))
                 .id
                 .clone(),
             InlineModelSelectorTab::FullTerminalUse => llm_preferences
-                .get_active_cli_agent_model(ctx, Some(self.terminal_view_id))
+                .get_active_cli_agent_model(&scope, ctx, Some(self.terminal_view_id))
                 .id
                 .clone(),
         }

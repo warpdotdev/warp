@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::mpsc::SyncSender;
 
@@ -15,7 +16,7 @@ use super::user_workspaces::{
     CreateTeamResponse, UserWorkspaces, WorkspacesMetadataResponse, WorkspacesMetadataWithPricing,
 };
 use super::workspace::WorkspaceUid;
-use crate::ai::llms::LLMPreferences;
+use crate::ai::llms::{LLMPreferences, ModelsByFeature};
 use crate::ai::request_usage_model::AIRequestUsageModel;
 use crate::auth::AuthStateProvider;
 use crate::cloud_object::CloudObjectEventEntrypoint;
@@ -126,6 +127,7 @@ impl TeamUpdateManager {
                     joinable_teams: vec![],
                     experiments: None,
                     feature_model_choices: None,
+                    team_feature_model_choices: HashMap::new(),
                     ai_credit_availability: None,
                     user_purchase_policy: None,
                 },
@@ -511,10 +513,35 @@ impl TeamUpdateManager {
                     });
                 }
 
-                if let Some(feature_model_choices) = user_workspaces_access.feature_model_choices {
+                // Fold both halves of the polled catalog -- the per-team map plus the
+                // workspace-level (resolved-teamless) entry -- into one scope-keyed update, so
+                // `LLMPreferences.models_by_team` reflects exactly the teams this response
+                // named (see `LLMPreferences::update_feature_model_choices_by_team`).
+                let mut feature_models_by_team = HashMap::new();
+                for (team_uid, choice) in user_workspaces_access.team_feature_model_choices {
+                    match ModelsByFeature::try_from(choice) {
+                        Ok(models) => {
+                            feature_models_by_team.insert(Some(team_uid), models);
+                        }
+                        Err(e) => report_error!(
+                            e.context("Failed to convert team feature model choice from server")
+                        ),
+                    }
+                }
+                if let Some(choice) = user_workspaces_access.feature_model_choices {
+                    match ModelsByFeature::try_from(choice) {
+                        Ok(models) => {
+                            feature_models_by_team.insert(None, models);
+                        }
+                        Err(e) => report_error!(
+                            e.context("Failed to convert feature model choice from server")
+                        ),
+                    }
+                }
+                if !feature_models_by_team.is_empty() {
                     LLMPreferences::handle(ctx).update(ctx, |llm_preferences, ctx| {
                         llm_preferences
-                            .update_feature_model_choices(feature_model_choices.try_into(), ctx);
+                            .update_feature_model_choices_by_team(feature_models_by_team, ctx);
                     });
                 }
 

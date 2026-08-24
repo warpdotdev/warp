@@ -136,11 +136,15 @@ pub struct WorkspacesMetadataResponse {
     pub joinable_teams: Vec<DiscoverableTeam>,
     /// The list of experiments applicable to the user.
     pub experiments: Option<Vec<ServerExperiment>>,
-    /// TODO(Tyler): Post-workspaces, move this into the workspace object.
-    /// Feature model choices may change from user to user and while the app is open, so we need to periodically update this list.
-    /// It makes most sense to fetch this in workspaces which is queried every 10 minutes.
-    /// This is list of available LLM models for the user.
+    /// The workspace-level model catalog: the resolved-teamless read (see
+    /// [`crate::ai::llms::LLMPreferences::update_feature_model_choices_by_team`]). Populated
+    /// from the same workspaces-metadata response as [`Self::team_feature_model_choices`], so
+    /// both halves of the catalog arrive on the same periodic poll rather than a separate
+    /// fetch.
     pub feature_model_choices: Option<FeatureModelChoice>,
+    /// The per-team model catalog, keyed by team UID, from the same workspaces-metadata
+    /// response as [`Self::feature_model_choices`].
+    pub team_feature_model_choices: HashMap<ServerId, FeatureModelChoice>,
     /// The server-authoritative AI credit availability decision, piggybacked
     /// on the metadata query so every refresh keeps the shared state fresh.
     pub ai_credit_availability: Option<AICreditAvailability>,

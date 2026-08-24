@@ -9,7 +9,7 @@ use crate::LaunchMode;
 use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
 use crate::ai::llms::{
     AvailableLLMs, LLMContextWindow, LLMId, LLMInfo, LLMPreferences, LLMProvider, LLMUsageMetadata,
-    ModelsByFeature,
+    ModelsByFeature, TeamlessScopeForTest,
 };
 use crate::ai::mcp::TemplatableMCPServerManager;
 use crate::auth::AuthStateProvider;
@@ -138,11 +138,11 @@ fn update_feature_model_choices_clears_unavailable_flag_after_failed_fetch() {
         // Simulate a failed authed fetch: the server was unhealthy, so the
         // agent-mode model list is marked unavailable.
         llm_preferences.update(&mut app, |preferences, _| {
-            preferences.set_agent_mode_models_unavailable(true);
+            preferences.set_agent_mode_models_unavailable_for_team_uid(None, true);
         });
         assert!(
             llm_preferences.read(&app, |preferences, _| {
-                preferences.agent_mode_models_unavailable()
+                preferences.agent_mode_models_unavailable(&TeamlessScopeForTest)
             }),
             "flag should be set after a failed fetch"
         );
@@ -183,7 +183,7 @@ fn update_feature_model_choices_clears_unavailable_flag_after_failed_fetch() {
         // The successful update must have cleared the unavailable flag ...
         assert!(
             !llm_preferences.read(&app, |preferences, _| {
-                preferences.agent_mode_models_unavailable()
+                preferences.agent_mode_models_unavailable(&TeamlessScopeForTest)
             }),
             "a successful model-list update through update_feature_model_choices must clear the unavailable flag"
         );

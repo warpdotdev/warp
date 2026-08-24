@@ -47,7 +47,7 @@ use crate::ai::harness_availability::{
     HarnessAvailabilityEvent, HarnessAvailabilityModel, HarnessModelInfo,
 };
 use crate::ai::llms::{
-    ByoKeySource, LLMId, LLMInfo, LLMPreferences, LLMPreferencesEvent, LLMSpec,
+    ByoKeySource, LLMId, LLMInfo, LLMPreferences, LLMPreferencesEvent, LLMSpec, ResolvedTeamScope,
     byo_key_source_for_model, dedupe_model_display_names, is_model_allowed_for_scope,
     should_show_key_icon_for_model,
 };
@@ -713,6 +713,9 @@ impl ProfileModelSelector {
         let model_name = if self.is_third_party_harness(ctx) {
             self.harness_model_display_name(ctx)
         } else {
+            let scope = ResolvedTeamScope::from_scope(
+                &UserWorkspaces::as_ref(ctx).team_context_for_view(ctx),
+            );
             let llm_preferences = LLMPreferences::as_ref(ctx);
             let active_llm = if FeatureFlag::InlineMenuHeaders.is_enabled()
                 && self
@@ -722,9 +725,9 @@ impl ProfileModelSelector {
                     .active_block()
                     .is_agent_in_control_or_tagged_in()
             {
-                llm_preferences.get_active_cli_agent_model(ctx, Some(self.terminal_view_id))
+                llm_preferences.get_active_cli_agent_model(&scope, ctx, Some(self.terminal_view_id))
             } else {
-                llm_preferences.get_active_base_model(ctx, Some(self.terminal_view_id))
+                llm_preferences.get_active_base_model(&scope, ctx, Some(self.terminal_view_id))
             };
 
             // Don't append description for custom model routers — it would add a
@@ -990,9 +993,12 @@ impl ProfileModelSelector {
             return;
         }
 
+        let scope =
+            ResolvedTeamScope::from_scope(&UserWorkspaces::as_ref(ctx).team_context_for_view(ctx));
         let llm_preferences = LLMPreferences::as_ref(ctx);
 
-        let active_llm = llm_preferences.get_active_base_model(ctx, Some(self.terminal_view_id));
+        let active_llm =
+            llm_preferences.get_active_base_model(&scope, ctx, Some(self.terminal_view_id));
 
         let active_profile =
             AIExecutionProfilesModel::as_ref(ctx).active_profile(Some(self.terminal_view_id), ctx);
@@ -1006,13 +1012,18 @@ impl ProfileModelSelector {
                     .get_llm_info(&id)
                     .map(|info| info.id.clone())
             })
-            .unwrap_or_else(|| llm_preferences.get_default_base_model(ctx).id.clone());
+            .unwrap_or_else(|| {
+                llm_preferences
+                    .get_default_base_model(&scope, ctx)
+                    .id
+                    .clone()
+            });
 
         let model_id_to_add_profile_default_label_to = Some(&profile_base_model_id);
 
         // Store all model choices for reasoning variant lookups
         self.all_model_choices = llm_preferences
-            .get_base_llm_choices_for_agent_mode(ctx)
+            .get_base_llm_choices_for_agent_mode(&scope, ctx)
             .cloned()
             .collect();
 
@@ -1156,13 +1167,16 @@ impl ProfileModelSelector {
         kind: &ModelSpecSidecarKind,
         ctx: &mut ViewContext<Self>,
     ) {
+        let scope =
+            ResolvedTeamScope::from_scope(&UserWorkspaces::as_ref(ctx).team_context_for_view(ctx));
         let llm_preferences = LLMPreferences::as_ref(ctx);
-        let active_llm = llm_preferences.get_active_base_model(ctx, Some(self.terminal_view_id));
+        let active_llm =
+            llm_preferences.get_active_base_model(&scope, ctx, Some(self.terminal_view_id));
         let active_llm_id = active_llm.id.clone();
 
         let items: Vec<MenuItem<ProfileModelSelectorAction>> = match kind {
             ModelSpecSidecarKind::Auto => llm_preferences
-                .get_base_llm_choices_for_agent_mode(ctx)
+                .get_base_llm_choices_for_agent_mode(&scope, ctx)
                 .filter(|llm| is_auto(llm))
                 .map(|llm| {
                     let is_selected = llm.id == active_llm_id;
@@ -1209,8 +1223,11 @@ impl ProfileModelSelector {
         base_name: &str,
         ctx: &mut ViewContext<Self>,
     ) {
+        let scope =
+            ResolvedTeamScope::from_scope(&UserWorkspaces::as_ref(ctx).team_context_for_view(ctx));
         let llm_preferences = LLMPreferences::as_ref(ctx);
-        let active_llm = llm_preferences.get_active_base_model(ctx, Some(self.terminal_view_id));
+        let active_llm =
+            llm_preferences.get_active_base_model(&scope, ctx, Some(self.terminal_view_id));
         let active_llm_id = active_llm.id.clone();
 
         let items: Vec<MenuItem<ProfileModelSelectorAction>> = self
@@ -1284,8 +1301,16 @@ impl ProfileModelSelector {
                 "Selecting base agent model {} (from model selector)",
                 &llm.id
             );
+            let scope = ResolvedTeamScope::from_scope(
+                &UserWorkspaces::as_ref(ctx).team_context_for_view(ctx),
+            );
             LLMPreferences::handle(ctx).update(ctx, |preferences, ctx| {
-                preferences.update_preferred_agent_mode_llm(&llm.id, self.terminal_view_id, ctx);
+                preferences.update_preferred_agent_mode_llm(
+                    &scope,
+                    &llm.id,
+                    self.terminal_view_id,
+                    ctx,
+                );
             });
         }
         self.set_model_menu_visibility(false, ctx);
@@ -1346,6 +1371,8 @@ impl ProfileModelSelector {
             MenuType::Main => &self.model_dropdown,
             MenuType::Sidecar => &self.model_spec_sidecar.dropdown,
         };
+        let scope =
+            ResolvedTeamScope::from_scope(&UserWorkspaces::as_ref(ctx).team_context_for_view(ctx));
         model_dropdown.read(ctx, |menu, _| {
             menu.items()
                 .get(index)
@@ -1359,7 +1386,7 @@ impl ProfileModelSelector {
                             // Get the first "auto" variant as the generic auto model
                             let llm_prefs = LLMPreferences::as_ref(ctx);
                             llm_prefs
-                                .get_base_llm_choices_for_agent_mode(ctx)
+                                .get_base_llm_choices_for_agent_mode(&scope, ctx)
                                 .find(|llm| is_auto(llm))
                                 .cloned()
                         }
@@ -1696,14 +1723,17 @@ impl ProfileModelSelector {
 
         let model_display_name = if self.is_third_party_harness(app) {
             self.harness_model_display_name(app)
-        } else if is_lrc {
-            llm_preferences
-                .get_active_cli_agent_model(app, Some(self.terminal_view_id))
-                .menu_display_name()
         } else {
-            llm_preferences
-                .get_active_base_model(app, Some(self.terminal_view_id))
-                .menu_display_name()
+            let scope = UserWorkspaces::as_ref(app).team_context(&self.self_handle, app);
+            if is_lrc {
+                llm_preferences
+                    .get_active_cli_agent_model(&scope, app, Some(self.terminal_view_id))
+                    .menu_display_name()
+            } else {
+                llm_preferences
+                    .get_active_base_model(&scope, app, Some(self.terminal_view_id))
+                    .menu_display_name()
+            }
         };
 
         let text_color = if self.is_blurred {
@@ -2168,9 +2198,17 @@ impl TypedActionView for ProfileModelSelector {
                 self.set_profile_menu_visibility(false, ctx);
             }
             ProfileModelSelectorAction::SelectModel(llm_id) => {
+                let scope = ResolvedTeamScope::from_scope(
+                    &UserWorkspaces::as_ref(ctx).team_context_for_view(ctx),
+                );
                 LLMPreferences::handle(ctx).update(ctx, |preferences, ctx| {
                     log::info!("Selecting base agent model {llm_id} (from model selector)");
-                    preferences.update_preferred_agent_mode_llm(llm_id, self.terminal_view_id, ctx);
+                    preferences.update_preferred_agent_mode_llm(
+                        &scope,
+                        llm_id,
+                        self.terminal_view_id,
+                        ctx,
+                    );
                 });
                 self.set_model_menu_visibility(false, ctx);
             }

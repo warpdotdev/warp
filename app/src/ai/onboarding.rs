@@ -26,9 +26,16 @@ pub fn build_onboarding_models(
     prefs: &LLMPreferences,
     app: &AppContext,
 ) -> (Vec<OnboardingModelInfo>, LLMId) {
-    let default_id = prefs.get_default_base_model(app).id.clone();
+    // Onboarding runs before login, so there is no team to resolve yet -- teamless is the
+    // correct answer here, not merely a fallback, so this passes `None` explicitly rather
+    // than resolving an inherited/default team uid.
+    let team_uid = None;
+    let default_id = prefs
+        .get_default_base_model_for_team_uid(team_uid, app)
+        .id
+        .clone();
     let models: Vec<OnboardingModelInfo> = prefs
-        .get_base_llm_choices_for_agent_mode(app)
+        .get_base_llm_choices_for_agent_mode_for_team_uid(team_uid, app)
         .map(|llm| {
             let mut info = OnboardingModelInfo::from(llm);
             info.is_default = info.id == default_id;

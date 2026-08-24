@@ -4,13 +4,16 @@ use warp::editor::CodeEditorModel;
 use warp::tui_export::{
     ActiveSession, BlocklistAIContextEvent, BlocklistAIContextModel, BlocklistAIInputModel,
     InputType, InputTypeAutoDetectionSource, LLMPreferences, MAX_IMAGE_COUNT_FOR_QUERY,
-    PendingAttachmentSummary,
+    PendingAttachmentSummary, TeamScope, UserWorkspaces,
 };
 use warp_core::features::FeatureFlag;
 use warp_editor::model::CoreEditorModel;
 use warpui_core::r#async::SpawnedFutureHandle;
 use warpui_core::clipboard::ClipboardContent;
-use warpui_core::{AppContext, Entity, EntityId, ModelContext, ModelHandle, SingletonEntity as _};
+use warpui_core::{
+    AppContext, Entity, EntityId, ModelContext, ModelHandle, SingletonEntity as _, WeakViewHandle,
+    WindowId,
+};
 
 use super::image_processing::{
     ClipboardPasteContent, classify_clipboard_content, parse_image_paths,
@@ -50,12 +53,25 @@ enum AttachmentModeTransition {
     RestoreAgent { request_detection: bool },
 }
 
+/// Resolves the terminal surface's current window for the vision-support catalog read in
+/// [`TuiAttachmentModel::validate_new_images`]. Boxed to type-erase the concrete view type the
+/// handle was captured from, so [`TuiAttachmentModel`] does not need a generic parameter
+/// purely to remember which view its window came from.
+type WindowIdResolver = Box<dyn Fn(&AppContext) -> Option<WindowId>>;
+
+fn window_id_resolver<T: Entity>(view: WeakViewHandle<T>) -> WindowIdResolver {
+    Box::new(move |app| view.window_id(app))
+}
+
 pub(crate) struct TuiAttachmentModel {
     context_model: ModelHandle<BlocklistAIContextModel>,
     input_mode: ModelHandle<BlocklistAIInputModel>,
     input_editor: ModelHandle<CodeEditorModel>,
     active_session: ModelHandle<ActiveSession>,
     terminal_surface_id: EntityId,
+    /// Resolves the terminal surface's window for the catalog read in
+    /// [`Self::validate_new_images`], per [`window_id_resolver`].
+    window_id: WindowIdResolver,
     selected_index: Option<usize>,
     /// Last observed shared-context count. Growth selects the newest item;
     /// shrinkage preserves and clamps the current selection.
@@ -67,12 +83,13 @@ pub(crate) struct TuiAttachmentModel {
 }
 
 impl TuiAttachmentModel {
-    pub(crate) fn new(
+    pub(crate) fn new<T: Entity>(
         context_model: ModelHandle<BlocklistAIContextModel>,
         input_mode: ModelHandle<BlocklistAIInputModel>,
         input_editor: ModelHandle<CodeEditorModel>,
         active_session: ModelHandle<ActiveSession>,
         terminal_surface_id: EntityId,
+        terminal_surface: WeakViewHandle<T>,
         ctx: &mut ModelContext<Self>,
     ) -> Self {
         let initial_attachment_count = context_model.as_ref(ctx).pending_attachments().len();
@@ -88,6 +105,7 @@ impl TuiAttachmentModel {
             input_editor,
             active_session,
             terminal_surface_id,
+            window_id: window_id_resolver(terminal_surface),
             selected_index: initial_attachment_count.checked_sub(1),
             last_attachment_count: initial_attachment_count,
             had_locking_attachment,
@@ -331,7 +349,16 @@ impl TuiAttachmentModel {
                 "Image attachment limit is {MAX_IMAGE_COUNT_FOR_QUERY} per query."
             ));
         }
-        if !LLMPreferences::as_ref(ctx).vision_supported(ctx, Some(self.terminal_surface_id)) {
+        let team_uid = (self.window_id)(ctx).and_then(|window_id| {
+            UserWorkspaces::as_ref(ctx)
+                .team_context_for_window(window_id)
+                .team_uid()
+        });
+        if !LLMPreferences::as_ref(ctx).vision_supported_for_team_uid(
+            team_uid,
+            ctx,
+            Some(self.terminal_surface_id),
+        ) {
             return Err("The selected model does not support image attachments.".to_owned());
         }
         Ok(())

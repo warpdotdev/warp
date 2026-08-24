@@ -221,7 +221,7 @@ use crate::ai::facts::view::AIFactPage;
 use crate::ai::facts::{AIFactManager, AIFactView, AIFactViewEvent};
 #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
 use crate::ai::llms::LLMId as HandoffLLMId;
-use crate::ai::llms::LLMPreferences;
+use crate::ai::llms::{LLMPreferences, ResolvedTeamScope};
 use crate::ai::persisted_workspace::PersistedWorkspace;
 use crate::ai_assistant::execution_context::execution_context_for_session;
 use crate::ai_assistant::panel::{AIAssistantPanelEvent, AIAssistantPanelView};
@@ -15844,8 +15844,12 @@ impl Workspace {
             ctx,
         );
         let handoff_terminal_view_id = model_handle.as_ref(ctx).terminal_view_id();
+        let scope = ResolvedTeamScope::from_scope(
+            &UserWorkspaces::as_ref(ctx).team_context_for_window(source_view.window_id(ctx)),
+        );
         LLMPreferences::handle(ctx).update(ctx, |preferences, ctx| {
             preferences.update_preferred_agent_mode_llm(
+                &scope,
                 &HandoffLLMId::from(presentation.model_id.as_str()),
                 handoff_terminal_view_id,
                 ctx,
@@ -19238,8 +19242,12 @@ impl Workspace {
                     return;
                 };
 
+                let scope = ResolvedTeamScope::from_scope(
+                    &UserWorkspaces::as_ref(ctx)
+                        .team_context_for_window(terminal_view.window_id(ctx)),
+                );
                 let Some(codex_model_id) = LLMPreferences::as_ref(ctx)
-                    .get_preferred_codex_model()
+                    .get_preferred_codex_model(&scope)
                     .map(|info| info.id.clone())
                 else {
                     report_error!("No preferred codex model found");

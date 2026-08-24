@@ -11,6 +11,7 @@ use warp_core::features::FeatureFlag;
 use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warpui::{
     AppContext, Entity, EntityId, ModelContext, ModelHandle, SingletonEntity, WeakModelHandle,
+    WeakViewHandle, WindowId,
 };
 
 use super::agent_view::{AgentViewEntryOrigin, EnterAgentViewError};
@@ -34,7 +35,7 @@ use crate::terminal::model::block::{BlockId, BlockMetadata};
 use crate::terminal::model::session::Sessions;
 use crate::terminal::model_events::{ModelEvent, ModelEventDispatcher};
 use crate::util::git::{PrInfo, RepositoryInfo};
-use crate::workspaces::user_workspaces::UserWorkspaces;
+use crate::workspaces::user_workspaces::{TeamScope, UserWorkspaces};
 
 /// A non-image file picked via the "attach file" button, stored until query submission.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -80,6 +81,18 @@ impl PendingAttachment {
         }
     }
 }
+
+/// Resolves the terminal surface's current window, scoped to the `WeakViewHandle` captured
+/// when this model was constructed (see [`BlocklistAIContextModel::new`]). Boxed to
+/// type-erase the concrete view type -- the GUI's `TerminalView` and the TUI's terminal
+/// session view both construct this model -- so the model itself doesn't need a generic
+/// parameter purely to remember which view its window came from.
+type WindowIdResolver = Box<dyn Fn(&AppContext) -> Option<WindowId>>;
+
+fn window_id_resolver<T: Entity>(view: WeakViewHandle<T>) -> WindowIdResolver {
+    Box::new(move |app| view.window_id(app))
+}
+
 /// Model responsible for keeping track of session context to be attached to the next AI query.
 pub struct BlocklistAIContextModel {
     terminal_model: Arc<FairMutex<TerminalModel>>,
@@ -102,6 +115,12 @@ pub struct BlocklistAIContextModel {
 
     /// The ID of the terminal surface this model is associated with.
     terminal_surface_id: EntityId,
+
+    /// Resolves the terminal view's window, so catalog reads can scope to its current window
+    /// instead of an ambient default. `None` only for test/mock constructors that have no
+    /// real view to back this model; those callers exercise unrelated logic and reading as
+    /// teamless for them is correct, not merely convenient.
+    terminal_view: Option<WindowIdResolver>,
 
     /// AI document ID to be included as context with the next AI query.
     /// When set, the document content will be attached as plain text context.
@@ -148,14 +167,16 @@ pub fn block_context_from_terminal_model(
 
 impl BlocklistAIContextModel {
     /// Creates pending context state for a terminal surface.
-    pub fn new(
+    pub fn new<T: Entity>(
         sessions: ModelHandle<Sessions>,
         model_event_dispatcher: &ModelHandle<ModelEventDispatcher>,
         terminal_model: Arc<FairMutex<TerminalModel>>,
         terminal_surface_id: EntityId,
+        terminal_view: WeakViewHandle<T>,
         conversation_selection: ConversationSelectionHandle,
         ctx: &mut ModelContext<Self>,
     ) -> Self {
+        let terminal_view = Some(window_id_resolver(terminal_view));
         ctx.subscribe_to_model(
             model_event_dispatcher,
             move |me, _, event, ctx| match event {
@@ -198,8 +219,20 @@ impl BlocklistAIContextModel {
         ctx.subscribe_to_model(&LLMPreferences::handle(ctx), |me, _, event, ctx| {
             if let LLMPreferencesEvent::UpdatedActiveAgentModeLLM = event {
                 let llm_prefs = LLMPreferences::as_ref(ctx);
-                let vision_supported =
-                    llm_prefs.vision_supported(ctx, Some(me.terminal_surface_id));
+                let team_uid = me
+                    .terminal_view
+                    .as_ref()
+                    .and_then(|resolve_window_id| resolve_window_id(ctx))
+                    .and_then(|window_id| {
+                        UserWorkspaces::as_ref(ctx)
+                            .team_context_for_window(window_id)
+                            .team_uid()
+                    });
+                let vision_supported = llm_prefs.vision_supported_for_team_uid(
+                    team_uid,
+                    ctx,
+                    Some(me.terminal_surface_id),
+                );
                 if !vision_supported {
                     me.clear_pending_images(ctx);
                 }
@@ -225,6 +258,7 @@ impl BlocklistAIContextModel {
             pending_attachments: Default::default(),
             conversation_selection,
             terminal_surface_id,
+            terminal_view,
             pending_inline_diff_hunk_attachments: Default::default(),
             pending_document_id: None,
             auto_attached_agent_view_user_block_ids: Vec::new(),
@@ -247,6 +281,7 @@ impl BlocklistAIContextModel {
             pending_attachments: Default::default(),
             conversation_selection,
             terminal_surface_id,
+            terminal_view: None,
             pending_inline_diff_hunk_attachments: Default::default(),
             pending_document_id: None,
             auto_attached_agent_view_user_block_ids: Vec::new(),

@@ -10,7 +10,7 @@ use warp_core::send_telemetry_from_ctx;
 use warp_errors::report_error;
 use warp_terminal::model::BlockId;
 use warpui::r#async::{SpawnedFutureHandle, Timer};
-use warpui::{AppContext, Entity, EntityId, ModelContext, SingletonEntity};
+use warpui::{AppContext, Entity, EntityId, ModelContext, SingletonEntity, WeakViewHandle};
 
 use super::AmbientAgentProgressUIState;
 use crate::ai::active_agent_views_model::ActiveAgentViewsModel;
@@ -44,9 +44,9 @@ use crate::server::server_api::ServerApiProvider;
 use crate::server::server_api::ai::{
     AgentConfigSnapshot, AmbientAgentTaskState, AttachmentInput, SpawnAgentRequest,
 };
-use crate::terminal::CLIAgent;
 use crate::terminal::view::ambient_agent::{SetupCommandGroupId, SetupCommandState};
-use crate::workspaces::user_workspaces::TeamScope;
+use crate::terminal::{CLIAgent, TerminalView};
+use crate::workspaces::user_workspaces::{TeamScope, UserWorkspaces};
 
 /// Tracks progress timestamps for each step during ambient agent spawning.
 #[derive(Debug, Clone)]
@@ -135,6 +135,10 @@ pub struct AmbientAgentViewModel {
     /// The terminal view this model is part of.
     terminal_view_id: EntityId,
 
+    /// Weak handle to the terminal view, so catalog reads can scope to its current window
+    /// (see [`Self::team_uid`]) instead of an ambient default.
+    terminal_view: WeakViewHandle<TerminalView>,
+
     /// Selected cloud environment to launch the ambient agent with.
     environment_id: Option<SyncId>,
     /// True when `environment_id` came from an existing run config rather than from local
@@ -194,7 +198,11 @@ pub struct AmbientAgentViewModel {
 }
 
 impl AmbientAgentViewModel {
-    pub(crate) fn new(terminal_view_id: EntityId, ctx: &mut ModelContext<Self>) -> Self {
+    pub fn new(
+        terminal_view_id: EntityId,
+        terminal_view: WeakViewHandle<TerminalView>,
+        ctx: &mut ModelContext<Self>,
+    ) -> Self {
         ctx.subscribe_to_model(&CloudModel::handle(ctx), |me, _, event, ctx| {
             me.handle_cloud_model_event(event, ctx);
         });
@@ -240,6 +248,7 @@ impl AmbientAgentViewModel {
             status: Status::Composing,
             request: None,
             terminal_view_id,
+            terminal_view,
             environment_id: None,
             environment_id_from_viewed_task: false,
             progress_timer_handle: None,
@@ -264,6 +273,17 @@ impl AmbientAgentViewModel {
 
     pub fn request(&self) -> Option<&SpawnAgentRequest> {
         self.request.as_ref()
+    }
+
+    /// Resolves the terminal view's current window's team, or `None` when the view isn't
+    /// attached to one (e.g. torn down) or that window has no team. Feeds the raw-uid catalog
+    /// accessors directly rather than minting a `TeamScope` for this pane.
+    fn team_uid(&self, app: &AppContext) -> Option<ServerId> {
+        self.terminal_view.window_id(app).and_then(|window_id| {
+            UserWorkspaces::as_ref(app)
+                .team_context_for_window(window_id)
+                .team_uid()
+        })
     }
 
     /// The terminal view this model belongs to. Used by the handoff open path
@@ -850,8 +870,10 @@ impl AmbientAgentViewModel {
         self.set_environment_id_from_viewed_task(environment_id, ctx);
 
         if let Some(model_id) = snapshot.and_then(|s| s.model_id.as_deref()) {
+            let team_uid = self.team_uid(ctx);
             LLMPreferences::handle(ctx).update(ctx, |prefs, ctx| {
-                prefs.update_preferred_agent_mode_llm(
+                prefs.update_preferred_agent_mode_llm_for_team_uid(
+                    team_uid,
                     &LLMId::from(model_id),
                     self.terminal_view_id,
                     ctx,
@@ -1022,7 +1044,11 @@ impl AmbientAgentViewModel {
         let oz_model = (selected_harness == Harness::Oz).then(|| {
             let prefs = LLMPreferences::as_ref(ctx);
             let active_id = &prefs
-                .get_active_base_model(ctx, Some(self.terminal_view_id))
+                .get_active_base_model_for_team_uid(
+                    self.team_uid(ctx),
+                    ctx,
+                    Some(self.terminal_view_id),
+                )
                 .id;
             prefs.cloud_runnable_oz_model_id_or_fallback(active_id)
         });
@@ -1107,8 +1133,10 @@ impl AmbientAgentViewModel {
             self.environment_id_from_viewed_task = false;
 
             if let Some(model_id) = config.model_id.as_deref() {
+                let team_uid = self.team_uid(ctx);
                 LLMPreferences::handle(ctx).update(ctx, |prefs, ctx| {
-                    prefs.update_preferred_agent_mode_llm(
+                    prefs.update_preferred_agent_mode_llm_for_team_uid(
+                        team_uid,
                         &LLMId::from(model_id),
                         self.terminal_view_id,
                         ctx,

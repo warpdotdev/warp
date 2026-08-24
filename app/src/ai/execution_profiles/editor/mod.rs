@@ -48,7 +48,7 @@ use crate::view_components::{
     Dropdown, DropdownItem, FilterableDropdown, SubmittableTextInput, SubmittableTextInputEvent,
 };
 use crate::workspace::WorkspaceAction;
-use crate::workspaces::user_workspaces::{TeamContext, UserWorkspacesEvent};
+use crate::workspaces::user_workspaces::{TeamContext, TeamScope, UserWorkspacesEvent};
 use crate::{Appearance, TemplatableMCPServerManager, UserWorkspaces};
 
 const MODEL_MENU_WIDTH: f32 = 250.;
@@ -546,7 +546,9 @@ impl ExecutionProfileEditorView {
         // persisted limit (or the active model's max as a sensible default).
         // The slider's current position is derived from the profile on each
         // render, so no local Cell is needed.
-        let initial_context_window_value = initial_context_window_display_value(&profile_data, ctx);
+        let scope = UserWorkspaces::as_ref(ctx).team_context_for_view(ctx);
+        let initial_context_window_value =
+            initial_context_window_display_value(&profile_data, &scope, ctx);
         let context_window_slider_state = SliderStateHandle::default();
         let context_window_editor = ctx.add_typed_action_view(|ctx| {
             let options = SingleLineEditorOptions {
@@ -763,9 +765,13 @@ impl ExecutionProfileEditorView {
                     Self::refresh_filterable_model_dropdown(
                         &me.base_model_dropdown,
                         current_permissions.base_model.clone(),
-                        |prefs, app| prefs.get_base_llm_choices_for_agent_mode(app).collect_vec(),
+                        |prefs, scope, app| {
+                            prefs
+                                .get_base_llm_choices_for_agent_mode(scope, app)
+                                .collect_vec()
+                        },
                         |id| ExecutionProfileEditorViewAction::SetBaseModel { id },
-                        |prefs, app| prefs.get_default_base_model(app).id.clone(),
+                        |prefs, scope, app| prefs.get_default_base_model(scope, app).id.clone(),
                         &me.upgrade_footer_mouse_state,
                         ctx,
                     );
@@ -777,18 +783,24 @@ impl ExecutionProfileEditorView {
                     Self::refresh_filterable_model_dropdown(
                         &me.full_terminal_use_model_dropdown,
                         current_permissions.cli_agent_model.clone(),
-                        |prefs, app| prefs.get_cli_agent_llm_choices(app).collect_vec(),
+                        |prefs, scope, app| {
+                            prefs.get_cli_agent_llm_choices(scope, app).collect_vec()
+                        },
                         |id| ExecutionProfileEditorViewAction::SetFullTerminalUseModel { id },
-                        |prefs, app| prefs.get_default_cli_agent_model(app).id.clone(),
+                        |prefs, scope, app| {
+                            prefs.get_default_cli_agent_model(scope, app).id.clone()
+                        },
                         &me.upgrade_footer_mouse_state,
                         ctx,
                     );
                     Self::refresh_filterable_model_dropdown(
                         &me.computer_use_model_dropdown,
                         current_permissions.computer_use_model.clone(),
-                        |prefs, _| prefs.get_computer_use_llm_choices().collect_vec(),
+                        |prefs, scope, _| prefs.get_computer_use_llm_choices(scope).collect_vec(),
                         |id| ExecutionProfileEditorViewAction::SetComputerUseModel { id },
-                        |prefs, app| prefs.get_default_computer_use_model(app).id.clone(),
+                        |prefs, scope, app| {
+                            prefs.get_default_computer_use_model(scope, app).id.clone()
+                        },
                         &me.upgrade_footer_mouse_state,
                         ctx,
                     );
@@ -798,9 +810,13 @@ impl ExecutionProfileEditorView {
                     Self::refresh_filterable_model_dropdown(
                         &me.base_model_dropdown,
                         current_permissions.base_model.clone(),
-                        |prefs, app| prefs.get_base_llm_choices_for_agent_mode(app).collect_vec(),
+                        |prefs, scope, app| {
+                            prefs
+                                .get_base_llm_choices_for_agent_mode(scope, app)
+                                .collect_vec()
+                        },
                         |id| ExecutionProfileEditorViewAction::SetBaseModel { id },
-                        |prefs, app| prefs.get_default_base_model(app).id.clone(),
+                        |prefs, scope, app| prefs.get_default_base_model(scope, app).id.clone(),
                         &me.upgrade_footer_mouse_state,
                         ctx,
                     );
@@ -827,9 +843,13 @@ impl ExecutionProfileEditorView {
                 Self::refresh_filterable_model_dropdown(
                     &me.base_model_dropdown,
                     current_permissions.base_model.clone(),
-                    |prefs, app| prefs.get_base_llm_choices_for_agent_mode(app).collect_vec(),
+                    |prefs, scope, app| {
+                        prefs
+                            .get_base_llm_choices_for_agent_mode(scope, app)
+                            .collect_vec()
+                    },
                     |id| ExecutionProfileEditorViewAction::SetBaseModel { id },
-                    |prefs, app| prefs.get_default_base_model(app).id.clone(),
+                    |prefs, scope, app| prefs.get_default_base_model(scope, app).id.clone(),
                     &me.upgrade_footer_mouse_state,
                     ctx,
                 );
@@ -951,9 +971,13 @@ impl ExecutionProfileEditorView {
         Self::refresh_filterable_model_dropdown(
             &self.base_model_dropdown,
             current_permissions.base_model.clone(),
-            |prefs, app| prefs.get_base_llm_choices_for_agent_mode(app).collect_vec(),
+            |prefs, scope, app| {
+                prefs
+                    .get_base_llm_choices_for_agent_mode(scope, app)
+                    .collect_vec()
+            },
             |id| ExecutionProfileEditorViewAction::SetBaseModel { id },
-            |prefs, app| prefs.get_default_base_model(app).id.clone(),
+            |prefs, scope, app| prefs.get_default_base_model(scope, app).id.clone(),
             &self.upgrade_footer_mouse_state,
             ctx,
         );
@@ -965,18 +989,18 @@ impl ExecutionProfileEditorView {
         Self::refresh_filterable_model_dropdown(
             &self.full_terminal_use_model_dropdown,
             current_permissions.cli_agent_model.clone(),
-            |prefs, app| prefs.get_cli_agent_llm_choices(app).collect_vec(),
+            |prefs, scope, app| prefs.get_cli_agent_llm_choices(scope, app).collect_vec(),
             |id| ExecutionProfileEditorViewAction::SetFullTerminalUseModel { id },
-            |prefs, app| prefs.get_default_cli_agent_model(app).id.clone(),
+            |prefs, scope, app| prefs.get_default_cli_agent_model(scope, app).id.clone(),
             &self.upgrade_footer_mouse_state,
             ctx,
         );
         Self::refresh_filterable_model_dropdown(
             &self.computer_use_model_dropdown,
             current_permissions.computer_use_model.clone(),
-            |prefs, _| prefs.get_computer_use_llm_choices().collect_vec(),
+            |prefs, scope, _| prefs.get_computer_use_llm_choices(scope).collect_vec(),
             |id| ExecutionProfileEditorViewAction::SetComputerUseModel { id },
-            |prefs, app| prefs.get_default_computer_use_model(app).id.clone(),
+            |prefs, scope, app| prefs.get_default_computer_use_model(scope, app).id.clone(),
             &self.upgrade_footer_mouse_state,
             ctx,
         );
@@ -1183,9 +1207,9 @@ impl ExecutionProfileEditorView {
         upgrade_mouse_state: &MouseStateHandle,
         ctx: &mut ViewContext<Self>,
     ) where
-        G: for<'a> FnOnce(&'a LLMPreferences, &AppContext) -> Vec<&'a LLMInfo>,
+        G: for<'a> FnOnce(&'a LLMPreferences, &dyn TeamScope, &AppContext) -> Vec<&'a LLMInfo>,
         A: Fn(LLMId) -> ExecutionProfileEditorViewAction,
-        D: FnOnce(&LLMPreferences, &AppContext) -> LLMId,
+        D: FnOnce(&LLMPreferences, &dyn TeamScope, &AppContext) -> LLMId,
     {
         menu.update(ctx, |dropdown, ctx| {
             let disabled_by_ai_toggle = !AISettings::as_ref(ctx).is_any_ai_enabled(ctx);
@@ -1196,15 +1220,17 @@ impl ExecutionProfileEditorView {
                 dropdown.set_enabled(ctx);
             }
 
+            let scope = crate::ai::llms::ResolvedTeamScope::from_scope(
+                &UserWorkspaces::as_ref(ctx).team_context_for_view(ctx),
+            );
             let llm_prefs = LLMPreferences::handle(ctx);
             let llm_prefs = llm_prefs.as_ref(ctx);
-            let choices = get_choices(llm_prefs, ctx);
+            let choices = get_choices(llm_prefs, &scope, ctx);
 
             let has_upgrade_gated_models = choices
                 .iter()
                 .any(|llm| matches!(llm.disable_reason, Some(DisableReason::RequiresUpgrade)));
 
-            let scope = UserWorkspaces::as_ref(ctx).team_context_for_view(ctx);
             let items = available_model_menu_items(
                 choices,
                 |llm| DropdownAction::select_action_and_close(create_action(llm.id.clone())),
@@ -1228,7 +1254,8 @@ impl ExecutionProfileEditorView {
 
             let llm_prefs = LLMPreferences::handle(ctx);
             let llm_prefs = llm_prefs.as_ref(ctx);
-            let model_to_select = profile_model.unwrap_or_else(|| get_default_id(llm_prefs, ctx));
+            let model_to_select =
+                profile_model.unwrap_or_else(|| get_default_id(llm_prefs, &scope, ctx));
             dropdown.set_selected_by_action(create_action(model_to_select), ctx);
             ctx.notify();
         });
@@ -1249,11 +1276,13 @@ impl ExecutionProfileEditorView {
                 dropdown.set_enabled(ctx);
             }
 
+            let scope = crate::ai::llms::ResolvedTeamScope::from_scope(
+                &UserWorkspaces::as_ref(ctx).team_context_for_view(ctx),
+            );
             let choices = LLMPreferences::as_ref(ctx)
-                .get_coding_llm_choices(ctx)
+                .get_coding_llm_choices(&scope, ctx)
                 .collect_vec();
 
-            let scope = UserWorkspaces::as_ref(ctx).team_context_for_view(ctx);
             let items = available_model_menu_items(
                 choices,
                 |llm| {
@@ -1271,7 +1300,7 @@ impl ExecutionProfileEditorView {
 
             let model_to_select = profile_coding_model.unwrap_or_else(|| {
                 LLMPreferences::as_ref(ctx)
-                    .get_default_coding_model(ctx)
+                    .get_default_coding_model(&scope, ctx)
                     .id
                     .clone()
             });
@@ -1506,13 +1535,14 @@ impl ExecutionProfileEditorView {
 
 fn initial_context_window_display_value(
     profile_data: &AIExecutionProfile,
+    scope: &impl TeamScope,
     app: &AppContext,
 ) -> u32 {
     profile_data
         .context_window_display_value(app)
         .unwrap_or_else(|| {
             LLMPreferences::as_ref(app)
-                .get_default_base_model(app)
+                .get_default_base_model(scope, app)
                 .context_window
                 .default_max
         })

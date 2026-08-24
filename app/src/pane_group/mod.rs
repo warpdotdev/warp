@@ -1752,8 +1752,17 @@ impl PaneGroup {
                     && let Ok(llm_id) = serde_json::from_str::<LLMId>(llm_override)
                 {
                     log::info!("Selecting base agent model {llm_id} (from terminal snapshot)");
+                    let scope = crate::ai::llms::ResolvedTeamScope::from_scope(
+                        &crate::workspaces::user_workspaces::UserWorkspaces::as_ref(ctx)
+                            .team_context_for_view(ctx),
+                    );
                     crate::ai::llms::LLMPreferences::handle(ctx).update(ctx, |llm_prefs, ctx| {
-                        llm_prefs.update_preferred_agent_mode_llm(&llm_id, terminal_view_id, ctx);
+                        llm_prefs.update_preferred_agent_mode_llm(
+                            &scope,
+                            &llm_id,
+                            terminal_view_id,
+                            ctx,
+                        );
                     });
                 }
 
