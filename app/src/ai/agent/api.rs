@@ -140,13 +140,7 @@ pub struct RequestParams {
     pub planning_enabled: bool,
     should_redact_secrets: bool,
 
-    /// Whether `scope`'s team allows members to use their own provider credentials, resolved
-    /// alongside [`Self::api_keys`] in [`Self::new`].
-    ///
-    /// Any path that re-populates [`Self::api_keys`] after construction (e.g. a Grok OAuth
-    /// refresh completing) must gate on this rather than on plan entitlement alone: `api_keys`
-    /// staying `Some(..)` for surviving org-level credentials is not a signal that member
-    /// credentials are allowed.
+    /// Whether `scope`'s team allows members to use their own provider credentials.
     pub member_byo_credentials_allowed: bool,
     /// User-provided API keys for AI providers (BYO API Key).
     pub api_keys: Option<warp_multi_agent_api::request::settings::ApiKeys>,
@@ -319,12 +313,8 @@ impl RequestParams {
 
         let user_workspaces = UserWorkspaces::as_ref(app);
         let api_key_manager = ApiKeyManager::as_ref(app);
-        // Both halves have to hold for a member credential to reach the server: the plan must
-        // permit BYO at all ([`UserWorkspaces::is_byo_api_key_enabled`]), and `scope`'s team
-        // must allow its members to bring their own ([`UserWorkspaces::are_member_byo_keys_allowed`]).
-        // AWS Bedrock and Gemini Enterprise are admin-configured host credentials, not member
-        // BYO keys, so they skip this gate and are requested independently below. Scoping those
-        // host settings to the team is handled in P2 (#15447).
+        // Bedrock and Gemini Enterprise are admin-configured host credentials rather than member
+        // BYO keys, so they deliberately skip this gate; scoping them to the team is P2 (#15447).
         let member_byo_credentials_allowed = user_workspaces.are_member_byo_keys_allowed(scope);
         let is_byo_enabled =
             user_workspaces.is_byo_api_key_enabled(app) && member_byo_credentials_allowed;
