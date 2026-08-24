@@ -2024,7 +2024,44 @@ fn schedule_create_accepts_team_scope() {
         panic!("Expected `warp schedule create` subcommand");
     };
 
-    assert!(create_args.scope.team);
+    assert!(create_args.scope.is_team());
+    assert!(create_args.scope.requested_team_uid().is_none());
+    assert!(!create_args.scope.personal);
+}
+
+#[test]
+fn schedule_create_accepts_team_scope_with_uid() {
+    let args = Args::try_parse_from([
+        "warp",
+        "schedule",
+        "create",
+        "--name",
+        "test",
+        "--cron",
+        "0 9 * * 1",
+        "--prompt",
+        "hello",
+        "--team",
+        "team_uid00000000000123",
+    ])
+    .unwrap();
+
+    let Some(Command::CommandLine(boxed_cmd)) = args.command else {
+        panic!("Expected `warp schedule create` command");
+    };
+    let CliCommand::Schedule(schedule_cmd) = boxed_cmd.as_ref() else {
+        panic!("Expected `warp schedule create` command");
+    };
+
+    let Some(ScheduleSubcommand::Create(create_args)) = schedule_cmd.subcommand() else {
+        panic!("Expected `warp schedule create` subcommand");
+    };
+
+    assert!(create_args.scope.is_team());
+    assert_eq!(
+        create_args.scope.requested_team_uid(),
+        Some("team_uid00000000000123")
+    );
     assert!(!create_args.scope.personal);
 }
 
@@ -2055,7 +2092,7 @@ fn schedule_create_accepts_personal_scope() {
         panic!("Expected `warp schedule create` subcommand");
     };
 
-    assert!(!create_args.scope.team);
+    assert!(!create_args.scope.is_team());
     assert!(create_args.scope.personal);
 }
 
@@ -3001,7 +3038,7 @@ fn secret_create_codex_api_key_accepts_base_url_and_value_file() {
         api_key_args.common.description.as_deref(),
         Some("OpenAI key for Codex")
     );
-    assert!(api_key_args.common.scope.team);
+    assert!(api_key_args.common.scope.is_team());
     assert!(!api_key_args.common.scope.personal);
     assert_eq!(
         api_key_args

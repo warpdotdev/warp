@@ -162,6 +162,14 @@ pub struct CreateTeamResponse {
     pub team: Team,
 }
 
+#[derive(Debug, thiserror::Error)]
+pub enum SoleTeamError {
+    #[error("you are not on a team")]
+    NoTeam,
+    #[error("you are on {} teams, so no single team applies", .team_uids.len())]
+    MoreThanOneTeam { team_uids: Vec<ServerId> },
+}
+
 impl UserWorkspaces {
     #[cfg(any(test, all(feature = "tui", feature = "test-util")))]
     pub fn mock(
@@ -530,14 +538,25 @@ impl UserWorkspaces {
         }
     }
 
-    pub fn sole_team(&self) -> Option<&Team> {
-        let [team] = self.current_workspace()?.teams.as_slice() else {
-            return None;
-        };
-        Some(team)
+    /// The user's single team in the current workspace.
+    ///
+    /// Having no workspace is reported as [`SoleTeamError::NoTeam`]: a user with no workspace
+    /// is on no team, and no caller can act differently on the distinction.
+    pub fn sole_team(&self) -> Result<&Team, SoleTeamError> {
+        let teams = self
+            .current_workspace()
+            .map(|workspace| workspace.teams.as_slice())
+            .unwrap_or_default();
+        match teams {
+            [] => Err(SoleTeamError::NoTeam),
+            [team] => Ok(team),
+            _ => Err(SoleTeamError::MoreThanOneTeam {
+                team_uids: teams.iter().map(|team| team.uid).collect(),
+            }),
+        }
     }
 
-    pub fn sole_team_uid(&self) -> Option<ServerId> {
+    pub fn sole_team_uid(&self) -> Result<ServerId, SoleTeamError> {
         self.sole_team().map(|team| team.uid)
     }
 

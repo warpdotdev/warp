@@ -90,14 +90,13 @@ fn create(ctx: &mut AppContext, args: CreateScheduleArgs) -> anyhow::Result<()> 
                 }
             };
 
-            let owner =
-                match super::common::resolve_owner(args.scope.team, args.scope.personal, ctx) {
-                    Ok(owner) => owner,
-                    Err(err) => {
-                        super::report_fatal_error(err, ctx);
-                        return;
-                    }
-                };
+            let owner = match super::common::resolve_owner(&args.scope, ctx) {
+                Ok(owner) => owner,
+                Err(err) => {
+                    super::report_fatal_error(err, ctx);
+                    return;
+                }
+            };
 
             let cli_mcp_servers =
                 match super::mcp_config::build_mcp_servers_from_specs(&args.mcp_specs) {

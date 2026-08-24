@@ -2917,10 +2917,11 @@ fn test_member_team_settings_win_over_workspace_settings() {
 
         app.read(|ctx| {
             let user_workspaces = UserWorkspaces::as_ref(ctx);
-            let team = user_workspaces.sole_team();
-            assert!(team.is_some(), "the member team should survive filtering");
+            let team = user_workspaces
+                .sole_team()
+                .expect("the member team should survive filtering");
             assert!(
-                !user_workspaces.is_custom_llm_enabled_for_team(team),
+                !user_workspaces.is_custom_llm_enabled_for_team(Some(team)),
                 "the team's own settings should win when the user has a team"
             );
         });

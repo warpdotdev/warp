@@ -2,7 +2,7 @@ use std::rc::Rc;
 
 use warpui::{AppContext, Entity, SingletonEntity, ViewContext, WeakViewHandle};
 
-use super::UserWorkspaces;
+use super::{SoleTeamError, UserWorkspaces};
 use crate::server::ids::ServerId;
 use crate::workspaces::workspace::AiAutonomySettings;
 
@@ -95,6 +95,29 @@ impl TeamScope for TeamContext<'_> {
 /// [`UserWorkspaces::team_context_resolver`] for when this is the right tool.
 pub type TeamContextResolver = Rc<dyn for<'a> Fn(&'a AppContext) -> TeamContext<'a>>;
 
+/// The team a headless CLI invocation acts as, named on the command line instead of resolved
+/// from a window.
+///
+/// Deliberately cannot be teamless. The other two scopes can be, because a window genuinely may
+/// have no team selected; a CLI caller that cannot name one has instead failed to say what it
+/// meant, and is told to pass `--team <UID>`. Minted only by
+/// [`UserWorkspaces::team_scope_for_cli`], which checks membership first.
+pub struct TeamScopeForCli(ServerId);
+
+impl TeamScope for TeamScopeForCli {
+    fn team_uid(&self) -> Option<ServerId> {
+        Some(self.0)
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum CliTeamError {
+    #[error(transparent)]
+    NoSoleTeam(#[from] SoleTeamError),
+    #[error("you are not on team {team_uid}")]
+    NotAMember { team_uid: ServerId },
+}
+
 impl UserWorkspaces {
     /// Captures the team selected in `ctx`'s window as an operation's
     /// [`TeamContextForOperation`]. This is the only way application code mints one. Always
@@ -132,6 +155,30 @@ impl UserWorkspaces {
     #[cfg(any(test, feature = "test-util"))]
     pub fn teamless_context_resolver_for_test() -> TeamContextResolver {
         Rc::new(|_| TeamContext { team_uid: None })
+    }
+
+    /// The team a CLI invocation acts as: the one it named, or its sole team when it named none.
+    ///
+    /// Membership is checked here so a mistyped uid fails loudly, rather than resolving to a team
+    /// that a scoped settings getter cannot find and being denied everything for a reason the
+    /// user cannot see.
+    pub fn cli_team_uid(&self, requested: Option<ServerId>) -> Result<ServerId, CliTeamError> {
+        match requested {
+            Some(team_uid) => self
+                .team_from_uid(team_uid)
+                .map(|team| team.uid)
+                .ok_or(CliTeamError::NotAMember { team_uid }),
+            None => Ok(self.sole_team_uid()?),
+        }
+    }
+
+    /// [`Self::cli_team_uid`] as a scope, for the policy reads a CLI command makes. Both are fed
+    /// the same requested uid so an object's owner and the credentials it may use cannot disagree.
+    pub fn team_scope_for_cli(
+        &self,
+        requested: Option<ServerId>,
+    ) -> Result<TeamScopeForCli, CliTeamError> {
+        self.cli_team_uid(requested).map(TeamScopeForCli)
     }
 
     /// Resolves `view`'s window team for one read. See [`TeamContext`].

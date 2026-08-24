@@ -515,7 +515,7 @@ impl AmbientAgentRunner {
                 mode,
                 config,
                 title: args.title,
-                team: match (args.scope.team, args.scope.personal) {
+                team: match (args.scope.is_team(), args.scope.personal) {
                     (true, _) => Some(true),
                     (_, true) => Some(false),
                     _ => None,

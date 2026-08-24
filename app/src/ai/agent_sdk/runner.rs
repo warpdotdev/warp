@@ -108,14 +108,13 @@ impl RunnerCommandRunner {
                 return;
             }
 
-            let owner =
-                match super::common::resolve_owner(args.scope.team, args.scope.personal, ctx) {
-                    Ok(owner) => owner,
-                    Err(e) => {
-                        super::report_fatal_error(e, ctx);
-                        return;
-                    }
-                };
+            let owner = match super::common::resolve_owner(&args.scope, ctx) {
+                Ok(owner) => owner,
+                Err(e) => {
+                    super::report_fatal_error(e, ctx);
+                    return;
+                }
+            };
 
             let factory = ServerApiProvider::as_ref(ctx).get_factory_client();
             let input = build_create_input(args, owner.into());
