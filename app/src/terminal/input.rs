@@ -407,6 +407,31 @@ pub fn get_input_box_top_border_width() -> f32 {
     }
 }
 
+/// The cloud-mode host selector's window should default to: the `WARP_CLOUD_MODE_DEFAULT_HOST`
+/// developer override when set, otherwise the default host configured for that window's team.
+///
+/// Resolved from the host selector's own handle rather than `Input`'s: `Input::build_host_selector`
+/// runs from within `Input::new`, and a view is absent from `view_to_window` until its own
+/// constructor returns -- a child it builds along the way is already registered by then, so a
+/// handle to `Input` itself would resolve no window here while a handle to the selector does.
+/// Reading through the live mapping also means the host follows the selector if it is ever moved
+/// between windows.
+fn effective_default_host(
+    host_selector: &WeakViewHandle<HostSelector>,
+    app: &AppContext,
+) -> Option<String> {
+    if let Some(slug) = std::env::var("WARP_CLOUD_MODE_DEFAULT_HOST")
+        .ok()
+        .filter(|slug| !slug.is_empty())
+    {
+        return Some(slug);
+    }
+    let workspaces = UserWorkspaces::as_ref(app);
+    workspaces
+        .default_host_slug(&workspaces.team_context(host_selector, app))
+        .map(String::from)
+}
+
 pub const COMPLETIONS_MENU_WIDTH: f32 = 330.;
 pub const OPEN_COMPLETIONS_KEYBINDING_NAME: &str = "input:open_completion_suggestions";
 pub const INPUT_A11Y_LABEL: &str = "Command Input.";
@@ -2335,15 +2360,8 @@ impl Input {
     ) -> ViewHandle<HostSelector> {
         let view = ctx
             .add_typed_action_view(|ctx| HostSelector::new(menu_positioning_provider.clone(), ctx));
-        // Env var takes priority over workspace setting for developer testing.
-        let effective_host = std::env::var("WARP_CLOUD_MODE_DEFAULT_HOST")
-            .ok()
-            .filter(|s| !s.is_empty())
-            .or_else(|| {
-                UserWorkspaces::as_ref(ctx)
-                    .default_host_slug()
-                    .map(String::from)
-            });
+        let weak_view = view.downgrade();
+        let effective_host = effective_default_host(&weak_view, ctx);
         if let Some(slug) = &effective_host {
             view.update(ctx, |selector, ctx| {
                 selector.set_default_host(slug.clone(), ctx);
@@ -2376,32 +2394,38 @@ impl Input {
                 });
             }
         });
-        // Keep the host selector and view model in sync when workspace metadata refreshes (e.g.
-        // admin changes default_host_slug).
+        // Keep the host selector and view model in sync when the host this window should
+        // default to changes: because the admin edited the team's `default_host_slug`, or
+        // because the window moved to a team that configures a different one.
         let view_for_ws = view.clone();
         let vm_for_ws = view_model.clone();
         ctx.subscribe_to_model(&UserWorkspaces::handle(ctx), move |_me, _, event, ctx| {
-            if !matches!(event, UserWorkspacesEvent::TeamsChanged) {
+            // Windows are independent, so a sibling window switching team must not retarget
+            // this one.
+            let affects_this_window = matches!(event, UserWorkspacesEvent::TeamsChanged)
+                || matches!(
+                    event,
+                    UserWorkspacesEvent::WindowTeamChanged { window_id }
+                        if *window_id == ctx.window_id()
+                );
+            if !affects_this_window {
                 return;
             }
-            let effective_host = std::env::var("WARP_CLOUD_MODE_DEFAULT_HOST")
-                .ok()
-                .filter(|s| !s.is_empty())
-                .or_else(|| {
-                    UserWorkspaces::as_ref(ctx)
-                        .default_host_slug()
-                        .map(String::from)
-                });
-            if let Some(slug) = &effective_host {
-                view_for_ws.update(ctx, |selector, ctx| {
-                    selector.set_default_host(slug.clone(), ctx);
-                });
+            // `None` has to be applied, not skipped: it means the window's team configures no
+            // self-hosted default, and leaving the previous value in place would keep the
+            // selector and the run config pointed at another team's worker.
+            let effective_host = effective_default_host(&weak_view, ctx);
+            match effective_host.clone() {
+                Some(slug) => view_for_ws.update(ctx, |selector, ctx| {
+                    selector.set_default_host(slug, ctx);
+                }),
+                None => view_for_ws.update(ctx, |selector, ctx| {
+                    selector.clear_default_host(ctx);
+                }),
             }
-            if let Some(slug) = effective_host {
-                vm_for_ws.update(ctx, |model, _ctx| {
-                    model.set_worker_host(Some(slug));
-                });
-            }
+            vm_for_ws.update(ctx, |model, _ctx| {
+                model.set_worker_host(effective_host);
+            });
         });
         view
     }

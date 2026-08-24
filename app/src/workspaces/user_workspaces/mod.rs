@@ -1651,19 +1651,17 @@ impl UserWorkspaces {
         }
     }
 
-    pub fn default_host_slug(&self) -> Option<&str> {
+    /// The current workspace's configured default self-hosted worker host slug, regardless of
+    /// which team the caller is scoped to.
+    ///
+    /// This is the old workspace-level ambient read, not the team-scoped
+    /// [`Self::default_host_slug`] most callers want. It survives only for
+    /// `ai::orchestration::resolve_default_host_slug`, whose own callers (the plan card, the
+    /// confirmation card, the TUI orchestration block, and the handoff pipeline) have no window
+    /// to scope to yet and must move as one unit. Do not add new callers.
+    pub(crate) fn unscoped_default_host_slug(&self) -> Option<&str> {
         self.current_workspace()
             .and_then(|workspace| workspace.settings.default_host_slug.as_deref())
-    }
-
-    /// Returns the team-level agent attribution setting.
-    ///
-    /// Use this to decide whether the user's attribution toggle should be locked
-    /// (`Enable`/`Disable`) or editable (`RespectUserSetting`).
-    pub fn get_agent_attribution_setting(&self) -> AdminEnablementSetting {
-        self.current_workspace()
-            .map(|workspace| workspace.settings.enable_warp_attribution.clone())
-            .unwrap_or_default()
     }
 
     pub fn teams_allow_codebase_context(&self) -> AdminEnablementSetting {

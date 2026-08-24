@@ -20,7 +20,7 @@ use super::{SoleTeamError, UserWorkspaces};
 use crate::ai::llms::{LLMId, LLMProvider};
 use crate::server::ids::ServerId;
 use crate::workspaces::team::Team;
-use crate::workspaces::workspace::{AiAutonomySettings, TeamByoSettings};
+use crate::workspaces::workspace::{AdminEnablementSetting, AiAutonomySettings, TeamByoSettings};
 
 /// The team an operation is scoped to, captured once from the window that started it.
 ///
@@ -360,6 +360,78 @@ impl UserWorkspaces {
                     [] => workspace.settings.team_byo.as_ref(),
                     [team] => team.settings.team_byo.as_ref(),
                     _ => None,
+                }
+            }
+        }
+    }
+
+    /// The self-hosted worker host slug configured as the default for `scope`'s team.
+    ///
+    /// A scope with no team falls back on the current workspace, but only where that has an
+    /// unambiguous answer: `workspace.settings` when the user is on no team there, and their own
+    /// team's default when they are on exactly one. On several teams there is nothing to fall
+    /// back to -- `workspace.settings` would be an arbitrarily elected one of them, see
+    /// [`TeamScope`] -- so the default is absent.
+    pub(crate) fn default_host_slug<S: TeamScope + ?Sized>(&self, scope: &S) -> Option<&str> {
+        match scope.team_uid() {
+            Some(_) => self
+                .team_from_scope(scope)
+                .and_then(|team| team.settings.default_host_slug.as_deref()),
+            None => {
+                let workspace = self.current_workspace()?;
+                match workspace.teams.as_slice() {
+                    [] => workspace.settings.default_host_slug.as_deref(),
+                    [team] => team.settings.default_host_slug.as_deref(),
+                    _ => None,
+                }
+            }
+        }
+    }
+
+    /// Whether any team the user belongs to configures a default self-hosted worker host.
+    ///
+    /// For callers with no window to scope to, such as the `/host` slash-command gate shared
+    /// with the TUI: it can only ask whether the command is worth offering at all, not which
+    /// team's host to offer, so unlike [`Self::default_host_slug`] this deliberately widens
+    /// rather than picks -- a window on a team with no host configured may still see `/host`
+    /// because another of the user's teams has one.
+    pub(crate) fn any_team_has_default_host_slug(&self) -> bool {
+        let mut team_slugs = self
+            .workspaces
+            .iter()
+            .flat_map(|workspace| workspace.teams.iter())
+            .map(|team| &team.settings.default_host_slug)
+            .peekable();
+
+        if team_slugs.peek().is_none() {
+            return self
+                .current_workspace()
+                .is_some_and(|workspace| workspace.settings.default_host_slug.is_some());
+        }
+
+        team_slugs.any(Option::is_some)
+    }
+
+    /// The agent attribution policy for `scope`'s team: `Enable` and `Disable` lock the user's
+    /// attribution toggle, `RespectUserSetting` leaves it editable. Resolves a no-team scope the
+    /// same way as [`Self::default_host_slug`].
+    pub(crate) fn get_agent_attribution_setting<S: TeamScope + ?Sized>(
+        &self,
+        scope: &S,
+    ) -> AdminEnablementSetting {
+        match scope.team_uid() {
+            Some(_) => self
+                .team_from_scope(scope)
+                .map(|team| team.settings.enable_warp_attribution.clone())
+                .unwrap_or_default(),
+            None => {
+                let Some(workspace) = self.current_workspace() else {
+                    return AdminEnablementSetting::default();
+                };
+                match workspace.teams.as_slice() {
+                    [] => workspace.settings.enable_warp_attribution.clone(),
+                    [team] => team.settings.enable_warp_attribution.clone(),
+                    _ => AdminEnablementSetting::default(),
                 }
             }
         }

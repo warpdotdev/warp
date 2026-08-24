@@ -95,7 +95,7 @@ pub fn resolve_default_host_slug(ctx: &AppContext) -> Option<String> {
         }
     }
     UserWorkspaces::as_ref(ctx)
-        .default_host_slug()
+        .unscoped_default_host_slug()
         .map(str::to_string)
         .filter(|s| !s.trim().is_empty())
 }
