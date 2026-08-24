@@ -985,7 +985,10 @@ pub fn resolve_executable(command: &str) -> Option<Cow<'_, Path>> {
 /// MCP/LSP find binaries). Callers that want the process's PATH should
 /// use [`resolve_executable`] instead.
 #[cfg(not(target_family = "wasm"))]
-pub fn resolve_executable_in_path<'a>(command: &'a str, path_env: &std::ffi::OsStr) -> Option<Cow<'a, Path>> {
+pub fn resolve_executable_in_path<'a>(
+    command: &'a str,
+    path_env: &std::ffi::OsStr,
+) -> Option<Cow<'a, Path>> {
     if command.contains(std::path::MAIN_SEPARATOR) {
         let path = Path::new(command);
         return file_exists_and_is_executable(path).then_some(Cow::Borrowed(path));
