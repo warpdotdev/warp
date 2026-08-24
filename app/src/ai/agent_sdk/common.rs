@@ -98,24 +98,43 @@ pub(super) fn set_ambient_task_context_from_run_id(
     Ok(task_id)
 }
 
-pub(super) fn describe_sole_team_error(error: SoleTeamError) -> anyhow::Error {
+pub(super) fn describe_sole_team_error(error: SoleTeamError, ctx: &AppContext) -> anyhow::Error {
     match error {
         SoleTeamError::NoTeam => anyhow::anyhow!("You are not on a team"),
         SoleTeamError::MoreThanOneTeam { team_uids } => anyhow::anyhow!(
-            "You are on {} teams; specify one with --team=<UID>: {}",
+            "You are on {} teams. Re-run with one of:\n\n{}",
             team_uids.len(),
-            team_uids
-                .iter()
-                .map(ServerId::to_string)
-                .collect::<Vec<_>>()
-                .join(", ")
+            describe_team_choices(&team_uids, ctx)
         ),
     }
 }
 
-fn describe_cli_team_error(error: CliTeamError) -> anyhow::Error {
+/// One `--team=<UID>` line per team, so the flag to copy starts each line and the name that
+/// identifies it follows. Sorted by name to keep the list stable across runs.
+fn describe_team_choices(team_uids: &[ServerId], ctx: &AppContext) -> String {
+    let workspaces = UserWorkspaces::as_ref(ctx);
+    let mut choices: Vec<(String, ServerId)> = team_uids
+        .iter()
+        .map(|uid| {
+            let name = workspaces
+                .team_from_uid(*uid)
+                .map(|team| team.name.clone())
+                .unwrap_or_default();
+            (name, *uid)
+        })
+        .collect();
+    choices.sort_by_key(|(name, _)| name.to_lowercase());
+
+    choices
+        .iter()
+        .map(|(name, uid)| format!("  --team={uid}   {name}").trim_end().to_string())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn describe_cli_team_error(error: CliTeamError, ctx: &AppContext) -> anyhow::Error {
     match error {
-        CliTeamError::NoSoleTeam(error) => describe_sole_team_error(error),
+        CliTeamError::NoSoleTeam(error) => describe_sole_team_error(error, ctx),
         CliTeamError::NotAMember { team_uid } => {
             anyhow::anyhow!("You are not on team {team_uid}")
         }
@@ -154,7 +173,7 @@ pub fn resolve_owner(scope: &ObjectScope, ctx: &AppContext) -> anyhow::Result<Ow
     if scope.is_team() {
         let team_uid = UserWorkspaces::as_ref(ctx)
             .cli_team_uid(requested_team_uid(scope)?)
-            .map_err(describe_cli_team_error)?;
+            .map_err(|err| describe_cli_team_error(err, ctx))?;
         return Ok(Owner::Team { team_uid });
     }
 
@@ -163,7 +182,9 @@ pub fn resolve_owner(scope: &ObjectScope, ctx: &AppContext) -> anyhow::Result<Ow
         Err(SoleTeamError::NoTeam) => Ok(Owner::User {
             user_uid: current_user_uid(ctx)?,
         }),
-        Err(error @ SoleTeamError::MoreThanOneTeam { .. }) => Err(describe_sole_team_error(error)),
+        Err(error @ SoleTeamError::MoreThanOneTeam { .. }) => {
+            Err(describe_sole_team_error(error, ctx))
+        }
     }
 }
 
@@ -182,7 +203,7 @@ pub fn validate_team_scope(scope: &ObjectScope, ctx: &AppContext) -> anyhow::Res
     UserWorkspaces::as_ref(ctx)
         .cli_team_uid(requested_team_uid(scope)?)
         .map(|_| ())
-        .map_err(describe_cli_team_error)
+        .map_err(|err| describe_cli_team_error(err, ctx))
 }
 
 /// Refresh workspace metadata before executing an operation.

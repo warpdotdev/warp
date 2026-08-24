@@ -61,7 +61,7 @@ impl ProviderCommandRunner {
         let url = if use_team_auth {
             let team_uid = UserWorkspaces::as_ref(ctx)
                 .sole_team_uid()
-                .map_err(describe_sole_team_error)?;
+                .map_err(|err| describe_sole_team_error(err, ctx))?;
             format!("{server_url}/oauth/connect/{slug}?principalType=team&principalId={team_uid}")
         } else {
             format!("{server_url}/oauth/connect/{slug}")
