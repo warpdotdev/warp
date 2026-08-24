@@ -1265,14 +1265,20 @@ impl View for RunAgentsCardView {
 
         // Still streaming: show "Configuring agents..." placeholder until
         // the action reaches Blocked status (i.e., streaming is complete
-        // and the action is queued for user confirmation).
+        // and the action is queued for user confirmation). If the action
+        // never made it into the action model at all (no status), that's
+        // normally because it's still streaming — but if the response
+        // stream was cancelled before the tool call finished streaming,
+        // the action will never be queued and this placeholder would
+        // otherwise persist forever. Mirror the shared `action_icon`
+        // fallback other inline actions use (no status + output no longer
+        // streaming => cancelled) instead of inventing new copy.
         if !matches!(status, Some(AIActionStatus::Blocked)) {
-            return render_status_only_card(
-                "Configuring agents\u{2026}".to_string(),
-                appearance,
-                StatusKind::Spawning,
-                app,
+            let (label, kind) = pending_confirmation_status_kind(
+                status.as_ref(),
+                self.block_model.status(app).is_streaming(),
             );
+            return render_status_only_card(label, appearance, kind, app);
         }
 
         let is_blocked = matches!(status, Some(AIActionStatus::Blocked));
@@ -1683,6 +1689,26 @@ pub(crate) enum StatusKind {
     Mixed,
     Failure,
     Cancelled,
+}
+
+/// Resolves the status-only card shown while the action hasn't reached
+/// `Blocked` yet. A `None` status while the block's own output is still
+/// streaming means the tool call is genuinely still being constructed. But
+/// once that output has stopped streaming (e.g. the response stream was
+/// cancelled) with no status ever recorded, the action never made it into
+/// the action model and won't reach a terminal result on its own, so this
+/// renders the same terminal Cancelled state used elsewhere.
+pub(crate) fn pending_confirmation_status_kind(
+    status: Option<&AIActionStatus>,
+    block_output_is_streaming: bool,
+) -> (String, StatusKind) {
+    if status.is_none() && !block_output_is_streaming {
+        return ("Spawn agents cancelled".to_string(), StatusKind::Cancelled);
+    }
+    (
+        "Configuring agents\u{2026}".to_string(),
+        StatusKind::Spawning,
+    )
 }
 
 fn render_spawning_card(

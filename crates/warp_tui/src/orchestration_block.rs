@@ -167,6 +167,14 @@ pub(crate) struct TuiOrchestrationBlock {
     /// Identity palette pinned at construction so identities stay stable
     /// across re-renders, edits, and theme switches.
     identity_palette: Vec<AgentIdentity>,
+    /// Whether the owning exchange's own response stream is still
+    /// streaming, i.e. the same [`AIBlockOutputStatus::is_streaming`] the
+    /// GUI's `RunAgentsCardView` reads from its `AIBlockModel`. Used to
+    /// tell a `run_agents` tool call that's genuinely still being
+    /// constructed apart from one that will never reach the action model
+    /// because its exchange's stream was cancelled first (see
+    /// `render::render`).
+    is_output_streaming: Rc<dyn Fn(&AppContext) -> bool>,
 }
 
 impl TuiOrchestrationBlock {
@@ -182,6 +190,7 @@ impl TuiOrchestrationBlock {
         run_agents_executor: ModelHandle<RunAgentsExecutor>,
         fallback_base_model_id: Option<String>,
         is_restored: bool,
+        is_output_streaming: Rc<dyn Fn(&AppContext) -> bool>,
         ctx: &mut ViewContext<Self>,
     ) -> Self {
         let action_id = action.id.clone();
@@ -289,6 +298,7 @@ impl TuiOrchestrationBlock {
             fallback_base_model_id,
             is_restored,
             identity_palette,
+            is_output_streaming,
             ctx,
         );
         view.resolve_interactive_defaults(ctx);
@@ -306,6 +316,7 @@ impl TuiOrchestrationBlock {
         fallback_base_model_id: Option<String>,
         is_restored: bool,
         identity_palette: Vec<AgentIdentity>,
+        is_output_streaming: Rc<dyn Fn(&AppContext) -> bool>,
         ctx: &mut ViewContext<Self>,
     ) -> Self {
         let selector = ctx.add_typed_action_tui_view(TuiOptionSelector::new);
@@ -334,6 +345,7 @@ impl TuiOrchestrationBlock {
             entered_event_emitted: false,
             decision_event_emitted: false,
             identity_palette,
+            is_output_streaming,
         }
     }
 

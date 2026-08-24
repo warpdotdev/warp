@@ -12,6 +12,7 @@ use warpui::{App, Entity, EntityId, ModelHandle};
 use super::*;
 use crate::ai::active_agent_views_model::ActiveAgentViewsModel;
 use crate::ai::agent::task::TaskId;
+use crate::ai::blocklist::orchestration_event_streamer::OrchestrationEventStreamer;
 use crate::ai::blocklist::{
     BlocklistAIHistoryModel, BlocklistAIPermissions, StartAgentExecutorEvent, StartAgentRequest,
 };
@@ -27,6 +28,7 @@ use crate::cloud_object::model::persistence::CloudModel;
 use crate::network::NetworkStatus;
 use crate::server::cloud_objects::update_manager::UpdateManager;
 use crate::server::ids::SyncId;
+use crate::server::server_api::ServerApiProvider;
 use crate::server::sync_queue::SyncQueue;
 use crate::settings::PrivacySettings;
 use crate::terminal::cli_agent_sessions::CLIAgentSessionsModel;
@@ -49,6 +51,14 @@ struct CapturedStartAgentRequests(Vec<StartAgentRequest>);
 impl Entity for CapturedStartAgentRequests {
     type Event = ();
 }
+
+#[derive(Default)]
+struct CapturedSpawningFinishedEvents(Vec<AIAgentActionId>);
+
+impl Entity for CapturedSpawningFinishedEvents {
+    type Event = ();
+}
+
 fn with_plan_id(mut action: AIAgentAction, plan_id: &str) -> AIAgentAction {
     let AIAgentActionType::RunAgents(request) = &mut action.action else {
         panic!("expected run_agents action");
@@ -596,6 +606,153 @@ fn cancel_during_plan_publication_does_not_dispatch_children() {
             assert!(captured.0.is_empty());
         });
     });
+}
+
+/// A run_agents call whose children have already been dispatched to
+/// `StartAgentExecutor` sits in the `Spawning` state until each child
+/// confirms or times out. This verifies that cancelling from that state
+/// releases the pending marker and emits `SpawningFinished` immediately,
+/// symmetric with the `Publishing`-phase cancellation above — so the card
+/// views don't hang on their "Spawning…" snapshot waiting for the
+/// background dispatch to resolve (or time out) on its own. It then
+/// resolves the still in-flight child *after* cancelling, mirroring a
+/// launch that completes on its own timeline once the parent action has
+/// already been cancelled, and asserts `SpawningFinished` is not emitted
+/// a second time for that late completion.
+#[test]
+fn cancel_during_spawning_releases_pending_state_and_emits_spawning_finished_exactly_once() {
+    App::test((), |mut app| async move {
+        let state = initialize_run_agents_test(&mut app, ExecutionMode::Sdk);
+        // `StartAgentExecutor::complete_pending_as_started` (exercised below
+        // when the child launch resolves) registers the newly-launched
+        // child's run_id via `OrchestrationEventStreamer`, which in turn
+        // needs `ServerApiProvider`. Neither is needed by the other
+        // run_agents tests, so they're registered here rather than in the
+        // shared fixture.
+        app.add_singleton_model(|_| ServerApiProvider::new_for_test());
+        app.add_singleton_model(OrchestrationEventStreamer::new);
+        // A run_id is required for the Remote dispatch to actually reach
+        // `StartAgentExecutor` (otherwise every child fails synchronously
+        // with "parent run_id" missing, resolving before `Spawning` can be
+        // observed as pending).
+        BlocklistAIHistoryModel::handle(&app).update(&mut app, |model, ctx| {
+            model.assign_run_id_for_conversation(
+                state.conversation_id,
+                "00000000-0000-0000-0000-000000000002".to_string(),
+                None,
+                EntityId::new(),
+                ctx,
+            );
+        });
+        let captured_requests =
+            subscribe_to_start_agent_requests(&mut app, &state.start_agent_executor);
+        let action = remote_run_agents_action("oz");
+        let action_id = action.id.clone();
+
+        let execution = state.executor.update(&mut app, |executor, ctx| {
+            executor
+                .execute(
+                    ExecuteActionInput {
+                        action: &action,
+                        conversation_id: state.conversation_id,
+                    },
+                    ctx,
+                )
+                .into()
+        });
+        assert!(matches!(execution, AnyActionExecution::Async { .. }));
+
+        // No plan to publish, so the dispatch moves past `Publishing`
+        // straight into `Spawning` once the child dispatch is issued. That
+        // still takes a couple of scheduling round trips (the publication
+        // wait's completion callback, then the dispatch call itself), so
+        // poll for the dispatch to land instead of assuming a fixed yield
+        // count (which is flaky under load).
+        poll_until(|| captured_requests.read(&app, |captured, _ctx| !captured.0.is_empty())).await;
+        captured_requests.read(&app, |captured, _ctx| {
+            assert_eq!(
+                captured.0.len(),
+                1,
+                "expected exactly one dispatched child by now"
+            );
+        });
+
+        let events = app.add_model(|_| CapturedSpawningFinishedEvents::default());
+        events.update(&mut app, |_, ctx| {
+            ctx.subscribe_to_model(&state.executor, |captured, _, event, _ctx| {
+                if let RunAgentsExecutorEvent::SpawningFinished { action_id } = event {
+                    captured.0.push(action_id.clone());
+                }
+            });
+        });
+
+        state.executor.update(&mut app, |executor, ctx| {
+            assert!(
+                executor.is_pending(&action_id),
+                "expected the Spawning phase to still be pending"
+            );
+            executor.cancel_execution(&action_id, ctx);
+            assert!(!executor.is_pending(&action_id));
+        });
+        events.read(&app, |captured, _ctx| {
+            assert_eq!(
+                captured.0,
+                vec![action_id.clone()],
+                "cancellation should emit exactly one SpawningFinished"
+            );
+        });
+
+        // The dispatched child's own request is still in flight; resolve it
+        // normally now, after the parent action was already cancelled.
+        let request_id = captured_requests.read(&app, |captured, _ctx| captured.0[0].id);
+        let child_conversation_id =
+            BlocklistAIHistoryModel::handle(&app).update(&mut app, |history, ctx| {
+                history.start_new_child_conversation(
+                    EntityId::new(),
+                    "child".to_string(),
+                    state.conversation_id,
+                    None,
+                    ctx,
+                )
+            });
+        BlocklistAIHistoryModel::handle(&app).update(&mut app, |model, ctx| {
+            model.assign_run_id_for_conversation(
+                child_conversation_id,
+                "00000000-0000-0000-0000-000000000003".to_string(),
+                None,
+                EntityId::new(),
+                ctx,
+            );
+            model.record_new_conversation_request_complete(request_id, child_conversation_id, ctx);
+        });
+        poll_until(|| events.read(&app, |captured, _ctx| !captured.0.is_empty())).await;
+
+        // The late completion must not emit a second terminal event for an
+        // action_id that was already resolved by cancellation.
+        events.read(&app, |captured, _ctx| {
+            assert_eq!(
+                captured.0,
+                vec![action_id.clone()],
+                "a completion arriving after cancellation must not double-emit SpawningFinished"
+            );
+        });
+    });
+}
+
+/// Polls by repeatedly yielding to the test executor until `condition`
+/// returns true, or panics after a generous bound. Prefer this over a fixed
+/// yield count when waiting on a `ctx.spawn`-driven state transition: a
+/// fixed count that's tuned for an isolated run can still flake once other
+/// tests are scheduled onto the same executor concurrently.
+async fn poll_until(mut condition: impl FnMut() -> bool) {
+    const MAX_ATTEMPTS: usize = 10_000;
+    for _ in 0..MAX_ATTEMPTS {
+        if condition() {
+            return;
+        }
+        futures_lite::future::yield_now().await;
+    }
+    panic!("condition not met after {MAX_ATTEMPTS} yields");
 }
 
 fn set_run_agents_permission(app: &mut App, permission: RunAgentsPermission) {
