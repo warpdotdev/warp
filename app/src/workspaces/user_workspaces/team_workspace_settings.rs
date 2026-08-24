@@ -428,7 +428,11 @@ impl UserWorkspaces {
             scope,
             |team| {
                 // A denylist blocks only what it lists, so an empty list is no constraint.
-                let values = &team.settings.sandboxed_agent.execute_commands_denylist.values;
+                let values = &team
+                    .settings
+                    .sandboxed_agent
+                    .execute_commands_denylist
+                    .values;
                 (!values.is_empty()).then(|| values.clone().to_predicates())
             },
             |workspace| {
