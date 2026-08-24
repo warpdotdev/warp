@@ -247,6 +247,7 @@ impl Workspace {
             tab.group_id = Some(group_id);
             tab.pinned = false;
             tab.in_multi_selection = false;
+            tab.mark_non_pristine();
         }
 
         // Split tabs into the new group's members and all other tabs.
@@ -352,6 +353,7 @@ impl Workspace {
             tab.group_id = Some(group_id);
             tab.pinned = false;
             tab.in_multi_selection = false;
+            tab.mark_non_pristine();
         }
 
         // Anchor the group block at its original first-member position, shifted
@@ -414,6 +416,7 @@ impl Workspace {
         // Clear the group that all selected tabs belonged to.
         for &index in &selected_indices {
             self.tabs[index].group_id = None;
+            self.tabs[index].mark_non_pristine();
         }
 
         // Non-selected tabs originally before the group's first member; if the
@@ -577,6 +580,7 @@ impl Workspace {
 
         self.tabs[tab_index].group_id = None;
         self.tabs[tab_index].pinned = true;
+        self.tabs[tab_index].mark_non_pristine();
         self.move_tab_to_index(tab_index, target, ctx);
 
         if let Some(prev) = previous_group_id {
@@ -605,6 +609,7 @@ impl Workspace {
         let target = self.pinned_boundary_index(&self.tabs);
 
         self.tabs[tab_index].pinned = false;
+        self.tabs[tab_index].mark_non_pristine();
         self.move_tab_to_index(tab_index, target, ctx);
 
         ctx.dispatch_global_action("workspace:save_app", ());
@@ -633,6 +638,7 @@ impl Workspace {
         if let Some(group) = self.tab_groups.get_mut(&group_id) {
             group.pinned = true;
         }
+        self.mark_group_members_non_pristine(group_id);
         self.move_group_block(group_id, target, ctx);
 
         ctx.dispatch_global_action("workspace:save_app", ());
@@ -658,10 +664,22 @@ impl Workspace {
         if let Some(group) = self.tab_groups.get_mut(&group_id) {
             group.pinned = false;
         }
+        self.mark_group_members_non_pristine(group_id);
         self.move_group_block(group_id, target, ctx);
 
         ctx.dispatch_global_action("workspace:save_app", ());
         ctx.notify();
+    }
+
+    /// Records a mutation on every member of `group_id`. A group's `pinned` flag changes each
+    /// member's effective pin state and relocates the whole block, so the mutation belongs to
+    /// the members rather than to the group.
+    fn mark_group_members_non_pristine(&mut self, group_id: TabGroupId) {
+        for tab in &mut self.tabs {
+            if tab.group_id == Some(group_id) {
+                tab.mark_non_pristine();
+            }
+        }
     }
 
     /// Builds the "Move to group" submenu. One builder serves both parent
