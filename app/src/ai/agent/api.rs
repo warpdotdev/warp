@@ -140,8 +140,6 @@ pub struct RequestParams {
     pub planning_enabled: bool,
     should_redact_secrets: bool,
 
-    /// Whether `scope`'s team allows members to use their own provider credentials.
-    pub member_byo_credentials_allowed: bool,
     /// User-provided API keys for AI providers (BYO API Key).
     pub api_keys: Option<warp_multi_agent_api::request::settings::ApiKeys>,
     /// User-provided custom model providers (BYOK endpoints).
@@ -209,7 +207,6 @@ impl RequestParams {
             mcp_context: None,
             planning_enabled: false,
             should_redact_secrets: false,
-            member_byo_credentials_allowed: false,
             api_keys: None,
             custom_model_providers: None,
             custom_model_routers: None,
@@ -313,11 +310,7 @@ impl RequestParams {
 
         let user_workspaces = UserWorkspaces::as_ref(app);
         let api_key_manager = ApiKeyManager::as_ref(app);
-        // Bedrock and Gemini Enterprise are admin-configured host credentials rather than member
-        // BYO keys, so they deliberately skip this gate; scoping them to the team is P2 (#15447).
-        let member_byo_credentials_allowed = user_workspaces.are_member_byo_keys_allowed(scope);
-        let is_byo_enabled =
-            user_workspaces.is_byo_api_key_enabled(app) && member_byo_credentials_allowed;
+        let is_byo_enabled = user_workspaces.is_byo_api_key_enabled(app);
         #[cfg(not(target_family = "wasm"))]
         let geap_binding = crate::ai::geap_credentials::current_geap_policy(app).mint_binding();
         #[cfg(target_family = "wasm")]
@@ -327,8 +320,7 @@ impl RequestParams {
             user_workspaces.is_aws_bedrock_credentials_enabled(app),
             geap_binding,
         );
-        let is_custom_inference_enabled = user_workspaces.is_byo_endpoint_enabled(app)
-            && user_workspaces.are_member_byo_endpoints_allowed(scope);
+        let is_custom_inference_enabled = user_workspaces.is_byo_endpoint_enabled(app);
         let custom_model_providers =
             api_key_manager.custom_model_providers_for_request(is_custom_inference_enabled);
         let custom_model_routers = FeatureFlag::CustomModelRouters.is_enabled().then(|| {
@@ -411,7 +403,6 @@ impl RequestParams {
             mcp_context,
             planning_enabled: true,
             should_redact_secrets,
-            member_byo_credentials_allowed,
             api_keys,
             custom_model_providers,
             custom_model_routers,
