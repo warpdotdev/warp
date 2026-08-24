@@ -236,7 +236,8 @@ impl TemplatableMCPServerManager {
         } else {
             report_error!(
                 "No template UUID found for installation UUID",
-                extra: { "installation_uuid" => %installation_uuid }
+                extra: { "installation_uuid" => %installation_uuid },
+                warp_errors::ReportErrorLogMode::OncePerRun
             );
         }
     }
