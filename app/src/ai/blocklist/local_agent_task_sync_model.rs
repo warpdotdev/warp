@@ -131,9 +131,11 @@ impl LocalAgentTaskSyncModel {
         }
     }
 
-    /// The most recent terminal task state the server acknowledged for this
-    /// task, if any. Only reflects updates delivered through this model, not
-    /// direct `update_agent_task` calls made elsewhere.
+    /// The most recent terminal task state this client confirmed delivering
+    /// for this task, if any. This is delivery confirmation, not task-state
+    /// ground truth: it only reflects updates sent through this model, not
+    /// direct `update_agent_task` calls made elsewhere in this process or
+    /// writes made server-side.
     #[cfg_attr(target_family = "wasm", allow(dead_code))]
     pub fn confirmed_terminal_state(&self, task_id: &AmbientAgentTaskId) -> Option<AgentTaskState> {
         self.confirmed_terminal_states.get(task_id).copied()

@@ -1166,12 +1166,13 @@ impl AgentDriver {
     /// Exit guarantee: before the returned future resolves (after which the
     /// caller may terminate the process), the driver waits for queued
     /// `LocalAgentTaskSyncModel` status updates to finish delivering, reports
-    /// driver-level errors itself, and — for successful runs where no terminal
-    /// state was confirmed delivered — reports `SUCCEEDED` directly, so a
-    /// graceful exit never leaves the server task `IN_PROGRESS`. Abrupt exits
-    /// (SIGKILL, panics, Ctrl-C — which terminates the app without resolving
-    /// this future — and aborts before the task id is known) are NOT covered
-    /// and rely on server-side stale-task cleanup.
+    /// driver-level errors itself, and — for error-free runs where no terminal
+    /// state was confirmed delivered — reports `SUCCEEDED` directly (see
+    /// `flush_task_status_before_exit`), so a graceful exit never leaves the
+    /// server task `IN_PROGRESS`. Abrupt exits (SIGKILL, panics, Ctrl-C —
+    /// which terminates the app without resolving this future — and aborts
+    /// before the task id is known) are NOT covered and rely on server-side
+    /// stale-task cleanup.
     pub fn run(
         &mut self,
         task: Task,
@@ -1480,10 +1481,16 @@ impl AgentDriver {
     /// Flushes task-status reporting before the process may exit: waits
     /// (bounded by [`TASK_STATUS_FLUSH_TIMEOUT`]) for `LocalAgentTaskSyncModel`
     /// to finish delivering queued `update_agent_task` calls, then — for
-    /// successful runs where no terminal state was confirmed delivered (e.g. a
+    /// error-free runs where no terminal state was confirmed delivered (e.g. a
     /// `--skip-initial-turn` run with no follow-up, or a third-party harness
     /// whose plugin never reported a terminal status) — reports `SUCCEEDED`
     /// directly so the task cannot be left `IN_PROGRESS`.
+    ///
+    /// Contract: an error-free driver exit is reported as `SUCCEEDED` whenever
+    /// nothing more specific was delivered. This mirrors exit-code semantics
+    /// (`run_harness` likewise maps a zero exit code to success); each shutdown
+    /// path chooses its own classification by resolving the run with `Ok` or a
+    /// specific `AgentDriverError`, and this fallback does not second-guess it.
     ///
     /// Failed runs only get the drain: the caller reports the error itself via
     /// `report_driver_error` after receiving the result.
