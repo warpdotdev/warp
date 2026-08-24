@@ -19,6 +19,11 @@ ENV PATH=/usr/local/cargo/bin:/usr/local/go/bin:/usr/local/tfenv/bin:$PATH
 # existing cluster and create your own role/db, e.g.:
 #   sudo pg_ctlcluster 16 main start
 #   sudo -u postgres createuser -s "$(whoami)" && sudo -u postgres createdb "$(whoami)"
+# postgresql-16-pgvector: warp-server's migrations run `CREATE EXTENSION IF
+# NOT EXISTS vector` (db/migrations/20241011184444_enable_pgvector.sql), so a
+# local cluster needs pgvector to run migrations. The other extensions
+# warp-server uses (pg_trgm, pgcrypto) already ship as part of postgresql-16
+# itself, so they need no extra package here.
 RUN set -eux; \
   apt-get update; \
   apt-get install -y --no-install-recommends \
@@ -29,7 +34,7 @@ RUN set -eux; \
     libwayland-client0 libwayland-egl1 \
     mesa-vulkan-drivers libegl1 \
     libsqlite3-dev libpq-dev libmysqlclient-dev \
-    postgresql postgresql-client \
+    postgresql postgresql-client postgresql-16-pgvector \
     ca-certificates \
     openssh-client netcat-openbsd lsof \
     xvfb

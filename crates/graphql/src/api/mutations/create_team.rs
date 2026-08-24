@@ -20,6 +20,7 @@ mutation CreateTeam($input: CreateTeamInput!, $request_context: RequestContext!)
         teams {
           uid
           name
+          inviteLink
           members {
             uid
             email
@@ -93,10 +94,10 @@ mutation CreateTeam($input: CreateTeamInput!, $request_context: RequestContext!)
           }
         }
         hasBillingHistory
-        inviteCode
         pendingEmailInvites {
           email
           expired
+          teamUid
         }
         inviteLinkDomainRestrictions {
           uid

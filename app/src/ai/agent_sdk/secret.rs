@@ -230,7 +230,7 @@ fn create_secret_with_input(
                 return;
             }
 
-            let owner = match super::common::resolve_owner(scope.team, scope.personal, ctx) {
+            let owner = match super::common::resolve_owner(&scope, ctx) {
                 Ok(owner) => owner,
                 Err(err) => {
                     super::report_fatal_error(err, ctx);
@@ -283,8 +283,7 @@ fn create_secret_with_input(
 fn delete_secret(ctx: &mut AppContext, args: DeleteSecretArgs) -> Result<()> {
     let name = args.name;
     let force = args.force;
-    let team = args.scope.team;
-    let personal = args.scope.personal;
+    let scope = args.scope;
 
     ManagedSecretManager::handle(ctx).update(ctx, move |_manager, ctx| {
         let refresh_future = super::common::refresh_workspace_metadata(ctx);
@@ -295,7 +294,7 @@ fn delete_secret(ctx: &mut AppContext, args: DeleteSecretArgs) -> Result<()> {
                 return;
             }
 
-            let owner = match super::common::resolve_owner(team, personal, ctx) {
+            let owner = match super::common::resolve_owner(&scope, ctx) {
                 Ok(owner) => owner,
                 Err(err) => {
                     super::report_fatal_error(err, ctx);
@@ -379,14 +378,13 @@ fn update_secret(ctx: &mut AppContext, args: UpdateSecretArgs) -> Result<()> {
                 return;
             }
 
-            let owner =
-                match super::common::resolve_owner(args.scope.team, args.scope.personal, ctx) {
-                    Ok(owner) => owner,
-                    Err(err) => {
-                        super::report_fatal_error(err, ctx);
-                        return;
-                    }
-                };
+            let owner = match super::common::resolve_owner(&args.scope, ctx) {
+                Ok(owner) => owner,
+                Err(err) => {
+                    super::report_fatal_error(err, ctx);
+                    return;
+                }
+            };
 
             // Read the secret value if either --value or --value-file is provided.
             let secret_value = if args.value || args.value_args.value_file.is_some() {

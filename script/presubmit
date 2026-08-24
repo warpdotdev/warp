@@ -38,6 +38,10 @@ echo "Running clang-format..."
 ./script/run-clang-format.py -r --extensions 'c,h,cpp,m' ./crates/warpui/src/ ./app/src/
 echo "clang-format succeeded..."
 
+echo "Running factory-files validator cases..."
+./script/test_factory_files_skill.py
+echo "factory-files validator cases succeeded..."
+
 echo "Running wgslfmt..."
 # Normally a recursive glob pattern will do the trick, e.g. **/*.wgsl
 # However, the default bash version in MacOS is too old to support that, so we use `find` instead.

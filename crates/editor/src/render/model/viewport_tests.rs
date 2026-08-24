@@ -114,6 +114,36 @@ fn test_viewport_item_to_block() {
 }
 
 #[test]
+fn test_scroll_fraction() {
+    // Viewport 100px tall over 300px of content => 200px of scrollable range.
+    let mut viewport = ViewportState::new(100.0.into_pixels(), 100.0.into_pixels());
+    let content_height = 300.0.into_pixels();
+
+    assert_eq!(viewport.scroll_fraction(content_height), 0.0);
+
+    viewport.set_scroll_top(100.0.into_pixels());
+    assert_eq!(viewport.scroll_fraction(content_height), 0.5);
+
+    // Fraction -> scroll_top maps onto the scrollable range.
+    viewport.scroll_to_fraction(0.25, content_height);
+    assert_eq!(viewport.scroll_top().as_f32(), 50.0);
+
+    // Out-of-range fractions are clamped to the ends.
+    viewport.scroll_to_fraction(2.0, content_height);
+    assert_eq!(viewport.scroll_top().as_f32(), 200.0);
+    assert_eq!(viewport.scroll_fraction(content_height), 1.0);
+
+    viewport.scroll_to_fraction(-1.0, content_height);
+    assert_eq!(viewport.scroll_top().as_f32(), 0.0);
+
+    // When content fits within the viewport there is no scrollable range.
+    let short_content = 80.0.into_pixels();
+    assert_eq!(viewport.scroll_fraction(short_content), 0.0);
+    viewport.scroll_to_fraction(1.0, short_content);
+    assert_eq!(viewport.scroll_top().as_f32(), 0.0);
+}
+
+#[test]
 fn test_scroll_bounds() {
     let content_height = 32.0.into_pixels();
     let mut state = ViewportState::new(8.0.into_pixels(), 16.0.into_pixels());

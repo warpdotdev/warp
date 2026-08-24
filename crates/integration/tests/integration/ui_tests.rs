@@ -287,10 +287,6 @@ integration_tests! {
     test_settings_search_subpage_still_renders_content,
     test_settings_search_clear_restores_umbrella_state,
     test_settings_search_preserved_on_sidebar_click,
-    // The command palette entry for MCP servers dispatches the internal
-    // backing key rather than the sidebar subpage, so no row highlights.
-    // Un-ignore once the settings page model is unified.
-    #[ignore = "Blocked on unifying the settings page model"]
     test_settings_agent_mcp_servers_renders_standalone_page,
 
     test_copy_selection_within_ai_block,

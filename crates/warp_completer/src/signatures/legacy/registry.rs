@@ -4,6 +4,7 @@ use itertools::Itertools;
 use memo_map::MemoMap;
 use warp_command_signatures::{Argument, DynamicCompletionData, IsArgumentOptional, Signature};
 
+use super::miss_cache::MissCache;
 use crate::completer::{CommandExitStatus, CompletionContext, TopLevelCommandCaseSensitivity};
 use crate::parsers::SignatureAtTokenIndex;
 
@@ -18,6 +19,8 @@ pub enum SignatureResult<'a> {
 
 type SignatureLookupFn = dyn 'static + Send + Sync + Fn(&str) -> Option<Signature>;
 
+const MAX_CACHEABLE_COMMAND_LEN: usize = 255;
+
 /// A simple structure to cache parsed command signatures.  These are stored as
 /// JSON, so this makes it easy for us to lazily load and parse the JSON when
 /// a command signature is needed, and only need to do that parsing work once
@@ -27,12 +30,13 @@ struct SignatureCache {
     /// for it.  Should return None if there is no signature available for the
     /// given command.
     lookup_fn: Box<SignatureLookupFn>,
-    /// A map from command name to the signature for the command, if any.  The
-    /// use of [`MemoMap`] here allows us to safely return references to the
-    /// contained signatures (as the map internally is an append-only
-    /// structure).  This stores an `Option<Signature>` in order to also store
-    /// our knowledge of commands for which we do _not_ have a signature.
-    signatures: MemoMap<String, Option<Signature>>,
+    /// A map from (lowercased) command name to its signature. The use of [`MemoMap`] here allows
+    /// us to safely return references to the contained signatures (as the map internally is an
+    /// append-only structure).
+    signatures: MemoMap<String, Signature>,
+    /// A bounded set of (lowercased) command names that recently failed to resolve to a
+    /// signature.
+    misses: MissCache,
 }
 
 impl SignatureCache {
@@ -40,6 +44,7 @@ impl SignatureCache {
         Self {
             lookup_fn,
             signatures: Default::default(),
+            misses: MissCache::default(),
         }
     }
 
@@ -49,19 +54,44 @@ impl SignatureCache {
         } else {
             command
         };
+
+        if command.len() > MAX_CACHEABLE_COMMAND_LEN {
+            // No known command/subcommand name comes anywhere close to this length, so a token
+            // this long can never resolve to anything. Return before the lowercase allocation
+            // and before touching either cache -- in particular, an oversized token must never
+            // be admitted into `misses`, or the leak this cap exists to prevent would just move
+            // to the negative cache.
+            return None;
+        }
+
         let command = command.to_lowercase();
-        self.signatures
-            .get_or_insert(&command, || (self.lookup_fn)(&command))
-            .as_ref()
+
+        if let Some(signature) = self.signatures.get(command.as_str()) {
+            return Some(signature);
+        }
+
+        if self.misses.contains(command.as_str()) {
+            return None;
+        }
+
+        match (self.lookup_fn)(&command) {
+            Some(signature) => Some(
+                self.signatures
+                    .get_or_insert(command.as_str(), || signature),
+            ),
+            None => {
+                self.misses.insert(command);
+                None
+            }
+        }
     }
 
     /// Inserts the given `Signature` into the underlying map, keyed by `Signature::name`.
     ///
-    /// If there is already a cached value for the given `Signature::name`, this is a no-op (even
-    /// if the cached value is `None`).
+    /// If there is already a cached value for the given `Signature::name`, this is a no-op.
     fn insert(&self, signature: Signature) {
         self.signatures
-            .insert(signature.name.to_lowercase(), Some(signature));
+            .insert(signature.name.to_lowercase(), signature);
     }
 }
 
@@ -126,12 +156,13 @@ impl CommandRegistry {
     pub fn registered_commands(&self) -> impl Iterator<Item = &str> {
         // Note we need to collect the keys because MemoMap uses a mutex under the hood to control
         // access to the underlying signature data. This means the mutex is locked as long as the
-        // iterator returned from `keys()` lives, which means we need to collect keys into a vec
-        // and return an owned iterator.
+        // iterator returned from `iter()` lives, which means we need to collect keys into a vec
+        // and return an owned iterator. Every entry in `signatures` corresponds to a real
+        // signature (see its doc comment), so no filtering is needed here.
         self.signatures
             .signatures
             .iter()
-            .filter_map(|(key, signature)| signature.as_ref().map(|_| key.as_str()))
+            .map(|(key, _)| key.as_str())
             .collect::<Vec<_>>()
             .into_iter()
     }
@@ -411,11 +442,13 @@ impl CommandRegistry {
         self.signatures.get(name)
     }
 
-    /// Registers the given `Signature`.
+    /// Registers the given `Signature`, making it resolvable via `signature()` and friends.
     ///
-    /// Note the underlying map caches the lookup result for a given signature (regardless of
-    /// whether or not it is `Some` or `None`), which means that if there is already a cached
-    /// `None` value for the command corresponding to this signature, this is a no-op.
+    /// `get` always checks the positive cache before the negative one (see
+    /// `SignatureCache::misses`), so this takes effect immediately even if a lookup for this
+    /// name previously missed and is currently sitting in the negative cache -- there's no
+    /// stale `None` result to invalidate. If a signature is already registered for this name,
+    /// this is a no-op.
     pub fn register_signature(&self, signature: Signature) {
         self.signatures.insert(signature);
     }

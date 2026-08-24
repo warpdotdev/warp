@@ -164,6 +164,8 @@ impl Shell {
     /// shell's input buffer, wrapped within the 'InputBuffer' DCS hook when triggered. PowerShell
     /// cannot use a binding that contains the letter "i"  because it does virtual key code
     /// translation based on the current layout, and not all layouts have the letter "i".
+    ///
+    /// https://github.com/microsoft/terminal/blob/20588130d8ef2ba40eb56bdae88e04cce7fc5b5d/src/terminal/parser/InputStateMachineEngine.cpp#L1074-L1100
     pub fn input_reporting_sequence(&self) -> Option<[u8; 2]> {
         match self.shell_type {
             ShellType::PowerShell => Some([escape_sequences::C0::ESC, b'1']),
@@ -564,6 +566,8 @@ impl ShellType {
     /// that clears the command line. PowerShell cannot use a binding that contains the letter "p"
     /// (DLE maps to ctrl-p) because it does virtual key code translation based on the current
     /// layout, and not all layouts have the letter "p".
+    ///
+    /// https://github.com/microsoft/terminal/blob/20588130d8ef2ba40eb56bdae88e04cce7fc5b5d/src/terminal/parser/InputStateMachineEngine.cpp#L1074-L1100
     pub fn kill_buffer_bytes(self) -> &'static [u8] {
         const POWERSHELL_BINDING: [u8; 2] = [escape_sequences::C0::ESC, b'2'];
         const OTHER_BINDING: [u8; 1] = [escape_sequences::C0::DLE];

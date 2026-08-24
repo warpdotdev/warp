@@ -24,6 +24,7 @@ use crate::ai::local_harness_setup::{
     LocalHarnessSetupState, local_harness_is_product_enabled, local_harness_setup_state,
 };
 use crate::cloud_object::CloudObjectLookup as _;
+use crate::workspaces::user_workspaces::TeamScope;
 
 const DEFAULT_MODEL_LABEL: &str = "Default model";
 /// Label shown in the auth secret picker when no secret is selected
@@ -475,12 +476,16 @@ fn build_api_key_snapshot(
 
 // ── Host ────────────────────────────────────────────────────────────
 
-/// Builds the host options in the GUI host picker's order: workspace
+/// Builds the host options in the GUI host picker's order: `scope`'s team
 /// default (badged), warp, connected worker hosts (badged), the recent
 /// custom slug (badged), then a custom-host text-entry footer.
-pub fn host_snapshot(state: &OrchestrationConfigState, ctx: &AppContext) -> OptionSnapshot {
-    let default_host = resolve_default_host_slug(ctx);
-    let recent_host = resolve_recent_host_slug(ctx);
+pub fn host_snapshot<S: TeamScope + ?Sized>(
+    state: &OrchestrationConfigState,
+    scope: &S,
+    ctx: &AppContext,
+) -> OptionSnapshot {
+    let default_host = resolve_default_host_slug(scope, ctx);
+    let recent_host = resolve_recent_host_slug(scope, ctx);
     let mut connected_hosts = ConnectedSelfHostedWorkersModel::as_ref(ctx)
         .worker_hosts_excluding(default_host.as_deref());
     connected_hosts.sort();

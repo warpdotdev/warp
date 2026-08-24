@@ -62,6 +62,10 @@ const DECLARATION_VERSION: u32 = 1;
 /// Env var override for the declarations file path (useful for tests and operators).
 const DECLARATIONS_PATH_ENV_VAR: &str = "OZ_SNAPSHOT_DECLARATIONS_FILE";
 
+/// Warp-branded name for the same path, set alongside [`DECLARATIONS_PATH_ENV_VAR`] with the
+/// same value. Only the `OZ_` name is read back.
+const WARP_DECLARATIONS_PATH_ENV_VAR: &str = "WARP_SNAPSHOT_DECLARATIONS_FILE";
+
 /// Env var pointing directly at the declarations-generator script.
 /// Set by `entrypoint.sh` in containerized runs and by `oz-local --docker-dir` in local dev.
 const DECLARATIONS_SCRIPT_PATH_ENV_VAR: &str = "OZ_SNAPSHOT_DECLARATIONS_SCRIPT";
@@ -167,8 +171,9 @@ pub(super) async fn run_declarations_script(
     //
     // Setting `current_dir` ensures `$PWD` in the bash script is the workspace even when the
     // driver process's own CWD has drifted (e.g. the macOS startup path does `cd $HOME`).
-    // Setting `OZ_SNAPSHOT_DECLARATIONS_FILE` keeps the script and the upload pipeline in sync
-    // on which file to read/write.
+    // Setting the declarations-file path, under both `OZ_SNAPSHOT_DECLARATIONS_FILE` and
+    // `WARP_SNAPSHOT_DECLARATIONS_FILE`, keeps the script and the upload pipeline in sync on
+    // which file to read/write.
     let declarations_path = resolve_declarations_path(Some(task_id));
     log::info!(
         "Running snapshot declarations script {} with cwd={} output={} (task {task_id})",
@@ -179,7 +184,8 @@ pub(super) async fn run_declarations_script(
     let mut command = Command::new(&script_path);
     command
         .current_dir(working_dir)
-        .env(DECLARATIONS_PATH_ENV_VAR, &declarations_path);
+        .env(DECLARATIONS_PATH_ENV_VAR, &declarations_path)
+        .env(WARP_DECLARATIONS_PATH_ENV_VAR, &declarations_path);
 
     let output = match command.output().with_timeout(script_timeout).await {
         Ok(Ok(output)) => output,

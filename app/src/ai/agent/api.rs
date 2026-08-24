@@ -34,7 +34,7 @@ use crate::ai::mcp::TemplatableMCPServerManager;
 use crate::server::server_api::AIApiError;
 use crate::settings::AISettings;
 use crate::terminal::safe_mode_settings::get_secret_obfuscation_mode;
-use crate::workspaces::user_workspaces::UserWorkspaces;
+use crate::workspaces::user_workspaces::{TeamScope, UserWorkspaces};
 
 /// Unique, server-generated conversation-scoped token to be roundtripped to the API when sending
 /// requests that follow-up within a given conversation.
@@ -140,6 +140,11 @@ pub struct RequestParams {
     pub planning_enabled: bool,
     should_redact_secrets: bool,
 
+    /// Whether `scope`'s team allows members to use their own provider credentials.
+    ///
+    /// A later mutation of [`Self::api_keys`] must gate on this, not on plan entitlement alone:
+    /// `api_keys` stays `Some(..)` for org-level credentials that survive the team's policy.
+    pub member_byo_credentials_allowed: bool,
     /// User-provided API keys for AI providers (BYO API Key).
     pub api_keys: Option<warp_multi_agent_api::request::settings::ApiKeys>,
     /// User-provided custom model providers (BYOK endpoints).
@@ -207,6 +212,7 @@ impl RequestParams {
             mcp_context: None,
             planning_enabled: false,
             should_redact_secrets: false,
+            member_byo_credentials_allowed: false,
             api_keys: None,
             custom_model_providers: None,
             custom_model_routers: None,
@@ -224,12 +230,13 @@ impl RequestParams {
         }
     }
 
-    pub fn new(
+    pub(crate) fn new(
         terminal_view_id: Option<EntityId>,
         session_context: SessionContext,
         request_input: &RequestInput,
         conversation: ConversationData,
         metadata: Option<RequestMetadata>,
+        scope: &impl TeamScope,
         app: &AppContext,
     ) -> Self {
         let ai_settings = AISettings::as_ref(app);
@@ -309,7 +316,11 @@ impl RequestParams {
 
         let user_workspaces = UserWorkspaces::as_ref(app);
         let api_key_manager = ApiKeyManager::as_ref(app);
-        let is_byo_enabled = user_workspaces.is_byo_api_key_enabled(app);
+        // Bedrock and Gemini Enterprise are admin-configured host credentials rather than member
+        // BYO keys, so they deliberately skip this gate; scoping them to the team is P2 (#15447).
+        let member_byo_credentials_allowed = user_workspaces.are_member_byo_keys_allowed(scope);
+        let is_byo_enabled =
+            user_workspaces.is_byo_api_key_enabled(app) && member_byo_credentials_allowed;
         #[cfg(not(target_family = "wasm"))]
         let geap_binding = crate::ai::geap_credentials::current_geap_policy(app).mint_binding();
         #[cfg(target_family = "wasm")]
@@ -319,7 +330,8 @@ impl RequestParams {
             user_workspaces.is_aws_bedrock_credentials_enabled(app),
             geap_binding,
         );
-        let is_custom_inference_enabled = user_workspaces.is_custom_inference_enabled(app);
+        let is_custom_inference_enabled = user_workspaces.is_byo_endpoint_enabled(app)
+            && user_workspaces.are_member_byo_endpoints_allowed(scope);
         let custom_model_providers =
             api_key_manager.custom_model_providers_for_request(is_custom_inference_enabled);
         let custom_model_routers = FeatureFlag::CustomModelRouters.is_enabled().then(|| {
@@ -355,7 +367,7 @@ impl RequestParams {
         let is_ambient_agent = conversation.ambient_agent_task_id.is_some();
         let computer_use_enabled = FeatureFlag::AgentModeComputerUse.is_enabled()
             && BlocklistAIPermissions::as_ref(app)
-                .get_computer_use_setting(app, terminal_view_id)
+                .get_computer_use_setting(terminal_view_id, scope, app)
                 .is_enabled()
             && computer_use::is_supported_on_current_platform()
             && (FeatureFlag::LocalComputerUse.is_enabled() || is_ambient_agent);
@@ -402,6 +414,7 @@ impl RequestParams {
             mcp_context,
             planning_enabled: true,
             should_redact_secrets,
+            member_byo_credentials_allowed,
             api_keys,
             custom_model_providers,
             custom_model_routers,

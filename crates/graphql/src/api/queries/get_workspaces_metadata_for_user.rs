@@ -39,11 +39,13 @@ query GetWorkspacesMetadataForUser($requestContext: RequestContext!) {
           teams {
             uid
             name
+            inviteLink
             members {
               uid
               email
               role
             }
+            visibility
           }
           billingMetadata {
             customerType
@@ -167,10 +169,10 @@ query GetWorkspacesMetadataForUser($requestContext: RequestContext!) {
             }
           }
           hasBillingHistory
-          inviteCode
           pendingEmailInvites {
             email
             expired
+            teamUid
           }
           inviteLinkDomainRestrictions {
             uid

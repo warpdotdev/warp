@@ -150,11 +150,9 @@ pub fn test_settings_search_filters_subpages() -> Builder {
 /// A search that matches only one subpage must still render that subpage's
 /// content, not an empty pane.
 ///
-/// The Agents umbrella's subpages share one backing page that owns no widget
-/// list of its own, so whether that page survives the filter is derived from
-/// its subpages' results. If that derivation were wrong the sidebar would still
-/// show the matching row while the content pane rendered nothing, which no
-/// sidebar-only assertion would catch.
+/// Sidebar visibility and content rendering are decided separately, so a page
+/// can keep its row while the content pane renders nothing. No sidebar-only
+/// assertion would catch that, which is why this asserts on a widget.
 pub fn test_settings_search_subpage_still_renders_content() -> Builder {
     new_builder()
         .with_step(wait_until_bootstrapped_single_pane_for_tab(0))
@@ -217,14 +215,13 @@ pub fn test_settings_search_preserved_on_sidebar_click() -> Builder {
 /// page, so it has to highlight its row and expand its umbrella like any other
 /// subpage.
 ///
-/// Ignored until the settings page model is unified: the command palette entry
-/// `workspace:show_mcp_servers_settings_page` dispatches the internal backing
-/// key `SettingsSection::MCPServers` (see `app/src/workspace/mod.rs`), which
-/// has no sidebar row, so nothing highlights and the umbrella stays collapsed.
+/// This previously failed because the command palette dispatched the backing
+/// page key rather than the nav target, so the content rendered with no row
+/// highlighted and the umbrella collapsed.
 pub fn test_settings_agent_mcp_servers_renders_standalone_page() -> Builder {
     new_builder()
         .with_step(wait_until_bootstrapped_single_pane_for_tab(0))
-        .with_step(open_settings_page(SettingsSection::MCPServers))
+        .with_step(open_settings_page(SettingsSection::AgentMCPServers))
         .with_step(assert_settings_section(SettingsSection::AgentMCPServers))
         .with_step(assert_umbrella_expanded(AGENTS_UMBRELLA, true))
         .with_step(assert_settings_nav_subpage_visible(

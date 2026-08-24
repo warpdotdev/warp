@@ -750,7 +750,7 @@ if [ -z "$WARP_BOOTSTRAPPED" ]; then
     # Afterwards it's decoded in rust and parsed as usual.
     # Accepts one argument: DCS JSON string
     warp_hex_encode_string () {
-      echo "$1" | command -p od -An -v -tx1 | command -p tr -d ' \n'
+      printf '%s' "$1" | command -p od -An -v -tx1 | command -p tr -d ' \n'
     }
 
     # Returns encoded InitShell hook
