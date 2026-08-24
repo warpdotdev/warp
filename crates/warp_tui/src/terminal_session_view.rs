@@ -1643,6 +1643,7 @@ impl TuiTerminalSessionView {
         let read_only_menu_selection = TuiSelectionHandle::default();
         let read_only_menu_viewport = TuiViewportedListState::new_at_end();
         read_only_menu_viewport.scroll_to_rows_from_top(0);
+        let slash_commands_team_context = UserWorkspaces::team_context_resolver(ctx.handle());
         let slash_commands_source = ctx.add_model(|ctx| {
             TuiSlashCommandDataSource::new(
                 TuiSlashCommandDataSourceArgs {
@@ -1650,6 +1651,7 @@ impl TuiTerminalSessionView {
                     cli_subagent_controller: cli_subagent_controller.clone(),
                     terminal_view_id: terminal_surface_id,
                     terminal_model: model.clone(),
+                    team_context_resolver: slash_commands_team_context,
                 },
                 ctx,
             )

@@ -3611,6 +3611,8 @@ impl Input {
             me.handle_prompt_suggestions_event(event, ctx);
         });
 
+        let slash_command_team_context_resolver =
+            UserWorkspaces::team_context_resolver(ctx.handle());
         let slash_command_data_source = ctx.add_model(|ctx| {
             let args = slash_commands::GuiDataSourceArgs {
                 active_session: active_session.clone(),
@@ -3619,6 +3621,7 @@ impl Input {
                 terminal_view_id,
                 // Wired post-construction via `attach_ambient_agent_view_model`.
                 ambient_agent_view_model: None,
+                team_context_resolver: slash_command_team_context_resolver.clone(),
             };
             GuiSlashCommandDataSource::new(args, ctx)
         });
@@ -3639,6 +3642,7 @@ impl Input {
                     terminal_view_id,
                     // Wired post-construction via `attach_ambient_agent_view_model`.
                     ambient_agent_view_model: None,
+                    team_context_resolver: slash_command_team_context_resolver,
                 };
                 Some(ctx.add_model(|ctx| GuiSlashCommandDataSource::for_cloud_mode_v2(args, ctx)))
             } else {

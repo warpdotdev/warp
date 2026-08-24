@@ -573,7 +573,8 @@ pub fn populate_host_picker<V: View>(
             runner_id: String::new(),
         },
     );
-    let snapshot = host_snapshot(&state, ctx);
+    let scope = UserWorkspaces::as_ref(ctx).team_context_for_view(ctx);
+    let snapshot = host_snapshot(&state, &scope, ctx);
     let selected = snapshot
         .selected_id
         .unwrap_or_else(|| ORCHESTRATION_WARP_WORKER_HOST.to_string());

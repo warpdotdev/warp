@@ -21,9 +21,10 @@ use warp::tui_export::{
     OptionSnapshot, OrchestrationConfig, OrchestrationConfigState, OrchestrationConfigStatus,
     OrchestrationEditState, OrchestrationEnteredEvent, OrchestrationEntrySource,
     RunAgentsCardDecision, RunAgentsExecutionMode, RunAgentsExecutor, RunAgentsExecutorEvent,
-    RunAgentsRequest, RunAgentsSpawningSnapshot, persist_host_selection,
-    resolve_auth_secret_selection_for_harness, resolve_default_environment_id,
-    resolve_default_host_slug, run_agents_card_decision_event, should_show_auth_secret_picker,
+    RunAgentsRequest, RunAgentsSpawningSnapshot, TeamContextResolver, UserWorkspaces,
+    persist_host_selection, resolve_auth_secret_selection_for_harness,
+    resolve_default_environment_id, resolve_default_host_slug, run_agents_card_decision_event,
+    should_show_auth_secret_picker,
 };
 use warpui::SingletonEntity;
 use warpui_core::elements::tui::TuiElement;
@@ -167,6 +168,9 @@ pub(crate) struct TuiOrchestrationBlock {
     /// Identity palette pinned at construction so identities stay stable
     /// across re-renders, edits, and theme switches.
     identity_palette: Vec<AgentIdentity>,
+    /// Resolves this card's team context on demand, so host-slug reads follow the window's team
+    /// rather than an ambient, unscoped workspace read.
+    team_context_resolver: TeamContextResolver,
 }
 
 impl TuiOrchestrationBlock {
@@ -315,6 +319,7 @@ impl TuiOrchestrationBlock {
         let orchestration_edit_state = OrchestrationEditState::new(
             Self::config_state_from_request(request, active_config.as_ref()),
         );
+        let team_context_resolver = UserWorkspaces::team_context_resolver(ctx.handle());
         Self {
             conversation_id,
             action_id: action.id.clone(),
@@ -334,6 +339,7 @@ impl TuiOrchestrationBlock {
             entered_event_emitted: false,
             decision_event_emitted: false,
             identity_palette,
+            team_context_resolver,
         }
     }
 
@@ -370,6 +376,7 @@ impl TuiOrchestrationBlock {
     /// environment, and an `Unset` auth selection re-seeds from persisted
     /// per-harness settings.
     fn resolve_interactive_defaults(&mut self, ctx: &AppContext) {
+        let team_context = (self.team_context_resolver)(ctx);
         let state = &mut self.orchestration_edit_state.orchestration_config_state;
         if state.model_id.is_empty() {
             let harness = Harness::parse_orchestration_harness(&state.harness_type);
@@ -388,7 +395,7 @@ impl TuiOrchestrationBlock {
             let needs_host = worker_host.is_empty();
             let needs_env = environment_id.is_empty();
             if needs_host {
-                let default_host = resolve_default_host_slug(ctx)
+                let default_host = resolve_default_host_slug(&team_context, ctx)
                     .unwrap_or_else(|| ORCHESTRATION_WARP_WORKER_HOST.to_string());
                 state.set_worker_host(default_host);
             }
@@ -491,9 +498,11 @@ impl TuiOrchestrationBlock {
 
     /// Builds the option snapshot for `page` from the shared builders.
     fn snapshot_for_page(&self, page: ConfigPage, ctx: &AppContext) -> OptionSnapshot {
+        let team_context = (self.team_context_resolver)(ctx);
         self.controller.snapshot_for_page(
             page,
             &self.orchestration_edit_state.orchestration_config_state,
+            &team_context,
             ctx,
         )
     }

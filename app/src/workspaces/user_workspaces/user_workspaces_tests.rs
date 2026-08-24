@@ -2802,57 +2802,6 @@ fn test_default_host_slug_reads_workspace_settings_for_a_teamless_user() {
     })
 }
 
-/// The windowless `/host` gate asks whether a default host exists anywhere, and one team
-/// configuring one is enough to answer yes.
-#[test]
-fn test_any_team_has_default_host_slug_when_one_team_configures_one() {
-    let (team_a, mut team_b) = two_teams();
-    team_b.settings.default_host_slug = Some("host-b".to_string());
-    let mut workspace = workspace_for_test(&team_a);
-    workspace.teams.push(team_b);
-
-    App::test((), |mut app| async move {
-        initialize_window_team_test_app(&mut app, vec![workspace]);
-
-        app.read(|ctx| {
-            assert!(UserWorkspaces::as_ref(ctx).any_team_has_default_host_slug());
-        });
-    })
-}
-
-/// Once the user is on a team, workspace settings are one arbitrary team's data, so they must
-/// not be able to answer the availability question on the teams' behalf.
-#[test]
-fn test_any_team_has_default_host_slug_ignores_workspace_settings_when_teams_exist() {
-    let (team_a, team_b) = two_teams();
-    let mut workspace = workspace_for_test(&team_a);
-    workspace.teams.push(team_b);
-    workspace.settings.default_host_slug = Some("workspace-host".to_string());
-
-    App::test((), |mut app| async move {
-        initialize_window_team_test_app(&mut app, vec![workspace]);
-
-        app.read(|ctx| {
-            assert!(!UserWorkspaces::as_ref(ctx).any_team_has_default_host_slug());
-        });
-    })
-}
-
-#[test]
-fn test_any_team_has_default_host_slug_reads_workspace_settings_for_a_teamless_user() {
-    let mut workspace = workspace_for_test(&team_for_test());
-    workspace.teams.clear();
-    workspace.settings.default_host_slug = Some("workspace-host".to_string());
-
-    App::test((), |mut app| async move {
-        initialize_window_team_test_app(&mut app, vec![workspace]);
-
-        app.read(|ctx| {
-            assert!(UserWorkspaces::as_ref(ctx).any_team_has_default_host_slug());
-        });
-    })
-}
-
 #[test]
 fn test_team_switcher_hidden_with_zero_teams() {
     // When the user is in no workspace / no teams, `can_switch_teams` must return
