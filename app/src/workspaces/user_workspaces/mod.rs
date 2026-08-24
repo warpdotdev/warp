@@ -252,6 +252,7 @@ impl UserWorkspaces {
         )
     }
 
+    // TODO(isaiah): make me private in favour for upgrade_link_for_scope being the public facing api
     pub fn upgrade_link_for_team(team_uid: ServerId) -> String {
         format!(
             "{}{}/{}",
@@ -259,6 +260,22 @@ impl UserWorkspaces {
             STRIPE_SUBSCRIPTION_INTERVAL_PAGE_PREFIX,
             team_uid
         )
+    }
+
+    pub(crate) fn upgrade_link_for_scope<S: TeamScope + ?Sized>(
+        &self,
+        scope: &S,
+        app: &AppContext,
+    ) -> String {
+        match scope.team_uid() {
+            Some(team_uid) => Self::upgrade_link_for_team(team_uid),
+            None => Self::upgrade_link(
+                AuthStateProvider::as_ref(app)
+                    .get()
+                    .user_id()
+                    .unwrap_or_default(),
+            ),
+        }
     }
 
     pub fn warp_agent_cli_upgrade_link(user_id: Option<UserUid>) -> String {
@@ -569,6 +586,7 @@ impl UserWorkspaces {
         self.current_workspace_uid
             .and_then(|workspace_uid| self.workspace_from_uid(workspace_uid))
     }
+
     /// Updates the user-level add-on credits purchase policy captured from a
     /// workspaces-metadata response. Must be called on every path that
     /// applies such a response so the teamless fallback can't go stale.

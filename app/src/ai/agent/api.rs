@@ -140,6 +140,14 @@ pub struct RequestParams {
     pub planning_enabled: bool,
     should_redact_secrets: bool,
 
+    /// Whether `scope`'s team allows members to use their own provider credentials, resolved
+    /// alongside [`Self::api_keys`] in [`Self::new`].
+    ///
+    /// Any path that re-populates [`Self::api_keys`] after construction (e.g. a Grok OAuth
+    /// refresh completing) must gate on this rather than on plan entitlement alone: `api_keys`
+    /// staying `Some(..)` for surviving org-level credentials is not a signal that member
+    /// credentials are allowed.
+    pub member_byo_credentials_allowed: bool,
     /// User-provided API keys for AI providers (BYO API Key).
     pub api_keys: Option<warp_multi_agent_api::request::settings::ApiKeys>,
     /// User-provided custom model providers (BYOK endpoints).
@@ -207,6 +215,7 @@ impl RequestParams {
             mcp_context: None,
             planning_enabled: false,
             should_redact_secrets: false,
+            member_byo_credentials_allowed: false,
             api_keys: None,
             custom_model_providers: None,
             custom_model_routers: None,
@@ -310,7 +319,15 @@ impl RequestParams {
 
         let user_workspaces = UserWorkspaces::as_ref(app);
         let api_key_manager = ApiKeyManager::as_ref(app);
-        let is_byo_enabled = user_workspaces.is_byo_api_key_enabled(app);
+        // Both halves have to hold for a member credential to reach the server: the plan must
+        // permit BYO at all ([`UserWorkspaces::is_byo_api_key_enabled`]), and `scope`'s team
+        // must allow its members to bring their own ([`UserWorkspaces::are_member_byo_keys_allowed`]).
+        // AWS Bedrock and Gemini Enterprise are admin-configured host credentials, not member
+        // BYO keys, so they skip this gate and are requested independently below. Scoping those
+        // host settings to the team is handled in P2 (#15447).
+        let member_byo_credentials_allowed = user_workspaces.are_member_byo_keys_allowed(scope);
+        let is_byo_enabled =
+            user_workspaces.is_byo_api_key_enabled(app) && member_byo_credentials_allowed;
         #[cfg(not(target_family = "wasm"))]
         let geap_binding = crate::ai::geap_credentials::current_geap_policy(app).mint_binding();
         #[cfg(target_family = "wasm")]
@@ -320,7 +337,8 @@ impl RequestParams {
             user_workspaces.is_aws_bedrock_credentials_enabled(app),
             geap_binding,
         );
-        let is_custom_inference_enabled = user_workspaces.is_custom_inference_enabled(app);
+        let is_custom_inference_enabled = user_workspaces.is_byo_endpoint_enabled(app)
+            && user_workspaces.are_member_byo_endpoints_allowed(scope);
         let custom_model_providers =
             api_key_manager.custom_model_providers_for_request(is_custom_inference_enabled);
         let custom_model_routers = FeatureFlag::CustomModelRouters.is_enabled().then(|| {
@@ -403,6 +421,7 @@ impl RequestParams {
             mcp_context,
             planning_enabled: true,
             should_redact_secrets,
+            member_byo_credentials_allowed,
             api_keys,
             custom_model_providers,
             custom_model_routers,

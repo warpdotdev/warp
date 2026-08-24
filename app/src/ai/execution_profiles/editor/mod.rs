@@ -20,7 +20,9 @@ use warpui::{
 };
 
 use crate::ai::blocklist::BlocklistAIPermissions;
-use crate::ai::execution_profiles::model_menu_items::available_model_menu_items;
+use crate::ai::execution_profiles::model_menu_items::{
+    CollapsedModelVariants, available_model_menu_items,
+};
 use crate::ai::execution_profiles::profiles::{
     AIExecutionProfilesModel, AIExecutionProfilesModelEvent,
 };
@@ -1202,13 +1204,14 @@ impl ExecutionProfileEditorView {
                 .iter()
                 .any(|llm| matches!(llm.disable_reason, Some(DisableReason::RequiresUpgrade)));
 
+            let scope = UserWorkspaces::as_ref(ctx).team_context_for_view(ctx);
             let items = available_model_menu_items(
                 choices,
                 |llm| DropdownAction::select_action_and_close(create_action(llm.id.clone())),
                 None,
                 None,
-                false,
-                false,
+                CollapsedModelVariants::default(),
+                &scope,
                 ctx,
             );
             dropdown.set_rich_items(items, ctx);
@@ -1250,6 +1253,7 @@ impl ExecutionProfileEditorView {
                 .get_coding_llm_choices(ctx)
                 .collect_vec();
 
+            let scope = UserWorkspaces::as_ref(ctx).team_context_for_view(ctx);
             let items = available_model_menu_items(
                 choices,
                 |llm| {
@@ -1259,8 +1263,8 @@ impl ExecutionProfileEditorView {
                 },
                 None,
                 None,
-                false,
-                false,
+                CollapsedModelVariants::default(),
+                &scope,
                 ctx,
             );
             dropdown.set_rich_items(items, ctx);

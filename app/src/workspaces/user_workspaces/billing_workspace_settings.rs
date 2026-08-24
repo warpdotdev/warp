@@ -1,3 +1,8 @@
+//! Workspace-level billing/plan accessors: reads of `workspace.billing_metadata` (tier and
+//! policy entitlements) that hold regardless of which team a window has selected. See
+//! [`crate::workspaces::user_workspaces::team_workspace_settings`] for the workspace-vs-team
+//! two-layer model and the team-scoped policies that layer on top.
+
 use warp_core::features::FeatureFlag;
 use warpui::{AppContext, SingletonEntity};
 
@@ -18,8 +23,7 @@ impl UserWorkspaces {
     /// The given team's billing metadata when the team is known, otherwise
     /// the current workspace's. For purchase surfaces that need
     /// team/workspace-scoped state (e.g. delinquency); for the purchase
-    /// policy itself use [`Self::purchase_policy_for_team`], which adds the
-    /// user-level fallback for teamless users.
+    /// policy itself use [`Self::purchase_policy`].
     pub fn team_billing_metadata<'a>(
         &'a self,
         team: Option<&'a Team>,
@@ -41,23 +45,12 @@ impl UserWorkspaces {
     /// current workspace's policy when one exists, else the user-level policy
     /// from the workspaces-metadata response (how teamless users get one).
     ///
-    /// Callers bound to a view/window should use
-    /// [`Self::purchase_policy_for_team`] instead, since their team can
-    /// differ from the current workspace's in multi-team situations.
+    /// This is workspace-level: `purchase_add_on_credits_policy` is a plan
+    /// entitlement, so it does not vary by the window's selected team.
     pub fn purchase_policy(&self) -> Option<PurchaseAddOnCreditsPolicy> {
         self.current_workspace_billing_metadata()
             .and_then(|billing| billing.tier.purchase_add_on_credits_policy)
             .or(self.user_purchase_policy)
-    }
-
-    /// [`Self::purchase_policy`], preferring the given team's policy when the
-    /// team is known (e.g. resolved from a view or window).
-    pub fn purchase_policy_for_team(
-        &self,
-        team: Option<&Team>,
-    ) -> Option<PurchaseAddOnCreditsPolicy> {
-        team.and_then(|team| team.billing_metadata.tier.purchase_add_on_credits_policy)
-            .or_else(|| self.purchase_policy())
     }
 
     /// Returns `true` if active AI is allowed for the current workspace, based on billing config.
@@ -170,14 +163,14 @@ impl UserWorkspaces {
             return false;
         }
         self.current_workspace()
-            .map(|workspace| workspace.is_byo_api_key_enabled())
+            .map(|workspace| workspace.billing_metadata.is_byo_api_key_enabled())
             .unwrap_or(FeatureFlag::SoloUserByok.is_enabled())
     }
 
     /// Whether custom inference endpoints are enabled for the current user.
     /// Anonymous or logged-out users are not allowed to use custom inference.
     /// Controlled by the BYO_ENDPOINT billing policy.
-    pub fn is_custom_inference_enabled(&self, app: &AppContext) -> bool {
+    pub fn is_byo_endpoint_enabled(&self, app: &AppContext) -> bool {
         if AuthStateProvider::as_ref(app)
             .get()
             .is_anonymous_or_logged_out()
@@ -188,5 +181,15 @@ impl UserWorkspaces {
         self.current_workspace()
             .map(|workspace| workspace.billing_metadata.is_byo_endpoint_enabled())
             .unwrap_or(true)
+    }
+
+    /// Whether the current workspace's plan manages BYOK/BYOE centrally.
+    ///
+    /// A workspace-level plan entitlement that turns on the team-scoped `team_byo` policy; see the
+    /// [`crate::workspaces::user_workspaces::team_workspace_settings`] module docs for the
+    /// two-layer model.
+    pub(crate) fn is_managed_byok_byoe_enabled(&self) -> bool {
+        self.current_workspace_billing_metadata()
+            .is_some_and(|billing| billing.is_managed_byok_byoe_enabled())
     }
 }

@@ -479,7 +479,11 @@ impl AmbientAgentRunner {
                     .model_id
                     .as_deref()
                     .map(|model_id| {
-                        super::common::validate_agent_mode_base_model_id(model_id, ctx)
+                        super::common::validate_agent_mode_base_model_id_for_scope(
+                            model_id,
+                            &args.scope,
+                            ctx,
+                        )
                     })
                     .transpose()
                 {

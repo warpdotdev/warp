@@ -163,10 +163,6 @@ impl Workspace {
         false
     }
 
-    pub fn is_byo_api_key_enabled(&self) -> bool {
-        self.billing_metadata.is_byo_api_key_enabled()
-    }
-
     /// Returns true if the workspace has reached or exceeded its monthly addon credits spend limit.
     pub fn is_at_addon_credits_monthly_limit(&self) -> bool {
         if let Some(limit) = self.settings.addon_credits_settings.max_monthly_spend_cents {

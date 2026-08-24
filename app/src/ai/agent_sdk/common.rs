@@ -17,7 +17,7 @@ use crate::ai::agent::conversation::ServerAIConversationMetadata;
 use crate::ai::agent_sdk::driver::{AgentDriverError, WARP_DRIVE_SYNC_TIMEOUT};
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::cloud_environments::CloudAmbientAgentEnvironment;
-use crate::ai::llms::{LLMId, LLMPreferences};
+use crate::ai::llms::{LLMId, LLMPreferences, is_model_allowed_for_scope};
 use crate::auth::UserUid;
 use crate::auth::auth_state::AuthStateProvider;
 use crate::cloud_object::{CloudObject, CloudObjectLookup as _, Owner};
@@ -26,8 +26,8 @@ use crate::server::ids::{ServerId, SyncId};
 use crate::server::server_api::ServerApiProvider;
 use crate::server::server_api::ai::AIClient;
 use crate::workspaces::update_manager::TeamUpdateManager;
-use crate::workspaces::user_workspaces::team_workspace_settings::CliTeamError;
-use crate::workspaces::user_workspaces::{SoleTeamError, UserWorkspaces};
+use crate::workspaces::user_workspaces::team_workspace_settings::{CliTeamError, TeamScopeForCli};
+use crate::workspaces::user_workspaces::{SoleTeamError, TeamScope as _, UserWorkspaces};
 
 /// How long to wait for workspace metadata to refresh.
 pub const WORKSPACE_METADATA_REFRESH_TIMEOUT: Duration = Duration::from_secs(10);
@@ -149,6 +149,43 @@ fn requested_team_uid(scope: &ObjectScope) -> anyhow::Result<Option<ServerId>> {
             ServerId::try_from(uid).map_err(|err| anyhow::anyhow!("Invalid --team '{uid}': {err}"))
         })
         .transpose()
+}
+
+/// The team a CLI command's policy reads are scoped to, resolved from the same `--team` the
+/// object's owner is resolved from so the two cannot disagree.
+fn resolve_team_scope(scope: &ObjectScope, ctx: &AppContext) -> anyhow::Result<TeamScopeForCli> {
+    let requested = requested_team_uid(scope)?;
+    UserWorkspaces::as_ref(ctx)
+        .team_scope_for_cli(requested)
+        .map_err(|err| describe_cli_team_error(err, ctx))
+}
+
+/// [`validate_agent_mode_base_model_id`], also rejecting a model `scope`'s team does not let this
+/// member use.
+///
+/// The team is resolved only once the model turns out to be one of the member's own custom
+/// endpoints, since that is the only kind a team withholds. Resolving it eagerly would make a
+/// multi-team user pass `--team` to name a model no team governs.
+pub fn validate_agent_mode_base_model_id_for_scope(
+    model_id: &str,
+    scope: &ObjectScope,
+    ctx: &AppContext,
+) -> anyhow::Result<LLMId> {
+    let llm_id = validate_agent_mode_base_model_id(model_id, ctx)?;
+    let prefs = LLMPreferences::as_ref(ctx);
+    let Some(llm) = prefs.custom_llm_info_for_id(&llm_id) else {
+        return Ok(llm_id);
+    };
+
+    let team_scope = resolve_team_scope(scope, ctx)?;
+    if is_model_allowed_for_scope(prefs, llm, &team_scope, ctx) {
+        return Ok(llm_id);
+    }
+    Err(anyhow::anyhow!(
+        "Model '{model_id}' is one of your own custom endpoints, which team {} does not allow its \
+         members to use.",
+        team_scope.team_uid().expect("a CLI scope names a team")
+    ))
 }
 
 fn current_user_uid(ctx: &AppContext) -> anyhow::Result<UserUid> {

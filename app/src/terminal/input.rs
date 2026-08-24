@@ -354,7 +354,7 @@ use crate::workspace::{
     CommandSearchOptions, ForkFromExchange, ForkedConversationDestination, InitContent,
     RestoreConversationLayout, ToastStack, WorkspaceAction,
 };
-use crate::workspaces::user_workspaces::{UserWorkspaces, UserWorkspacesEvent};
+use crate::workspaces::user_workspaces::{TeamContext, UserWorkspaces, UserWorkspacesEvent};
 #[allow(unused_imports)]
 use crate::{AgentModeEntrypoint, ServerApiProvider, cmd_or_ctrl_shift, send_telemetry_from_ctx};
 
@@ -6474,6 +6474,10 @@ impl Input {
     fn is_pane_focused(&self, app: &AppContext) -> bool {
         // If the focus handle hasn't been set yet, assume we're not in a split pane and therefore focused.
         self.focus_handle.as_ref().is_none_or(|h| h.is_focused(app))
+    }
+
+    pub(super) fn team_scope<'a>(&self, app: &'a AppContext) -> TeamContext<'a> {
+        UserWorkspaces::as_ref(app).team_context(&self.weak_view_handle, app)
     }
 
     fn is_active_session(&self, app: &AppContext) -> bool {
