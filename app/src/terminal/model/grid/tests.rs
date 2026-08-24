@@ -543,6 +543,77 @@ fn shrink_reflow_disabled() {
     assert_eq!(row[1], cell('2'));
 }
 
+/// Regression test for issue #15199: soft-wrapped content already on screen in
+/// an active `FullGridClearBehavior::Clear` session (CLI-agent TUIs such as
+/// Claude Code or Codex) must reflow when a resize grows the number of
+/// columns -- e.g. as happens when the UI zoom level changes -- instead of
+/// keeping its stale wrap width.
+///
+/// Before the fix, `resize_storage` called `grid.resize(false, ...)`
+/// (no reflow) unconditionally for all `FullGridClearBehavior::Clear`
+/// sessions, leaving `WRAPLINE` flags at the old column position after a
+/// grow, which is what produced the overlapping/misaligned rendering
+/// reported when zooming in while a CLI-agent TUI was running.
+#[test]
+fn grow_reflow_full_grid_clear_behavior() {
+    let mut grid = GridHandler::new_for_test(2, 2);
+    // Input "123 " which wraps at 2 cols:
+    //   row 0: "12" (WRAPLINE), row 1: "3 " (WRAPLINE on the space)
+    grid.input_at_cursor("123 ");
+    grid.enable_full_grid_clear_behavior();
+
+    // Grow to 3 cols — the two soft-wrapped rows should merge.
+    grid.resize(SizeInfo::new_without_font_metrics(2, 3));
+
+    assert_eq!(grid.total_rows(), 2);
+    // Reflow must stay within GridStorage; flat_storage must not gain any rows
+    // (preserving the GH #9838 invariant on the grow path).
+    assert_eq!(grid.history_size(), 0);
+
+    // Row 0 should contain "123" (still soft-wrapped because " " continues
+    // on the next row).
+    let row = grid.row(0).expect("row should exist");
+    assert_eq!(row.len(), 3);
+    assert_eq!(row[0], cell('1'));
+    assert_eq!(row[1], cell('2'));
+    assert_eq!(row[2], wrap_cell('3'));
+
+    // Row 1 should contain the trailing space.
+    let row = grid.row(1).expect("row should exist");
+    assert_eq!(row.len(), 3);
+    assert_eq!(row[0], cell(' '));
+    assert_eq!(row[1], Cell::default());
+    assert_eq!(row[2], Cell::default());
+}
+
+/// Complementary to `grow_reflow_full_grid_clear_behavior`: verifies that
+/// column *shrink* in an active `FullGridClearBehavior::Clear` session still
+/// does NOT reflow, leaving visible rows in-place (truncated to the new
+/// width) rather than reflowing them into extra rows.
+///
+/// Without the no-reflow guard, shrink reflow would split visible rows into
+/// more rows than `GridStorage::max_scroll_limit` (hardcoded to 0 by
+/// `GridHandler::new`) permits, causing `shrink_cols` to truncate the
+/// reversed row list and discard the leading content -- e.g. keeping only
+/// the final fragment "5" instead of the expected truncation "12".
+#[test]
+fn shrink_no_reflow_full_grid_clear_behavior_keeps_visible_rows_in_place() {
+    let mut grid = GridHandler::new_for_test_with_scroll_limit(1, 5, 100);
+    grid.input_at_cursor("12345");
+    grid.enable_full_grid_clear_behavior();
+
+    grid.resize(SizeInfo::new_without_font_metrics(1, 2));
+
+    assert_eq!(grid.visible_rows(), 1);
+    // Row 0 must contain the in-place truncation of "12345" to 2 columns.
+    // Under a shrink-reflow, GridStorage would split "12345" into "12"/"34"/"5"
+    // and then truncate to 1 row (max_scroll_limit=0 + rows=1), keeping only
+    // the trailing fragment "5" -- the wrong content.
+    let row = grid.row(0).expect("row should exist");
+    assert_eq!(row[0], cell('1'));
+    assert_eq!(row[1], cell('2'));
+}
+
 #[test]
 fn grow_can_move_max_cursor_column_left() {
     // Starting Grid
