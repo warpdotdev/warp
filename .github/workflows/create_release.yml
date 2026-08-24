@@ -2433,17 +2433,19 @@ jobs:
           SIGN_TOOL_CMD: ${{ steps.setup_signing.outputs.sign_tool_cmd }}
           SETTINGS_SCHEMA_SOURCE: ${{ github.workspace }}/.release-artifacts/settings-schema-windows/settings_schema.json
 
-      # matbour/setup-sentry-cli cannot run here: its platform table has no win32/arm64
-      # entry, so it fails with "Unsupported platform: win32/arm64" on the native Windows
-      # arm64 runner. We install the CLI ourselves instead.
+      # TEMPORARY: pinned to our fork of matbour/setup-sentry-cli. Upstream's platform
+      # table has no win32/arm64 entry, so it fails with "Unsupported platform:
+      # win32/arm64" on the native Windows arm64 runner. The fork is upstream plus that
+      # single mapping entry, submitted upstream as
+      # https://github.com/matbour/setup-sentry-cli/pull/24 -- switch this call site back
+      # to matbour/setup-sentry-cli once that lands in a release.
       - name: Set up Sentry CLI
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
-        shell: pwsh
-        run: ./script/windows/install_sentry_cli.ps1
-        env:
-          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_RELEASE_TOKEN }}
-          SENTRY_ORG: warpdotdev
-          SENTRY_PROJECT: ${{ steps.get-config.outputs.sentry_project }}
+        uses: warpdotdev/setup-sentry-cli@80a37ad0848719ac9d0390ee4197fd070af6718e # v2.0.0 + win32/arm64
+        with:
+          token: ${{ secrets.SENTRY_RELEASE_TOKEN }}
+          organization: warpdotdev
+          project: ${{ steps.get-config.outputs.sentry_project }}
 
       - name: Upload binary to Sentry
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
