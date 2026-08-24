@@ -577,6 +577,17 @@ define_settings_group!(TabSettings, settings: [
     workspace_decoration_visibility: WorkspaceDecorationVisibility,
     close_button_position: TabCloseButtonPosition,
     directory_tab_colors: DirectoryTabColors,
+    tab_group_auto_color: TabGroupAutoColor {
+        type: bool,
+        default: false,
+        supported_platforms: SupportedPlatforms::ALL,
+        sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        surface: settings::SettingSurfaces::GUI,
+        private: false,
+        toml_path: "appearance.tabs.tab_group_auto_color",
+        description: "Whether new tab groups are automatically assigned a distinct color.",
+        feature_flag: warp_core::features::FeatureFlag::GroupedTabs,
+    },
 ]);
 
 #[cfg(test)]
