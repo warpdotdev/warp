@@ -477,13 +477,22 @@ impl UserWorkspaces {
     }
 
     /// Whether AI is allowed in remote sessions under `scope`'s team. See
-    /// [`Self::scoped_or_workspace_setting`] for the no-team fallback. An unresolvable team
-    /// denies rather than guessing, for a control gating AI in an environment the user may not
-    /// control.
+    /// [`Self::scoped_or_workspace_setting`] for the no-team fallback. An unresolvable named
+    /// team denies rather than guessing, for a control gating AI in an environment the user
+    /// may not control.
+    ///
+    /// [`Self::scoped_or_workspace_setting`]'s single `absent` value cannot serve both that
+    /// case and a user with no workspace at all: no workspace means no admin policy exists at
+    /// all, so -- unlike an unresolvable team -- it permits, matching the convention in
+    /// `billing_workspace_settings.rs` that no workspace implies no restriction. That case is
+    /// handled explicitly before delegating to the helper.
     pub(crate) fn is_ai_allowed_in_remote_sessions<S: TeamScope + ?Sized>(
         &self,
         scope: &S,
     ) -> bool {
+        if scope.team_uid().is_none() && self.current_workspace().is_none() {
+            return true;
+        }
         self.scoped_or_workspace_setting(
             scope,
             |team| {

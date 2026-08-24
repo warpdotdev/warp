@@ -1365,11 +1365,14 @@ fn remote_session_ai_permission_denies_a_scope_naming_an_unresolvable_team() {
     })
 }
 
-/// With no workspace at all there is nothing to read `absent` from, so the shared
-/// `scoped_or_workspace_setting` fallback applies: this denies rather than guessing, the same
-/// as an unresolvable named team.
+/// With no workspace at all there is no admin policy to consult, so unlike an unresolvable
+/// named team this permits rather than denying -- matching the no-workspace convention
+/// elsewhere in this module (e.g. `billing_workspace_settings.rs`'s `is_none_or` reads).
+/// `scoped_or_workspace_setting`'s single `absent` value cannot serve both answers, so this
+/// case is handled explicitly ahead of it; pinned here rather than left to that ambient
+/// default.
 #[test]
-fn remote_session_ai_permission_denies_a_user_with_no_workspace_at_all() {
+fn remote_session_ai_permission_is_allowed_for_a_user_with_no_workspace_at_all() {
     App::test((), |mut app| async move {
         initialize_window_team_test_app(&mut app, vec![]);
 
@@ -1379,7 +1382,7 @@ fn remote_session_ai_permission_denies_a_user_with_no_workspace_at_all() {
         });
 
         app.read(|ctx| {
-            assert!(!remote_session_ai_allowed_for_surface(&view, ctx));
+            assert!(remote_session_ai_allowed_for_surface(&view, ctx));
             assert!(remote_session_patterns_for_surface(&view, ctx).is_empty());
         });
     })
