@@ -12,11 +12,9 @@
 //! does not manage credentials centrally has no `team_byo` to enforce, so members fall back to the
 //! plan's own BYO entitlement.
 
-use std::collections::HashMap;
 use std::rc::Rc;
 
 use regex::Regex;
-use warp_errors::report_error;
 use warpui::{AppContext, Entity, SingletonEntity, ViewContext, WeakViewHandle, WindowId};
 
 use super::{SoleTeamError, UserWorkspaces};
@@ -532,20 +530,19 @@ impl UserWorkspaces {
     /// [`Self::is_ai_allowed_in_remote_sessions`]. Unlike that permission there is no
     /// restrictive value to fail closed to, so an unresolvable team or several teams contribute
     /// no patterns rather than the workspace's.
-    ///
-    /// Looks teams up directly in the [`UserWorkspaces::remote_session_regexes`] cache instead
-    /// of reading `team.settings` fresh: the cache is compiled from every workspace so a window
-    /// can keep the team it was assigned even if it is not the current workspace's, and
-    /// recompiling per read would repeat the cost that cache exists to avoid.
     pub(crate) fn get_remote_session_regex_list<S: TeamScope + ?Sized>(
         &self,
         scope: &S,
     ) -> &[Regex] {
         match scope.team_uid() {
-            Some(team_uid) => self
-                .remote_session_regexes
-                .get(&team_uid)
-                .map(Vec::as_slice)
+            Some(_) => self
+                .team_from_scope(scope)
+                .map(|team| {
+                    team.settings
+                        .ai_permissions
+                        .remote_session_regex_list
+                        .as_slice()
+                })
                 .unwrap_or_default(),
             None => {
                 let Some(workspace) = self.current_workspace() else {
@@ -557,48 +554,14 @@ impl UserWorkspaces {
                         .ai_permissions_settings
                         .remote_session_regex_list
                         .as_slice(),
-                    [team] => self
-                        .remote_session_regexes
-                        .get(&team.uid)
-                        .map(Vec::as_slice)
-                        .unwrap_or_default(),
+                    [team] => team
+                        .settings
+                        .ai_permissions
+                        .remote_session_regex_list
+                        .as_slice(),
                     _ => &[],
                 }
             }
         }
     }
-}
-
-/// Compiles each team's remote-session command patterns, keyed by team, across every workspace.
-///
-/// An unparseable pattern is dropped rather than failing its team's whole list, so one bad entry
-/// in an org's configuration cannot suppress the rest.
-pub(super) fn compile_remote_session_regexes(
-    workspaces: &[Workspace],
-) -> HashMap<ServerId, Vec<Regex>> {
-    workspaces
-        .iter()
-        .flat_map(|workspace| workspace.teams.iter())
-        .map(|team| {
-            let regexes = team
-                .settings
-                .ai_permissions
-                .remote_session_regex_list
-                .values
-                .iter()
-                .filter_map(|pattern| match Regex::new(pattern) {
-                    Ok(regex) => Some(regex),
-                    Err(_) => {
-                        report_error!(
-                            "Invalid regex pattern for remote session detection",
-                            extra: { "pattern" => %pattern },
-                            warp_errors::ReportErrorLogMode::OncePerRun
-                        );
-                        None
-                    }
-                })
-                .collect();
-            (team.uid, regexes)
-        })
-        .collect()
 }

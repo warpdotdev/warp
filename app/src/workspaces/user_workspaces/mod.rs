@@ -2,7 +2,6 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use anyhow::Result;
-use regex::Regex;
 use warp_core::features::FeatureFlag;
 use warp_core::settings::{ChangeEventReason, Setting};
 use warp_errors::report_error;
@@ -115,11 +114,6 @@ pub enum UserWorkspacesEvent {
 pub struct UserWorkspaces {
     current_workspace_uid: Tracked<Option<WorkspaceUid>>,
     workspaces: Tracked<Vec<Workspace>>,
-    /// Each team's compiled remote-session command patterns, kept in step with `workspaces`.
-    /// Team settings carry these patterns as strings while the classification they drive runs on
-    /// every executed command, so compiling them on read would recompile a team's whole list per
-    /// command.
-    remote_session_regexes: HashMap<ServerId, Vec<Regex>>,
     window_team_uids: HashMap<WindowId, Option<ServerId>>,
     joinable_teams: Vec<DiscoverableTeam>,
     /// The user-level add-on credits purchase policy from the latest
@@ -188,9 +182,6 @@ impl UserWorkspaces {
         // for all tests that use [`UserWorkspaces`] (a lot of them do).
         Self {
             current_workspace_uid: cached_workspaces.first().map(|w| w.uid).into(),
-            remote_session_regexes: team_workspace_settings::compile_remote_session_regexes(
-                &cached_workspaces,
-            ),
             workspaces: cached_workspaces.into(),
             window_team_uids: Default::default(),
             joinable_teams: Default::default(),
@@ -241,9 +232,6 @@ impl UserWorkspaces {
 
         Self {
             current_workspace_uid: current_workspace_uid.into(),
-            remote_session_regexes: team_workspace_settings::compile_remote_session_regexes(
-                &cached_workspaces,
-            ),
             workspaces: cached_workspaces.into(),
             window_team_uids: Default::default(),
             joinable_teams: Default::default(),
@@ -847,8 +835,6 @@ impl UserWorkspaces {
         // Check if sunsetted_to_build_ts changed for any workspace
         let sunsetted_to_build_changed = self.has_sunsetted_to_build_data_changed(&workspaces);
 
-        self.remote_session_regexes =
-            team_workspace_settings::compile_remote_session_regexes(&workspaces);
         *self.workspaces = workspaces;
         let reassigned_windows = self.reconcile_window_team_assignments();
         self.notify_and_emit_teams_changed(ctx);

@@ -4179,10 +4179,8 @@ fn org_command_patterns_classify_a_block_remote_even_when_remote_session_ai_is_p
                         .ai_permissions
                         .allow_ai_in_remote_sessions
                         .value = true;
-                    team.settings
-                        .ai_permissions
-                        .remote_session_regex_list
-                        .values = vec!["^kubectl".to_string()];
+                    team.settings.ai_permissions.remote_session_regex_list =
+                        vec![Regex::new("^kubectl").expect("test pattern should compile")];
                 },
                 ctx,
             );

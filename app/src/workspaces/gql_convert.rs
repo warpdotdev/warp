@@ -419,25 +419,32 @@ impl From<&GqlAiPermissionsSettings> for AiPermissionsSettings {
     fn from(gql_ai_permissions_settings: &GqlAiPermissionsSettings) -> AiPermissionsSettings {
         Self {
             allow_ai_in_remote_sessions: gql_ai_permissions_settings.allow_ai_in_remote_sessions,
-            remote_session_regex_list: gql_ai_permissions_settings
-                .remote_session_regex_list
-                .iter()
-                .filter_map(|r| {
-                    let regex = Regex::new(r);
-                    match regex {
-                        Ok(regex) => Some(regex),
-                        Err(_) => {
-                            report_error!(
-                                "Invalid regex pattern for remote session detection",
-                                extra: { "pattern" => %r }
-                            );
-                            None
-                        }
-                    }
-                })
-                .collect(),
+            remote_session_regex_list: compile_remote_session_regex_list(
+                gql_ai_permissions_settings
+                    .remote_session_regex_list
+                    .clone(),
+            ),
         }
     }
+}
+
+/// Compiles each remote-session command pattern into a [`Regex`], dropping (and reporting) any
+/// pattern that fails to compile so one bad entry in an org's configuration cannot suppress the
+/// rest of the list.
+fn compile_remote_session_regex_list(patterns: impl IntoIterator<Item = String>) -> Vec<Regex> {
+    patterns
+        .into_iter()
+        .filter_map(|pattern| match Regex::new(&pattern) {
+            Ok(regex) => Some(regex),
+            Err(_) => {
+                report_error!(
+                    "Invalid regex pattern for remote session detection",
+                    extra: { "pattern" => %pattern }
+                );
+                None
+            }
+        })
+        .collect()
 }
 
 impl From<GqlUgcDataCollectionPolicy> for UgcDataCollectionPolicy {
@@ -992,24 +999,11 @@ impl From<GqlWorkspaceSettings> for WorkspaceSettings {
                 allow_ai_in_remote_sessions: gql_workspace_settings
                     .ai_permissions_settings
                     .allow_ai_in_remote_sessions,
-                remote_session_regex_list: gql_workspace_settings
-                    .ai_permissions_settings
-                    .remote_session_regex_list
-                    .iter()
-                    .filter_map(|r| {
-                        let regex = Regex::new(r);
-                        match regex {
-                            Ok(regex) => Some(regex),
-                            Err(_) => {
-                                report_error!(
-                                    "Invalid regex pattern for remote session detection",
-                                    extra: { "pattern" => %r }
-                                );
-                                None
-                            }
-                        }
-                    })
-                    .collect(),
+                remote_session_regex_list: compile_remote_session_regex_list(
+                    gql_workspace_settings
+                        .ai_permissions_settings
+                        .remote_session_regex_list,
+                ),
             },
             link_sharing_settings: LinkSharingSettings {
                 anyone_with_link_sharing_enabled: gql_workspace_settings
@@ -1161,8 +1155,11 @@ impl From<GqlTeamSettings> for TeamSettings {
                         .allow_ai_in_remote_sessions
                         .is_enforced_by_workspace,
                 },
-                remote_session_regex_list: split_string_list(
-                    gql_team_settings.ai_permissions.remote_session_regex_list,
+                remote_session_regex_list: compile_remote_session_regex_list(
+                    gql_team_settings
+                        .ai_permissions
+                        .remote_session_regex_list
+                        .values,
                 ),
             },
             secret_redaction: TeamSecretRedactionSettings {

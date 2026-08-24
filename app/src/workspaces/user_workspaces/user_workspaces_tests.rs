@@ -3,6 +3,7 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use mockall::Sequence;
+use regex::Regex;
 use settings::{PrivatePreferences, PublicPreferences};
 use warp_graphql::billing::{
     BillingMetadata as GqlBillingMetadata, BonusGrantsInfo as GqlBonusGrantsInfo,
@@ -1163,10 +1164,10 @@ fn set_team_remote_session_policy(team: &mut Team, allow_ai: bool, patterns: &[&
         .ai_permissions
         .allow_ai_in_remote_sessions
         .value = allow_ai;
-    team.settings
-        .ai_permissions
-        .remote_session_regex_list
-        .values = patterns.iter().map(|pattern| pattern.to_string()).collect();
+    team.settings.ai_permissions.remote_session_regex_list = patterns
+        .iter()
+        .map(|pattern| Regex::new(pattern).expect("test pattern should compile"))
+        .collect();
 }
 
 fn set_workspace_remote_session_policy(
