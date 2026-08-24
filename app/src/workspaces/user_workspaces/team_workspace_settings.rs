@@ -417,10 +417,9 @@ impl UserWorkspaces {
     }
 
     /// The organization-managed command denylist a sandboxed agent must obey, for `scope`'s
-    /// team. A team that has not configured one yields `None`, distinct via
-    /// [`SplitListSetting::is_configured`](crate::workspaces::workspace::SplitListSetting::is_configured)
-    /// from a team overriding with an empty list. See [`Self::scoped_or_workspace_setting`] for
-    /// the no-team fallback.
+    /// team. An empty or unconfigured list is no constraint (a denylist blocks only what it
+    /// lists), so both lower to `None`. See [`Self::scoped_or_workspace_setting`] for the
+    /// no-team fallback.
     pub(crate) fn sandboxed_agent_execute_commands_denylist_for_scope<S: TeamScope + ?Sized>(
         &self,
         scope: &S,
@@ -428,10 +427,9 @@ impl UserWorkspaces {
         self.scoped_or_workspace_setting(
             scope,
             |team| {
-                let denylist = &team.settings.sandboxed_agent.execute_commands_denylist;
-                denylist
-                    .is_configured()
-                    .then(|| denylist.values.clone().to_predicates())
+                // A denylist blocks only what it lists, so an empty list is no constraint.
+                let values = &team.settings.sandboxed_agent.execute_commands_denylist.values;
+                (!values.is_empty()).then(|| values.clone().to_predicates())
             },
             |workspace| {
                 workspace
