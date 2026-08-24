@@ -14,8 +14,8 @@ fn task_id() -> AmbientAgentTaskId {
     "550e8400-e29b-41d4-a716-446655440000".parse().unwrap()
 }
 
-fn request() -> AgentRunRepositoryRevisionsRequest {
-    RepositoryRevisionSnapshot {
+fn request() -> AgentRunEnvironmentSnapshotRequest {
+    EnvironmentSnapshot {
         captured_at: Utc::now(),
         unresolved_repository_count: 1,
         repositories: vec![RepositoryRevision {
@@ -32,7 +32,7 @@ fn request() -> AgentRunRepositoryRevisionsRequest {
 
 fn background() -> Arc<Background> {
     Arc::new(Background::new(1, |_| {
-        "repository-revision-test".to_string()
+        "environment-snapshot-test".to_string()
     }))
 }
 
@@ -55,7 +55,7 @@ fn request_conversion_uses_expected_wire_shape() {
 
 #[test]
 fn empty_snapshot_serializes_as_an_explicit_empty_report() {
-    let request = AgentRunRepositoryRevisionsRequest::from(RepositoryRevisionSnapshot::empty());
+    let request = AgentRunEnvironmentSnapshotRequest::from(EnvironmentSnapshot::empty());
     let json = serde_json::to_value(request).unwrap();
 
     assert_eq!(json["unresolved_repository_count"], 0);
@@ -67,7 +67,7 @@ async fn transient_failures_retry_with_stable_snapshot_uuid() {
     let snapshot_uuids = Arc::new(Mutex::new(Vec::new()));
     let snapshot_uuids_for_mock = snapshot_uuids.clone();
     let mut mock = MockAIClient::new();
-    mock.expect_post_agent_run_repository_revisions()
+    mock.expect_post_agent_run_environment_snapshot()
         .times(2)
         .returning(move |_, request| {
             let mut snapshot_uuids = snapshot_uuids_for_mock.lock().unwrap();
@@ -93,7 +93,7 @@ async fn transient_failures_stop_at_retry_bound() {
     let attempts = Arc::new(AtomicUsize::new(0));
     let attempts_for_mock = attempts.clone();
     let mut mock = MockAIClient::new();
-    mock.expect_post_agent_run_repository_revisions()
+    mock.expect_post_agent_run_environment_snapshot()
         .times(REPORT_MAX_ATTEMPTS)
         .returning(move |_, _| {
             attempts_for_mock.fetch_add(1, Ordering::SeqCst);
@@ -113,7 +113,7 @@ async fn permanent_http_failure_does_not_retry() {
     let attempts = Arc::new(AtomicUsize::new(0));
     let attempts_for_mock = attempts.clone();
     let mut mock = MockAIClient::new();
-    mock.expect_post_agent_run_repository_revisions()
+    mock.expect_post_agent_run_environment_snapshot()
         .times(1)
         .returning(move |_, _| {
             attempts_for_mock.fetch_add(1, Ordering::SeqCst);
@@ -134,25 +134,25 @@ async fn permanent_http_failure_does_not_retry() {
 #[test]
 fn no_task_reporter_does_not_publish() {
     let mut mock = MockAIClient::new();
-    mock.expect_post_agent_run_repository_revisions().times(0);
-    let reporter = RepositoryRevisionReporter::noop(Arc::new(mock), background());
+    mock.expect_post_agent_run_environment_snapshot().times(0);
+    let reporter = EnvironmentSnapshotReporter::noop(Arc::new(mock), background());
 
-    reporter.report(RepositoryRevisionSnapshot::empty());
+    reporter.report(EnvironmentSnapshot::empty());
 }
 
 #[test]
 fn report_returns_before_blocking_client_call_completes() {
     let mut mock = MockAIClient::new();
-    mock.expect_post_agent_run_repository_revisions()
+    mock.expect_post_agent_run_environment_snapshot()
         .times(1)
         .returning(|_, _| {
             std::thread::sleep(Duration::from_millis(250));
             Ok(())
         });
-    let reporter = RepositoryRevisionReporter::new(task_id(), Arc::new(mock), background());
+    let reporter = EnvironmentSnapshotReporter::new(task_id(), Arc::new(mock), background());
 
     let start = Instant::now();
-    reporter.report(RepositoryRevisionSnapshot::empty());
+    reporter.report(EnvironmentSnapshot::empty());
 
     assert!(start.elapsed() < Duration::from_millis(50));
     std::thread::sleep(Duration::from_millis(300));

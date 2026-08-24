@@ -9,7 +9,7 @@ use warpui::r#async::{FutureExt as _, Timer};
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::server::retry_strategies::{backoff_after_attempts, is_transient_http_error};
 use crate::server::server_api::ai::{
-    AIClient, AgentRunRepositoryRevision, AgentRunRepositoryRevisionsRequest,
+    AIClient, AgentRunEnvironmentSnapshotRequest, AgentRunRepositoryRevision,
 };
 
 const REPORT_ATTEMPT_TIMEOUT: Duration = Duration::from_secs(3);
@@ -26,13 +26,13 @@ pub(crate) struct RepositoryRevision {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct RepositoryRevisionSnapshot {
+pub(crate) struct EnvironmentSnapshot {
     pub captured_at: DateTime<Utc>,
     pub unresolved_repository_count: usize,
     pub repositories: Vec<RepositoryRevision>,
 }
 
-impl RepositoryRevisionSnapshot {
+impl EnvironmentSnapshot {
     pub(crate) fn empty() -> Self {
         Self {
             captured_at: Utc::now(),
@@ -42,8 +42,8 @@ impl RepositoryRevisionSnapshot {
     }
 }
 
-impl From<RepositoryRevisionSnapshot> for AgentRunRepositoryRevisionsRequest {
-    fn from(snapshot: RepositoryRevisionSnapshot) -> Self {
+impl From<EnvironmentSnapshot> for AgentRunEnvironmentSnapshotRequest {
+    fn from(snapshot: EnvironmentSnapshot) -> Self {
         Self {
             snapshot_uuid: uuid::Uuid::new_v4().to_string(),
             captured_at: snapshot.captured_at,
@@ -65,13 +65,13 @@ impl From<RepositoryRevisionSnapshot> for AgentRunRepositoryRevisionsRequest {
 }
 
 #[derive(Clone)]
-pub(crate) struct RepositoryRevisionReporter {
+pub(crate) struct EnvironmentSnapshotReporter {
     run_id: Option<AmbientAgentTaskId>,
     ai_client: Arc<dyn AIClient>,
     background: Arc<Background>,
 }
 
-impl RepositoryRevisionReporter {
+impl EnvironmentSnapshotReporter {
     pub(crate) fn new(
         run_id: AmbientAgentTaskId,
         ai_client: Arc<dyn AIClient>,
@@ -92,16 +92,16 @@ impl RepositoryRevisionReporter {
         }
     }
 
-    pub(crate) fn report(&self, snapshot: RepositoryRevisionSnapshot) {
+    pub(crate) fn report(&self, snapshot: EnvironmentSnapshot) {
         let Some(run_id) = self.run_id else {
             return;
         };
-        let request = AgentRunRepositoryRevisionsRequest::from(snapshot);
+        let request = AgentRunEnvironmentSnapshotRequest::from(snapshot);
         let ai_client = self.ai_client.clone();
         self.background
             .spawn(async move {
                 if let Err(error) = publish_with_retry(run_id, ai_client, request).await {
-                    log::warn!("Failed to report repository revisions for run {run_id}: {error:#}");
+                    log::warn!("Failed to report environment snapshot for run {run_id}: {error:#}");
                 }
             })
             .detach();
@@ -111,18 +111,18 @@ impl RepositoryRevisionReporter {
 async fn publish_with_retry(
     run_id: AmbientAgentTaskId,
     ai_client: Arc<dyn AIClient>,
-    request: AgentRunRepositoryRevisionsRequest,
+    request: AgentRunEnvironmentSnapshotRequest,
 ) -> anyhow::Result<()> {
     for attempt in 1..=REPORT_MAX_ATTEMPTS {
         let result = ai_client
-            .post_agent_run_repository_revisions(&run_id, request.clone())
+            .post_agent_run_environment_snapshot(&run_id, request.clone())
             .with_timeout(REPORT_ATTEMPT_TIMEOUT)
             .await;
         let error = match result {
             Ok(Ok(())) => return Ok(()),
             Ok(Err(error)) => error,
             Err(_) => anyhow::anyhow!(
-                "repository revision report attempt timed out after {:?}",
+                "environment snapshot report attempt timed out after {:?}",
                 REPORT_ATTEMPT_TIMEOUT
             ),
         };
@@ -132,14 +132,14 @@ async fn publish_with_retry(
         }
 
         log::warn!(
-            "Repository revision report attempt {attempt}/{REPORT_MAX_ATTEMPTS} failed for run {run_id}, retrying: {error:#}"
+            "Environment snapshot report attempt {attempt}/{REPORT_MAX_ATTEMPTS} failed for run {run_id}, retrying: {error:#}"
         );
         Timer::after(backoff_after_attempts(attempt)).await;
     }
 
-    unreachable!("repository revision reporter always attempts at least once")
+    unreachable!("environment snapshot reporter always attempts at least once")
 }
 
 #[cfg(test)]
-#[path = "repository_revisions_tests.rs"]
+#[path = "environment_snapshot_tests.rs"]
 mod tests;

@@ -23,8 +23,8 @@ use super::AgentDriverError;
 #[cfg(feature = "local_fs")]
 use super::cache_setup;
 use super::terminal::TerminalDriver;
-use crate::ai::agent_sdk::repository_revisions::{
-    RepositoryRevision, RepositoryRevisionReporter, RepositoryRevisionSnapshot,
+use crate::ai::agent_sdk::environment_snapshot::{
+    EnvironmentSnapshot, EnvironmentSnapshotReporter, RepositoryRevision,
 };
 use crate::ai::agent_sdk::setup_observability::{SetupClientEventReporter, SetupStep};
 use crate::ai::cloud_environments::SourceRepo;
@@ -76,12 +76,12 @@ fn parse_clone_failure_stage<'a>(namespace: &str, output: &'a str) -> Option<&'a
     })
 }
 
-fn repository_revision_snapshot(
+fn environment_snapshot(
     repos: &[RepositoryCloneRequest],
     working_dir: &Path,
     namespace: &str,
     output: &str,
-) -> RepositoryRevisionSnapshot {
+) -> EnvironmentSnapshot {
     let mut revisions_by_index = HashMap::new();
     let mut duplicate_indices = HashSet::new();
     for line in output.lines() {
@@ -137,7 +137,7 @@ fn repository_revision_snapshot(
             repos.len()
         );
     }
-    RepositoryRevisionSnapshot {
+    EnvironmentSnapshot {
         captured_at: Utc::now(),
         unresolved_repository_count,
         repositories,
@@ -231,7 +231,7 @@ pub(crate) fn prepare_environment(
     harness: Harness,
     repository_options: RepositoryPreparationOptions,
     setup_events: SetupClientEventReporter,
-    repository_revisions: RepositoryRevisionReporter,
+    environment_snapshot_reporter: EnvironmentSnapshotReporter,
     ctx: &mut ModelContext<TerminalDriver>,
 ) -> impl Future<Output = Result<(), PrepareEnvironmentError>> + use<> {
     let spawner = ctx.spawner();
@@ -264,7 +264,7 @@ pub(crate) fn prepare_environment(
             should_index_codebase,
             Arc::clone(&repo_channels),
             setup_events,
-            repository_revisions,
+            environment_snapshot_reporter,
         )
         .await;
 
@@ -373,7 +373,7 @@ async fn prepare_environment_impl(
     should_index_codebase: bool,
     repo_channels: Arc<Mutex<HashMap<PathBuf, oneshot::Sender<()>>>>,
     setup_events: SetupClientEventReporter,
-    repository_revisions: RepositoryRevisionReporter,
+    environment_snapshot_reporter: EnvironmentSnapshotReporter,
 ) -> Result<(), PrepareEnvironmentError> {
     let working_dir_string = working_dir.to_string_lossy().to_string();
 
@@ -389,8 +389,8 @@ async fn prepare_environment_impl(
     }
     let mut codebase_context_receivers = Vec::new();
 
-    let revision_snapshot = if source_repos.is_empty() {
-        RepositoryRevisionSnapshot::empty()
+    let environment_snapshot = if source_repos.is_empty() {
+        EnvironmentSnapshot::empty()
     } else {
         setup_events
             .record_result(SetupStep::EnvironmentRepoClone, async {
@@ -403,7 +403,7 @@ async fn prepare_environment_impl(
             })
             .await?
     };
-    repository_revisions.report(revision_snapshot);
+    environment_snapshot_reporter.report(environment_snapshot);
 
     if !source_repos.is_empty() {
         for repo in source_repos {
@@ -797,9 +797,9 @@ async fn clone_checkout_requests(
     repos: &[RepositoryCloneRequest],
     working_dir: &Path,
     spawner: &ModelSpawner<TerminalDriver>,
-) -> Result<RepositoryRevisionSnapshot, PrepareEnvironmentError> {
+) -> Result<EnvironmentSnapshot, PrepareEnvironmentError> {
     if repos.is_empty() {
-        return Ok(RepositoryRevisionSnapshot::empty());
+        return Ok(EnvironmentSnapshot::empty());
     }
     let shell_type = spawner
         .spawn(|driver, ctx| {
@@ -846,7 +846,7 @@ async fn clone_checkout_requests(
         safe: ("Successfully cloned repositories"),
         full: ("Successfully cloned repositories: {}", repo_names.join(", "))
     );
-    Ok(repository_revision_snapshot(
+    Ok(environment_snapshot(
         repos,
         working_dir,
         namespace,

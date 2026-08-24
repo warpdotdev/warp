@@ -27,7 +27,7 @@ use crate::ai::agent_sdk::driver::{
     terminal::TerminalDriver,
 };
 #[cfg(not(target_family = "wasm"))]
-use crate::ai::agent_sdk::repository_revisions::RepositoryRevisionReporter;
+use crate::ai::agent_sdk::environment_snapshot::EnvironmentSnapshotReporter;
 #[cfg(not(target_family = "wasm"))]
 use crate::ai::agent_sdk::setup_observability::SetupClientEventReporter;
 #[cfg(not(target_family = "wasm"))]
@@ -251,7 +251,8 @@ impl TerminalView {
         let ai_client = ServerApiProvider::as_ref(ctx).get_ai_client().clone();
         let background = ctx.background_executor();
         let setup_events = SetupClientEventReporter::noop(ai_client.clone(), background.clone());
-        let repository_revisions = RepositoryRevisionReporter::noop(ai_client, background.clone());
+        let environment_snapshot_reporter =
+            EnvironmentSnapshotReporter::noop(ai_client, background.clone());
 
         let spawner = terminal_driver.update(ctx, |_, ctx| ctx.spawner());
         let sync_future = UpdateManager::as_ref(ctx).initial_load_complete();
@@ -308,7 +309,7 @@ impl TerminalView {
                                 false,
                             ),
                             setup_events,
-                            repository_revisions,
+                            environment_snapshot_reporter,
                             ctx,
                         )
                     })

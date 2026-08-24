@@ -87,6 +87,7 @@ mod common;
 mod config_file;
 pub(crate) mod driver;
 mod environment;
+pub(crate) mod environment_snapshot;
 mod federate;
 mod harness_support;
 #[cfg(not(target_family = "wasm"))]
@@ -101,7 +102,6 @@ mod oauth_flow;
 pub mod output;
 mod profiles;
 mod provider;
-pub(crate) mod repository_revisions;
 pub(crate) mod retry;
 mod runner;
 mod schedule;

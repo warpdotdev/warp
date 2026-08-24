@@ -10,8 +10,8 @@ use warp_core::command::ExitCode;
 use super::{
     PrepareEnvironmentError, RepositoryCloneRequest, build_parallel_clone_command,
     build_remove_repository_origins_command, checkout_command_for, checkout_result,
-    is_valid_git_object_id, merge_repos_deduped, repository_clone_requests,
-    repository_revision_snapshot, single_repo_name, validate_repository_head_overrides,
+    environment_snapshot, is_valid_git_object_id, merge_repos_deduped, repository_clone_requests,
+    single_repo_name, validate_repository_head_overrides,
 };
 use crate::ai::cloud_environments::{AmbientAgentEnvironment, SourceRepo};
 use crate::terminal::shell::ShellType;
@@ -85,7 +85,7 @@ fn git_object_id_validation_accepts_lowercase_sha1_and_sha256() {
 }
 
 #[test]
-fn revision_snapshot_parses_only_valid_namespaced_unique_records_in_request_order() {
+fn environment_snapshot_parses_only_valid_namespaced_unique_records_in_request_order() {
     let requests = vec![
         clone_request(
             repo(CodeForge::GitHub, "warpdotdev", "warp"),
@@ -105,7 +105,7 @@ fn revision_snapshot_parses_only_valid_namespaced_unique_records_in_request_orde
     );
 
     let snapshot =
-        repository_revision_snapshot(&requests, Path::new("/workspace"), TEST_NAMESPACE, &output);
+        environment_snapshot(&requests, Path::new("/workspace"), TEST_NAMESPACE, &output);
 
     assert_eq!(snapshot.unresolved_repository_count, 0);
     assert_eq!(snapshot.repositories.len(), 2);
@@ -121,7 +121,7 @@ fn revision_snapshot_parses_only_valid_namespaced_unique_records_in_request_orde
 }
 
 #[test]
-fn revision_snapshot_omits_missing_malformed_duplicate_and_invalid_records() {
+fn environment_snapshot_omits_missing_malformed_duplicate_and_invalid_records() {
     let requests = vec![
         clone_request(repo(CodeForge::GitHub, "one", "first"), None),
         clone_request(repo(CodeForge::GitHub, "two", "second"), None),
@@ -138,7 +138,7 @@ fn revision_snapshot_omits_missing_malformed_duplicate_and_invalid_records() {
     );
 
     let snapshot =
-        repository_revision_snapshot(&requests, Path::new("/workspace"), TEST_NAMESPACE, &output);
+        environment_snapshot(&requests, Path::new("/workspace"), TEST_NAMESPACE, &output);
 
     assert!(snapshot.repositories.is_empty());
     assert_eq!(snapshot.unresolved_repository_count, requests.len());

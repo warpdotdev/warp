@@ -412,7 +412,7 @@ pub struct AgentRunClientSetupMetricPayload {
     pub is_error: bool,
 }
 #[derive(Debug, Clone, serde::Serialize, PartialEq, Eq)]
-pub struct AgentRunRepositoryRevisionsRequest {
+pub struct AgentRunEnvironmentSnapshotRequest {
     pub snapshot_uuid: String,
     pub captured_at: DateTime<Utc>,
     pub unresolved_repository_count: usize,
@@ -1517,10 +1517,10 @@ pub trait AIClient: 'static + Send + Sync {
         run_id: &AmbientAgentTaskId,
         request: AgentRunClientEventRequest,
     ) -> anyhow::Result<(), anyhow::Error>;
-    async fn post_agent_run_repository_revisions(
+    async fn post_agent_run_environment_snapshot(
         &self,
         run_id: &AmbientAgentTaskId,
-        request: AgentRunRepositoryRevisionsRequest,
+        request: AgentRunEnvironmentSnapshotRequest,
     ) -> anyhow::Result<(), anyhow::Error>;
 
     async fn mark_message_delivered(&self, message_id: &str) -> anyhow::Result<(), anyhow::Error>;
@@ -2971,14 +2971,14 @@ impl AIClient for ServerApi {
         .await?;
         Ok(())
     }
-    async fn post_agent_run_repository_revisions(
+    async fn post_agent_run_environment_snapshot(
         &self,
         run_id: &AmbientAgentTaskId,
-        request: AgentRunRepositoryRevisionsRequest,
+        request: AgentRunEnvironmentSnapshotRequest,
     ) -> anyhow::Result<(), anyhow::Error> {
         self.post_public_api_response_for_task(
             run_id,
-            &format!("agent/runs/{run_id}/repository-revisions"),
+            &format!("agent/runs/{run_id}/environment-snapshot"),
             &request,
         )
         .await?;

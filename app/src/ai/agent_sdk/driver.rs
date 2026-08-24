@@ -51,8 +51,8 @@ use crate::ai::agent_sdk::driver::harness::{
     HarnessCleanupDisposition, HarnessKind, HarnessRunner, ResumePayload, SavePoint,
     ThirdPartyHarness, ThirdPartyHarnessTelemetryEvent, harness_model_env_vars, task_env_vars,
 };
-use crate::ai::agent_sdk::repository_revisions::{
-    RepositoryRevisionReporter, RepositoryRevisionSnapshot,
+use crate::ai::agent_sdk::environment_snapshot::{
+    EnvironmentSnapshot, EnvironmentSnapshotReporter,
 };
 use crate::ai::agent_sdk::setup_observability::{SetupClientEventReporter, SetupStep};
 use crate::ai::ambient_agents::task::HarnessModelConfig;
@@ -2498,7 +2498,7 @@ impl AgentDriver {
             ai_client_for_refresh,
             oidc_strategy_for_refresh,
         ) = async {
-            let (setup_events, repository_revisions) = foreground
+            let (setup_events, environment_snapshot_reporter) = foreground
                 .spawn(|me, ctx| {
                     let ai_client = ServerApiProvider::as_ref(ctx).get_ai_client().clone();
                     let background = ctx.background_executor();
@@ -2509,7 +2509,7 @@ impl AgentDriver {
                                 ai_client.clone(),
                                 background.clone(),
                             ),
-                            RepositoryRevisionReporter::new(task_id, ai_client, background),
+                            EnvironmentSnapshotReporter::new(task_id, ai_client, background),
                         ),
                         None => {
                             report_error!(
@@ -2520,7 +2520,7 @@ impl AgentDriver {
                                     ai_client.clone(),
                                     background.clone(),
                                 ),
-                                RepositoryRevisionReporter::noop(ai_client, background),
+                                EnvironmentSnapshotReporter::noop(ai_client, background),
                             )
                         }
                     }
@@ -2799,7 +2799,7 @@ impl AgentDriver {
                                 remove_repository_origins,
                             ),
                             setup_events_for_environment,
-                            repository_revisions.clone(),
+                            environment_snapshot_reporter.clone(),
                             ctx,
                         )
                     })
@@ -2860,7 +2860,7 @@ impl AgentDriver {
                 }
             }
         } else {
-            repository_revisions.report(RepositoryRevisionSnapshot::empty());
+            environment_snapshot_reporter.report(EnvironmentSnapshot::empty());
         }
 
         // Skill loading is Oz-only; third-party harnesses have their own skill systems.
