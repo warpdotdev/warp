@@ -1,10 +1,10 @@
 mod selection;
 
 use std::collections::{HashMap, HashSet};
-use std::io;
 use std::ops::{AddAssign, Range, RangeInclusive};
 use std::sync::Arc;
 use std::time::Duration;
+use std::{io, mem};
 
 use anyhow::anyhow;
 use chrono::{DateTime, Local};
@@ -3350,6 +3350,33 @@ impl BlockList {
             self.early_output.precmd();
         }
 
+        // Depending on whether or not there's a background block active, the previous
+        // completed block is at blocks.len - 2 or blocks.len - 3.
+        let previous_block_index = [2usize, 3usize]
+            .into_iter()
+            .flat_map(|offset| self.blocks.len().checked_sub(offset))
+            .find(|&index| !self.blocks[index].is_background());
+        let should_send_after_block_completed_event =
+            !mem::take(&mut self.skip_next_after_block_completed_event);
+
+        // Hidden in-band command blocks are never rendered, and their output is routed to
+        // the generator that requested it rather than read back from the block, so keeping
+        // them past their completion event only grows memory without bound over a long
+        // session. Removing one has to happen before `apply_precmd` below, which emits the
+        // active block's index: dropping an earlier block shifts that index down by one.
+        let in_band_block_to_remove = previous_block_index.filter(|&index| {
+            !self.show_in_band_command_blocks && self.blocks[index].is_for_in_band_command
+        });
+        if let Some(in_band_block_index) = in_band_block_to_remove {
+            if should_send_after_block_completed_event {
+                self.send_after_block_completed_event(
+                    &self.blocks[in_band_block_index],
+                    block_finished_to_precmd_delay,
+                );
+            }
+            self.remove_block_at_index(BlockIndex(in_band_block_index));
+        }
+
         // If this is the Precmd following an in-band command, the payload is not populated. If the payload
         // is not populated, use the last populated Precmd payload to initialize the new active block.
         //
@@ -3366,20 +3393,16 @@ impl BlockList {
             self.last_populated_precmd_payload = Some(data);
         }
 
-        // Depending on whether or not there's a background block active, the previous
-        // completed block is at blocks.len - 2 or blocks.len - 3.
-        let previous_block = [2usize, 3usize]
-            .into_iter()
-            .flat_map(|offset| self.blocks.len().checked_sub(offset))
-            .map(|idx| &self.blocks[idx])
-            .find(|block| !block.is_background());
-        if self.skip_next_after_block_completed_event {
-            self.skip_next_after_block_completed_event = false;
-        } else if let Some(previous_block) = previous_block {
-            self.send_after_block_completed_event(previous_block, block_finished_to_precmd_delay);
-        } else {
-            self.event_proxy
-                .send_terminal_event(TerminalEvent::BootstrapPrecmdDone);
+        if in_band_block_to_remove.is_none() && should_send_after_block_completed_event {
+            if let Some(previous_block_index) = previous_block_index {
+                self.send_after_block_completed_event(
+                    &self.blocks[previous_block_index],
+                    block_finished_to_precmd_delay,
+                );
+            } else {
+                self.event_proxy
+                    .send_terminal_event(TerminalEvent::BootstrapPrecmdDone);
+            }
         }
     }
 
