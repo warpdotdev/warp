@@ -3324,11 +3324,11 @@ impl ansi::Handler for Block {
     fn dynamic_color_sequence<W: std::io::Write>(
         &mut self,
         writer: &mut W,
-        code: u8,
+        reply_prefix: &str,
         index: usize,
         terminator: &str,
     ) {
-        delegate!(self.dynamic_color_sequence(writer, code, index, terminator));
+        delegate!(self.dynamic_color_sequence(writer, reply_prefix, index, terminator));
     }
 
     fn reset_color(&mut self, index: usize) {

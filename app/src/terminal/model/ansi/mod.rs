@@ -856,17 +856,35 @@ where
                 unhandled(params);
             }
 
-            // Set color index.
+            // Get/set color index.
+            //
+            // Format: OSC 4 ; c ; spec [; c ; spec ...] ST, where `spec` is either an
+            // xparse-format color (to set index `c`) or `?` (to query it). Each `c ; spec`
+            // pair is applied independently, so a single sequence can set or query multiple
+            // palette entries at once.
             b"4" => {
                 if params.len() > 1 && !params.len().is_multiple_of(2) {
                     for chunk in params[1..].chunks(2) {
-                        let index = parse_number(chunk[0]);
-                        let color = xparse_color(chunk[1]);
-                        if let (Some(i), Some(c)) = (index, color) {
-                            self.handler.set_color(i as usize, c);
-                            return;
+                        match parse_number(chunk[0]) {
+                            Some(index) if chunk[1] == b"?" => {
+                                self.handler.dynamic_color_sequence(
+                                    writer,
+                                    &format!("4;{index}"),
+                                    index as usize,
+                                    terminator,
+                                );
+                            }
+                            Some(index) => {
+                                if let Some(color) = xparse_color(chunk[1]) {
+                                    self.handler.set_color(index as usize, color);
+                                } else {
+                                    unhandled(params);
+                                }
+                            }
+                            None => unhandled(params),
                         }
                     }
+                    return;
                 }
                 unhandled(params);
             }
@@ -942,7 +960,7 @@ where
                         } else if param == b"?" {
                             self.handler.dynamic_color_sequence(
                                 writer,
-                                dynamic_code,
+                                &dynamic_code.to_string(),
                                 index,
                                 terminator,
                             );

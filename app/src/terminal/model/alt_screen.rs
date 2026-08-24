@@ -599,12 +599,12 @@ impl ansi::Handler for AltScreen {
     fn dynamic_color_sequence<W: io::Write>(
         &mut self,
         writer: &mut W,
-        code: u8,
+        reply_prefix: &str,
         index: usize,
         terminator: &str,
     ) {
         self.ansi_handler()
-            .dynamic_color_sequence(writer, code, index, terminator);
+            .dynamic_color_sequence(writer, reply_prefix, index, terminator);
     }
 
     fn reset_color(&mut self, index: usize) {

@@ -2862,14 +2862,14 @@ impl ansi::Handler for TerminalModel {
     fn dynamic_color_sequence<W: std::io::Write>(
         &mut self,
         writer: &mut W,
-        code: u8,
+        reply_prefix: &str,
         index: usize,
         terminator: &str,
     ) {
         let color = self.override_colors[index].unwrap_or(self.colors[index]);
         let response = format!(
             "\x1b]{};rgb:{1:02x}{1:02x}/{2:02x}{2:02x}/{3:02x}{3:02x}{4}",
-            code, color.r, color.g, color.b, terminator
+            reply_prefix, color.r, color.g, color.b, terminator
         );
         let _ = writer.write_all(response.as_bytes());
     }

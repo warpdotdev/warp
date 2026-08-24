@@ -1157,7 +1157,7 @@ impl ansi::Handler for GridHandler {
         );
     }
 
-    fn dynamic_color_sequence<W: std::io::Write>(&mut self, _: &mut W, _: u8, _: usize, _: &str) {
+    fn dynamic_color_sequence<W: std::io::Write>(&mut self, _: &mut W, _: &str, _: usize, _: &str) {
         report_error!(
             "Handler method GridHandler::dynamic_color_sequence should never be called. This should be handled by TerminalModel."
         );

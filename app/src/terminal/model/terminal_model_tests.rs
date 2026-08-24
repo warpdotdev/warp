@@ -6,8 +6,10 @@ use chrono::{DateTime, Local};
 use vec1::vec1;
 use warp_core::command::ExitCode;
 use warp_core::features::FeatureFlag;
+use warp_core::ui::theme::{Fill, WarpTheme, mock_terminal_colors};
 use warp_terminal::model::ansi::ClearMode;
 use warpui::r#async::executor::Background;
+use warpui::color::ColorU;
 use warpui::text::{SelectionType, str_to_byte_vec};
 
 use super::*;
@@ -2258,4 +2260,101 @@ fn cloud_mode_setup_phase_ended_does_not_emit_when_not_sharing() {
     rx.close();
     let events: Vec<_> = std::iter::from_fn(|| rx.try_recv().ok()).collect();
     assert!(events.is_empty());
+}
+
+/// Builds a `TerminalModel` whose color table is derived from `theme` via the real
+/// `color::Colors::from(WarpTheme)` / `color::List::from(&Colors)` conversion, so tests can
+/// drive `Handler::dynamic_color_sequence` (the only real implementation, on `TerminalModel`
+/// itself) through the theme's actual color pipeline instead of a hand-rolled double.
+fn terminal_model_with_theme(theme: WarpTheme) -> TerminalModel {
+    let colors = color::List::from(&color::Colors::from(theme));
+    TerminalModel::new_for_test(
+        block_size(),
+        colors,
+        ChannelEventListener::new_for_test(),
+        Arc::new(Background::default()),
+        false,
+        None,
+        false,
+        false,
+        None,
+    )
+}
+
+#[test]
+fn dynamic_color_sequence_reports_theme_derived_colors_through_real_terminal_model() {
+    // Regression coverage for the OSC 12 cursor-color bug, driven through the actual
+    // production reply path: `Processor` -> `TerminalModel::dynamic_color_sequence` (the
+    // only real `Handler` implementation) -> `color::List::fill_named` /
+    // `color::Colors::from(WarpTheme)`. Crucially, the cursor color is never set via OSC 12
+    // first, so this only passes if `fill_named` populated `color_index::CURSOR` from the
+    // theme up front. Before the `color.rs` fix, `fill_named` never wrote that slot, so this
+    // query would have reported black instead of the theme's cursor color.
+    let theme = WarpTheme::new(
+        Fill::Solid(ColorU::new(0x11, 0x22, 0x33, 0xff)), // background
+        ColorU::new(0xaa, 0xbb, 0xcc, 0xff),              // foreground
+        Fill::Solid(ColorU::new(0x77, 0x88, 0x99, 0xff)), // accent (unused: cursor is explicit)
+        Some(Fill::Solid(ColorU::new(0x44, 0x55, 0x66, 0xff))), // cursor
+        None,
+        mock_terminal_colors(),
+        None,
+        None,
+    );
+    let mut terminal = terminal_model_with_theme(theme);
+
+    let mut processor = Processor::new();
+    let mut written = Vec::new();
+    processor.parse_bytes(
+        &mut terminal,
+        b"\x1b]10;?\x07\x1b]11;?\x07\x1b]12;?\x07",
+        &mut written,
+    );
+
+    assert_eq!(
+        written,
+        b"\x1b]10;rgb:aaaa/bbbb/cccc\x07\x1b]11;rgb:1111/2222/3333\x07\x1b]12;rgb:4444/5555/6666\x07"
+    );
+}
+
+#[test]
+fn dynamic_color_sequence_reflects_override_after_osc_set_through_real_terminal_model() {
+    // Regression coverage for the `override_colors` half of the real reply path
+    // (`TerminalModel::dynamic_color_sequence`), driven end-to-end through the ANSI
+    // processor using the ST terminator form.
+    let mut terminal = TerminalModel::mock(None, None);
+
+    let mut processor = Processor::new();
+    let mut written = Vec::new();
+    processor.parse_bytes(
+        &mut terminal,
+        b"\x1b]10;#aabbcc\x1b\\\x1b]10;?\x1b\\",
+        &mut written,
+    );
+
+    assert_eq!(written, b"\x1b]10;rgb:aaaa/bbbb/cccc\x1b\\");
+}
+
+#[test]
+fn osc4_query_reports_theme_derived_palette_color_through_real_terminal_model() {
+    // Regression coverage for the new OSC 4 palette-query support, driven through the real
+    // `TerminalModel::dynamic_color_sequence` implementation rather than a test double.
+    let theme = WarpTheme::new(
+        Fill::Solid(ColorU::black()),
+        ColorU::white(),
+        Fill::Solid(ColorU::black()),
+        None,
+        None,
+        mock_terminal_colors(),
+        None,
+        None,
+    );
+    let mut terminal = terminal_model_with_theme(theme);
+
+    let mut processor = Processor::new();
+    let mut written = Vec::new();
+    processor.parse_bytes(&mut terminal, b"\x1b]4;1;?\x07", &mut written);
+
+    // Palette index 1 is the "red" entry, `AnsiColor::from_u32(0xFF8272FF)` in
+    // `mock_terminal_colors()`.
+    assert_eq!(written, b"\x1b]4;1;rgb:ffff/8282/7272\x07");
 }

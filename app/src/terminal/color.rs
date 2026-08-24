@@ -46,14 +46,12 @@ impl Colors {
 impl From<WarpTheme> for Colors {
     fn from(theme: WarpTheme) -> Self {
         let colors = theme.terminal_colors();
-        Colors::new(
-            PrimaryColors::new(
-                theme.foreground().into_solid(),
-                theme.background().into_solid(),
-            ),
-            colors.normal.into(),
-            colors.bright.into(),
-        )
+        let mut primary = PrimaryColors::new(
+            theme.foreground().into_solid(),
+            theme.background().into_solid(),
+        );
+        primary.cursor = Some(theme.cursor().into_solid());
+        Colors::new(primary, colors.normal.into(), colors.bright.into())
     }
 }
 
@@ -119,6 +117,11 @@ impl List {
         // Foreground and background.
         self[color_index::FOREGROUND] = colors.primary.foreground;
         self[color_index::BACKGROUND] = colors.primary.background;
+
+        // Cursor. Fall back to the foreground color, rather than the list's default black,
+        // when no explicit cursor color is available (e.g. a hand-built `Colors` that didn't
+        // go through `From<WarpTheme>`).
+        self[color_index::CURSOR] = colors.primary.cursor.unwrap_or(colors.primary.foreground);
 
         // Dims.
         self[color_index::DIM_FOREGROUND] = colors
@@ -217,6 +220,8 @@ pub struct PrimaryColors {
     pub background: ColorU,
     pub bright_foreground: Option<ColorU>,
     pub dim_foreground: Option<ColorU>,
+    /// The terminal cursor color, as reported by OSC 12. Falls back to `foreground` when unset.
+    pub cursor: Option<ColorU>,
 }
 
 impl PrimaryColors {
@@ -246,6 +251,7 @@ impl Default for PrimaryColors {
             },
             bright_foreground: Default::default(),
             dim_foreground: Default::default(),
+            cursor: Default::default(),
         }
     }
 }
