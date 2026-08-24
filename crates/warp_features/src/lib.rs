@@ -448,9 +448,6 @@ pub enum FeatureFlag {
     /// Enables using Agent Mode in shared sessions.
     AgentSharedSessions,
 
-    /// Enables auto-opening code review pane on first agent change and its setting UI.
-    AutoOpenCodeReviewPane,
-
     /// Enables the ambient agents command-line interface.
     AmbientAgentsCommandLine,
 

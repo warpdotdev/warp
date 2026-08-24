@@ -7380,7 +7380,6 @@ impl TerminalView {
 
                         if !already_opened
                                 && should_auto_open
-                                && FeatureFlag::AutoOpenCodeReviewPane.is_enabled()
                                 && self.can_auto_open_code_review_panel(ctx)
                                 // we shouldn't auto open if this was triggered from a passive code review diff
                                 && !BlocklistAIHistoryModel::as_ref(ctx)

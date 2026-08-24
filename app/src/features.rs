@@ -299,8 +299,6 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::CodeReviewFind,
         #[cfg(feature = "ui_zoom")]
         FeatureFlag::UIZoom,
-        #[cfg(feature = "auto_open_code_review_pane")]
-        FeatureFlag::AutoOpenCodeReviewPane,
         #[cfg(feature = "inline_code_review")]
         FeatureFlag::InlineCodeReview,
         #[cfg(feature = "create_environment_slash_command")]
