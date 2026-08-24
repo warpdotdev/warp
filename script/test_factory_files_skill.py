@@ -198,10 +198,14 @@ def assert_submits_only_resource_files() -> None:
             "automations/nightly/automation.md": "---\nagent: main\n---\nrun\n",
             "runners/linux.yaml": "platform:\n  linux:\n    dockerImage: ubuntu:24.04\n",
             "scorers/tests/scorer.md": "---\nagents: [main]\n---\nRubric.\n",
+            "webhooks/ci.yaml": "authMode: token\nsecretName: CI_TOKEN\n",
             "skills/helper/SKILL.md": "---\nname: helper\n---\nhelp\n",
             "agents/main/skills/inner/SKILL.md": "---\nname: inner\n---\nhelp\n",
             "README.md": "unrelated",
             "agents/main/notes.txt": "unrelated",
+            # Not a canonical webhook path: the server would not classify a
+            # nested file as a source, so submitting it would be noise.
+            "webhooks/nested/inner.yaml": "authMode: token\n",
         }
     ) as root:
         with fake_server(CLEAN_RESPONSE) as server:
@@ -215,6 +219,7 @@ def assert_submits_only_resource_files() -> None:
             "automations/nightly/automation.md",
             "runners/linux.yaml",
             "scorers/tests/scorer.md",
+            "webhooks/ci.yaml",
         }
         if submitted != expected:
             raise RuntimeError(
