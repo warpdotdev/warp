@@ -173,8 +173,36 @@ pub fn model_leading_icon(llm: &LLMInfo, flags: ModelIconFlags) -> Icon {
     } else if flags.is_using_gemini_enterprise {
         Icon::GeminiEnterpriseAgentPlatform
     } else {
-        llm.provider.icon().unwrap_or(Icon::Agent)
+        model_provider_logo(llm)
     }
+}
+
+/// The logo identifying who made a model, for surfaces that show no host badge.
+///
+/// Falls back to the model family when the provider carries no logo, and to the
+/// generic agent glyph when neither is recognized.
+pub fn model_provider_logo(llm: &LLMInfo) -> Icon {
+    llm.provider
+        .icon()
+        .or_else(|| model_family_logo(llm))
+        .unwrap_or(Icon::Agent)
+}
+
+/// The logo for a model whose provider carries none of its own.
+///
+/// Open-weight models are served through inference hosts that the wire
+/// `LLMProvider` enum does not name, so they all arrive as
+/// [`LLMProvider::Unknown`]. The model family is still recognizable from the
+/// id, and users pick these rows by brand, so match on the family rather than
+/// dropping every one of them onto the generic agent glyph.
+fn model_family_logo(llm: &LLMInfo) -> Option<Icon> {
+    const KIMI: &str = "kimi";
+    let is_kimi = |name: &str| {
+        name.trim_start()
+            .get(..KIMI.len())
+            .is_some_and(|prefix| prefix.eq_ignore_ascii_case(KIMI))
+    };
+    (is_kimi(llm.id.as_str()) || is_kimi(&llm.base_model_name)).then_some(Icon::KimiLogo)
 }
 
 /// Key for cached LLM metadata in user preferences.

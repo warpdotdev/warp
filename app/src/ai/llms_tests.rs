@@ -286,6 +286,42 @@ fn models_without_a_host_fall_back_to_the_provider_icon() {
     );
 }
 
+#[test]
+fn kimi_models_fall_back_to_the_kimi_logo() {
+    // Kimi is served through an inference host the wire provider enum does not
+    // name, so these rows arrive as `Unknown` and would otherwise be generic.
+    for id in [
+        "kimi-k25-fireworks",
+        "kimi-k26-fireworks",
+        "kimi-k27-code-fireworks",
+        "kimi-k3-fireworks",
+    ] {
+        let llm = server_llm(id, None);
+        assert_eq!(
+            model_leading_icon(&llm, ModelIconFlags::default()),
+            Icon::KimiLogo,
+            "{id} should use the Kimi logo"
+        );
+    }
+
+    // A BYOK endpoint exposes Kimi under an opaque config-key id, so the
+    // model's own name is the only signal left.
+    let mut byok = server_llm("52941f14-1b74-4afa-8f02-cdd5243b5aa9", None);
+    byok.base_model_name = "Kimi K2.6".to_string();
+    assert_eq!(
+        model_leading_icon(&byok, ModelIconFlags::default()),
+        Icon::KimiLogo
+    );
+
+    // A provider that has a logo of its own still wins over the family match.
+    let mut lookalike = server_llm("kimi-lookalike", None);
+    lookalike.provider = LLMProvider::Anthropic;
+    assert_eq!(
+        model_leading_icon(&lookalike, ModelIconFlags::default()),
+        Icon::ClaudeLogo
+    );
+}
+
 // -- build_custom_llm_infos / display label tests --
 
 fn endpoint(
