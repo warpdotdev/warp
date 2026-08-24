@@ -4231,9 +4231,6 @@ impl SettingsWidget for AgentAttributionWidget {
         let ai_settings = AISettings::as_ref(app);
         let is_any_ai_enabled = ai_settings.is_any_ai_enabled(app);
 
-        // Live policy, resolved from the window being painted rather than captured when the
-        // page was built: a window that moves to a team with a different attribution policy
-        // has to reflect it on the next frame.
         let workspaces = UserWorkspaces::as_ref(app);
         let scope = workspaces.team_context(&view.self_handle, app);
         let org_setting = workspaces.get_agent_attribution_setting(&scope);

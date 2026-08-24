@@ -20,7 +20,9 @@ use super::{SoleTeamError, UserWorkspaces};
 use crate::ai::llms::{LLMId, LLMProvider};
 use crate::server::ids::ServerId;
 use crate::workspaces::team::Team;
-use crate::workspaces::workspace::{AdminEnablementSetting, AiAutonomySettings, TeamByoSettings};
+use crate::workspaces::workspace::{
+    AdminEnablementSetting, AiAutonomySettings, TeamByoSettings, Workspace,
+};
 
 /// The team an operation is scoped to, captured once from the window that started it.
 ///
@@ -339,92 +341,77 @@ impl UserWorkspaces {
         teams.any(|team| team.settings.team_byo.as_ref().is_some_and(allows))
     }
 
-    /// The `team_byo` policy that governs `scope`.
+    /// Resolves a per-team setting for `scope`: the scope's own team when it names one, otherwise
+    /// `current_workspace().settings`.
     ///
-    /// A scope that names a team reads that team's policy and only that team's: an unresolvable
-    /// team yields `None`, never another team's policy.
-    ///
-    /// A scope with no team falls back on the current workspace, but only where that has an
-    /// unambiguous answer: `workspace.settings` when the user is on no team there, and their
-    /// own team's policy when they are on exactly one. On several teams there is nothing to
-    /// fall back to -- `workspace.settings` would be an arbitrarily elected one of them, see
-    /// [`TeamScope`] -- so the policy is absent and the callers deny.
-    fn team_byo_for_scope<S: TeamScope + ?Sized>(&self, scope: &S) -> Option<&TeamByoSettings> {
+    /// A scope naming an unresolvable team yields `absent`, never another team's value. The
+    /// no-team branch reads `current_workspace().settings` unconditionally; for a member on teams
+    /// that is the server's arbitrarily-elected stand-in (see [`TeamScope`]), a deliberate
+    /// simplification because a windowed terminal is never expected to present a teamless scope,
+    /// so in practice only a genuinely teamless user reaches it, whose workspace settings the
+    /// server computes from tier defaults.
+    fn scoped_or_workspace_setting<'a, S: TeamScope + ?Sized, T>(
+        &'a self,
+        scope: &S,
+        from_team: impl FnOnce(&'a Team) -> T,
+        from_workspace: impl FnOnce(&'a Workspace) -> T,
+        absent: T,
+    ) -> T {
         match scope.team_uid() {
-            Some(_) => self
-                .team_from_scope(scope)
-                .and_then(|team| team.settings.team_byo.as_ref()),
-            None => {
-                let workspace = self.current_workspace()?;
-                match workspace.teams.as_slice() {
-                    [] => workspace.settings.team_byo.as_ref(),
-                    [team] => team.settings.team_byo.as_ref(),
-                    _ => None,
-                }
-            }
+            Some(_) => self.team_from_scope(scope).map_or(absent, from_team),
+            None => self.current_workspace().map_or(absent, from_workspace),
         }
     }
 
-    /// The self-hosted worker host slug configured as the default for `scope`'s team.
-    ///
-    /// A scope with no team falls back on the current workspace, but only where that has an
-    /// unambiguous answer: `workspace.settings` when the user is on no team there, and their own
-    /// team's default when they are on exactly one. On several teams there is nothing to fall
-    /// back to -- `workspace.settings` would be an arbitrarily elected one of them, see
-    /// [`TeamScope`] -- so the default is absent.
+    /// The `team_byo` policy that governs `scope`. See [`Self::scoped_or_workspace_setting`] for
+    /// the no-team fallback.
+    fn team_byo_for_scope<S: TeamScope + ?Sized>(&self, scope: &S) -> Option<&TeamByoSettings> {
+        self.scoped_or_workspace_setting(
+            scope,
+            |team| team.settings.team_byo.as_ref(),
+            |workspace| workspace.settings.team_byo.as_ref(),
+            None,
+        )
+    }
+
+    /// The self-hosted worker host slug configured as the default for `scope`'s team. See
+    /// [`Self::scoped_or_workspace_setting`] for the no-team fallback.
     pub(crate) fn default_host_slug<S: TeamScope + ?Sized>(&self, scope: &S) -> Option<&str> {
-        match scope.team_uid() {
-            Some(_) => self
-                .team_from_scope(scope)
-                .and_then(|team| team.settings.default_host_slug.as_deref()),
-            None => {
-                let workspace = self.current_workspace()?;
-                match workspace.teams.as_slice() {
-                    [] => workspace.settings.default_host_slug.as_deref(),
-                    [team] => team.settings.default_host_slug.as_deref(),
-                    _ => None,
-                }
-            }
-        }
+        self.scoped_or_workspace_setting(
+            scope,
+            |team| team.settings.default_host_slug.as_deref(),
+            |workspace| workspace.settings.default_host_slug.as_deref(),
+            None,
+        )
     }
 
     /// The agent attribution policy for `scope`'s team: `Enable` and `Disable` lock the user's
-    /// attribution toggle, `RespectUserSetting` leaves it editable. Resolves a no-team scope the
-    /// same way as [`Self::default_host_slug`].
+    /// attribution toggle, `RespectUserSetting` leaves it editable. See
+    /// [`Self::scoped_or_workspace_setting`] for the no-team fallback.
     pub(crate) fn get_agent_attribution_setting<S: TeamScope + ?Sized>(
         &self,
         scope: &S,
     ) -> AdminEnablementSetting {
-        match scope.team_uid() {
-            Some(_) => self
-                .team_from_scope(scope)
-                .map(|team| team.settings.enable_warp_attribution.clone())
-                .unwrap_or_default(),
-            None => {
-                let Some(workspace) = self.current_workspace() else {
-                    return AdminEnablementSetting::default();
-                };
-                match workspace.teams.as_slice() {
-                    [] => workspace.settings.enable_warp_attribution.clone(),
-                    [team] => team.settings.enable_warp_attribution.clone(),
-                    _ => AdminEnablementSetting::default(),
-                }
-            }
-        }
+        self.scoped_or_workspace_setting(
+            scope,
+            |team| team.settings.enable_warp_attribution.clone(),
+            |workspace| workspace.settings.enable_warp_attribution.clone(),
+            AdminEnablementSetting::default(),
+        )
     }
 
-    /// The AI autonomy policy that applies to `scope`'s team.
+    /// The AI autonomy policy that applies to `scope`'s team. See
+    /// [`Self::scoped_or_workspace_setting`] for the no-team fallback.
     pub(crate) fn ai_autonomy_settings<S: TeamScope + ?Sized>(
         &self,
         scope: &S,
     ) -> AiAutonomySettings {
-        match scope.team_uid().and_then(|id| self.team_from_uid(id)) {
-            Some(team) => AiAutonomySettings::from(&team.settings.ai_autonomy),
-            None => self
-                .current_workspace()
-                .map(|workspace| workspace.settings.ai_autonomy_settings.clone())
-                .unwrap_or_default(),
-        }
+        self.scoped_or_workspace_setting(
+            scope,
+            |team| AiAutonomySettings::from(&team.settings.ai_autonomy),
+            |workspace| workspace.settings.ai_autonomy_settings.clone(),
+            AiAutonomySettings::default(),
+        )
     }
 
     /// Returns true iff AI autonomy features are allowed for `scope`'s team.

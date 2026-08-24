@@ -82,7 +82,7 @@ pub(super) trait OrchestrationBlockController {
         ctx: &AppContext,
     ) -> Option<AIActionStatus>;
 
-    /// Builds the current option snapshot for a configuration page, scoped to `scope`'s team.
+    /// Builds the current option snapshot for a configuration page.
     fn snapshot_for_page(
         &self,
         page: ConfigPage,

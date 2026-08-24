@@ -407,15 +407,12 @@ pub fn get_input_box_top_border_width() -> f32 {
     }
 }
 
-/// The cloud-mode host selector's window should default to: the `WARP_CLOUD_MODE_DEFAULT_HOST`
-/// developer override when set, otherwise the default host configured for that window's team.
+/// The host the cloud-mode selector defaults to: the `WARP_CLOUD_MODE_DEFAULT_HOST` override when
+/// set, otherwise the window's team default.
 ///
-/// Resolved from the host selector's own handle rather than `Input`'s: `Input::build_host_selector`
-/// runs from within `Input::new`, and a view is absent from `view_to_window` until its own
-/// constructor returns -- a child it builds along the way is already registered by then, so a
-/// handle to `Input` itself would resolve no window here while a handle to the selector does.
-/// Reading through the live mapping also means the host follows the selector if it is ever moved
-/// between windows.
+/// Takes the selector's handle, not `Input`'s: this runs inside `Input::new` before `Input` is in
+/// `view_to_window`, so an `Input` handle would resolve no window here while the already-built
+/// selector's does.
 fn effective_default_host(
     host_selector: &WeakViewHandle<HostSelector>,
     app: &AppContext,
