@@ -286,6 +286,62 @@ fn models_without_a_host_fall_back_to_the_provider_icon() {
     );
 }
 
+#[test]
+fn kimi_models_show_the_kimi_logo_despite_an_unknown_provider() {
+    // Kimi is Fireworks-hosted, so the server reports LLMProvider::Unknown for
+    // it. The id prefix is matched directly so the picker still shows a Kimi
+    // logo instead of falling back to the generic agent glyph.
+    let llm = server_llm("kimi-k27-code-fireworks", None);
+    assert_eq!(
+        model_leading_icon(&llm, ModelIconFlags::default()),
+        Icon::KimiLogo
+    );
+}
+
+#[test]
+fn auto_models_in_the_kimi_id_namespace_still_show_the_agent_glyph() {
+    // Regression guard for callers (e.g. the ambient-agent model selector)
+    // that must check `is_auto` before falling back to the provider/id-based
+    // icon helper: `model_leading_icon`'s own precedence puts `is_auto`
+    // ahead of `model_provider_icon`, so even a hypothetical auto entry
+    // whose id fell in the `kimi-` namespace must stay `Icon::Agent`.
+    let llm = server_llm("kimi-auto-test", None);
+    assert_eq!(
+        model_leading_icon(
+            &llm,
+            ModelIconFlags {
+                is_auto: true,
+                ..Default::default()
+            }
+        ),
+        Icon::Agent
+    );
+}
+
+#[test]
+fn a_custom_endpoint_named_kimi_does_not_get_the_kimi_logo() {
+    // `base_model_name`/`display_name` are user-controlled for custom
+    // endpoints (see `custom_llm_info_from`), so a user naming their own
+    // endpoint model "Kimi proxy" must NOT be granted the Kimi logo. Only the
+    // canonical `kimi-` id namespace should match.
+    let keys = ai::api_keys::ApiKeys {
+        custom_endpoints: vec![endpoint(
+            "ep",
+            "https://a.io",
+            "k",
+            vec![model("Kimi proxy", None, "uuid-kimi-proxy")],
+        )],
+        ..Default::default()
+    };
+    let infos = build_custom_llm_infos(&keys);
+    assert_eq!(infos[0].display_name, "Kimi proxy");
+    assert_eq!(infos[0].provider, LLMProvider::Unknown);
+    assert_eq!(
+        model_leading_icon(&infos[0], ModelIconFlags::default()),
+        Icon::Agent
+    );
+}
+
 // -- build_custom_llm_infos / display label tests --
 
 fn endpoint(
