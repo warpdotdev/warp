@@ -12,8 +12,11 @@
 //! does not manage credentials centrally has no `team_byo` to enforce, so members fall back to the
 //! plan's own BYO entitlement.
 
+use std::collections::HashMap;
 use std::rc::Rc;
 
+use regex::Regex;
+use warp_errors::report_error;
 use warpui::{AppContext, Entity, SingletonEntity, ViewContext, WeakViewHandle, WindowId};
 
 use super::{SoleTeamError, UserWorkspaces};
@@ -474,4 +477,104 @@ impl UserWorkspaces {
                 .is_some_and(|policy| policy.is_enabled)
         })
     }
+
+    /// Whether AI is allowed in remote sessions under `scope`'s team.
+    ///
+    /// A scope with no team reads the current workspace's value only where that is unambiguous:
+    /// no teams there at all. With teams present, a scope naming no team means the surface's
+    /// team could not be determined rather than that no policy applies, and for a control
+    /// gating AI in an environment the user may not control, that unknown case fails closed
+    /// instead of falling through to the workspace's team-neutral default.
+    pub(crate) fn is_ai_allowed_in_remote_sessions<S: TeamScope + ?Sized>(
+        &self,
+        scope: &S,
+    ) -> bool {
+        match self.team_from_scope(scope) {
+            Some(team) => {
+                team.settings
+                    .ai_permissions
+                    .allow_ai_in_remote_sessions
+                    .value
+            }
+            None if !self.has_teams() => self
+                .current_workspace()
+                .map(|workspace| {
+                    workspace
+                        .settings
+                        .ai_permissions_settings
+                        .allow_ai_in_remote_sessions
+                })
+                .unwrap_or(true),
+            None => false,
+        }
+    }
+
+    /// The remote-session command patterns configured by `scope`'s team.
+    ///
+    /// Falls back to the current workspace's patterns on the same terms as
+    /// [`Self::is_ai_allowed_in_remote_sessions`]. Unlike that permission there is no
+    /// restrictive value to fail closed to, so an unresolvable team contributes no patterns
+    /// rather than the workspace's.
+    ///
+    /// Looks the team up directly in the [`UserWorkspaces::remote_session_regexes`] cache
+    /// instead of going through [`Self::team_from_scope`]: the cache is compiled from every
+    /// workspace so a window can keep the team it was assigned even if it is not the current
+    /// workspace's, and recompiling per read would repeat the cost that cache exists to avoid.
+    pub(crate) fn get_remote_session_regex_list<S: TeamScope + ?Sized>(
+        &self,
+        scope: &S,
+    ) -> &[Regex] {
+        match scope.team_uid() {
+            Some(team_uid) => self
+                .remote_session_regexes
+                .get(&team_uid)
+                .map(Vec::as_slice)
+                .unwrap_or_default(),
+            None if !self.has_teams() => self
+                .current_workspace()
+                .map(|workspace| {
+                    workspace
+                        .settings
+                        .ai_permissions_settings
+                        .remote_session_regex_list
+                        .as_slice()
+                })
+                .unwrap_or_default(),
+            None => &[],
+        }
+    }
+}
+
+/// Compiles each team's remote-session command patterns, keyed by team, across every workspace.
+///
+/// An unparseable pattern is dropped rather than failing its team's whole list, so one bad entry
+/// in an org's configuration cannot suppress the rest.
+pub(super) fn compile_remote_session_regexes(
+    workspaces: &[Workspace],
+) -> HashMap<ServerId, Vec<Regex>> {
+    workspaces
+        .iter()
+        .flat_map(|workspace| workspace.teams.iter())
+        .map(|team| {
+            let regexes = team
+                .settings
+                .ai_permissions
+                .remote_session_regex_list
+                .values
+                .iter()
+                .filter_map(|pattern| match Regex::new(pattern) {
+                    Ok(regex) => Some(regex),
+                    Err(_) => {
+                        report_error!(
+                            "Invalid regex pattern for remote session detection",
+                            extra: { "pattern" => %pattern },
+                            warp_errors::ReportErrorLogMode::OncePerRun
+                        );
+                        None
+                    }
+                })
+                .collect();
+            (team.uid, regexes)
+        })
+        .collect()
 }
