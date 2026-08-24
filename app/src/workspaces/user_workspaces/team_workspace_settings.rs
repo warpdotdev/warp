@@ -256,6 +256,9 @@ impl UserWorkspaces {
     }
 
     /// Whether `scope`'s team admins allows its members to use their own provider API keys.
+    ///
+    /// Without the managed BYOK/BYOE policy there is no team-level restriction, so this returns
+    /// true and the normal BYO entitlement applies.
     pub fn are_member_byo_keys_allowed<S: TeamScope + ?Sized>(&self, scope: &S) -> bool {
         !self.is_managed_byok_byoe_enabled()
             || self
