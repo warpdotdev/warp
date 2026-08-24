@@ -93,8 +93,7 @@ pub fn host_native_absolute_path(
                 Ok(path) => path.to_string_lossy().into_owned(),
                 Err(err) => {
                     report_error!(
-                        anyhow::anyhow!("{err:#}")
-                            .context("Could not convert WSL to Windows host path"),
+                        anyhow::Error::new(err).context("Could not convert WSL to Windows host path"),
                         extra: { "path" => ?normalized_path }
                     );
                     normalized_path.to_string_lossy().into_owned()
@@ -113,7 +112,7 @@ pub fn host_native_absolute_path(
                 Ok(path) => path.to_string_lossy().into_owned(),
                 Err(err) => {
                     report_error!(
-                        anyhow::anyhow!("{err:#}")
+                        anyhow::Error::new(err)
                             .context("Could not convert MSYS2 to Windows host path"),
                         extra: { "path" => ?normalized_path }
                     );

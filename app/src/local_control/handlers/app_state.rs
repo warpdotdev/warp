@@ -5,7 +5,6 @@ mod tests;
 
 #[cfg(feature = "local_fs")]
 use std::path::{Path, PathBuf};
-use std::str::FromStr;
 
 use ::local_control::protocol::{
     Direction as ControlDirection, DirectionParams, FileOpenParams, PageQueryParams, QueryParams,
@@ -682,7 +681,7 @@ fn surface_settings_open(
 }
 
 fn settings_section(page: String) -> Result<SettingsSection, ControlError> {
-    let section = SettingsSection::from_str(&page).map_err(|_| {
+    let section = SettingsSection::from_slug(&page).ok_or_else(|| {
         ControlError::new(
             ErrorCode::InvalidParams,
             format!("surface.settings.open cannot resolve settings page {page:?}"),

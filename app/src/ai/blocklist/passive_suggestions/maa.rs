@@ -36,6 +36,7 @@ cfg_if::cfg_if! {
     if #[cfg(feature = "local_fs")] {
         use std::{path::PathBuf, time::Duration};
         use crate::ai::blocklist::{read_local_file_context, BlocklistAIPermissions};
+        use crate::workspaces::user_workspaces::TeamScope;
         use warp_terminal::shell::ShellLaunchData;
         use crate::util::link_detection::{detect_file_paths, DetectedLinkType};
         use crate::util::openable_file_type::is_binary_file;
@@ -495,21 +496,30 @@ impl PassiveSuggestionsModel {
             supported_tools.push(warp_multi_agent_api::ToolType::SuggestPrompt);
         }
 
-        let block_context = BlockContext::from_completed_block(block_completed);
-        let (conversation_id, block_context) = {
+        // Note: the lock is dropped before calling `BlockContext::from_completed_block` below,
+        // since that (like `UserBlockCompleted`'s other accessors) locks `self.terminal_model`
+        // itself if needed, and `FairMutex` isn't reentrant.
+        let conversation_id = {
             let model = self.terminal_model.lock();
             let Some(block) = model.block_list().block_at(block_completed.index) else {
                 return;
             };
-
-            let conversation_id = block.agent_view_visibility().agent_view_conversation_id();
-            (conversation_id, block_context)
+            block.agent_view_visibility().agent_view_conversation_id()
         };
+        let block_context =
+            BlockContext::from_completed_block(block_completed, &self.terminal_model);
 
         // If passive code diffs are enabled, check for any files that were read.
         #[cfg(feature = "local_fs")]
         if is_passive_code_diffs_enabled
-            && let Some(current_working_directory) = block_completed.serialized_block.pwd.clone()
+            && let Some(current_working_directory) = block_completed
+                .serialized_block
+                .get_with(|compute| {
+                    let model = self.terminal_model.lock();
+                    compute(model.block_list())
+                })
+                .pwd
+                .clone()
         {
             let block_contents = format!("{}\n{}", &block_context.command, &block_context.output);
             let shell = self.active_session.as_ref(ctx).shell_launch_data(ctx);
@@ -538,10 +548,12 @@ impl PassiveSuggestionsModel {
                     }
                 },
                 move |me, candidate_paths, ctx| {
+                    let scope = me.ai_controller.as_ref(ctx).team_context(ctx);
                     let Some(file_locations) = get_allowed_file_locations_for_paths(
                         candidate_paths,
                         conversation_id.as_ref(),
                         terminal_view_id,
+                        &scope,
                         ctx,
                     ) else {
                         me.pending_file_read_handle = None;
@@ -917,6 +929,7 @@ fn get_allowed_file_locations_for_paths(
     paths: Vec<PathBuf>,
     conversation_id: Option<&AIConversationId>,
     terminal_view_id: EntityId,
+    scope: &impl TeamScope,
     ctx: &AppContext,
 ) -> Option<Vec<FileLocations>> {
     if paths.is_empty() {
@@ -924,7 +937,13 @@ fn get_allowed_file_locations_for_paths(
     }
 
     if !BlocklistAIPermissions::as_ref(ctx)
-        .can_read_files(conversation_id, paths.clone(), Some(terminal_view_id), ctx)
+        .can_read_files(
+            conversation_id,
+            paths.clone(),
+            Some(terminal_view_id),
+            scope,
+            ctx,
+        )
         .is_allowed()
     {
         return None;

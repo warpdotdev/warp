@@ -326,10 +326,10 @@ impl Input {
         maybe_add_buy_credits_banner(
             &mut outer_stack,
             &self.buy_credits_banner,
-            &self.weak_view_handle,
             self.is_pane_focused(app),
             self.terminal_view_id,
             self.is_input_at_top(&model, app),
+            &self.team_scope(app),
             app,
         );
 
@@ -486,10 +486,10 @@ impl Input {
         maybe_add_buy_credits_banner(
             &mut outer_stack,
             &self.buy_credits_banner,
-            &self.weak_view_handle,
             self.is_pane_focused(app),
             self.terminal_view_id,
             self.is_input_at_top(&model, app),
+            &self.team_scope(app),
             app,
         );
 
@@ -691,10 +691,10 @@ impl Input {
         maybe_add_buy_credits_banner(
             &mut stack,
             &self.buy_credits_banner,
-            &self.weak_view_handle,
             self.focus_handle.as_ref().is_none_or(|h| h.is_focused(app)),
             self.terminal_view_id,
             self.is_input_at_top(&model, app),
+            &self.team_scope(app),
             app,
         );
 

@@ -5,6 +5,15 @@ use super::*;
 use crate::ai::llms::{AvailableLLMs, LLMId, LLMInfo, LLMPreferences, ModelsByFeature};
 use crate::server::server_api::ClientError;
 use crate::test_util::terminal::initialize_app_for_terminal_view;
+
+/// A teamless [`TeamScope`] for spawn-config tests, standing in for a window with no team.
+struct TeamlessScope;
+impl TeamScope for TeamlessScope {
+    fn team_uid(&self) -> Option<ServerId> {
+        None
+    }
+}
+
 fn attachment() -> AttachmentInput {
     AttachmentInput {
         file_name: "context.txt".to_owned(),
@@ -84,7 +93,10 @@ fn spawn_config_falls_back_to_auto_only_for_non_cloud_runnable_model() {
         );
         model.read(&app, |model, app| {
             assert_eq!(
-                model.build_default_spawn_config(app).model_id.as_deref(),
+                model
+                    .build_default_spawn_config(&TeamlessScope, app)
+                    .model_id
+                    .as_deref(),
                 Some("auto")
             );
         });
@@ -92,7 +104,10 @@ fn spawn_config_falls_back_to_auto_only_for_non_cloud_runnable_model() {
         install_default_agent_mode_model(&model, &mut app, LLMInfo::new_for_test("auto-genius"));
         model.read(&app, |model, app| {
             assert_eq!(
-                model.build_default_spawn_config(app).model_id.as_deref(),
+                model
+                    .build_default_spawn_config(&TeamlessScope, app)
+                    .model_id
+                    .as_deref(),
                 Some("auto-genius")
             );
         });
@@ -131,7 +146,10 @@ fn spawn_config_honors_pane_model_override() {
 
         model.read(&app, |model, app| {
             assert_eq!(
-                model.build_default_spawn_config(app).model_id.as_deref(),
+                model
+                    .build_default_spawn_config(&TeamlessScope, app)
+                    .model_id
+                    .as_deref(),
                 Some("auto-genius")
             );
         });
@@ -145,7 +163,7 @@ fn spawn_agent_omits_orchestration_handoff_for_fresh_launches() {
         let model = add_model(&mut app);
 
         model.update(&mut app, |model, ctx| {
-            model.spawn_agent("new run".to_owned(), vec![], ctx);
+            model.spawn_agent("new run".to_owned(), vec![], &TeamlessScope, ctx);
         });
 
         model.read(&app, |model, _| {

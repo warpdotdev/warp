@@ -15,7 +15,7 @@ use super::handle::{AnyViewHandle, ReadView, UpdateView, ViewAsRef, ViewHandle, 
 use super::{TypedActionView, View};
 use crate::accessibility::AccessibilityContent;
 use crate::r#async::executor::{Background, Foreground};
-use crate::r#async::{SpawnableOutput, SpawnedFutureHandle, SpawnedLocalStream};
+use crate::r#async::{BoxFuture, SpawnableOutput, SpawnedFutureHandle, SpawnedLocalStream};
 use crate::core::{Observation, Subscription, SubscriptionKey, TaskCallback};
 use crate::fonts::Cache as FontCache;
 use crate::modals::{AlertDialogWithCallbacks, ModalButton, ViewModalCallback};
@@ -45,6 +45,12 @@ impl<'a, T: View> ViewContext<'a, T> {
         }
     }
 }
+
+/// Callback that receives the output of a resolved future spawned from a [`ViewContext`].
+type SpawnResolveCallback<T, O> = Box<dyn FnOnce(&mut T, O, &mut ViewContext<T>)>;
+
+/// Callback that runs when a future spawned from a [`ViewContext`] is aborted.
+type SpawnAbortCallback<T> = Box<dyn FnOnce(&mut T, &mut ViewContext<T>)>;
 
 /// Structure that combines view identifiers and a handle to the application
 /// context/application state.
@@ -562,12 +568,12 @@ impl<'a, T: Entity> ViewContext<'a, T> {
         F: 'static + FnOnce(&mut T, <S as Future>::Output, &mut ViewContext<T>) -> U,
         U: 'static,
     {
-        self.spawn_abortable::<S, _, _>(
-            future,
-            |view, output, ctx| {
+        self.spawn_abortable_boxed(
+            Box::pin(future),
+            Box::new(|view, output, ctx| {
                 callback(view, output, ctx);
-            },
-            |_, _| {},
+            }),
+            Box::new(|_, _| {}),
         )
     }
 
@@ -600,6 +606,22 @@ impl<'a, T: Entity> ViewContext<'a, T> {
         <S as Future>::Output: crate::r#async::SpawnableOutput,
         F: 'static + FnOnce(&mut T, <S as Future>::Output, &mut ViewContext<T>),
         A: 'static + FnOnce(&mut T, &mut ViewContext<T>),
+    {
+        self.spawn_abortable_boxed(Box::pin(future), Box::new(on_resolve), Box::new(on_abort))
+    }
+
+    /// Type-erased body of [`Self::spawn`] and [`Self::spawn_abortable`].
+    ///
+    /// The public entry points box the future and the callbacks immediately, so this body is
+    /// compiled once per output type instead of once per call site.
+    fn spawn_abortable_boxed<O>(
+        &mut self,
+        future: BoxFuture<'static, O>,
+        on_resolve: SpawnResolveCallback<T, O>,
+        on_abort: SpawnAbortCallback<T>,
+    ) -> SpawnedFutureHandle
+    where
+        O: 'static + SpawnableOutput,
     {
         let (tx, rx) = futures::channel::oneshot::channel();
 

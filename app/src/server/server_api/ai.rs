@@ -365,7 +365,7 @@ pub struct AgentMessageHeader {
     pub read_at: Option<String>,
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct AgentRunEvent {
     pub event_type: String,
     pub run_id: String,
@@ -2151,7 +2151,7 @@ impl AIClient for ServerApi {
     ) -> anyhow::Result<(), anyhow::Error> {
         let variables = UpdateAgentTaskVariables {
             input: UpdateAgentTaskInput {
-                task_id: task_id.into(),
+                task_id: task_id.to_string().into(),
                 task_state,
                 session_id: session_id.map(|id| id.to_string().into()),
                 conversation_id: conversation_id.map(|id| id.into()),

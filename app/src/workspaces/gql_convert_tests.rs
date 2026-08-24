@@ -75,6 +75,62 @@ fn drop_every_team_when_user_has_no_team_membership() {
     assert!(team_names(&workspace).is_empty());
 }
 
+mod pending_email_invites_conversion {
+    use warp_graphql::workspace::EmailInvite as GqlEmailInvite;
+
+    use crate::workspaces::gql_convert::team_pending_email_invites_from_gql;
+
+    fn gql_invite(email: &str, team_uid: Option<&str>) -> GqlEmailInvite {
+        GqlEmailInvite {
+            email: email.to_string(),
+            expired: false,
+            team_uid: team_uid.map(cynic::Id::new),
+        }
+    }
+
+    #[test]
+    fn keeps_only_invites_sent_for_the_given_team() {
+        let team_a_uid = format!("{:0>22}", "team-a");
+        let team_b_uid = format!("{:0>22}", "team-b");
+        let team_a = cynic::Id::new(team_a_uid.clone());
+        let team_b = cynic::Id::new(team_b_uid.clone());
+        let workspace_invites = vec![
+            gql_invite("alice@example.com", Some(team_a_uid.as_str())),
+            gql_invite("bob@example.com", Some(team_b_uid.as_str())),
+            gql_invite("carol@example.com", Some(team_a_uid.as_str())),
+        ];
+
+        let team_a_invites = team_pending_email_invites_from_gql(&workspace_invites, &team_a);
+        assert_eq!(
+            team_a_invites
+                .iter()
+                .map(|invite| invite.invitee_email.as_str())
+                .collect::<Vec<_>>(),
+            vec!["alice@example.com", "carol@example.com"],
+            "team A's page must not show team B's pending invite"
+        );
+
+        let team_b_invites = team_pending_email_invites_from_gql(&workspace_invites, &team_b);
+        assert_eq!(
+            team_b_invites
+                .iter()
+                .map(|invite| invite.invitee_email.as_str())
+                .collect::<Vec<_>>(),
+            vec!["bob@example.com"],
+            "team B's page must not show team A's pending invites"
+        );
+    }
+
+    #[test]
+    fn drops_invites_with_no_team_uid() {
+        let team_a = cynic::Id::new(format!("{:0>22}", "team-a"));
+        let workspace_invites = vec![gql_invite("dangling@example.com", None)];
+
+        let team_a_invites = team_pending_email_invites_from_gql(&workspace_invites, &team_a);
+        assert!(team_a_invites.is_empty());
+    }
+}
+
 mod team_settings_conversion {
     use warp_graphql::workspace as gqlws;
 
@@ -341,5 +397,44 @@ mod team_settings_conversion {
             settings.ugc_collection.is_enforced_by_workspace,
             "enforcement metadata from the team payload must be preserved"
         );
+    }
+}
+
+mod team_visibility_conversion {
+    use warp_graphql::workspace::TeamVisibility as GqlTeamVisibility;
+
+    use crate::workspaces::team::TeamVisibility;
+
+    #[test]
+    fn maps_known_values() {
+        assert_eq!(
+            TeamVisibility::from(GqlTeamVisibility::Open),
+            TeamVisibility::Open
+        );
+        assert_eq!(
+            TeamVisibility::from(GqlTeamVisibility::Private),
+            TeamVisibility::Private
+        );
+        assert_eq!(
+            TeamVisibility::from(GqlTeamVisibility::Hidden),
+            TeamVisibility::Hidden
+        );
+    }
+
+    #[test]
+    fn fails_closed_on_unrecognized_value() {
+        // An unrecognized value must never be treated as Open, since that
+        // would surface the invite-by-link control the server doesn't
+        // actually support for it.
+        let visibility = TeamVisibility::from(GqlTeamVisibility::Other("future-value".to_string()));
+        assert_eq!(visibility, TeamVisibility::Private);
+        assert!(!visibility.supports_invite_link());
+    }
+
+    #[test]
+    fn only_open_supports_invite_link() {
+        assert!(TeamVisibility::Open.supports_invite_link());
+        assert!(!TeamVisibility::Private.supports_invite_link());
+        assert!(!TeamVisibility::Hidden.supports_invite_link());
     }
 }

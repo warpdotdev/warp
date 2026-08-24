@@ -109,9 +109,9 @@ Getting this wrong in the first direction is bug class 1 below. Getting it wrong
 
 Classify the page before you write it:
 
-- **Single-topic page** — one heading names everything on it. Knowledge, Third party CLI agents, Editor and Code Review, Codebase Indexing, Account, Scripting. → **Title in the `PageType` slot.**
+- **Single-topic page** — one heading names everything on it, but the content is still made of separately-matchable widgets. Knowledge, Third party CLI agents, Editor and Code Review, Account, Scripting. → **Title in the `PageType` slot.**
 - **Multi-section page** — several independent sections, each with its own heading. Warp Agent, Agent profiles, Appearance, Features. → **Per-section headings live in widgets/categories** and correctly disappear with their rows. (For `Categorized`, `get_filtered` drops categories whose widgets all filtered out, so their subheaders vanish automatically — that's the behavior you want.)
-- **Monolith page** — Keybindings, Teams, About, Environments. There is no partial-match state: the sole widget either matches, and the whole page renders, or it doesn't, and the whole page renders empty and drops out of the sidebar. So a monolith can never strand an orphaned setting under a missing heading — it is **not** affected by bug class 1, but for that reason, *not* because its title is protected. Passing the title through the slot is still the tidier structure (Billing and Usage and Referrals do), just don't expect it to keep the title on screen during a non-matching search; on a monolith it will not.
+- **Monolith page** — Keybindings, Teams, About, Environments, Codebase Indexing. There is no partial-match state: the sole widget either matches, and the whole page renders, or it doesn't, and the whole page renders empty and drops out of the sidebar. So a monolith can never strand an orphaned setting under a missing heading — it is **not** affected by bug class 1, but for that reason, *not* because its title is protected. Passing the title through the slot is still the tidier structure (Billing and Usage and Referrals do), just don't expect it to keep the title on screen during a non-matching search; on a monolith it will not. Codebase Indexing looks single-topic but is really one unfilterable widget covering the whole page (`CodePageWidget`, wrapped by `CodeIndexingPageWidget`) — building it as `Uncategorized` instead of `Monolith` made the sidebar show a permanent, misleading "(1)" on any match ([APP-5530]).
 
 The two are not mutually exclusive: a page can name itself in the title slot **and** have per-section subheaders inside its widgets. Privacy does exactly that — `PageType::new_uncategorized(widgets, Some("Privacy"))` plus `render_sub_header` calls inside individual widgets. The rule is per heading, not per page.
 
@@ -134,16 +134,16 @@ After, the heading moved to page chrome and the rows became focused widgets:
 
 ```rust
 let title = match subpage {
-    Some(AISubpage::Knowledge) => Some("Knowledge"),
-    Some(AISubpage::ThirdPartyCLIAgents) => Some("Third party CLI agents"),
-    None | Some(AISubpage::WarpAgent) | Some(AISubpage::Profiles) => None,
+    AISubpage::Knowledge => Some("Knowledge"),
+    AISubpage::ThirdPartyCLIAgents => Some("Third party CLI agents"),
+    AISubpage::WarpAgent | AISubpage::Profiles => None,
 };
 PageType::new_uncategorized(widgets, title)
 ```
 
 (The `ThirdPartyCLIAgents` arm and the exhaustive `match` came from #14524; note the deliberate absence of a `_` arm, so a new subpage forces this decision.)
 
-The same commit (#14524) deleted `CodeSubpageHeaderWidget` from `code_page.rs` — a widget whose entire job was `build_sub_header(appearance, self.title, None)` — and replaced it with `PageType::new_uncategorized(widgets, Some(subpage.title()))`. **A header-only widget is always this bug.** If a widget renders nothing but a title, delete it and use the title slot.
+The same commit (#14524) deleted `CodeSubpageHeaderWidget` from the then-combined Code page — a widget whose entire job was `build_sub_header(appearance, self.title, None)` — and replaced it with a title passed through `PageType`. Those two halves are now separate pages, `code_indexing_page.rs` and `code_editor_review_page.rs`, each passing its own `PAGE_TITLE` through the slot. **A header-only widget is always this bug.** If a widget renders nothing but a title, delete it and use the title slot.
 
 ## Bug class 2 — the unfilterable mega-widget
 
@@ -186,7 +186,8 @@ Rules of thumb when splitting:
 
 ## Subpages rebuild their `PageType` — reapply the filter
 
-AI and Code subpages rebuild their `PageType` when the active subpage changes (`AISettingsPageView::build_page`, `CodeSettingsPageView::set_active_subpage`). A fresh `PageType` starts with **every** widget in its filter, so a live search query is silently dropped unless it's reapplied. `SettingsView::reapply_search_filter_to_active_subpage` in `app/src/settings_view/mod.rs` exists for exactly this ([APP-4922], #14116). If you add a code path that rebuilds a subpage's page while search may be active, call it.
+AI subpages rebuild their `PageType` when the active subpage changes (`AISettingsPageView::set_active_subpage` / `build_page`). A fresh `PageType` starts with **every** widget in its filter, so a live search query is silently dropped unless it's reapplied. `SettingsView::reapply_search_filter_to_active_subpage` in `app/src/settings_view/mod.rs` exists for exactly this ([APP-4922], #14116). If you add a code path that rebuilds a subpage's page while search may be active, call it.
+The Code umbrella no longer works this way: `CodeIndexing` and `EditorAndCodeReview` are separate pages that each own their widgets outright, so nothing rebuilds and there is no filter to reapply. Prefer that shape for new umbrella children — a subpage that owns its own page needs none of this machinery.
 
 ## Known anti-examples still in the tree
 

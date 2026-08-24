@@ -6,8 +6,8 @@
 
 set -eo pipefail
 
-# Keep in sync with the cargo-bins/cargo-binstall action pin in .github/workflows/ci.yml
-# so local bootstraps and CI resolve binaries with the same binstall version.
+# Local bootstraps and CI both install binstall through this script, so this is
+# the single pinned version everywhere.
 BINSTALL_VERSION="1.18.1"
 
 # Every archive this script may run, keyed by asset name, with the SHA-256 that
@@ -29,6 +29,8 @@ archive_sha256() {
             echo "c55962a0115f9716b709216de7f8bdd59d6ba8738779e60b051b4593f677717a" ;;
         cargo-binstall-x86_64-pc-windows-msvc.zip)
             echo "89706aa5215c164d8d091597a470fee72308ac87e8553af395ea77db844a888c" ;;
+        cargo-binstall-aarch64-pc-windows-msvc.zip)
+            echo "c6873e81457d9e44973a8e9a849795f2c83765fce0af8ad68b597b5b40dec418" ;;
     esac
 }
 
@@ -41,7 +43,17 @@ archive_for_platform() {
             echo "cargo-binstall-$(uname -m)-unknown-linux-musl.tgz" ;;
         *)
             if [ "${OS-}" = "Windows_NT" ]; then
-                echo "cargo-binstall-$(uname -m)-pc-windows-msvc.zip"
+                # uname -m is unreliable here: Git for Windows' MSYS runtime reports the
+                # emulated x86_64 host under WOW64, or "unknown" on a native arm64 host,
+                # rather than the real machine architecture. PROCESSOR_ARCHITEW6432 (set
+                # only under emulation, to the true native architecture) falling back to
+                # PROCESSOR_ARCHITECTURE reports it correctly in both cases.
+                case "${PROCESSOR_ARCHITEW6432:-${PROCESSOR_ARCHITECTURE-}}" in
+                    ARM64)
+                        echo "cargo-binstall-aarch64-pc-windows-msvc.zip" ;;
+                    AMD64)
+                        echo "cargo-binstall-x86_64-pc-windows-msvc.zip" ;;
+                esac
             fi
             ;;
     esac
@@ -96,9 +108,26 @@ if [ "$INSTALLED_VERSION" != "$BINSTALL_VERSION" ]; then
     # shellcheck disable=SC2064 # Expand WORKDIR now so the trap still resolves it later.
     trap "rm -rf \"$WORKDIR\"" EXIT
 
-    curl -L --proto '=https' --tlsv1.2 -sSf \
-        "https://github.com/cargo-bins/cargo-binstall/releases/download/v${BINSTALL_VERSION}/${ARCHIVE}" \
-        --output "$WORKDIR/$ARCHIVE"
+    # GitHub's release-asset CDN intermittently fails with errors curl's --retry
+    # won't retry, and its brownouts can last minutes, so retry at the shell level
+    # with exponential backoff.
+    DOWNLOAD_ATTEMPTS=5
+    RETRY_DELAY=10
+    for attempt in $(seq 1 "$DOWNLOAD_ATTEMPTS"); do
+        if curl -L --proto '=https' --tlsv1.2 -sSf \
+            --retry 5 --retry-delay 2 \
+            "https://github.com/cargo-bins/cargo-binstall/releases/download/v${BINSTALL_VERSION}/${ARCHIVE}" \
+            --output "$WORKDIR/$ARCHIVE"; then
+            break
+        fi
+        if [ "$attempt" -eq "$DOWNLOAD_ATTEMPTS" ]; then
+            echo "error: failed to download $ARCHIVE after $DOWNLOAD_ATTEMPTS attempts." >&2
+            exit 1
+        fi
+        echo "Download failed; retrying in ${RETRY_DELAY}s..." >&2
+        sleep "$RETRY_DELAY"
+        RETRY_DELAY=$((RETRY_DELAY * 2))
+    done
 
     ACTUAL_SHA256="$(sha256_of "$WORKDIR/$ARCHIVE")"
     if [ "$ACTUAL_SHA256" != "$EXPECTED_SHA256" ]; then

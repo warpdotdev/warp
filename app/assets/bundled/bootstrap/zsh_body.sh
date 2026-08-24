@@ -296,6 +296,16 @@ if [[ -z $WARP_BOOTSTRAPPED ]]; then
     GIT_OPTIONAL_LOCKS=0 command git "$@"
   }
 
+  # Clears the line editor's buffer and, if the active keymap is "vicmd" (vi command/normal
+  # mode), switches back to "viins" (its insert companion).
+  function warp_kill_buffer_and_reset_insert_mode () {
+    zle kill-buffer
+    if [[ $KEYMAP == vicmd ]]; then
+      zle -K viins
+    fi
+  }
+  zle -N warp_kill_buffer_and_reset_insert_mode
+
   # Note that this is very performance sensitive code, so try not to
   # invoke any external commands in here.
   warp_precmd () {
@@ -347,8 +357,19 @@ if [[ -z $WARP_BOOTSTRAPPED ]]; then
       # Reset the custom kill-buffer binding as the user's zshrc (which is sourced after zshrc_warp)
       # could have added a bindkey. This won't have any user-impact because these shortcuts are only run
       # in the context of the zsh line editor, which isn't displayed in Warp.
-      bindkey -r '^P'
-      bindkey '^P' kill-buffer
+      #
+      # We explicitly rebind on every standard keymap (not just "main", which is only a link to
+      # whichever of emacs/viins is currently selected) because a user's rc file can switch editing
+      # modes after we've bound "main" (e.g. `bindkey -v`, as used by the "cursor_mode" zsh function
+      # and by prezto). `bindkey -v` re-links "main" to "viins" and leaves "vicmd" (vi command mode)
+      # bound to its default of up-history. If the active keymap when Warp sends its pre-command ^P
+      # ends up being one we didn't rebind, the clear becomes a no-op and any leftover bootstrap bytes
+      # still sitting in the line editor's buffer get echoed alongside the next command.
+      # See https://github.com/warpdotdev/warp/issues/7099.
+      local warp_keymap
+      for warp_keymap in main emacs viins vicmd; do
+        bindkey -M "$warp_keymap" '^P' warp_kill_buffer_and_reset_insert_mode 2>/dev/null || :
+      done
 
       # Reset the custom input-reporting binding as well, in case it was overridden
       # by the user's zshrc.
@@ -1357,9 +1378,22 @@ esac
     # do we have a description parameter?
     # note we don''t use zparseopts here because of combined option parameters
     # with arguments like -default- confuse it.
-    if (( $@[(I)-d] )); then # kind of a hack, $+@[(r)-d] doesn''t work because of line noise overload
-        # next param after -d
-        __tmp=${@[$[${@[(i)-d]}+1]]}
+    #
+    # -d can be passed on its own (e.g. from _arguments) or clustered with other short
+    # flags (e.g. -ld from _describe). Match any flag token consisting of a leading -,
+    # zero or more letters, and a trailing d, rather than requiring an exact "-d". Use
+    # (I), not (i): (i) returns one past the end (not 0) when nothing matches, which
+    # would make the presence test below true on every call. Restrict the search to the
+    # same leading flags-only prefix the -O/-A/-D check above uses (everything before the
+    # first bare "-"/"--"), so a completion candidate that happens to look like a flag
+    # (a literal "-d"/"-ld" match, e.g. for ls or find) is never mistaken for the flag.
+    setopt localoptions extendedglob
+    local -a __flags
+    __flags=(${@[1,(i)(-|--)]})
+    local __d_idx=${__flags[(I)-[a-zA-Z]#d]}
+    if (( __d_idx )); then
+        # next param after the flag containing -d
+        __tmp=${@[$[__d_idx+1]]}
         # description can be given as an array parameter name, or inline () array
         if [[ $__tmp == \(* ]]; then
             eval "__dscr=$__tmp"

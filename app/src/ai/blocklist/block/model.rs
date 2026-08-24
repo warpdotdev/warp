@@ -222,18 +222,26 @@ pub mod testing {
 
     use super::{AIBlockModel, AIBlockOutputStatus, OutputStatusUpdateCallback};
     use crate::ai::agent::conversation::AIConversationId;
-    use crate::ai::agent::{AIAgentInput, AIAgentOutput, ServerOutputId, Shared};
+    use crate::ai::agent::{
+        AIAgentInput, AIAgentOutput, CancellationReason, ServerOutputId, Shared,
+    };
     use crate::ai::blocklist::AIBlock;
     use crate::ai::blocklist::model::{
         AIRequestType, PassiveRequestType, PassiveSuggestionTriggerType,
     };
     use crate::ai::llms::LLMId;
 
+    /// The output shape a [`FakeAIBlockModel`] reports, mirroring the streaming,
+    /// successful, and cancelled states of a live block.
+    enum FakeOutput {
+        Streaming,
+        Complete(Shared<AIAgentOutput>),
+        Cancelled(Shared<AIAgentOutput>),
+    }
+
     pub struct FakeAIBlockModel {
         input: Vec<AIAgentInput>,
-        /// `None` models a block that is still streaming output, so its status
-        /// stays [`AIBlockOutputStatus::Pending`].
-        output: Option<Shared<AIAgentOutput>>,
+        output: FakeOutput,
         model_id: LLMId,
     }
 
@@ -241,7 +249,7 @@ pub mod testing {
         pub fn new(input: Vec<AIAgentInput>, output: AIAgentOutput) -> Self {
             Self {
                 input,
-                output: Some(Shared::new(output)),
+                output: FakeOutput::Complete(Shared::new(output)),
                 model_id: "fake-llm".to_owned().into(),
             }
         }
@@ -251,7 +259,17 @@ pub mod testing {
         pub fn new_streaming(input: Vec<AIAgentInput>) -> Self {
             Self {
                 input,
-                output: None,
+                output: FakeOutput::Streaming,
+                model_id: "fake-llm".to_owned().into(),
+            }
+        }
+
+        /// Builds a fake model for a block whose stream was cancelled by the
+        /// user partway through, keeping `output` as the partial output.
+        pub fn new_cancelled(input: Vec<AIAgentInput>, output: AIAgentOutput) -> Self {
+            Self {
+                input,
+                output: FakeOutput::Cancelled(Shared::new(output)),
                 model_id: "fake-llm".to_owned().into(),
             }
         }
@@ -262,10 +280,14 @@ pub mod testing {
 
         fn status(&self, _app: &AppContext) -> AIBlockOutputStatus {
             match &self.output {
-                Some(output) => AIBlockOutputStatus::Complete {
+                FakeOutput::Streaming => AIBlockOutputStatus::Pending,
+                FakeOutput::Complete(output) => AIBlockOutputStatus::Complete {
                     output: output.clone(),
                 },
-                None => AIBlockOutputStatus::Pending,
+                FakeOutput::Cancelled(output) => AIBlockOutputStatus::Cancelled {
+                    partial_output: Some(output.clone()),
+                    reason: CancellationReason::ManuallyCancelled,
+                },
             }
         }
 

@@ -832,7 +832,7 @@ impl EnvVarCollectionView {
                         new_env_var_collection,
                         id,
                         self.active_env_var_collection_data
-                            .update(ctx, |data, _| data.revision_ts.clone()),
+                            .update(ctx, |data, _| data.revision_ts),
                         ctx,
                     );
                 }),
@@ -1468,7 +1468,7 @@ impl View for EnvVarCollectionView {
                 .top_center()
                 .finish(),
         )
-        .on_right_mouse_down(|ctx, _, position| {
+        .on_right_mouse_down(|ctx, _, position, _| {
             ctx.dispatch_typed_action(EnvVarCollectionAction::DisplayPaneMenu(position));
             DispatchEventResult::StopPropagation
         })

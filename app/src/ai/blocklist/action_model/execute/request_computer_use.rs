@@ -12,6 +12,7 @@ use crate::ai::blocklist::BlocklistAIHistoryModel;
 use crate::features::FeatureFlag;
 use crate::send_telemetry_from_ctx;
 use crate::server::telemetry::TelemetryEvent;
+use crate::workspaces::user_workspaces::TeamContext;
 
 pub struct RequestComputerUseExecutor {
     terminal_view_id: EntityId,
@@ -37,7 +38,8 @@ impl RequestComputerUseExecutor {
     pub(super) fn should_autoexecute(
         &mut self,
         input: ExecuteActionInput,
-        ctx: &mut ModelContext<Self>,
+        scope: &TeamContext<'_>,
+        ctx: &ModelContext<Self>,
     ) -> bool {
         let ExecuteActionInput { action, .. } = input;
         let AIAgentActionType::RequestComputerUse(_) = &action.action else {
@@ -46,7 +48,7 @@ impl RequestComputerUseExecutor {
 
         // Check profile permission
         let permission = crate::ai::blocklist::BlocklistAIPermissions::as_ref(ctx)
-            .get_computer_use_setting(ctx, Some(self.terminal_view_id));
+            .get_computer_use_setting(Some(self.terminal_view_id), scope, ctx);
         if permission.is_always_allow() {
             // Track that this action was auto-executed for telemetry in execute()
             self.autoexecuted_actions.insert(action.id.clone());

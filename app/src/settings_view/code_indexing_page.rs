@@ -17,7 +17,6 @@ use remote_server::codebase_index_proto::{RemoteCodebaseIndexState, RemoteCodeba
 use warp_core::features::FeatureFlag;
 use warp_core::settings::ToggleableSetting as _;
 use warp_core::ui::theme::{AnsiColorIdentifier, Fill as ThemeFill};
-use warp_errors::report_if_error;
 use warp_util::path::user_friendly_path;
 #[cfg(not(target_family = "wasm"))]
 use warp_util::remote_path::RemotePath;
@@ -34,13 +33,11 @@ use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
 use warpui::ui_components::switch::{SwitchStateHandle, TooltipConfig};
 use warpui::{
     Action, AppContext, Entity, ModelHandle, SingletonEntity, TypedActionView, View, ViewContext,
-    ViewHandle, id,
+    ViewHandle, WindowId, id,
 };
 
-#[cfg(feature = "local_fs")]
-use super::features::external_editor::ExternalEditorView;
 use super::settings_page::{
-    Category, MatchData, PageType, SettingsPageMeta, SettingsPageViewHandle, SettingsWidget,
+    MatchData, PageType, SettingsPageMeta, SettingsPageViewHandle, SettingsWidget,
     TOGGLE_BUTTON_RIGHT_PADDING, render_body_item, render_separator,
 };
 use super::{
@@ -58,14 +55,12 @@ use crate::remote_server::codebase_index_model::{
     RemoteCodebaseIndexModel, RemoteCodebaseIndexModelEvent, RemoteCodebaseIndexSettingsEntry,
 };
 use crate::settings::{AISettings, CodeSettings};
-use crate::terminal::general_settings::GeneralSettings;
 use crate::ui_components::avatar::{Avatar, AvatarContent, StatusElementTypes};
 use crate::ui_components::buttons::icon_button;
 use crate::ui_components::icons::Icon;
 use crate::view_components::DismissibleToast;
 use crate::view_components::action_button::{ActionButton, SecondaryTheme};
 use crate::workspace::ToastStack;
-use crate::workspace::tab_settings::TabSettings;
 use crate::workspaces::update_manager::TeamUpdateManager;
 use crate::workspaces::user_workspaces::UserWorkspaces;
 use crate::workspaces::workspace::AdminEnablementSetting;
@@ -92,31 +87,7 @@ const CODEBASE_INDEX_LIMIT_REACHED: &str = "You have reached the maximum number 
 const REMOTE_CODEBASE_INDEX_LIMIT_REACHED_FAILURE: &str =
     "maximum number of codebase indexes has been reached";
 
-/// Identifies which subpage of the Code settings the user is viewing.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum CodeSubpage {
-    /// Codebase indexing and initialization settings.
-    Indexing,
-    /// External editor, code review panel, and project explorer settings.
-    EditorAndCodeReview,
-}
-
-impl CodeSubpage {
-    pub fn from_section(section: SettingsSection) -> Option<Self> {
-        match section {
-            SettingsSection::CodeIndexing => Some(Self::Indexing),
-            SettingsSection::EditorAndCodeReview => Some(Self::EditorAndCodeReview),
-            _ => None,
-        }
-    }
-
-    pub fn title(&self) -> &'static str {
-        match self {
-            Self::Indexing => "Codebase Indexing",
-            Self::EditorAndCodeReview => "Editor and Code Review",
-        }
-    }
-}
+const PAGE_TITLE: &str = "Codebase Indexing";
 
 #[cfg(not(target_family = "wasm"))]
 fn remote_codebase_index_limit_reached(status: &RemoteCodebaseIndexStatus) -> bool {
@@ -126,8 +97,49 @@ fn remote_codebase_index_limit_reached(status: &RemoteCodebaseIndexStatus) -> bo
         .is_some_and(|message| message.contains(REMOTE_CODEBASE_INDEX_LIMIT_REACHED_FAILURE))
 }
 
+fn codebase_indexing_disabled_admin_text(
+    blocking_team_name: Option<&str>,
+    current_team_disables: bool,
+) -> String {
+    if current_team_disables {
+        return INDEXING_DISABLED_ADMIN_TEXT.to_string();
+    }
+
+    blocking_team_name.map_or_else(
+        || INDEXING_DISABLED_ADMIN_TEXT.to_string(),
+        |team_name| {
+            format!("Codebase indexing is unavailable because {team_name} has disabled it.")
+        },
+    )
+}
+
+fn codebase_indexing_tooltip_text(
+    global_ai_enabled: bool,
+    window_id: WindowId,
+    app: &AppContext,
+) -> Option<String> {
+    let user_workspaces = UserWorkspaces::as_ref(app);
+    match user_workspaces.teams_allow_codebase_context() {
+        AdminEnablementSetting::Enable => Some(INDEXING_WORKSPACE_ENABLED_ADMIN_TEXT.to_string()),
+        AdminEnablementSetting::Disable => Some(codebase_indexing_disabled_admin_text(
+            user_workspaces
+                .team_disabling_codebase_context()
+                .map(|team| team.name.as_str()),
+            user_workspaces
+                .team_for_window(window_id)
+                .is_some_and(|team| {
+                    team.settings.codebase_context.value == AdminEnablementSetting::Disable
+                }),
+        )),
+        AdminEnablementSetting::RespectUserSetting if !global_ai_enabled => {
+            Some(INDEXING_DISABLED_GLOBAL_AI_TEXT.to_string())
+        }
+        AdminEnablementSetting::RespectUserSetting => None,
+    }
+}
+
 #[cfg(all(test, not(target_family = "wasm")))]
-#[path = "code_page_tests.rs"]
+#[path = "code_indexing_page_tests.rs"]
 mod tests;
 
 #[derive(Clone, Default)]
@@ -169,9 +181,9 @@ enum IndexingRefreshAction {
     RequestRemote,
     Resync,
 }
-pub struct CodeSettingsPageView {
+pub struct CodeIndexingPageView {
     page: PageType<Self>,
-    active_subpage: Option<CodeSubpage>,
+    window_id: WindowId,
     codebase_manual_resync_mouse_states: Vec<MouseStateHandle>,
     codebase_delete_mouse_states: Vec<MouseStateHandle>,
     #[cfg(not(target_family = "wasm"))]
@@ -189,12 +201,10 @@ pub struct CodeSettingsPageView {
     /// whether to show "Available for download" vs "Installed" and whether the
     /// "+" button should trigger install or just enable.
     suggested_server_statuses: HashMap<(PathBuf, LSPServerType), LspRepoStatus>,
-    #[cfg(feature = "local_fs")]
-    external_editor_view: Option<ViewHandle<ExternalEditorView>>,
 }
 
-impl CodeSettingsPageView {
-    pub fn new(ctx: &mut ViewContext<CodeSettingsPageView>) -> Self {
+impl CodeIndexingPageView {
+    pub fn new(ctx: &mut ViewContext<CodeIndexingPageView>) -> Self {
         let index_manager = CodebaseIndexManager::handle(ctx);
         let codebase_count = index_manager
             .as_ref(ctx)
@@ -327,71 +337,11 @@ impl CodeSettingsPageView {
             }
         });
 
-        let manual_add_directory_button = ctx.add_typed_action_view(|_| {
-            ActionButton::new("Index new folder", SecondaryTheme)
-                .with_icon(Icon::FindAll)
-                .on_click(|ctx| {
-                    ctx.dispatch_typed_action(CodeSettingsPageAction::ManualAddDirectory);
-                })
-        });
-
-        let code_page_widget = CodePageWidget {
-            switch_state: Default::default(),
-            auto_index_switch_state: Default::default(),
-            manual_add_directory_button,
-        };
-
         let workspace_count = PersistedWorkspace::as_ref(ctx).workspaces().count();
 
-        #[cfg(feature = "local_fs")]
-        let external_editor_view;
-        let page = if FeatureFlag::OpenWarpNewSettingsModes.is_enabled() {
-            #[cfg(feature = "local_fs")]
-            {
-                external_editor_view = Some(ctx.add_typed_action_view(ExternalEditorView::new));
-            }
-
-            let codebase_indexing_widgets: Vec<Box<dyn SettingsWidget<View = Self>>> =
-                vec![Box::new(CodebaseIndexingCategorizedWidget {
-                    inner: code_page_widget,
-                })];
-            #[cfg(feature = "local_fs")]
-            let mut code_editor_review_widgets: Vec<
-                Box<dyn SettingsWidget<View = Self>>,
-            > = vec![Box::new(ExternalEditorCodeWidget)];
-            #[cfg(not(feature = "local_fs"))]
-            let mut code_editor_review_widgets: Vec<
-                Box<dyn SettingsWidget<View = Self>>,
-            > = vec![];
-            code_editor_review_widgets.extend([
-                Box::new(AutoOpenCodeReviewPaneCodeWidget::default())
-                    as Box<dyn SettingsWidget<View = Self>>,
-                Box::new(CodeReviewPanelToggleWidget::default()),
-                Box::new(CodeReviewDiffStatsToggleWidget::default()),
-                Box::new(ProjectExplorerToggleWidget::default()),
-                Box::new(GlobalSearchToggleWidget::default()),
-                Box::new(ShowHiddenFilesToggleWidget::default()),
-                Box::new(FormatOnSaveToggleWidget::default()),
-                Box::new(AutoSaveToggleWidget::default()),
-            ]);
-            let categories = vec![
-                Category::new("Codebase Indexing", codebase_indexing_widgets),
-                Category::new("Code Editor and Review", code_editor_review_widgets),
-            ];
-            PageType::new_categorized(categories, None)
-        } else {
-            #[cfg(feature = "local_fs")]
-            {
-                external_editor_view = None;
-            }
-            let widgets: Vec<Box<dyn SettingsWidget<View = Self>>> =
-                vec![Box::new(code_page_widget)];
-            PageType::new_uncategorized(widgets, None)
-        };
-
         Self {
-            page,
-            active_subpage: None,
+            page: Self::build_page(ctx),
+            window_id: ctx.window_id(),
             codebase_manual_resync_mouse_states: (0..codebase_count)
                 .map(|_| Default::default())
                 .collect(),
@@ -409,125 +359,25 @@ impl CodeSettingsPageView {
                 .map(|_| Default::default())
                 .collect(),
             suggested_server_statuses: HashMap::new(),
-            #[cfg(feature = "local_fs")]
-            external_editor_view,
         }
     }
 
-    /// Set the active subpage and rebuild the page to show only the relevant widgets.
-    pub fn set_active_subpage(
-        &mut self,
-        subpage: Option<CodeSubpage>,
-        ctx: &mut ViewContext<Self>,
-    ) {
-        if self.active_subpage != subpage {
-            self.active_subpage = subpage;
-            // Rebuild the page with the relevant widgets for the selected subpage,
-            // or the full categorized page when subpage is None.
-            if let Some(subpage) = subpage {
-                let manual_add_directory_button = ctx.add_typed_action_view(|_| {
-                    ActionButton::new("Index new folder", SecondaryTheme)
-                        .with_icon(Icon::FindAll)
-                        .on_click(|ctx| {
-                            ctx.dispatch_typed_action(CodeSettingsPageAction::ManualAddDirectory);
-                        })
-                });
-                let mut widgets: Vec<Box<dyn SettingsWidget<View = Self>>> = Vec::new();
-                match subpage {
-                    CodeSubpage::Indexing => {
-                        widgets.push(Box::new(CodebaseIndexingCategorizedWidget {
-                            inner: CodePageWidget {
-                                switch_state: Default::default(),
-                                auto_index_switch_state: Default::default(),
-                                manual_add_directory_button,
-                            },
-                        }));
-                    }
-                    CodeSubpage::EditorAndCodeReview => {
-                        #[cfg(feature = "local_fs")]
-                        widgets.push(Box::new(ExternalEditorCodeWidget));
-                        widgets.extend([
-                            Box::new(AutoOpenCodeReviewPaneCodeWidget::default())
-                                as Box<dyn SettingsWidget<View = Self>>,
-                            Box::new(CodeReviewPanelToggleWidget::default()),
-                            Box::new(CodeReviewDiffStatsToggleWidget::default()),
-                            Box::new(ProjectExplorerToggleWidget::default()),
-                            Box::new(GlobalSearchToggleWidget::default()),
-                            Box::new(ShowHiddenFilesToggleWidget::default()),
-                            Box::new(FormatOnSaveToggleWidget::default()),
-                            Box::new(AutoSaveToggleWidget::default()),
-                        ]);
-                    }
-                }
-                self.page = PageType::new_uncategorized(widgets, Some(subpage.title()));
-            } else {
-                // None: rebuild the full categorized page (all widgets).
-                self.page = Self::build_full_page(ctx);
-            }
-            ctx.notify();
-        }
-    }
-
-    /// Builds the full categorized page with all Code widgets.
-    /// Used for the default/legacy view and when resetting to all-widgets mode for search.
-    fn build_full_page(ctx: &mut ViewContext<Self>) -> PageType<Self> {
-        if FeatureFlag::OpenWarpNewSettingsModes.is_enabled() {
-            let manual_add_directory_button = ctx.add_typed_action_view(|_| {
-                ActionButton::new("Index new folder", SecondaryTheme)
-                    .with_icon(Icon::FindAll)
-                    .on_click(|ctx| {
-                        ctx.dispatch_typed_action(CodeSettingsPageAction::ManualAddDirectory);
-                    })
-            });
-            let code_page_widget = CodePageWidget {
+    fn build_page(ctx: &mut ViewContext<Self>) -> PageType<Self> {
+        let manual_add_directory_button = ctx.add_typed_action_view(|_| {
+            ActionButton::new("Index new folder", SecondaryTheme)
+                .with_icon(Icon::FindAll)
+                .on_click(|ctx| {
+                    ctx.dispatch_typed_action(CodeIndexingPageAction::ManualAddDirectory);
+                })
+        });
+        let widget = CodeIndexingPageWidget {
+            inner: CodePageWidget {
                 switch_state: Default::default(),
                 auto_index_switch_state: Default::default(),
                 manual_add_directory_button,
-            };
-            let codebase_indexing_widgets: Vec<Box<dyn SettingsWidget<View = Self>>> =
-                vec![Box::new(CodebaseIndexingCategorizedWidget {
-                    inner: code_page_widget,
-                })];
-            #[cfg(feature = "local_fs")]
-            let mut code_editor_review_widgets: Vec<
-                Box<dyn SettingsWidget<View = Self>>,
-            > = vec![Box::new(ExternalEditorCodeWidget)];
-            #[cfg(not(feature = "local_fs"))]
-            let mut code_editor_review_widgets: Vec<
-                Box<dyn SettingsWidget<View = Self>>,
-            > = vec![];
-            code_editor_review_widgets.extend([
-                Box::new(AutoOpenCodeReviewPaneCodeWidget::default())
-                    as Box<dyn SettingsWidget<View = Self>>,
-                Box::new(CodeReviewPanelToggleWidget::default()),
-                Box::new(CodeReviewDiffStatsToggleWidget::default()),
-                Box::new(ProjectExplorerToggleWidget::default()),
-                Box::new(GlobalSearchToggleWidget::default()),
-                Box::new(ShowHiddenFilesToggleWidget::default()),
-                Box::new(FormatOnSaveToggleWidget::default()),
-                Box::new(AutoSaveToggleWidget::default()),
-            ]);
-            let categories = vec![
-                Category::new("Codebase Indexing", codebase_indexing_widgets),
-                Category::new("Code Editor and Review", code_editor_review_widgets),
-            ];
-            PageType::new_categorized(categories, None)
-        } else {
-            let manual_add_directory_button = ctx.add_typed_action_view(|_| {
-                ActionButton::new("Index new folder", SecondaryTheme)
-                    .with_icon(Icon::FindAll)
-                    .on_click(|ctx| {
-                        ctx.dispatch_typed_action(CodeSettingsPageAction::ManualAddDirectory);
-                    })
-            });
-            let widgets: Vec<Box<dyn SettingsWidget<View = Self>>> =
-                vec![Box::new(CodePageWidget {
-                    switch_state: Default::default(),
-                    auto_index_switch_state: Default::default(),
-                    manual_add_directory_button,
-                })];
-            PageType::new_uncategorized(widgets, None)
-        }
+            },
+        };
+        PageType::new_monolith(widget, Some(PAGE_TITLE), true)
     }
 
     /// Resize `open_project_rules_mouse_states` to match the current workspace count.
@@ -569,13 +419,13 @@ impl CodeSettingsPageView {
     }
 }
 
-impl Entity for CodeSettingsPageView {
-    type Event = CodeSettingsPageEvent;
+impl Entity for CodeIndexingPageView {
+    type Event = CodeIndexingPageEvent;
 }
 
-impl View for CodeSettingsPageView {
+impl View for CodeIndexingPageView {
     fn ui_name() -> &'static str {
-        "CodePage"
+        "CodeIndexingPage"
     }
 
     fn render(&self, app: &AppContext) -> Box<dyn Element> {
@@ -584,7 +434,7 @@ impl View for CodeSettingsPageView {
 }
 
 #[derive(Debug, Clone)]
-pub enum CodeSettingsPageEvent {
+pub enum CodeIndexingPageEvent {
     SignupAnonymousUser,
     OpenLspLogs { log_path: PathBuf },
     OpenProjectRules { rule_paths: Vec<PathBuf> },
@@ -592,7 +442,7 @@ pub enum CodeSettingsPageEvent {
 
 // Define the code page actions.
 #[derive(Debug, Clone)]
-pub enum CodeSettingsPageAction {
+pub enum CodeIndexingPageAction {
     ToggleCodebaseContext,
     ToggleAutoIndexing,
     ManualResync(PathBuf),
@@ -620,14 +470,6 @@ pub enum CodeSettingsPageAction {
     OpenProjectRules {
         rule_paths: Vec<PathBuf>,
     },
-    ToggleCodeReviewPanel,
-    ToggleShowCodeReviewDiffStats,
-    ToggleAutoOpenCodeReviewPane,
-    ToggleProjectExplorer,
-    ToggleGlobalSearch,
-    ToggleShowHiddenFiles,
-    ToggleFormatOnSave,
-    ToggleAutoSave,
     /// Install (if needed) and enable a suggested LSP server.
     InstallAndEnableLspServer {
         workspace_path: PathBuf,
@@ -640,14 +482,14 @@ pub enum CodeSettingsPageAction {
     },
 }
 
-impl TypedActionView for CodeSettingsPageView {
-    type Action = CodeSettingsPageAction;
+impl TypedActionView for CodeIndexingPageView {
+    type Action = CodeIndexingPageAction;
 
     fn handle_action(&mut self, action: &Self::Action, ctx: &mut ViewContext<Self>) {
         match action {
-            CodeSettingsPageAction::ToggleCodebaseContext => {
+            CodeIndexingPageAction::ToggleCodebaseContext => {
                 // If the organization has an explicit setting (on or off), ignore user toggles.
-                let setting = UserWorkspaces::as_ref(ctx).team_allows_codebase_context();
+                let setting = UserWorkspaces::as_ref(ctx).teams_allow_codebase_context();
                 match setting {
                     AdminEnablementSetting::Enable | AdminEnablementSetting::Disable => {
                         return;
@@ -675,7 +517,7 @@ impl TypedActionView for CodeSettingsPageView {
 
                 ctx.notify();
             }
-            CodeSettingsPageAction::ToggleAutoIndexing => {
+            CodeIndexingPageAction::ToggleAutoIndexing => {
                 CodeSettings::handle(ctx).update(ctx, |settings, ctx| {
                     match settings.auto_indexing_enabled.toggle_and_save_value(ctx) {
                         Ok(new_value) => {
@@ -694,41 +536,41 @@ impl TypedActionView for CodeSettingsPageView {
 
                 ctx.notify();
             }
-            CodeSettingsPageAction::ManualResync(repo_path) => {
+            CodeIndexingPageAction::ManualResync(repo_path) => {
                 CodebaseIndexManager::handle(ctx).update(ctx, |manager, ctx| {
                     manager.try_manual_resync_codebase(repo_path, ctx);
                 });
             }
-            CodeSettingsPageAction::DeleteIndex(repo_path) => {
+            CodeIndexingPageAction::DeleteIndex(repo_path) => {
                 CodebaseIndexManager::handle(ctx).update(ctx, |manager, ctx| {
                     manager.drop_index(repo_path.clone(), ctx);
                 });
             }
             #[cfg(not(target_family = "wasm"))]
-            CodeSettingsPageAction::RequestRemoteIndex(remote_path) => {
+            CodeIndexingPageAction::RequestRemoteIndex(remote_path) => {
                 RemoteCodebaseIndexModel::handle(ctx).update(ctx, |model, ctx| {
                     model.request_index(remote_path.clone(), ctx);
                 });
             }
             #[cfg(not(target_family = "wasm"))]
-            CodeSettingsPageAction::ManualResyncRemote(remote_path) => {
+            CodeIndexingPageAction::ManualResyncRemote(remote_path) => {
                 RemoteCodebaseIndexModel::handle(ctx).update(ctx, |model, ctx| {
                     model.resync_index(remote_path.clone(), ctx);
                 });
             }
             #[cfg(not(target_family = "wasm"))]
-            CodeSettingsPageAction::DeleteRemoteIndex(remote_path) => {
+            CodeIndexingPageAction::DeleteRemoteIndex(remote_path) => {
                 RemoteCodebaseIndexModel::handle(ctx).update(ctx, |model, ctx| {
                     model.drop_index(remote_path.clone(), ctx);
                 });
             }
-            CodeSettingsPageAction::ManualAddDirectory => {
+            CodeIndexingPageAction::ManualAddDirectory => {
                 self.open_directory_picker(ctx);
             }
-            CodeSettingsPageAction::SignupAnonymousUser => {
-                ctx.emit(CodeSettingsPageEvent::SignupAnonymousUser);
+            CodeIndexingPageAction::SignupAnonymousUser => {
+                ctx.emit(CodeIndexingPageEvent::SignupAnonymousUser);
             }
-            CodeSettingsPageAction::ToggleLspServer {
+            CodeIndexingPageAction::ToggleLspServer {
                 workspace_path,
                 server_type,
                 currently_enabled,
@@ -772,7 +614,7 @@ impl TypedActionView for CodeSettingsPageView {
                 }
                 ctx.notify();
             }
-            CodeSettingsPageAction::RestartLspServer { server } => {
+            CodeIndexingPageAction::RestartLspServer { server } => {
                 let server_name = server.as_ref(ctx).server_name();
                 send_telemetry_from_ctx!(
                     LspTelemetryEvent::ControlAction {
@@ -785,7 +627,7 @@ impl TypedActionView for CodeSettingsPageView {
                     server.restart(ctx);
                 });
             }
-            CodeSettingsPageAction::OpenLspLogs { log_path } => {
+            CodeIndexingPageAction::OpenLspLogs { log_path } => {
                 send_telemetry_from_ctx!(
                     LspTelemetryEvent::ControlAction {
                         action: LspControlActionType::OpenLogs,
@@ -793,83 +635,16 @@ impl TypedActionView for CodeSettingsPageView {
                     },
                     ctx
                 );
-                ctx.emit(CodeSettingsPageEvent::OpenLspLogs {
+                ctx.emit(CodeIndexingPageEvent::OpenLspLogs {
                     log_path: log_path.clone(),
                 });
             }
-            CodeSettingsPageAction::OpenProjectRules { rule_paths } => {
-                ctx.emit(CodeSettingsPageEvent::OpenProjectRules {
+            CodeIndexingPageAction::OpenProjectRules { rule_paths } => {
+                ctx.emit(CodeIndexingPageEvent::OpenProjectRules {
                     rule_paths: rule_paths.clone(),
                 });
             }
-            CodeSettingsPageAction::ToggleCodeReviewPanel => {
-                TabSettings::handle(ctx).update(ctx, |settings, ctx| {
-                    report_if_error!(settings.show_code_review_button.toggle_and_save_value(ctx));
-                });
-                ctx.notify();
-            }
-            CodeSettingsPageAction::ToggleShowCodeReviewDiffStats => {
-                TabSettings::handle(ctx).update(ctx, |settings, ctx| {
-                    report_if_error!(
-                        settings
-                            .show_code_review_diff_stats
-                            .toggle_and_save_value(ctx)
-                    );
-                });
-                ctx.notify();
-            }
-            CodeSettingsPageAction::ToggleProjectExplorer => {
-                CodeSettings::handle(ctx).update(ctx, |settings, ctx| {
-                    report_if_error!(settings.show_project_explorer.toggle_and_save_value(ctx));
-                });
-                ctx.notify();
-            }
-            CodeSettingsPageAction::ToggleGlobalSearch => {
-                CodeSettings::handle(ctx).update(ctx, |settings, ctx| {
-                    report_if_error!(settings.show_global_search.toggle_and_save_value(ctx));
-                });
-                ctx.notify();
-            }
-            CodeSettingsPageAction::ToggleShowHiddenFiles => {
-                CodeSettings::handle(ctx).update(ctx, |settings, ctx| {
-                    report_if_error!(settings.show_hidden_files.toggle_and_save_value(ctx));
-                });
-                ctx.notify();
-            }
-            CodeSettingsPageAction::ToggleFormatOnSave => {
-                CodeSettings::handle(ctx).update(ctx, |settings, ctx| {
-                    report_if_error!(settings.format_on_save.toggle_and_save_value(ctx));
-                });
-                ctx.notify();
-            }
-            CodeSettingsPageAction::ToggleAutoSave => {
-                CodeSettings::handle(ctx).update(ctx, |settings, ctx| {
-                    report_if_error!(settings.auto_save.toggle_and_save_value(ctx));
-                });
-                ctx.notify();
-            }
-            CodeSettingsPageAction::ToggleAutoOpenCodeReviewPane => {
-                GeneralSettings::handle(ctx).update(ctx, |settings, ctx| {
-                    report_if_error!(
-                        settings
-                            .auto_open_code_review_pane_on_first_agent_change
-                            .toggle_and_save_value(ctx)
-                    );
-                });
-                send_telemetry_from_ctx!(
-                    TelemetryEvent::FeaturesPageAction {
-                        action: "ToggleAutoOpenCodeReviewPane".to_string(),
-                        value: format!(
-                            "{}",
-                            *GeneralSettings::as_ref(ctx)
-                                .auto_open_code_review_pane_on_first_agent_change
-                        )
-                    },
-                    ctx
-                );
-                ctx.notify();
-            }
-            CodeSettingsPageAction::InstallAndEnableLspServer {
+            CodeIndexingPageAction::InstallAndEnableLspServer {
                 workspace_path,
                 server_type,
             } => {
@@ -900,7 +675,7 @@ impl TypedActionView for CodeSettingsPageView {
                 let _ = workspace_path;
                 ctx.notify();
             }
-            CodeSettingsPageAction::EnableSuggestedLspServer {
+            CodeIndexingPageAction::EnableSuggestedLspServer {
                 workspace_path,
                 server_type,
             } => {
@@ -939,8 +714,8 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
         ToggleSettingActionPair::add_toggle_setting_action_pairs_as_bindings(
             vec![ToggleSettingActionPair::new(
                 "codebase index",
-                builder(SettingsAction::Code(
-                    CodeSettingsPageAction::ToggleCodebaseContext,
+                builder(SettingsAction::CodeIndexing(
+                    CodeIndexingPageAction::ToggleCodebaseContext,
                 )),
                 &(context.clone() & id!(flags::IS_ANY_AI_ENABLED)),
                 flags::IS_CODEBASE_INDEXING_ENABLED,
@@ -951,68 +726,12 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
         ToggleSettingActionPair::add_toggle_setting_action_pairs_as_bindings(
             vec![ToggleSettingActionPair::new(
                 "auto-indexing",
-                builder(SettingsAction::Code(
-                    CodeSettingsPageAction::ToggleAutoIndexing,
+                builder(SettingsAction::CodeIndexing(
+                    CodeIndexingPageAction::ToggleAutoIndexing,
                 )),
                 &(context.clone() & id!(flags::IS_CODEBASE_INDEXING_ENABLED)),
                 flags::IS_AUTOINDEXING_ENABLED,
             )],
-            app,
-        );
-    }
-
-    if FeatureFlag::OpenWarpNewSettingsModes.is_enabled() {
-        ToggleSettingActionPair::add_toggle_setting_action_pairs_as_bindings(
-            vec![
-                ToggleSettingActionPair::new(
-                    "auto open code review panel",
-                    builder(SettingsAction::Code(
-                        CodeSettingsPageAction::ToggleAutoOpenCodeReviewPane,
-                    )),
-                    context,
-                    flags::AUTO_OPEN_CODE_REVIEW_PANE_FLAG,
-                ),
-                ToggleSettingActionPair::new(
-                    "code review button",
-                    builder(SettingsAction::Code(
-                        CodeSettingsPageAction::ToggleCodeReviewPanel,
-                    )),
-                    context,
-                    flags::SHOW_CODE_REVIEW_BUTTON_FLAG,
-                ),
-                ToggleSettingActionPair::new(
-                    "diff stats on code review button",
-                    builder(SettingsAction::Code(
-                        CodeSettingsPageAction::ToggleShowCodeReviewDiffStats,
-                    )),
-                    context,
-                    flags::SHOW_CODE_REVIEW_DIFF_STATS_FLAG,
-                ),
-                ToggleSettingActionPair::new(
-                    "project explorer",
-                    builder(SettingsAction::Code(
-                        CodeSettingsPageAction::ToggleProjectExplorer,
-                    )),
-                    context,
-                    flags::SHOW_PROJECT_EXPLORER,
-                ),
-                ToggleSettingActionPair::new(
-                    "global file search",
-                    builder(SettingsAction::Code(
-                        CodeSettingsPageAction::ToggleGlobalSearch,
-                    )),
-                    context,
-                    flags::SHOW_GLOBAL_SEARCH,
-                ),
-                ToggleSettingActionPair::new(
-                    "show hidden files in project explorer",
-                    builder(SettingsAction::Code(
-                        CodeSettingsPageAction::ToggleShowHiddenFiles,
-                    )),
-                    context,
-                    flags::SHOW_HIDDEN_FILES,
-                ),
-            ],
             app,
         );
     }
@@ -1025,7 +744,7 @@ struct CodePageWidget {
 }
 
 impl SettingsWidget for CodePageWidget {
-    type View = CodeSettingsPageView;
+    type View = CodeIndexingPageView;
 
     fn search_terms(&self) -> &str {
         "code coding codebase repository index indexing indices context path lsp language server"
@@ -1049,6 +768,7 @@ impl SettingsWidget for CodePageWidget {
         content.add_child(self.render_initialization_settings_header(appearance));
         content.add_child(self.render_codebase_indexing_toggle_row(
             global_ai_enabled,
+            view.window_id,
             appearance,
             app,
         ));
@@ -1109,7 +829,7 @@ impl CodePageWidget {
                 AUTO_INDEX_FEATURE_NAME,
                 self.auto_index_switch_state.clone(),
                 auto_indexing_enabled,
-                CodeSettingsPageAction::ToggleAutoIndexing,
+                CodeIndexingPageAction::ToggleAutoIndexing,
                 appearance,
             ),
             // Use subtext styling for description (gray color per Figma)
@@ -1142,7 +862,7 @@ impl CodePageWidget {
         label: &'static str,
         switch_state: SwitchStateHandle,
         auto_indexing_enabled: bool,
-        action: CodeSettingsPageAction,
+        action: CodeIndexingPageAction,
         appearance: &Appearance,
     ) -> Box<dyn Element> {
         let ui_builder = appearance.ui_builder();
@@ -1253,12 +973,12 @@ impl CodePageWidget {
     fn render_codebase_indexing_toggle_row(
         &self,
         global_ai_enabled: bool,
+        window_id: WindowId,
         appearance: &Appearance,
         app: &AppContext,
     ) -> Box<dyn Element> {
         let ui_builder = appearance.ui_builder();
         let theme = appearance.theme();
-        let admin_setting = UserWorkspaces::as_ref(app).team_allows_codebase_context();
 
         let label = ui_builder
             .span(CODEBASE_INDEXING_LABEL)
@@ -1275,19 +995,13 @@ impl CodePageWidget {
             .switch(self.switch_state.clone())
             .check(UserWorkspaces::as_ref(app).is_codebase_context_enabled(app));
 
-        let disabled_tooltip_text = match admin_setting {
-            AdminEnablementSetting::Enable => Some(INDEXING_WORKSPACE_ENABLED_ADMIN_TEXT),
-            AdminEnablementSetting::Disable => Some(INDEXING_DISABLED_ADMIN_TEXT),
-            AdminEnablementSetting::RespectUserSetting if !global_ai_enabled => {
-                Some(INDEXING_DISABLED_GLOBAL_AI_TEXT)
-            }
-            AdminEnablementSetting::RespectUserSetting => None,
-        };
+        let disabled_tooltip_text =
+            codebase_indexing_tooltip_text(global_ai_enabled, window_id, app);
 
         let toggle_element = if let Some(tooltip_text) = disabled_tooltip_text {
             switch
                 .with_tooltip(TooltipConfig {
-                    text: tooltip_text.to_string(),
+                    text: tooltip_text,
                     styles: ui_builder.default_tool_tip_styles(),
                 })
                 .disable()
@@ -1297,7 +1011,7 @@ impl CodePageWidget {
             switch
                 .build()
                 .on_click(move |ctx, _, _| {
-                    ctx.dispatch_typed_action(CodeSettingsPageAction::ToggleCodebaseContext);
+                    ctx.dispatch_typed_action(CodeIndexingPageAction::ToggleCodebaseContext);
                 })
                 .finish()
         };
@@ -1557,7 +1271,7 @@ impl CodePageWidget {
                 .build()
                 .with_cursor(Cursor::PointingHand)
                 .on_click(move |ctx, _, _| {
-                    ctx.dispatch_typed_action(CodeSettingsPageAction::OpenProjectRules {
+                    ctx.dispatch_typed_action(CodeIndexingPageAction::OpenProjectRules {
                         rule_paths: workspace_rule_paths.clone(),
                     });
                 })
@@ -1974,14 +1688,14 @@ impl CodePageWidget {
                             LocalOrRemotePath::Local(codebase_path),
                             IndexingRefreshAction::Resync,
                         ) => {
-                            ctx.dispatch_typed_action(CodeSettingsPageAction::ManualResync(
+                            ctx.dispatch_typed_action(CodeIndexingPageAction::ManualResync(
                                 codebase_path.clone(),
                             ));
                         }
                         (LocalOrRemotePath::Local(_), IndexingRefreshAction::RequestRemote) => {}
                         #[cfg(not(target_family = "wasm"))]
                         (LocalOrRemotePath::Remote(remote_path), IndexingRefreshAction::Resync) => {
-                            ctx.dispatch_typed_action(CodeSettingsPageAction::ManualResyncRemote(
+                            ctx.dispatch_typed_action(CodeIndexingPageAction::ManualResyncRemote(
                                 remote_path.clone(),
                             ));
                         }
@@ -1990,7 +1704,7 @@ impl CodePageWidget {
                             LocalOrRemotePath::Remote(remote_path),
                             IndexingRefreshAction::RequestRemote,
                         ) => {
-                            ctx.dispatch_typed_action(CodeSettingsPageAction::RequestRemoteIndex(
+                            ctx.dispatch_typed_action(CodeIndexingPageAction::RequestRemoteIndex(
                                 remote_path.clone(),
                             ));
                         }
@@ -2013,13 +1727,13 @@ impl CodePageWidget {
                     .build()
                     .on_click(move |ctx, _, _| match &action_target {
                         LocalOrRemotePath::Local(codebase_path) => {
-                            ctx.dispatch_typed_action(CodeSettingsPageAction::DeleteIndex(
+                            ctx.dispatch_typed_action(CodeIndexingPageAction::DeleteIndex(
                                 codebase_path.clone(),
                             ));
                         }
                         #[cfg(not(target_family = "wasm"))]
                         LocalOrRemotePath::Remote(remote_path) => {
-                            ctx.dispatch_typed_action(CodeSettingsPageAction::DeleteRemoteIndex(
+                            ctx.dispatch_typed_action(CodeIndexingPageAction::DeleteRemoteIndex(
                                 remote_path.clone(),
                             ));
                         }
@@ -2205,14 +1919,14 @@ impl CodePageWidget {
                 .on_click(move |ctx, _, _| {
                     if needs_install {
                         ctx.dispatch_typed_action(
-                            CodeSettingsPageAction::InstallAndEnableLspServer {
+                            CodeIndexingPageAction::InstallAndEnableLspServer {
                                 workspace_path: workspace_path_clone.clone(),
                                 server_type,
                             },
                         );
                     } else {
                         ctx.dispatch_typed_action(
-                            CodeSettingsPageAction::EnableSuggestedLspServer {
+                            CodeIndexingPageAction::EnableSuggestedLspServer {
                                 workspace_path: workspace_path_clone.clone(),
                                 server_type,
                             },
@@ -2354,7 +2068,7 @@ impl CodePageWidget {
                 .build()
                 .with_cursor(Cursor::PointingHand)
                 .on_click(move |ctx, _, _| {
-                    ctx.dispatch_typed_action(CodeSettingsPageAction::RestartLspServer {
+                    ctx.dispatch_typed_action(CodeIndexingPageAction::RestartLspServer {
                         server: server_for_action.clone(),
                     });
                 })
@@ -2384,7 +2098,7 @@ impl CodePageWidget {
                     .build()
                     .with_cursor(Cursor::PointingHand)
                     .on_click(move |ctx, _, _| {
-                        ctx.dispatch_typed_action(CodeSettingsPageAction::OpenLspLogs {
+                        ctx.dispatch_typed_action(CodeIndexingPageAction::OpenLspLogs {
                             log_path: log_path.clone(),
                         });
                     })
@@ -2403,7 +2117,7 @@ impl CodePageWidget {
                 .check(is_enabled)
                 .build()
                 .on_click(move |ctx, _, _| {
-                    ctx.dispatch_typed_action(CodeSettingsPageAction::ToggleLspServer {
+                    ctx.dispatch_typed_action(CodeIndexingPageAction::ToggleLspServer {
                         workspace_path: workspace_path_clone.clone(),
                         server_type: server_type_clone,
                         currently_enabled: is_enabled,
@@ -2460,12 +2174,12 @@ impl CodePageWidget {
     }
 }
 
-struct CodebaseIndexingCategorizedWidget {
+struct CodeIndexingPageWidget {
     inner: CodePageWidget,
 }
 
-impl SettingsWidget for CodebaseIndexingCategorizedWidget {
-    type View = CodeSettingsPageView;
+impl SettingsWidget for CodeIndexingPageWidget {
+    type View = CodeIndexingPageView;
 
     fn search_terms(&self) -> &str {
         "codebase index indexing repository code context embedding auto-index lsp language server"
@@ -2484,24 +2198,16 @@ impl SettingsWidget for CodebaseIndexingCategorizedWidget {
         let mut content = Flex::column();
 
         // Codebase indexing toggle using render_body_item for consistent styling
-        let admin_setting = UserWorkspaces::as_ref(app).team_allows_codebase_context();
         let switch = ui_builder
             .switch(self.inner.switch_state.clone())
             .check(codebase_context_enabled);
-
-        let disabled_tooltip_text = match admin_setting {
-            AdminEnablementSetting::Enable => Some(INDEXING_WORKSPACE_ENABLED_ADMIN_TEXT),
-            AdminEnablementSetting::Disable => Some(INDEXING_DISABLED_ADMIN_TEXT),
-            AdminEnablementSetting::RespectUserSetting if !global_ai_enabled => {
-                Some(INDEXING_DISABLED_GLOBAL_AI_TEXT)
-            }
-            AdminEnablementSetting::RespectUserSetting => None,
-        };
+        let disabled_tooltip_text =
+            codebase_indexing_tooltip_text(global_ai_enabled, view.window_id, app);
 
         let toggle_element = if let Some(tooltip_text) = disabled_tooltip_text {
             switch
                 .with_tooltip(TooltipConfig {
-                    text: tooltip_text.to_string(),
+                    text: tooltip_text,
                     styles: ui_builder.default_tool_tip_styles(),
                 })
                 .disable()
@@ -2511,12 +2217,12 @@ impl SettingsWidget for CodebaseIndexingCategorizedWidget {
             switch
                 .build()
                 .on_click(move |ctx, _, _| {
-                    ctx.dispatch_typed_action(CodeSettingsPageAction::ToggleCodebaseContext);
+                    ctx.dispatch_typed_action(CodeIndexingPageAction::ToggleCodebaseContext);
                 })
                 .finish()
         };
 
-        content.add_child(render_body_item::<CodeSettingsPageAction>(
+        content.add_child(render_body_item::<CodeIndexingPageAction>(
             CODEBASE_INDEXING_LABEL.into(),
             None,
             LocalOnlyIconState::Hidden,
@@ -2530,7 +2236,7 @@ impl SettingsWidget for CodebaseIndexingCategorizedWidget {
         if global_ai_enabled && codebase_context_enabled {
             let auto_indexing_enabled = *CodeSettings::as_ref(app).auto_indexing_enabled;
 
-            content.add_child(render_body_item::<CodeSettingsPageAction>(
+            content.add_child(render_body_item::<CodeIndexingPageAction>(
                 AUTO_INDEX_FEATURE_NAME.into(),
                 None,
                 LocalOnlyIconState::Hidden,
@@ -2541,7 +2247,7 @@ impl SettingsWidget for CodebaseIndexingCategorizedWidget {
                     .check(auto_indexing_enabled)
                     .build()
                     .on_click(move |ctx, _, _| {
-                        ctx.dispatch_typed_action(CodeSettingsPageAction::ToggleAutoIndexing);
+                        ctx.dispatch_typed_action(CodeIndexingPageAction::ToggleAutoIndexing);
                     })
                     .finish(),
                 Some(AUTO_INDEX_DESCRIPTION.into()),
@@ -2584,73 +2290,9 @@ impl SettingsWidget for CodebaseIndexingCategorizedWidget {
     }
 }
 
-#[cfg(feature = "local_fs")]
-struct ExternalEditorCodeWidget;
-
-#[cfg(feature = "local_fs")]
-impl SettingsWidget for ExternalEditorCodeWidget {
-    type View = CodeSettingsPageView;
-
-    fn search_terms(&self) -> &str {
-        "code editor open files markdown AI conversations layout pane tab"
-    }
-
-    fn render(
-        &self,
-        view: &Self::View,
-        _appearance: &Appearance,
-        _app: &AppContext,
-    ) -> Box<dyn Element> {
-        if let Some(editor_view) = &view.external_editor_view {
-            ChildView::new(editor_view).finish()
-        } else {
-            Empty::new().finish()
-        }
-    }
-}
-
-#[derive(Default)]
-struct AutoOpenCodeReviewPaneCodeWidget {
-    switch_state: SwitchStateHandle,
-}
-
-impl SettingsWidget for AutoOpenCodeReviewPaneCodeWidget {
-    type View = CodeSettingsPageView;
-
-    fn search_terms(&self) -> &str {
-        "oz auto open code review pane panel agent mode change first time accepted diff view conversation"
-    }
-
-    fn render(
-        &self,
-        _view: &Self::View,
-        appearance: &Appearance,
-        app: &AppContext,
-    ) -> Box<dyn Element> {
-        let general_settings = GeneralSettings::as_ref(app);
-        render_body_item::<CodeSettingsPageAction>(
-            "Auto open code review panel".into(),
-            None,
-            LocalOnlyIconState::Hidden,
-            ToggleState::Enabled,
-            appearance,
-            appearance
-                .ui_builder()
-                .switch(self.switch_state.clone())
-                .check(*general_settings.auto_open_code_review_pane_on_first_agent_change)
-                .build()
-                .on_click(move |ctx, _, _| {
-                    ctx.dispatch_typed_action(CodeSettingsPageAction::ToggleAutoOpenCodeReviewPane);
-                })
-                .finish(),
-            Some("When this setting is on, the code review panel will open on the first accepted diff of a conversation".into()),
-        )
-    }
-}
-
-impl SettingsPageMeta for CodeSettingsPageView {
+impl SettingsPageMeta for CodeIndexingPageView {
     fn section() -> SettingsSection {
-        SettingsSection::Code
+        SettingsSection::CodeIndexing
     }
 
     fn update_filter(&mut self, query: &str, ctx: &mut ViewContext<Self>) -> MatchData {
@@ -2679,304 +2321,8 @@ impl SettingsPageMeta for CodeSettingsPageView {
     }
 }
 
-impl From<ViewHandle<CodeSettingsPageView>> for SettingsPageViewHandle {
-    fn from(view_handle: ViewHandle<CodeSettingsPageView>) -> Self {
-        SettingsPageViewHandle::Code(view_handle)
-    }
-}
-
-#[derive(Default)]
-struct CodeReviewPanelToggleWidget {
-    switch_state: SwitchStateHandle,
-}
-
-impl SettingsWidget for CodeReviewPanelToggleWidget {
-    type View = CodeSettingsPageView;
-
-    fn search_terms(&self) -> &str {
-        "code review panel right side diff git"
-    }
-
-    fn render(
-        &self,
-        _view: &Self::View,
-        appearance: &Appearance,
-        app: &AppContext,
-    ) -> Box<dyn Element> {
-        let tab_settings = TabSettings::as_ref(app);
-
-        render_body_item::<CodeSettingsPageAction>(
-            "Show code review button".into(),
-            None,
-            LocalOnlyIconState::Hidden,
-            ToggleState::Enabled,
-            appearance,
-            appearance
-                .ui_builder()
-                .switch(self.switch_state.clone())
-                .check(*tab_settings.show_code_review_button)
-                .build()
-                .on_click(move |ctx, _, _| {
-                    ctx.dispatch_typed_action(CodeSettingsPageAction::ToggleCodeReviewPanel);
-                })
-                .finish(),
-            Some(
-                "Show a button in the top right of the window to toggle the code review panel."
-                    .into(),
-            ),
-        )
-    }
-}
-
-#[derive(Default)]
-struct CodeReviewDiffStatsToggleWidget {
-    switch_state: SwitchStateHandle,
-}
-
-impl SettingsWidget for CodeReviewDiffStatsToggleWidget {
-    type View = CodeSettingsPageView;
-
-    fn search_terms(&self) -> &str {
-        "code review diff stats lines added removed counts"
-    }
-
-    fn render(
-        &self,
-        _view: &Self::View,
-        appearance: &Appearance,
-        app: &AppContext,
-    ) -> Box<dyn Element> {
-        let tab_settings = TabSettings::as_ref(app);
-
-        render_body_item::<CodeSettingsPageAction>(
-            "Show diff stats on code review button".into(),
-            None,
-            LocalOnlyIconState::Hidden,
-            ToggleState::Enabled,
-            appearance,
-            appearance
-                .ui_builder()
-                .switch(self.switch_state.clone())
-                .check(*tab_settings.show_code_review_diff_stats)
-                .build()
-                .on_click(move |ctx, _, _| {
-                    ctx.dispatch_typed_action(
-                        CodeSettingsPageAction::ToggleShowCodeReviewDiffStats,
-                    );
-                })
-                .finish(),
-            Some("Show lines added and removed counts on the code review button.".into()),
-        )
-    }
-}
-
-#[derive(Default)]
-struct ProjectExplorerToggleWidget {
-    switch_state: SwitchStateHandle,
-}
-
-impl SettingsWidget for ProjectExplorerToggleWidget {
-    type View = CodeSettingsPageView;
-
-    fn search_terms(&self) -> &str {
-        "project explorer file tree left panel tools"
-    }
-
-    fn render(
-        &self,
-        _view: &Self::View,
-        appearance: &Appearance,
-        app: &AppContext,
-    ) -> Box<dyn Element> {
-        let code_settings = CodeSettings::as_ref(app);
-
-        render_body_item::<CodeSettingsPageAction>(
-            "Project explorer".into(),
-            None,
-            LocalOnlyIconState::Hidden,
-            ToggleState::Enabled,
-            appearance,
-            appearance
-                .ui_builder()
-                .switch(self.switch_state.clone())
-                .check(*code_settings.show_project_explorer)
-                .build()
-                .on_click(move |ctx, _, _| {
-                    ctx.dispatch_typed_action(CodeSettingsPageAction::ToggleProjectExplorer);
-                })
-                .finish(),
-            Some(
-                "Adds an IDE-style project explorer / file tree to the left side tools panel."
-                    .into(),
-            ),
-        )
-    }
-}
-
-#[derive(Default)]
-struct GlobalSearchToggleWidget {
-    switch_state: SwitchStateHandle,
-}
-
-impl SettingsWidget for GlobalSearchToggleWidget {
-    type View = CodeSettingsPageView;
-
-    fn search_terms(&self) -> &str {
-        "global search file search left panel tools"
-    }
-
-    fn render(
-        &self,
-        _view: &Self::View,
-        appearance: &Appearance,
-        app: &AppContext,
-    ) -> Box<dyn Element> {
-        let code_settings = CodeSettings::as_ref(app);
-
-        render_body_item::<CodeSettingsPageAction>(
-            "Global file search".into(),
-            None,
-            LocalOnlyIconState::Hidden,
-            ToggleState::Enabled,
-            appearance,
-            appearance
-                .ui_builder()
-                .switch(self.switch_state.clone())
-                .check(*code_settings.show_global_search)
-                .build()
-                .on_click(move |ctx, _, _| {
-                    ctx.dispatch_typed_action(CodeSettingsPageAction::ToggleGlobalSearch);
-                })
-                .finish(),
-            Some("Adds global file search to the left side tools panel.".into()),
-        )
-    }
-}
-
-#[derive(Default)]
-struct ShowHiddenFilesToggleWidget {
-    switch_state: SwitchStateHandle,
-}
-
-impl SettingsWidget for ShowHiddenFilesToggleWidget {
-    type View = CodeSettingsPageView;
-
-    fn search_terms(&self) -> &str {
-        "show hidden files dotfiles project explorer file tree"
-    }
-
-    fn render(
-        &self,
-        _view: &Self::View,
-        appearance: &Appearance,
-        app: &AppContext,
-    ) -> Box<dyn Element> {
-        let code_settings = CodeSettings::as_ref(app);
-
-        render_body_item::<CodeSettingsPageAction>(
-            "Show hidden files in project explorer".into(),
-            None,
-            LocalOnlyIconState::Hidden,
-            ToggleState::Enabled,
-            appearance,
-            appearance
-                .ui_builder()
-                .switch(self.switch_state.clone())
-                .check(*code_settings.show_hidden_files)
-                .build()
-                .on_click(move |ctx, _, _| {
-                    ctx.dispatch_typed_action(CodeSettingsPageAction::ToggleShowHiddenFiles);
-                })
-                .finish(),
-            Some(
-                "Show dotfiles and hidden files (starting with .) in the project explorer.".into(),
-            ),
-        )
-    }
-}
-
-#[derive(Default)]
-struct FormatOnSaveToggleWidget {
-    switch_state: SwitchStateHandle,
-}
-
-impl SettingsWidget for FormatOnSaveToggleWidget {
-    type View = CodeSettingsPageView;
-
-    fn search_terms(&self) -> &str {
-        "format on save lsp language server formatting reformat editor"
-    }
-
-    fn render(
-        &self,
-        _view: &Self::View,
-        appearance: &Appearance,
-        app: &AppContext,
-    ) -> Box<dyn Element> {
-        let code_settings = CodeSettings::as_ref(app);
-
-        render_body_item::<CodeSettingsPageAction>(
-            "Format on save (requires an active language server)".into(),
-            None,
-            LocalOnlyIconState::Hidden,
-            ToggleState::Enabled,
-            appearance,
-            appearance
-                .ui_builder()
-                .switch(self.switch_state.clone())
-                .check(*code_settings.format_on_save)
-                .build()
-                .on_click(move |ctx, _, _| {
-                    ctx.dispatch_typed_action(CodeSettingsPageAction::ToggleFormatOnSave);
-                })
-                .finish(),
-            Some(
-                "Only applies when a language server is active for the file. Automatically formats the file with the language server on save; other LSP features (hover, go-to-definition, references, diagnostics) are unaffected."
-                    .into(),
-            ),
-        )
-    }
-}
-
-#[derive(Default)]
-struct AutoSaveToggleWidget {
-    switch_state: SwitchStateHandle,
-}
-
-impl SettingsWidget for AutoSaveToggleWidget {
-    type View = CodeSettingsPageView;
-
-    fn search_terms(&self) -> &str {
-        "auto save autosave automatically save editor files on type focus"
-    }
-
-    fn render(
-        &self,
-        _view: &Self::View,
-        appearance: &Appearance,
-        app: &AppContext,
-    ) -> Box<dyn Element> {
-        let code_settings = CodeSettings::as_ref(app);
-
-        render_body_item::<CodeSettingsPageAction>(
-            "Auto save".into(),
-            None,
-            LocalOnlyIconState::Hidden,
-            ToggleState::Enabled,
-            appearance,
-            appearance
-                .ui_builder()
-                .switch(self.switch_state.clone())
-                .check(*code_settings.auto_save)
-                .build()
-                .on_click(move |ctx, _, _| {
-                    ctx.dispatch_typed_action(CodeSettingsPageAction::ToggleAutoSave);
-                })
-                .finish(),
-            Some(
-                "Automatically saves changes in the Warp text editor as you type and when the editor loses focus."
-                    .into(),
-            ),
-        )
+impl From<ViewHandle<CodeIndexingPageView>> for SettingsPageViewHandle {
+    fn from(view_handle: ViewHandle<CodeIndexingPageView>) -> Self {
+        SettingsPageViewHandle::CodeIndexing(view_handle)
     }
 }

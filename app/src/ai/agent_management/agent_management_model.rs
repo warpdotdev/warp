@@ -228,6 +228,26 @@ impl AgentNotificationsModel {
                         ctx,
                     );
                 }
+                CLIAgentSessionStatus::Cancelled => {
+                    let title = session_context
+                        .display_title()
+                        .unwrap_or_else(|| format!("{} cancelled", agent.display_name()));
+                    let metadata = TerminalViewMetadata::lookup(*terminal_view_id, ctx);
+                    self.add_notification(
+                        title,
+                        "Cancelled by user.".to_owned(),
+                        NotificationCategory::Complete,
+                        NotificationSourceAgent::CLI {
+                            agent: *agent,
+                            is_ambient: metadata.is_ambient,
+                        },
+                        NotificationOrigin::CLISession(*terminal_view_id),
+                        *terminal_view_id,
+                        vec![],
+                        metadata.branch,
+                        ctx,
+                    );
+                }
             },
         }
     }

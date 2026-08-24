@@ -109,7 +109,7 @@ pub(super) fn new_state(
             soft_wrap: true,
             autogrow: true,
             propagate_and_no_op_vertical_navigation_keys: PropagateAndNoOpNavigationKeys::Always,
-            supports_vim_mode: false,
+            supports_vim_mode: true,
             single_line: false,
             ..Default::default()
         };
@@ -425,7 +425,7 @@ pub(super) fn finish_commit_chain(
             show_toast(msg, ctx);
         }
         Err(err) => {
-            report_error!("Commit failed", extra: { "error" => %err });
+            report_error!(anyhow::anyhow!("{err}").context("Commit failed"));
             show_toast(user_facing_git_error(err), ctx);
         }
     }

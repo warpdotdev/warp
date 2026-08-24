@@ -456,6 +456,14 @@ fn cli_blocked_without_message() {
     assert!(update.is_none());
 }
 
+#[test]
+fn cli_cancelled_maps_to_cancelled_by_user() {
+    let (state, update) = map_cli_session_status(&CLIAgentSessionStatus::Cancelled);
+    assert_eq!(state, AgentTaskState::Cancelled);
+    let update = update.expect("should have status update");
+    assert_eq!(update.message, "Cancelled by user");
+}
+
 // --- Model-level tests ---
 
 /// Parses a fixed UUID into an `AmbientAgentTaskId`. Using a constant uuid

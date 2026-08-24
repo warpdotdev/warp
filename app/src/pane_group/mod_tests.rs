@@ -1,8 +1,10 @@
 use std::collections::HashMap;
+use std::time::Duration;
 
 use ai::index::full_source_code_embedding::manager::CodebaseIndexManager;
 use ai::project_context::model::ProjectContextModel;
 use chrono::Utc;
+use instant::Instant;
 use pathfinder_geometry::rect::RectF;
 use persistence::model::{
     AgentConversation, AgentConversationData, AgentConversationRecord, ConversationUsageMetadata,
@@ -22,9 +24,7 @@ use warpui::windowing::state::ApplicationStage;
 use warpui::{App, ModelHandle};
 use watcher::HomeDirectoryWatcher;
 
-use super::child_agent::hydration::{
-    RemoteChildHydrationAction, decide_remote_child_hydration_action,
-};
+use super::child_agent::restoration::is_stale_ancestor_list_completion;
 use super::child_agent::{
     HiddenChildAgentConversationRequest, HiddenChildAgentTaskContext,
     create_hidden_child_agent_conversation,
@@ -40,8 +40,7 @@ use crate::ai::agent_conversations_model::AgentConversationsModel;
 use crate::ai::ambient_agents::github_auth_notifier::GitHubAuthNotifier;
 use crate::ai::ambient_agents::task::TaskPrincipalInfo;
 use crate::ai::ambient_agents::{
-    AgentSource, AmbientAgentLiveSessionState, AmbientAgentTask, AmbientAgentTaskId,
-    AmbientAgentTaskState,
+    AgentSource, AmbientAgentTask, AmbientAgentTaskId, AmbientAgentTaskState,
 };
 use crate::ai::blocklist::agent_view::AgentViewEntryOrigin;
 use crate::ai::blocklist::history_model::CloudConversationData;
@@ -78,6 +77,7 @@ use crate::server::cloud_objects::listener::Listener;
 use crate::server::cloud_objects::update_manager::UpdateManager;
 use crate::server::ids::ServerId;
 use crate::server::server_api::ServerApiProvider;
+use crate::server::server_api::presigned_upload::HttpStatusError;
 use crate::server::sync_queue::SyncQueue;
 use crate::server::telemetry::context_provider::AppTelemetryContextProvider;
 use crate::settings::PrivacySettings;
@@ -111,6 +111,10 @@ use crate::{
 };
 
 fn initialize_app(app: &mut App) {
+    initialize_app_with_history(app, Vec::new());
+}
+
+fn initialize_app_with_history(app: &mut App, conversations: Vec<AgentConversation>) {
     initialize_settings_for_tests(app);
 
     app.add_singleton_model(|_ctx| ServerApiProvider::new_for_test());
@@ -164,7 +168,7 @@ fn initialize_app(app: &mut App) {
     app.add_singleton_model(|_| KeybindingChangedNotifier::new());
     app.add_singleton_model(NotebookKeybindings::new);
     app.add_singleton_model(TerminalKeybindings::new);
-    app.add_singleton_model(|_| BlocklistAIHistoryModel::new_for_test());
+    app.add_singleton_model(move |_| BlocklistAIHistoryModel::new(vec![], vec![], &conversations));
     // QueuedQueryModel subscribes to history events; register after the
     // history model is in place.
     app.add_singleton_model(QueuedQueryModel::new);
@@ -319,6 +323,17 @@ fn ambient_agent_task_for_current_user(task_id: AmbientAgentTaskId) -> AmbientAg
     }
 }
 
+/// Builds an *attachable* ambient task (InProgress + running sandbox +
+/// parseable session id) so the unified child-pane dispatch resolves to
+/// `AttachLive`.
+fn attachable_ambient_agent_task(task_id: AmbientAgentTaskId) -> AmbientAgentTask {
+    let mut task = ambient_agent_task_for_current_user(task_id);
+    task.state = AmbientAgentTaskState::InProgress;
+    task.is_sandbox_running = true;
+    task.session_id = Some("22222222-2222-2222-2222-222222222222".to_string());
+    task
+}
+
 fn mock_server_metadata() -> ServerMetadata {
     ServerMetadata {
         uid: ServerId::default(),
@@ -356,6 +371,8 @@ fn test_server_conversation_metadata(
             platform_credits_spent: 0.0,
             total_provider_cost_in_cents: None,
             credits_spent_for_last_block: None,
+            charged_usage_for_last_block: None,
+            total_charged_usage: None,
             token_usage: vec![],
             tool_usage_metadata: Default::default(),
             context_window_segments: Vec::new(),
@@ -948,15 +965,13 @@ fn test_restored_remote_hidden_child_pane_enters_existing_ambient_session() {
             let parent_conversation_id = start_parent_conversation(panes, parent_pane_id, ctx);
             let task_id = new_ambient_agent_task_id();
 
-            // Fix B: inject mock cloud task data so the task-backed hydration
-            // path resolves to the live ambient session via
-            // `resolve_open_action` -> `OpenOrAttachAmbientAgentConversation`.
-            // The default mock task has `is_sandbox_running = false` so it
-            // resolves to the fallback path; we leave it at the default to
-            // ensure the pre-Fix-B "attach to existing ambient session +
-            // tombstone" behavior is preserved.
+            // Inject an *attachable* task (InProgress + running sandbox +
+            // parseable session id) so the unified dispatch resolves to
+            // `AttachLive` and routes through
+            // `attach_ambient_orchestration_child_session`, joining the live
+            // ambient session in place.
             AgentConversationsModel::handle(ctx).update(ctx, |model, _| {
-                model.insert_task_for_test(ambient_agent_task_for_current_user(task_id));
+                model.insert_task_for_test(attachable_ambient_agent_task(task_id));
             });
 
             let mut child_conversation = AIConversation::new(false, false);
@@ -1008,16 +1023,16 @@ fn test_restored_remote_hidden_child_pane_enters_existing_ambient_session() {
     });
 }
 
-/// Fix B: when task data for a restored remote child is NOT yet cached at
-/// `create_hidden_child_agent_pane` time, the placeholder must still be
-/// registered in `child_agent_panes` keyed by its local AIConversationId,
-/// attached to the live ambient session (preserving today's behavior so
-/// streaming runs continue to attach), AND deferred via
-/// `pending_remote_child_hydrations` so the subscription handler can retry
-/// when `TasksUpdated` / `ConversationsLoaded` fires. The pane group must
-/// never produce a worse state than the pre-Fix-B fallback.
+/// When task data for a restored remote child is NOT yet cached at
+/// `create_hidden_child_agent_pane` time, the unified dispatch resolves to
+/// `Pending`: the hidden pane is still created and registered in
+/// `child_agent_panes` keyed by its local AIConversationId (so the pill can
+/// reveal it), using a passive loading transcript vehicle with no live attach.
+/// The tracker re-drives materialization on the next lifecycle /
+/// session-linked event.
 #[test]
-fn test_restored_remote_hidden_child_pane_fallback_when_task_data_unavailable() {
+fn test_restored_remote_hidden_child_pane_pending_when_task_data_unavailable() {
+    let _unified_stack = FeatureFlag::OrchestrationUnifiedStack.override_enabled(true);
     App::test((), |mut app| async move {
         initialize_app(&mut app);
         let pane_group = mock_pane_group(&mut app, Default::default());
@@ -1028,12 +1043,10 @@ fn test_restored_remote_hidden_child_pane_fallback_when_task_data_unavailable() 
             let task_id = new_ambient_agent_task_id();
 
             // Deliberately do NOT inject a task into AgentConversationsModel.
-            // `get_or_async_fetch_task_data` will return `None`, which forces
-            // the hydration to:
-            //   1. enter the existing ambient session in place (live-attach
-            //      preserved per Fix B contract);
-            //   2. register a pending hydration entry so the subscription
-            //      handler can retry once task data lands.
+            // `get_or_async_fetch_task_data` returns `None`, so the unified
+            // dispatch resolves to `Pending`: the hidden passive loading pane
+            // is created and tracked so the pill can reveal it.
+            // A later TasksUpdated re-drives the retained pending hydration.
 
             let mut child_conversation = AIConversation::new(false, false);
             child_conversation.set_parent_conversation_id(parent_conversation_id);
@@ -1055,30 +1068,262 @@ fn test_restored_remote_hidden_child_pane_fallback_when_task_data_unavailable() 
                 "placeholder AIConversationId must stay the child_agent_panes key in fallback path",
             );
 
-            // Live-attach preserved: the ambient agent view model is
-            // configured to view the existing session for `task_id`. This
-            // matches the pre-Fix-B behavior so streaming runs continue to
-            // attach.
-            let (ambient_task_id, _is_agent_running, active_conversation_id) =
-                ambient_child_session_state(panes, child_pane_id, ctx);
-            assert_eq!(
-                ambient_task_id,
-                Some(task_id),
-                "fallback path must still call enter_viewing_existing_session on the placeholder",
+            // Pending uses the passive loading presentation: no ambient
+            // composer is exposed before task metadata can select live or
+            // transcript materialization.
+            let terminal_view = panes
+                .terminal_view_from_pane_id(child_pane_id, ctx)
+                .expect("pending child pane has a terminal view");
+            let view = terminal_view.as_ref(ctx);
+            assert!(view.ambient_agent_view_model().is_none());
+            assert!(
+                !view.has_agent_view_zero_state_for_test(),
+                "pending child must not expose the cloud composition zero state",
             );
-            assert_eq!(active_conversation_id, Some(child_conversation_id));
-
-            // Fix B: pending hydration is recorded so the subscription handler
-            // can re-run hydration when task data lands. The map value is the
-            // placeholder's local AIConversationId, which must match the
-            // conversation we just restored.
-            let pending_placeholder_id =
-                panes.pending_remote_child_hydrations.get(&task_id).copied().expect(
-                    "task-data-unavailable hydration must register a pending entry keyed by task id",
-                );
             assert_eq!(
-                pending_placeholder_id, child_conversation_id,
-                "pending hydration must record the placeholder's local AIConversationId",
+                view.active_conversation_id(ctx),
+                Some(child_conversation_id)
+            );
+            let model = view.model.lock();
+            assert!(model.is_conversation_transcript_viewer());
+            assert!(model.is_read_only());
+            assert_eq!(
+                model.conversation_transcript_viewer_status(),
+                Some(&ConversationTranscriptViewerStatus::Loading),
+            );
+        });
+    });
+}
+
+/// A terminal owner remote child (`Succeeded` run with a server
+/// `conversation_id`, no live session) resolves to `LoadTranscript`: the
+/// unified dispatch still materializes the hidden ambient pane keyed by the
+/// placeholder's local id, into which the cloud transcript merges
+/// asynchronously.
+#[test]
+fn test_restored_remote_hidden_child_pane_terminal_owner_loads_transcript() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let pane_group = mock_pane_group(&mut app, Default::default());
+
+        pane_group.update(&mut app, |panes, ctx| {
+            let parent_pane_id = get_newly_created_pane_id(panes, &[]);
+            let parent_conversation_id = start_parent_conversation(panes, parent_pane_id, ctx);
+            let task_id = new_ambient_agent_task_id();
+
+            // Terminal task + server conversation id -> LoadTranscript.
+            let mut task = ambient_agent_task_for_current_user(task_id);
+            task.state = AmbientAgentTaskState::Succeeded;
+            task.is_sandbox_running = false;
+            task.conversation_id = Some("owner-child-server-token".to_string());
+            AgentConversationsModel::handle(ctx).update(ctx, |model, _| {
+                model.insert_task_for_test(task);
+            });
+
+            let mut child_conversation = AIConversation::new(false, false);
+            child_conversation.set_parent_conversation_id(parent_conversation_id);
+            child_conversation.set_task_id(task_id);
+            child_conversation.mark_as_remote_child();
+            let child_conversation_id = child_conversation.id();
+
+            panes.create_hidden_child_agent_pane(child_conversation, parent_pane_id, ctx);
+
+            let child_pane_id = panes
+                .child_agent_panes
+                .get(&child_conversation_id)
+                .copied()
+                .expect("terminal owner remote child must materialize an ambient transcript pane");
+            // The transcript branch builds a cloud-mode ambient pane (so the
+            // pill can reveal it) keyed by the placeholder's local id.
+            let (_task_id, _running, active_conversation_id) =
+                ambient_child_session_state(panes, child_pane_id, ctx);
+            assert_eq!(active_conversation_id, Some(child_conversation_id));
+        });
+    });
+}
+
+/// A terminal *viewer* child (`is_viewing_shared_session`, `Succeeded` run
+/// with a server `conversation_id`, no live session) resolves to
+/// `LoadTranscript` in a passive transcript pane. It must not expose the
+/// ambient cloud-composition model or its new-conversation zero state while
+/// the transcript fetch is in flight.
+#[test]
+fn test_restored_viewer_hidden_child_pane_terminal_loads_transcript() {
+    let _unified_stack = FeatureFlag::OrchestrationUnifiedStack.override_enabled(true);
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let pane_group = mock_pane_group(&mut app, Default::default());
+
+        pane_group.update(&mut app, |panes, ctx| {
+            let parent_pane_id = get_newly_created_pane_id(panes, &[]);
+            let parent_conversation_id = start_parent_conversation(panes, parent_pane_id, ctx);
+            let task_id = new_ambient_agent_task_id();
+
+            let mut task = ambient_agent_task_for_current_user(task_id);
+            task.state = AmbientAgentTaskState::Succeeded;
+            task.is_sandbox_running = false;
+            task.conversation_id = Some("viewer-child-server-token".to_string());
+            AgentConversationsModel::handle(ctx).update(ctx, |model, _| {
+                model.insert_task_for_test(task);
+            });
+
+            let mut child_conversation = AIConversation::new(false, false);
+            child_conversation.set_parent_conversation_id(parent_conversation_id);
+            child_conversation.set_task_id(task_id);
+            child_conversation.set_is_viewing_shared_session(true);
+            let child_conversation_id = child_conversation.id();
+
+            panes.create_hidden_child_agent_pane(child_conversation, parent_pane_id, ctx);
+
+            let child_pane_id = panes
+                .child_agent_panes
+                .get(&child_conversation_id)
+                .copied()
+                .expect("terminal viewer child must materialize a transcript pane");
+            let terminal_view = panes
+                .terminal_view_from_pane_id(child_pane_id, ctx)
+                .expect("terminal viewer child pane has a terminal view");
+            let view = terminal_view.as_ref(ctx);
+            assert_eq!(
+                view.active_conversation_id(ctx),
+                Some(child_conversation_id),
+            );
+            assert!(
+                view.ambient_agent_view_model().is_none(),
+                "passive viewer transcripts must not retain a configuring cloud-agent model",
+            );
+            assert!(
+                !view.has_agent_view_zero_state_for_test(),
+                "viewer child placeholders must not insert new-cloud composition zero state",
+            );
+            let model = view.model.lock();
+            assert!(model.is_conversation_transcript_viewer());
+            assert!(model.is_read_only());
+            assert_eq!(
+                model.conversation_transcript_viewer_status(),
+                Some(&ConversationTranscriptViewerStatus::Loading),
+            );
+        });
+    });
+}
+
+#[test]
+fn completed_shared_session_child_with_edit_access_uses_continuation_pane() {
+    let _unified_stack = FeatureFlag::OrchestrationUnifiedStack.override_enabled(true);
+    let _handoff = FeatureFlag::HandoffCloudCloud.override_enabled(true);
+    let _cloud_mode = FeatureFlag::CloudMode.override_enabled(true);
+    let _setup_v2 = FeatureFlag::CloudModeSetupV2.override_enabled(true);
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let pane_group = mock_pane_group(&mut app, Default::default());
+
+        pane_group.update(&mut app, |panes, ctx| {
+            let task_id = new_ambient_agent_task_id();
+            let mut task = ambient_agent_task_for_current_user(task_id);
+            task.creator = Some(TaskPrincipalInfo {
+                creator_type: "USER".to_string(),
+                uid: "other-user".to_string(),
+                display_name: None,
+            });
+            task.conversation_id = Some("test-server-token".to_string());
+            AgentConversationsModel::handle(ctx).update(ctx, |model, _| {
+                model.insert_task_for_test(task);
+            });
+
+            let mut child = AIConversation::new(true, false);
+            child.set_task_id(task_id);
+            let child_id = child.id();
+            let mut merged = child.clone();
+            merged.set_server_metadata(test_server_conversation_metadata(Some(task_id)));
+
+            let loading_pane_id = panes
+                .create_child_loading_placeholder(
+                    child,
+                    AgentViewEntryOrigin::SharedSessionSelection,
+                    ctx,
+                )
+                .expect("viewer child loading pane");
+            panes.replace_child_loading_with_continuation_pane(
+                loading_pane_id,
+                child_id,
+                task_id,
+                merged,
+                ctx,
+            );
+
+            let pane_id = panes.child_agent_panes[&child_id];
+            assert_ne!(pane_id, loading_pane_id);
+            let view = panes
+                .terminal_view_from_pane_id(pane_id, ctx)
+                .expect("continuation pane");
+            assert!(view.as_ref(ctx).ambient_agent_view_model().is_some());
+            let model = view.as_ref(ctx).model.lock();
+            assert!(!model.is_conversation_transcript_viewer());
+            assert!(!model.is_read_only());
+            assert!(matches!(
+                model.shared_session_status(),
+                SharedSessionStatus::NotShared
+            ));
+        });
+    });
+}
+
+#[test]
+fn failed_viewer_child_session_stays_unavailable_without_retrying_same_session() {
+    let _unified_stack = FeatureFlag::OrchestrationUnifiedStack.override_enabled(true);
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let pane_group = mock_pane_group(&mut app, Default::default());
+        let task_id = new_ambient_agent_task_id();
+        let failed_session_id = SessionId::new();
+
+        pane_group.update(&mut app, |panes, ctx| {
+            let parent_pane_id = get_newly_created_pane_id(panes, &[]);
+            let parent_conversation_id = start_parent_conversation(panes, parent_pane_id, ctx);
+
+            let mut pending_task = ambient_agent_task_for_current_user(task_id);
+            pending_task.state = AmbientAgentTaskState::Pending;
+            pending_task.is_sandbox_running = false;
+            pending_task.session_id = None;
+            AgentConversationsModel::handle(ctx).update(ctx, |model, _| {
+                model.insert_task_for_test(pending_task);
+            });
+
+            let mut child_conversation = AIConversation::new(false, false);
+            child_conversation.set_parent_conversation_id(parent_conversation_id);
+            child_conversation.set_task_id(task_id);
+            child_conversation.set_is_viewing_shared_session(true);
+            let child_id = child_conversation.id();
+            panes.create_hidden_child_agent_pane(child_conversation, parent_pane_id, ctx);
+            let pane_id = panes.child_agent_panes[&child_id];
+
+            panes.recover_viewer_child_join_failure(pane_id, child_id, failed_session_id, ctx);
+
+            let mut running_task = ambient_agent_task_for_current_user(task_id);
+            running_task.state = AmbientAgentTaskState::InProgress;
+            running_task.is_sandbox_running = true;
+            running_task.session_id = Some(failed_session_id.to_string());
+            AgentConversationsModel::handle(ctx).update(ctx, |model, _| {
+                model.insert_task_for_test(running_task);
+            });
+            panes.process_pending_child_hydrations(ctx);
+
+            assert_eq!(panes.child_agent_panes[&child_id], pane_id);
+            assert_eq!(
+                panes.failed_viewer_child_sessions.get(&child_id),
+                Some(&failed_session_id),
+            );
+            assert_eq!(
+                panes.pending_child_hydrations.get(&task_id),
+                Some(&child_id),
+            );
+            let view = panes
+                .terminal_view_from_pane_id(pane_id, ctx)
+                .expect("pending child pane remains available");
+            assert!(
+                view.as_ref(ctx)
+                    .is_orchestration_child_live_unavailable_for_test(),
+                "failed child join should leave bounded non-error unavailable UI",
             );
         });
     });
@@ -1264,6 +1509,350 @@ fn test_pane_group_restore_loop_keeps_orchestration_topology_and_materializes_ch
     });
 }
 
+/// A concurrent seed call racing a re-drive must not dispatch a second
+/// `?ancestor_run_id=` request for the same parent while the first is
+/// still in flight.
+#[test]
+fn seed_child_conversations_from_task_coalesces_concurrent_ancestor_list_fetches() {
+    let _unified_stack = FeatureFlag::OrchestrationUnifiedStack.override_enabled(true);
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let pane_group = mock_pane_group(&mut app, Default::default());
+
+        pane_group.update(&mut app, |panes, ctx| {
+            let parent_pane_id = get_newly_created_pane_id(panes, &[]);
+            let parent_conversation_id = start_parent_conversation(panes, parent_pane_id, ctx);
+            let parent_task_id = new_ambient_agent_task_id();
+
+            // Simulate multiple entry points trying to seed the same parent
+            // before its first ancestor-list fetch has resolved: a direct
+            // re-entrant call, plus two `TasksUpdated` re-drives.
+            panes.seed_child_conversations_from_task(parent_conversation_id, parent_task_id, ctx);
+            panes.seed_child_conversations_from_task(parent_conversation_id, parent_task_id, ctx);
+            panes.process_pending_parent_child_seeds(ctx);
+            panes.process_pending_parent_child_seeds(ctx);
+
+            assert_eq!(
+                panes.parent_child_seed_fetch_dispatch_count, 1,
+                "a parent with an ancestor-list fetch already in flight must not get a second \
+                 request dispatched by a concurrent seed call or TasksUpdated re-drive",
+            );
+            assert!(
+                panes
+                    .pending_parent_child_seeds
+                    .contains_key(&parent_task_id),
+                "the parent should remain pending until the in-flight fetch resolves",
+            );
+        });
+    });
+}
+
+/// Drives the real completion handler with a synthetic successful response
+/// whose only child is already cached. Both the child link and the
+/// pending-entry removal must happen with zero additional network dispatches.
+#[test]
+fn finish_seed_child_conversations_from_task_links_children_and_clears_pending_once_resolved() {
+    let _unified_stack = FeatureFlag::OrchestrationUnifiedStack.override_enabled(true);
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let pane_group = mock_pane_group(&mut app, Default::default());
+
+        pane_group.update(&mut app, |panes, ctx| {
+            let parent_pane_id = get_newly_created_pane_id(panes, &[]);
+            let parent_conversation_id = start_parent_conversation(panes, parent_pane_id, ctx);
+            let parent_task_id = new_ambient_agent_task_id();
+            let child_task_id = new_ambient_agent_task_id();
+
+            // Seed the child's task data directly so `get_or_async_fetch_task_data`
+            // resolves from cache instead of issuing a network call.
+            AgentConversationsModel::handle(ctx).update(ctx, |model, _| {
+                model.insert_task_for_test(ambient_agent_task_for_current_user(child_task_id));
+            });
+
+            // Mark pending the way `seed_child_conversations_from_task` does,
+            // then drive the completion handler directly with a synthetic
+            // response reporting one direct child.
+            panes.seed_child_conversations_from_task(parent_conversation_id, parent_task_id, ctx);
+            // The real completion callback clears `fetch_in_flight` before
+            // calling `finish_seed_child_conversations_from_task`; mirror
+            // that here since this test drives the completion handler
+            // directly, bypassing the wrapper.
+            panes
+                .pending_parent_child_seeds
+                .get_mut(&parent_task_id)
+                .unwrap()
+                .fetch_in_flight = false;
+            let response = vec![ambient_agent_task_for_current_user(child_task_id)];
+            panes.finish_seed_child_conversations_from_task(
+                parent_conversation_id,
+                parent_task_id,
+                Ok(response),
+                ctx,
+            );
+
+            assert!(
+                !panes
+                    .pending_parent_child_seeds
+                    .contains_key(&parent_task_id),
+                "the parent must be cleared once its only known child has resolved locally",
+            );
+
+            let history = BlocklistAIHistoryModel::as_ref(ctx);
+            assert_eq!(
+                history
+                    .child_conversation_ids_of(&parent_conversation_id)
+                    .len(),
+                1,
+                "the known child must be linked under the parent",
+            );
+        });
+    });
+}
+
+/// While any reported child hasn't resolved from the local task cache yet,
+/// the parent must stay pending (not be dropped) so a subsequent re-drive
+/// still re-lists and can pick up a child spawned in the interim; clearing
+/// early would stop discovering such children. Only once every currently
+/// reported child resolves does the parent clear.
+#[test]
+fn finish_seed_child_conversations_from_task_stays_pending_while_a_child_is_unresolved() {
+    let _unified_stack = FeatureFlag::OrchestrationUnifiedStack.override_enabled(true);
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let pane_group = mock_pane_group(&mut app, Default::default());
+
+        pane_group.update(&mut app, |panes, ctx| {
+            let parent_pane_id = get_newly_created_pane_id(panes, &[]);
+            let parent_conversation_id = start_parent_conversation(panes, parent_pane_id, ctx);
+            let parent_task_id = new_ambient_agent_task_id();
+            let unresolved_child_task_id = new_ambient_agent_task_id();
+
+            // Deliberately do NOT insert the child's task data, so
+            // `get_or_async_fetch_task_data` returns `None` for it.
+            panes.seed_child_conversations_from_task(parent_conversation_id, parent_task_id, ctx);
+            let response = vec![ambient_agent_task_for_current_user(
+                unresolved_child_task_id,
+            )];
+            panes.finish_seed_child_conversations_from_task(
+                parent_conversation_id,
+                parent_task_id,
+                Ok(response),
+                ctx,
+            );
+
+            assert!(
+                panes
+                    .pending_parent_child_seeds
+                    .contains_key(&parent_task_id),
+                "the parent must remain pending while a reported child hasn't resolved yet, so \
+                 the next TasksUpdated re-drive still re-lists",
+            );
+
+            // The real completion callback (in `spawn_ancestor_list_fetch_if_needed`)
+            // clears `fetch_in_flight` before calling
+            // `finish_seed_child_conversations_from_task`; mirror that here
+            // since this test drives the completion handler directly.
+            panes
+                .pending_parent_child_seeds
+                .get_mut(&parent_task_id)
+                .unwrap()
+                .fetch_in_flight = false;
+
+            // A subsequent TasksUpdated re-drive must actually re-list (not
+            // silently no-op) now that the previous fetch has completed.
+            let dispatch_count_before = panes.parent_child_seed_fetch_dispatch_count;
+            panes.process_pending_parent_child_seeds(ctx);
+            assert_eq!(
+                panes.parent_child_seed_fetch_dispatch_count,
+                dispatch_count_before + 1,
+                "an unresolved parent must be re-listed on the next TasksUpdated re-drive",
+            );
+        });
+    });
+}
+
+/// A transient ancestor-list failure (e.g. a network blip) must not leave
+/// the parent stranded waiting on an incidental external event that may
+/// never come (e.g. an idle completed conversation) — a one-shot retry
+/// must be scheduled so the fetch is retried on its own.
+#[test]
+fn finish_seed_child_conversations_from_task_schedules_retry_on_transient_failure() {
+    let _unified_stack = FeatureFlag::OrchestrationUnifiedStack.override_enabled(true);
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let pane_group = mock_pane_group(&mut app, Default::default());
+
+        pane_group.update(&mut app, |panes, ctx| {
+            let parent_pane_id = get_newly_created_pane_id(panes, &[]);
+            let parent_conversation_id = start_parent_conversation(panes, parent_pane_id, ctx);
+            let parent_task_id = new_ambient_agent_task_id();
+
+            panes.seed_child_conversations_from_task(parent_conversation_id, parent_task_id, ctx);
+            // Mirror the real completion callback's `fetch_in_flight` reset,
+            // since this test drives the completion handler directly.
+            panes
+                .pending_parent_child_seeds
+                .get_mut(&parent_task_id)
+                .unwrap()
+                .fetch_in_flight = false;
+            // No `HttpStatusError` in the chain => classified as transient by
+            // `is_transient_http_error` (network-level failure).
+            panes.finish_seed_child_conversations_from_task(
+                parent_conversation_id,
+                parent_task_id,
+                Err(anyhow::anyhow!("connection reset")),
+                ctx,
+            );
+
+            let seed = panes
+                .pending_parent_child_seeds
+                .get(&parent_task_id)
+                .expect("a transient failure must leave the parent pending for a retry");
+            assert!(
+                !seed.fetch_in_flight,
+                "the completion path must not leave fetch_in_flight stuck true after handling \
+                 a transient failure",
+            );
+            assert!(
+                seed.retry_handle.is_some(),
+                "a transient failure must schedule a guaranteed one-shot retry instead of \
+                 relying on an incidental TasksUpdated, so no subsequent external event is \
+                 needed for the parent to eventually link its children",
+            );
+        });
+    });
+}
+
+/// If a pending seed is removed (e.g. its pane closes) and a new one
+/// created for the same `parent_task_id` while the old fetch is still in
+/// flight (e.g. the same parent conversation is reopened), the old
+/// completion must be recognized as stale so it can't clobber the new
+/// seed's in-flight state or feed it stale results.
+#[test]
+fn stale_ancestor_list_completion_is_detected_when_seed_removed_or_recreated() {
+    let dispatched_at = Instant::now();
+    let live_seed = PendingParentChildSeed {
+        parent_conversation_id: AIConversationId::new(),
+        fetch_in_flight: true,
+        in_flight_fetch_started_at: Some(dispatched_at),
+        retry_handle: None,
+    };
+    assert!(
+        !is_stale_ancestor_list_completion(Some(&live_seed), dispatched_at),
+        "a completion matching the seed's own in-flight dispatch marker must not be stale",
+    );
+
+    assert!(
+        is_stale_ancestor_list_completion(None, dispatched_at),
+        "a completion for a seed that was removed entirely (e.g. pane closed) must be stale",
+    );
+
+    // A later dispatch on a recreated seed (e.g. the same parent conversation
+    // reopened while the old fetch was still in flight) has a distinct
+    // dispatch marker.
+    let recreated_seed = PendingParentChildSeed {
+        parent_conversation_id: AIConversationId::new(),
+        fetch_in_flight: true,
+        in_flight_fetch_started_at: Some(dispatched_at + Duration::from_secs(1)),
+        retry_handle: None,
+    };
+    assert!(
+        is_stale_ancestor_list_completion(Some(&recreated_seed), dispatched_at),
+        "a completion whose dispatch marker doesn't match the current seed's must be stale, \
+         since a newer fetch has since been dispatched for the same parent_task_id",
+    );
+}
+
+/// A permanent (non-transient) ancestor-list failure such as a 404/403
+/// can't succeed by retrying blindly, so the parent must be dropped
+/// instead of staying pending forever.
+#[test]
+fn finish_seed_child_conversations_from_task_gives_up_on_permanent_failure() {
+    let _unified_stack = FeatureFlag::OrchestrationUnifiedStack.override_enabled(true);
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let pane_group = mock_pane_group(&mut app, Default::default());
+
+        pane_group.update(&mut app, |panes, ctx| {
+            let parent_pane_id = get_newly_created_pane_id(panes, &[]);
+            let parent_conversation_id = start_parent_conversation(panes, parent_pane_id, ctx);
+            let parent_task_id = new_ambient_agent_task_id();
+
+            panes.seed_child_conversations_from_task(parent_conversation_id, parent_task_id, ctx);
+            let err = anyhow::Error::new(HttpStatusError {
+                status: 404,
+                body: String::new(),
+            });
+            panes.finish_seed_child_conversations_from_task(
+                parent_conversation_id,
+                parent_task_id,
+                Err(err),
+                ctx,
+            );
+
+            assert!(
+                !panes
+                    .pending_parent_child_seeds
+                    .contains_key(&parent_task_id),
+                "a permanent failure can't succeed by retrying blindly, so the parent must be \
+                 dropped instead of staying pending forever",
+            );
+        });
+    });
+}
+
+/// A parent with no terminal surface to seed into (e.g. a background
+/// ancestor several levels above the conversation the user actually
+/// opened) must not stay pending forever, since that would re-list it on
+/// every future re-drive indefinitely.
+#[test]
+fn finish_seed_child_conversations_from_task_gives_up_when_parent_has_no_terminal_surface() {
+    let _unified_stack = FeatureFlag::OrchestrationUnifiedStack.override_enabled(true);
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let pane_group = mock_pane_group(&mut app, Default::default());
+
+        pane_group.update(&mut app, |panes, ctx| {
+            // Never attached via `start_new_conversation` / `restore_conversations`,
+            // so it has no terminal surface.
+            let orphan_parent_conversation_id = AIConversationId::new();
+            let parent_task_id = new_ambient_agent_task_id();
+            let child_task_id = new_ambient_agent_task_id();
+
+            // Mark pending directly (bypassing `seed_child_conversations_from_task`,
+            // which would spawn a real network fetch) then drive the real
+            // completion handler, so the test exercises the actual
+            // no-terminal-surface early return instead of asserting against
+            // fabricated state.
+            panes.pending_parent_child_seeds.insert(
+                parent_task_id,
+                PendingParentChildSeed {
+                    parent_conversation_id: orphan_parent_conversation_id,
+                    fetch_in_flight: true,
+                    in_flight_fetch_started_at: None,
+                    retry_handle: None,
+                },
+            );
+
+            let response = vec![ambient_agent_task_for_current_user(child_task_id)];
+            panes.finish_seed_child_conversations_from_task(
+                orphan_parent_conversation_id,
+                parent_task_id,
+                Ok(response),
+                ctx,
+            );
+
+            assert!(
+                !panes
+                    .pending_parent_child_seeds
+                    .contains_key(&parent_task_id),
+                "a parent with no terminal surface to seed into must not stay pending forever \
+                 and be re-listed on every future re-drive",
+            );
+        });
+    });
+}
+
 #[test]
 fn test_create_missing_child_agent_panes_restores_remote_child_from_history_model() {
     App::test((), |mut app| async move {
@@ -1295,10 +1884,16 @@ fn test_create_missing_child_agent_panes_restores_remote_child_from_history_mode
                     ),
                 ]);
             });
+            // Attachable task so restoration live-attaches (was the old
+            // task-data-unavailable fallback; now an explicit AttachLive).
+            AgentConversationsModel::handle(ctx).update(ctx, |model, _| {
+                model.insert_task_for_test(attachable_ambient_agent_task(task_id));
+            });
 
             panes.restore_missing_child_agent_panes_for_parent(
                 parent_conversation_id,
                 parent_pane_id,
+                true,
                 ctx,
             );
 
@@ -1729,6 +2324,11 @@ fn test_entering_remote_parent_agent_view_lazily_restores_remote_hidden_child_pa
                     .contains_key(&remote_child_conversation_id)
             );
 
+            // Attachable task so the lazily-restored remote child live-attaches.
+            AgentConversationsModel::handle(ctx).update(ctx, |model, _| {
+                model.insert_task_for_test(attachable_ambient_agent_task(remote_child_task_id));
+            });
+
             enter_agent_view_for_conversation(
                 panes,
                 parent_pane_id,
@@ -2015,6 +2615,10 @@ fn test_ensure_hidden_child_agent_pane_materializes_restored_remote_child_linked
                         task_id,
                     ),
                 ]);
+            });
+            // Attachable task so the on-demand restore live-attaches.
+            AgentConversationsModel::handle(ctx).update(ctx, |model, _| {
+                model.insert_task_for_test(attachable_ambient_agent_task(task_id));
             });
 
             assert!(!panes.child_agent_panes.contains_key(&child_conversation_id));
@@ -3261,180 +3865,6 @@ fn test_focused_pane_is_synchronized_with_application_focus() {
             ctx.emit(Event::OpenPromptEditor);
         });
     });
-}
-
-/// Builds an [`AmbientAgentTask`] tailored for unit-testing
-/// [`decide_remote_child_hydration_action`].
-///
-/// `state`, `is_sandbox_running`, and `session_id` combine to determine the
-/// task's [`AmbientAgentLiveSessionState`]:
-/// - `state == InProgress`, `is_sandbox_running == true`, and a parseable
-///   UUID-shaped `session_id` resolve to
-///   [`AmbientAgentLiveSessionState::Attachable`].
-/// - `state == InProgress`, `is_sandbox_running == true`, and an
-///   unparseable `session_id` resolve to
-///   [`AmbientAgentLiveSessionState::ActiveUnattachable`].
-/// - Any other shape resolves to [`AmbientAgentLiveSessionState::Inactive`].
-///
-/// `conversation_id` populates the server conversation token used by the
-/// `LoadTranscript` branch; pass `None` to exercise `Fallback`.
-///
-/// Note: `session_link` is unconditionally set to `None` in this helper.
-/// `AmbientAgentTask::active_live_session_state` falls back to parsing the
-/// session id out of `session_link` when `session_id` is absent, so a test
-/// that exercises that branch would need a different helper.
-fn hydration_decision_task(
-    state: AmbientAgentTaskState,
-    is_sandbox_running: bool,
-    session_id: Option<&str>,
-    conversation_id: Option<&str>,
-) -> AmbientAgentTask {
-    let mut task = ambient_agent_task_for_current_user(new_ambient_agent_task_id());
-    task.state = state;
-    task.is_sandbox_running = is_sandbox_running;
-    task.session_id = session_id.map(str::to_string);
-    task.session_link = None;
-    task.conversation_id = conversation_id.map(str::to_string);
-    task
-}
-
-#[test]
-fn decide_remote_child_hydration_attachable_live_session_chooses_live_attach() {
-    // InProgress + sandbox running + parseable session id -> Attachable.
-    let task = hydration_decision_task(
-        AmbientAgentTaskState::InProgress,
-        true,
-        Some("11111111-1111-1111-1111-111111111111"),
-        Some("server-token-irrelevant-for-attach"),
-    );
-    assert_eq!(
-        task.active_live_session_state(),
-        AmbientAgentLiveSessionState::Attachable {
-            session_id: "11111111-1111-1111-1111-111111111111".parse().unwrap(),
-        },
-    );
-
-    assert_eq!(
-        decide_remote_child_hydration_action(&task),
-        RemoteChildHydrationAction::LiveAttach,
-    );
-}
-
-#[test]
-fn decide_remote_child_hydration_inactive_with_token_loads_transcript() {
-    // Terminal state -> Inactive, server token present -> LoadTranscript.
-    let task = hydration_decision_task(
-        AmbientAgentTaskState::Succeeded,
-        false,
-        None,
-        Some("my-server-token"),
-    );
-    assert_eq!(
-        task.active_live_session_state(),
-        AmbientAgentLiveSessionState::Inactive,
-    );
-
-    assert_eq!(
-        decide_remote_child_hydration_action(&task),
-        RemoteChildHydrationAction::LoadTranscript {
-            server_token: ServerConversationToken::new("my-server-token".to_string()),
-            task_is_terminal: true,
-        },
-    );
-}
-
-#[test]
-fn decide_remote_child_hydration_active_unattachable_with_token_loads_transcript() {
-    // InProgress + sandbox running + unparseable session id ->
-    // ActiveUnattachable. With a server token we still prefer LoadTranscript
-    // over Fallback so the user sees the merged transcript instead of a bare
-    // tombstone.
-    let task = hydration_decision_task(
-        AmbientAgentTaskState::InProgress,
-        true,
-        Some("not-a-valid-uuid"),
-        Some("unattachable-server-token"),
-    );
-    assert_eq!(
-        task.active_live_session_state(),
-        AmbientAgentLiveSessionState::ActiveUnattachable,
-    );
-
-    assert_eq!(
-        decide_remote_child_hydration_action(&task),
-        RemoteChildHydrationAction::LoadTranscript {
-            server_token: ServerConversationToken::new("unattachable-server-token".to_string()),
-            task_is_terminal: false,
-        },
-    );
-}
-
-#[test]
-fn decide_remote_child_hydration_inactive_without_token_falls_back() {
-    // Terminal state, no server token -> nothing to attach to and nothing to
-    // load. Terminal => tombstone is appropriate.
-    let task = hydration_decision_task(AmbientAgentTaskState::Succeeded, false, None, None);
-    assert_eq!(
-        task.active_live_session_state(),
-        AmbientAgentLiveSessionState::Inactive,
-    );
-
-    assert_eq!(
-        decide_remote_child_hydration_action(&task),
-        RemoteChildHydrationAction::Fallback {
-            task_is_terminal: true,
-        },
-    );
-}
-
-/// `ActiveUnattachable` + no server token: the run is still in progress but
-/// the client can't attach and has nothing to load. Fallback must carry
-/// `task_is_terminal: false` so the dispatch arm skips the
-/// conversation-ended tombstone.
-#[test]
-fn decide_remote_child_hydration_active_unattachable_without_token_falls_back_non_terminal() {
-    let task = hydration_decision_task(
-        AmbientAgentTaskState::InProgress,
-        true,
-        Some("not-a-valid-uuid"),
-        None,
-    );
-    assert_eq!(
-        task.active_live_session_state(),
-        AmbientAgentLiveSessionState::ActiveUnattachable,
-    );
-
-    assert_eq!(
-        decide_remote_child_hydration_action(&task),
-        RemoteChildHydrationAction::Fallback {
-            task_is_terminal: false,
-        },
-    );
-}
-
-/// An `AmbientAgentTask` whose `conversation_id` is `Some("")` (or
-/// whitespace-only) is treated the same as `None`: the dispatch must not
-/// route to a no-op cloud fetch wrapped in a misleading tombstone. The
-/// `Fallback` arm handles "nothing to attach to, nothing to load"
-/// correctly. Terminal here => tombstone is appropriate.
-#[test]
-fn decide_remote_child_hydration_empty_token_falls_back() {
-    for empty_token in [Some(""), Some("   "), Some("\t\n")] {
-        let task =
-            hydration_decision_task(AmbientAgentTaskState::Succeeded, false, None, empty_token);
-        assert_eq!(
-            task.active_live_session_state(),
-            AmbientAgentLiveSessionState::Inactive,
-            "empty/whitespace token={empty_token:?} should still resolve to Inactive",
-        );
-        assert_eq!(
-            decide_remote_child_hydration_action(&task),
-            RemoteChildHydrationAction::Fallback {
-                task_is_terminal: true,
-            },
-            "empty/whitespace token={empty_token:?} must fall through to Fallback",
-        );
-    }
 }
 
 /// APP-5243: closing a file pane only hides it while undo-close is available, and the same view is

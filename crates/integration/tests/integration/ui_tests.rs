@@ -219,6 +219,7 @@ integration_tests! {
     test_osc8_file_scheme_opens_url,
     test_osc8_no_regression_on_url_autodetect,
 
+    test_cycle_active_tab_color_with_keybinding,
     test_active_session_follows_focus,
     test_tab_context_menu_copies_metadata,
     test_vertical_tab_context_menu_copies_metadata,
@@ -276,6 +277,18 @@ integration_tests! {
     test_settings_error_banner_on_reload_with_invalid_toml,
     test_settings_error_banner_on_reload_with_invalid_value,
 
+    // Settings sidebar navigation and search.
+    test_settings_mouse_navigation_through_umbrella,
+    test_settings_keyboard_navigation_down_into_collapsed_umbrella,
+    test_settings_keyboard_navigation_up_into_collapsed_umbrella,
+    test_settings_keyboard_navigation_after_manual_collapse,
+    test_settings_search_filters_top_level_pages,
+    test_settings_search_filters_subpages,
+    test_settings_search_subpage_still_renders_content,
+    test_settings_search_clear_restores_umbrella_state,
+    test_settings_search_preserved_on_sidebar_click,
+    test_settings_agent_mcp_servers_renders_standalone_page,
+
     test_copy_selection_within_ai_block,
     #[ignore = "Affected by agent_view feature flag UI changes"]
     test_selection_first_to_last_through_ai_simple,
@@ -316,6 +329,7 @@ integration_tests! {
     #[ignore = "Affected by agent_view feature flag UI changes"]
     test_selection_last_to_ai_lines,
     test_restored_ai_block_renders_mermaid_and_local_images,
+    test_cancelled_run_agents_card_renders_cancelled_state,
 
     // Middle-click-paste is only implemented for Linux right now.
     #[cfg(any(target_os = "linux", target_os = "freebsd"))]

@@ -361,7 +361,7 @@ fn test_empty_task_handling() {
 
 #[test]
 fn test_from_tasks() {
-    use std::collections::HashMap;
+    use hashbrown::HashMap;
 
     let task = create_test_task_with_exchanges(3);
     let task_id = task.id().clone();

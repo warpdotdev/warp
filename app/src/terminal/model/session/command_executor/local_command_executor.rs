@@ -22,10 +22,25 @@ fn kill_all_processes_in_process_group(pid: u32) -> Result<(), nix::Error> {
 }
 #[cfg(unix)]
 fn terminate_process_group(process_group_id: u32) {
-    if let Err(error) = kill_all_processes_in_process_group(process_group_id) {
-        match error {
-            nix::errno::Errno::ESRCH | nix::errno::Errno::EPERM => {}
-            _ => log::warn!("Failed to kill process group {process_group_id}: {error}"),
+    // A pgid of 0 targets the caller's own process group, and 1 negates to
+    // -1, which SIGKILLs every process this user is allowed to signal.
+    // Neither is ever a legitimate target, so refuse them rather than let a
+    // bad pgid reach `kill`.
+    if process_group_id < 2 {
+        log::warn!("Refusing to signal process group {process_group_id}: pid is below 2");
+        return;
+    }
+
+    match kill_all_processes_in_process_group(process_group_id) {
+        Ok(()) => log::info!("Sent SIGKILL to process group {process_group_id}"),
+        Err(error @ nix::errno::Errno::ESRCH) => {
+            log::info!("Process group {process_group_id} had already exited: {error}");
+        }
+        Err(error @ nix::errno::Errno::EPERM) => {
+            log::warn!("Not permitted to kill process group {process_group_id}: {error}");
+        }
+        Err(error) => {
+            log::warn!("Failed to kill process group {process_group_id}: {error}");
         }
     }
 }

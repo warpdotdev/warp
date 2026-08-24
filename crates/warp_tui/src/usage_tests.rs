@@ -13,6 +13,7 @@ fn totals(credits_spent: f32, cost_in_cents: f32) -> ConversationUsageTotals {
         credits_spent,
         cost_in_cents: Some(cost_in_cents),
         has_usage: true,
+        charged_usage: None,
     }
 }
 
@@ -57,13 +58,14 @@ fn cost_mode_explicitly_marks_unknown_historical_cost() {
                 credits_spent: 0.0,
                 cost_in_cents: None,
                 has_usage: true,
+                charged_usage: None,
             },
         ),
         "Cost unavailable"
     );
 }
 
-/// The credits⇄dollars toggle is gated behind `TuiCostTransparency`: with the
+/// The credits⇄dollars toggle is gated behind `PricingTransparency`: with the
 /// flag off (prod/stable) the footer renders a static credits total and never
 /// exposes the dollar cost even when the persisted mode is `Cost`; with the
 /// flag on (dogfood/staging + local/dev) the entry follows the persisted mode.
@@ -81,7 +83,7 @@ fn footer_usage_entry_gates_the_cost_toggle_behind_the_feature_flag() {
         // Flag OFF: static credits; the persisted `Cost` mode is ignored so the
         // dollar cost is never surfaced.
         app.read(|ctx| {
-            let _guard = FeatureFlag::TuiCostTransparency.override_enabled(false);
+            let _guard = FeatureFlag::PricingTransparency.override_enabled(false);
             let entry = toggle.render_entry(TuiUsageDisplayMode::Cost, usage, ctx, |_, _| {});
             let line = TuiPresenter::new()
                 .present_element(entry, TuiRect::new(0, 0, 20, 1), ctx)
@@ -101,7 +103,7 @@ fn footer_usage_entry_gates_the_cost_toggle_behind_the_feature_flag() {
         // Flag ON: the entry follows the persisted display mode, exposing the
         // dollar cost the toggle switches to.
         app.read(|ctx| {
-            let _guard = FeatureFlag::TuiCostTransparency.override_enabled(true);
+            let _guard = FeatureFlag::PricingTransparency.override_enabled(true);
             let entry = toggle.render_entry(TuiUsageDisplayMode::Cost, usage, ctx, |_, _| {});
             let line = TuiPresenter::new()
                 .present_element(entry, TuiRect::new(0, 0, 20, 1), ctx)

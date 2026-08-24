@@ -1319,6 +1319,9 @@ impl CodeEditorView {
                         ScrollPosition::FocusedDiffHunk => {
                             self.navigate_current_diff_hunk(ctx);
                         }
+                        ScrollPosition::Fraction(fraction) => {
+                            self.scroll_to_fraction(fraction, ctx);
+                        }
                     }
                 }
                 ctx.emit(CodeEditorEvent::ViewportUpdated);
@@ -1597,6 +1600,26 @@ impl CodeEditorView {
     /// Returns the total content height of the editor.
     pub fn content_height(&self, ctx: &AppContext) -> Pixels {
         self.model.as_ref(ctx).render_state().as_ref(ctx).height()
+    }
+
+    /// The current vertical scroll position as a fraction of the scrollable range, in `0..=1`.
+    pub fn scroll_fraction(&self, ctx: &AppContext) -> f32 {
+        self.model
+            .as_ref(ctx)
+            .render_state()
+            .as_ref(ctx)
+            .scroll_fraction()
+    }
+
+    fn scroll_to_fraction(&self, fraction: f32, ctx: &mut ViewContext<Self>) {
+        self.model.update(ctx, |model, ctx| {
+            // Content is already rendered here (this runs from `ViewportUpdated`), so the current
+            // buffer version is the one to wait for.
+            let version = model.buffer_version(ctx);
+            model.render_state().update(ctx, |render_state, _ctx| {
+                render_state.scroll_to_fraction(fraction, version);
+            });
+        });
     }
 
     pub fn interaction_state(&self, ctx: &AppContext) -> InteractionState {

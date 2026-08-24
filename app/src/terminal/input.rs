@@ -144,7 +144,10 @@ use super::view::{
     ExecuteCommandEvent, PADDING_LEFT as TERMINAL_VIEW_PADDING_LEFT, SyncInputType, TerminalAction,
 };
 use super::warpify::SubshellSource;
-use super::{History, HistoryEntry, SizeInfo, TerminalModel, UpArrowHistoryConfig, prompt};
+use super::{
+    History, HistoryEntry, SizeInfo, TerminalModel, UpArrowHistoryConfig, prompt,
+    should_right_click_paste,
+};
 #[allow(unused_imports)]
 use crate::ASSETS;
 use crate::ai::AIRequestUsageModel;
@@ -204,7 +207,7 @@ use crate::ai::predict::prompt_suggestions::{
     is_accept_prompt_suggestion_bound_to_ctrl_enter,
 };
 use crate::ai::skills::{SkillOpenOrigin, SkillTelemetryEvent};
-use crate::ai_assistant::execution_context::WarpAiExecutionContext;
+use crate::ai_assistant::execution_context::execution_context_for_session;
 use crate::appearance::{Appearance, AppearanceEvent};
 use crate::channel::{Channel, ChannelState};
 use crate::cloud_object::model::actions::ObjectActionType;
@@ -351,7 +354,7 @@ use crate::workspace::{
     CommandSearchOptions, ForkFromExchange, ForkedConversationDestination, InitContent,
     RestoreConversationLayout, ToastStack, WorkspaceAction,
 };
-use crate::workspaces::user_workspaces::{UserWorkspaces, UserWorkspacesEvent};
+use crate::workspaces::user_workspaces::{TeamContext, UserWorkspaces, UserWorkspacesEvent};
 #[allow(unused_imports)]
 use crate::{AgentModeEntrypoint, ServerApiProvider, cmd_or_ctrl_shift, send_telemetry_from_ctx};
 
@@ -6473,6 +6476,10 @@ impl Input {
         self.focus_handle.as_ref().is_none_or(|h| h.is_focused(app))
     }
 
+    pub(super) fn team_scope<'a>(&self, app: &'a AppContext) -> TeamContext<'a> {
+        UserWorkspaces::as_ref(app).team_context(&self.weak_view_handle, app)
+    }
+
     fn is_active_session(&self, app: &AppContext) -> bool {
         self.focus_handle
             .as_ref()
@@ -6660,6 +6667,10 @@ impl Input {
             }
             InputSettingsChangedEvent::AtContextMenuInTerminalMode { .. } => {
                 self.check_and_update_ai_context_menu_disabled_state(ctx);
+                ctx.notify();
+            }
+            InputSettingsChangedEvent::EnableAiCommandSearchHashTrigger { .. } => {
+                self.set_zero_state_hint_text(ctx);
                 ctx.notify();
             }
             InputSettingsChangedEvent::CompletionsMenuWidth { .. } => {
@@ -6994,7 +7005,15 @@ impl Input {
 
         // If the last block was empty, don't create any suggestions.
         // Also don't create suggestions for requested commands part of an agent mode conversation.
-        if block_completed.command.is_empty() || block_completed.was_part_of_agent_interaction {
+        if block_completed
+            .command
+            .get_with(|compute| {
+                let model = self.model.lock();
+                compute(model.block_list())
+            })
+            .is_empty()
+            || block_completed.was_part_of_agent_interaction
+        {
             return;
         }
 
@@ -7018,9 +7037,12 @@ impl Input {
         let Some(session) = self.active_session(ctx) else {
             return;
         };
-        let context = WarpAiExecutionContext::new(&session);
+        let context = execution_context_for_session(&session);
         let completer_data = self.completer_data();
-        let block_context = Some(BlockContext::from_completed_block(&block_completed));
+        let block_context = Some(BlockContext::from_completed_block(
+            &block_completed,
+            &self.model,
+        ));
         let previous_result = self.last_intelligent_autosuggestion_result.take();
         self.next_command_model.update(ctx, |model, ctx| {
             model.generate_next_command_suggestion(
@@ -7156,9 +7178,16 @@ impl Input {
                 self.editor.update(ctx, |editor, ctx| {
                     editor.set_placeholder_text(hint_text, ctx);
                 });
-            } else {
+            } else if *InputSettings::as_ref(ctx).enable_ai_command_search_hash_trigger {
                 self.editor.update(ctx, |editor, ctx| {
                     editor.set_placeholder_text(AI_COMMAND_SEARCH_HINT_TEXT, ctx);
+                });
+            } else {
+                // Don't advertise the '#' shorthand when the user has disabled it;
+                // AI Command Search remains reachable via its keybinding.
+                self.editor.update(ctx, |editor, ctx| {
+                    editor.clear_placeholder_text(ctx);
+                    ctx.notify();
                 });
             }
         } else {
@@ -9730,7 +9759,7 @@ impl Input {
             let Some(session) = self.active_session(ctx) else {
                 return;
             };
-            let context = WarpAiExecutionContext::new(&session);
+            let context = execution_context_for_session(&session);
             if let Some(last_user_block_completed) =
                 completer_data.last_user_block_completed.clone()
             {
@@ -9769,6 +9798,31 @@ impl Input {
             .get_ignored_suggestions_for_type(SuggestionType::ShellCommand);
         #[cfg(feature = "local_fs")]
         let conn = self.conn.clone();
+        // Resolve the last completed block's lazily-computed fields now, synchronously, since the
+        // spawned future below doesn't have access to the terminal model to resolve them later.
+        #[cfg(feature = "local_fs")]
+        let last_user_block_completed_data =
+            completer_data
+                .last_user_block_completed
+                .as_ref()
+                .map(|block| {
+                    (
+                        block
+                            .command
+                            .get_with(|compute| {
+                                let model = self.model.lock();
+                                compute(model.block_list())
+                            })
+                            .to_owned(),
+                        block
+                            .serialized_block
+                            .get_with(|compute| {
+                                let model = self.model.lock();
+                                compute(model.block_list())
+                            })
+                            .clone(),
+                    )
+                });
         let abort_handle = ctx
             .spawn_abortable(
                 async move {
@@ -9776,14 +9830,17 @@ impl Input {
                     // First, use rich history to find commands with a matching prefix that were run
                     // in a similar context, taking into account the most recent block run.
                     if let Some(conn) = conn
-                        && let Some(last_user_block_completed) =
-                            &completer_data.last_user_block_completed
+                        && let Some((last_command, last_serialized_block)) =
+                            &last_user_block_completed_data
                     {
                         let similar_history_contexts = {
                             let mut conn = conn.lock();
                             NextCommandModel::get_similar_history_context(
                                 &mut conn,
-                                last_user_block_completed,
+                                last_command,
+                                &last_serialized_block.pwd,
+                                last_serialized_block.exit_code,
+                                last_serialized_block.shell_host.as_ref(),
                                 0,
                             )
                         };
@@ -10459,6 +10516,7 @@ impl Input {
                 }
 
                 if AISettings::as_ref(ctx).is_any_ai_enabled(ctx)
+                    && *InputSettings::as_ref(ctx).enable_ai_command_search_hash_trigger
                     && self.editor_starts_with_command_search_trigger(ctx)
                     && *edit_origin == EditOrigin::UserTyped
                     && !self.ai_input_model.as_ref(ctx).is_ai_input_enabled()
@@ -13582,8 +13640,9 @@ impl Input {
                 });
 
                 if let Some(ambient_agent_view_model) = self.ambient_agent_view_model() {
+                    let scope = UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx);
                     ambient_agent_view_model.update(ctx, |state, ctx| {
-                        state.spawn_agent(prompt, attachments, ctx);
+                        state.spawn_agent(prompt, attachments, &scope, ctx);
                     });
                 }
                 return;
@@ -13819,10 +13878,11 @@ impl Input {
             return;
         }
         let block = block.as_ref().unwrap();
-        let (exit_code, working_dir) = (
-            block.serialized_block.exit_code,
-            block.serialized_block.pwd.as_ref(),
-        );
+        let serialized_block = block.serialized_block.get_with(|compute| {
+            let model = self.model.lock();
+            compute(model.block_list())
+        });
+        let (exit_code, working_dir) = (serialized_block.exit_code, serialized_block.pwd.as_ref());
         let number_of_top_lines_per_grid = 100;
         let number_of_bottom_lines_per_grid = 200;
 
@@ -13830,9 +13890,7 @@ impl Input {
             let model = self.model.lock();
             let terminal_width = model.block_list().size().columns;
 
-            if let Some(current_block) =
-                model.block_list().block_with_id(&block.serialized_block.id)
-            {
+            if let Some(current_block) = model.block_list().block_with_id(&serialized_block.id) {
                 current_block.get_block_content_summary(
                     terminal_width,
                     number_of_top_lines_per_grid,
@@ -13841,7 +13899,7 @@ impl Input {
             } else {
                 log::warn!(
                     "Failed to fetch predicted queries, could not find block with ID {:?}",
-                    block.serialized_block.id
+                    serialized_block.id
                 );
                 return;
             }
@@ -13858,7 +13916,7 @@ impl Input {
         let Some(session) = self.active_session(ctx) else {
             return;
         };
-        let context = WarpAiExecutionContext::new(&session);
+        let context = execution_context_for_session(&session);
 
         let request = PredictAMQueriesRequest {
             context_messages: vec![json_message.to_string()],
@@ -15266,11 +15324,21 @@ impl Input {
                     .map(|state| state.history_model.clone())
                 {
                     Some(shared_session_history_model) => {
-                        shared_session_history_model.update(ctx, |history_model, _ctx| {
-                            history_model.push(HistoryEntry::for_completed_block(
-                                block_completed.command,
-                                &block_completed.serialized_block,
-                            ))
+                        let command = block_completed
+                            .command
+                            .get_with(|compute| {
+                                let model = self.model.lock();
+                                compute(model.block_list())
+                            })
+                            .to_owned();
+                        let serialized_block =
+                            block_completed.serialized_block.get_with(|compute| {
+                                let model = self.model.lock();
+                                compute(model.block_list())
+                            });
+                        shared_session_history_model.update(ctx, move |history_model, _ctx| {
+                            history_model
+                                .push(HistoryEntry::for_completed_block(command, serialized_block))
                         })
                     }
                     _ => {
@@ -15805,7 +15873,14 @@ impl Input {
         let input_editor_save_position_id = self.editor_save_position_id();
         SavePosition::new(
             EventHandler::new(input_box)
-                .on_right_mouse_down(move |ctx, _, position| {
+                .on_right_mouse_down(move |ctx, app, position, modifiers| {
+                    if should_right_click_paste(modifiers.shift, app) {
+                        // Same path as the `terminal:paste` keybinding, so escaped-path
+                        // processing and CLI-agent image handling behave identically.
+                        ctx.dispatch_typed_action(TerminalAction::Paste);
+                        return DispatchEventResult::StopPropagation;
+                    }
+
                     let input_rect = ctx
                         .element_position_by_id(input_editor_save_position_id.clone())
                         .expect("input editor position id should be saved");
@@ -16417,8 +16492,7 @@ impl View for Input {
             .last_non_hidden_ai_block_handle(app)
             .is_some_and(|ai_block| {
                 let block = ai_block.as_ref(app);
-                block.is_passive_conversation(app)
-                    && block.find_undismissed_code_diff(app).is_some()
+                block.is_passive_conversation() && block.find_undismissed_code_diff(app).is_some()
             });
         if has_undismissed_passive_code_diff {
             ctx.set.insert(flags::PASSIVE_CODE_DIFF_KEYBINDINGS_ENABLED);

@@ -58,7 +58,7 @@ fn orchestration_fixture(app: &mut App) -> OrchestrationFixture {
                 window_style: WindowStyle::NotStealFocus,
                 ..Default::default()
             },
-            |_| RootTuiView::new(),
+            RootTuiView::new,
         )
     });
     let sessions = app.add_singleton_model(|_| TuiSessions::new_for_test());
@@ -90,6 +90,7 @@ fn add_child_session(
                 name.to_owned(),
                 parent_conversation_id,
                 Some(Harness::Oz),
+                false,
                 ctx,
             );
             history.set_active_conversation_id(conversation_id, session_id.surface_id(), ctx);
@@ -415,6 +416,7 @@ fn snapshot_is_shared_across_tree_and_filters_conversations_without_sessions() {
                     "missing-session".to_owned(),
                     parent_conversation_id,
                     Some(Harness::Oz),
+                    false,
                     ctx,
                 );
             });
@@ -826,6 +828,7 @@ fn seed_remote_child(
                 name.to_owned(),
                 parent_conversation_id,
                 Some(Harness::Oz),
+                true,
                 ctx,
             );
             if let Some(conversation) = history.conversation_mut(&child_id) {
@@ -1097,6 +1100,7 @@ fn sessionless_parents_are_filtered_from_chips_and_marked_non_navigable() {
                     "claude-mid".to_owned(),
                     root_id,
                     Some(Harness::Claude),
+                    false,
                     ctx,
                 )
             })
@@ -1477,6 +1481,7 @@ fn restore_skips_unsupported_or_malformed_children() {
                     "no-identity".to_owned(),
                     parent_conversation_id,
                     Some(Harness::Oz),
+                    true,
                     ctx,
                 );
                 history
@@ -1494,6 +1499,7 @@ fn restore_skips_unsupported_or_malformed_children() {
                     "claude-child".to_owned(),
                     parent_conversation_id,
                     Some(Harness::Claude),
+                    false,
                     ctx,
                 )
             })
@@ -1506,6 +1512,7 @@ fn restore_skips_unsupported_or_malformed_children() {
                     "shared-viewer".to_owned(),
                     parent_conversation_id,
                     Some(Harness::Oz),
+                    false,
                     ctx,
                 );
                 history
@@ -1601,6 +1608,7 @@ fn restored_local_oz_child_materializes_terminal_session_without_relaunch() {
                     "local-child".to_owned(),
                     parent_conversation_id,
                     Some(Harness::Oz),
+                    false,
                     ctx,
                 )
             })
