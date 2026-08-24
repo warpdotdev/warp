@@ -259,8 +259,43 @@ impl PtySpawner {
     ) -> Result<(PtySpawnResult, Box<dyn PtyHandle>)> {
         use crate::terminal::local_tty::server::ServerOwnedPtyHandle;
 
+        // Run the IPC call in a background thread with a timeout. The blocking
+        // `receive_message` inside `spawn_pty` runs on a Unix domain socket and
+        // normally completes in milliseconds. If the terminal server subprocess
+        // hangs (e.g. during user resolution via a slow NSS backend, or during
+        // PTY allocation), the receive never returns. Because `spawn_pty_via_server`
+        // is called on the UI thread inside `AgentDriver::new`, an indefinite
+        // block here freezes the entire Warp event loop: no async timers can
+        // fire, no bootstrap timeout can trigger, and the agent hangs silently
+        // for the GHA job ceiling (observed as 6-hour hangs on Blacksmith
+        // runners; see REMOTE-2318).
+        //
+        // On timeout the call falls back to `spawn_pty_directly`. The background
+        // thread is intentionally left running: it will eventually unblock when
+        // the terminal server responds (result discarded) or when the terminal
+        // server subprocess is killed on process exit.
+        const TERMINAL_SERVER_SPAWN_TIMEOUT: std::time::Duration =
+            std::time::Duration::from_secs(30);
+
         let client = server.client().clone();
-        let result = client.spawn_pty(options)?;
+        let client_for_thread = client.clone();
+        let (tx, rx) = std::sync::mpsc::channel::<anyhow::Result<PtySpawnResult>>();
+        std::thread::spawn(move || {
+            let _ = tx.send(client_for_thread.spawn_pty(options));
+        });
+
+        let result = match rx.recv_timeout(TERMINAL_SERVER_SPAWN_TIMEOUT) {
+            Ok(result) => result?,
+            Err(_elapsed) => {
+                anyhow::bail!(
+                    "Terminal server did not respond to PTY spawn request within {}s; \
+                     the server subprocess may be unresponsive. \
+                     Falling back to direct PTY spawn.",
+                    TERMINAL_SERVER_SPAWN_TIMEOUT.as_secs()
+                );
+            }
+        };
+
         let handle = Box::new(ServerOwnedPtyHandle {
             pid: result.pid,
             client,
