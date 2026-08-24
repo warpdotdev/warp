@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use chrono::{DateTime, Utc};
 use session_sharing_protocol::common::SessionId;
 use warp_cli::agent::Harness;
@@ -18,7 +20,10 @@ use crate::ai::ambient_agents::{
 };
 use crate::ai::artifacts::Artifact;
 use crate::ai::blocklist::history_model::{AIConversationMetadata, BlocklistAIHistoryModel};
-use crate::ai::blocklist::orchestration_topology::orchestration_aware_conversation_status;
+use crate::ai::blocklist::orchestration_topology::{
+    SubtreeRoot, aggregated_subtree_artifacts, local_conversation_id_for_task,
+    orchestration_aware_conversation_status,
+};
 use crate::ai::conversation_navigation::ConversationNavigationData;
 use crate::auth::{AuthStateProvider, UserUid};
 use crate::util::time_format::human_readable_precise_duration;
@@ -295,27 +300,6 @@ impl AgentConversationEntry {
     }
 }
 
-/// Returns the local conversation ID represented by the given task, if this task and a
-/// conversation entry both point at the same underlying local run.
-///
-/// We first match using the orchestration agent ID (task ID / run ID under v2), and fall back
-/// to the server conversation token for cases where the task only carries conversation identity
-/// through `conversation_id`.
-pub(super) fn conversation_id_shadowed_by_task(
-    task: &AmbientAgentTask,
-    history_model: &BlocklistAIHistoryModel,
-) -> Option<AIConversationId> {
-    history_model
-        .conversation_id_for_agent_id(&task.run_id().to_string())
-        .or_else(|| {
-            task.conversation_id().and_then(|conversation_id| {
-                history_model.find_conversation_id_by_server_token(&ServerConversationToken::new(
-                    conversation_id.to_string(),
-                ))
-            })
-        })
-}
-
 pub(super) fn task_creator_name(task: &AmbientAgentTask, app: &AppContext) -> Option<String> {
     task.creator_display_name().or_else(|| {
         let uid = task.creator.as_ref().map(|creator| &creator.uid)?;
@@ -414,21 +398,6 @@ fn conversation_request_usage(
         })
 }
 
-fn conversation_artifacts(
-    metadata: &ConversationMetadata,
-    history_model: &BlocklistAIHistoryModel,
-) -> Vec<Artifact> {
-    history_model
-        .conversation(&metadata.nav_data.id)
-        .map(|conversation| conversation.artifacts().to_vec())
-        .or_else(|| {
-            history_model
-                .get_conversation_metadata(&metadata.nav_data.id)
-                .map(|metadata| metadata.artifacts.clone())
-        })
-        .unwrap_or_default()
-}
-
 fn principal_from_user_profile(profile: &UserProfileWithUID) -> AgentConversationPrincipal {
     let name = profile
         .display_name
@@ -472,10 +441,11 @@ fn conversation_creator(
 
 pub(super) fn entry_for_task(
     task: &AmbientAgentTask,
+    tasks: &HashMap<AmbientAgentTaskId, AmbientAgentTask>,
     history_model: &BlocklistAIHistoryModel,
     app: &AppContext,
 ) -> AgentConversationEntry {
-    let local_conversation_id = conversation_id_shadowed_by_task(task, history_model);
+    let local_conversation_id = local_conversation_id_for_task(task, history_model);
     let conversation_metadata =
         local_conversation_id.and_then(|id| history_model.get_conversation_metadata(&id));
     let server_conversation_token = task
@@ -545,7 +515,11 @@ pub(super) fn entry_for_task(
                 .as_ref()
                 .and_then(|snapshot| snapshot.environment_id.clone()),
             harness: task_harness(task),
-            artifacts: task.artifacts.clone(),
+            artifacts: aggregated_subtree_artifacts(
+                history_model,
+                tasks,
+                SubtreeRoot::Task(task.task_id),
+            ),
         },
         backing: AgentConversationBackingData {
             has_loaded_conversation: local_conversation_id
@@ -571,6 +545,7 @@ pub(super) fn entry_for_task(
 
 pub(super) fn entry_for_conversation(
     metadata: &ConversationMetadata,
+    tasks: &HashMap<AmbientAgentTaskId, AmbientAgentTask>,
     history_model: &BlocklistAIHistoryModel,
     app: &AppContext,
 ) -> AgentConversationEntry {
@@ -578,6 +553,7 @@ pub(super) fn entry_for_conversation(
     entry_for_conversation_parts(
         metadata.nav_data.clone(),
         conversation_metadata,
+        tasks,
         history_model,
         app,
     )
@@ -586,15 +562,17 @@ pub(super) fn entry_for_conversation(
 pub(super) fn entry_for_historical_metadata(
     metadata: &AIConversationMetadata,
     nav_data: ConversationNavigationData,
+    tasks: &HashMap<AmbientAgentTaskId, AmbientAgentTask>,
     history_model: &BlocklistAIHistoryModel,
     app: &AppContext,
 ) -> AgentConversationEntry {
-    entry_for_conversation_parts(nav_data, Some(metadata), history_model, app)
+    entry_for_conversation_parts(nav_data, Some(metadata), tasks, history_model, app)
 }
 
 fn entry_for_conversation_parts(
     nav_data: ConversationNavigationData,
     conversation_metadata: Option<&AIConversationMetadata>,
+    tasks: &HashMap<AmbientAgentTaskId, AmbientAgentTask>,
     history_model: &BlocklistAIHistoryModel,
     app: &AppContext,
 ) -> AgentConversationEntry {
@@ -656,7 +634,11 @@ fn entry_for_conversation_parts(
                 .and_then(|metadata| metadata.server_conversation_metadata.as_ref())
                 .map(|metadata| Harness::from(metadata.harness))
                 .or(Some(Harness::Oz)),
-            artifacts: conversation_artifacts(&metadata, history_model),
+            artifacts: aggregated_subtree_artifacts(
+                history_model,
+                tasks,
+                SubtreeRoot::Conversation(conversation_id),
+            ),
         },
         backing: AgentConversationBackingData {
             has_loaded_conversation,
