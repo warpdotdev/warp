@@ -103,9 +103,9 @@ fn make_item_fields<A: Action + Clone>(
     } else {
         llm.menu_display_name()
     };
-    let is_using_bedrock = should_show_bedrock_icon_for_model(llm, app);
+    let is_using_bedrock = should_show_bedrock_icon_for_model(llm, scope, app);
     let is_using_gemini_enterprise_agent_platform =
-        should_show_gemini_enterprise_agent_platform_icon_for_model(llm, app);
+        should_show_gemini_enterprise_agent_platform_icon_for_model(llm, scope, app);
     let is_using_api_key = should_show_key_icon_for_model(llm, scope, app);
     let is_custom_router = is_custom_router_id(llm.id.as_str());
     let leading_icon = model_leading_icon(

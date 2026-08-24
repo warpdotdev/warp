@@ -334,19 +334,45 @@ fn team_for_test() -> Team {
     }
 }
 
-#[test]
-fn test_aws_bedrock_credentials_default_off_when_admin_respects_user_setting() {
-    let team = team_for_test();
-    let mut workspace = workspace_for_test(&team);
-    workspace.settings.llm_settings.enabled = true;
-    workspace.settings.llm_settings.host_configs.insert(
-        LLMModelHost::AwsBedrock,
+/// Registers a fresh window on `team` and returns its id, so tests can build a
+/// [`TeamScope`] via [`UserWorkspaces::team_context_for_window_for_test`].
+fn window_on_team(app: &mut App, team: &Team) -> WindowId {
+    let window_id = WindowId::new();
+    UserWorkspaces::handle(app).update(app, |user_workspaces, ctx| {
+        user_workspaces.set_team_for_window(window_id, team.uid, ctx);
+    });
+    window_id
+}
+
+/// A team with `settings.llm_settings` configured for `host`, so a scoped read of that team
+/// (not the workspace's own settings, which the scoped accessors never read once a team is
+/// named) sees the host policy.
+fn team_with_llm_host(
+    host: LLMModelHost,
+    enabled: bool,
+    enablement_setting: HostEnablementSetting,
+) -> Team {
+    let mut team = team_for_test();
+    team.settings.llm_settings.enabled = true;
+    team.settings.llm_settings.host_configs.insert(
+        host,
         LlmHostSettings {
-            enabled: true,
-            enablement_setting: HostEnablementSetting::RespectUserSetting,
+            enabled,
+            enablement_setting,
             ..Default::default()
         },
     );
+    team
+}
+
+#[test]
+fn test_aws_bedrock_credentials_default_off_when_admin_respects_user_setting() {
+    let team = team_with_llm_host(
+        LLMModelHost::AwsBedrock,
+        true,
+        HostEnablementSetting::RespectUserSetting,
+    );
+    let workspace = workspace_for_test(&team);
 
     App::test((), |mut app| async move {
         initialize_app(
@@ -357,14 +383,17 @@ fn test_aws_bedrock_credentials_default_off_when_admin_respects_user_setting() {
             Arc::new(MockTeamClient::new()),
             Arc::new(MockWorkspaceClient::new()),
         );
+        let window_id = window_on_team(&mut app, &team);
 
         app.read(|ctx| {
+            let user_workspaces = UserWorkspaces::as_ref(ctx);
+            let scope = user_workspaces.team_context_for_window_for_test(window_id);
             assert!(
-                !UserWorkspaces::as_ref(ctx).is_aws_bedrock_credentials_enabled(ctx),
+                !user_workspaces.is_aws_bedrock_credentials_enabled(&scope, ctx),
                 "respect-user-setting should default the local Bedrock credentials toggle to off"
             );
             assert!(
-                UserWorkspaces::as_ref(ctx).is_aws_bedrock_credentials_toggleable(),
+                user_workspaces.is_aws_bedrock_credentials_toggleable(&scope),
                 "respect-user-setting should leave the local Bedrock credentials toggle editable"
             );
         });
@@ -373,17 +402,12 @@ fn test_aws_bedrock_credentials_default_off_when_admin_respects_user_setting() {
 
 #[test]
 fn test_aws_bedrock_credentials_respect_user_setting() {
-    let team = team_for_test();
-    let mut workspace = workspace_for_test(&team);
-    workspace.settings.llm_settings.enabled = true;
-    workspace.settings.llm_settings.host_configs.insert(
+    let team = team_with_llm_host(
         LLMModelHost::AwsBedrock,
-        LlmHostSettings {
-            enabled: true,
-            enablement_setting: HostEnablementSetting::RespectUserSetting,
-            ..Default::default()
-        },
+        true,
+        HostEnablementSetting::RespectUserSetting,
     );
+    let workspace = workspace_for_test(&team);
     let mut team_client = MockTeamClient::new();
     let workspace_for_poll = workspace.clone();
     team_client.expect_workspaces_metadata().returning(move || {
@@ -409,6 +433,7 @@ fn test_aws_bedrock_credentials_respect_user_setting() {
             Arc::new(team_client),
             Arc::new(MockWorkspaceClient::new()),
         );
+        let window_id = window_on_team(&mut app, &team);
 
         AISettings::handle(&app).update(&mut app, |settings, ctx| {
             let _ = settings
@@ -417,12 +442,14 @@ fn test_aws_bedrock_credentials_respect_user_setting() {
         });
 
         app.read(|ctx| {
+            let user_workspaces = UserWorkspaces::as_ref(ctx);
+            let scope = user_workspaces.team_context_for_window_for_test(window_id);
             assert!(
-                !UserWorkspaces::as_ref(ctx).is_aws_bedrock_credentials_enabled(ctx),
+                !user_workspaces.is_aws_bedrock_credentials_enabled(&scope, ctx),
                 "respect-user-setting should honor the local Bedrock credentials toggle"
             );
             assert!(
-                UserWorkspaces::as_ref(ctx).is_aws_bedrock_credentials_toggleable(),
+                user_workspaces.is_aws_bedrock_credentials_toggleable(&scope),
                 "respect-user-setting should leave the local Bedrock credentials toggle editable"
             );
         });
@@ -431,17 +458,12 @@ fn test_aws_bedrock_credentials_respect_user_setting() {
 
 #[test]
 fn test_aws_bedrock_credentials_enforced_by_admin() {
-    let team = team_for_test();
-    let mut workspace = workspace_for_test(&team);
-    workspace.settings.llm_settings.enabled = true;
-    workspace.settings.llm_settings.host_configs.insert(
+    let team = team_with_llm_host(
         LLMModelHost::AwsBedrock,
-        LlmHostSettings {
-            enabled: true,
-            enablement_setting: HostEnablementSetting::Enforce,
-            ..Default::default()
-        },
+        true,
+        HostEnablementSetting::Enforce,
     );
+    let workspace = workspace_for_test(&team);
     let mut team_client = MockTeamClient::new();
     let workspace_for_poll = workspace.clone();
     team_client.expect_workspaces_metadata().returning(move || {
@@ -467,6 +489,7 @@ fn test_aws_bedrock_credentials_enforced_by_admin() {
             Arc::new(MockTeamClient::new()),
             Arc::new(MockWorkspaceClient::new()),
         );
+        let window_id = window_on_team(&mut app, &team);
 
         AISettings::handle(&app).update(&mut app, |settings, ctx| {
             let _ = settings
@@ -475,13 +498,69 @@ fn test_aws_bedrock_credentials_enforced_by_admin() {
         });
 
         app.read(|ctx| {
+            let user_workspaces = UserWorkspaces::as_ref(ctx);
+            let scope = user_workspaces.team_context_for_window_for_test(window_id);
             assert!(
-                UserWorkspaces::as_ref(ctx).is_aws_bedrock_credentials_enabled(ctx),
+                user_workspaces.is_aws_bedrock_credentials_enabled(&scope, ctx),
                 "enforced Bedrock host policy should ignore the local Bedrock credentials toggle"
             );
             assert!(
-                !UserWorkspaces::as_ref(ctx).is_aws_bedrock_credentials_toggleable(),
+                !user_workspaces.is_aws_bedrock_credentials_toggleable(&scope),
                 "enforced Bedrock host policy should disable the local Bedrock credentials toggle"
+            );
+        });
+    })
+}
+
+/// Two teams, one enabling AWS Bedrock under `Enforce` and one not configuring it at all. A
+/// window with no team selected must not inherit either team's policy: `workspace.settings`
+/// would be an arbitrarily-elected one of them (see [`TeamScope`]'s contract), so the read
+/// must deny rather than adopt the permissive team's answer.
+#[test]
+fn aws_bedrock_availability_denies_a_multi_team_users_teamless_window() {
+    let team_a = team_for_test();
+    let mut team_b = team_for_test();
+    team_b.uid = 456.into();
+    let mut workspace = workspace_for_test(&team_a);
+    workspace.teams.push(team_b);
+    // Permissive on purpose: if the teamless scope fell through to this ambient value, both
+    // assertions below would flip.
+    workspace.settings.llm_settings.enabled = true;
+    workspace.settings.llm_settings.host_configs.insert(
+        LLMModelHost::AwsBedrock,
+        LlmHostSettings {
+            enabled: true,
+            enablement_setting: HostEnablementSetting::Enforce,
+            ..Default::default()
+        },
+    );
+
+    App::test((), |mut app| async move {
+        initialize_app(
+            &mut app,
+            CachedResources {
+                workspaces: vec![workspace],
+            },
+            Arc::new(MockTeamClient::new()),
+            Arc::new(MockWorkspaceClient::new()),
+        );
+
+        let window_id = WindowId::new();
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.register_window(window_id, None, ctx);
+        });
+
+        app.read(|ctx| {
+            let user_workspaces = UserWorkspaces::as_ref(ctx);
+            let scope = user_workspaces.team_context_for_window_for_test(window_id);
+            assert_eq!(scope.team_uid(), None);
+            assert!(
+                !user_workspaces.is_aws_bedrock_available_from_workspace(&scope),
+                "a multi-team user's teamless window must not inherit any team's Bedrock policy"
+            );
+            assert!(
+                !user_workspaces.is_aws_bedrock_credentials_enabled(&scope, ctx),
+                "a multi-team user's teamless window must not enable Bedrock credentials"
             );
         });
     })
@@ -495,9 +574,9 @@ fn workspace_with_gemini_enterprise_host(
     enabled: bool,
     enablement_setting: HostEnablementSetting,
 ) -> Workspace {
-    let mut workspace = workspace_for_test(team);
-    workspace.settings.llm_settings.enabled = true;
-    workspace.settings.llm_settings.host_configs.insert(
+    let mut team = team.clone();
+    team.settings.llm_settings.enabled = true;
+    team.settings.llm_settings.host_configs.insert(
         LLMModelHost::GeminiEnterprise,
         LlmHostSettings {
             enabled,
@@ -506,7 +585,7 @@ fn workspace_with_gemini_enterprise_host(
             gcp_sa_email: Some(TEST_GCP_SA_EMAIL.to_string()),
         },
     );
-    workspace
+    workspace_for_test(&team)
 }
 
 #[test]
@@ -528,14 +607,17 @@ fn test_gemini_enterprise_credentials_default_off_when_admin_respects_user_setti
             Arc::new(MockTeamClient::new()),
             Arc::new(MockWorkspaceClient::new()),
         );
+        let window_id = window_on_team(&mut app, &team);
 
         app.read(|ctx| {
+            let user_workspaces = UserWorkspaces::as_ref(ctx);
+            let scope = user_workspaces.team_context_for_window_for_test(window_id);
             assert!(
-                !UserWorkspaces::as_ref(ctx).is_gemini_enterprise_credentials_enabled(ctx),
+                !user_workspaces.is_gemini_enterprise_credentials_enabled(&scope, ctx),
                 "respect-user-setting should default the local Gemini Enterprise credentials toggle to off"
             );
             assert!(
-                UserWorkspaces::as_ref(ctx).is_gemini_enterprise_credentials_toggleable(),
+                user_workspaces.is_gemini_enterprise_credentials_toggleable(&scope),
                 "respect-user-setting should leave the local Gemini Enterprise credentials toggle editable"
             );
         });
@@ -561,6 +643,7 @@ fn test_gemini_enterprise_credentials_respect_user_setting_honors_member_toggle(
             Arc::new(MockTeamClient::new()),
             Arc::new(MockWorkspaceClient::new()),
         );
+        let window_id = window_on_team(&mut app, &team);
 
         AISettings::handle(&app).update(&mut app, |settings, ctx| {
             let _ = settings
@@ -569,8 +652,10 @@ fn test_gemini_enterprise_credentials_respect_user_setting_honors_member_toggle(
         });
 
         app.read(|ctx| {
+            let user_workspaces = UserWorkspaces::as_ref(ctx);
+            let scope = user_workspaces.team_context_for_window_for_test(window_id);
             assert!(
-                UserWorkspaces::as_ref(ctx).is_gemini_enterprise_credentials_enabled(ctx),
+                user_workspaces.is_gemini_enterprise_credentials_enabled(&scope, ctx),
                 "respect-user-setting should honor an opted-in Gemini Enterprise credentials toggle"
             );
         });
@@ -593,6 +678,7 @@ fn test_gemini_enterprise_credentials_enforced_by_admin() {
             Arc::new(MockTeamClient::new()),
             Arc::new(MockWorkspaceClient::new()),
         );
+        let window_id = window_on_team(&mut app, &team);
 
         AISettings::handle(&app).update(&mut app, |settings, ctx| {
             let _ = settings
@@ -601,12 +687,14 @@ fn test_gemini_enterprise_credentials_enforced_by_admin() {
         });
 
         app.read(|ctx| {
+            let user_workspaces = UserWorkspaces::as_ref(ctx);
+            let scope = user_workspaces.team_context_for_window_for_test(window_id);
             assert!(
-                UserWorkspaces::as_ref(ctx).is_gemini_enterprise_credentials_enabled(ctx),
+                user_workspaces.is_gemini_enterprise_credentials_enabled(&scope, ctx),
                 "enforced Gemini Enterprise host policy should ignore the local credentials toggle"
             );
             assert!(
-                !UserWorkspaces::as_ref(ctx).is_gemini_enterprise_credentials_toggleable(),
+                !user_workspaces.is_gemini_enterprise_credentials_toggleable(&scope),
                 "enforced Gemini Enterprise host policy should disable the local credentials toggle"
             );
         });
@@ -629,14 +717,17 @@ fn test_gemini_enterprise_credentials_disabled_when_host_disabled() {
             Arc::new(MockTeamClient::new()),
             Arc::new(MockWorkspaceClient::new()),
         );
+        let window_id = window_on_team(&mut app, &team);
 
         app.read(|ctx| {
+            let user_workspaces = UserWorkspaces::as_ref(ctx);
+            let scope = user_workspaces.team_context_for_window_for_test(window_id);
             assert!(
-                !UserWorkspaces::as_ref(ctx).is_gemini_enterprise_available_from_workspace(),
+                !user_workspaces.is_gemini_enterprise_available_from_workspace(&scope),
                 "a disabled Gemini Enterprise host should not be available from the workspace"
             );
             assert!(
-                !UserWorkspaces::as_ref(ctx).is_gemini_enterprise_credentials_enabled(ctx),
+                !user_workspaces.is_gemini_enterprise_credentials_enabled(&scope, ctx),
                 "a disabled Gemini Enterprise host should gate credentials off even under ENFORCE"
             );
         });
@@ -646,18 +737,13 @@ fn test_gemini_enterprise_credentials_disabled_when_host_disabled() {
 #[test]
 fn test_gemini_enterprise_credentials_disabled_when_host_absent() {
     let _flag = FeatureFlag::GeminiEnterprise.override_enabled(true);
-    let team = team_for_test();
-    // Bedrock-only workspace: proves the GEAP gate reads its own host entry.
-    let mut workspace = workspace_for_test(&team);
-    workspace.settings.llm_settings.enabled = true;
-    workspace.settings.llm_settings.host_configs.insert(
+    // Bedrock-only team: proves the GEAP gate reads its own host entry.
+    let team = team_with_llm_host(
         LLMModelHost::AwsBedrock,
-        LlmHostSettings {
-            enabled: true,
-            enablement_setting: HostEnablementSetting::Enforce,
-            ..Default::default()
-        },
+        true,
+        HostEnablementSetting::Enforce,
     );
+    let workspace = workspace_for_test(&team);
 
     App::test((), |mut app| async move {
         initialize_app(
@@ -668,16 +754,19 @@ fn test_gemini_enterprise_credentials_disabled_when_host_absent() {
             Arc::new(MockTeamClient::new()),
             Arc::new(MockWorkspaceClient::new()),
         );
+        let window_id = window_on_team(&mut app, &team);
 
         app.read(|ctx| {
+            let user_workspaces = UserWorkspaces::as_ref(ctx);
+            let scope = user_workspaces.team_context_for_window_for_test(window_id);
             assert!(
-                UserWorkspaces::as_ref(ctx)
-                    .gemini_enterprise_host_settings()
+                user_workspaces
+                    .gemini_enterprise_host_settings(&scope)
                     .is_none(),
                 "a workspace without a Gemini Enterprise host entry should expose no settings"
             );
             assert!(
-                !UserWorkspaces::as_ref(ctx).is_gemini_enterprise_credentials_enabled(ctx),
+                !user_workspaces.is_gemini_enterprise_credentials_enabled(&scope, ctx),
                 "a workspace without a Gemini Enterprise host entry should gate credentials off"
             );
         });
@@ -701,10 +790,13 @@ fn test_gemini_enterprise_credentials_disabled_when_logged_out() {
             Arc::new(MockWorkspaceClient::new()),
             AuthStateProvider::new_logged_out_for_test(),
         );
+        let window_id = window_on_team(&mut app, &team);
 
         app.read(|ctx| {
+            let user_workspaces = UserWorkspaces::as_ref(ctx);
+            let scope = user_workspaces.team_context_for_window_for_test(window_id);
             assert!(
-                !UserWorkspaces::as_ref(ctx).is_gemini_enterprise_credentials_enabled(ctx),
+                !user_workspaces.is_gemini_enterprise_credentials_enabled(&scope, ctx),
                 "logged-out users should never mint or attach Gemini Enterprise credentials"
             );
         });
@@ -729,14 +821,63 @@ fn test_gemini_enterprise_host_settings_carries_federation_config() {
             Arc::new(MockTeamClient::new()),
             Arc::new(MockWorkspaceClient::new()),
         );
+        let window_id = window_on_team(&mut app, &team);
 
         app.read(|ctx| {
             let user_workspaces = UserWorkspaces::as_ref(ctx);
+            let scope = user_workspaces.team_context_for_window_for_test(window_id);
             let settings = user_workspaces
-                .gemini_enterprise_host_settings()
+                .gemini_enterprise_host_settings(&scope)
                 .expect("workspace should expose the Gemini Enterprise host settings");
             assert_eq!(settings.gcp_audience.as_deref(), Some(TEST_GCP_AUDIENCE));
             assert_eq!(settings.gcp_sa_email.as_deref(), Some(TEST_GCP_SA_EMAIL));
+        });
+    })
+}
+
+/// Two teams, one enabling Gemini Enterprise under `Enforce` and one not configuring it at
+/// all. A window with no team selected must not inherit either team's policy: `workspace.
+/// settings` would be an arbitrarily-elected one of them (see [`TeamScope`]'s contract), so
+/// the read must deny rather than adopt the permissive team's answer.
+#[test]
+fn gemini_enterprise_availability_denies_a_multi_team_users_teamless_window() {
+    let _flag = FeatureFlag::GeminiEnterprise.override_enabled(true);
+    let team_a = team_for_test();
+    let mut team_b = team_for_test();
+    team_b.uid = 456.into();
+    // Permissive on purpose: if the teamless scope fell through to this ambient value, both
+    // assertions below would flip.
+    let mut workspace =
+        workspace_with_gemini_enterprise_host(&team_a, true, HostEnablementSetting::Enforce);
+    workspace.teams.push(team_b);
+
+    App::test((), |mut app| async move {
+        initialize_app(
+            &mut app,
+            CachedResources {
+                workspaces: vec![workspace],
+            },
+            Arc::new(MockTeamClient::new()),
+            Arc::new(MockWorkspaceClient::new()),
+        );
+
+        let window_id = WindowId::new();
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.register_window(window_id, None, ctx);
+        });
+
+        app.read(|ctx| {
+            let user_workspaces = UserWorkspaces::as_ref(ctx);
+            let scope = user_workspaces.team_context_for_window_for_test(window_id);
+            assert_eq!(scope.team_uid(), None);
+            assert!(
+                !user_workspaces.is_gemini_enterprise_available_from_workspace(&scope),
+                "a multi-team user's teamless window must not inherit any team's GEAP policy"
+            );
+            assert!(
+                !user_workspaces.is_gemini_enterprise_credentials_enabled(&scope, ctx),
+                "a multi-team user's teamless window must not enable GEAP credentials"
+            );
         });
     })
 }

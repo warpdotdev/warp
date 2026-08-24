@@ -132,22 +132,27 @@ fn should_show_host_icon_for_model(
             .is_some_and(|config| config.enabled)
 }
 
-pub fn should_show_bedrock_icon_for_model(llm: &LLMInfo, app: &AppContext) -> bool {
+pub fn should_show_bedrock_icon_for_model(
+    llm: &LLMInfo,
+    scope: &dyn TeamScope,
+    app: &AppContext,
+) -> bool {
     should_show_host_icon_for_model(
         llm,
         &LLMModelHost::AwsBedrock,
-        UserWorkspaces::as_ref(app).is_aws_bedrock_credentials_enabled(app),
+        UserWorkspaces::as_ref(app).is_aws_bedrock_credentials_enabled(scope, app),
     )
 }
 
 pub fn should_show_gemini_enterprise_agent_platform_icon_for_model(
     llm: &LLMInfo,
+    scope: &dyn TeamScope,
     app: &AppContext,
 ) -> bool {
     should_show_host_icon_for_model(
         llm,
         &LLMModelHost::GeminiEnterprise,
-        UserWorkspaces::as_ref(app).is_gemini_enterprise_credentials_enabled(app),
+        UserWorkspaces::as_ref(app).is_gemini_enterprise_credentials_enabled(scope, app),
     )
 }
 

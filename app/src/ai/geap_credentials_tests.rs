@@ -8,6 +8,7 @@ use warpui::{AddSingletonModel, App};
 use warpui_extras::user_preferences;
 
 use super::*;
+use crate::features::FeatureFlag;
 use crate::server::server_api::ServerApiProvider;
 use crate::server::server_api::team::MockTeamClient;
 use crate::server::server_api::workspace::MockWorkspaceClient;
@@ -155,8 +156,21 @@ fn team_for_test() -> Team {
 }
 
 fn workspace_with_geap_host(enabled: bool) -> Workspace {
-    let team = team_for_test();
-    let mut workspace = Workspace {
+    let mut team = team_for_test();
+    // The scoped and any-team accessors both read a team's own `settings.llm_settings`
+    // (never the workspace's, once any team exists -- see `team_workspace_settings.rs`), so
+    // the host has to live there for a windowed or windowless read to see it.
+    team.settings.llm_settings.enabled = true;
+    team.settings.llm_settings.host_configs.insert(
+        crate::ai::llms::LLMModelHost::GeminiEnterprise,
+        LlmHostSettings {
+            enabled,
+            enablement_setting: HostEnablementSetting::Enforce,
+            gcp_audience: Some(TEST_AUDIENCE.to_string()),
+            gcp_sa_email: Some(TEST_SA_EMAIL.to_string()),
+        },
+    );
+    Workspace {
         uid: "workspace_uid123456789".to_string().into(),
         name: "test".to_string(),
         stripe_customer_id: None,
@@ -172,18 +186,7 @@ fn workspace_with_geap_host(enabled: bool) -> Workspace {
         is_eligible_for_discovery: false,
         members: vec![],
         total_requests_used_since_last_refresh: 0,
-    };
-    workspace.settings.llm_settings.enabled = true;
-    workspace.settings.llm_settings.host_configs.insert(
-        crate::ai::llms::LLMModelHost::GeminiEnterprise,
-        LlmHostSettings {
-            enabled,
-            enablement_setting: HostEnablementSetting::Enforce,
-            gcp_audience: Some(TEST_AUDIENCE.to_string()),
-            gcp_sa_email: Some(TEST_SA_EMAIL.to_string()),
-        },
-    );
-    workspace
+    }
 }
 
 /// Registers the minimal singleton set the refresh path touches: workspace
@@ -250,7 +253,7 @@ fn stale_binding() -> GeapMintBinding {
 /// The mintable binding for the harness gate. The harness enables the GEAP
 /// host with a configured audience, so the policy is always `Mintable`.
 fn current_binding(ctx: &mut ModelContext<ApiKeyManager>) -> GeapMintBinding {
-    match current_geap_policy(ctx) {
+    match current_geap_policy_for_any_team(ctx) {
         GeapPolicy::Mintable(binding) => binding,
         other => panic!("expected a mintable GEAP policy, got {other:?}"),
     }
@@ -294,7 +297,7 @@ fn refresh_disables_and_drops_tokens_when_gate_is_off() {
 fn refresh_rests_at_unconfigured_when_enabled_but_unconfigured() {
     let mut workspace = workspace_with_geap_host(true);
     // Enabled, but the admin has not configured an audience yet.
-    workspace
+    workspace.teams[0]
         .settings
         .llm_settings
         .host_configs
