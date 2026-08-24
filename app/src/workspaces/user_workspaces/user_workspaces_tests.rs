@@ -1308,10 +1308,11 @@ fn remote_session_policy_falls_back_to_the_workspace_for_a_user_with_no_teams() 
     })
 }
 
-/// A user with teams whose surface resolves to none has an unknown team, not an absent one. For
-/// a control that gates AI in an environment the user may not control, unknown fails closed.
+/// The fallback a single-team user needs: their window has no team selected, but they are on
+/// exactly one team, so that team's permission and patterns are the unambiguous answer. Mirrors
+/// `member_byo_policy_for_a_teamless_window_reads_a_sole_team`.
 #[test]
-fn remote_session_ai_permission_is_denied_when_a_surfaces_team_is_unknown() {
+fn remote_session_policy_for_a_teamless_window_reads_a_sole_team() {
     let mut team = team_for_test();
     set_team_remote_session_policy(&mut team, true, &["^kubectl"]);
     let workspace = workspace_for_test(&team);
@@ -1319,19 +1320,56 @@ fn remote_session_ai_permission_is_denied_when_a_surfaces_team_is_unknown() {
     App::test((), |mut app| async move {
         initialize_window_team_test_app(&mut app, vec![workspace]);
 
-        // A window that never registered a team, standing in for a surface whose window has
-        // no team selected while the user does have teams.
-        let (_window_id, view) = create_test_window(&mut app);
+        let (window_id, view) = create_test_window(&mut app);
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.register_window(window_id, None, ctx);
+        });
 
         app.read(|ctx| {
             assert!(
+                remote_session_ai_allowed_for_surface(&view, ctx),
+                "the sole team permits it, so the teamless window must too"
+            );
+            assert_eq!(
+                remote_session_patterns_for_surface(&view, ctx),
+                HashSet::from(["^kubectl".to_string()]),
+                "the sole team's patterns are the ones in scope"
+            );
+        });
+    })
+}
+
+/// A user on several teams has no unambiguous fallback for a teamless scope: the workspace's
+/// settings are whichever one of their teams the server elected, so reading it would hand this
+/// window another team's policy. Mirrors `member_byo_policy_denies_a_multi_team_users_teamless_window`.
+#[test]
+fn remote_session_policy_denies_a_multi_team_users_teamless_window() {
+    let (mut team_a, team_b) = two_teams();
+    set_team_remote_session_policy(&mut team_a, true, &["^kubectl"]);
+    let mut workspace = workspace_for_test(&team_a);
+    workspace.teams.push(team_b);
+    // Permissive on purpose: if the teamless scope fell through to this ambient value, both
+    // assertions below would flip.
+    set_workspace_remote_session_policy(&mut workspace, true, &["^workspace-only"]);
+
+    App::test((), |mut app| async move {
+        initialize_window_team_test_app(&mut app, vec![workspace]);
+
+        let (window_id, view) = create_test_window(&mut app);
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.register_window(window_id, None, ctx);
+        });
+
+        app.read(|ctx| {
+            let user_workspaces = UserWorkspaces::as_ref(ctx);
+            assert!(user_workspaces.can_switch_teams());
+            assert!(
                 !remote_session_ai_allowed_for_surface(&view, ctx),
-                "an unresolvable team must not be read as the absence of a policy"
+                "a multi-team user's teamless window must not inherit any team's permission"
             );
             assert!(
                 remote_session_patterns_for_surface(&view, ctx).is_empty(),
-                "there is no restrictive pattern list to fall back to, so an unknown team \
-                 contributes none"
+                "a multi-team user's teamless window must not inherit any team's patterns"
             );
         });
     })
@@ -1373,49 +1411,6 @@ fn remote_session_ai_permission_is_allowed_for_a_user_with_no_workspace_at_all()
         app.read(|ctx| {
             assert!(remote_session_ai_allowed_for_surface(&view, ctx));
             assert!(remote_session_patterns_for_surface(&view, ctx).is_empty());
-        });
-    })
-}
-
-/// `current_workspace().teams` being empty is not the same as belonging to no team: the sole
-/// team can live in a workspace that is not the current one (e.g. before `current_workspace_uid`
-/// catches up with a `workspaces` cache populated at startup). The current workspace's own
-/// policy is deliberately permissive here, so the teamless scope flipping to it would be
-/// visible in both assertions.
-#[test]
-fn remote_session_policy_denies_a_teamless_scope_whose_only_team_is_in_another_workspace() {
-    let mut team = team_for_test();
-    set_team_remote_session_policy(&mut team, false, &["^team-only"]);
-    let mut current_workspace = workspace_for_test(&team);
-    current_workspace.teams.clear();
-    set_workspace_remote_session_policy(&mut current_workspace, true, &["^workspace-only"]);
-    let mut other_workspace = workspace_for_test(&team);
-    other_workspace.uid = "workspace_uid999999999".to_string().into();
-
-    App::test((), |mut app| async move {
-        initialize_window_team_test_app(&mut app, vec![current_workspace, other_workspace]);
-
-        let (window_id, view) = create_test_window(&mut app);
-        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
-            user_workspaces.register_window(window_id, None, ctx);
-        });
-
-        app.read(|ctx| {
-            let user_workspaces = UserWorkspaces::as_ref(ctx);
-            assert!(
-                !user_workspaces.has_teams(),
-                "the current workspace itself has no teams"
-            );
-            assert!(
-                !remote_session_ai_allowed_for_surface(&view, ctx),
-                "a team in another workspace means the user does not belong to no team, so \
-                 the current workspace's permissive value must not stand in for it"
-            );
-            assert!(
-                remote_session_patterns_for_surface(&view, ctx).is_empty(),
-                "same reasoning for the patterns: the current workspace's configured list \
-                 must not leak through"
-            );
         });
     })
 }

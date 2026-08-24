@@ -262,20 +262,6 @@ impl UserWorkspaces {
             .and_then(|team_uid| self.team_from_uid(team_uid))
     }
 
-    /// Whether the user belongs to no team in any workspace, which is the only case where a
-    /// scope naming no team can safely fall back to `current_workspace().settings`.
-    ///
-    /// Spans every workspace rather than just the current one: a team elsewhere still makes
-    /// this workspace's settings some team's proxy rather than a genuinely team-neutral value
-    /// (see [`TeamScope`]), and at startup `workspaces` can populate before
-    /// `current_workspace_uid` does, leaving `current_workspace()` empty for a user who
-    /// demonstrably has a team.
-    fn belongs_to_no_team(&self) -> bool {
-        self.workspaces
-            .iter()
-            .all(|workspace| workspace.teams.is_empty())
-    }
-
     /// Whether `scope`'s team admins allows its members to use their own provider API keys.
     ///
     /// Without the managed BYOK/BYOE policy there is no team-level restriction, so this returns
@@ -494,33 +480,49 @@ impl UserWorkspaces {
 
     /// Whether AI is allowed in remote sessions under `scope`'s team.
     ///
-    /// A scope with no team reads the current workspace's value only where that is unambiguous:
-    /// the user belongs to no team at all (see [`Self::belongs_to_no_team`]). Otherwise, a scope
-    /// naming no team means the surface's team could not be determined rather than that no
-    /// policy applies, and for a control gating AI in an environment the user may not control,
-    /// that unknown case fails closed instead of falling through to the workspace's
-    /// team-neutral default.
+    /// A scope that names a team reads that team's permission and only that team's: an
+    /// unresolvable team denies, never another team's permission.
+    ///
+    /// A scope with no team falls back on the current workspace, but only where that has an
+    /// unambiguous answer: `workspace.settings` when the user is on no team there, and their
+    /// own team's permission when they are on exactly one. On several teams there is nothing to
+    /// fall back to -- `workspace.settings` would be an arbitrarily elected one of them, see
+    /// [`TeamScope`] -- so, for a control gating AI in an environment the user may not control,
+    /// this denies rather than guessing. Mirrors [`Self::team_byo_for_scope`]'s shape.
     pub(crate) fn is_ai_allowed_in_remote_sessions<S: TeamScope + ?Sized>(
         &self,
         scope: &S,
     ) -> bool {
-        match self.team_from_scope(scope) {
-            Some(team) => {
-                team.settings
-                    .ai_permissions
-                    .allow_ai_in_remote_sessions
-                    .value
-            }
-            None if self.belongs_to_no_team() => self
-                .current_workspace()
-                .map(|workspace| {
-                    workspace
-                        .settings
-                        .ai_permissions_settings
+        match scope.team_uid() {
+            Some(_) => self
+                .team_from_scope(scope)
+                .map(|team| {
+                    team.settings
+                        .ai_permissions
                         .allow_ai_in_remote_sessions
+                        .value
                 })
-                .unwrap_or(true),
-            None => false,
+                .unwrap_or(false),
+            None => {
+                let Some(workspace) = self.current_workspace() else {
+                    return true;
+                };
+                match workspace.teams.as_slice() {
+                    [] => {
+                        workspace
+                            .settings
+                            .ai_permissions_settings
+                            .allow_ai_in_remote_sessions
+                    }
+                    [team] => {
+                        team.settings
+                            .ai_permissions
+                            .allow_ai_in_remote_sessions
+                            .value
+                    }
+                    _ => false,
+                }
+            }
         }
     }
 
@@ -528,13 +530,13 @@ impl UserWorkspaces {
     ///
     /// Falls back to the current workspace's patterns on the same terms as
     /// [`Self::is_ai_allowed_in_remote_sessions`]. Unlike that permission there is no
-    /// restrictive value to fail closed to, so an unresolvable team contributes no patterns
-    /// rather than the workspace's.
+    /// restrictive value to fail closed to, so an unresolvable team or several teams contribute
+    /// no patterns rather than the workspace's.
     ///
-    /// Looks the team up directly in the [`UserWorkspaces::remote_session_regexes`] cache
-    /// instead of going through [`Self::team_from_scope`]: the cache is compiled from every
-    /// workspace so a window can keep the team it was assigned even if it is not the current
-    /// workspace's, and recompiling per read would repeat the cost that cache exists to avoid.
+    /// Looks teams up directly in the [`UserWorkspaces::remote_session_regexes`] cache instead
+    /// of reading `team.settings` fresh: the cache is compiled from every workspace so a window
+    /// can keep the team it was assigned even if it is not the current workspace's, and
+    /// recompiling per read would repeat the cost that cache exists to avoid.
     pub(crate) fn get_remote_session_regex_list<S: TeamScope + ?Sized>(
         &self,
         scope: &S,
@@ -545,17 +547,24 @@ impl UserWorkspaces {
                 .get(&team_uid)
                 .map(Vec::as_slice)
                 .unwrap_or_default(),
-            None if self.belongs_to_no_team() => self
-                .current_workspace()
-                .map(|workspace| {
-                    workspace
+            None => {
+                let Some(workspace) = self.current_workspace() else {
+                    return &[];
+                };
+                match workspace.teams.as_slice() {
+                    [] => workspace
                         .settings
                         .ai_permissions_settings
                         .remote_session_regex_list
-                        .as_slice()
-                })
-                .unwrap_or_default(),
-            None => &[],
+                        .as_slice(),
+                    [team] => self
+                        .remote_session_regexes
+                        .get(&team.uid)
+                        .map(Vec::as_slice)
+                        .unwrap_or_default(),
+                    _ => &[],
+                }
+            }
         }
     }
 }
