@@ -2041,8 +2041,7 @@ fn schedule_create_accepts_team_scope_with_uid() {
         "0 9 * * 1",
         "--prompt",
         "hello",
-        "--team",
-        "team_uid00000000000123",
+        "--team=team_uid00000000000123",
     ])
     .unwrap();
 
@@ -2063,6 +2062,73 @@ fn schedule_create_accepts_team_scope_with_uid() {
         Some("team_uid00000000000123")
     );
     assert!(!create_args.scope.personal);
+}
+
+#[test]
+fn schedule_create_rejects_detached_team_uid() {
+    assert!(
+        Args::try_parse_from([
+            "warp",
+            "schedule",
+            "create",
+            "--name",
+            "test",
+            "--cron",
+            "0 9 * * 1",
+            "--prompt",
+            "hello",
+            "--team",
+            "team_uid00000000000123",
+        ])
+        .is_err()
+    );
+}
+
+/// `--team` predates taking a uid, so a detached value must still reach the positional it
+/// always did rather than being read as the team.
+#[test]
+fn secret_delete_bare_team_leaves_the_name_positional_alone() {
+    warp_core::features::mark_initialized();
+
+    let args = Args::try_parse_from(["warp", "secret", "delete", "--team", "my-secret"]).unwrap();
+
+    let Some(Command::CommandLine(boxed_cmd)) = args.command else {
+        panic!("Expected `warp secret delete` command");
+    };
+    let CliCommand::Secret(SecretCommand::Delete(delete_args)) = boxed_cmd.as_ref() else {
+        panic!("Expected `warp secret delete` command");
+    };
+
+    assert_eq!(delete_args.name, "my-secret");
+    assert!(delete_args.scope.is_team());
+    assert!(delete_args.scope.requested_team_uid().is_none());
+}
+
+#[test]
+fn secret_delete_accepts_team_uid_alongside_the_name_positional() {
+    warp_core::features::mark_initialized();
+
+    let args = Args::try_parse_from([
+        "warp",
+        "secret",
+        "delete",
+        "--team=team_uid00000000000123",
+        "my-secret",
+    ])
+    .unwrap();
+
+    let Some(Command::CommandLine(boxed_cmd)) = args.command else {
+        panic!("Expected `warp secret delete` command");
+    };
+    let CliCommand::Secret(SecretCommand::Delete(delete_args)) = boxed_cmd.as_ref() else {
+        panic!("Expected `warp secret delete` command");
+    };
+
+    assert_eq!(delete_args.name, "my-secret");
+    assert_eq!(
+        delete_args.scope.requested_team_uid(),
+        Some("team_uid00000000000123")
+    );
 }
 
 #[test]

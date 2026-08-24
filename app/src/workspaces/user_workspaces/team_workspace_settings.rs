@@ -100,7 +100,7 @@ pub type TeamContextResolver = Rc<dyn for<'a> Fn(&'a AppContext) -> TeamContext<
 ///
 /// Deliberately cannot be teamless. The other two scopes can be, because a window genuinely may
 /// have no team selected; a CLI caller that cannot name one has instead failed to say what it
-/// meant, and is told to pass `--team <UID>`. Minted only by
+/// meant, and is told to pass `--team=<UID>`. Minted only by
 /// [`UserWorkspaces::team_scope_for_cli`], which checks membership first.
 pub struct TeamScopeForCli(ServerId);
 

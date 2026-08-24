@@ -102,7 +102,7 @@ pub(super) fn describe_sole_team_error(error: SoleTeamError) -> anyhow::Error {
     match error {
         SoleTeamError::NoTeam => anyhow::anyhow!("You are not on a team"),
         SoleTeamError::MoreThanOneTeam { team_uids } => anyhow::anyhow!(
-            "You are on {} teams; specify one with --team <UID>: {}",
+            "You are on {} teams; specify one with --team=<UID>: {}",
             team_uids.len(),
             team_uids
                 .iter()
@@ -122,7 +122,7 @@ fn describe_cli_team_error(error: CliTeamError) -> anyhow::Error {
     }
 }
 
-/// Parses the uid given as `--team <UID>`, if one was.
+/// Parses the uid given as `--team=<UID>`, if one was.
 fn requested_team_uid(scope: &ObjectScope) -> anyhow::Result<Option<ServerId>> {
     scope
         .requested_team_uid()
