@@ -981,10 +981,15 @@ impl AmbientAgentRunner {
                 Artifact::File {
                     filename,
                     filepath,
+                    title,
                     description,
                     ..
                 } => {
-                    let label = super::super::artifacts::file_button_label(filename, filepath);
+                    let label = super::super::artifacts::file_button_label(
+                        title.as_deref(),
+                        filename,
+                        filepath,
+                    );
                     lines.push(format!("  File: {}", label));
                     lines.push(format!("    Path: {}", filepath));
                     if let Some(description) = description {

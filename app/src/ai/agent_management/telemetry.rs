@@ -38,6 +38,7 @@ pub enum ArtifactType {
     Branch,
     PullRequest,
     File,
+    Video,
 }
 
 /// Type of filter changed
