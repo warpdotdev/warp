@@ -512,19 +512,17 @@ fn test_aws_bedrock_credentials_enforced_by_admin() {
     })
 }
 
-/// Two teams, one enabling AWS Bedrock under `Enforce` and one not configuring it at all. A
-/// window with no team selected must not inherit either team's policy: `workspace.settings`
-/// would be an arbitrarily-elected one of them (see [`TeamScope`]'s contract), so the read
-/// must deny rather than adopt the permissive team's answer.
+/// Two teams, neither configuring AWS Bedrock. A window with no team selected reads
+/// `current_workspace().settings` unconditionally -- the server's fallback for a user on
+/// several teams (see [`UserWorkspaces::scoped_or_workspace_setting`]) -- so it inherits the
+/// workspace's own Bedrock policy rather than being denied.
 #[test]
-fn aws_bedrock_availability_denies_a_multi_team_users_teamless_window() {
+fn aws_bedrock_availability_falls_back_to_the_workspace_for_a_multi_team_users_teamless_window() {
     let team_a = team_for_test();
     let mut team_b = team_for_test();
     team_b.uid = 456.into();
     let mut workspace = workspace_for_test(&team_a);
     workspace.teams.push(team_b);
-    // Permissive on purpose: if the teamless scope fell through to this ambient value, both
-    // assertions below would flip.
     workspace.settings.llm_settings.enabled = true;
     workspace.settings.llm_settings.host_configs.insert(
         LLMModelHost::AwsBedrock,
@@ -555,12 +553,12 @@ fn aws_bedrock_availability_denies_a_multi_team_users_teamless_window() {
             let scope = user_workspaces.team_context_for_window_for_test(window_id);
             assert_eq!(scope.team_uid(), None);
             assert!(
-                !user_workspaces.is_aws_bedrock_available_from_workspace(&scope),
-                "a multi-team user's teamless window must not inherit any team's Bedrock policy"
+                user_workspaces.is_aws_bedrock_available_from_workspace(&scope),
+                "a multi-team user's teamless window should read the workspace's own Bedrock policy"
             );
             assert!(
-                !user_workspaces.is_aws_bedrock_credentials_enabled(&scope, ctx),
-                "a multi-team user's teamless window must not enable Bedrock credentials"
+                user_workspaces.is_aws_bedrock_credentials_enabled(&scope, ctx),
+                "a multi-team user's teamless window should read the workspace's own Bedrock policy"
             );
         });
     })
@@ -835,21 +833,29 @@ fn test_gemini_enterprise_host_settings_carries_federation_config() {
     })
 }
 
-/// Two teams, one enabling Gemini Enterprise under `Enforce` and one not configuring it at
-/// all. A window with no team selected must not inherit either team's policy: `workspace.
-/// settings` would be an arbitrarily-elected one of them (see [`TeamScope`]'s contract), so
-/// the read must deny rather than adopt the permissive team's answer.
+/// Two teams, neither configuring Gemini Enterprise. A window with no team selected reads
+/// `current_workspace().settings` unconditionally -- the server's fallback for a user on
+/// several teams (see [`UserWorkspaces::scoped_or_workspace_setting`]) -- so it inherits the
+/// workspace's own GEAP policy rather than being denied.
 #[test]
-fn gemini_enterprise_availability_denies_a_multi_team_users_teamless_window() {
+fn gemini_enterprise_availability_falls_back_to_the_workspace_for_a_multi_team_users_teamless_window()
+ {
     let _flag = FeatureFlag::GeminiEnterprise.override_enabled(true);
     let team_a = team_for_test();
     let mut team_b = team_for_test();
     team_b.uid = 456.into();
-    // Permissive on purpose: if the teamless scope fell through to this ambient value, both
-    // assertions below would flip.
-    let mut workspace =
-        workspace_with_gemini_enterprise_host(&team_a, true, HostEnablementSetting::Enforce);
+    let mut workspace = workspace_for_test(&team_a);
     workspace.teams.push(team_b);
+    workspace.settings.llm_settings.enabled = true;
+    workspace.settings.llm_settings.host_configs.insert(
+        LLMModelHost::GeminiEnterprise,
+        LlmHostSettings {
+            enabled: true,
+            enablement_setting: HostEnablementSetting::Enforce,
+            gcp_audience: Some(TEST_GCP_AUDIENCE.to_string()),
+            gcp_sa_email: Some(TEST_GCP_SA_EMAIL.to_string()),
+        },
+    );
 
     App::test((), |mut app| async move {
         initialize_app(
@@ -871,12 +877,52 @@ fn gemini_enterprise_availability_denies_a_multi_team_users_teamless_window() {
             let scope = user_workspaces.team_context_for_window_for_test(window_id);
             assert_eq!(scope.team_uid(), None);
             assert!(
-                !user_workspaces.is_gemini_enterprise_available_from_workspace(&scope),
-                "a multi-team user's teamless window must not inherit any team's GEAP policy"
+                user_workspaces.is_gemini_enterprise_available_from_workspace(&scope),
+                "a multi-team user's teamless window should read the workspace's own GEAP policy"
             );
             assert!(
-                !user_workspaces.is_gemini_enterprise_credentials_enabled(&scope, ctx),
-                "a multi-team user's teamless window must not enable GEAP credentials"
+                user_workspaces.is_gemini_enterprise_credentials_enabled(&scope, ctx),
+                "a multi-team user's teamless window should read the workspace's own GEAP policy"
+            );
+        });
+    })
+}
+
+/// No workspace at all -- e.g. before the initial metadata fetch completes -- has no admin
+/// policy to consult. Unlike a permission that defaults to allowed absent an override (see
+/// billing_workspace_settings.rs's `is_none_or` convention), AWS Bedrock and Gemini Enterprise
+/// are opt-in admin features: the pre-scoping code already denied both when
+/// `current_workspace()` was `None`, and `scoped_or_workspace_setting`'s `absent = None` for
+/// `llm_settings_for_scope` must keep it that way rather than flip it permissive.
+#[test]
+fn bedrock_and_gemini_enterprise_unavailable_with_no_workspace_at_all() {
+    let _flag = FeatureFlag::GeminiEnterprise.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(
+            &mut app,
+            CachedResources { workspaces: vec![] },
+            Arc::new(MockTeamClient::new()),
+            Arc::new(MockWorkspaceClient::new()),
+        );
+
+        let window_id = WindowId::new();
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.register_window(window_id, None, ctx);
+        });
+
+        app.read(|ctx| {
+            let user_workspaces = UserWorkspaces::as_ref(ctx);
+            let scope = user_workspaces.team_context_for_window_for_test(window_id);
+            assert_eq!(scope.team_uid(), None);
+            assert!(user_workspaces.current_workspace().is_none());
+            assert!(
+                !user_workspaces.is_aws_bedrock_available_from_workspace(&scope),
+                "no workspace at all has no admin policy to consult, so Bedrock stays unavailable"
+            );
+            assert!(
+                !user_workspaces.is_gemini_enterprise_available_from_workspace(&scope),
+                "no workspace at all has no admin policy to consult, so GEAP stays unavailable"
             );
         });
     })
