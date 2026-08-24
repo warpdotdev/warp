@@ -13,8 +13,6 @@ pub enum Experiment {
     AgentOnboardingControl,
     AgentOnboardingSkippable,
     AgentOnboardingUnskippable,
-    OnboardingChooseHowToStartControl,
-    OnboardingChooseHowToStartExperiment,
     BuildPlanAutoReloadBannerToggle,
     BuildPlanAutoReloadControl,
     BuildPlanAutoReloadPostPurchaseModal,
