@@ -1,4 +1,5 @@
 use std::collections::{HashMap, HashSet};
+use std::sync::{Arc, Mutex};
 
 use warp_multi_agent_api as api;
 use warpui::{Entity, ModelContext, SingletonEntity};
@@ -69,14 +70,36 @@ pub enum OrchestrationEventServiceEvent {
     EventsReady { conversation_id: AIConversationId },
 }
 
+/// Thread-safe handle that commits a conversation's ambient run as exiting from any thread,
+/// without needing model access. `AgentDriver` uses this to commit that state synchronously on
+/// an idle-timeout's background timer thread, at the exact moment it decides to fire — before
+/// anything (including the timer's own completion signal) can make that decision observable
+/// elsewhere. `is_conversation_exiting` reads the same underlying set, so the commitment is
+/// visible to `conversation_ready_for_pending_events` immediately, without waiting for the
+/// model-side cleanup that `mark_conversation_exiting` still performs once it eventually runs
+/// (QUALITY-1801).
+#[derive(Clone)]
+pub struct ExitCommitHandle(Arc<Mutex<HashSet<AIConversationId>>>);
+
+impl ExitCommitHandle {
+    /// Commits `conversation_id` as exiting. Safe to call from any thread, including
+    /// concurrently with a model-thread read of `is_conversation_exiting`.
+    pub fn commit(&self, conversation_id: AIConversationId) {
+        if let Ok(mut exiting) = self.0.lock() {
+            exiting.insert(conversation_id);
+        }
+    }
+}
+
 /// Synchronous state manager for orchestration event queuing, delivery tracking, and readiness detection.
 pub struct OrchestrationEventService {
     pending_events: HashMap<AIConversationId, Vec<PendingEvent>>,
     awaiting_server_echo_events: HashMap<AIConversationId, Vec<PendingEvent>>,
     conversation_statuses: HashMap<AIConversationId, ConversationStatus>,
-    /// Conversations whose ambient run has begun a terminal exit with no
-    /// further idle window to cancel it (see `mark_conversation_exiting`).
-    exiting_conversations: HashSet<AIConversationId>,
+    /// Conversations whose ambient run has begun a terminal exit with no further idle window
+    /// to cancel it (see `mark_conversation_exiting`). Shared and mutex-guarded, rather than a
+    /// plain `HashSet`, so [`ExitCommitHandle`] can commit this state from a non-model thread.
+    exiting_conversations: Arc<Mutex<HashSet<AIConversationId>>>,
 }
 
 impl OrchestrationEventService {
@@ -93,19 +116,28 @@ impl OrchestrationEventService {
             pending_events: HashMap::new(),
             awaiting_server_echo_events: HashMap::new(),
             conversation_statuses: HashMap::new(),
-            exiting_conversations: HashSet::new(),
+            exiting_conversations: Arc::new(Mutex::new(HashSet::new())),
         }
+    }
+
+    /// Vends a thread-safe handle that can commit conversations as exiting from any thread. See
+    /// [`ExitCommitHandle`].
+    pub fn exit_commit_handle(&self) -> ExitCommitHandle {
+        ExitCommitHandle(Arc::clone(&self.exiting_conversations))
     }
 
     /// Marks `conversation_id`'s ambient run as having begun a terminal exit
     /// that nothing can now cancel (see `AgentDriver`'s `idle_window_for_terminal_status`
-    /// branch that has no idle window). From this point, pending orchestration events for
+    /// branch that has no idle window, and the deferred-window commit wired through
+    /// [`ExitCommitHandle`]). From this point, pending orchestration events for
     /// this conversation must not start a new MAA request: such a request would only race
     /// the teardown already underway and get cancelled, leaving the run stuck `InProgress`
     /// (QUALITY-1801). Any events still queued for the conversation can no longer be
     /// delivered, so they are dropped here with a warning rather than left to leak.
     pub fn mark_conversation_exiting(&mut self, conversation_id: AIConversationId) {
-        self.exiting_conversations.insert(conversation_id);
+        if let Ok(mut exiting) = self.exiting_conversations.lock() {
+            exiting.insert(conversation_id);
+        }
         if let Some(dropped) = self.pending_events.remove(&conversation_id)
             && !dropped.is_empty()
         {
@@ -117,9 +149,12 @@ impl OrchestrationEventService {
         }
     }
 
-    /// True once `mark_conversation_exiting` has been called for `conversation_id`.
+    /// True once `mark_conversation_exiting` or [`ExitCommitHandle::commit`] has been called for
+    /// `conversation_id`.
     pub fn is_conversation_exiting(&self, conversation_id: AIConversationId) -> bool {
-        self.exiting_conversations.contains(&conversation_id)
+        self.exiting_conversations
+            .lock()
+            .is_ok_and(|exiting| exiting.contains(&conversation_id))
     }
 
     pub fn handle_history_event(
@@ -161,7 +196,9 @@ impl OrchestrationEventService {
                 self.pending_events.remove(conversation_id);
                 self.awaiting_server_echo_events.remove(conversation_id);
                 self.conversation_statuses.remove(conversation_id);
-                self.exiting_conversations.remove(conversation_id);
+                if let Ok(mut exiting) = self.exiting_conversations.lock() {
+                    exiting.remove(conversation_id);
+                }
             }
             _ => {}
         }

@@ -250,6 +250,67 @@ fn ephemeral_mcp_installation_id(
     }
 }
 
+/// Abstraction over how [`IdleTimeoutSender::end_run_after`] waits out its deadline, so tests
+/// can substitute a controllable wait for a real, wall-clock-dependent `thread::sleep` and
+/// deterministically exercise the moment the timer commits to firing.
+trait IdleWait: Send + Sync {
+    fn wait(&self, duration: Duration);
+}
+
+struct RealIdleWait;
+
+impl IdleWait for RealIdleWait {
+    fn wait(&self, duration: Duration) {
+        thread::sleep(duration);
+    }
+}
+
+// Lets a test substitute the `IdleWait` used by the next `execute_run` call on this thread,
+// so a deferred idle window's deadline can be reached deterministically instead of via a real
+// `thread::sleep`. `execute_run` runs synchronously on the same thread as the test that calls
+// it, so this thread-local is read exactly once, synchronously, at construction time.
+#[cfg(test)]
+thread_local! {
+    static TEST_IDLE_WAIT: std::cell::RefCell<Option<Arc<dyn IdleWait>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(test)]
+fn test_idle_wait_override() -> Option<Arc<dyn IdleWait>> {
+    TEST_IDLE_WAIT.with(|cell| cell.borrow().clone())
+}
+
+#[cfg(test)]
+fn set_test_idle_wait_override(wait: Option<Arc<dyn IdleWait>>) {
+    TEST_IDLE_WAIT.with(|cell| *cell.borrow_mut() = wait);
+}
+
+// A second, independent gate consulted from inside `execute_run`'s `on_commit` closure,
+// immediately after it commits exiting state and before returning (i.e. strictly before
+// `end_run_now`/`end_run_after` send the completion value). Lets a test pause deterministically
+// in the window where the commit has already happened but the completion signal — and
+// everything downstream of it, including the async forwarder that runs model-side cleanup —
+// has provably not yet been observed by anything.
+#[cfg(test)]
+thread_local! {
+    static TEST_POST_COMMIT_GATE: std::cell::RefCell<Option<Arc<dyn IdleWait>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+// Read synchronously at `execute_run` construction time (main thread) and captured by value
+// into the `on_commit` closure, rather than re-read via this thread-local at commit time: a
+// deferred window's commit runs on a background `thread::spawn`, which does not see a
+// same-named thread-local set by the test on the main thread.
+#[cfg(test)]
+fn test_post_commit_gate() -> Option<Arc<dyn IdleWait>> {
+    TEST_POST_COMMIT_GATE.with(|cell| cell.borrow().clone())
+}
+
+#[cfg(test)]
+fn set_test_post_commit_gate(gate: Option<Arc<dyn IdleWait>>) {
+    TEST_POST_COMMIT_GATE.with(|cell| *cell.borrow_mut() = gate);
+}
+
 /// IdleTimeoutSender is wrapper around a sender that signals when a run is done after
 /// an idle timeout. Used for both Oz runs and third-party harnesses.
 ///
@@ -269,6 +330,14 @@ struct IdleTimeoutSender<T: Send + 'static> {
     /// Most recent [`Self::arm_refreshable`] call. Held here rather than by the caller so a
     /// long-lived refresher cannot re-arm with a superseded outcome.
     pending: Arc<Mutex<Option<(T, Duration)>>>,
+    wait: Arc<dyn IdleWait>,
+    /// Invoked synchronously, on whichever thread wins the race to complete the run,
+    /// immediately before the value is sent — including on `end_run_after`'s background
+    /// timer thread, before it ever touches the oneshot. Lets a caller commit
+    /// externally-observable state (e.g. "this conversation's ambient run is exiting") at the
+    /// exact moment of commitment, rather than only after the completion reaches the model
+    /// thread via the oneshot and any further async plumbing (QUALITY-1801).
+    on_commit: Arc<dyn Fn() + Send + Sync>,
 }
 
 // Hand-written so cloning does not require `T: Clone`. Every field is a shared handle, so
@@ -279,6 +348,8 @@ impl<T: Send + 'static> Clone for IdleTimeoutSender<T> {
             tx_cell: Arc::clone(&self.tx_cell),
             generation: Arc::clone(&self.generation),
             pending: Arc::clone(&self.pending),
+            wait: Arc::clone(&self.wait),
+            on_commit: Arc::clone(&self.on_commit),
         }
     }
 }
@@ -289,7 +360,24 @@ impl<T: Send + 'static> IdleTimeoutSender<T> {
             tx_cell: Arc::new(Mutex::new(Some(tx))),
             generation: Arc::new(AtomicUsize::new(0)),
             pending: Arc::new(Mutex::new(None)),
+            wait: Arc::new(RealIdleWait),
+            on_commit: Arc::new(|| {}),
         }
+    }
+
+    /// Registers `on_commit` to run synchronously, on whichever thread performs it, immediately
+    /// before every future completion send.
+    fn with_on_commit(mut self, on_commit: impl Fn() + Send + Sync + 'static) -> Self {
+        self.on_commit = Arc::new(on_commit);
+        self
+    }
+
+    /// Overrides the wait mechanism `end_run_after` uses, so a test can control exactly when a
+    /// deferred deadline is considered reached instead of depending on a real `thread::sleep`.
+    #[cfg(test)]
+    fn with_wait(mut self, wait: Arc<dyn IdleWait>) -> Self {
+        self.wait = wait;
+        self
     }
 
     /// End the run by sending `value` immediately.
@@ -297,6 +385,7 @@ impl<T: Send + 'static> IdleTimeoutSender<T> {
         if let Ok(mut guard) = self.tx_cell.lock()
             && let Some(sender) = guard.take()
         {
+            (self.on_commit)();
             let _ = sender.send(value);
         }
     }
@@ -308,11 +397,13 @@ impl<T: Send + 'static> IdleTimeoutSender<T> {
         let current_gen = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
         let tx_cell = Arc::clone(&self.tx_cell);
         let generation = Arc::clone(&self.generation);
+        let wait = Arc::clone(&self.wait);
+        let on_commit = Arc::clone(&self.on_commit);
 
         // Spawn a background thread that will complete the oneshot after the idle timeout,
         // unless a follow-up query resets the timer (by bumping the generation counter).
         thread::spawn(move || {
-            thread::sleep(timeout);
+            wait.wait(timeout);
 
             // Check if our timer generation is still current. If not, a follow-up
             // query or other activity has "cancelled" this timer by bumping the generation.
@@ -322,7 +413,10 @@ impl<T: Send + 'static> IdleTimeoutSender<T> {
             if let Ok(mut guard) = tx_cell.lock()
                 && let Some(sender) = guard.take()
             {
-                // Send the value after the idle timeout expires.
+                // Commit before sending: this is the only signal the model layer ever gets
+                // that a deferred window has elapsed, so it must land before the completion
+                // is observable at all (QUALITY-1801).
+                on_commit();
                 let _ = sender.send(value);
             }
         });
@@ -3772,9 +3866,43 @@ impl AgentDriver {
         task_prompt: AgentRunPrompt,
         ctx: &mut ModelContext<Self>,
     ) -> Receiver<SDKConversationOutputStatus> {
-        // Create a oneshot channel to signal task completion.
-        let (tx, rx) = oneshot::channel();
-        let run_exit = IdleTimeoutSender::new(tx);
+        // Create a oneshot channel to signal task completion. This is `run_exit`'s
+        // internal signal, not the receiver returned to the caller: see the
+        // `internal_rx` wiring at the end of this function for why.
+        let (internal_tx, internal_rx) = oneshot::channel();
+        // Tracks this run's conversation id for `on_commit` below, which can run on a
+        // background timer thread with no model access of its own; updated alongside
+        // `me.run_conversation_id` once `ConversationServerTokenAssigned` fires.
+        let committed_conversation_id: Arc<Mutex<Option<AIConversationId>>> =
+            Arc::new(Mutex::new(None));
+        let exit_commit_handle = OrchestrationEventService::as_ref(ctx).exit_commit_handle();
+        #[cfg(test)]
+        let post_commit_gate = test_post_commit_gate();
+        #[cfg_attr(not(test), allow(unused_mut))]
+        let mut run_exit = IdleTimeoutSender::new(internal_tx).with_on_commit({
+            let committed_conversation_id = Arc::clone(&committed_conversation_id);
+            move || {
+                if let Ok(guard) = committed_conversation_id.lock()
+                    && let Some(conversation_id) = *guard
+                {
+                    exit_commit_handle.commit(conversation_id);
+                }
+                // Test-only: lets a test pause deterministically right here — the commit has
+                // already landed, but the completion value has not been sent yet, so nothing
+                // (including the async forwarder that runs model-side cleanup) can have
+                // observed this run ending.
+                #[cfg(test)]
+                if let Some(gate) = &post_commit_gate {
+                    gate.wait(Duration::ZERO);
+                }
+            }
+        });
+        #[cfg(test)]
+        {
+            if let Some(wait) = test_idle_wait_override() {
+                run_exit = run_exit.with_wait(wait);
+            }
+        }
         let restored_conversation_id = self.restored_conversation_id;
 
         // ServerSide prompts enter the agent view and emit
@@ -3831,6 +3959,9 @@ impl AgentDriver {
                 } = event
                 {
                     me.run_conversation_id = Some(*conversation_id);
+                    if let Ok(mut guard) = committed_conversation_id.lock() {
+                        *guard = Some(*conversation_id);
+                    }
                     stamp_parent_agent_id_if_some(
                         *conversation_id,
                         me.parent_run_id.as_deref(),
@@ -4181,7 +4312,26 @@ impl AgentDriver {
             });
         }
 
-        rx
+        // Wrap `internal_rx` instead of returning it directly so every exit path — an
+        // immediate completion above and an `--idle-on-complete`/`--idle-on-fail` window that
+        // later elapses on a background timer with no further hook into the model layer — marks
+        // the conversation exiting before the caller can observe the result. The immediate branch
+        // above already marks it synchronously with the `UpdatedConversationStatus` dispatch, so
+        // this is redundant there; for a window that elapses on its own, this is the only signal
+        // the model layer gets, and it must land before any buffered orchestration event still
+        // pending for this conversation can flip it back to `InProgress` (QUALITY-1801).
+        let (external_tx, external_rx) = oneshot::channel();
+        ctx.spawn(internal_rx, move |me, result, ctx| {
+            if let Some(conversation_id) = me.run_conversation_id {
+                OrchestrationEventService::handle(ctx).update(ctx, |service, _| {
+                    service.mark_conversation_exiting(conversation_id);
+                });
+            }
+            if let Ok(status) = result {
+                let _ = external_tx.send(status);
+            }
+        });
+        external_rx
     }
 
     /// Write the inputs to an exchange to stdout.
