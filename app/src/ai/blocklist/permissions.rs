@@ -232,9 +232,9 @@ impl BlocklistAIPermissions {
     /// In unsandboxed mode, returns the standard AI autonomy settings.
     fn team_autonomy_settings(scope: &impl TeamScope, ctx: &AppContext) -> AiAutonomySettings {
         if AppExecutionMode::as_ref(ctx).is_sandboxed() {
-            let sandboxed = UserWorkspaces::as_ref(ctx).sandboxed_agent_settings();
             AiAutonomySettings {
-                execute_commands_denylist: sandboxed.and_then(|s| s.execute_commands_denylist),
+                execute_commands_denylist: UserWorkspaces::as_ref(ctx)
+                    .sandboxed_agent_execute_commands_denylist_for_scope(scope),
                 ..Default::default()
             }
         } else {

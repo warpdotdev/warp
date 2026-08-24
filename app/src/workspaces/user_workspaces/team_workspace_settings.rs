@@ -19,6 +19,8 @@ use warpui::{AppContext, Entity, SingletonEntity, ViewContext, WeakViewHandle, W
 use super::{SoleTeamError, UserWorkspaces};
 use crate::ai::llms::{LLMId, LLMProvider};
 use crate::server::ids::ServerId;
+use crate::settings::AgentModeCommandExecutionPredicate;
+use crate::workspaces::gql_convert::ToAgentModeCommandExecutionPredicates;
 use crate::workspaces::team::Team;
 use crate::workspaces::workspace::{
     AdminEnablementSetting, AiAutonomySettings, TeamByoSettings, Workspace,
@@ -411,6 +413,34 @@ impl UserWorkspaces {
             |team| AiAutonomySettings::from(&team.settings.ai_autonomy),
             |workspace| workspace.settings.ai_autonomy_settings.clone(),
             AiAutonomySettings::default(),
+        )
+    }
+
+    /// The organization-managed command denylist a sandboxed agent must obey, for `scope`'s
+    /// team. A team that has not configured one yields `None`, distinct via
+    /// [`SplitListSetting::is_configured`](crate::workspaces::workspace::SplitListSetting::is_configured)
+    /// from a team overriding with an empty list. See [`Self::scoped_or_workspace_setting`] for
+    /// the no-team fallback.
+    pub(crate) fn sandboxed_agent_execute_commands_denylist_for_scope<S: TeamScope + ?Sized>(
+        &self,
+        scope: &S,
+    ) -> Option<Vec<AgentModeCommandExecutionPredicate>> {
+        self.scoped_or_workspace_setting(
+            scope,
+            |team| {
+                let denylist = &team.settings.sandboxed_agent.execute_commands_denylist;
+                denylist
+                    .is_configured()
+                    .then(|| denylist.values.clone().to_predicates())
+            },
+            |workspace| {
+                workspace
+                    .settings
+                    .sandboxed_agent_settings
+                    .clone()
+                    .and_then(|settings| settings.execute_commands_denylist)
+            },
+            None,
         )
     }
 

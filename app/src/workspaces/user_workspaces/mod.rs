@@ -44,7 +44,7 @@ use crate::workspaces::workspace::{
     WorkspaceMember, WorkspaceSettings,
 };
 use crate::workspaces::workspace::{
-    AiOverages, PurchaseAddOnCreditsPolicy, SandboxedAgentSettings, UsageBasedPricingSettings,
+    AiOverages, PurchaseAddOnCreditsPolicy, UsageBasedPricingSettings,
 };
 pub(crate) mod billing_workspace_settings;
 pub(crate) mod team_workspace_settings;
@@ -722,12 +722,6 @@ impl UserWorkspaces {
                 .gemini_enterprise_credentials_enabled
                 .value(),
         }
-    }
-
-    /// Returns the sandboxed agent settings enforced by the workspace, if any.
-    pub fn sandboxed_agent_settings(&self) -> Option<SandboxedAgentSettings> {
-        self.current_workspace()
-            .and_then(|workspace| workspace.settings.sandboxed_agent_settings.clone())
     }
 
     // Returns a Vec of the user's active spaces, based on their
@@ -1800,13 +1794,22 @@ impl UserWorkspaces {
         }
     }
 
-    pub fn update_sandboxed_agent_settings<F>(&mut self, f: F, ctx: &mut ModelContext<Self>)
+    /// Sets the sandboxed-agent command denylist on [`Self::setup_test_workspace`]'s team, the
+    /// team [`Self::sandboxed_agent_execute_commands_denylist_for_scope`] reads for a scope on
+    /// it.
+    pub fn update_team_sandboxed_agent_denylist<F>(&mut self, f: F, ctx: &mut ModelContext<Self>)
     where
-        F: FnOnce(&mut Option<SandboxedAgentSettings>),
+        F: FnOnce(&mut SplitListSetting<String>),
     {
         self.update_current_workspace(
             |workspace| {
-                f(&mut workspace.settings.sandboxed_agent_settings);
+                f(&mut workspace
+                    .teams
+                    .first_mut()
+                    .expect("test workspace should have a team")
+                    .settings
+                    .sandboxed_agent
+                    .execute_commands_denylist);
             },
             ctx,
         );

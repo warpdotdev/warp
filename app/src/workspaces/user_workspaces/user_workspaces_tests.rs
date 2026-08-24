@@ -65,7 +65,9 @@ use crate::server::server_api::ServerApiProvider;
 use crate::server::server_api::team::{MockTeamClient, TeamClient};
 use crate::server::sync_queue::SyncQueue;
 use crate::server::telemetry::context_provider::AppTelemetryContextProvider;
-use crate::settings::{AISettings, CodeSettings, FocusedTerminalInfo};
+use crate::settings::{
+    AISettings, AgentModeCommandExecutionPredicate, CodeSettings, FocusedTerminalInfo,
+};
 use crate::system::SystemStats;
 use crate::workflows::workflow::Workflow;
 use crate::workflows::{CloudWorkflow, CloudWorkflowModel};
@@ -77,7 +79,7 @@ use crate::workspaces::user_workspaces::UserWorkspaces;
 use crate::workspaces::workspace::{
     AdminEnablementSetting, ByoFirstPartyKey, EnforceableSetting, HostEnablementSetting,
     LlmHostSettings, ManagedByokByoePolicy, MultiAdminPolicy, PurchaseAddOnCreditsPolicy,
-    SplitListSetting, TeamByoSettings, Workspace,
+    SandboxedAgentSettings, SplitListSetting, TeamByoSettings, Workspace,
 };
 
 #[derive(Default)]
@@ -2043,6 +2045,133 @@ fn member_byo_policy_follows_a_window_reconciled_onto_another_team() {
                 ),
                 "the window reconciled onto the restrictive team, so its policy applies now"
             );
+        });
+    })
+}
+
+fn team_with_sandboxed_denylist(team: &Team, patterns: &[&str]) -> Team {
+    let mut team = team.clone();
+    team.settings.sandboxed_agent.execute_commands_denylist = SplitListSetting {
+        values: patterns
+            .iter()
+            .map(|pattern| (*pattern).to_owned())
+            .collect(),
+        ..Default::default()
+    };
+    team
+}
+
+fn denylist_patterns(denylist: Vec<AgentModeCommandExecutionPredicate>) -> Vec<String> {
+    denylist.iter().map(ToString::to_string).collect()
+}
+
+#[test]
+fn test_sandboxed_agent_denylist_resolves_the_scopes_own_team() {
+    let (team_a, team_b) = two_teams();
+    let team_a = team_with_sandboxed_denylist(&team_a, &["rm .*"]);
+    let team_b = team_with_sandboxed_denylist(&team_b, &["curl .*"]);
+    let mut workspace = workspace_for_test(&team_a);
+    workspace.teams.push(team_b.clone());
+
+    App::test((), |mut app| async move {
+        initialize_window_team_test_app(&mut app, vec![workspace]);
+
+        let (window_a, view_a) = create_test_window(&mut app);
+        let (window_b, view_b) = create_test_window(&mut app);
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.set_team_for_window(window_a, team_a.uid, ctx);
+            user_workspaces.set_team_for_window(window_b, team_b.uid, ctx);
+        });
+
+        let scope_a = view_a.update(&mut app, |_, ctx| {
+            UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx)
+        });
+        let scope_b = view_b.update(&mut app, |_, ctx| {
+            UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx)
+        });
+
+        app.read(|ctx| {
+            let user_workspaces = UserWorkspaces::as_ref(ctx);
+            let denylist_a = user_workspaces
+                .sandboxed_agent_execute_commands_denylist_for_scope(&scope_a)
+                .expect("team A configured a denylist");
+            assert_eq!(
+                denylist_patterns(denylist_a),
+                ["rm .*"],
+                "the window on team A should read team A's denylist"
+            );
+
+            let denylist_b = user_workspaces
+                .sandboxed_agent_execute_commands_denylist_for_scope(&scope_b)
+                .expect("team B configured a denylist");
+            assert_eq!(
+                denylist_patterns(denylist_b),
+                ["curl .*"],
+                "the window on team B should read team B's denylist"
+            );
+        });
+    })
+}
+
+/// A list no admin layer contributed to is not an override, the same distinction
+/// [`test_an_unconfigured_team_list_setting_is_not_an_override`] locks in for the AI autonomy
+/// allowlists. Getting this wrong here would silently drop a team's denylist protection.
+#[test]
+fn test_sandboxed_agent_denylist_is_none_when_the_team_has_not_configured_one() {
+    let team = team_for_test();
+    let workspace = workspace_for_test(&team);
+
+    App::test((), |mut app| async move {
+        initialize_window_team_test_app(&mut app, vec![workspace]);
+
+        let (window_id, view) = create_test_window(&mut app);
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.set_team_for_window(window_id, team.uid, ctx);
+        });
+
+        let scope = view.update(&mut app, |_, ctx| {
+            UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx)
+        });
+
+        app.read(|ctx| {
+            assert_eq!(
+                UserWorkspaces::as_ref(ctx)
+                    .sandboxed_agent_execute_commands_denylist_for_scope(&scope),
+                None,
+                "an unconfigured team denylist must not read as an override with an empty list"
+            );
+        });
+    })
+}
+
+#[test]
+fn test_sandboxed_agent_denylist_falls_back_to_the_workspace_for_a_user_with_no_teams() {
+    let mut workspace = workspace_for_test(&team_for_test());
+    workspace.teams.clear();
+    workspace.settings.sandboxed_agent_settings = Some(SandboxedAgentSettings {
+        execute_commands_denylist: Some(vec![
+            AgentModeCommandExecutionPredicate::new_regex("git .*").unwrap(),
+        ]),
+    });
+
+    App::test((), |mut app| async move {
+        initialize_window_team_test_app(&mut app, vec![workspace]);
+
+        let (window_id, view) = create_test_window(&mut app);
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.register_window(window_id, None, ctx);
+        });
+
+        let scope = view.update(&mut app, |_, ctx| {
+            UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx)
+        });
+        assert_eq!(scope.team_uid(), None);
+
+        app.read(|ctx| {
+            let denylist = UserWorkspaces::as_ref(ctx)
+                .sandboxed_agent_execute_commands_denylist_for_scope(&scope)
+                .expect("with no teams at all the workspace's denylist is genuinely team-neutral");
+            assert_eq!(denylist_patterns(denylist), ["git .*"]);
         });
     })
 }
