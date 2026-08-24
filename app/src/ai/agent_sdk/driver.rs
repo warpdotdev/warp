@@ -3871,10 +3871,13 @@ impl AgentDriver {
         // `internal_rx` wiring at the end of this function for why.
         let (internal_tx, internal_rx) = oneshot::channel();
         // Tracks this run's conversation id for `on_commit` below, which can run on a
-        // background timer thread with no model access of its own; updated alongside
-        // `me.run_conversation_id` once `ConversationServerTokenAssigned` fires.
+        // background timer thread with no model access of its own. Seeded from
+        // `self.run_conversation_id` so a resumed conversation — already known at
+        // construction time, per `AgentDriver::new` — is covered from the start; a fresh
+        // run instead learns it later, updated alongside `me.run_conversation_id` once
+        // `ConversationServerTokenAssigned` fires below.
         let committed_conversation_id: Arc<Mutex<Option<AIConversationId>>> =
-            Arc::new(Mutex::new(None));
+            Arc::new(Mutex::new(self.run_conversation_id));
         let exit_commit_handle = OrchestrationEventService::as_ref(ctx).exit_commit_handle();
         #[cfg(test)]
         let post_commit_gate = test_post_commit_gate();

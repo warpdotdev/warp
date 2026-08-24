@@ -2529,6 +2529,114 @@ fn exit_commit_handle_blocks_injection_before_model_side_cleanup_runs() {
     });
 }
 
+/// Like `driver_wired_for_terminal`, but simulates a *resumed* conversation: the caller
+/// already knows `resumed_conversation_id` before `execute_run` is called, mirroring
+/// `AgentDriver::new` setting `run_conversation_id` up front for a restored conversation.
+/// Such a run never observes `ConversationServerTokenAssigned` (it already has a server
+/// token), so it takes a different path than a fresh run to learning its own conversation
+/// id.
+fn driver_wired_for_resumed_conversation(
+    app: &mut App,
+    terminal_view: warpui::ViewHandle<crate::terminal::TerminalView>,
+    idle_on_complete: Option<Duration>,
+    resumed_conversation_id: crate::ai::agent::conversation::AIConversationId,
+) -> warpui::ModelHandle<AgentDriver> {
+    let temp = TempDir::new().unwrap();
+    let driver_handle = app.add_model(|ctx| {
+        let terminal_driver =
+            super::terminal::TerminalDriver::create_from_existing_view(terminal_view, ctx);
+        let mut driver = AgentDriver::new_for_test(temp.path().to_path_buf(), terminal_driver, ctx);
+        driver.skip_initial_turn = true;
+        driver.idle_on_complete = idle_on_complete;
+        driver.run_conversation_id = Some(resumed_conversation_id);
+        driver
+    });
+    let _run_exit_rx = driver_handle.update(app, |driver, ctx| {
+        driver.execute_run(AgentRunPrompt::Local(String::new()), ctx)
+    });
+    driver_handle
+}
+
+/// QUALITY-1801 regression: a *resumed* conversation's deferred `--idle-on-complete`
+/// window must also commit exiting once it elapses. `execute_run` seeds the thread-safe
+/// commit's tracked conversation id from `self.run_conversation_id` precisely because a
+/// resumed run already has it at construction time and never takes the
+/// `ConversationServerTokenAssigned` branch that a fresh run relies on to learn it.
+#[test]
+fn ambient_driver_resumed_conversation_elapsed_idle_window_commits_exiting() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal_view = add_window_with_terminal(&mut app, None);
+        let (terminal_id, ai_controller) = terminal_view.update(&mut app, |view, _| {
+            (view.id(), view.ai_controller().clone())
+        });
+
+        // The conversation exists (and its id is known) *before* the driver is
+        // constructed, mirroring a resume: the id comes from restoration, not from a
+        // `ConversationServerTokenAssigned` event observed during this run.
+        let (conversation_id, stream) =
+            conversation_with_in_progress_mock_stream(&mut app, terminal_id, &ai_controller);
+
+        // Two gates, as in the interleaving test above: `elapse_wait` controls when the
+        // deferred deadline is reached, and `post_commit_wait` pauses `on_commit` strictly
+        // *before* the completion value is sent — so the async forwarder (which marks
+        // exiting via `me.run_conversation_id`, unaffected by this bug) is provably blocked
+        // from ever running while we check. Without this, the forwarder would eventually
+        // mark exiting on its own and mask a broken (never-populated) thread-safe seed.
+        let (elapse_wait, elapse_release_tx) = manual_idle_wait();
+        let (post_commit_wait, post_commit_release_tx) = manual_idle_wait();
+        super::set_test_idle_wait_override(Some(elapse_wait));
+        super::set_test_post_commit_gate(Some(post_commit_wait));
+        let _driver = driver_wired_for_resumed_conversation(
+            &mut app,
+            terminal_view,
+            Some(Duration::from_secs(300)),
+            conversation_id,
+        );
+        super::set_test_idle_wait_override(None);
+        super::set_test_post_commit_gate(None);
+
+        complete_mock_stream_successfully(&mut app, &stream);
+        stream.update(&mut app, |stream, ctx| {
+            stream.emit_after_stream_finished_for_test(ctx);
+        });
+
+        OrchestrationEventService::handle(&app).read(&app, |service, _| {
+            assert!(
+                !service.is_conversation_exiting(conversation_id),
+                "the timer is blocked on the manual wait, so nothing has committed yet"
+            );
+        });
+
+        elapse_release_tx
+            .send(())
+            .expect("background timer thread should still be waiting on the manual release");
+
+        // The background thread runs `on_commit` (which must populate the thread-safe
+        // commit using the seed from `self.run_conversation_id`) and then blocks on the
+        // post-commit gate, strictly before sending the completion value. The async
+        // forwarder therefore cannot have run yet, so this check is a direct, uncontaminated
+        // proof of `on_commit`'s own write, not of the forwarder's fallback.
+        poll_until(
+            &app,
+            Duration::from_secs(2),
+            "the resumed conversation to be marked exiting once its idle window elapses, \
+             via on_commit's seeded conversation id (not the async forwarder)",
+            |app| {
+                OrchestrationEventService::handle(app).read(app, |service, _| {
+                    service.is_conversation_exiting(conversation_id)
+                })
+            },
+        )
+        .await;
+
+        // Release the post-commit gate so the run can finish tearing down normally.
+        post_commit_release_tx
+            .send(())
+            .expect("background timer thread should still be waiting at the post-commit gate");
+    });
+}
+
 #[test]
 #[serial_test::serial]
 fn openai_api_key_exports_only_api_key_not_base_url() {
