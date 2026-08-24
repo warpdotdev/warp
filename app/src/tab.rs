@@ -356,9 +356,6 @@ pub struct TabData {
     pub pinned: bool,
 }
 
-const TAB_COLOR_ICON_PATH: &str = "bundled/svg/ellipse.svg";
-const TAB_NO_COLOR_ICON_PATH: &str = "bundled/svg/no_color_ellipse.svg";
-
 impl TabData {
     pub fn new(pane_group: ViewHandle<PaneGroup>) -> Self {
         Self {
@@ -863,45 +860,11 @@ impl TabData {
         index: usize,
         terminal_colors: AnsiColors,
     ) -> Vec<MenuItem<WorkspaceAction>> {
-        if FeatureFlag::DirectoryTabColors.is_enabled() {
-            color_picker_menu_items(
-                self.color(),
-                terminal_colors,
-                ColorPickerTarget::Tab { tab_index: index },
-            )
-        } else {
-            self.legacy_color_option_menu_items(index, terminal_colors)
-        }
-    }
-
-    /// Legacy icon-based color picker with toggle behavior.
-    fn legacy_color_option_menu_items(
-        &self,
-        index: usize,
-        terminal_colors: AnsiColors,
-    ) -> Vec<MenuItem<WorkspaceAction>> {
-        vec![MenuItem::ItemsRow {
-            items: TAB_COLOR_OPTIONS
-                .iter()
-                .map(|color_option| {
-                    let color = color_option.to_ansi_color(&terminal_colors);
-                    MenuItemFields::new_with_icon(
-                        if self.color() == Some(*color_option) {
-                            TAB_NO_COLOR_ICON_PATH
-                        } else {
-                            TAB_COLOR_ICON_PATH
-                        },
-                        color.into(),
-                        color_option.to_string(),
-                    )
-                    .no_highlight_on_hover()
-                    .with_on_select_action(WorkspaceAction::ToggleTabColor {
-                        color: *color_option,
-                        tab_index: index,
-                    })
-                })
-                .collect(),
-        }]
+        color_picker_menu_items(
+            self.color(),
+            terminal_colors,
+            ColorPickerTarget::Tab { tab_index: index },
+        )
     }
 }
 

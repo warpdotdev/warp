@@ -751,10 +751,6 @@ pub enum FeatureFlag {
     /// model chip, then restores that prompt when the selector closes.
     RestorePromptOnInlineModelSelectorSearch,
 
-    /// Enables associating a tab color with a directory so tabs automatically
-    /// adopt the configured color when their working directory matches.
-    DirectoryTabColors,
-
     /// Enables the new settings to control visibility of Warp Drive, Code Review Panel,
     /// and Project Explorer & Global Search features.
     OpenWarpNewSettingsModes,

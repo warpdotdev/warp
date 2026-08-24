@@ -685,7 +685,6 @@ default = [
     "open_warp_new_settings_modes",
     "skip_firebase_anonymous_user",
     "settings_file",
-    "directory_tab_colors",
     "git_credential_refresh",
     "oz_handoff",
     "handoff_local_cloud",
@@ -1017,7 +1016,6 @@ pending_user_query_indicator = []
 queue_slash_command = []
 queued_prompts_v2 = ["queue_slash_command"]
 inline_menu_headers = []
-directory_tab_colors = []
 open_warp_new_settings_modes = []
 hoa_code_review = []
 vertical_tabs = []

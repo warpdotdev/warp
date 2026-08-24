@@ -1557,13 +1557,11 @@ impl AppearanceSettingsPageView {
             }
         }
 
-        if FeatureFlag::DirectoryTabColors.is_enabled() {
-            let add_picker = ctx.add_typed_action_view(DirectoryColorAddPicker::new);
-            ctx.subscribe_to_view(&add_picker, |me, _, event, ctx| {
-                me.handle_directory_color_add_picker_event(event, ctx);
-            });
-            tab_settings_widgets.push(Box::new(DirectoryTabColorsWidget { add_picker }));
-        }
+        let add_picker = ctx.add_typed_action_view(DirectoryColorAddPicker::new);
+        ctx.subscribe_to_view(&add_picker, |me, _, event, ctx| {
+            me.handle_directory_color_add_picker_event(event, ctx);
+        });
+        tab_settings_widgets.push(Box::new(DirectoryTabColorsWidget { add_picker }));
 
         categories.push(Category::new("Tabs", tab_settings_widgets));
 
