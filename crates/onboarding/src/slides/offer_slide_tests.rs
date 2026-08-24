@@ -168,9 +168,12 @@ fn only_the_free_standard_offer_sells_ai_usage() {
     assert!(!OfferVariant::HeadStart.sells_ai_usage());
 }
 
-/// Renders a classified offer in each state the slide can be in. Without a
-/// variant set `render` bails to `Empty`, so this is the only coverage of
-/// `render_options` / `render_option_card` and of the auth-prompt-bar overlay.
+/// Renders a classified offer in every state the slide can be in: both
+/// variants, both selections, and with the auth prompt bar raised. Without a
+/// variant set `render` bails to `Empty`, so the pre-classification render test
+/// never reaches `render_options` / `render_option_card`; the windowed
+/// behavioural tests reach them incidentally for the free-standard variant
+/// only, leaving this as the sole coverage of the head-start layout.
 #[test]
 fn classified_offer_renders_in_every_selection_state() {
     App::test((), |mut app| async move {
