@@ -1377,6 +1377,49 @@ fn remote_session_ai_permission_is_allowed_for_a_user_with_no_workspace_at_all()
     })
 }
 
+/// `current_workspace().teams` being empty is not the same as belonging to no team: the sole
+/// team can live in a workspace that is not the current one (e.g. before `current_workspace_uid`
+/// catches up with a `workspaces` cache populated at startup). The current workspace's own
+/// policy is deliberately permissive here, so the teamless scope flipping to it would be
+/// visible in both assertions.
+#[test]
+fn remote_session_policy_denies_a_teamless_scope_whose_only_team_is_in_another_workspace() {
+    let mut team = team_for_test();
+    set_team_remote_session_policy(&mut team, false, &["^team-only"]);
+    let mut current_workspace = workspace_for_test(&team);
+    current_workspace.teams.clear();
+    set_workspace_remote_session_policy(&mut current_workspace, true, &["^workspace-only"]);
+    let mut other_workspace = workspace_for_test(&team);
+    other_workspace.uid = "workspace_uid999999999".to_string().into();
+
+    App::test((), |mut app| async move {
+        initialize_window_team_test_app(&mut app, vec![current_workspace, other_workspace]);
+
+        let (window_id, view) = create_test_window(&mut app);
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.register_window(window_id, None, ctx);
+        });
+
+        app.read(|ctx| {
+            let user_workspaces = UserWorkspaces::as_ref(ctx);
+            assert!(
+                !user_workspaces.has_teams(),
+                "the current workspace itself has no teams"
+            );
+            assert!(
+                !remote_session_ai_allowed_for_surface(&view, ctx),
+                "a team in another workspace means the user does not belong to no team, so \
+                 the current workspace's permissive value must not stand in for it"
+            );
+            assert!(
+                remote_session_patterns_for_surface(&view, ctx).is_empty(),
+                "same reasoning for the patterns: the current workspace's configured list \
+                 must not leak through"
+            );
+        });
+    })
+}
+
 fn team_named(uid: i64, name: &str) -> Team {
     let mut team = team_for_test();
     team.uid = uid.into();

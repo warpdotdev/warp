@@ -262,6 +262,20 @@ impl UserWorkspaces {
             .and_then(|team_uid| self.team_from_uid(team_uid))
     }
 
+    /// Whether the user belongs to no team in any workspace, which is the only case where a
+    /// scope naming no team can safely fall back to `current_workspace().settings`.
+    ///
+    /// Spans every workspace rather than just the current one: a team elsewhere still makes
+    /// this workspace's settings some team's proxy rather than a genuinely team-neutral value
+    /// (see [`TeamScope`]), and at startup `workspaces` can populate before
+    /// `current_workspace_uid` does, leaving `current_workspace()` empty for a user who
+    /// demonstrably has a team.
+    fn belongs_to_no_team(&self) -> bool {
+        self.workspaces
+            .iter()
+            .all(|workspace| workspace.teams.is_empty())
+    }
+
     /// Whether `scope`'s team admins allows its members to use their own provider API keys.
     ///
     /// Without the managed BYOK/BYOE policy there is no team-level restriction, so this returns
@@ -481,10 +495,11 @@ impl UserWorkspaces {
     /// Whether AI is allowed in remote sessions under `scope`'s team.
     ///
     /// A scope with no team reads the current workspace's value only where that is unambiguous:
-    /// no teams there at all. With teams present, a scope naming no team means the surface's
-    /// team could not be determined rather than that no policy applies, and for a control
-    /// gating AI in an environment the user may not control, that unknown case fails closed
-    /// instead of falling through to the workspace's team-neutral default.
+    /// the user belongs to no team at all (see [`Self::belongs_to_no_team`]). Otherwise, a scope
+    /// naming no team means the surface's team could not be determined rather than that no
+    /// policy applies, and for a control gating AI in an environment the user may not control,
+    /// that unknown case fails closed instead of falling through to the workspace's
+    /// team-neutral default.
     pub(crate) fn is_ai_allowed_in_remote_sessions<S: TeamScope + ?Sized>(
         &self,
         scope: &S,
@@ -496,7 +511,7 @@ impl UserWorkspaces {
                     .allow_ai_in_remote_sessions
                     .value
             }
-            None if !self.has_teams() => self
+            None if self.belongs_to_no_team() => self
                 .current_workspace()
                 .map(|workspace| {
                     workspace
@@ -530,7 +545,7 @@ impl UserWorkspaces {
                 .get(&team_uid)
                 .map(Vec::as_slice)
                 .unwrap_or_default(),
-            None if !self.has_teams() => self
+            None if self.belongs_to_no_team() => self
                 .current_workspace()
                 .map(|workspace| {
                     workspace
