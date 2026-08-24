@@ -71,7 +71,7 @@
       "source": "warpdotdev/common-skills",
       "sourceType": "github",
       "skillPath": ".agents/skills/reproduce-bug-report/SKILL.md",
-      "computedHash": "a906c867389e3ee76d9196cad893fb3ba7e5f0e27248373b53e30358aac5fe44"
+      "computedHash": "50aadfe21a79b7db83fe3ea26af7f9692c3c295e8bd1a870d3dcab6a4e7ba685"
     },
     "research": {
       "source": "warpdotdev/common-skills",
@@ -95,7 +95,7 @@
       "source": "warpdotdev/common-skills",
       "sourceType": "github",
       "skillPath": ".agents/skills/review-pr/SKILL.md",
-      "computedHash": "f27bfc9743fa0d240763a26519b25112a0ad8652c9a2b2b52daeb7af2d2a862c"
+      "computedHash": "48f6e5d134f636bf2708c4181480d9a557cd2f98e3828322f7ea422e9e873541"
     },
     "saga": {
       "source": "warpdotdev/common-skills",
