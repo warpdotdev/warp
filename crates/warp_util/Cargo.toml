@@ -25,7 +25,6 @@ thiserror.workspace = true
 typed-path.workspace = true
 dunce.workspace = true
 event-listener.workspace = true
-is_executable = "1.0.1"
 itertools.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -39,6 +38,9 @@ windows.workspace = true
 
 [target.'cfg(target_family = "wasm")'.dependencies]
 gloo.workspace = true
+
+[target.'cfg(not(target_family = "wasm"))'.dependencies]
+is_executable = "1.0.1"
 
 [dev-dependencies]
 futures-lite.workspace = true

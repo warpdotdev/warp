@@ -9,7 +9,6 @@ license.workspace = true
 anyhow.workspace = true
 async-broadcast.workspace = true
 async-channel.workspace = true
-async-io.workspace = true
 base64.workspace = true
 bimap = "0.6.2"
 bincode.workspace = true
@@ -64,10 +63,12 @@ warp_completer.workspace = true
 warp_assets.workspace = true
 warp_core.workspace = true
 warp_errors.workspace = true
+warp_isolation_platform.workspace = true
 warp_util.workspace = true
 warpui_core.workspace = true
 
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
+async-io.workspace = true
 gethostname = "1.1.0"
 mio = { version = "1.1.1", features = ["os-poll", "os-ext"] }
 

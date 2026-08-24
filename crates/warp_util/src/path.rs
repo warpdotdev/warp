@@ -7,7 +7,6 @@ use std::hash::Hash;
 use std::path::{self, Path, PathBuf};
 use std::str;
 
-use is_executable::IsExecutable as _;
 use itertools::Itertools as _;
 use lazy_static::lazy_static;
 use regex::Regex;
@@ -955,6 +954,8 @@ pub fn group_roots_by_common_ancestor<P: RootPath>(roots: &[P]) -> RootGrouping<
 
 #[cfg(not(target_family = "wasm"))]
 pub fn file_exists_and_is_executable(path: &Path) -> bool {
+    use is_executable::IsExecutable as _;
+
     // We need to check that the file exists, as the `is_executable` crate doesn't validate this on
     // Windows.
     path.is_file() && path.is_executable()

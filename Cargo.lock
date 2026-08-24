@@ -16054,6 +16054,7 @@ dependencies = [
  "warp_completer",
  "warp_core",
  "warp_errors",
+ "warp_isolation_platform",
  "warp_util",
  "warpui_core",
  "windows 0.62.2",
