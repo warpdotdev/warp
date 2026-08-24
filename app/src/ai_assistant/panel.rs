@@ -25,7 +25,7 @@ use warpui::{
     ViewContext, ViewHandle, WeakViewHandle,
 };
 
-use super::execution_context::WarpAiExecutionContext;
+use super::execution_context::execution_context_for_session;
 use super::requests::{Event as RequestsEvent, RequestStatus, Requests};
 use super::transcript::{Transcript, TranscriptEvent};
 use super::utils::{TranscriptPart, render_prepared_response_button, render_request_limit_info};
@@ -266,7 +266,7 @@ impl AIAssistantPanelView {
             .as_ref(ctx)
             .session(window_id)
             .as_ref()
-            .map(WarpAiExecutionContext::new);
+            .map(execution_context_for_session);
         self.requests_model.update(ctx, |requests, _| {
             requests.update_ai_execution_context(ai_execution_context);
         });

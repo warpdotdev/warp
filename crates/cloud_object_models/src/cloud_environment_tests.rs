@@ -110,6 +110,47 @@ fn source_repo_checkout_ref_round_trips_and_is_optional() {
 }
 
 #[test]
+fn deserialize_repo_less_environment_resolves_to_none_forge() {
+    let json = serde_json::json!({
+        "name": "repo-less-env",
+        "code_forge": "NONE",
+        "github_repos": [],
+        "source_repos": [],
+        "setup_commands": ["echo hello"]
+    });
+
+    let env: AmbientAgentEnvironment = serde_json::from_value(json).unwrap();
+
+    assert_eq!(env.effective_code_forge(), CodeForge::None);
+    assert!(env.effective_repos().is_empty());
+}
+
+#[test]
+fn deserialize_environment_with_unrecognized_forge_still_succeeds() {
+    // A forge value this client build doesn't know about yet (e.g. the
+    // server introduces a new one before this client updates) must not fail
+    // deserialization of the whole environment.
+    let json = serde_json::json!({
+        "name": "future-forge-env",
+        "code_forge": "BITBUCKET",
+        "github_repos": [],
+        "setup_commands": ["echo hello"]
+    });
+
+    let env: AmbientAgentEnvironment = serde_json::from_value(json).unwrap();
+
+    assert_eq!(env.effective_code_forge(), CodeForge::Unknown);
+}
+
+#[test]
+fn none_and_unknown_forges_have_no_clonable_host() {
+    // Neither identifies a real host; a caller falling back to GitHub's host
+    // for either would authenticate against the wrong one.
+    assert_eq!(CodeForge::None.host(), "");
+    assert_eq!(CodeForge::Unknown.host(), "");
+}
+
+#[test]
 fn deserialize_gitlab_environment_uses_authoritative_source_repos() {
     let json = serde_json::json!({
         "name": "gitlab-env",

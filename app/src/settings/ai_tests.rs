@@ -99,6 +99,7 @@ fn tui_statusline_normalization_preserves_custom_order_and_appends_missing_items
             TuiStatuslineItem::Model,
             TuiStatuslineItem::AutoApprove,
             TuiStatuslineItem::VimModeIndicator,
+            TuiStatuslineItem::Team,
             TuiStatuslineItem::WorkingDirectory,
             TuiStatuslineItem::GitBranchStatus,
             TuiStatuslineItem::GitDiffStatus,

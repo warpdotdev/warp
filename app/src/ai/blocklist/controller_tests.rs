@@ -1,10 +1,16 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
+use std::time::SystemTime;
 
+use ai::api_keys::{
+    ApiKeyManager, AwsCredentials, AwsCredentialsState, CustomEndpointParams, GeapCredentials,
+    GeapCredentialsState,
+};
 use chrono::Local;
 use uuid::Uuid;
+use warp_core::features::FeatureFlag;
 use warp_multi_agent_api::response_event;
-use warpui::{App, SingletonEntity};
+use warpui::{App, SingletonEntity, ViewHandle};
 
 use super::response_stream::{PendingResume, RecoveryBudget};
 use crate::ai::agent::conversation::AIConversationId;
@@ -18,8 +24,24 @@ use crate::ai::blocklist::{
     BlocklistAIHistoryEvent, BlocklistAIHistoryModel, PendingAttachment, PendingFile, RequestInput,
     ResponseStream, ResponseStreamId,
 };
-use crate::ai::llms::LLMId;
-use crate::test_util::terminal::{add_window_with_terminal, initialize_app_for_terminal_view};
+use crate::ai::geap_credentials::{GeapPolicy, current_geap_policy};
+use crate::ai::llms::{LLMId, LLMModelHost, LLMProvider};
+use crate::server::ids::ServerId;
+use crate::terminal::TerminalView;
+use crate::test_util::terminal::{
+    add_window_with_id_and_terminal, add_window_with_terminal, initialize_app_for_terminal_view,
+};
+use crate::workspaces::team::{Team, TeamVisibility};
+use crate::workspaces::user_workspaces::{TeamScope, UserWorkspaces};
+use crate::workspaces::workspace::{
+    ByoApiKeyPolicy, ByoEndpointPolicy, HostEnablementSetting, LlmHostSettings,
+    ManagedByokByoePolicy, TeamByoSettings, Workspace,
+};
+
+/// A workload identity provider resource name shaped like a real one, used only to satisfy
+/// [`current_geap_policy`]'s non-empty-audience check.
+const GEAP_TEST_AUDIENCE: &str = "//iam.googleapis.com/projects/123456/locations/global/workloadIdentityPools/warp-pool/providers/warp-provider";
+const GEAP_TEST_SA_EMAIL: &str = "warp-geap@test-project.iam.gserviceaccount.com";
 
 fn new_ambient_agent_task_id() -> AmbientAgentTaskId {
     Uuid::new_v4().to_string().parse().unwrap()
@@ -494,5 +516,303 @@ fn optimistic_cli_subagent_completion_with_in_flight_stream_reports_success() {
                 Some(&crate::ai::agent::conversation::ConversationStatus::Success)
             );
         });
+    });
+}
+
+fn team_for_test(uid: i64, name: &str) -> Team {
+    Team {
+        uid: uid.into(),
+        name: name.to_owned(),
+        color: None,
+        invite_link: None,
+        members: vec![],
+        pending_email_invites: vec![],
+        invite_link_domain_restrictions: vec![],
+        billing_metadata: Default::default(),
+        stripe_customer_id: None,
+        settings: Default::default(),
+        is_eligible_for_discovery: false,
+        has_billing_history: false,
+        visibility: TeamVisibility::Open,
+    }
+}
+
+fn workspace_for_test(teams: Vec<Team>) -> Workspace {
+    Workspace {
+        uid: "workspace_uid123456789".to_string().into(),
+        name: "test".to_owned(),
+        stripe_customer_id: None,
+        teams,
+        billing_metadata: Default::default(),
+        bonus_grants_purchased_this_month: Default::default(),
+        billing_cycle_usage: None,
+        has_billing_history: false,
+        settings: Default::default(),
+        invite_link_domain_restrictions: vec![],
+        pending_email_invites: vec![],
+        is_eligible_for_discovery: false,
+        members: vec![],
+        total_requests_used_since_last_refresh: 0,
+    }
+}
+
+fn set_current_workspace(app: &mut App, workspace: Workspace) {
+    let workspace_uid = workspace.uid;
+    let user_workspaces = UserWorkspaces::handle(app);
+    user_workspaces.update(app, |user_workspaces, ctx| {
+        user_workspaces.update_workspaces(vec![workspace], ctx);
+        user_workspaces.set_current_workspace_uid(workspace_uid, ctx);
+    });
+}
+
+fn controller_team_uid(terminal: &ViewHandle<TerminalView>, app: &mut App) -> Option<ServerId> {
+    terminal.update(app, |terminal, ctx| {
+        let controller = terminal.ai_controller().clone();
+        controller.as_ref(ctx).team_context(ctx).team_uid()
+    })
+}
+
+#[test]
+fn team_context_follows_each_terminals_window() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let team_a = team_for_test(123, "team-a");
+        let team_b = team_for_test(456, "team-b");
+        set_current_workspace(
+            &mut app,
+            workspace_for_test(vec![team_a.clone(), team_b.clone()]),
+        );
+
+        let (window_a, terminal_a) = add_window_with_id_and_terminal(&mut app, None);
+        let (window_b, terminal_b) = add_window_with_id_and_terminal(&mut app, None);
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.set_team_for_window(window_a, team_a.uid, ctx);
+            user_workspaces.set_team_for_window(window_b, team_b.uid, ctx);
+        });
+
+        assert_eq!(
+            controller_team_uid(&terminal_a, &mut app),
+            Some(team_a.uid),
+            "the blocklist in window A is scoped to team A"
+        );
+        assert_eq!(
+            controller_team_uid(&terminal_b, &mut app),
+            Some(team_b.uid),
+            "the blocklist in window B is scoped to team B, concurrently with A"
+        );
+
+        let terminal_a_id = terminal_a.id();
+        app.update(|ctx| {
+            ctx.transfer_view_tree_to_window(terminal_a_id, window_a, window_b);
+        });
+
+        assert_eq!(
+            controller_team_uid(&terminal_a, &mut app),
+            Some(team_b.uid),
+            "after the transfer the blocklist is scoped to the destination window's team"
+        );
+    });
+}
+
+#[test]
+fn team_context_has_no_team_when_the_window_has_none() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let team = team_for_test(123, "team-a");
+        set_current_workspace(&mut app, workspace_for_test(vec![team]));
+
+        let (window_id, terminal) = add_window_with_id_and_terminal(&mut app, None);
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.register_window(window_id, None, ctx);
+        });
+
+        assert_eq!(
+            controller_team_uid(&terminal, &mut app),
+            None,
+            "a window with no team must not borrow the workspace's only team's policy"
+        );
+    });
+}
+
+/// Two teams with opposing `team_byo` policy, so only the team's own policy can explain a
+/// difference in behaviour between them. The plan-level BYO entitlement
+/// (`byo_api_key_policy`/`byo_endpoint_policy`/`managed_byok_byoe_policy`) is workspace-owned,
+/// not team-owned (see [`UserWorkspaces::is_managed_byok_byoe_enabled`]), so it is set on the
+/// workspace by the caller instead of here.
+fn two_teams_of_opposing_byo_policy() -> (Team, Team) {
+    let mut team_a = team_for_test(123, "team-a");
+    team_a.settings.team_byo = Some(TeamByoSettings {
+        first_party_enabled: true,
+        endpoints_enabled: true,
+        allow_user_keys: true,
+        allow_user_endpoints: true,
+        first_party_keys: vec![],
+        endpoints: vec![],
+    });
+    let mut team_b = team_for_test(456, "team-b");
+    team_b.settings.team_byo = Some(TeamByoSettings {
+        first_party_enabled: true,
+        endpoints_enabled: true,
+        allow_user_keys: false,
+        allow_user_endpoints: false,
+        first_party_keys: vec![],
+        endpoints: vec![],
+    });
+    (team_a, team_b)
+}
+
+/// This is `RequestParams::new`'s construction-time regression fence: member keys and
+/// endpoints are included or stripped by the requesting window's own team, while org-level
+/// (AWS Bedrock, GEAP) credentials survive either team's policy.
+#[test]
+fn passive_suggestions_request_params_scope_member_byo_credentials_by_the_windows_team() {
+    App::test((), |mut app| async move {
+        let _geap_flag = FeatureFlag::GeminiEnterprise.override_enabled(true);
+        initialize_app_for_terminal_view(&mut app);
+
+        let (team_a, team_b) = two_teams_of_opposing_byo_policy();
+        let mut workspace = workspace_for_test(vec![team_a.clone(), team_b.clone()]);
+        // Plan-level BYO entitlement is workspace-owned (see
+        // `UserWorkspaces::is_managed_byok_byoe_enabled`), so it's shared by both teams; only
+        // `team_byo` differs between them.
+        workspace.billing_metadata.tier.byo_api_key_policy =
+            Some(ByoApiKeyPolicy { enabled: true });
+        workspace.billing_metadata.tier.byo_endpoint_policy =
+            Some(ByoEndpointPolicy { enabled: true });
+        workspace.billing_metadata.tier.managed_byok_byoe_policy =
+            Some(ManagedByokByoePolicy { enabled: true });
+        workspace.settings.llm_settings.enabled = true;
+        workspace.settings.llm_settings.host_configs.insert(
+            LLMModelHost::AwsBedrock,
+            LlmHostSettings {
+                enabled: true,
+                enablement_setting: HostEnablementSetting::Enforce,
+                gcp_audience: None,
+                gcp_sa_email: None,
+            },
+        );
+        workspace.settings.llm_settings.host_configs.insert(
+            LLMModelHost::GeminiEnterprise,
+            LlmHostSettings {
+                enabled: true,
+                enablement_setting: HostEnablementSetting::Enforce,
+                gcp_audience: Some(GEAP_TEST_AUDIENCE.to_string()),
+                gcp_sa_email: Some(GEAP_TEST_SA_EMAIL.to_string()),
+            },
+        );
+        set_current_workspace(&mut app, workspace);
+
+        ApiKeyManager::handle(&app).update(&mut app, |manager, ctx| {
+            manager
+                .persist_provider_key(LLMProvider::Anthropic, Some("sk-ant-test".to_owned()), ctx)
+                .expect("no-op secure storage should accept the provider key");
+            manager.add_custom_endpoint(
+                CustomEndpointParams {
+                    name: "member-endpoint".to_string(),
+                    url: "https://example.com/v1".to_string(),
+                    api_key: "endpoint-key".to_string(),
+                    models: vec![("member-model".to_string(), None, None)],
+                    schema: Default::default(),
+                },
+                ctx,
+            );
+            manager.set_aws_credentials_state(
+                AwsCredentialsState::Loaded {
+                    credentials: AwsCredentials::new(
+                        "access-key".to_string(),
+                        "secret-key".to_string(),
+                        None,
+                        None,
+                    ),
+                    loaded_at: SystemTime::now(),
+                },
+                ctx,
+            );
+            let binding = match current_geap_policy(ctx) {
+                GeapPolicy::Mintable(binding) => binding,
+                other => panic!("expected a mintable GEAP policy, got {other:?}"),
+            };
+            manager.set_geap_credentials_state(
+                GeapCredentialsState::Loaded {
+                    credentials: GeapCredentials::new("geap-token".to_string(), None),
+                    loaded_at: SystemTime::now(),
+                    minted_for: binding,
+                },
+                ctx,
+            );
+        });
+
+        let (window_a, terminal_a) = add_window_with_id_and_terminal(&mut app, None);
+        let (window_b, terminal_b) = add_window_with_id_and_terminal(&mut app, None);
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.set_team_for_window(window_a, team_a.uid, ctx);
+            user_workspaces.set_team_for_window(window_b, team_b.uid, ctx);
+        });
+
+        let build_params = |terminal: &ViewHandle<TerminalView>, app: &mut App| {
+            terminal.update(app, |terminal, ctx| {
+                terminal.ai_controller().update(ctx, |controller, ctx| {
+                    controller
+                        .build_passive_suggestions_request_params(
+                            None,
+                            PassiveSuggestionTrigger::FilesChanged,
+                            vec![],
+                            ctx,
+                        )
+                        .expect("should build passive suggestion params")
+                        .1
+                })
+            })
+        };
+
+        let params_a = build_params(&terminal_a, &mut app);
+        let keys_a = params_a
+            .api_keys
+            .expect("team A's policy allows members to use their own keys");
+        assert!(
+            !keys_a.anthropic.is_empty(),
+            "team A's policy allows members to use their own keys"
+        );
+        assert!(
+            keys_a.aws_credentials.is_some(),
+            "Bedrock credentials are org-level and must survive either team's policy"
+        );
+        assert!(
+            keys_a.google_cloud_credentials.is_some(),
+            "GEAP credentials are org-level and must survive either team's policy"
+        );
+        assert!(
+            params_a.custom_model_providers.is_some(),
+            "team A's policy allows members to use their own custom endpoints"
+        );
+        assert!(
+            params_a.member_byo_credentials_allowed,
+            "the permissive team's decision must be recorded on the params"
+        );
+
+        let params_b = build_params(&terminal_b, &mut app);
+        let keys_b = params_b.api_keys.expect(
+            "Bedrock/GEAP credentials must keep api_keys populated even once member keys are stripped",
+        );
+        assert!(
+            keys_b.anthropic.is_empty(),
+            "team B's policy disallows members from using their own keys"
+        );
+        assert!(
+            keys_b.aws_credentials.is_some(),
+            "a restrictive team_byo policy must not strip org-level Bedrock credentials"
+        );
+        assert!(
+            keys_b.google_cloud_credentials.is_some(),
+            "a restrictive team_byo policy must not strip org-level GEAP credentials"
+        );
+        assert!(
+            params_b.custom_model_providers.is_none(),
+            "team B's policy disallows members from using their own custom endpoints"
+        );
+        assert!(
+            !params_b.member_byo_credentials_allowed,
+            "the restrictive team's decision must be recorded on the params"
+        );
     });
 }

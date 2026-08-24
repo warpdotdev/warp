@@ -364,6 +364,38 @@ zle -N zle-line-init
         ))
 }
 
+/// Regression test for CORE-3804: a profile that selects PSReadLine's vi edit mode must not
+/// corrupt submitted commands.
+pub fn test_pwsh_vi_edit_mode_does_not_corrupt_commands() -> Builder {
+    new_builder()
+        .set_should_run_test(|| {
+            let (starter, _) = current_shell_starter_and_version();
+            matches!(starter.shell_type(), shell::ShellType::PowerShell)
+        })
+        .with_setup(|utils| {
+            let dir = utils.test_dir();
+            write_rc_files_for_test(
+                dir,
+                "Set-PSReadLineOption -EditMode Vi",
+                [ShellRcType::PowerShell],
+            );
+        })
+        .with_step(wait_until_bootstrapped_single_pane_for_tab(0))
+        .with_step(clear_blocklist_to_remove_bootstrapped_blocks())
+        .with_step(execute_command_for_single_terminal_in_tab(
+            0,
+            "echo vi_edit_mode_ok".to_string(),
+            ExpectedExitStatus::Success,
+            "vi_edit_mode_ok",
+        ))
+        .with_step(execute_command_for_single_terminal_in_tab(
+            0,
+            "Write-Output second_command_ok".to_string(),
+            ExpectedExitStatus::Success,
+            "second_command_ok",
+        ))
+}
+
 pub fn test_bash_bootstraps_with_prompt_command_array_that_sets_ps1() -> Builder {
     new_builder()
         .set_should_run_test(|| {

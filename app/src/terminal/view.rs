@@ -200,7 +200,7 @@ use super::ssh::util::{InteractiveSshCommand, SshWarpifyCommand, parse_interacti
 use super::warpify::WarpificationSource;
 use super::warpify::success_block::{WarpifySuccessBlock, WarpifySuccessBlockEvent};
 use super::warpify::trigger_state::{SshBlockState, WarpifyState};
-use super::{CLIAgent, GridType, cli_agent};
+use super::{CLIAgent, GridType, cli_agent, should_right_click_paste};
 #[cfg(any(test, feature = "integration_tests"))]
 use crate::ai::agent::UserQueryMode;
 use crate::ai::agent::api::ServerConversationToken;
@@ -3161,6 +3161,7 @@ impl TerminalView {
         ctx: &mut ViewContext<Self>,
     ) -> Self {
         let terminal_view_id = ctx.view_id();
+        let terminal_view = ctx.handle();
         let active_session = ctx.add_model(|ctx| {
             ActiveSession::new(sessions.clone(), model_events_handle.clone(), ctx)
         });
@@ -3538,6 +3539,8 @@ impl TerminalView {
         });
 
         let get_relevant_files_controller = ctx.add_model(GetRelevantFilesController::new);
+        let ai_action_team_context_resolver =
+            UserWorkspaces::team_context_resolver(terminal_view.clone());
         let ai_action_model = ctx.add_model(|ctx| {
             BlocklistAIActionModel::new(
                 model.clone(),
@@ -3545,6 +3548,7 @@ impl TerminalView {
                 &model_events_handle,
                 get_relevant_files_controller.clone(),
                 terminal_view_id,
+                ai_action_team_context_resolver,
                 ctx,
             )
         });
@@ -3557,6 +3561,7 @@ impl TerminalView {
                 active_session.clone(),
                 model.clone(),
                 terminal_view_id,
+                terminal_view,
                 ctx,
             )
         });
@@ -6958,6 +6963,8 @@ impl TerminalView {
             conversation.total_agent_response_time_since_last_user_query_ms();
         let wall_to_wall_response_time_ms =
             conversation.wall_to_wall_response_time_since_last_query();
+        let usage_totals = conversation.usage_totals();
+        let charged_usage_for_last_block = conversation.charged_usage_for_last_block();
 
         let conversation_usage_info = ConversationUsageInfo {
             credits_spent: conversation.inference_credits_spent(),
@@ -6971,6 +6978,11 @@ impl TerminalView {
             lines_added: tool_usage.apply_file_diff_stats.lines_added,
             lines_removed: tool_usage.apply_file_diff_stats.lines_removed,
             commands_executed: tool_usage.run_command_stats.commands_executed,
+            total_tokens: usage_totals.charged_usage.map(|usage| usage.total_tokens()),
+            total_cost_in_cents: usage_totals.total_cost_in_cents(),
+            tokens_for_last_block: charged_usage_for_last_block.map(|usage| usage.total_tokens()),
+            cost_in_cents_for_last_block: charged_usage_for_last_block
+                .map(|usage| usage.total_cost_in_cents()),
         };
 
         let timing_info = TimingInfo {
@@ -16780,7 +16792,7 @@ impl TerminalView {
                 Some(highlighted_link),
                 _,
             ) => {
-                match highlighted_link {
+                let mut items = match highlighted_link {
                     GridHighlightedLink::Url(url) => {
                         let url_content =
                             Some(model.link_at_range(url, RespectObfuscatedSecrets::Yes));
@@ -16860,7 +16872,14 @@ impl TerminalView {
                                 .into_item(),
                         ]
                     }
+                };
+
+                if !items.is_empty() {
+                    items.push(MenuItem::Separator);
                 }
+                items.push(self.paste_menu_item(ctx));
+
+                items
             }
             (
                 BlockListMenuSource::RegularTextRightClick { .. }
@@ -16974,6 +16993,15 @@ impl TerminalView {
                     "Share..."
                 };
 
+                // Only right-click sources offer general terminal actions like "Paste";
+                // the overflow-button and keybinding menus are scoped to the selected block(s).
+                let is_right_click_source = matches!(
+                    menu_source,
+                    BlockListMenuSource::RegularBlockRightClick { .. }
+                        | BlockListMenuSource::RichContentBlockRightClick { .. }
+                        | BlockListMenuSource::OutsideBlockRightClick { .. }
+                );
+
                 let mut items = vec![
                     MenuItemFields::new(copy_str)
                         .with_on_select_action(TerminalAction::ContextMenu(
@@ -16995,6 +17023,54 @@ impl TerminalView {
                         ))
                         .with_disabled(is_copy_commands_disabled)
                         .into_item(),
+                ];
+
+                if is_single_selection {
+                    let mut copy_output_menu_item = MenuItemFields::new("Copy output")
+                        .with_on_select_action(TerminalAction::ContextMenu(
+                            ContextMenuAction::CopyBlockOutputs,
+                        ))
+                        .with_disabled(tail_block.output_grid().is_empty());
+
+                    // If there is an active filter on a block, then we want to display a
+                    // Copy filtered output option and assign the "terminal:copy_outputs" keybinding to it.
+                    if tail_block.has_active_filter() {
+                        items.insert(
+                            1,
+                            MenuItemFields::new("Copy filtered output")
+                                .with_on_select_action(TerminalAction::ContextMenu(
+                                    ContextMenuAction::CopyBlockFilteredOutputs,
+                                ))
+                                .with_key_shortcut_label(keybinding_name_to_display_string(
+                                    "terminal:copy_outputs",
+                                    ctx,
+                                ))
+                                .into_item(),
+                        );
+                        items.insert(2, copy_output_menu_item.into_item());
+                    } else {
+                        copy_output_menu_item = copy_output_menu_item.with_key_shortcut_label(
+                            keybinding_name_to_display_string("terminal:copy_outputs", ctx),
+                        );
+                        items.insert(2, copy_output_menu_item.into_item());
+                    }
+
+                    let mut prompt_items = self.copy_prompt_menu_items(
+                        self.input_is_on_git_branch(&model),
+                        self.is_rprompt_shown(&model),
+                        PromptPosition::Block(tail_block_index),
+                    );
+                    items.append(&mut prompt_items);
+                }
+
+                // "Paste" closes out the copy-related section so clipboard actions for
+                // the block sit together, ending with the general clipboard paste.
+                if is_right_click_source {
+                    items.push(self.paste_menu_item(ctx));
+                }
+
+                items.push(MenuItem::Separator);
+                items.push(
                     MenuItemFields::new(share_block_label)
                         .with_on_select_action(TerminalAction::ContextMenu(
                             ContextMenuAction::OpenShareBlockModal {
@@ -17007,7 +17083,7 @@ impl TerminalView {
                         ))
                         .with_disabled(is_share_disabled)
                         .into_item(),
-                ];
+                );
 
                 if FeatureFlag::CreatingSharedSessions.is_enabled()
                     && ContextFlag::CreateSharedSession.is_enabled()
@@ -17075,45 +17151,6 @@ impl TerminalView {
                                 .into_item(),
                         ]);
                     }
-                }
-
-                if is_single_selection {
-                    let mut copy_output_menu_item = MenuItemFields::new("Copy output")
-                        .with_on_select_action(TerminalAction::ContextMenu(
-                            ContextMenuAction::CopyBlockOutputs,
-                        ))
-                        .with_disabled(tail_block.output_grid().is_empty());
-
-                    // If there is an active filter on a block, then we want to display a
-                    // Copy filtered output option and assign the "terminal:copy_outputs" keybinding to it.
-                    if tail_block.has_active_filter() {
-                        items.insert(
-                            1,
-                            MenuItemFields::new("Copy filtered output")
-                                .with_on_select_action(TerminalAction::ContextMenu(
-                                    ContextMenuAction::CopyBlockFilteredOutputs,
-                                ))
-                                .with_key_shortcut_label(keybinding_name_to_display_string(
-                                    "terminal:copy_outputs",
-                                    ctx,
-                                ))
-                                .into_item(),
-                        );
-                        items.insert(2, copy_output_menu_item.into_item());
-                    } else {
-                        copy_output_menu_item = copy_output_menu_item.with_key_shortcut_label(
-                            keybinding_name_to_display_string("terminal:copy_outputs", ctx),
-                        );
-                        items.insert(2, copy_output_menu_item.into_item());
-                    }
-
-                    let mut prompt_items = self.copy_prompt_menu_items(
-                        self.input_is_on_git_branch(&model),
-                        self.is_rprompt_shown(&model),
-                        PromptPosition::Block(tail_block_index),
-                    );
-                    items.push(MenuItem::Separator);
-                    items.append(&mut prompt_items);
                 }
 
                 items.append(&mut vec![
@@ -17383,6 +17420,15 @@ impl TerminalView {
         }
 
         items
+    }
+
+    fn paste_menu_item(&self, ctx: &mut ViewContext<Self>) -> MenuItem<TerminalAction> {
+        let is_clipboard_empty = ctx.clipboard().read().is_empty();
+        MenuItemFields::new("Paste")
+            .with_on_select_action(TerminalAction::Paste)
+            .with_key_shortcut_label(keybinding_name_to_display_string("terminal:paste", ctx))
+            .with_disabled(is_clipboard_empty)
+            .into_item()
     }
 
     /// Builds the "Clear Blocks" entry for the terminal right-click context
@@ -24960,7 +25006,7 @@ impl TerminalView {
             SavePosition::new(
                 EventHandler::new(child)
                     .on_right_mouse_down(
-                        enclose!((position_id, input_position_id) move |ctx, _app, position | {
+                        enclose!((position_id, input_position_id) move |ctx, app, position, modifiers| {
                                 if let Some(position_in_terminal_view) = offset_position_outside_block(
                                     position,
                                     &position_id,
@@ -24968,6 +25014,10 @@ impl TerminalView {
                                     block_list_height_px,
                                     ctx,
                                 ) {
+                                    if should_right_click_paste(modifiers.shift, app) {
+                                        ctx.dispatch_typed_action(TerminalAction::Paste);
+                                        return DispatchEventResult::StopPropagation;
+                                    }
                                     ctx.dispatch_typed_action(TerminalAction::BlockListContextMenu(
                                         BlockListMenuSource::OutsideBlockRightClick {
                                             position_in_terminal_view,

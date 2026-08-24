@@ -8,11 +8,12 @@ use warp::tui_export::{
     AIActionStatus, AIAgentAction, AIAgentActionId, AIAgentActionType, AIConversationId,
     Appearance, AuthSecretSelection, OptionRow, OptionSnapshot, OptionSourceStatus,
     OrchestrationConfigState, OrchestrationEditState, RunAgentsAgentRunConfig,
-    RunAgentsExecutionMode, RunAgentsRequest, TaskId, register_tui_session_view_test_singletons,
+    RunAgentsExecutionMode, RunAgentsRequest, ServerApiProvider, TaskId, TeamContext,
+    UserWorkspaces, register_tui_session_view_test_singletons,
 };
 use warp_core::features::FeatureFlag;
 use warpui::platform::WindowStyle;
-use warpui::{AddWindowOptions, App, ViewHandle};
+use warpui::{AddWindowOptions, App, SingletonEntity as _, ViewHandle};
 use warpui_core::elements::tui::{TuiBufferExt, TuiRect};
 use warpui_core::keymap::Keystroke;
 use warpui_core::presenter::tui::TuiPresenter;
@@ -264,6 +265,7 @@ impl OrchestrationBlockController for TestController {
         &self,
         page: ConfigPage,
         state: &OrchestrationConfigState,
+        _scope: &TeamContext,
         _ctx: &warpui::AppContext,
     ) -> OptionSnapshot {
         let (rows, selected_id) = match page {
@@ -350,6 +352,16 @@ fn test_block(
 ) -> (ViewHandle<TuiOrchestrationBlock>, Rc<TestController>) {
     app.add_singleton_model(|_| Appearance::mock());
     app.update(warp_core::telemetry::testing::MockTelemetryContextProvider::register);
+    app.add_singleton_model(|_| ServerApiProvider::new_for_test());
+    app.add_singleton_model(|ctx| {
+        let provider = ServerApiProvider::as_ref(ctx);
+        UserWorkspaces::mock(
+            provider.get_team_client(),
+            provider.get_workspace_client(),
+            Vec::new(),
+            ctx,
+        )
+    });
     let action = AIAgentAction {
         id: AIAgentActionId::from("run-agents-1".to_string()),
         task_id: TaskId::new("task-1".to_string()),

@@ -17,7 +17,7 @@
       "source": "warpdotdev/common-skills",
       "sourceType": "github",
       "skillPath": ".agents/skills/complain/SKILL.md",
-      "computedHash": "a3b8c766daa0713c209522f6885309314c4699f6630246710d9fc19756851b61"
+      "computedHash": "2d556f9b6592c714678b898ef672faa676376335f8fe6bb014fc7cf16e7aa2e0"
     },
     "council": {
       "source": "warpdotdev/common-skills",
@@ -29,7 +29,7 @@
       "source": "warpdotdev/common-skills",
       "sourceType": "github",
       "skillPath": ".agents/skills/create-pr/SKILL.md",
-      "computedHash": "d9f06f0219b3d402cf1ff3b0ee3a4d6d38f259a0dcf6103a99b1815c2b81d95b"
+      "computedHash": "4d7994aab3778d6659d853e4e3f7cd1c4fdb4b99c4305cd349d8ccc50592ac73"
     },
     "cross-critique": {
       "source": "warpdotdev/common-skills",
@@ -41,7 +41,7 @@
       "source": "warpdotdev/common-skills",
       "sourceType": "github",
       "skillPath": ".agents/skills/diagnose-ci-failures/SKILL.md",
-      "computedHash": "7a7bbe627bbf747c05e37f9a815ddaedea30a588c452e9279b1305ec172d1006"
+      "computedHash": "b2facf371cb6ab69fa12432c8f3b44a07c74881e7ec9b9750cb8cb30e933a4df"
     },
     "fix-errors": {
       "source": "warpdotdev/common-skills",
@@ -71,7 +71,7 @@
       "source": "warpdotdev/common-skills",
       "sourceType": "github",
       "skillPath": ".agents/skills/reproduce-bug-report/SKILL.md",
-      "computedHash": "a906c867389e3ee76d9196cad893fb3ba7e5f0e27248373b53e30358aac5fe44"
+      "computedHash": "50aadfe21a79b7db83fe3ea26af7f9692c3c295e8bd1a870d3dcab6a4e7ba685"
     },
     "research": {
       "source": "warpdotdev/common-skills",
@@ -89,13 +89,13 @@
       "source": "warpdotdev/common-skills",
       "sourceType": "github",
       "skillPath": ".agents/skills/respond-to-pr-comments-in-blocklist/SKILL.md",
-      "computedHash": "f7408cf90c10397aa9048f14ab985a138641fc1e5f3245e290150437d62875f0"
+      "computedHash": "23f85aa61dca27eff5e864b42f204388a4c79e6995c735a1303b05a039473274"
     },
     "review-pr": {
       "source": "warpdotdev/common-skills",
       "sourceType": "github",
       "skillPath": ".agents/skills/review-pr/SKILL.md",
-      "computedHash": "f27bfc9743fa0d240763a26519b25112a0ad8652c9a2b2b52daeb7af2d2a862c"
+      "computedHash": "f1e389e40df08b22a70013756f40147c9a4a4d3641e08c28c40028ceef0a632e"
     },
     "saga": {
       "source": "warpdotdev/common-skills",
@@ -109,6 +109,12 @@
       "skillPath": ".agents/skills/scan-new-specs/SKILL.md",
       "computedHash": "684f0008445e6e68e1fbef759e7a2b85ac90e0c0a1b884dd32f4da49405ebca0"
     },
+    "skill-doctor": {
+      "source": "warpdotdev/common-skills",
+      "sourceType": "github",
+      "skillPath": ".agents/skills/skill-doctor/SKILL.md",
+      "computedHash": "7d1871b3f68fdcf9d9e8c8418ef0031bb2eb3676c5f5b7c629d9a1affdbaddb1"
+    },
     "spec-driven-implementation": {
       "source": "warpdotdev/common-skills",
       "sourceType": "github",
@@ -119,7 +125,7 @@
       "source": "warpdotdev/common-skills",
       "sourceType": "github",
       "skillPath": ".agents/skills/suggestion-box/SKILL.md",
-      "computedHash": "26a194f61ed3c9cab1c6e5429bb51175189fed4a9c96a9805315f60c071bda4c"
+      "computedHash": "8c6c83bed6551b4d8f447a18bce4fbe948c1227113529d54977f29215eef0514"
     },
     "update-skill": {
       "source": "warpdotdev/common-skills",
@@ -131,13 +137,19 @@
       "source": "warpdotdev/common-skills",
       "sourceType": "github",
       "skillPath": ".agents/skills/validate-changes-match-specs/SKILL.md",
-      "computedHash": "9123fd70ced064bdd773fd8d2baa8d5d5291fef910eb2c028084074b3ac72c27"
+      "computedHash": "a70b71aa4c68ef2c837feec6e2788ff618b9486a17f0954f24b1fee939503d8c"
     },
     "write-feature-docs": {
       "source": "warpdotdev/common-skills",
       "sourceType": "github",
       "skillPath": ".agents/skills/write-feature-docs/SKILL.md",
       "computedHash": "5aeb3b1b5b298deca5774023efd2bfbd1ac7c2b9b0cd4467dc721e336f8fd344"
+    },
+    "write-pr-description": {
+      "source": "warpdotdev/common-skills",
+      "sourceType": "github",
+      "skillPath": ".agents/skills/write-pr-description/SKILL.md",
+      "computedHash": "12dcdad5ff5180cf324165deb0c8fad902ae0a79ae9d86b18cf5d347501870cb"
     },
     "write-product-spec": {
       "source": "warpdotdev/common-skills",

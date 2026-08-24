@@ -36,6 +36,7 @@ cfg_if::cfg_if! {
     if #[cfg(feature = "local_fs")] {
         use std::{path::PathBuf, time::Duration};
         use crate::ai::blocklist::{read_local_file_context, BlocklistAIPermissions};
+        use crate::workspaces::user_workspaces::TeamScope;
         use warp_terminal::shell::ShellLaunchData;
         use crate::util::link_detection::{detect_file_paths, DetectedLinkType};
         use crate::util::openable_file_type::is_binary_file;
@@ -547,10 +548,12 @@ impl PassiveSuggestionsModel {
                     }
                 },
                 move |me, candidate_paths, ctx| {
+                    let scope = me.ai_controller.as_ref(ctx).team_context(ctx);
                     let Some(file_locations) = get_allowed_file_locations_for_paths(
                         candidate_paths,
                         conversation_id.as_ref(),
                         terminal_view_id,
+                        &scope,
                         ctx,
                     ) else {
                         me.pending_file_read_handle = None;
@@ -926,6 +929,7 @@ fn get_allowed_file_locations_for_paths(
     paths: Vec<PathBuf>,
     conversation_id: Option<&AIConversationId>,
     terminal_view_id: EntityId,
+    scope: &impl TeamScope,
     ctx: &AppContext,
 ) -> Option<Vec<FileLocations>> {
     if paths.is_empty() {
@@ -933,7 +937,13 @@ fn get_allowed_file_locations_for_paths(
     }
 
     if !BlocklistAIPermissions::as_ref(ctx)
-        .can_read_files(conversation_id, paths.clone(), Some(terminal_view_id), ctx)
+        .can_read_files(
+            conversation_id,
+            paths.clone(),
+            Some(terminal_view_id),
+            scope,
+            ctx,
+        )
         .is_allowed()
     {
         return None;

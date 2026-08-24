@@ -1064,8 +1064,6 @@ pub const RELEASE_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::Changelog,
     FeatureFlag::CrashReporting,
     FeatureFlag::VideoRecording,
-    // Marked text is currently only supported on MacOS.
-    #[cfg(target_os = "macos")]
     FeatureFlag::ImeMarkedText,
     // Remote server binary is not yet supported on Windows.
     #[cfg(not(windows))]

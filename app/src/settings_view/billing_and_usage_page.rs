@@ -1696,9 +1696,7 @@ impl BillingAndUsagePageView {
             .finish();
 
         let workspaces = UserWorkspaces::as_ref(app);
-        let purchase_policy = workspaces.purchase_policy_for_team(
-            team_uid.and_then(|team_uid| workspaces.team_from_uid(team_uid)),
-        );
+        let purchase_policy = workspaces.purchase_policy();
         let team_can_purchase_addon_credits =
             purchase_policy.is_some_and(|policy| policy.allows_purchases());
         let premium_bps = purchase_policy.map_or(0, |policy| policy.effective_premium_bps());
@@ -2953,7 +2951,7 @@ impl BillingAndUsagePageView {
 
         let show_addon_credits_panel = workspace.is_some()
             || workspaces
-                .purchase_policy_for_team(team)
+                .purchase_policy()
                 .is_some_and(|policy| policy.allows_purchases());
         if show_addon_credits_panel {
             let bonus_credit_balance = workspace.map_or_else(

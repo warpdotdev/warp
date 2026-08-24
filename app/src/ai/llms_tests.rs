@@ -700,11 +700,15 @@ fn active_models_fall_back_to_usable_choice_or_custom_endpoint_when_default_disa
 }
 
 /// Runs picker-query assertions with searchable, selectable, and disabled model fixtures plus
-/// the app singletons consulted by model eligibility logic.
-fn with_model_picker_query_test_context(f: impl FnOnce(&LLMPreferences, &AppContext) + 'static) {
+/// the app singletons consulted by model eligibility logic. The scope is teamless: these
+/// fixtures exercise ordering and filtering, not team credential policy.
+fn with_model_picker_query_test_context(
+    f: impl FnOnce(&LLMPreferences, &dyn TeamScope, &AppContext) + 'static,
+) {
     App::test((), |app| async move {
         app.add_singleton_model(|_| AuthStateProvider::new_for_test());
         app.add_singleton_model(UserWorkspaces::default_mock);
+        let scope = UserWorkspaces::teamless_context_resolver_for_test();
         app.read(|app_ctx| {
             let agent_mode = AvailableLLMs::new(
                 "auto".into(),
@@ -727,7 +731,7 @@ fn with_model_picker_query_test_context(f: impl FnOnce(&LLMPreferences, &AppCont
                 custom_llms: Vec::new(),
                 custom_model_routers: Vec::new(),
             };
-            f(&preferences, app_ctx);
+            f(&preferences, &scope(app_ctx), app_ctx);
         });
     });
 }
@@ -1062,11 +1066,12 @@ fn preferences_for_profile_model_tests() -> LLMPreferences {
 
 #[test]
 fn shared_model_picker_query_orders_filters_and_marks_disabled_choices() {
-    with_model_picker_query_test_context(|preferences, app| {
+    with_model_picker_query_test_context(|preferences, scope, app| {
         let all = query_model_picker_choices(
             preferences,
             preferences.get_base_llm_choices_for_agent_mode(app),
             "",
+            scope,
             app,
         );
         assert_eq!(
@@ -1083,6 +1088,7 @@ fn shared_model_picker_query_orders_filters_and_marks_disabled_choices() {
             preferences,
             preferences.get_base_llm_choices_for_agent_mode(app),
             "gpt 5",
+            scope,
             app,
         );
         assert_eq!(filtered.len(), 1);

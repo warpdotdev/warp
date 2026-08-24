@@ -1682,7 +1682,7 @@ impl AgentInputFooter {
             .with_run_spacing(context_chips::spacing::UDI_ROW_RUN_SPACING)
             .finish();
         let content = EventHandler::new(content)
-            .on_right_mouse_down(|ctx, _, position| {
+            .on_right_mouse_down(|ctx, _, position, _| {
                 ctx.dispatch_typed_action(AgentInputFooterAction::ShowContextMenu { position });
                 DispatchEventResult::StopPropagation
             })
@@ -2414,7 +2414,7 @@ impl View for AgentInputFooter {
             .with_run_spacing(context_chips::spacing::UDI_ROW_RUN_SPACING)
             .finish();
         let content = EventHandler::new(content)
-            .on_right_mouse_down(|ctx, _, position| {
+            .on_right_mouse_down(|ctx, _, position, _| {
                 ctx.dispatch_typed_action(AgentInputFooterAction::ShowContextMenu { position });
                 DispatchEventResult::StopPropagation
             })

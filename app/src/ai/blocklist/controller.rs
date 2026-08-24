@@ -27,7 +27,9 @@ use warp_core::assertions::safe_assert;
 use warp_errors::report_error;
 use warp_multi_agent_api::{Task, ToolType, message};
 use warpui::r#async::{SpawnedFutureHandle, Timer};
-use warpui::{AppContext, Entity, EntityId, ModelContext, ModelHandle, SingletonEntity};
+use warpui::{
+    AppContext, Entity, EntityId, ModelContext, ModelHandle, SingletonEntity, WeakViewHandle,
+};
 
 use self::response_stream::{PendingResume, RecoveryBudget, ResponseStream, ResponseStreamEvent};
 use super::action_model::{BlocklistAIActionEvent, BlocklistAIActionModel};
@@ -82,7 +84,7 @@ use crate::terminal::model::terminal_model::TerminalModel;
 use crate::terminal::view::inline_banner::ZeroStatePromptSuggestionType;
 use crate::workspace::OneTimeModalModel;
 use crate::workspaces::update_manager::TeamUpdateManager;
-use crate::workspaces::user_workspaces::UserWorkspaces;
+use crate::workspaces::user_workspaces::{TeamContext, TeamContextResolver, UserWorkspaces};
 
 #[derive(Debug, Clone)]
 pub struct SessionContext {
@@ -322,6 +324,7 @@ pub struct BlocklistAIController {
 
     /// The ID of the terminal surface this controller is associated with.
     terminal_surface_id: EntityId,
+    team_context_resolver: TeamContextResolver,
 
     should_refresh_available_llms_on_stream_finish: bool,
 
@@ -422,9 +425,13 @@ impl BlocklistAIController {
         SessionContext::from_session(self.active_session.as_ref(ctx), ctx).skill_path_origin()
     }
 
+    pub(crate) fn team_context<'a>(&self, app: &'a AppContext) -> TeamContext<'a> {
+        (self.team_context_resolver)(app)
+    }
+
     /// Creates a controller for a terminal surface.
     #[allow(clippy::too_many_arguments)]
-    pub fn new(
+    pub fn new<T: Entity>(
         input_model: ModelHandle<BlocklistAIInputModel>,
         context_model: ModelHandle<BlocklistAIContextModel>,
         conversation_selection: ConversationSelectionHandle,
@@ -432,8 +439,10 @@ impl BlocklistAIController {
         active_session: ModelHandle<ActiveSession>,
         terminal_model: Arc<FairMutex<TerminalModel>>,
         terminal_surface_id: EntityId,
+        terminal_surface: WeakViewHandle<T>,
         ctx: &mut ModelContext<Self>,
     ) -> Self {
+        let team_context_resolver = UserWorkspaces::team_context_resolver(terminal_surface);
         ctx.subscribe_to_model(&action_model, move |me, _, event, ctx| {
             let BlocklistAIActionEvent::FinishedAction {
                 conversation_id,
@@ -626,6 +635,7 @@ impl BlocklistAIController {
             terminal_model,
             in_flight_response_streams: PendingResponseStreams::new(),
             terminal_surface_id,
+            team_context_resolver,
             should_refresh_available_llms_on_stream_finish: false,
             shared_session_state: shared_session::SharedSessionState::default(),
             ambient_agent_task_id: None,
@@ -2274,12 +2284,14 @@ impl BlocklistAIController {
             is_auto_resume_after_error: false,
         });
 
+        let scope = self.team_context(ctx);
         let request_params = api::RequestParams::new(
             Some(self.terminal_surface_id),
             SessionContext::from_session(self.active_session.as_ref(ctx), ctx),
             &request_input,
             conversation_data,
             metadata,
+            &scope,
             ctx,
         );
 
@@ -2509,12 +2521,14 @@ impl BlocklistAIController {
             });
         }
 
+        let scope = self.team_context(ctx);
         let mut request_params = api::RequestParams::new(
             Some(self.terminal_surface_id),
             SessionContext::from_session(self.active_session.as_ref(ctx), ctx),
             &request_input,
             conversation_data.clone(),
             query_metadata,
+            &scope,
             ctx,
         );
         request_params.parent_agent_id = parent_agent_id;
@@ -3287,6 +3301,7 @@ impl BlocklistAIController {
             history_model.update_conversation_cost_and_usage_for_request(
                 conversation_id,
                 request_cost,
+                finished_event.request_charges.take(),
                 finished_event.token_usage,
                 finished_event.conversation_usage_metadata.take(),
                 did_request_contain_user_query,

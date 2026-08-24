@@ -18,8 +18,8 @@ use super::team::{DiscoverableTeam, MembershipRole, Team};
 #[cfg(test)]
 use super::workspace::WorkspaceMemberUsageInfo;
 use super::workspace::{
-    AdminEnablementSetting, BillingMetadata, CustomerType, EnterpriseSecretRegex,
-    HostEnablementSetting, UgcCollectionEnablementSetting, Workspace, WorkspaceUid,
+    AdminEnablementSetting, EnterpriseSecretRegex, HostEnablementSetting,
+    UgcCollectionEnablementSetting, Workspace, WorkspaceUid,
 };
 use crate::ai::credit_availability::AICreditAvailability;
 use crate::ai::llms::LLMModelHost;
@@ -39,11 +39,17 @@ use crate::settings::{
     AISettings, AISettingsChangedEvent, CodeSettings, CodeSettingsChangedEvent, PrivacySettings,
 };
 #[cfg(test)]
-use crate::workspaces::workspace::{AIAutonomyPolicy, WorkspaceMember, WorkspaceSettings};
 use crate::workspaces::workspace::{
-    AiAutonomySettings, AiOverages, PurchaseAddOnCreditsPolicy, SandboxedAgentSettings,
-    UsageBasedPricingSettings,
+    AIAutonomyPolicy, AiAutonomySettings, BillingMetadata, CustomerType, SplitListSetting,
+    WorkspaceMember, WorkspaceSettings,
 };
+use crate::workspaces::workspace::{
+    AiOverages, PurchaseAddOnCreditsPolicy, UsageBasedPricingSettings,
+};
+pub(crate) mod billing_workspace_settings;
+pub(crate) mod team_workspace_settings;
+pub(crate) use team_workspace_settings::TeamContextForOperation;
+pub use team_workspace_settings::{TeamContext, TeamContextResolver, TeamScope};
 
 const STRIPE_SUBSCRIPTION_INTERVAL_PAGE_PREFIX: &str = "/upgrade";
 
@@ -156,39 +162,12 @@ pub struct CreateTeamResponse {
     pub team: Team,
 }
 
-/// The team an operation is scoped to, captured once from the window that started it.
-///
-/// A logical operation carries its `TeamContext` from start to finish instead of asking a
-/// window which team is selected now, so concurrent windows on different teams stay
-/// independent and a later team switch cannot retarget work already in flight.
-///
-/// Deliberately neither `Clone` nor `Copy`. Moves make the handoff between the parts of an
-/// operation explicit and reviewable, whereas copies let a scope leak sideways into work
-/// that never established it. Wanting to duplicate one is a sign the second consumer is
-/// really a separate operation that should capture its own scope; if the parts genuinely
-/// share a lifetime, restructure so they share the single owner instead.
-///
-/// This is scope, not authority: the server still authorizes every request made under it.
-// Only tests construct one today; remove this once a Group 1 migration PR mints one from a
-// real call site.
-#[allow(dead_code)]
-pub(crate) struct TeamContext {
-    team_uid: ServerId,
-}
-
-/// The team a view renders as, borrowed for the duration of a single render.
-///
-/// Current-team UI must reflect the window's team as of this frame, so this is resolved
-/// per render rather than cached. The borrow is what enforces that: it cannot be stored in
-/// view state or moved into a `'static` future, and it deliberately offers no conversion to
-/// a team UID or to a [`TeamContext`]. A [`WeakViewHandle`] locates a window to read from;
-/// it is not evidence that the holder is running in that window, which is what minting
-/// operation scope requires.
-// Only tests construct one today; remove this once a Group 1 migration PR resolves one from a
-// real render.
-#[allow(dead_code)]
-pub(crate) struct TeamRenderContext<'a> {
-    team: &'a Team,
+#[derive(Debug, thiserror::Error)]
+pub enum SoleTeamError {
+    #[error("you are not on a team")]
+    NoTeam,
+    #[error("you are on {} teams, so no single team applies", .team_uids.len())]
+    MoreThanOneTeam { team_uids: Vec<ServerId> },
 }
 
 impl UserWorkspaces {
@@ -273,6 +252,7 @@ impl UserWorkspaces {
         )
     }
 
+    // TODO(isaiah): make me private in favour for upgrade_link_for_scope being the public facing api
     pub fn upgrade_link_for_team(team_uid: ServerId) -> String {
         format!(
             "{}{}/{}",
@@ -280,6 +260,22 @@ impl UserWorkspaces {
             STRIPE_SUBSCRIPTION_INTERVAL_PAGE_PREFIX,
             team_uid
         )
+    }
+
+    pub(crate) fn upgrade_link_for_scope<S: TeamScope + ?Sized>(
+        &self,
+        scope: &S,
+        app: &AppContext,
+    ) -> String {
+        match scope.team_uid() {
+            Some(team_uid) => Self::upgrade_link_for_team(team_uid),
+            None => Self::upgrade_link(
+                AuthStateProvider::as_ref(app)
+                    .get()
+                    .user_id()
+                    .unwrap_or_default(),
+            ),
+        }
     }
 
     pub fn warp_agent_cli_upgrade_link(user_id: Option<UserUid>) -> String {
@@ -358,6 +354,20 @@ impl UserWorkspaces {
         self.window_team_uids.get(&window_id).copied().flatten()
     }
 
+    pub fn switch_window_to_team(
+        &mut self,
+        window_id: WindowId,
+        team_uid: ServerId,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        if self.team_uid_for_window(window_id) == Some(team_uid) {
+            return;
+        }
+        self.window_team_uids.insert(window_id, Some(team_uid));
+        ctx.emit(UserWorkspacesEvent::WindowTeamChanged { window_id });
+        ctx.notify();
+    }
+
     /// Returns `true` when the user belongs to more than one team in the current
     /// workspace, meaning the team-switcher pill and dropdown should be shown.
     /// Single-team and no-workspace users return `false` so their UI is unchanged.
@@ -382,41 +392,6 @@ impl UserWorkspaces {
         view_handle
             .window_id(ctx)
             .and_then(|window_id| self.team_for_window(window_id))
-    }
-
-    /// Captures the team selected in `ctx`'s window as an operation's [`TeamContext`]. This
-    /// is the only way application code mints one.
-    // Only tests call this today; remove once a Group 1 migration PR has a real call site.
-    #[allow(dead_code)]
-    pub(crate) fn team_context_for_view<T: Entity>(
-        &self,
-        ctx: &ViewContext<T>,
-    ) -> Option<TeamContext> {
-        self.team_uid_for_window(ctx.window_id())
-            .map(|team_uid| TeamContext { team_uid })
-    }
-
-    /// Resolves `view`'s window team for one render. See [`TeamRenderContext`].
-    // Only tests call this today; remove once a Group 1 migration PR has a real call site.
-    #[allow(dead_code)]
-    pub(crate) fn team_render_context_for_view_handle<'a, T: Entity>(
-        &'a self,
-        view: &WeakViewHandle<T>,
-        app: &AppContext,
-    ) -> Option<TeamRenderContext<'a>> {
-        let window_id = view.window_id(app)?;
-        let team_uid = self.team_uid_for_window(window_id)?;
-        let team = self.team_from_uid(team_uid)?;
-
-        Some(TeamRenderContext { team })
-    }
-
-    /// Reads a captured team's metadata. Returns `None` once that team is gone from the
-    /// current workspace, e.g. after the user leaves it.
-    // Only tests call this today; remove once a Group 1 migration PR has a real call site.
-    #[allow(dead_code)]
-    pub(crate) fn team_for_context(&self, context: &TeamContext) -> Option<&Team> {
-        self.team_from_uid(context.team_uid)
     }
 
     /// Returns the windows whose team assignment changed.
@@ -580,14 +555,25 @@ impl UserWorkspaces {
         }
     }
 
-    pub fn sole_team(&self) -> Option<&Team> {
-        let [team] = self.current_workspace()?.teams.as_slice() else {
-            return None;
-        };
-        Some(team)
+    /// The user's single team in the current workspace.
+    ///
+    /// Having no workspace is reported as [`SoleTeamError::NoTeam`]: a user with no workspace
+    /// is on no team, and no caller can act differently on the distinction.
+    pub fn sole_team(&self) -> Result<&Team, SoleTeamError> {
+        let teams = self
+            .current_workspace()
+            .map(|workspace| workspace.teams.as_slice())
+            .unwrap_or_default();
+        match teams {
+            [] => Err(SoleTeamError::NoTeam),
+            [team] => Ok(team),
+            _ => Err(SoleTeamError::MoreThanOneTeam {
+                team_uids: teams.iter().map(|team| team.uid).collect(),
+            }),
+        }
     }
 
-    pub fn sole_team_uid(&self) -> Option<ServerId> {
+    pub fn sole_team_uid(&self) -> Result<ServerId, SoleTeamError> {
         self.sole_team().map(|team| team.uid)
     }
 
@@ -599,55 +585,6 @@ impl UserWorkspaces {
     pub fn current_workspace(&self) -> Option<&Workspace> {
         self.current_workspace_uid
             .and_then(|workspace_uid| self.workspace_from_uid(workspace_uid))
-    }
-    pub fn current_workspace_billing_metadata(&self) -> Option<&BillingMetadata> {
-        self.current_workspace()
-            .map(|workspace| &workspace.billing_metadata)
-    }
-
-    /// The given team's billing metadata when the team is known, otherwise
-    /// the current workspace's. For purchase surfaces that need
-    /// team/workspace-scoped state (e.g. delinquency); for the purchase
-    /// policy itself use [`Self::purchase_policy_for_team`], which adds the
-    /// user-level fallback for teamless users.
-    pub fn team_billing_metadata<'a>(
-        &'a self,
-        team: Option<&'a Team>,
-    ) -> Option<&'a BillingMetadata> {
-        team.map(|team| &team.billing_metadata)
-            .or_else(|| self.current_workspace_billing_metadata())
-    }
-
-    pub fn is_custom_llm_enabled_for_team(&self, team: Option<&Team>) -> bool {
-        team.map(Team::is_custom_llm_enabled)
-            .or_else(|| {
-                self.current_workspace()
-                    .map(Workspace::is_custom_llm_enabled)
-            })
-            .unwrap_or(false)
-    }
-
-    /// The add-on credits purchase policy for the current viewer context: the
-    /// current workspace's policy when one exists, else the user-level policy
-    /// from the workspaces-metadata response (how teamless users get one).
-    ///
-    /// Callers bound to a view/window should use
-    /// [`Self::purchase_policy_for_team`] instead, since their team can
-    /// differ from the current workspace's in multi-team situations.
-    pub fn purchase_policy(&self) -> Option<PurchaseAddOnCreditsPolicy> {
-        self.current_workspace_billing_metadata()
-            .and_then(|billing| billing.tier.purchase_add_on_credits_policy)
-            .or(self.user_purchase_policy)
-    }
-
-    /// [`Self::purchase_policy`], preferring the given team's policy when the
-    /// team is known (e.g. resolved from a view or window).
-    pub fn purchase_policy_for_team(
-        &self,
-        team: Option<&Team>,
-    ) -> Option<PurchaseAddOnCreditsPolicy> {
-        team.and_then(|team| team.billing_metadata.tier.purchase_add_on_credits_policy)
-            .or_else(|| self.purchase_policy())
     }
 
     /// Updates the user-level add-on credits purchase policy captured from a
@@ -679,169 +616,6 @@ impl UserWorkspaces {
         if changed {
             ctx.emit(UserWorkspacesEvent::CurrentWorkspaceChanged);
         }
-    }
-
-    /// Returns `true` if active AI is allowed for the current workspace, based on billing config.
-    ///
-    /// In the future, we should store active AI enablement on the policy directly. For now, we
-    /// proxy whether active AI by checking whether any active AI feature is enabled.
-    pub fn is_active_ai_allowed(&self) -> bool {
-        self.current_workspace().is_none_or(|workspace| {
-            workspace
-                .billing_metadata
-                .tier
-                .warp_ai_policy
-                .is_none_or(|policy| {
-                    policy.is_prompt_suggestions_toggleable
-                        || policy.is_next_command_enabled
-                        || policy.is_code_suggestions_toggleable
-                        || policy.is_git_operations_ai_enabled
-                })
-        })
-    }
-
-    pub fn ai_allowed_for_team(team: Option<&Team>) -> bool {
-        !team.is_some_and(|team| team.billing_metadata.customer_type == CustomerType::Enterprise)
-            || team.is_some_and(|team| team.billing_metadata.is_warp_plan())
-            || ChannelState::channel().is_dogfood()
-    }
-
-    /// Whether Prompt Suggestions should be toggleable for the current user, based on the active policies.
-    /// Note that the value may be incorrect if called before the team's billing metadata has been fetched.
-    pub fn is_prompt_suggestions_toggleable(&self) -> bool {
-        self.current_workspace()
-            // If the user has no team, they can toggle prompt suggestions (no restrictions).
-            .is_none_or(|workspace| {
-                workspace
-                    .billing_metadata
-                    .tier
-                    .warp_ai_policy
-                    .is_some_and(|policy| policy.is_prompt_suggestions_toggleable)
-            })
-    }
-
-    /// Whether Code Suggestions should be toggleable for the current user, based on the active policies.
-    /// Note that the value may be incorrect if called before the team's billing metadata has been fetched.
-    pub fn is_code_suggestions_toggleable(&self) -> bool {
-        self.current_workspace()
-            // If the user has no team, they can toggle code suggestions (no restrictions).
-            .is_none_or(|workspace| {
-                workspace
-                    .billing_metadata
-                    .tier
-                    .warp_ai_policy
-                    .is_some_and(|policy| policy.is_code_suggestions_toggleable)
-            })
-    }
-
-    /// Whether Next Command should be toggleable for the current user, based on the active policies.
-    /// Note that the value may be incorrect if called before the team's billing metadata has been fetched.
-    pub fn is_next_command_enabled(&self) -> bool {
-        self.current_workspace()
-            // If the user has no team, they can toggle Next Command (no restrictions).
-            .is_none_or(|workspace| {
-                workspace
-                    .billing_metadata
-                    .tier
-                    .warp_ai_policy
-                    .is_some_and(|policy| policy.is_next_command_enabled)
-            })
-    }
-
-    /// Whether Git Operations AI is enabled for the current user, based on the active policies.
-    /// Note that the value may be incorrect if called before the team's billing metadata has been fetched.
-    pub fn is_git_operations_ai_enabled(&self) -> bool {
-        self.current_workspace()
-            // If the user has no team, they can toggle Git Operations AI (no restrictions).
-            .is_none_or(|workspace| {
-                workspace
-                    .billing_metadata
-                    .tier
-                    .warp_ai_policy
-                    .is_some_and(|policy| policy.is_git_operations_ai_enabled)
-            })
-    }
-
-    /// Whether voice input should be toggleable for the current user, based on the active policies.
-    /// Note that the value may be incorrect if called before the team's billing metadata has been fetched.
-    /// If voice input support is not compiled into this build, always returns `false`.
-    pub fn is_voice_enabled(&self) -> bool {
-        cfg!(feature = "voice_input")
-            && self
-                .current_workspace()
-                // If the user has no team, they can toggle Voice (no restrictions).
-                .is_none_or(|workspace| {
-                    workspace
-                        .billing_metadata
-                        .tier
-                        .warp_ai_policy
-                        .is_some_and(|policy| policy.is_voice_enabled)
-                })
-    }
-
-    /// Whether BYO API key is enabled for the current user, based on the active policies.
-    /// Note that the value may be incorrect if called before the team's billing metadata has been fetched.
-    /// For solo users (no workspace), this is controlled by the `SoloUserByok` feature flag.
-    /// Anonymous or logged-out users are not allowed to use BYO API keys.
-    pub fn is_byo_api_key_enabled(&self, app: &AppContext) -> bool {
-        if AuthStateProvider::as_ref(app)
-            .get()
-            .is_anonymous_or_logged_out()
-        {
-            return false;
-        }
-        self.current_workspace()
-            .map(|workspace| workspace.is_byo_api_key_enabled())
-            .unwrap_or(FeatureFlag::SoloUserByok.is_enabled())
-    }
-
-    /// Whether the current workspace's managed BYOK/BYOE policy allows members
-    /// to use their own provider API keys. Users with no workspace, or
-    /// workspaces without the managed BYOK/BYOE policy, have no team-level
-    /// restriction, so this returns true and the normal BYO entitlement applies.
-    pub fn are_member_byo_keys_allowed(&self) -> bool {
-        self.current_workspace().is_none_or(|workspace| {
-            !workspace.billing_metadata.is_managed_byok_byoe_enabled()
-                || workspace
-                    .settings
-                    .team_byo
-                    .as_ref()
-                    .is_some_and(|team_byo| {
-                        team_byo.first_party_enabled && team_byo.allow_user_keys
-                    })
-        })
-    }
-    /// Whether custom inference endpoints are enabled for the current user.
-    /// Anonymous or logged-out users are not allowed to use custom inference.
-    /// Controlled by the BYO_ENDPOINT billing policy.
-    pub fn is_custom_inference_enabled(&self, app: &AppContext) -> bool {
-        if AuthStateProvider::as_ref(app)
-            .get()
-            .is_anonymous_or_logged_out()
-        {
-            return false;
-        }
-
-        self.current_workspace()
-            .map(|workspace| workspace.billing_metadata.is_byo_endpoint_enabled())
-            .unwrap_or(true)
-    }
-
-    /// Whether the current workspace's managed BYOK/BYOE policy allows members
-    /// to use their own custom endpoints. Users with no workspace, or
-    /// workspaces without the managed BYOK/BYOE policy, have no team-level
-    /// restriction, so this returns true and the normal BYO entitlement applies.
-    pub fn are_member_byo_endpoints_allowed(&self) -> bool {
-        self.current_workspace().is_none_or(|workspace| {
-            !workspace.billing_metadata.is_managed_byok_byoe_enabled()
-                || workspace
-                    .settings
-                    .team_byo
-                    .as_ref()
-                    .is_some_and(|team_byo| {
-                        team_byo.endpoints_enabled && team_byo.allow_user_endpoints
-                    })
-        })
     }
 
     pub fn aws_bedrock_host_settings(&self) -> Option<&super::workspace::LlmHostSettings> {
@@ -948,49 +722,6 @@ impl UserWorkspaces {
                 .gemini_enterprise_credentials_enabled
                 .value(),
         }
-    }
-
-    /// Returns the AI autonomy settings that are enforced by the workspace for all its members.
-    /// If a setting is `None`, the workspace doesn't enforce a particular setting.
-    pub fn ai_autonomy_settings(&self) -> AiAutonomySettings {
-        self.current_workspace()
-            .map(|workspace| workspace.settings.ai_autonomy_settings.clone())
-            .unwrap_or_default()
-    }
-
-    /// Returns the sandboxed agent settings enforced by the workspace, if any.
-    pub fn sandboxed_agent_settings(&self) -> Option<SandboxedAgentSettings> {
-        self.current_workspace()
-            .and_then(|workspace| workspace.settings.sandboxed_agent_settings.clone())
-    }
-
-    /// Returns true iff AI autonomy features are allowed for this client.
-    /// TODO: This should be deleted soon. AI autonomy settings have been moved into organization
-    /// settings (see `ai_autonomy_settings` above), but there could be an interim time where we
-    /// have not set up the org settings yet for an enterprise that previously had the entire
-    /// feature set disabled. To capture that case, we'll see if all the settings are `None`;
-    /// if so, we'll fall back to their billing metadata's value. Once we've migrated everyone
-    /// into org settings, we should remove `is_enabled` from the policy and delete this function.
-    pub fn is_ai_autonomy_allowed(&self) -> bool {
-        self.current_workspace().is_none_or(|workspace| {
-            let settings = &workspace.settings.ai_autonomy_settings;
-            let all_settings_none = settings.apply_code_diffs_setting.is_none()
-                && settings.read_files_setting.is_none()
-                && settings.read_files_allowlist.is_none()
-                && settings.execute_commands_setting.is_none()
-                && settings.execute_commands_allowlist.is_none()
-                && settings.execute_commands_denylist.is_none();
-
-            if all_settings_none {
-                workspace
-                    .billing_metadata
-                    .tier
-                    .ai_autonomy_policy
-                    .is_some_and(|policy| policy.is_enabled)
-            } else {
-                true
-            }
-        })
     }
 
     // Returns a Vec of the user's active spaces, based on their
@@ -1902,18 +1633,10 @@ impl UserWorkspaces {
             .unwrap_or(false)
     }
 
-    /// Returns the codebase context settings, taking into account the organization,
-    /// global AI settings, and codebase-specific settings.
-    /// Prefer this function to determine whether to show indexing-related functionality.
+    /// Returns whether codebase context is enabled across all of the user's teams.
     pub fn is_codebase_context_enabled(&self, app: &AppContext) -> bool {
-        // If the organization has an explicit setting, respect it and make user toggle irrelevant.
-        // - Enable: forced ON by org, regardless of user preference.
-        // - Disable: forced OFF by org.
-        // - RespectUserSetting: respect the user setting.
-        let org_setting = self.team_allows_codebase_context();
         let ai_globally_enabled = AISettings::as_ref(app).is_any_ai_enabled(app);
-
-        match org_setting {
+        match self.teams_allow_codebase_context() {
             AdminEnablementSetting::Enable => ai_globally_enabled,
             AdminEnablementSetting::Disable => false,
             AdminEnablementSetting::RespectUserSetting => {
@@ -1922,28 +1645,43 @@ impl UserWorkspaces {
         }
     }
 
-    pub fn default_host_slug(&self) -> Option<&str> {
-        self.current_workspace()
-            .and_then(|workspace| workspace.settings.default_host_slug.as_deref())
+    pub fn teams_allow_codebase_context(&self) -> AdminEnablementSetting {
+        let mut team_settings = self
+            .workspaces
+            .iter()
+            .flat_map(|workspace| workspace.teams.iter())
+            .map(|team| &team.settings.codebase_context.value)
+            .peekable();
+
+        if team_settings.peek().is_none() {
+            return self
+                .current_workspace()
+                .map(|workspace| workspace.settings.codebase_context_settings.setting.clone())
+                .unwrap_or_default();
+        }
+
+        // TODO(isaiah): Enforce codebase-indexing policy per team and window.
+        let mut respects_user_setting = false;
+        for setting in team_settings {
+            match setting {
+                AdminEnablementSetting::Enable => {}
+                AdminEnablementSetting::Disable => return AdminEnablementSetting::Disable,
+                AdminEnablementSetting::RespectUserSetting => respects_user_setting = true,
+            }
+        }
+
+        if respects_user_setting {
+            AdminEnablementSetting::RespectUserSetting
+        } else {
+            AdminEnablementSetting::Enable
+        }
     }
 
-    /// Returns the team-level agent attribution setting.
-    ///
-    /// Use this to decide whether the user's attribution toggle should be locked
-    /// (`Enable`/`Disable`) or editable (`RespectUserSetting`).
-    pub fn get_agent_attribution_setting(&self) -> AdminEnablementSetting {
-        self.current_workspace()
-            .map(|workspace| workspace.settings.enable_warp_attribution.clone())
-            .unwrap_or_default()
-    }
-
-    /// Returns only the organization-specific codebase context enablement setting.
-    /// Do not use this function to determine whether codebase context is generally enabled --
-    /// use `is_codebase_context_enabled` instead.
-    pub fn team_allows_codebase_context(&self) -> AdminEnablementSetting {
-        self.current_workspace()
-            .map(|workspace| workspace.settings.codebase_context_settings.setting.clone())
-            .unwrap_or_default()
+    pub fn team_disabling_codebase_context(&self) -> Option<&Team> {
+        self.workspaces
+            .iter()
+            .flat_map(|workspace| workspace.teams.iter())
+            .find(|team| team.settings.codebase_context.value == AdminEnablementSetting::Disable)
     }
 
     /// Updates whether or not session sharing is enabled based on the current team's tier policy.
@@ -1967,6 +1705,18 @@ impl UserWorkspaces {
             .map(|policy| policy.is_enabled)
             .unwrap_or(true);
         FeatureFlag::CreatingSharedSessions.set_enabled(is_session_sharing_enabled_via_tier_policy);
+    }
+}
+
+#[cfg(test)]
+fn split_test_list(values: Option<Vec<String>>) -> SplitListSetting<String> {
+    match values {
+        Some(values) => SplitListSetting {
+            team_entries: values.clone(),
+            values,
+            ..Default::default()
+        },
+        None => Default::default(),
     }
 }
 
@@ -2044,13 +1794,22 @@ impl UserWorkspaces {
         }
     }
 
-    pub fn update_sandboxed_agent_settings<F>(&mut self, f: F, ctx: &mut ModelContext<Self>)
+    /// Sets the sandboxed-agent command denylist on [`Self::setup_test_workspace`]'s team, the
+    /// team [`Self::sandboxed_agent_execute_commands_denylist_for_scope`] reads for a scope on
+    /// it.
+    pub fn update_team_sandboxed_agent_denylist<F>(&mut self, f: F, ctx: &mut ModelContext<Self>)
     where
-        F: FnOnce(&mut Option<SandboxedAgentSettings>),
+        F: FnOnce(&mut SplitListSetting<String>),
     {
         self.update_current_workspace(
             |workspace| {
-                f(&mut workspace.settings.sandboxed_agent_settings);
+                f(&mut workspace
+                    .teams
+                    .first_mut()
+                    .expect("test workspace should have a team")
+                    .settings
+                    .sandboxed_agent
+                    .execute_commands_denylist);
             },
             ctx,
         );
@@ -2063,24 +1822,37 @@ impl UserWorkspaces {
         self.update_current_workspace(
             |workspace| {
                 f(&mut workspace.settings.ai_autonomy_settings);
-            },
-            ctx,
-        );
-    }
-
-    pub fn update_ai_autonomy_policy_flag(&mut self, enabled: bool, ctx: &mut ModelContext<Self>) {
-        self.update_current_workspace(
-            |workspace| {
-                if let Some(team) = workspace.teams.first_mut() {
-                    team.billing_metadata.tier.ai_autonomy_policy = Some(AIAutonomyPolicy {
-                        is_enabled: enabled,
-                        toggleable: true,
-                    });
-                } else {
-                    panic!(
-                        "No team found in current workspace. Did you call setup_test_workspace()?"
-                    );
-                }
+                let settings = &workspace.settings.ai_autonomy_settings;
+                let team_settings = &mut workspace
+                    .teams
+                    .first_mut()
+                    .expect("test workspace should have a team")
+                    .settings
+                    .ai_autonomy;
+                team_settings.apply_code_diffs.value = settings.apply_code_diffs_setting;
+                team_settings.read_files.value = settings.read_files_setting;
+                team_settings.execute_commands.value = settings.execute_commands_setting;
+                team_settings.write_to_pty.value = settings.write_to_pty_setting;
+                team_settings.computer_use.value = settings.computer_use_setting;
+                team_settings.read_files_allowlist =
+                    split_test_list(settings.read_files_allowlist.as_ref().map(|items| {
+                        items
+                            .iter()
+                            .map(|path| path.display().to_string())
+                            .collect()
+                    }));
+                team_settings.execute_commands_allowlist = split_test_list(
+                    settings
+                        .execute_commands_allowlist
+                        .as_ref()
+                        .map(|items| items.iter().map(ToString::to_string).collect()),
+                );
+                team_settings.execute_commands_denylist = split_test_list(
+                    settings
+                        .execute_commands_denylist
+                        .as_ref()
+                        .map(|items| items.iter().map(ToString::to_string).collect()),
+                );
             },
             ctx,
         );

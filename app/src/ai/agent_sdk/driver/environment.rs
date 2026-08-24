@@ -60,6 +60,10 @@ pub enum PrepareEnvironmentError {
         first_owner: String,
         second_owner: String,
     },
+    #[error(
+        "Repository {repo_name} has a code forge this client build doesn't support; update Warp to a version that does"
+    )]
+    UnsupportedRepositoryForge { repo_name: String },
     #[error("Terminal driver error while preparing environment: {source}")]
     TerminalDriver { source: AgentDriverError },
 }
@@ -395,7 +399,7 @@ async fn prepare_environment_impl(
         setup_events
             .record_result(SetupStep::EnvironmentRepoClone, async {
                 clone_checkout_requests(
-                    &repository_clone_requests(source_repos, repository_head_overrides),
+                    &repository_clone_requests(source_repos, repository_head_overrides)?,
                     working_dir,
                     spawner,
                 )
@@ -565,14 +569,19 @@ fn record_codebase_indexing(
     });
 }
 
-fn repository_forge_for_repo(repo: &SourceRepo) -> RepositoryForge {
+// `None` covers both a repo-less container forge and one this client build
+// doesn't recognize. Unlike `None`, a future server can assign the latter to
+// a real repository before this client updates, so callers must treat it as
+// an ordinary "can't clone this" outcome rather than an invariant violation.
+fn repository_forge_for_repo(repo: &SourceRepo) -> Option<RepositoryForge> {
     match repo.code_forge.unwrap_or_default() {
-        CodeForge::GitHub => RepositoryForge::GitHub,
-        CodeForge::GitLab => RepositoryForge::GitLab,
+        CodeForge::GitHub => Some(RepositoryForge::GitHub),
+        CodeForge::GitLab => Some(RepositoryForge::GitLab),
+        CodeForge::None | CodeForge::Unknown => None,
     }
 }
 fn head_override_matches_repo(head_override: &RepositoryHeadOverride, repo: &SourceRepo) -> bool {
-    head_override.code_forge == repository_forge_for_repo(repo)
+    Some(head_override.code_forge) == repository_forge_for_repo(repo)
         && head_override.repo_owner == repo.owner
         && head_override.repo_name == repo.repo
 }
@@ -595,16 +604,25 @@ struct RepositoryCloneRequest {
 fn repository_clone_requests(
     repos: &[SourceRepo],
     overrides: &[RepositoryHeadOverride],
-) -> Vec<RepositoryCloneRequest> {
+) -> Result<Vec<RepositoryCloneRequest>, PrepareEnvironmentError> {
     repos
         .iter()
         .cloned()
         .map(|repo| {
+            // A repository this client can't identify a host for can never
+            // clone; fail clearly here rather than attempt one with an empty
+            // host, which would otherwise be the only signal something is
+            // wrong.
+            if repository_forge_for_repo(&repo).is_none() {
+                return Err(PrepareEnvironmentError::UnsupportedRepositoryForge {
+                    repo_name: format!("{}/{}", repo.owner, repo.repo),
+                });
+            }
             let checkout = match head_override_for_repo(overrides, &repo) {
                 Some(head_override) => Some(head_override.head.clone()),
                 None => repo.checkout_ref.clone().map(RepositoryHeadRef::Branch),
             };
-            RepositoryCloneRequest { repo, checkout }
+            Ok(RepositoryCloneRequest { repo, checkout })
         })
         .collect()
 }
@@ -693,7 +711,7 @@ clone_repo() {
         return 1
       fi
     fi
-    if ! git -C "$target" fetch --filter=tree:0 origin "$checkout_ref" || ! git -C "$target" checkout --detach FETCH_HEAD; then
+    if ! git -C "$target" fetch --filter=blob:none origin "$checkout_ref" || ! git -C "$target" checkout --detach FETCH_HEAD; then
       printf '%s\t%s\t%s\n' "$status_marker" "$repo_index" "checkout"
       return 1
     fi
@@ -702,14 +720,14 @@ clone_repo() {
       printf '%s\n' "Repository directory $target already exists, skipping clone..."
     else
       printf '%s\n' "Cloning repository $repo_name..."
-      if ! git clone --filter=tree:0 "$repo_url" "$target"; then
+      if ! git clone --filter=blob:none "$repo_url" "$target"; then
         printf '%s\t%s\t%s\n' "$status_marker" "$repo_index" "clone"
         return 1
       fi
     fi
     if [ -n "$checkout_ref" ]; then
       printf '%s\n' "Checking out $checkout_ref in $repo_name..."
-      if ! git -C "$target" fetch --filter=tree:0 origin "$checkout_ref" || ! git -C "$target" checkout --detach FETCH_HEAD; then
+      if ! git -C "$target" fetch --filter=blob:none origin "$checkout_ref" || ! git -C "$target" checkout --detach FETCH_HEAD; then
         printf '%s\t%s\t%s\n' "$status_marker" "$repo_index" "checkout"
         return 1
       fi
@@ -788,9 +806,13 @@ pub(super) async fn clone_repos(
     working_dir: &Path,
     spawner: &ModelSpawner<TerminalDriver>,
 ) -> Result<(), PrepareEnvironmentError> {
-    clone_checkout_requests(&repository_clone_requests(repos, &[]), working_dir, spawner)
-        .await
-        .map(|_| ())
+    clone_checkout_requests(
+        &repository_clone_requests(repos, &[])?,
+        working_dir,
+        spawner,
+    )
+    .await
+    .map(|_| ())
 }
 
 async fn clone_checkout_requests(
@@ -857,12 +879,11 @@ async fn clone_checkout_requests(
 /// Build the `git fetch` + `git checkout` command that pins `request`'s clone at
 /// its checkout, or `None` when the repo has no ref to pin.
 ///
-/// A extra clone (`--filter=tree:0`) only fetches the default branch, so an
-/// arbitrary ref (commit SHA, branch, or tag) may not be present yet: fetch it
-/// first, then check out the resulting `FETCH_HEAD` detached. Checking out the
-/// original ref name can prefer a stale local branch or fail when the object
-/// only landed in `FETCH_HEAD`. Detached HEAD is expected and fine — trials
-/// never merge.
+/// The requested ref (commit SHA, branch, or tag) may not have existed yet,
+/// or may have moved, by the time the clone ran: fetch it first, then check
+/// out the resulting `FETCH_HEAD` detached. Checking out the original ref
+/// name can prefer a stale local branch or fail when the object only landed
+/// in `FETCH_HEAD`. Detached HEAD is expected and fine — trials never merge.
 #[cfg(test)]
 fn checkout_command_for(
     request: &RepositoryCloneRequest,
@@ -874,7 +895,7 @@ fn checkout_command_for(
     let escaped_dir = shell_escape_single_quotes(&repo_dir.to_string_lossy(), shell_type);
     let escaped_ref = shell_escape_single_quotes(checkout_ref, shell_type);
     Some(format!(
-        "git -C '{escaped_dir}' fetch --filter=tree:0 origin '{escaped_ref}' && \
+        "git -C '{escaped_dir}' fetch --filter=blob:none origin '{escaped_ref}' && \
          git -C '{escaped_dir}' checkout --detach FETCH_HEAD"
     ))
 }
