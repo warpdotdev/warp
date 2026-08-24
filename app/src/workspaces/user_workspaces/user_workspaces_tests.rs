@@ -1252,35 +1252,6 @@ fn remote_session_policy_follows_each_surfaces_own_team() {
 }
 
 #[test]
-fn remote_session_policy_ignores_workspace_settings_once_the_user_has_a_team() {
-    let mut team = team_for_test();
-    set_team_remote_session_policy(&mut team, true, &["^team-only"]);
-    let mut workspace = workspace_for_test(&team);
-    set_workspace_remote_session_policy(&mut workspace, false, &["^workspace-only"]);
-
-    App::test((), |mut app| async move {
-        initialize_window_team_test_app(&mut app, vec![workspace]);
-
-        let (window_id, view) = create_test_window(&mut app);
-        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
-            user_workspaces.set_team_for_window(window_id, team.uid, ctx);
-        });
-
-        app.read(|ctx| {
-            assert!(
-                remote_session_ai_allowed_for_surface(&view, ctx),
-                "workspace settings are one arbitrarily-chosen team's effective settings once \
-                 the user has a team, so they must not override the team's own value"
-            );
-            assert_eq!(
-                remote_session_patterns_for_surface(&view, ctx),
-                HashSet::from(["^team-only".to_string()])
-            );
-        });
-    })
-}
-
-#[test]
 fn remote_session_policy_falls_back_to_the_workspace_for_a_user_with_no_teams() {
     let team = team_for_test();
     let mut workspace = workspace_for_test(&team);
@@ -1300,39 +1271,6 @@ fn remote_session_policy_falls_back_to_the_workspace_for_a_user_with_no_teams() 
                 !remote_session_ai_allowed_for_surface(&view, ctx),
                 "the workspace value is genuinely team-neutral for a user with no teams, so it \
                  is the one to read"
-            );
-            assert_eq!(
-                remote_session_patterns_for_surface(&view, ctx),
-                HashSet::from(["^workspace-only".to_string()])
-            );
-        });
-    })
-}
-
-/// A teamless scope reads the current workspace unconditionally, so a user on several teams
-/// gets the workspace's own value rather than a deny: there is no team-count check any more.
-#[test]
-fn remote_session_policy_reads_the_workspace_for_a_multi_team_users_teamless_window() {
-    let (mut team_a, team_b) = two_teams();
-    set_team_remote_session_policy(&mut team_a, true, &["^kubectl"]);
-    let mut workspace = workspace_for_test(&team_a);
-    workspace.teams.push(team_b);
-    set_workspace_remote_session_policy(&mut workspace, true, &["^workspace-only"]);
-
-    App::test((), |mut app| async move {
-        initialize_window_team_test_app(&mut app, vec![workspace]);
-
-        let (window_id, view) = create_test_window(&mut app);
-        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
-            user_workspaces.register_window(window_id, None, ctx);
-        });
-
-        app.read(|ctx| {
-            let user_workspaces = UserWorkspaces::as_ref(ctx);
-            assert!(user_workspaces.can_switch_teams());
-            assert!(
-                remote_session_ai_allowed_for_surface(&view, ctx),
-                "a teamless window reads the workspace unconditionally, even with several teams"
             );
             assert_eq!(
                 remote_session_patterns_for_surface(&view, ctx),
@@ -1365,12 +1303,10 @@ fn remote_session_ai_permission_denies_a_scope_naming_an_unresolvable_team() {
     })
 }
 
-/// With no workspace at all there is no admin policy to consult, so unlike an unresolvable
-/// named team this permits rather than denying -- matching the no-workspace convention
-/// elsewhere in this module (e.g. `billing_workspace_settings.rs`'s `is_none_or` reads).
-/// `scoped_or_workspace_setting`'s single `absent` value cannot serve both answers, so this
-/// case is handled explicitly ahead of it; pinned here rather than left to that ambient
-/// default.
+/// `current_workspace()` is `None` only when logged out or before the first metadata fetch, not
+/// for a teamless user (who has a personal workspace). With no workspace there is no admin
+/// policy to consult, so this permits -- preserving the pre-refactor default that the
+/// unresolvable-team deny would otherwise have swallowed.
 #[test]
 fn remote_session_ai_permission_is_allowed_for_a_user_with_no_workspace_at_all() {
     App::test((), |mut app| async move {

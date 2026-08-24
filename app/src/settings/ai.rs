@@ -2178,12 +2178,10 @@ impl AISettings {
 
     /// Whether the org forbids AI given what the focused terminal contains.
     ///
-    /// Both halves of the question are about that one terminal: what it contains, and whether
-    /// the team of the window it is in right now permits AI there. The permission is therefore
-    /// re-minted from the handle [`FocusedTerminalInfo`] holds, at the point of use, so it
-    /// tracks an admin revoking it and the terminal being dragged to another team's window
-    /// alike. The flags are checked first, so the resolution is skipped entirely unless the
-    /// focused terminal actually holds remote content.
+    /// The permission is resolved from the handle [`FocusedTerminalInfo`] holds at read time, so
+    /// it tracks both an admin revoking it and the terminal being dragged to another team's
+    /// window. The content flags are checked first to skip resolution when there is no remote
+    /// content.
     pub fn is_ai_disabled_due_to_remote_session_org_policy(&self, app: &AppContext) -> bool {
         let focused_terminal = FocusedTerminalInfo::as_ref(app);
         let Some(terminal) = focused_terminal.terminal() else {

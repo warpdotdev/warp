@@ -481,11 +481,11 @@ impl UserWorkspaces {
     /// team denies rather than guessing, for a control gating AI in an environment the user
     /// may not control.
     ///
-    /// [`Self::scoped_or_workspace_setting`]'s single `absent` value cannot serve both that
-    /// case and a user with no workspace at all: no workspace means no admin policy exists at
-    /// all, so -- unlike an unresolvable team -- it permits, matching the convention in
-    /// `billing_workspace_settings.rs` that no workspace implies no restriction. That case is
-    /// handled explicitly before delegating to the helper.
+    /// `current_workspace()` is only `None` when logged out or before the first metadata fetch
+    /// (an authenticated user, teamless or not, always has at least a personal workspace). There
+    /// is no admin policy to read in that state, so it permits, preserving the pre-refactor
+    /// default. The helper's single `absent` value cannot express both that and the
+    /// unresolvable-team deny, so the no-workspace case is handled explicitly first.
     pub(crate) fn is_ai_allowed_in_remote_sessions<S: TeamScope + ?Sized>(
         &self,
         scope: &S,

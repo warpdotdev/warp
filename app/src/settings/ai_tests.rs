@@ -60,7 +60,8 @@ fn add_ai_enablement_dependencies_for_test(app: &mut App) {
 }
 
 /// A real terminal surface for the [`FocusedTerminalInfo`] cases below, which record the
-/// handle of the terminal their flags came from.
+/// handle of the terminal their flags came from. The change-detection cases reuse one stable
+/// surface so only the flags vary.
 fn focused_terminal_for_test(app: &mut App) -> WeakViewHandle<TerminalView> {
     crate::test_util::terminal::initialize_app_for_terminal_view(app);
     crate::test_util::add_window_with_terminal(app, None).downgrade()
@@ -151,8 +152,6 @@ fn tui_statusline_normalization_preserves_explicitly_disabled_vim_indicator() {
 #[test]
 fn test_update_both_values_changed() {
     App::test((), |mut app| async move {
-        // The flags are always published with the surface they came from, so these
-        // change-detection cases keep one stable surface throughout.
         let terminal = focused_terminal_for_test(&mut app);
         let model_handle = app.add_model(|_| FocusedTerminalInfo::default());
 
@@ -193,8 +192,6 @@ fn test_update_both_values_changed() {
 #[test]
 fn test_update_additional_value_changed() {
     App::test((), |mut app| async move {
-        // The flags are always published with the surface they came from, so these
-        // change-detection cases keep one stable surface throughout.
         let terminal = focused_terminal_for_test(&mut app);
         let model_handle = app.add_model(|_| FocusedTerminalInfo::default());
 
@@ -243,8 +240,6 @@ fn test_update_additional_value_changed() {
 #[test]
 fn test_update_no_change() {
     App::test((), |mut app| async move {
-        // The flags are always published with the surface they came from, so these
-        // change-detection cases keep one stable surface throughout.
         let terminal = focused_terminal_for_test(&mut app);
         let model_handle = app.add_model(|_| FocusedTerminalInfo::default());
 
@@ -293,8 +288,6 @@ fn test_update_no_change() {
 #[test]
 fn test_update_only_remote_toggles() {
     App::test((), |mut app| async move {
-        // The flags are always published with the surface they came from, so these
-        // change-detection cases keep one stable surface throughout.
         let terminal = focused_terminal_for_test(&mut app);
         let model_handle = app.add_model(|_| FocusedTerminalInfo::default());
 
@@ -343,8 +336,6 @@ fn test_update_only_remote_toggles() {
 #[test]
 fn test_update_only_restored_toggles() {
     App::test((), |mut app| async move {
-        // The flags are always published with the surface they came from, so these
-        // change-detection cases keep one stable surface throughout.
         let terminal = focused_terminal_for_test(&mut app);
         let model_handle = app.add_model(|_| FocusedTerminalInfo::default());
 
