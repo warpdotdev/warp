@@ -2,11 +2,11 @@
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::env::{self, VarError};
-use std::ffi::OsStr;
 use std::hash::Hash;
-use std::path::{self, Path, PathBuf};
+use std::path::{Path, PathBuf};
 use std::str;
 
+#[cfg(not(target_family = "wasm"))]
 use itertools::Itertools as _;
 use lazy_static::lazy_static;
 use regex::Regex;
@@ -985,8 +985,8 @@ pub fn resolve_executable(command: &str) -> Option<Cow<'_, Path>> {
 /// MCP/LSP find binaries). Callers that want the process's PATH should
 /// use [`resolve_executable`] instead.
 #[cfg(not(target_family = "wasm"))]
-pub fn resolve_executable_in_path<'a>(command: &'a str, path_env: &OsStr) -> Option<Cow<'a, Path>> {
-    if command.contains(path::MAIN_SEPARATOR) {
+pub fn resolve_executable_in_path<'a>(command: &'a str, path_env: &std::ffi::OsStr) -> Option<Cow<'a, Path>> {
+    if command.contains(std::path::MAIN_SEPARATOR) {
         let path = Path::new(command);
         return file_exists_and_is_executable(path).then_some(Cow::Borrowed(path));
     }
