@@ -672,6 +672,32 @@ fn test_find_url_line_wrapping() {
 }
 
 #[test]
+fn test_find_url_full_width_hard_wrapping() {
+    let first_line = "prefix https://example.com/some/long/path/that/hard-wraps/exactly-here";
+    let second_line = "/and/continues?query=warp";
+    let blockgrid = mock_blockgrid(&format!("{first_line}\r\n{second_line}"));
+
+    assert_eq!(
+        blockgrid
+            .grid_handler
+            .url_at_point(Point { row: 0, col: 20 }),
+        Some(Link {
+            range: Point { row: 0, col: 7 }..=Point { row: 1, col: 24 },
+            is_empty: false
+        })
+    );
+    assert_eq!(
+        blockgrid
+            .grid_handler
+            .url_at_point(Point { row: 1, col: 5 }),
+        Some(Link {
+            range: Point { row: 0, col: 7 }..=Point { row: 1, col: 24 },
+            is_empty: false
+        })
+    );
+}
+
+#[test]
 fn test_find_url_with_delimiter() {
     let blockgrid = mock_blockgrid("https://google.com'");
     // Should not include the trailing delimiter.
@@ -716,7 +742,8 @@ fn test_find_url_with_delimiter() {
 
 #[test]
 fn test_find_url_line_breaks() {
-    let blockgrid = mock_blockgrid("abc https://goog\r\nle.com");
+    let mut blockgrid = mock_blockgrid("abc https://goog\r\nle.com and more text");
+    blockgrid.resize(SizeInfo::new_without_font_metrics(2, 80));
     assert_eq!(
         blockgrid
             .grid_handler

@@ -987,6 +987,37 @@ fn compare_within_block_points() {
 }
 
 #[test]
+fn link_at_range_joins_full_width_hard_wrapped_url() {
+    let mut terminal = TerminalModel::mock(None, None);
+    terminal.simulate_block("cmd", "https:/\r\n/x.y");
+    let block_index = terminal
+        .block_list()
+        .blocks()
+        .iter()
+        .position(|block| !block.output_grid().is_empty())
+        .expect("simulated command should create an output block");
+
+    let point = WithinModel::BlockList(WithinBlock::new(
+        Point::new(1, 1),
+        block_index.into(),
+        GridType::Output,
+    ));
+
+    let url = terminal
+        .url_at_point(&point)
+        .expect("hard-wrapped URL should be detected from continuation row");
+
+    assert_eq!(
+        terminal.string_at_range(&url, RespectObfuscatedSecrets::No),
+        "https:/\n/x.y"
+    );
+    assert_eq!(
+        terminal.link_at_range(&url, RespectObfuscatedSecrets::No),
+        "https://x.y"
+    );
+}
+
+#[test]
 fn test_alt_screen_toggle() {
     let mut terminal = TerminalModel::mock(None, None);
 

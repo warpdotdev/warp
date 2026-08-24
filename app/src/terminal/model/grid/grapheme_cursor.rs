@@ -15,6 +15,10 @@ pub enum Wrap {
     None,
     /// Wraps at the start/end of a row, but stops upon reaching a newline.
     Soft,
+    /// Wraps like [`Wrap::Soft`], and also crosses a hard line break when the
+    /// previous row is full-width. Some TUIs wrap long text by writing a full
+    /// row followed by CRLF instead of relying on terminal soft-wrap metadata.
+    SoftOrFullWidth,
     /// Wraps at the start and end of each row, ignoring newlines.
     All,
 }
@@ -126,10 +130,11 @@ impl<'g> GraphemeCursor<'g> {
         }
 
         let at_end_of_row = self.is_at_end_of_row();
-        if self.wrap == Wrap::None && at_end_of_row
-            || self.wrap == Wrap::Soft && self.is_at_end_of_line()
-        {
-            return false;
+        match self.wrap {
+            Wrap::None if at_end_of_row => return false,
+            Wrap::Soft if self.is_at_end_of_line() => return false,
+            Wrap::SoftOrFullWidth if self.is_at_end_of_soft_or_full_width_line() => return false,
+            _ => {}
         }
 
         !at_end_of_row || self.cur.row < self.grid.total_rows() - 1
@@ -141,10 +146,11 @@ impl<'g> GraphemeCursor<'g> {
         }
 
         let at_start_of_row = self.is_at_start_of_row();
-        if self.wrap == Wrap::None && at_start_of_row
-            || self.wrap == Wrap::Soft && self.is_at_start_of_line()
-        {
-            return false;
+        match self.wrap {
+            Wrap::None if at_start_of_row => return false,
+            Wrap::Soft if self.is_at_start_of_line() => return false,
+            Wrap::SoftOrFullWidth if self.is_at_start_of_soft_or_full_width_line() => return false,
+            _ => {}
         }
 
         !at_start_of_row || self.cur.row > 0
@@ -236,6 +242,24 @@ impl<'g> GraphemeCursor<'g> {
     pub fn is_at_end_of_line(&self) -> bool {
         self.is_at_end_of_row()
             && (self.cur.row == self.grid.total_rows() - 1 || !self.grid.row_wraps(self.cur.row))
+    }
+
+    fn is_at_start_of_soft_or_full_width_line(&self) -> bool {
+        self.is_at_start_of_row()
+            && (self.cur.row == 0
+                || (!self.grid.row_wraps(self.cur.row - 1)
+                    && !self
+                        .grid
+                        .row_is_full_width_hard_wrap_candidate(self.cur.row - 1)))
+    }
+
+    fn is_at_end_of_soft_or_full_width_line(&self) -> bool {
+        self.is_at_end_of_row()
+            && (self.cur.row == self.grid.total_rows() - 1
+                || (!self.grid.row_wraps(self.cur.row)
+                    && !self
+                        .grid
+                        .row_is_full_width_hard_wrap_candidate(self.cur.row)))
     }
 }
 
