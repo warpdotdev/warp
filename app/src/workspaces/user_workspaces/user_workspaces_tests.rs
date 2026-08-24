@@ -2113,6 +2113,30 @@ fn test_sandboxed_agent_denylist_resolves_the_scopes_own_team() {
     })
 }
 
+/// Mirrors [`member_byo_policy_denies_a_scope_naming_an_unresolvable_team`] for the sandboxed
+/// denylist: a scope naming a team that cannot be resolved must not fall through to another
+/// team's (or the workspace's) denylist.
+#[test]
+fn test_sandboxed_agent_denylist_denies_a_scope_naming_an_unresolvable_team() {
+    let (team_a, _team_b) = two_teams();
+    let team_a = team_with_sandboxed_denylist(&team_a, &["rm .*"]);
+    let workspace = workspace_for_test(&team_a);
+
+    App::test((), |mut app| async move {
+        initialize_window_team_test_app(&mut app, vec![workspace]);
+
+        let unresolvable_team_scope = TeamContextForOperation::new_for_test(9999.into());
+        app.read(|ctx| {
+            assert_eq!(
+                UserWorkspaces::as_ref(ctx)
+                    .sandboxed_agent_execute_commands_denylist_for_scope(&unresolvable_team_scope),
+                None,
+                "a team whose denylist cannot be read must not inherit another team's"
+            );
+        });
+    })
+}
+
 /// A list no admin layer contributed to is not an override, the same distinction
 /// [`test_an_unconfigured_team_list_setting_is_not_an_override`] locks in for the AI autonomy
 /// allowlists. Getting this wrong here would silently drop a team's denylist protection.
