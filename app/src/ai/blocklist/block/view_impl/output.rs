@@ -3696,7 +3696,7 @@ fn render_usage_button(props: Props, app: &AppContext) -> Box<dyn Element> {
     let headline_cost_in_cents = rollup
         .as_ref()
         .map(|r| r.total_cost_in_cents)
-        .unwrap_or_else(|| conversation.usage_totals().cost_in_cents);
+        .unwrap_or_else(|| conversation.usage_totals().total_cost_in_cents());
     // Same rollup-vs-own-totals split as `headline_cost_in_cents`, for the
     // token count shown alongside it.
     let headline_tokens = rollup.as_ref().map(|r| r.total_tokens).unwrap_or_else(|| {

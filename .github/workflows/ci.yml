@@ -831,10 +831,12 @@ jobs:
   ci-result:
     name: Check CI results
     timeout-minutes: 3
-    runs-on: ubuntu-latest
-    # Always run this job, as it needs to check the results of all of the other
-    # jobs. If we skipped CI checks (e.g. on a draft PR), also skip this one.
-    if: ${{ !cancelled() && needs.params.result != 'skipped' }}
+    runs-on: ubuntu-slim
+    # This must run unconditionally on drafts so a draft PR is never treated as passing CI; the
+    # repo-sync/* and non-warpdotdev-owner skips above remain a deliberate exception to that.
+    if: >-
+      !cancelled() &&
+      (needs.params.result != 'skipped' || github.event.pull_request.draft == true)
     needs:
       - params
       - database-migration

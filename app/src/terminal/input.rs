@@ -207,7 +207,7 @@ use crate::ai::predict::prompt_suggestions::{
     is_accept_prompt_suggestion_bound_to_ctrl_enter,
 };
 use crate::ai::skills::{SkillOpenOrigin, SkillTelemetryEvent};
-use crate::ai_assistant::execution_context::WarpAiExecutionContext;
+use crate::ai_assistant::execution_context::execution_context_for_session;
 use crate::appearance::{Appearance, AppearanceEvent};
 use crate::channel::{Channel, ChannelState};
 use crate::cloud_object::model::actions::ObjectActionType;
@@ -354,7 +354,7 @@ use crate::workspace::{
     CommandSearchOptions, ForkFromExchange, ForkedConversationDestination, InitContent,
     RestoreConversationLayout, ToastStack, WorkspaceAction,
 };
-use crate::workspaces::user_workspaces::{UserWorkspaces, UserWorkspacesEvent};
+use crate::workspaces::user_workspaces::{TeamContext, UserWorkspaces, UserWorkspacesEvent};
 #[allow(unused_imports)]
 use crate::{AgentModeEntrypoint, ServerApiProvider, cmd_or_ctrl_shift, send_telemetry_from_ctx};
 
@@ -405,6 +405,28 @@ pub fn get_input_box_top_border_width() -> f32 {
     } else {
         1.0
     }
+}
+
+/// The host the cloud-mode selector defaults to: the `WARP_CLOUD_MODE_DEFAULT_HOST` override when
+/// set, otherwise the window's team default.
+///
+/// Takes the selector's handle, not `Input`'s: this runs inside `Input::new` before `Input` is in
+/// `view_to_window`, so an `Input` handle would resolve no window here while the already-built
+/// selector's does.
+fn effective_default_host(
+    host_selector: &WeakViewHandle<HostSelector>,
+    app: &AppContext,
+) -> Option<String> {
+    if let Some(slug) = std::env::var("WARP_CLOUD_MODE_DEFAULT_HOST")
+        .ok()
+        .filter(|slug| !slug.is_empty())
+    {
+        return Some(slug);
+    }
+    let workspaces = UserWorkspaces::as_ref(app);
+    workspaces
+        .default_host_slug(&workspaces.team_context(host_selector, app))
+        .map(String::from)
 }
 
 pub const COMPLETIONS_MENU_WIDTH: f32 = 330.;
@@ -2335,15 +2357,8 @@ impl Input {
     ) -> ViewHandle<HostSelector> {
         let view = ctx
             .add_typed_action_view(|ctx| HostSelector::new(menu_positioning_provider.clone(), ctx));
-        // Env var takes priority over workspace setting for developer testing.
-        let effective_host = std::env::var("WARP_CLOUD_MODE_DEFAULT_HOST")
-            .ok()
-            .filter(|s| !s.is_empty())
-            .or_else(|| {
-                UserWorkspaces::as_ref(ctx)
-                    .default_host_slug()
-                    .map(String::from)
-            });
+        let weak_view = view.downgrade();
+        let effective_host = effective_default_host(&weak_view, ctx);
         if let Some(slug) = &effective_host {
             view.update(ctx, |selector, ctx| {
                 selector.set_default_host(slug.clone(), ctx);
@@ -2376,32 +2391,38 @@ impl Input {
                 });
             }
         });
-        // Keep the host selector and view model in sync when workspace metadata refreshes (e.g.
-        // admin changes default_host_slug).
+        // Keep the host selector and view model in sync when the host this window should
+        // default to changes: because the admin edited the team's `default_host_slug`, or
+        // because the window moved to a team that configures a different one.
         let view_for_ws = view.clone();
         let vm_for_ws = view_model.clone();
         ctx.subscribe_to_model(&UserWorkspaces::handle(ctx), move |_me, _, event, ctx| {
-            if !matches!(event, UserWorkspacesEvent::TeamsChanged) {
+            // Windows are independent, so a sibling window switching team must not retarget
+            // this one.
+            let affects_this_window = matches!(event, UserWorkspacesEvent::TeamsChanged)
+                || matches!(
+                    event,
+                    UserWorkspacesEvent::WindowTeamChanged { window_id }
+                        if *window_id == ctx.window_id()
+                );
+            if !affects_this_window {
                 return;
             }
-            let effective_host = std::env::var("WARP_CLOUD_MODE_DEFAULT_HOST")
-                .ok()
-                .filter(|s| !s.is_empty())
-                .or_else(|| {
-                    UserWorkspaces::as_ref(ctx)
-                        .default_host_slug()
-                        .map(String::from)
-                });
-            if let Some(slug) = &effective_host {
-                view_for_ws.update(ctx, |selector, ctx| {
-                    selector.set_default_host(slug.clone(), ctx);
-                });
+            // `None` has to be applied, not skipped: it means the window's team configures no
+            // self-hosted default, and leaving the previous value in place would keep the
+            // selector and the run config pointed at another team's worker.
+            let effective_host = effective_default_host(&weak_view, ctx);
+            match effective_host.clone() {
+                Some(slug) => view_for_ws.update(ctx, |selector, ctx| {
+                    selector.set_default_host(slug, ctx);
+                }),
+                None => view_for_ws.update(ctx, |selector, ctx| {
+                    selector.clear_default_host(ctx);
+                }),
             }
-            if let Some(slug) = effective_host {
-                vm_for_ws.update(ctx, |model, _ctx| {
-                    model.set_worker_host(Some(slug));
-                });
-            }
+            vm_for_ws.update(ctx, |model, _ctx| {
+                model.set_worker_host(effective_host);
+            });
         });
         view
     }
@@ -3587,6 +3608,8 @@ impl Input {
             me.handle_prompt_suggestions_event(event, ctx);
         });
 
+        let slash_command_team_context_resolver =
+            UserWorkspaces::team_context_resolver(ctx.handle());
         let slash_command_data_source = ctx.add_model(|ctx| {
             let args = slash_commands::GuiDataSourceArgs {
                 active_session: active_session.clone(),
@@ -3595,6 +3618,7 @@ impl Input {
                 terminal_view_id,
                 // Wired post-construction via `attach_ambient_agent_view_model`.
                 ambient_agent_view_model: None,
+                team_context_resolver: slash_command_team_context_resolver.clone(),
             };
             GuiSlashCommandDataSource::new(args, ctx)
         });
@@ -3615,6 +3639,7 @@ impl Input {
                     terminal_view_id,
                     // Wired post-construction via `attach_ambient_agent_view_model`.
                     ambient_agent_view_model: None,
+                    team_context_resolver: slash_command_team_context_resolver,
                 };
                 Some(ctx.add_model(|ctx| GuiSlashCommandDataSource::for_cloud_mode_v2(args, ctx)))
             } else {
@@ -6476,6 +6501,10 @@ impl Input {
         self.focus_handle.as_ref().is_none_or(|h| h.is_focused(app))
     }
 
+    pub(super) fn team_scope<'a>(&self, app: &'a AppContext) -> TeamContext<'a> {
+        UserWorkspaces::as_ref(app).team_context(&self.weak_view_handle, app)
+    }
+
     fn is_active_session(&self, app: &AppContext) -> bool {
         self.focus_handle
             .as_ref()
@@ -7033,7 +7062,7 @@ impl Input {
         let Some(session) = self.active_session(ctx) else {
             return;
         };
-        let context = WarpAiExecutionContext::new(&session);
+        let context = execution_context_for_session(&session);
         let completer_data = self.completer_data();
         let block_context = Some(BlockContext::from_completed_block(
             &block_completed,
@@ -9755,7 +9784,7 @@ impl Input {
             let Some(session) = self.active_session(ctx) else {
                 return;
             };
-            let context = WarpAiExecutionContext::new(&session);
+            let context = execution_context_for_session(&session);
             if let Some(last_user_block_completed) =
                 completer_data.last_user_block_completed.clone()
             {
@@ -13636,8 +13665,9 @@ impl Input {
                 });
 
                 if let Some(ambient_agent_view_model) = self.ambient_agent_view_model() {
+                    let scope = UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx);
                     ambient_agent_view_model.update(ctx, |state, ctx| {
-                        state.spawn_agent(prompt, attachments, ctx);
+                        state.spawn_agent(prompt, attachments, &scope, ctx);
                     });
                 }
                 return;
@@ -13911,7 +13941,7 @@ impl Input {
         let Some(session) = self.active_session(ctx) else {
             return;
         };
-        let context = WarpAiExecutionContext::new(&session);
+        let context = execution_context_for_session(&session);
 
         let request = PredictAMQueriesRequest {
             context_messages: vec![json_message.to_string()],

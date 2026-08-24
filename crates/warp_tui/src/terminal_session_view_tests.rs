@@ -28,9 +28,10 @@ use warp::tui_export::{
     OutputStatusUpdateCallback, ParsedSlashCommandInput, PtyIntent, PtyIntentEvent, ServerOutputId,
     Session, Shared, SizeInfo, SizeUpdate, SlashCommandDataSource as _, SlashCommandKind, TaskId,
     TranscriptScope, TuiMcpAction, TuiMcpServerId, TuiOnboardingMarker, TuiOnboardingMarkers,
-    TuiUpArrowHistoryItemKind, UserTakeOverReason, WarpConfig, WarpConfigUpdateEvent,
-    export_conversation_markdown, forkable_tui_conversation_for_test, queue_tui_permission_action,
-    register_tui_session_view_test_singletons, set_tui_default_team_admin_for_test, slash_commands,
+    TuiUpArrowHistoryItemKind, UserTakeOverReason, UserWorkspaces, WarpConfig,
+    WarpConfigUpdateEvent, export_conversation_markdown, forkable_tui_conversation_for_test,
+    queue_tui_permission_action, register_tui_session_view_test_singletons,
+    set_tui_default_team_admin_for_test, set_tui_workspace_teams_for_test, slash_commands,
 };
 use warp_core::channel::{Channel, ChannelState};
 use warp_core::features::FeatureFlag;
@@ -2736,7 +2737,7 @@ fn focus_test_fixture(app: &mut App) -> FocusTestFixture {
                 window_style: WindowStyle::NotStealFocus,
                 ..Default::default()
             },
-            |_| RootTuiView::new(),
+            RootTuiView::new,
         )
     });
     let sessions = app.add_singleton_model(|_| TuiSessions::new_for_test());
@@ -7219,4 +7220,92 @@ fn resume_shell_commands_use_shared_tui_launcher() {
         super::tui_resume_shell_command(Channel::Preview, "conversation-token"),
         "warp-preview --resume conversation-token"
     );
+}
+
+fn set_teams_and_register_window(
+    app: &mut App,
+    names: &[&str],
+    window_id: warpui::WindowId,
+) -> Vec<warp::tui_export::ServerId> {
+    let team_uids: Vec<warp::tui_export::ServerId> = (1..=names.len() as i64)
+        .map(warp::tui_export::ServerId::from)
+        .collect();
+    let teams = team_uids
+        .iter()
+        .copied()
+        .zip(names.iter().map(|name| (*name).to_owned()))
+        .collect::<Vec<_>>();
+    app.update(|ctx| {
+        set_tui_workspace_teams_for_test(teams, ctx);
+        let starting_team = team_uids.first().copied();
+        UserWorkspaces::handle(ctx).update(ctx, |workspaces, ctx| {
+            workspaces.register_window(window_id, starting_team, ctx);
+        });
+    });
+    team_uids
+}
+
+#[test]
+fn active_team_is_rendered_for_a_single_team_user() {
+    App::test((), |mut app| async move {
+        let fixture = focus_test_fixture(&mut app);
+        let (view, _) = add_focus_test_session(&mut app, &fixture, true);
+        set_enabled_statusline_items(&mut app, vec![TuiStatuslineItem::Team]);
+
+        let window_id = app.read(|ctx| view.window_id(ctx));
+
+        set_teams_and_register_window(&mut app, &["Solo"], window_id);
+        let rendered = render_session(&mut app, &view, 100, 24).join("\n");
+        assert!(
+            rendered.contains("Solo"),
+            "a single-team user's active team should be shown, got:\n{rendered}"
+        );
+    });
+}
+
+#[test]
+fn active_team_is_rendered_and_follows_a_switch() {
+    App::test((), |mut app| async move {
+        let fixture = focus_test_fixture(&mut app);
+        let (view, _) = add_focus_test_session(&mut app, &fixture, true);
+        set_enabled_statusline_items(&mut app, vec![TuiStatuslineItem::Team]);
+
+        let window_id = app.read(|ctx| view.window_id(ctx));
+        let team_uids =
+            set_teams_and_register_window(&mut app, &["Platform", "Security"], window_id);
+
+        let rendered = render_session(&mut app, &view, 100, 24).join("\n");
+        assert!(
+            rendered.contains("Platform"),
+            "a multi-team user's active team should be shown, got:\n{rendered}"
+        );
+
+        app.update(|ctx| {
+            UserWorkspaces::handle(ctx).update(ctx, |workspaces, ctx| {
+                workspaces.switch_window_to_team(window_id, team_uids[1], ctx);
+            });
+        });
+        let rendered = render_session(&mut app, &view, 100, 24).join("\n");
+        assert!(
+            rendered.contains("Security") && !rendered.contains("Platform"),
+            "the statusline should follow the window's team, got:\n{rendered}"
+        );
+    });
+}
+
+#[test]
+fn active_team_is_hidden_when_disabled() {
+    App::test((), |mut app| async move {
+        let fixture = focus_test_fixture(&mut app);
+        let (view, _) = add_focus_test_session(&mut app, &fixture, true);
+
+        let window_id = app.read(|ctx| view.window_id(ctx));
+        set_teams_and_register_window(&mut app, &["Platform", "Security"], window_id);
+
+        let rendered = render_session(&mut app, &view, 100, 24).join("\n");
+        assert!(
+            !rendered.contains("Platform"),
+            "a disabled team item must stay hidden, got:\n{rendered}"
+        );
+    });
 }

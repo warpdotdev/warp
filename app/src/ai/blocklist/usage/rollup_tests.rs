@@ -51,6 +51,25 @@ fn set_charged_usage_tokens(
     });
 }
 
+fn set_charged_usage(
+    app: &mut App,
+    history: &warpui::ModelHandle<BlocklistAIHistoryModel>,
+    id: AIConversationId,
+    cost_in_cents: f32,
+    total_tokens: u32,
+) {
+    history.update(app, |history, _| {
+        history
+            .conversation_mut(&id)
+            .expect("conversation must be loaded")
+            .set_charged_usage_for_test(Some(ChargedUsageTotals {
+                input_cost_in_cents: cost_in_cents,
+                input_tokens: total_tokens,
+                ..Default::default()
+            }));
+    });
+}
+
 fn spawn_child(
     app: &mut App,
     history: &warpui::ModelHandle<BlocklistAIHistoryModel>,
@@ -157,6 +176,45 @@ fn sums_cost_in_cents_when_all_contributors_have_a_baseline() {
             let rollup = compute_orchestration_rollup(orchestrator_id, history)
                 .expect("rollup should be Some");
             assert_eq!(rollup.total_cost_in_cents, Some(66.0));
+        });
+    });
+}
+
+#[test]
+fn sums_charged_usage_cost_over_divergent_provider_cost() {
+    App::test((), |mut app| async move {
+        initialize_history_persistence_for_tests(&mut app);
+        let terminal_view_id = EntityId::new();
+        let history = app.add_singleton_model(|_| BlocklistAIHistoryModel::new_for_test());
+
+        let orchestrator_id = history.update(&mut app, |history, ctx| {
+            history.start_new_conversation(terminal_view_id, false, false, false, ctx)
+        });
+        let child_id = spawn_child(
+            &mut app,
+            &history,
+            "DesignBot",
+            orchestrator_id,
+            terminal_view_id,
+        );
+
+        set_credits(&mut app, &history, orchestrator_id, 3.0);
+        set_credits(&mut app, &history, child_id, 30.0);
+        // Deliberately diverge each contributor's provider-only baseline
+        // from its charged-usage total.
+        set_cost_in_cents(&mut app, &history, orchestrator_id, Some(6.0));
+        set_cost_in_cents(&mut app, &history, child_id, Some(60.0));
+        set_charged_usage(&mut app, &history, orchestrator_id, 5.0, 0);
+        set_charged_usage(&mut app, &history, child_id, 50.0, 0);
+
+        history.read(&app, |history, _| {
+            let rollup = compute_orchestration_rollup(orchestrator_id, history)
+                .expect("rollup should be Some");
+            assert_eq!(
+                rollup.total_cost_in_cents,
+                Some(55.0),
+                "the rollup total must come from charged usage, not the divergent provider baseline"
+            );
         });
     });
 }
@@ -285,10 +343,11 @@ fn zero_credit_descendant_does_not_poison_cost_or_token_totals() {
 
         set_credits(&mut app, &history, orchestrator_id, 3.0);
         set_credits(&mut app, &history, child_id, 30.0);
-        set_cost_in_cents(&mut app, &history, orchestrator_id, Some(6.0));
-        set_cost_in_cents(&mut app, &history, child_id, Some(60.0));
-        set_charged_usage_tokens(&mut app, &history, orchestrator_id, Some(100));
-        set_charged_usage_tokens(&mut app, &history, child_id, Some(900));
+        // Charged usage carries cost and tokens together, mirroring the
+        // real wire shape (unlike the provider-only baseline, which never
+        // carries a token count).
+        set_charged_usage(&mut app, &history, orchestrator_id, 6.0, 100);
+        set_charged_usage(&mut app, &history, child_id, 60.0, 900);
 
         history.read(&app, |history, _| {
             let rollup = compute_orchestration_rollup(orchestrator_id, history)

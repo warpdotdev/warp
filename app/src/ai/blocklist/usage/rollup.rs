@@ -43,8 +43,8 @@ pub struct OrchestrationCreditRollup {
     /// Sum of `credits_spent` across the orchestrator and every
     /// locally-loaded descendant.
     pub total_credits: f32,
-    /// Sum of `usage_totals().cost_in_cents` across the orchestrator and
-    /// every locally-loaded descendant that has spent > 0 credits,
+    /// Sum of `usage_totals().total_cost_in_cents()` across the orchestrator
+    /// and every locally-loaded descendant that has spent > 0 credits,
     /// mirroring `total_credits`. `None` when any such contributing
     /// conversation lacks a known dollar-cost baseline — a partial sum
     /// would misrepresent the true total, so the rollup omits the dollar
@@ -120,7 +120,7 @@ pub fn compute_orchestration_rollup(
             let orchestrator_usage_totals = orchestrator.usage_totals();
             accumulate_cost(
                 &mut total_cost_in_cents,
-                orchestrator_usage_totals.cost_in_cents,
+                orchestrator_usage_totals.total_cost_in_cents(),
             );
             accumulate_tokens(
                 &mut total_tokens,
@@ -152,7 +152,7 @@ pub fn compute_orchestration_rollup(
             let descendant_usage_totals = descendant.usage_totals();
             accumulate_cost(
                 &mut total_cost_in_cents,
-                descendant_usage_totals.cost_in_cents,
+                descendant_usage_totals.total_cost_in_cents(),
             );
             accumulate_tokens(
                 &mut total_tokens,

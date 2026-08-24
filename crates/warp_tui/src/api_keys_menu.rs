@@ -5,7 +5,7 @@ use ai::api_keys::{ApiKeyManager, ApiKeyManagerEvent};
 use ai::grok_subscription::oauth::OauthAttempt;
 use warp::editor::{CodeEditorModel, CodeEditorModelEvent};
 use warp::settings::{AISettings, AISettingsChangedEvent};
-use warp::tui_export::UserWorkspaces;
+use warp::tui_export::{TeamContextResolver, UserWorkspaces};
 use warp_core::features::FeatureFlag;
 use warp_core::settings::ToggleableSetting as _;
 use warp_editor::model::CoreEditorModel;
@@ -93,6 +93,7 @@ pub(crate) struct TuiApiKeysMenuEvent;
 pub(crate) struct TuiApiKeysMenuModel {
     input_editor: ModelHandle<CodeEditorModel>,
     suggestions_mode: ModelHandle<TuiInputSuggestionsModeModel>,
+    team_context: TeamContextResolver,
     state: TuiApiKeysMenuState,
 }
 
@@ -100,6 +101,7 @@ impl TuiApiKeysMenuModel {
     pub(crate) fn new(
         input_editor: ModelHandle<CodeEditorModel>,
         suggestions_mode: ModelHandle<TuiInputSuggestionsModeModel>,
+        team_context: TeamContextResolver,
         ctx: &mut ModelContext<Self>,
     ) -> Self {
         ctx.subscribe_to_model(&input_editor, |model, _, event, ctx| {
@@ -153,17 +155,23 @@ impl TuiApiKeysMenuModel {
         Self {
             input_editor,
             suggestions_mode,
+            team_context,
             state: TuiApiKeysMenuState::Closed,
         }
     }
 
+    /// Whether this session's team allows members to bring their own provider credentials.
+    fn member_byo_keys_allowed(&self, ctx: &AppContext) -> bool {
+        let scope = (self.team_context)(ctx);
+        UserWorkspaces::as_ref(ctx).are_member_byo_keys_allowed(&scope)
+    }
+
     fn start_grok_oauth(&mut self, ctx: &mut ModelContext<Self>) {
-        let workspaces = UserWorkspaces::as_ref(ctx);
         let policy_error = if !FeatureFlag::SuperGrok.is_enabled() {
             Some("Grok subscriptions aren't available in this build.")
-        } else if !workspaces.is_byo_api_key_enabled(ctx) {
+        } else if !UserWorkspaces::as_ref(ctx).is_byo_api_key_enabled(ctx) {
             Some("Grok subscriptions require BYOK access for this workspace.")
-        } else if !workspaces.are_member_byo_keys_allowed() {
+        } else if !self.member_byo_keys_allowed(ctx) {
             Some("Your organization doesn't allow member-provided credentials.")
         } else {
             None

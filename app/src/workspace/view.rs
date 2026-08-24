@@ -223,7 +223,7 @@ use crate::ai::facts::{AIFactManager, AIFactView, AIFactViewEvent};
 use crate::ai::llms::LLMId as HandoffLLMId;
 use crate::ai::llms::LLMPreferences;
 use crate::ai::persisted_workspace::PersistedWorkspace;
-use crate::ai_assistant::execution_context::WarpAiExecutionContext;
+use crate::ai_assistant::execution_context::execution_context_for_session;
 use crate::ai_assistant::panel::{AIAssistantPanelEvent, AIAssistantPanelView};
 use crate::ai_assistant::{AI_ASSISTANT_FEATURE_NAME, AI_ASSISTANT_LOGO_COLOR, AskAIType};
 use crate::app_state::{
@@ -15467,10 +15467,11 @@ impl Workspace {
                         Some((prompt, attachments))
                     })
                 });
+                let scope = UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx);
                 model_handle.update(ctx, |model, ctx| {
                     model.set_environment_id(Some(env_id), ctx);
                     if let Some((prompt, attachments)) = pending {
-                        model.spawn_agent(prompt, attachments, ctx);
+                        model.spawn_agent(prompt, attachments, &scope, ctx);
                     }
                 });
             }
@@ -17298,7 +17299,7 @@ impl Workspace {
 
             let ai_execution_context = session_context
                 .as_ref()
-                .map(|session_context| WarpAiExecutionContext::new(&session_context.session));
+                .map(|session_context| execution_context_for_session(&session_context.session));
 
             let menu_positioning = active_input_handle
                 .as_ref()

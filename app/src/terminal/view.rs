@@ -3161,6 +3161,7 @@ impl TerminalView {
         ctx: &mut ViewContext<Self>,
     ) -> Self {
         let terminal_view_id = ctx.view_id();
+        let terminal_view = ctx.handle();
         let active_session = ctx.add_model(|ctx| {
             ActiveSession::new(sessions.clone(), model_events_handle.clone(), ctx)
         });
@@ -3538,6 +3539,8 @@ impl TerminalView {
         });
 
         let get_relevant_files_controller = ctx.add_model(GetRelevantFilesController::new);
+        let ai_action_team_context_resolver =
+            UserWorkspaces::team_context_resolver(terminal_view.clone());
         let ai_action_model = ctx.add_model(|ctx| {
             BlocklistAIActionModel::new(
                 model.clone(),
@@ -3545,6 +3548,7 @@ impl TerminalView {
                 &model_events_handle,
                 get_relevant_files_controller.clone(),
                 terminal_view_id,
+                ai_action_team_context_resolver,
                 ctx,
             )
         });
@@ -3557,6 +3561,7 @@ impl TerminalView {
                 active_session.clone(),
                 model.clone(),
                 terminal_view_id,
+                terminal_view,
                 ctx,
             )
         });
@@ -6958,11 +6963,6 @@ impl TerminalView {
             conversation.total_agent_response_time_since_last_user_query_ms();
         let wall_to_wall_response_time_ms =
             conversation.wall_to_wall_response_time_since_last_query();
-        // Same rollup-vs-own-totals split as the footer's compact usage
-        // button (`render_usage_button`): `cost_in_cents` is the
-        // server-authoritative provider cost baseline, while the token
-        // count comes from the charged-usage breakdown, which is the only
-        // place it's tracked.
         let usage_totals = conversation.usage_totals();
         let charged_usage_for_last_block = conversation.charged_usage_for_last_block();
 
@@ -6979,7 +6979,7 @@ impl TerminalView {
             lines_removed: tool_usage.apply_file_diff_stats.lines_removed,
             commands_executed: tool_usage.run_command_stats.commands_executed,
             total_tokens: usage_totals.charged_usage.map(|usage| usage.total_tokens()),
-            total_cost_in_cents: usage_totals.cost_in_cents,
+            total_cost_in_cents: usage_totals.total_cost_in_cents(),
             tokens_for_last_block: charged_usage_for_last_block.map(|usage| usage.total_tokens()),
             cost_in_cents_for_last_block: charged_usage_for_last_block
                 .map(|usage| usage.total_cost_in_cents()),

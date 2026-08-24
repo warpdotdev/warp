@@ -436,7 +436,7 @@ impl View for PromptAlertView {
         });
 
         let can_purchase_addon_credits = workspaces
-            .purchase_policy_for_team(current_team)
+            .purchase_policy()
             .is_some_and(|policy| policy.allows_purchases());
 
         let suggest_buy_credits = can_purchase_addon_credits

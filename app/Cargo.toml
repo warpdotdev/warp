@@ -48,14 +48,10 @@ path = "src/bin/preview.rs"
 required-features = ["preview_channel"]
 test = false
 
-[[bin]]
-name = "generate_settings_schema"
-path = "src/bin/generate_settings_schema.rs"
-test = false
-
 [dependencies]
 addr = "0.15.6"
 ai.workspace = true
+ai_types.workspace = true
 alphanumeric-sort = "1.5.7"
 anyhow.workspace = true
 arrayvec.workspace = true
