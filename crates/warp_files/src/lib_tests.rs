@@ -16,6 +16,10 @@ enum TestFileModelEvent {
         content: String,
         _version: ContentVersion,
     },
+    FileUpdated {
+        id: FileId,
+        content: String,
+    },
     FileSaved,
     FailedToLoad(String),
     FailedToSave,
@@ -33,21 +37,16 @@ impl From<&FileModelEvent> for TestFileModelEvent {
                 content: content.clone(),
                 _version: *version,
             },
+            FileModelEvent::FileUpdated { id, content, .. } => TestFileModelEvent::FileUpdated {
+                id: *id,
+                content: content.clone(),
+            },
             FileModelEvent::FileSaved { .. } => TestFileModelEvent::FileSaved,
             FileModelEvent::FailedToLoad {
                 id: _id,
                 error: err,
             } => TestFileModelEvent::FailedToLoad(format!("{err:?}")),
             FileModelEvent::FailedToSave { .. } => TestFileModelEvent::FailedToSave,
-            FileModelEvent::FileUpdated { .. } => {
-                // For now, we don't handle file updated events in tests
-                // This could be extended to include a FileUpdated variant in TestFileModelEvent if needed
-                TestFileModelEvent::FileLoaded {
-                    id: event.file_id(),
-                    content: String::new(),
-                    _version: ContentVersion::new(),
-                }
-            }
         }
     }
 }
@@ -353,6 +352,149 @@ fn test_a_failed_open_registers_no_watcher() {
 
         files.update(app, |model, ctx| model.unsubscribe(file_id, ctx));
         assert_eq!(files.read(app, |model, _| model.file_path(file_id)), None);
+    });
+}
+
+/// Opening a file whose on-disk size exceeds `MAX_LOADABLE_FILE_SIZE_BYTES`
+/// must fail with `FileLoadError::TooLarge` instead of reading the whole file
+/// into memory. A single pathologically large file (a huge log, a binary
+/// opened by mistake, etc.) could otherwise trigger a multi-gigabyte
+/// allocation. Uses a sparse file (`set_len`) so the test doesn't actually
+/// need to write the oversized content to disk.
+#[test]
+fn test_load_oversized_file_reports_too_large() {
+    App::test((), |mut app| async move {
+        let app = &mut app;
+        let files = app.add_singleton_model(FileModel::new);
+        let receiver = setup_event_channel(app, &files);
+
+        let directory = tempfile::tempdir().expect("temp dir");
+        let path = directory.path().join("huge.log");
+        let file = std::fs::File::create(&path).expect("create file");
+        file.set_len(MAX_LOADABLE_FILE_SIZE_BYTES + 1)
+            .expect("set sparse length");
+        drop(file);
+
+        files.update(app, |model, ctx| {
+            model.open(&path, false, ctx);
+        });
+
+        match receiver.recv().await.expect("Could not receive the result") {
+            TestFileModelEvent::FailedToLoad(err) => {
+                assert!(
+                    err.contains("TooLarge"),
+                    "expected TooLarge error, got {err}"
+                );
+            }
+            event => panic!("Expected oversized file to fail to load, got {event:?}"),
+        }
+    });
+}
+
+/// [`FileModel::read_content_for_file`] is used for reload/discard flows and
+/// must apply the same size guard as `open`.
+#[test]
+fn test_read_content_for_file_reports_too_large() {
+    App::test((), |mut _app| async move {
+        let directory = tempfile::tempdir().expect("temp dir");
+        let path = directory.path().join("huge.log");
+        let file = std::fs::File::create(&path).expect("create file");
+        file.set_len(MAX_LOADABLE_FILE_SIZE_BYTES + 1)
+            .expect("set sparse length");
+        drop(file);
+
+        let result = FileModel::read_content_for_file(&path).await;
+        assert!(
+            matches!(
+                result,
+                Err(FileLoadError::TooLarge { limit_bytes, .. })
+                    if limit_bytes == MAX_LOADABLE_FILE_SIZE_BYTES
+            ),
+            "expected TooLarge error, got {result:?}"
+        );
+    });
+}
+
+/// [`read_reload_contents`] must skip an oversized file without failing the whole batch,
+/// matching the existing "skip files that fail to read" behavior for other read errors.
+#[test]
+fn test_read_reload_contents_skips_oversized_file() {
+    let directory = tempfile::tempdir().expect("temp dir");
+    let oversized_path = directory.path().join("big.txt");
+    let file = std::fs::File::create(&oversized_path).expect("create file");
+    file.set_len(MAX_LOADABLE_FILE_SIZE_BYTES + 1)
+        .expect("set sparse length");
+    drop(file);
+    let ok_path = directory.path().join("small.txt");
+    std::fs::write(&ok_path, "fine").expect("write small file");
+
+    let contents = block_on(read_reload_contents(vec![oversized_path, ok_path.clone()]));
+
+    assert_eq!(contents, vec![(ok_path, "fine".to_string())]);
+}
+
+/// Regression: the file-watcher autoreload path (`reload_file_paths`) must apply the same size
+/// guard as the initial `open`. A file that grows past the cap between opens is skipped instead
+/// of reloaded, rather than reading it unbounded and emitting `FileUpdated` with its content.
+#[test]
+fn test_reload_file_paths_skips_oversized_replacement() {
+    App::test((), |mut app| async move {
+        let app = &mut app;
+        app.add_singleton_model(|_| DetectedRepositories::default());
+        let files = app.add_singleton_model(FileModel::new);
+        let receiver = setup_event_channel(app, &files);
+
+        let directory = tempfile::tempdir().expect("temp dir");
+        let small_path = directory.path().join("small.txt");
+        let big_path = directory.path().join("big.txt");
+        std::fs::write(&small_path, "small").expect("write small file");
+        std::fs::write(&big_path, "placeholder").expect("write big file placeholder");
+
+        let small_id = files.update(app, |model, ctx| model.open(&small_path, true, ctx));
+        await_load(&receiver).await;
+        let big_id = files.update(app, |model, ctx| model.open(&big_path, true, ctx));
+        await_load(&receiver).await;
+
+        let (tracked_small_path, tracked_big_path) = files.read(app, |model, _| {
+            (
+                model.file_path(small_id).expect("small path tracked"),
+                model.file_path(big_id).expect("big path tracked"),
+            )
+        });
+
+        // Grow the big file past the cap, as an external process replacing it with something
+        // huge would, then drive the same reload path the watcher uses for both files at once.
+        std::fs::write(&tracked_small_path, "small, updated").expect("update small file");
+        let file = std::fs::File::create(&tracked_big_path).expect("recreate big file");
+        file.set_len(MAX_LOADABLE_FILE_SIZE_BYTES + 1)
+            .expect("set sparse length");
+        drop(file);
+
+        files.update(app, |model, ctx| {
+            model.reload_file_paths(HashSet::from([tracked_small_path, tracked_big_path]), ctx);
+        });
+
+        // The reload's spawned callback emits every `FileUpdated` for this call in one
+        // synchronous pass before yielding, and the event channel forwards each emit
+        // synchronously too, so by the time the first event is received here, any second
+        // event this reload produced is already sitting in the channel. Checking for one
+        // immediately after the other -- rather than only checking the first -- is what
+        // actually proves the oversized file's id never got an update, instead of merely
+        // being consistent with it having been emitted second.
+        match receiver.recv().await.expect("Could not receive the result") {
+            TestFileModelEvent::FileUpdated { id, content } => {
+                assert_eq!(
+                    id, small_id,
+                    "expected the small file's update, not the oversized one"
+                );
+                assert_eq!(content, "small, updated");
+            }
+            event => panic!("Expected an update event for the small file, got {event:?}"),
+        }
+        assert!(
+            receiver.try_recv().is_err(),
+            "no update should have been emitted for the oversized file's id ({big_id:?})"
+        );
     });
 }
 

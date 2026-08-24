@@ -24,7 +24,9 @@ use repo_metadata::repository::{RepositorySubscriber, SubscriberId};
 use repo_metadata::{CanonicalizedPath, Repository, RepositoryUpdate, RepositoryWatchMode};
 use warp_core::HostId;
 use warp_util::content_version::ContentVersion;
-use warp_util::file::{FileId, FileLoadError, FileSaveError};
+use warp_util::file::{
+    FileId, FileLoadError, FileSaveError, MAX_LOADABLE_FILE_SIZE_BYTES, read_to_string_capped,
+};
 use warp_util::standardized_path::StandardizedPath;
 use warpui_core::r#async::SpawnedFutureHandle;
 use warpui_core::{Entity, ModelContext, ModelHandle, SingletonEntity};
@@ -447,9 +449,8 @@ impl FileModel {
         let file_path_buf = file_path.to_owned();
         let future = ctx.spawn(
             async move {
-                let contents = async_fs::read_to_string(&file_path_buf)
-                    .await
-                    .map_err(FileLoadError::from);
+                let contents =
+                    read_to_string_capped(&file_path_buf, MAX_LOADABLE_FILE_SIZE_BYTES).await;
                 (file_id, contents)
             },
             move |me, (file_id, load_result), ctx| {
@@ -518,12 +519,13 @@ impl FileModel {
     }
 
     pub async fn read_content_for_file(file_path: &Path) -> Result<String, FileLoadError> {
-        if !Self::file_exists(file_path).await {
-            return Err(FileLoadError::DoesNotExist);
+        match read_to_string_capped(file_path, MAX_LOADABLE_FILE_SIZE_BYTES).await {
+            Ok(content) => Ok(content),
+            Err(FileLoadError::IOError(err)) if err.kind() == io::ErrorKind::NotFound => {
+                Err(FileLoadError::DoesNotExist)
+            }
+            Err(err) => Err(err),
         }
-        async_fs::read_to_string(file_path)
-            .await
-            .map_err(FileLoadError::from)
     }
 
     /// Asynchronously reads specific lines from a file using BufReader.
@@ -1141,43 +1143,32 @@ impl FileModel {
         }
 
         // Autoreload modified files.
-        ctx.spawn(
-            async move {
-                let mut res = Vec::new();
-                for file_path in matching_files {
-                    if let Ok(content) = async_fs::read_to_string(&file_path).await {
-                        res.push((file_path, content));
+        ctx.spawn(read_reload_contents(matching_files), move |me, res, ctx| {
+            for (file_path, content) in res {
+                let mut emitted_event = false;
+                for (file_id, file_state) in me.file_state.local_iter_mut() {
+                    // Only set the new version of a file if it has opt-in to receiving updates.
+                    if file_state.should_receive_update_for_path(&file_path) {
+                        let new_version = ContentVersion::new();
+                        ctx.emit(FileModelEvent::FileUpdated {
+                            id: *file_id,
+                            content: content.clone(),
+                            base_version: file_state.version.expect("Version should be some"),
+                            new_version,
+                        });
+                        emitted_event = true;
+                        file_state.version = Some(new_version);
                     }
                 }
-                res
-            },
-            move |me, res, ctx| {
-                for (file_path, content) in res {
-                    let mut emitted_event = false;
-                    for (file_id, file_state) in me.file_state.local_iter_mut() {
-                        // Only set the new version of a file if it has opt-in to receiving updates.
-                        if file_state.should_receive_update_for_path(&file_path) {
-                            let new_version = ContentVersion::new();
-                            ctx.emit(FileModelEvent::FileUpdated {
-                                id: *file_id,
-                                content: content.clone(),
-                                base_version: file_state.version.expect("Version should be some"),
-                                new_version,
-                            });
-                            emitted_event = true;
-                            file_state.version = Some(new_version);
-                        }
-                    }
 
-                    if !emitted_event {
-                        log::warn!(
-                            "{} is changed but there is no handler for the update event",
-                            file_path.display()
-                        );
-                    }
+                if !emitted_event {
+                    log::warn!(
+                        "{} is changed but there is no handler for the update event",
+                        file_path.display()
+                    );
                 }
-            },
-        );
+            }
+        });
     }
 
     /// Falls back to individual file watchers for all files that were expecting to use the given repository.
@@ -1221,6 +1212,20 @@ impl FileModel {
             }
         }
     }
+}
+
+/// Reads the current content of each of `file_paths` for the autoreload loop, silently
+/// omitting any that fail to read (including files rejected by the size cap) so the caller
+/// applies exactly the files that succeeded.
+async fn read_reload_contents(file_paths: Vec<PathBuf>) -> Vec<(PathBuf, String)> {
+    let mut res = Vec::new();
+    for file_path in file_paths {
+        match read_to_string_capped(&file_path, MAX_LOADABLE_FILE_SIZE_BYTES).await {
+            Ok(content) => res.push((file_path, content)),
+            Err(err) => log::warn!("Skipping autoreload of {}: {err}", file_path.display()),
+        }
+    }
+    res
 }
 
 impl Entity for FileModel {

@@ -16088,6 +16088,7 @@ name = "warp_util"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-fs",
  "command",
  "content_inspector",
  "dirs 6.0.0",
@@ -16107,6 +16108,7 @@ dependencies = [
  "regex",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror 2.0.17",
  "typed-path 0.10.0",
  "warp_errors",
