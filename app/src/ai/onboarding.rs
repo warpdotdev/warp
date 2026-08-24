@@ -3,20 +3,29 @@
 use ai::LLMId;
 use onboarding::slides::OnboardingModelInfo;
 use onboarding::{CreditPackOption, OnboardingAuthState};
-use warp_core::ui::icons::Icon;
 use warpui::{AppContext, SingletonEntity};
 
-use super::llms::{LLMInfo, LLMPreferences};
+use super::custom_model_routers::is_custom_router_id;
+use super::execution_profiles::model_menu_items::is_auto;
+use super::llms::{LLMInfo, LLMPreferences, ModelIconFlags, model_leading_icon};
 use crate::auth::AuthStateProvider;
 use crate::pricing::{PricingInfoModel, onboarding_credit_pack_options};
 use crate::workspaces::user_workspaces::UserWorkspaces;
 
 impl From<&LLMInfo> for OnboardingModelInfo {
     fn from(llm: &LLMInfo) -> Self {
+        let icon = model_leading_icon(
+            llm,
+            ModelIconFlags {
+                is_custom_router: is_custom_router_id(llm.id.as_str()),
+                is_auto: is_auto(llm),
+                ..Default::default()
+            },
+        );
         Self {
             id: llm.id.clone(),
             title: llm.display_name.clone(),
-            icon: llm.provider.icon().unwrap_or(Icon::Agent),
+            icon,
             is_default: false,
         }
     }

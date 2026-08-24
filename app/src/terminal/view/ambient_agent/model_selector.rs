@@ -22,7 +22,9 @@ use crate::ai::custom_model_routers::is_custom_router_id;
 use crate::ai::execution_profiles::model_menu_items::is_auto;
 use crate::ai::harness_availability::{HarnessAvailabilityEvent, HarnessAvailabilityModel};
 use crate::ai::harness_display::icon_for as harness_icon_for;
-use crate::ai::llms::{LLMId, LLMPreferences, LLMPreferencesEvent};
+use crate::ai::llms::{
+    LLMId, LLMInfo, LLMPreferences, LLMPreferencesEvent, ModelIconFlags, model_leading_icon,
+};
 use crate::editor::{
     EditorView, Event as EditorEvent, PropagateAndNoOpEscapeKey, PropagateAndNoOpNavigationKeys,
     SingleLineEditorOptions, TextOptions,
@@ -507,11 +509,7 @@ impl ModelSelector {
             .chain(other_choices)
             .map(|llm| {
                 let display_name = llm.menu_display_name();
-                let leading_icon = if is_custom_router_id(llm.id.as_str()) {
-                    Icon::Dataflow
-                } else {
-                    llm.provider.icon().unwrap_or(Icon::Agent)
-                };
+                let leading_icon = oz_menu_item_icon(llm);
                 let fields = MenuItemFields::new(display_name)
                     .with_icon(leading_icon)
                     .with_icon_size_override(ITEM_ICON_SIZE)
@@ -619,6 +617,18 @@ impl ModelSelector {
     }
 }
 
+/// The leading icon for a row in the Oz Agent Mode model list.
+fn oz_menu_item_icon(llm: &LLMInfo) -> Icon {
+    model_leading_icon(
+        llm,
+        ModelIconFlags {
+            is_custom_router: is_custom_router_id(llm.id.as_str()),
+            is_auto: is_auto(llm),
+            ..Default::default()
+        },
+    )
+}
+
 fn render_search_footer(
     search_editor: &ViewHandle<EditorView>,
     app: &AppContext,
@@ -715,3 +725,7 @@ impl View for ModelSelector {
         stack.finish()
     }
 }
+
+#[cfg(test)]
+#[path = "model_selector_tests.rs"]
+mod tests;

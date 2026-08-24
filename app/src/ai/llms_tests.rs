@@ -286,6 +286,93 @@ fn models_without_a_host_fall_back_to_the_provider_icon() {
     );
 }
 
+#[test]
+fn is_kimi_model_id_requires_a_kimi_prefix_not_just_a_substring() {
+    assert!(is_kimi_model_id("kimi"));
+    assert!(is_kimi_model_id("KIMI"));
+    assert!(is_kimi_model_id("kimi-k3-fireworks"));
+    assert!(is_kimi_model_id("KIMI-K26-FIREWORKS"));
+    assert!(!is_kimi_model_id("not-kimi-fireworks"));
+    assert!(!is_kimi_model_id("asakimi-x"));
+    assert!(!is_kimi_model_id("kimichi"));
+}
+
+#[test]
+fn kimi_models_show_the_kimi_logo() {
+    for id in [
+        "kimi-k26-fireworks",
+        "kimi-k27-code-fireworks",
+        "kimi-k3-fireworks",
+    ] {
+        let llm = server_llm(id, None);
+        assert_eq!(
+            model_leading_icon(&llm, ModelIconFlags::default()),
+            Icon::KimiLogo,
+            "expected {id} to show the Kimi logo"
+        );
+    }
+}
+
+#[test]
+fn kimi_model_id_wins_over_a_known_providers_logo() {
+    // The `kimi-` id check sits above the provider fallback in
+    // `model_leading_icon`, so it must win even if a Kimi row ever arrives
+    // tagged with a concrete (non-`Unknown`) provider.
+    let mut llm = server_llm("kimi-k3-fireworks", None);
+    llm.provider = LLMProvider::OpenAI;
+
+    assert_eq!(
+        model_leading_icon(&llm, ModelIconFlags::default()),
+        Icon::KimiLogo
+    );
+}
+
+#[test]
+fn kimi_model_ids_still_defer_to_higher_priority_icon_flags() {
+    let llm = server_llm("kimi-k3-fireworks", None);
+
+    assert_eq!(
+        model_leading_icon(
+            &llm,
+            ModelIconFlags {
+                is_custom_router: true,
+                ..Default::default()
+            }
+        ),
+        Icon::Dataflow
+    );
+    assert_eq!(
+        model_leading_icon(
+            &llm,
+            ModelIconFlags {
+                is_auto: true,
+                ..Default::default()
+            }
+        ),
+        Icon::Agent
+    );
+    assert_eq!(
+        model_leading_icon(
+            &llm,
+            ModelIconFlags {
+                is_using_bedrock: true,
+                ..Default::default()
+            }
+        ),
+        Icon::Aws
+    );
+    assert_eq!(
+        model_leading_icon(
+            &llm,
+            ModelIconFlags {
+                is_using_gemini_enterprise: true,
+                ..Default::default()
+            }
+        ),
+        Icon::GeminiEnterpriseAgentPlatform
+    );
+}
+
 // -- build_custom_llm_infos / display label tests --
 
 fn endpoint(
