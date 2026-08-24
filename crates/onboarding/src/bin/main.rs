@@ -192,7 +192,7 @@ impl OnboardingMainView {
                 self.state = OnboardingMainState::Finished(finished_view);
                 ctx.notify();
             }
-            AgentOnboardingEvent::OfferAiPurchaseCompleted { .. }
+            AgentOnboardingEvent::OfferAiSellSatisfied { .. }
             | AgentOnboardingEvent::OfferSetUpLaterSelected { .. } => {
                 let finished_view =
                     ctx.add_typed_action_view(|_| FinishedOnboardingView::new(None));

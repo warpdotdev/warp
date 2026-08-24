@@ -1721,8 +1721,8 @@ enum AccountFirstCompletion {
     PaidTeam,
     FreeIcpSetupLater,
     FreeStandardSetupLater,
-    /// The user bought one-time credits from the offer instead of subscribing.
-    /// They stay on the free plan, so they remain free-standard.
+    /// The user gained AI usage from the offer without ending up on a plan,
+    /// so they remain free-standard.
     FreeStandardCreditsPurchased,
     UpgradeCompleted,
 }
@@ -2919,7 +2919,7 @@ impl RootView {
                     self.complete_account_first(AccountFirstCompletion::FreeStandardSetupLater, ctx)
                 }
             },
-            AgentOnboardingEvent::OfferAiPurchaseCompleted { variant } => match variant {
+            AgentOnboardingEvent::OfferAiSellSatisfied { variant } => match variant {
                 // Only the free-standard offer sells AI usage.
                 OfferVariant::ChooseHowToStart => {
                     // The user may have bought a plan or one-time credits;

@@ -70,7 +70,7 @@ pub enum AgentOnboardingEvent {
         variant: OfferVariant,
     },
     /// The user can now use AI, so onboarding is done for this user.
-    OfferAiPurchaseCompleted {
+    OfferAiSellSatisfied {
         variant: OfferVariant,
     },
     /// Emitted when the app regains focus (e.g. user returns from the browser).
@@ -555,7 +555,7 @@ impl AgentOnboardingView {
         let Some(variant) = self.onboarding_state.as_ref(ctx).offer_variant() else {
             return;
         };
-        ctx.emit(AgentOnboardingEvent::OfferAiPurchaseCompleted { variant });
+        ctx.emit(AgentOnboardingEvent::OfferAiSellSatisfied { variant });
     }
 
     /// Reacts to a billing/auth transition. When the user becomes a paying user

@@ -95,9 +95,9 @@ impl OfferVariant {
         }
     }
 
-    /// Whether this offer's purpose is to sell the user AI usage. Only the
-    /// free-standard offer's is: the head-start offer already ships with
-    /// included AI usage, so a purchase isn't the decision being made.
+    /// Whether this offer exists to sell the user AI usage. Only the
+    /// free-standard offer does: the head-start offer already ships with AI
+    /// usage, so a purchase isn't the decision being made.
     pub(crate) fn sells_ai_usage(self) -> bool {
         matches!(self, OfferVariant::ChooseHowToStart)
     }

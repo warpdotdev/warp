@@ -168,6 +168,50 @@ fn only_the_free_standard_offer_sells_ai_usage() {
     assert!(!OfferVariant::HeadStart.sells_ai_usage());
 }
 
+/// Renders a classified offer in each state the slide can be in. Without a
+/// variant set `render` bails to `Empty`, so this is the only coverage of
+/// `render_options` / `render_option_card` and of the auth-prompt-bar overlay.
+#[test]
+fn classified_offer_renders_in_every_selection_state() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        app.update(MockTelemetryContextProvider::register);
+
+        // `show_post_auth_offer` is sticky, so each variant needs its own model.
+        for variant in [OfferVariant::HeadStart, OfferVariant::ChooseHowToStart] {
+            let onboarding_state = add_onboarding_state(&mut app);
+            let (_, slide) = app.add_window(WindowStyle::NotStealFocus, {
+                let onboarding_state = onboarding_state.clone();
+                move |_| OfferSlide::new(onboarding_state)
+            });
+            onboarding_state.update(&mut app, |model, ctx| {
+                model.show_post_auth_offer(variant, ctx);
+            });
+
+            // The primary card is selected by default, so rendering either side
+            // of this selection change covers both cards selected and not.
+            for action in [
+                OfferSlideAction::SelectSetUpLater,
+                OfferSlideAction::SelectPrimary,
+            ] {
+                app.read(|ctx| drop(slide.as_ref(ctx).render(ctx)));
+                slide.update(&mut app, |slide, ctx| slide.handle_action(&action, ctx));
+            }
+
+            // "Get Warping" on the primary raises the auth prompt bar, which
+            // renders stacked over the slide.
+            slide.update(&mut app, |slide, ctx| {
+                slide.handle_action(&OfferSlideAction::GetWarping, ctx)
+            });
+            assert!(
+                slide.read(&app, |slide, _| slide.show_auth_prompt_bar),
+                "{variant:?} should have raised the auth prompt bar"
+            );
+            app.read(|ctx| drop(slide.as_ref(ctx).render(ctx)));
+        }
+    });
+}
+
 /// Selecting the primary card must not open the upgrade page; only "Get
 /// Warping" does.
 #[test]
