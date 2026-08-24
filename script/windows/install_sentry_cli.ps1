@@ -29,7 +29,23 @@ $executable = Join-Path $installDir 'sentry-cli.exe'
 
 $uri = "https://downloads.sentry-cdn.com/sentry-cli/$Version/sentry-cli-Windows-$arch.exe"
 Write-Host "Installing sentry-cli ($Version) for $arch from $uri"
-Invoke-WebRequest -Uri $uri -OutFile $executable -MaximumRetryCount 3 -RetryIntervalSec 5
+
+# Invoke-WebRequest only grew -MaximumRetryCount in PowerShell 6.1, and this tree is linted
+# for Windows PowerShell 5.1 compatibility, so retry by hand. A transient CDN blip should
+# not sink a release leg that has already spent an hour building and signing.
+$maxAttempts = 3
+for ($attempt = 1; ; $attempt++) {
+    try {
+        Invoke-WebRequest -Uri $uri -OutFile $executable
+        break
+    } catch {
+        if ($attempt -ge $maxAttempts) {
+            throw
+        }
+        Write-Host "Attempt $attempt of $maxAttempts failed: $($_.Exception.Message)"
+        Start-Sleep -Seconds 5
+    }
+}
 
 $installDir >> $env:GITHUB_PATH
 
