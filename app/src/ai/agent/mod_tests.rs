@@ -17,6 +17,7 @@ use crate::ai::agent::{
     TransientNetworkErrorKind,
 };
 use crate::ai::block_context::BlockContext;
+use crate::ai_assistant::execution_context::{WarpAiExecutionContext, WarpAiOsContext};
 use crate::server::server_api::AIApiError;
 use crate::terminal::shell::ShellType;
 
@@ -384,6 +385,14 @@ fn ai_agent_context_round_trips_tagged_variants() {
             are_file_symbols_indexed: true,
         },
         AIAgentContext::SelectedText("selected text".to_string()),
+        AIAgentContext::ExecutionEnvironment(WarpAiExecutionContext {
+            os: WarpAiOsContext {
+                category: Some("MacOS".to_string()),
+                distribution: None,
+            },
+            shell_name: "zsh".to_string(),
+            shell_version: Some("5.9".to_string()),
+        }),
         AIAgentContext::CurrentTime {
             current_time: Utc
                 .with_ymd_and_hms(2024, 1, 15, 10, 30, 0)

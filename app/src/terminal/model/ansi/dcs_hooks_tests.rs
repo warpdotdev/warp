@@ -137,6 +137,68 @@ fn missing_value_field_is_an_error() {
 }
 
 #[test]
+fn every_hook_tag_dispatches_to_the_matching_variant() {
+    let cases = [
+        (
+            "CommandFinished",
+            serde_json::json!({"exit_code": 0, "next_block_id": "block-1"}),
+        ),
+        ("Precmd", serde_json::json!({})),
+        ("Preexec", serde_json::json!({"command": "echo hi"})),
+        (
+            "Bootstrapped",
+            serde_json::json!({
+                "histfile": "",
+                "home_dir": "",
+                "path": "",
+                "aliases": "",
+                "abbreviations": "",
+                "function_names": "",
+                "env_var_names": "",
+                "builtins": "",
+                "keywords": "",
+                "shell_version": "",
+            }),
+        ),
+        ("PreInteractiveSSHSession", serde_json::json!({})),
+        (
+            "SSH",
+            serde_json::json!({"socket_path": "/tmp/warp.sock", "remote_shell": "bash"}),
+        ),
+        (
+            "InitShell",
+            serde_json::json!({"session_id": 1, "shell": "zsh"}),
+        ),
+        ("InputBuffer", serde_json::json!({"buffer": "echo hi"})),
+        ("Clear", serde_json::json!({})),
+        (
+            "InitSubshell",
+            serde_json::json!({"shell": "zsh", "uname": "Darwin"}),
+        ),
+        (
+            "SourcedRcFileForWarp",
+            serde_json::json!({"shell": "zsh", "uname": "Darwin"}),
+        ),
+        ("FinishUpdate", serde_json::json!({"update_id": "update-1"})),
+        ("ExitShell", serde_json::json!({"session_id": 1})),
+    ];
+    let covered_variants = cases.each_ref().map(|(name, _)| *name);
+    assert_eq!(covered_variants.as_slice(), DPROTO_HOOK_VARIANTS);
+
+    for (expected_name, value) in cases {
+        let hook: DProtoHook = serde_json::from_value(serde_json::json!({
+            "hook": expected_name,
+            "value": value,
+        }))
+        .unwrap();
+        assert_eq!(hook.name(), expected_name);
+
+        let serialized = serde_json::to_value(hook).unwrap();
+        assert_eq!(serialized["hook"], expected_name);
+    }
+}
+
+#[test]
 fn precmd_hook_with_completion_metadata_classifies() {
     let json = r#"{
         "hook": "Precmd",
