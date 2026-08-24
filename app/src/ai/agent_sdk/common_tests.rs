@@ -3,9 +3,11 @@ use std::collections::HashMap;
 use warpui::App;
 
 use super::{
-    classify_agent_mode_base_model_id, parse_ambient_task_id, validate_agent_mode_base_model_id,
+    classify_agent_mode_base_model_id, classify_environment_lookup_failure, parse_ambient_task_id,
+    validate_agent_mode_base_model_id,
 };
 use crate::LaunchMode;
+use crate::ai::agent_sdk::driver::AgentDriverError;
 use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
 use crate::ai::llms::{
     AvailableLLMs, LLMContextWindow, LLMId, LLMInfo, LLMPreferences, LLMProvider, LLMUsageMetadata,
@@ -22,6 +24,23 @@ use crate::server::sync_queue::SyncQueue;
 use crate::test_util::settings::initialize_settings_for_tests;
 use crate::workspaces::team_tester::TeamTesterStatus;
 use crate::workspaces::user_workspaces::UserWorkspaces;
+
+#[test]
+fn classify_environment_lookup_failure_is_not_found_when_catalog_is_populated() {
+    // The catalog synced fine and simply doesn't have a row for this ID, so
+    // it's a genuine not-found.
+    let err = classify_environment_lookup_failure("env-123".into(), false);
+    assert!(matches!(err, AgentDriverError::EnvironmentNotFound(id) if id == "env-123"));
+}
+
+#[test]
+fn classify_environment_lookup_failure_is_catalog_unavailable_when_catalog_is_empty() {
+    // An empty catalog means the object sync that populates it hasn't
+    // completed or failed silently — we can't yet tell whether the ID is
+    // valid, so this must not be reported as `EnvironmentNotFound`.
+    let err = classify_environment_lookup_failure("env-123".into(), true);
+    assert!(matches!(err, AgentDriverError::EnvironmentCatalogUnavailable(id) if id == "env-123"));
+}
 
 #[test]
 fn parse_ambient_task_id_accepts_valid_ids() {

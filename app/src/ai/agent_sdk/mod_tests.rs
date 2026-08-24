@@ -1,3 +1,7 @@
+use std::collections::HashMap;
+use std::path::PathBuf;
+use std::sync::Arc;
+
 use serde_json::json;
 use warp_cli::CliCommand;
 use warp_cli::agent::Harness;
@@ -6,11 +10,23 @@ use warp_cli::artifact::{
 };
 use warp_cli::task::{MessageCommand, MessageSendArgs, MessageWatchArgs, TaskCommand};
 use warp_core::telemetry::TelemetryEvent;
+use warpui::{App, SingletonEntity as _};
 
 use super::{
-    CommandAuthentication, command_authentication, command_requires_auth,
+    AgentDriverRunner, CommandAuthentication, command_authentication, command_requires_auth,
     command_to_telemetry_event, reconcile_task_harness,
 };
+use crate::ai::agent_sdk::driver::{AgentDriverError, AgentDriverOptions};
+use crate::ai::cloud_environments::{
+    AmbientAgentEnvironment, CloudAmbientAgentEnvironment, CloudAmbientAgentEnvironmentModel,
+};
+use crate::cloud_object::model::persistence::CloudModel;
+use crate::cloud_object::{CloudObjectMetadata, CloudObjectPermissions};
+use crate::server::cloud_objects::test_utils::{
+    create_update_manager_struct, initialize_app, mock_server_api,
+};
+use crate::server::cloud_objects::update_manager::InitialLoadResponse;
+use crate::server::ids::{ServerId, SyncId};
 
 const TASK_ID: &str = "00000000-0000-0000-0000-000000000001";
 
@@ -215,4 +231,193 @@ fn run_message_watch_telemetry_defaults_to_unknown_harness() {
     )));
 
     assert_eq!(event.payload(), Some(json!({ "harness": "unknown" })));
+}
+
+// ── `resolve_environment` regression matrix ──────────────────────────────────
+//
+// Classification must be driven by whether the *sync* was healthy, never by
+// whether the catalog happens to be empty. Each cell below combines sync
+// health (via `UpdateManager::mock_initial_load`) with catalog population
+// (via a real `CloudModel` object, added independently of the id under
+// test) to prove catalog size has no bearing on the outcome.
+
+fn minimal_driver_options() -> AgentDriverOptions {
+    AgentDriverOptions {
+        working_dir: PathBuf::from("/tmp"),
+        secrets: HashMap::new(),
+        task_id: None,
+        parent_run_id: None,
+        should_share: false,
+        idle_on_complete: None,
+        idle_on_fail: None,
+        resume: None,
+        cloud_providers: Vec::new(),
+        environment: None,
+        additional_source_repos: Vec::new(),
+        selected_harness: Harness::Oz,
+        third_party_harness_model_config: None,
+        snapshot_disabled: None,
+        snapshot_upload_timeout: None,
+        snapshot_script_timeout: None,
+        checkpoint_interval: None,
+        skip_initial_turn: false,
+        strict_mcp_startup: false,
+        mcp_startup_timeout: None,
+    }
+}
+
+/// Seeds an environment into `CloudModel` with a server id unrelated to any id looked up in
+/// these tests, so "catalog populated" cells have a real, unrelated row while the target id
+/// remains genuinely absent.
+fn seed_unrelated_environment(app: &mut App, server_id: i64) {
+    let sync_id = SyncId::ServerId(ServerId::from(server_id));
+    let environment = AmbientAgentEnvironment::new(
+        "Unrelated Env".to_string(),
+        None,
+        vec![],
+        "ubuntu:latest".to_string(),
+        vec![],
+    );
+    let object = CloudAmbientAgentEnvironment::new(
+        sync_id,
+        CloudAmbientAgentEnvironmentModel::new(environment),
+        CloudObjectMetadata::mock(),
+        CloudObjectPermissions::mock_personal(),
+    );
+    CloudModel::handle(app).update(app, |cloud_model, _| {
+        cloud_model.add_object(sync_id, object);
+    });
+}
+
+/// Drives the real `AgentDriverRunner::resolve_environment` for a missing environment id,
+/// through a live `ModelSpawner`, and returns its result.
+async fn resolve_missing_environment(
+    app: &mut App,
+    missing_id: &str,
+) -> Result<(), AgentDriverError> {
+    let runner = app.add_singleton_model(|_| AgentDriverRunner);
+    let (tx, rx) = futures::channel::oneshot::channel();
+    let missing_id = missing_id.to_string();
+    runner.update(app, |_, ctx| {
+        let spawner = ctx.spawner();
+        let mut driver_options = minimal_driver_options();
+        ctx.spawn(
+            async move {
+                let result = AgentDriverRunner::resolve_environment(
+                    &spawner,
+                    Some(missing_id),
+                    &mut driver_options,
+                )
+                .await;
+                let _ = tx.send(result);
+            },
+            |_, _, _| {},
+        );
+    });
+    rx.await.expect("resolve_environment task should complete")
+}
+
+#[test]
+fn resolve_environment_is_not_found_when_sync_healthy_and_catalog_empty() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let update_manager_struct =
+            create_update_manager_struct(&mut app, Arc::new(mock_server_api()));
+        update_manager_struct
+            .update_manager
+            .update(&mut app, |update_manager, ctx| {
+                update_manager.mock_initial_load(InitialLoadResponse::default(), ctx);
+            });
+
+        let missing_id = ServerId::from(999_001_i64).to_string();
+        let result = resolve_missing_environment(&mut app, &missing_id).await;
+
+        assert!(
+            matches!(&result, Err(AgentDriverError::EnvironmentNotFound(id)) if id == &missing_id),
+            "expected EnvironmentNotFound, got {result:?}"
+        );
+    });
+}
+
+#[test]
+fn resolve_environment_is_catalog_unavailable_when_sync_unhealthy_and_catalog_empty() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let update_manager_struct =
+            create_update_manager_struct(&mut app, Arc::new(mock_server_api()));
+        update_manager_struct
+            .update_manager
+            .update(&mut app, |update_manager, ctx| {
+                update_manager.mock_initial_load(
+                    InitialLoadResponse {
+                        had_errors: true,
+                        ..Default::default()
+                    },
+                    ctx,
+                );
+            });
+
+        let missing_id = ServerId::from(999_002_i64).to_string();
+        let result = resolve_missing_environment(&mut app, &missing_id).await;
+
+        assert!(
+            matches!(&result, Err(AgentDriverError::EnvironmentCatalogUnavailable(id)) if id == &missing_id),
+            "an empty catalog after an unhealthy sync must not be reported as a genuine not-found: {result:?}"
+        );
+    });
+}
+
+#[test]
+fn resolve_environment_is_not_found_when_sync_healthy_despite_unrelated_catalog_entries() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        seed_unrelated_environment(&mut app, 999_010);
+        let update_manager_struct =
+            create_update_manager_struct(&mut app, Arc::new(mock_server_api()));
+        update_manager_struct
+            .update_manager
+            .update(&mut app, |update_manager, ctx| {
+                update_manager.mock_initial_load(InitialLoadResponse::default(), ctx);
+            });
+
+        let missing_id = ServerId::from(999_011_i64).to_string();
+        let result = resolve_missing_environment(&mut app, &missing_id).await;
+
+        assert!(
+            matches!(&result, Err(AgentDriverError::EnvironmentNotFound(id)) if id == &missing_id),
+            "a healthy sync must report a genuine not-found even though the catalog has other rows: {result:?}"
+        );
+    });
+}
+
+#[test]
+fn resolve_environment_is_catalog_unavailable_when_sync_unhealthy_despite_populated_catalog() {
+    // This is the exact shape of the original incident: a partial sync failure leaves stale or
+    // unrelated rows in the catalog (non-empty), while the requested environment is silently
+    // missing. Catalog size alone would (wrongly) call this a genuine not-found.
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        seed_unrelated_environment(&mut app, 999_020);
+        let update_manager_struct =
+            create_update_manager_struct(&mut app, Arc::new(mock_server_api()));
+        update_manager_struct
+            .update_manager
+            .update(&mut app, |update_manager, ctx| {
+                update_manager.mock_initial_load(
+                    InitialLoadResponse {
+                        had_errors: true,
+                        ..Default::default()
+                    },
+                    ctx,
+                );
+            });
+
+        let missing_id = ServerId::from(999_021_i64).to_string();
+        let result = resolve_missing_environment(&mut app, &missing_id).await;
+
+        assert!(
+            matches!(&result, Err(AgentDriverError::EnvironmentCatalogUnavailable(id)) if id == &missing_id),
+            "a non-empty catalog must not mask an unhealthy sync: {result:?}"
+        );
+    });
 }

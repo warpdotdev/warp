@@ -565,6 +565,28 @@ impl ServerApi {
         )
     }
 
+    /// Like [`Self::send_graphql_request`], but also reports whether the response carried
+    /// GraphQL partial errors, so callers building caches from the response (e.g. the Warp
+    /// Drive object sync) can tell an incomplete response apart from a genuinely empty one.
+    pub fn send_graphql_request_with_partial_errors<
+        'a,
+        QF,
+        O: warp_graphql::client::Operation<QF> + Send + 'a,
+    >(
+        &'a self,
+        operation: O,
+        timeout: Option<Duration>,
+    ) -> BoxFuture<'a, Result<(QF, bool)>>
+    where
+        QF: 'a,
+    {
+        warp_server_client::graphql_helpers::send_graphql_request_with_partial_errors(
+            &self.base_client,
+            operation,
+            timeout,
+        )
+    }
+
     /// Opens an SSE stream to the agent event-push endpoint.
     ///
     /// The returned `EventSourceStream` yields `reqwest_eventsource::Event`

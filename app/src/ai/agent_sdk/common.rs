@@ -277,6 +277,27 @@ pub fn refresh_warp_drive(
         .map_err(|_| anyhow::anyhow!("Timed out waiting for Warp Drive to sync"))
 }
 
+/// Classifies a failed environment catalog lookup, distinguishing "the Drive catalog does not
+/// contain this ID" from "the most recent object sync that populates the catalog had errors"
+/// (e.g. GraphQL partial errors, such as the `.permissions` timeouts that motivated this).
+///
+/// Deliberately does NOT infer catalog health from whether the catalog is empty: a healthy,
+/// fully-synced account can genuinely have zero environments (empty catalog, healthy sync), and
+/// a partially-failed sync can still leave stale/unrelated environments in a non-empty catalog
+/// while silently omitting the one being looked up. Catalog size says nothing about whether the
+/// sync that produced it was complete, so `sync_had_errors` must come from the sync itself (see
+/// `UpdateManager::last_sync_had_errors`) rather than from `CloudAmbientAgentEnvironment::get_all`.
+pub(super) fn classify_environment_lookup_failure(
+    environment_id: String,
+    sync_had_errors: bool,
+) -> AgentDriverError {
+    if sync_had_errors {
+        AgentDriverError::EnvironmentCatalogUnavailable(environment_id)
+    } else {
+        AgentDriverError::EnvironmentNotFound(environment_id)
+    }
+}
+
 /// Fetch the conversation's server metadata and validate that its harness matches the caller's
 /// `--harness` choice. Returns the metadata on success so the caller can reuse it (e.g. for the
 /// server conversation token).

@@ -731,7 +731,9 @@ impl ObjectClient for ServerApi {
         };
 
         let operation = GetUpdatedCloudObjects::build(variables);
-        let response_data = self.send_graphql_request(operation, None).await?;
+        let (response_data, had_errors) = self
+            .send_graphql_request_with_partial_errors(operation, None)
+            .await?;
 
         match response_data.updated_cloud_objects {
             UpdatedCloudObjectsResult::UpdatedCloudObjectsOutput(output) => {
@@ -915,6 +917,7 @@ impl ObjectClient for ServerApi {
                     user_profiles,
                     action_histories,
                     mcp_gallery,
+                    had_errors,
                 };
                 Ok(response)
             }
