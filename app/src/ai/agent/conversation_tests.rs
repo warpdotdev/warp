@@ -1,6 +1,7 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use ai::api_keys::{ApiKeyManager, CustomEndpointParams, CustomEndpointSchema};
+use chrono::{DateTime, Local};
 use warp_core::features::FeatureFlag;
 use warp_multi_agent_api as api;
 use warpui::{App, SingletonEntity};
@@ -10,8 +11,12 @@ use super::{
     ConversationUsageTotals, RecordingSpanStatus, RestoreConversationError,
     artifact_from_fork_proto, footer_model_token_usage,
 };
+use crate::ai::agent::{
+    AIAgentExchange, AIAgentExchangeId, AIAgentInput, AIAgentOutputStatus, FinishedAIAgentOutput,
+    Shared, UserQueryMode,
+};
 use crate::ai::artifacts::Artifact;
-use crate::ai::llms::LLMPreferences;
+use crate::ai::llms::{LLMId, LLMPreferences};
 use crate::auth::AuthStateProvider;
 use crate::auth::auth_manager::AuthManager;
 use crate::network::NetworkStatus;
@@ -1538,5 +1543,139 @@ fn fetched_memories_dedupes_keeping_first_position_and_latest_data() {
             fetched_memory("m2", "other", "store-1", None),
             fetched_memory("m1", "same memory id different store", "store-2", None),
         ]
+    );
+}
+
+// --- total_agent_response_time_since_last_user_query_ms /
+// wall_to_wall_response_time_since_last_query (APP-5364) ---
+//
+// `start_time` is stamped from the client's local clock while `finish_time`
+// is derived from server message timestamps (see
+// `finish_time_from_exchange_messages`), so the two can drift relative to
+// each other. These tests drive that skew directly through the exchange's
+// public timestamp fields, without needing a real clock-skew setup.
+
+/// Builds a minimal exchange with the given start/finish times. `has_query`
+/// controls whether the exchange carries a user query, matching the
+/// user-query-vs-follow-up distinction the timing walk relies on.
+fn timed_exchange(
+    start_time: DateTime<Local>,
+    finish_time: Option<DateTime<Local>>,
+    has_query: bool,
+) -> AIAgentExchange {
+    let input = if has_query {
+        vec![AIAgentInput::UserQuery {
+            query: "hello".to_string(),
+            context: Default::default(),
+            static_query_type: None,
+            referenced_attachments: Default::default(),
+            user_query_mode: UserQueryMode::default(),
+            running_command: None,
+            intended_agent: None,
+        }]
+    } else {
+        vec![]
+    };
+    AIAgentExchange {
+        id: AIAgentExchangeId::new(),
+        input,
+        output_status: AIAgentOutputStatus::Finished {
+            finished_output: FinishedAIAgentOutput::Success {
+                output: Shared::new(Default::default()),
+            },
+        },
+        added_message_ids: HashSet::new(),
+        start_time,
+        finish_time,
+        time_to_first_token_ms: None,
+        working_directory: None,
+        model_id: LLMId::from("test-model"),
+        request_cost: None,
+        coding_model_id: LLMId::from("test-model"),
+        cli_agent_model_id: LLMId::from("test-model"),
+        computer_use_model_id: LLMId::from("test-model"),
+        response_initiator: None,
+    }
+}
+
+/// A multi-exchange orchestration turn where the client clock runs ahead of
+/// the server (so every exchange's raw `finish_time - start_time` is
+/// negative) must never sum to a negative total — this is the exact APP-5364
+/// symptom ("-40019.9 seconds").
+#[test]
+fn total_agent_response_time_clamps_when_client_clock_leads_server() {
+    let mut conversation = AIConversation::new(false, false);
+    let query_time = Local::now();
+    conversation.append_root_exchange_for_test(timed_exchange(
+        query_time,
+        Some(query_time - chrono::Duration::seconds(40020)),
+        true,
+    ));
+    conversation.append_root_exchange_for_test(timed_exchange(
+        query_time,
+        Some(query_time - chrono::Duration::seconds(10)),
+        false,
+    ));
+
+    assert_eq!(
+        conversation.total_agent_response_time_since_last_user_query_ms(),
+        0,
+        "a skewed clock must never produce a negative total agent response time"
+    );
+}
+
+#[test]
+fn total_agent_response_time_sums_positive_durations_across_exchanges() {
+    let mut conversation = AIConversation::new(false, false);
+    let query_time = Local::now();
+    conversation.append_root_exchange_for_test(timed_exchange(
+        query_time,
+        Some(query_time + chrono::Duration::milliseconds(100)),
+        true,
+    ));
+    conversation.append_root_exchange_for_test(timed_exchange(
+        query_time + chrono::Duration::milliseconds(100),
+        Some(query_time + chrono::Duration::milliseconds(300)),
+        false,
+    ));
+
+    assert_eq!(
+        conversation.total_agent_response_time_since_last_user_query_ms(),
+        300
+    );
+}
+
+/// The "Total time (including tool calls)" wall-to-wall figure uses the same
+/// mixed client/server clocks as the per-exchange duration and must also
+/// clamp to non-negative.
+#[test]
+fn wall_to_wall_response_time_clamps_when_client_clock_leads_server() {
+    let mut conversation = AIConversation::new(false, false);
+    let query_time = Local::now();
+    conversation.append_root_exchange_for_test(timed_exchange(
+        query_time,
+        Some(query_time - chrono::Duration::seconds(5)),
+        true,
+    ));
+
+    assert_eq!(
+        conversation.wall_to_wall_response_time_since_last_query(),
+        Some(0)
+    );
+}
+
+#[test]
+fn wall_to_wall_response_time_returns_positive_duration_unchanged() {
+    let mut conversation = AIConversation::new(false, false);
+    let query_time = Local::now();
+    conversation.append_root_exchange_for_test(timed_exchange(
+        query_time,
+        Some(query_time + chrono::Duration::milliseconds(250)),
+        true,
+    ));
+
+    assert_eq!(
+        conversation.wall_to_wall_response_time_since_last_query(),
+        Some(250)
     );
 }
