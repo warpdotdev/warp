@@ -19,6 +19,9 @@ use typed_path::{
 };
 
 use crate::standardized_path::StandardizedPath;
+#[cfg(windows)]
+#[path = "path/windows.rs"]
+pub mod windows;
 
 lazy_static! {
     /// Test home directory value for tests.

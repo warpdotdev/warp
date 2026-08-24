@@ -1,8 +1,9 @@
 use std::collections::HashMap;
 use std::ffi::OsString;
 
+use warp_core::channel::ChannelState;
+
 use super::{FOCUS_URL_ENV, TERMINAL_SESSION_UUID_ENV, add_session_focus_env_vars};
-use crate::channel::ChannelState;
 
 #[test]
 fn focus_env_vars_point_at_session_deeplink() {

@@ -1478,7 +1478,7 @@ impl Session {
 
     #[cfg(windows)]
     async fn read_history_via_powershell(history_file_path: &OsStr) -> Result<Vec<u8>> {
-        let Some(powershell_command) = crate::util::windows::any_powershell_path() else {
+        let Some(powershell_command) = warp_util::path::windows::any_powershell_path() else {
             return Err(anyhow::anyhow!(
                 "Failed to find powershell executable to read history"
             ));

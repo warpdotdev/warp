@@ -34,6 +34,7 @@ log.workspace = true
 warp_errors.workspace = true
 
 [target.'cfg(windows)'.dependencies]
+directories.workspace = true
 windows.workspace = true
 
 [target.'cfg(target_family = "wasm")'.dependencies]

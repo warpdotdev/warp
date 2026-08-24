@@ -471,7 +471,7 @@ impl AvailableShells {
         // to search.
         #[cfg(windows)]
         {
-            use crate::util::windows;
+            use warp_util::path::windows;
 
             paths_to_search.extend(windows::powershell_7_install_paths());
             paths_to_search.push(windows::powershell_5_install_path());

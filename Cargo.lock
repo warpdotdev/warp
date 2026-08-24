@@ -16131,6 +16131,7 @@ dependencies = [
  "anyhow",
  "command",
  "content_inspector",
+ "directories",
  "dirs 6.0.0",
  "dunce",
  "event-listener",
