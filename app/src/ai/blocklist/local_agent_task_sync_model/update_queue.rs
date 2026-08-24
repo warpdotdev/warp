@@ -86,6 +86,13 @@ impl LocalTaskUpdateQueue {
         self.take_next_update(task_id)
     }
 
+    /// Whether the task has no queued or in-flight updates.
+    pub fn is_idle(&self, task_id: &AmbientAgentTaskId) -> bool {
+        self.task_queues.get(task_id).is_none_or(|queue| {
+            queue.in_flight_update.is_none() && queue.pending_updates.is_empty()
+        })
+    }
+
     /// Marks a task for final cleanup and removes its queue after updates
     /// already accepted by the queue finish.
     ///

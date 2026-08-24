@@ -139,8 +139,8 @@ fn account_first_completion_metadata_matches_terminal_outcomes() {
         (
             AccountFirstCompletion::FreeStandardCreditsPurchased,
             "free_standard_credits_purchased",
-            // Buying an ad-hoc credit pack does not put the user on a plan, so
-            // they stay free-standard.
+            // Buying one-time credits does not put the user on a plan, so they
+            // stay free-standard.
             Some(FtueAccountClass::FreeStandard),
             true,
         ),
