@@ -1309,48 +1309,14 @@ fn remote_session_policy_falls_back_to_the_workspace_for_a_user_with_no_teams() 
     })
 }
 
-/// The fallback a single-team user needs: their window has no team selected, but they are on
-/// exactly one team, so that team's permission and patterns are the unambiguous answer. Mirrors
-/// `member_byo_policy_for_a_teamless_window_reads_a_sole_team`.
+/// A teamless scope reads the current workspace unconditionally, so a user on several teams
+/// gets the workspace's own value rather than a deny: there is no team-count check any more.
 #[test]
-fn remote_session_policy_for_a_teamless_window_reads_a_sole_team() {
-    let mut team = team_for_test();
-    set_team_remote_session_policy(&mut team, true, &["^kubectl"]);
-    let workspace = workspace_for_test(&team);
-
-    App::test((), |mut app| async move {
-        initialize_window_team_test_app(&mut app, vec![workspace]);
-
-        let (window_id, view) = create_test_window(&mut app);
-        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
-            user_workspaces.register_window(window_id, None, ctx);
-        });
-
-        app.read(|ctx| {
-            assert!(
-                remote_session_ai_allowed_for_surface(&view, ctx),
-                "the sole team permits it, so the teamless window must too"
-            );
-            assert_eq!(
-                remote_session_patterns_for_surface(&view, ctx),
-                HashSet::from(["^kubectl".to_string()]),
-                "the sole team's patterns are the ones in scope"
-            );
-        });
-    })
-}
-
-/// A user on several teams has no unambiguous fallback for a teamless scope: the workspace's
-/// settings are whichever one of their teams the server elected, so reading it would hand this
-/// window another team's policy. Mirrors `member_byo_policy_denies_a_multi_team_users_teamless_window`.
-#[test]
-fn remote_session_policy_denies_a_multi_team_users_teamless_window() {
+fn remote_session_policy_reads_the_workspace_for_a_multi_team_users_teamless_window() {
     let (mut team_a, team_b) = two_teams();
     set_team_remote_session_policy(&mut team_a, true, &["^kubectl"]);
     let mut workspace = workspace_for_test(&team_a);
     workspace.teams.push(team_b);
-    // Permissive on purpose: if the teamless scope fell through to this ambient value, both
-    // assertions below would flip.
     set_workspace_remote_session_policy(&mut workspace, true, &["^workspace-only"]);
 
     App::test((), |mut app| async move {
@@ -1365,12 +1331,12 @@ fn remote_session_policy_denies_a_multi_team_users_teamless_window() {
             let user_workspaces = UserWorkspaces::as_ref(ctx);
             assert!(user_workspaces.can_switch_teams());
             assert!(
-                !remote_session_ai_allowed_for_surface(&view, ctx),
-                "a multi-team user's teamless window must not inherit any team's permission"
+                remote_session_ai_allowed_for_surface(&view, ctx),
+                "a teamless window reads the workspace unconditionally, even with several teams"
             );
-            assert!(
-                remote_session_patterns_for_surface(&view, ctx).is_empty(),
-                "a multi-team user's teamless window must not inherit any team's patterns"
+            assert_eq!(
+                remote_session_patterns_for_surface(&view, ctx),
+                HashSet::from(["^workspace-only".to_string()])
             );
         });
     })
@@ -1399,8 +1365,11 @@ fn remote_session_ai_permission_denies_a_scope_naming_an_unresolvable_team() {
     })
 }
 
+/// With no workspace at all there is nothing to read `absent` from, so the shared
+/// `scoped_or_workspace_setting` fallback applies: this denies rather than guessing, the same
+/// as an unresolvable named team.
 #[test]
-fn remote_session_ai_permission_is_allowed_for_a_user_with_no_workspace_at_all() {
+fn remote_session_ai_permission_denies_a_user_with_no_workspace_at_all() {
     App::test((), |mut app| async move {
         initialize_window_team_test_app(&mut app, vec![]);
 
@@ -1410,7 +1379,7 @@ fn remote_session_ai_permission_is_allowed_for_a_user_with_no_workspace_at_all()
         });
 
         app.read(|ctx| {
-            assert!(remote_session_ai_allowed_for_surface(&view, ctx));
+            assert!(!remote_session_ai_allowed_for_surface(&view, ctx));
             assert!(remote_session_patterns_for_surface(&view, ctx).is_empty());
         });
     })

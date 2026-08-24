@@ -431,6 +431,10 @@ impl From<&GqlAiPermissionsSettings> for AiPermissionsSettings {
 /// Compiles each remote-session command pattern into a [`Regex`], dropping (and reporting) any
 /// pattern that fails to compile so one bad entry in an org's configuration cannot suppress the
 /// rest of the list.
+///
+/// Throttled to once per run: an uncompilable pattern is a static configuration problem that
+/// does not resolve itself between polls of the workspaces-metadata query, so reporting it every
+/// time would page the same broken pattern at the poll rate for every affected user.
 fn compile_remote_session_regex_list(patterns: impl IntoIterator<Item = String>) -> Vec<Regex> {
     patterns
         .into_iter()
@@ -439,7 +443,8 @@ fn compile_remote_session_regex_list(patterns: impl IntoIterator<Item = String>)
             Err(_) => {
                 report_error!(
                     "Invalid regex pattern for remote session detection",
-                    extra: { "pattern" => %pattern }
+                    extra: { "pattern" => %pattern },
+                    warp_errors::ReportErrorLogMode::OncePerRun
                 );
                 None
             }

@@ -476,92 +476,54 @@ impl UserWorkspaces {
         })
     }
 
-    /// Whether AI is allowed in remote sessions under `scope`'s team.
-    ///
-    /// A scope that names a team reads that team's permission and only that team's: an
-    /// unresolvable team denies, never another team's permission.
-    ///
-    /// A scope with no team falls back on the current workspace, but only where that has an
-    /// unambiguous answer: `workspace.settings` when the user is on no team there, and their
-    /// own team's permission when they are on exactly one. On several teams there is nothing to
-    /// fall back to -- `workspace.settings` would be an arbitrarily elected one of them, see
-    /// [`TeamScope`] -- so, for a control gating AI in an environment the user may not control,
-    /// this denies rather than guessing. Mirrors [`Self::team_byo_for_scope`]'s shape.
+    /// Whether AI is allowed in remote sessions under `scope`'s team. See
+    /// [`Self::scoped_or_workspace_setting`] for the no-team fallback. An unresolvable team
+    /// denies rather than guessing, for a control gating AI in an environment the user may not
+    /// control.
     pub(crate) fn is_ai_allowed_in_remote_sessions<S: TeamScope + ?Sized>(
         &self,
         scope: &S,
     ) -> bool {
-        match scope.team_uid() {
-            Some(_) => self
-                .team_from_scope(scope)
-                .map(|team| {
-                    team.settings
-                        .ai_permissions
-                        .allow_ai_in_remote_sessions
-                        .value
-                })
-                .unwrap_or(false),
-            None => {
-                let Some(workspace) = self.current_workspace() else {
-                    return true;
-                };
-                match workspace.teams.as_slice() {
-                    [] => {
-                        workspace
-                            .settings
-                            .ai_permissions_settings
-                            .allow_ai_in_remote_sessions
-                    }
-                    [team] => {
-                        team.settings
-                            .ai_permissions
-                            .allow_ai_in_remote_sessions
-                            .value
-                    }
-                    _ => false,
-                }
-            }
-        }
+        self.scoped_or_workspace_setting(
+            scope,
+            |team| {
+                team.settings
+                    .ai_permissions
+                    .allow_ai_in_remote_sessions
+                    .value
+            },
+            |workspace| {
+                workspace
+                    .settings
+                    .ai_permissions_settings
+                    .allow_ai_in_remote_sessions
+            },
+            false,
+        )
     }
 
-    /// The remote-session command patterns configured by `scope`'s team.
-    ///
-    /// Falls back to the current workspace's patterns on the same terms as
-    /// [`Self::is_ai_allowed_in_remote_sessions`]. Unlike that permission there is no
-    /// restrictive value to fail closed to, so an unresolvable team or several teams contribute
-    /// no patterns rather than the workspace's.
+    /// The remote-session command patterns configured by `scope`'s team. See
+    /// [`Self::scoped_or_workspace_setting`] for the no-team fallback.
     pub(crate) fn get_remote_session_regex_list<S: TeamScope + ?Sized>(
         &self,
         scope: &S,
     ) -> &[Regex] {
-        match scope.team_uid() {
-            Some(_) => self
-                .team_from_scope(scope)
-                .map(|team| {
-                    team.settings
-                        .ai_permissions
-                        .remote_session_regex_list
-                        .as_slice()
-                })
-                .unwrap_or_default(),
-            None => {
-                let Some(workspace) = self.current_workspace() else {
-                    return &[];
-                };
-                match workspace.teams.as_slice() {
-                    [] => workspace
-                        .settings
-                        .ai_permissions_settings
-                        .remote_session_regex_list
-                        .as_slice(),
-                    [team] => team
-                        .settings
-                        .ai_permissions
-                        .remote_session_regex_list
-                        .as_slice(),
-                    _ => &[],
-                }
-            }
-        }
+        self.scoped_or_workspace_setting(
+            scope,
+            |team| {
+                team.settings
+                    .ai_permissions
+                    .remote_session_regex_list
+                    .as_slice()
+            },
+            |workspace| {
+                workspace
+                    .settings
+                    .ai_permissions_settings
+                    .remote_session_regex_list
+                    .as_slice()
+            },
+            &[],
+        )
     }
 }

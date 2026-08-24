@@ -4042,7 +4042,24 @@ fn focused_terminal_publishes_remote_blocks_while_remote_session_ai_is_still_per
         initialize_app_for_terminal_view(&mut app);
         let (window_id, terminal) = add_window_with_id_and_terminal(&mut app, None);
         UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
-            user_workspaces.register_window(window_id, None, ctx);
+            user_workspaces.setup_test_workspace(ctx);
+            user_workspaces.update_current_workspace(
+                |workspace| {
+                    workspace
+                        .teams
+                        .first_mut()
+                        .expect("the fixture workspace has a team")
+                        .settings
+                        .ai_permissions
+                        .allow_ai_in_remote_sessions
+                        .value = true;
+                },
+                ctx,
+            );
+            let team_uid = user_workspaces
+                .sole_team_uid()
+                .expect("the fixture workspace has exactly one team");
+            user_workspaces.set_team_for_window(window_id, team_uid, ctx);
         });
 
         app.read(|ctx| {
