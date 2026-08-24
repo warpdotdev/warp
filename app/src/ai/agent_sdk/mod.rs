@@ -1059,6 +1059,8 @@ impl AgentDriverRunner {
                     cloud_providers: Vec::new(),
                     environment: None,
                     additional_source_repos: Vec::new(),
+                    repository_head_overrides: args.repository_head_overrides.clone(),
+                    remove_repository_origins: args.remove_repository_origins,
                     selected_harness: args.harness,
                     third_party_harness_model_config,
                     snapshot_disabled: args.snapshot.no_snapshot.then_some(true),
@@ -1128,6 +1130,17 @@ impl AgentDriverRunner {
                 Self::resolve_environment(foreground, environment_id, &mut driver_options),
             )
             .await?;
+        driver::environment::validate_repository_head_overrides(
+            &driver::environment::merge_repos_deduped(
+                driver_options
+                    .environment
+                    .as_ref()
+                    .map(crate::ai::cloud_environments::AmbientAgentEnvironment::effective_repos)
+                    .unwrap_or_default(),
+                driver_options.additional_source_repos.clone(),
+            )?,
+            &driver_options.repository_head_overrides,
+        )?;
 
         Ok((driver_options, task, task_conversation_id))
     }

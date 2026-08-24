@@ -25,7 +25,9 @@ use crate::ai::custom_model_routers::{
     ComplexityRouting, CustomModelRouter, CustomModelRouting, PromptRouting, PromptRule,
     is_auto_target,
 };
-use crate::ai::execution_profiles::model_menu_items::available_model_menu_items;
+use crate::ai::execution_profiles::model_menu_items::{
+    CollapsedModelVariants, available_model_menu_items,
+};
 use crate::ai::llms::{LLMPreferences, LLMPreferencesEvent};
 use crate::appearance::Appearance;
 use crate::auth::AuthStateProvider;
@@ -42,6 +44,7 @@ use crate::view_components::action_button::{
     ActionButton, ButtonSize, PrimaryTheme, SecondaryTheme,
 };
 use crate::view_components::dropdown::DropdownAction;
+use crate::workspaces::user_workspaces::UserWorkspaces;
 
 pub const HEADER_TEXT: &str = "Router Editor";
 
@@ -1048,6 +1051,7 @@ fn fill_filterable_dropdown<F>(
     // `set_filtered_items` keeps an empty selection blank rather than
     // auto-selecting the first model.
     dropdown.set_placeholder(MODEL_PLACEHOLDER, ctx);
+    let scope = UserWorkspaces::as_ref(ctx).team_context_for_view(ctx);
     let items = available_model_menu_items(
         LLMPreferences::as_ref(ctx)
             .get_base_llm_choices_for_agent_mode(ctx)
@@ -1056,8 +1060,8 @@ fn fill_filterable_dropdown<F>(
         |llm| DropdownAction::select_action_and_close(make_action(llm.id.to_string())),
         None,
         None,
-        false,
-        false,
+        CollapsedModelVariants::default(),
+        &scope,
         ctx,
     );
     dropdown.set_rich_items(items, ctx);

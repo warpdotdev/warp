@@ -1892,8 +1892,7 @@ impl CodebaseIndex {
                             },
                             ctx
                         );
-                        report_error!(anyhow::anyhow!("{err:?}")
-                            .context("Failed to diff filesystem with tree from snapshot"));
+                        report_error!(&err);
                         me.update_tree_sync_state(
                             TreeSourceSyncState::InitializeTreeFailure(err),
                             ctx,

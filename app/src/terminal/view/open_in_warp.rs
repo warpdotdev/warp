@@ -58,7 +58,13 @@ impl TerminalView {
                 return;
             }
 
-            let command = block_completed.command.clone();
+            let command = block_completed
+                .command
+                .get_with(|compute| {
+                    let model = self.model.lock();
+                    compute(model.block_list())
+                })
+                .to_owned();
             let working_directory = active_block_metadata
                 .current_working_directory()
                 .map(Into::into);

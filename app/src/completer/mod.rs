@@ -1,5 +1,6 @@
 #[cfg(feature = "completions_v2")]
 mod js;
+mod wsl_guest_listing;
 
 use std::collections::{HashMap, HashSet};
 use std::ops::Deref;
@@ -75,6 +76,20 @@ impl SessionContext {
     ) -> Vec<EngineDirEntry> {
         match self.session.session_type() {
             SessionType::Local => {
+                // The host cannot resolve an `IO_REPARSE_TAG_LX_SYMLINK` over `\\wsl$`
+                // (APP-3993): it can't classify a symlink-to-directory correctly, and it can't
+                // traverse *through* a symlinked directory to list its contents at all. So a WSL
+                // session asks the guest for the listing directly, following symlinks (`-L`) so
+                // both problems are avoided at the source, rather than patching up a host listing
+                // afterwards. A slow or failing guest falls back to the plain host listing below
+                // rather than emptying the completion list.
+                #[cfg(windows)]
+                if self.session.is_wsl()
+                    && let Some(entries) = wsl_guest_listing::list_entries(self, directory).await
+                {
+                    return entries;
+                }
+
                 let dir = match self.session.maybe_convert_to_native_path(directory) {
                     Ok(dir) => dir,
                     Err(err) => {
@@ -125,52 +140,16 @@ impl SessionContext {
                     )
                     .await;
 
-                if let Ok(command_output) = command_output_result {
-                    let Ok(output_string) = command_output.to_string() else {
-                        log::warn!(
-                            "Executing `ls` on remote box returned unparsable bytes: `{:?}`",
-                            AsciiDebug(command_output.output())
-                        );
-                        return vec![];
-                    };
-
-                    match command_output.status {
+                match command_output_result {
+                    Ok(command_output) => match command_output.status {
                         CommandExitStatus::Success => {
-                            let mut entries = Vec::new();
-                            let mut entries_iter = output_string.split('\0');
-                            let dirs = entries_iter
-                                .by_ref()
-                                // We use two consecutive null characters to separate files and
-                                // folders, so detect that here. Note that take_while consumes the
-                                // first entry that returns false.
-                                .take_while(|entry| !entry.is_empty())
-                                .filter_map(|entry| {
-                                    if entry == "." {
-                                        return None;
-                                    }
-
-                                    Path::new(entry)
-                                        .file_name()
-                                        .and_then(|name| name.to_str())
-                                        .map(|name| EngineDirEntry {
-                                            file_name: name.to_owned(),
-                                            file_type: EngineFileType::Directory,
-                                        })
-                                });
-                            entries.extend(dirs);
-
-                            let files = entries_iter.filter_map(|entry| {
-                                Path::new(entry)
-                                    .file_name()
-                                    .and_then(|name| name.to_str())
-                                    .map(|name| EngineDirEntry {
-                                        file_name: name.to_owned(),
-                                        file_type: EngineFileType::File,
-                                    })
-                            });
-                            entries.extend(files);
-
-                            entries
+                            parse_ls_script_output(command_output.output()).unwrap_or_else(|| {
+                                log::warn!(
+                                    "Executing `ls` on remote box returned malformed or truncated output: `{:?}`",
+                                    AsciiDebug(command_output.output())
+                                );
+                                vec![]
+                            })
                         }
                         CommandExitStatus::Failure => {
                             safe_warn!(
@@ -179,12 +158,11 @@ impl SessionContext {
                             );
                             vec![]
                         }
+                    },
+                    Err(err) => {
+                        log::warn!("Executing `ls` on remote box failed with error {err:?}");
+                        vec![]
                     }
-                } else {
-                    log::warn!(
-                        "Executing `ls` on remote box failed with error {command_output_result:?}"
-                    );
-                    vec![]
                 }
             }
         }
@@ -502,6 +480,59 @@ find -L . -maxdepth 1 -not -type d -print0
     .replace("\n", " ");
 
     Some(command)
+}
+
+/// Parses the null-delimited output of the script `ls_script_for_dir` builds into directory and
+/// file entries, or `None` if the output doesn't match that script's guaranteed wire format --
+/// a dirs list, a `\0` separator, and a files list, with every entry (including the separator
+/// and, when the files list is non-empty, its own entries) `\0`-terminated.
+fn parse_ls_script_output(output: &[u8]) -> Option<Vec<EngineDirEntry>> {
+    let mut entries = Vec::new();
+    let mut segments = output.split(|&byte| byte == b'\0');
+
+    let dirs = segments
+        .by_ref()
+        // We use two consecutive null characters to separate files and folders, so detect that
+        // here. Note that take_while consumes the first entry that returns false -- the
+        // dirs/files separator itself.
+        .take_while(|segment| !segment.is_empty())
+        .filter_map(|segment| dir_entry_from_segment(segment, EngineFileType::Directory));
+    entries.extend(dirs);
+
+    // What's left after the separator is the files list followed by its own trailing `\0`,
+    // which `find -print0` guarantees on every complete pass, empty or not (an empty pass
+    // contributes no bytes of its own, but the separator's `\0` is still the final byte). If
+    // nothing is left at all, the separator was never reached: the output was truncated before
+    // the second `find` pass ran, or was empty to begin with. If the last remaining segment
+    // isn't empty, the files list itself was cut off mid-entry. Either way, this isn't a real,
+    // complete listing.
+    let remaining: Vec<&[u8]> = segments.collect();
+    let (last, files) = remaining.split_last()?;
+    if !last.is_empty() {
+        return None;
+    }
+
+    entries.extend(
+        files
+            .iter()
+            .filter_map(|segment| dir_entry_from_segment(segment, EngineFileType::File)),
+    );
+
+    Some(entries)
+}
+
+/// Converts one `\0`-delimited `find -print0` segment into an entry, or `None` if it's the `.`
+/// entry `find` itself emits, or the segment isn't valid UTF-8.
+fn dir_entry_from_segment(segment: &[u8], file_type: EngineFileType) -> Option<EngineDirEntry> {
+    let path_str = std::str::from_utf8(segment).ok()?;
+    if path_str == "." {
+        return None;
+    }
+    let file_name = Path::new(path_str).file_name()?.to_str()?.to_owned();
+    Some(EngineDirEntry {
+        file_name,
+        file_type,
+    })
 }
 
 #[cfg(test)]

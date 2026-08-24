@@ -312,6 +312,7 @@ use crate::settings_view::DisplayCount;
 use crate::settings_view::keybindings::KeybindingChangedNotifier;
 use crate::suggestions::ignored_suggestions_model::IgnoredSuggestionsModel;
 use crate::system::SystemStats;
+use crate::tab::TabShortcutModifierState;
 use crate::terminal::cli_agent_sessions::CLIAgentSessionsModel;
 use crate::terminal::keys::TerminalKeybindings;
 use crate::terminal::resizable_data::ResizableData;
@@ -812,6 +813,10 @@ pub fn run() -> Result<()> {
             }
             warp_cli::Command::DumpDebugInfo => {
                 return debug_dump::run();
+            }
+            #[cfg(not(target_family = "wasm"))]
+            warp_cli::Command::DumpSettingsSchema { output_path } => {
+                return settings::schema_generation::dump_settings_schema(output_path.as_deref());
             }
             #[cfg(not(target_family = "wasm"))]
             warp_cli::Command::PrintTelemetryEvents => {
@@ -2115,6 +2120,7 @@ pub(crate) fn initialize_app(
     ctx.add_singleton_model(|_| SystemStats::new());
     workspace::auto_handoff::init(ctx);
     ctx.add_singleton_model(|_| KeybindingChangedNotifier::new());
+    ctx.add_singleton_model(|_| TabShortcutModifierState::new());
     ctx.add_singleton_model(|_| search::command_palette::SelectedItems::new());
     ctx.add_singleton_model(search::files::model::FileSearchModel::new);
     ctx.add_singleton_model(|_| VimRegisters::new());

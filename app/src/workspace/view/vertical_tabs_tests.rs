@@ -1,3 +1,4 @@
+use std::iter::once;
 use std::path::PathBuf;
 
 use pathfinder_geometry::rect::RectF;
@@ -27,6 +28,7 @@ use crate::context_chips::display_chip::GitLineChanges;
 use crate::pane_group::pane::IPaneType;
 use crate::pane_group::{PaneId, TerminalPaneId};
 use crate::safe_triangle::SafeTriangle;
+use crate::tab::{ShortcutModifierKind, reveals_shortcut_hints};
 use crate::terminal::CLIAgent;
 use crate::workspace::tab_settings::VerticalTabsDisplayGranularity;
 
@@ -1165,6 +1167,18 @@ fn synced_inputs_indicator_respects_tab_indicators_setting() {
 #[test]
 fn synced_inputs_indicator_hidden_on_non_terminal_rows() {
     assert!(!shows_synced_inputs_indicator(false, true, true));
+}
+
+#[test]
+fn reveals_shortcut_hints_requires_overlap_with_binding_modifiers() {
+    let super_kind = once(ShortcutModifierKind::Super).collect();
+    assert!(reveals_shortcut_hints(&super_kind, &super_kind));
+
+    let alt_kind = once(ShortcutModifierKind::Alt).collect();
+    assert!(!reveals_shortcut_hints(&alt_kind, &super_kind));
+
+    let empty = std::collections::HashSet::new();
+    assert!(!reveals_shortcut_hints(&empty, &super_kind));
 }
 
 #[test]

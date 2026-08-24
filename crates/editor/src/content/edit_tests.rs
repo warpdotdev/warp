@@ -1,6 +1,7 @@
 use std::path::Path;
 #[cfg(not(target_arch = "wasm32"))]
 use std::path::PathBuf;
+use std::sync::Arc;
 #[cfg(not(target_arch = "wasm32"))]
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -15,9 +16,9 @@ use warpui_core::{App, SingletonEntity};
 use super::{
     BlockLocation, LayOutArgs, layout_mermaid_diagram_block, layout_table_block, layout_text_block,
 };
-use crate::content::buffer::{StyledBufferRun, StyledTextBlock};
+use crate::content::buffer::{StyledBufferBlock, StyledBufferRun, StyledTextBlock};
 use crate::content::edit::{
-    ParsedUrl, highlight_urls, layout_mermaid_block_for_test, resolve_asset_source,
+    EditDelta, ParsedUrl, highlight_urls, layout_mermaid_block_for_test, resolve_asset_source,
     resolve_asset_source_relative_to_directory,
 };
 use crate::content::mermaid_diagram::{mermaid_asset_source, mermaid_diagram_layout};
@@ -223,6 +224,84 @@ fn test_text_around_link_not_auto_highlighted() {
 }
 
 #[test]
+fn test_layout_delta_never_takes_ownership_of_new_lines_with_multiple_owners() {
+    // Regression test for APP-4844: `EditDelta::new_lines` is wrapped in an `Arc` so that
+    // cloning a delta (e.g. to stash it in `DelayRendering::edits`, or because multiple editors
+    // share the same underlying buffer) is O(1) instead of O(file size). `layout_delta` must not
+    // depend on `new_lines` having a single owner to stay cheap: it takes `&self` and only ever
+    // borrows through the `Arc`, so laying out a delta can never fall back to cloning the whole
+    // (potentially file-sized) block list, no matter how many clones of the delta are alive.
+    //
+    // This exercises `layout_delta` itself (not just raw `Arc` semantics) with two live clones of
+    // the same delta -- the exact shape of two `CodeEditorModel`s sharing one buffer, each
+    // holding their own clone of the `ContentChanged` event's delta -- and confirms neither
+    // layout call touches the `Arc`'s strong count or invalidates the other clone.
+    App::test((), |app| async move {
+        app.read(|ctx| {
+            let layout_cache = LayoutCache::new();
+            let text_layout = TextLayout::new(
+                &layout_cache,
+                ctx.font_cache().text_layout_system(),
+                &TEST_STYLES,
+                f32::MAX,
+            );
+
+            let block = StyledBufferBlock::Text(StyledTextBlock {
+                block: vec![StyledBufferRun {
+                    run: "hello\n".to_string(),
+                    text_styles: Default::default(),
+                    block_style: BufferBlockStyle::PlainText,
+                }],
+                style: BufferBlockStyle::PlainText,
+                content_length: CharOffset::from(6),
+            });
+
+            let delta = EditDelta {
+                new_lines: Arc::new(vec![block]),
+                old_offset: CharOffset::from(1)..CharOffset::from(1),
+                ..EditDelta::default()
+            };
+
+            // Simulate two editors sharing the same buffer, each holding their own clone of the
+            // delta emitted by the shared `ContentChanged` event.
+            let editor_a_delta = delta.clone();
+            let editor_b_delta = delta.clone();
+            drop(delta);
+            assert_eq!(Arc::strong_count(&editor_a_delta.new_lines), 2);
+
+            let laid_out_a = editor_a_delta.layout_delta(
+                &text_layout,
+                None,
+                &RenderLayoutOptions::default(),
+                None,
+                ctx,
+            );
+            assert_eq!(laid_out_a.laid_out_line.len(), 1);
+            assert_eq!(
+                Arc::strong_count(&editor_a_delta.new_lines),
+                2,
+                "layout_delta must not take ownership of new_lines"
+            );
+
+            let laid_out_b = editor_b_delta.layout_delta(
+                &text_layout,
+                None,
+                &RenderLayoutOptions::default(),
+                None,
+                ctx,
+            );
+            assert_eq!(laid_out_b.laid_out_line.len(), 1);
+            assert_eq!(
+                Arc::strong_count(&editor_a_delta.new_lines),
+                2,
+                "both clones of the delta must remain valid, sharing the same allocation, after layout"
+            );
+            assert!(Arc::ptr_eq(&editor_a_delta.new_lines, &editor_b_delta.new_lines));
+        });
+    })
+}
+
+#[test]
 fn test_layout_partial_url() {
     // Regression test for laying out a partially-styled autodetected URL (CLD-871).
     App::test((), |app| async move {
@@ -338,7 +417,7 @@ fn test_layout_mermaid_block_uses_loaded_svg_aspect_ratio() {
             let mermaid_diagram = mermaid_diagram_layout(content, &text_layout, spacing, ctx);
 
             let (item, _has_trailing_newline) = layout_mermaid_diagram_block(
-                block,
+                &block,
                 mermaid_diagram.0,
                 mermaid_diagram.1,
                 BlockLocation::Middle,
@@ -753,7 +832,7 @@ fn test_layout_text_block_uses_rich_table_when_flag_enabled() {
             };
 
             let (item, has_trailing_newline) =
-                layout_text_block(block, &text_layout, BlockLocation::Middle, false)
+                layout_text_block(&block, &text_layout, BlockLocation::Middle, false)
                     .expect("table layout should succeed");
 
             assert!(matches!(item, BlockItem::Table(_)));
@@ -786,7 +865,7 @@ fn test_layout_text_block_uses_plain_text_when_flag_disabled() {
             };
 
             let (item, _has_trailing_newline) =
-                layout_text_block(block, &text_layout, BlockLocation::Middle, false)
+                layout_text_block(&block, &text_layout, BlockLocation::Middle, false)
                     .expect("table layout should succeed");
 
             assert!(matches!(item, BlockItem::Paragraph(_)));
@@ -817,7 +896,7 @@ fn test_layout_table_block_caches_cell_text_frames() {
             };
 
             let table = match layout_table_block(
-                block,
+                &block,
                 &text_layout,
                 TEST_STYLES
                     .block_spacings
@@ -870,7 +949,7 @@ fn test_layout_table_block_clamps_cell_width_to_max() {
             };
 
             let table = match layout_table_block(
-                block,
+                &block,
                 &text_layout,
                 TEST_STYLES
                     .block_spacings

@@ -13,6 +13,7 @@ license.workspace = true
 anyhow.workspace = true
 command.workspace = true
 content_inspector = "0.2.4"
+parking_lot.workspace = true
 pathdiff = "0.2.1"
 rand.workspace = true
 dirs.workspace = true

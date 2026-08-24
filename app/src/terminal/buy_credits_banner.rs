@@ -389,7 +389,7 @@ impl BuyCreditsBanner {
 
         let workspaces = UserWorkspaces::as_ref(ctx);
         let premium_bps = workspaces
-            .purchase_policy_for_team(workspaces.team_for_view(ctx))
+            .purchase_policy()
             .map_or(0, |policy| policy.effective_premium_bps());
         let base_rate = self
             .addon_credits_options
@@ -697,7 +697,7 @@ impl BuyCreditsBanner {
 
         // Check if the selected purchase would reach/exceed the monthly limit
         let premium_bps = workspaces
-            .purchase_policy_for_team(current_team)
+            .purchase_policy()
             .map_or(0, |policy| policy.effective_premium_bps());
         let selected_option = self
             .addon_credits_options

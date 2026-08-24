@@ -30,8 +30,8 @@ use super::ai_shared::{
     update_editor_interaction_state,
 };
 use super::settings_page::{
-    AdditionalInfo, CONTENT_FONT_SIZE, LocalOnlyIconState, MatchData, PageType, SettingsPageMeta,
-    SettingsPageViewHandle, SettingsWidget, ToggleState, build_toggle_element,
+    AdditionalInfo, CONTENT_FONT_SIZE, LocalOnlyIconState, MatchData, PageTitle, PageType,
+    SettingsPageMeta, SettingsPageViewHandle, SettingsWidget, ToggleState, build_toggle_element,
     render_body_item_label,
 };
 use super::{SettingsAction, SettingsSection, ToggleSettingActionPair, flags};
@@ -134,7 +134,7 @@ impl CLIAgentsPageView {
             Box::new(CLIAgentCommandsWidget),
             Box::new(CLIAgentToolbarLayoutWidget),
         ];
-        PageType::new_uncategorized(widgets, Some(PAGE_TITLE))
+        PageType::new_uncategorized(widgets, Some(PageTitle::new(PAGE_TITLE)))
     }
 
     fn create_cli_agent_dropdowns(

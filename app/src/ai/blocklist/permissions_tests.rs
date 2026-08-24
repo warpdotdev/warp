@@ -22,16 +22,23 @@ use crate::auth::AuthStateProvider;
 use crate::cloud_object::model::persistence::CloudModel;
 use crate::network::NetworkStatus;
 use crate::server::cloud_objects::update_manager::UpdateManager;
+use crate::server::ids::ServerId;
 use crate::server::sync_queue::SyncQueue;
 use crate::settings::{AISettings, AgentModeCommandExecutionPredicate, PrivacySettings};
 use crate::terminal::cli_agent_sessions::CLIAgentSessionsModel;
 use crate::test_util::settings::initialize_settings_for_tests_with_mode;
 use crate::workspaces::team_tester::TeamTesterStatus;
-use crate::workspaces::user_workspaces::UserWorkspaces;
+use crate::workspaces::user_workspaces::{TeamContextForOperation, UserWorkspaces};
 use crate::workspaces::workspace::SandboxedAgentSettings;
 use crate::{
     AgentNotificationsModel, GlobalResourceHandles, GlobalResourceHandlesProvider, LaunchMode,
 };
+
+/// The team [`UserWorkspaces::setup_test_workspace`] puts in the test workspace. Tests that
+/// never create one resolve this scope to no team, which is what a real teamless window does.
+fn test_scope() -> TeamContextForOperation {
+    TeamContextForOperation::new_for_test(ServerId::from(2))
+}
 
 struct PermissionsTestState {
     convo_id: AIConversationId,
@@ -111,6 +118,7 @@ fn test_can_read_files_empty_paths() {
                 &convo_id,
                 vec![],
                 Some(terminal_view_id),
+                &test_scope(),
                 ctx,
             );
             assert!(result.is_allowed());
@@ -147,6 +155,7 @@ fn test_can_read_files_workspace_settings_override_profile() {
                 &convo_id,
                 vec![PathBuf::from("/test/file.txt")],
                 Some(terminal_view_id),
+                &test_scope(),
                 ctx,
             );
             assert!(result.is_allowed());
@@ -174,6 +183,7 @@ fn test_can_read_files_workspace_settings_override_profile() {
                 &convo_id,
                 vec![PathBuf::from("/test/file.txt")],
                 Some(terminal_view_id),
+                &test_scope(),
                 ctx,
             );
             assert!(!result.is_allowed());
@@ -220,6 +230,7 @@ fn test_can_read_files_profile_workspace_allowlist_interaction() {
                 &convo_id,
                 vec![PathBuf::from("/profile/allowed/file.txt")],
                 Some(terminal_view_id),
+                &test_scope(),
                 ctx,
             );
             assert!(result.is_allowed());
@@ -233,6 +244,7 @@ fn test_can_read_files_profile_workspace_allowlist_interaction() {
                 &convo_id,
                 vec![PathBuf::from("/not/allowed/file.txt")],
                 Some(terminal_view_id),
+                &test_scope(),
                 ctx,
             );
             assert!(!result.is_allowed());
@@ -260,6 +272,7 @@ fn test_can_read_files_profile_workspace_allowlist_interaction() {
                 &convo_id,
                 vec![PathBuf::from("/profile/allowed/file.txt")],
                 Some(terminal_view_id),
+                &test_scope(),
                 ctx,
             );
             assert!(result.is_allowed());
@@ -287,6 +300,7 @@ fn test_can_read_files_profile_workspace_allowlist_interaction() {
                 &convo_id,
                 vec![PathBuf::from("/workspace/allowed/file.txt")],
                 Some(terminal_view_id),
+                &test_scope(),
                 ctx,
             );
             assert!(result.is_allowed());
@@ -300,6 +314,7 @@ fn test_can_read_files_profile_workspace_allowlist_interaction() {
                 &convo_id,
                 vec![PathBuf::from("/profile/allowed/file.txt")],
                 Some(terminal_view_id),
+                &test_scope(),
                 ctx,
             );
             assert!(!result.is_allowed());
@@ -313,6 +328,7 @@ fn test_can_read_files_profile_workspace_allowlist_interaction() {
                 &convo_id,
                 vec![PathBuf::from("/not/allowed/file.txt")],
                 Some(terminal_view_id),
+                &test_scope(),
                 ctx,
             );
             assert!(!result.is_allowed());
@@ -345,7 +361,8 @@ fn test_can_write_files() {
         });
 
         permissions.read(&app, |model, ctx| {
-            let result = model.can_write_files(&convo_id, &[], Some(terminal_view_id), ctx);
+            let result =
+                model.can_write_files(&convo_id, &[], Some(terminal_view_id), &test_scope(), ctx);
             assert!(!result.is_allowed());
             assert!(
                 matches!(
@@ -366,7 +383,8 @@ fn test_can_write_files() {
         });
 
         permissions.read(&app, |model, ctx| {
-            let result = model.can_write_files(&convo_id, &[], Some(terminal_view_id), ctx);
+            let result =
+                model.can_write_files(&convo_id, &[], Some(terminal_view_id), &test_scope(), ctx);
             assert!(result.is_allowed());
             assert!(matches!(
                 result,
@@ -386,7 +404,8 @@ fn test_can_write_files() {
         });
 
         permissions.read(&app, |model, ctx| {
-            let result = model.can_write_files(&convo_id, &[], Some(terminal_view_id), ctx);
+            let result =
+                model.can_write_files(&convo_id, &[], Some(terminal_view_id), &test_scope(), ctx);
             assert!(!result.is_allowed());
             assert!(matches!(
                 result,
@@ -419,7 +438,8 @@ fn test_can_write_files_workspace_settings_override_profile() {
 
         // Test that profile setting is respected when no workspace setting
         permissions.read(&app, |model, ctx| {
-            let result = model.can_write_files(&convo_id, &[], Some(terminal_view_id), ctx);
+            let result =
+                model.can_write_files(&convo_id, &[], Some(terminal_view_id), &test_scope(), ctx);
             assert!(result.is_allowed());
             assert!(matches!(
                 result,
@@ -442,7 +462,8 @@ fn test_can_write_files_workspace_settings_override_profile() {
 
         // Test that workspace setting overrides profile
         permissions.read(&app, |model, ctx| {
-            let result = model.can_write_files(&convo_id, &[], Some(terminal_view_id), ctx);
+            let result =
+                model.can_write_files(&convo_id, &[], Some(terminal_view_id), &test_scope(), ctx);
             assert!(!result.is_allowed());
             assert!(matches!(
                 result,
@@ -484,6 +505,7 @@ fn test_can_write_files_mcp_config_always_denied() {
                     &convo_id,
                     std::slice::from_ref(&path),
                     Some(terminal_view_id),
+                    &test_scope(),
                     ctx,
                 );
                 assert!(
@@ -532,6 +554,7 @@ fn test_can_autoexecute_command_workspace_settings_override_profile() {
                 false,
                 None,
                 Some(terminal_view_id),
+                &test_scope(),
                 ctx,
             );
             assert!(result.is_allowed());
@@ -563,6 +586,7 @@ fn test_can_autoexecute_command_workspace_settings_override_profile() {
                 false,
                 None,
                 Some(terminal_view_id),
+                &test_scope(),
                 ctx,
             );
             assert!(!result.is_allowed());
@@ -606,6 +630,7 @@ fn test_can_autoexecute_command_denylist_precedence() {
                 false,
                 None,
                 Some(terminal_view_id),
+                &test_scope(),
                 ctx,
             );
             assert!(!result.is_allowed());
@@ -639,6 +664,7 @@ fn test_can_autoexecute_command_denylist_precedence() {
                 false,
                 None,
                 Some(terminal_view_id),
+                &test_scope(),
                 ctx,
             );
             assert!(!result.is_allowed());
@@ -656,6 +682,7 @@ fn test_can_autoexecute_command_denylist_precedence() {
                 false,
                 None,
                 Some(terminal_view_id),
+                &test_scope(),
                 ctx,
             );
             assert!(
@@ -708,6 +735,7 @@ fn test_can_autoexecute_command_denylist_matches_env_prefixed_commands() {
                     false,
                     None,
                     Some(terminal_view_id),
+                    &test_scope(),
                     ctx,
                 );
                 assert!(
@@ -730,6 +758,7 @@ fn test_can_autoexecute_command_denylist_matches_env_prefixed_commands() {
                 false,
                 None,
                 Some(terminal_view_id),
+                &test_scope(),
                 ctx,
             );
             assert!(matches!(
@@ -777,6 +806,7 @@ fn test_can_autoexecute_command_allowlist_precedence() {
                 false,
                 None,
                 Some(terminal_view_id),
+                &test_scope(),
                 ctx,
             );
             assert!(result.is_allowed());
@@ -812,6 +842,7 @@ fn test_can_autoexecute_command_allowlist_precedence() {
                 false,
                 None,
                 Some(terminal_view_id),
+                &test_scope(),
                 ctx,
             );
             assert!(!result.is_allowed());
@@ -830,6 +861,7 @@ fn test_can_autoexecute_command_allowlist_precedence() {
                 false,
                 None,
                 Some(terminal_view_id),
+                &test_scope(),
                 ctx,
             );
             assert!(result.is_allowed());
@@ -847,6 +879,7 @@ fn test_can_autoexecute_command_allowlist_precedence() {
                 false,
                 None,
                 Some(terminal_view_id),
+                &test_scope(),
                 ctx,
             );
             assert!(
@@ -908,6 +941,7 @@ fn test_can_autoexecute_command_auto_approve_bypasses_user_denylist_but_not_work
                 false,
                 None,
                 Some(terminal_view_id),
+                &test_scope(),
                 ctx,
             );
             assert!(matches!(
@@ -924,6 +958,7 @@ fn test_can_autoexecute_command_auto_approve_bypasses_user_denylist_but_not_work
                 false,
                 None,
                 Some(terminal_view_id),
+                &test_scope(),
                 ctx,
             );
             assert!(matches!(
@@ -975,6 +1010,7 @@ fn test_can_autoexecute_command_auto_approve_respects_local_denylist_when_bypass
                 false,
                 None,
                 Some(terminal_view_id),
+                &test_scope(),
                 ctx,
             );
             assert!(matches!(
@@ -991,6 +1027,7 @@ fn test_can_autoexecute_command_auto_approve_respects_local_denylist_when_bypass
                 false,
                 None,
                 Some(terminal_view_id),
+                &test_scope(),
                 ctx,
             );
             assert!(matches!(
@@ -1028,6 +1065,7 @@ fn test_can_autoexecute_command_auto_approve_allows_non_denylisted() {
                 true,        // read-only command
                 Some(false), // not risky
                 Some(terminal_view_id),
+                &test_scope(),
                 ctx,
             );
             assert!(result.is_allowed());
@@ -1064,7 +1102,8 @@ fn test_can_write_to_pty() {
 
         // Test that profile setting is respected when no workspace setting
         permissions.read(&app, |model, ctx| {
-            let result = model.can_write_to_pty(&convo_id, Some(terminal_view_id), ctx);
+            let result =
+                model.can_write_to_pty(&convo_id, Some(terminal_view_id), &test_scope(), ctx);
             assert_eq!(result, WriteToPtyPermission::AlwaysAllow);
         });
 
@@ -1081,7 +1120,8 @@ fn test_can_write_to_pty() {
 
         // Test that workspace setting overrides profile
         permissions.read(&app, |model, ctx| {
-            let result = model.can_write_to_pty(&convo_id, Some(terminal_view_id), ctx);
+            let result =
+                model.can_write_to_pty(&convo_id, Some(terminal_view_id), &test_scope(), ctx);
             assert_eq!(result, WriteToPtyPermission::AlwaysAsk);
         });
     })
@@ -1374,7 +1414,8 @@ fn test_sandboxed_mode_allows_read_write_files() {
         // In sandboxed mode the workspace read/write restrictions are bypassed,
         // so the profile's AlwaysAllow setting takes effect.
         permissions.read(&app, |model, ctx| {
-            let result = model.can_write_files(&convo_id, &[], Some(terminal_view_id), ctx);
+            let result =
+                model.can_write_files(&convo_id, &[], Some(terminal_view_id), &test_scope(), ctx);
             assert!(
                 result.is_allowed(),
                 "write files should be allowed in sandboxed mode (workspace restriction bypassed)"
@@ -1390,6 +1431,7 @@ fn test_sandboxed_mode_allows_read_write_files() {
                 &convo_id,
                 vec![PathBuf::from("/test/file.txt")],
                 Some(terminal_view_id),
+                &test_scope(),
                 ctx,
             );
             assert!(
@@ -1463,6 +1505,7 @@ fn test_sandboxed_denylist_used_in_sandboxed_mode() {
                 false,
                 None,
                 Some(terminal_view_id),
+                &test_scope(),
                 ctx,
             );
             assert!(matches!(
@@ -1480,6 +1523,7 @@ fn test_sandboxed_denylist_used_in_sandboxed_mode() {
                 false,
                 None,
                 Some(terminal_view_id),
+                &test_scope(),
                 ctx,
             );
             assert!(!result.is_allowed());
@@ -1531,7 +1575,8 @@ fn test_merged_denylist_deduplication() {
         });
 
         permissions.read(&app, |model, ctx| {
-            let denylist = model.get_execute_commands_denylist(ctx, Some(terminal_view_id));
+            let denylist =
+                model.get_execute_commands_denylist(Some(terminal_view_id), &test_scope(), ctx);
             let rm_count = denylist.iter().filter(|p| p.to_string() == "rm .*").count();
             assert_eq!(rm_count, 1, "duplicate entries should be deduplicated");
             assert!(
@@ -1552,7 +1597,8 @@ fn test_get_org_execute_commands_denylist() {
         } = initialize_permissions_test(&mut app);
 
         permissions.read(&app, |_, ctx| {
-            let org_list = BlocklistAIPermissions::get_org_execute_commands_denylist(ctx);
+            let org_list =
+                BlocklistAIPermissions::get_org_execute_commands_denylist(&test_scope(), ctx);
             assert!(org_list.is_empty());
         });
 
@@ -1569,7 +1615,8 @@ fn test_get_org_execute_commands_denylist() {
         });
 
         permissions.read(&app, |_, ctx| {
-            let org_list = BlocklistAIPermissions::get_org_execute_commands_denylist(ctx);
+            let org_list =
+                BlocklistAIPermissions::get_org_execute_commands_denylist(&test_scope(), ctx);
             assert_eq!(org_list.len(), 1);
             assert_eq!(org_list[0].to_string(), "git .*");
         });
@@ -1614,6 +1661,7 @@ fn test_empty_org_denylist_allows_user_entries() {
                 false,
                 None,
                 Some(terminal_view_id),
+                &test_scope(),
                 ctx,
             );
             assert!(
@@ -1653,6 +1701,7 @@ fn test_denylist_matches_multiline_commands() {
                 false,
                 None,
                 Some(terminal_view_id),
+                &test_scope(),
                 ctx,
             );
             assert!(!result.is_allowed());
@@ -1673,6 +1722,7 @@ fn test_denylist_matches_multiline_commands() {
                 false,
                 None,
                 Some(terminal_view_id),
+                &test_scope(),
                 ctx,
             );
             assert!(
@@ -1696,6 +1746,7 @@ fn test_denylist_matches_multiline_commands() {
                 false,
                 None,
                 Some(terminal_view_id),
+                &test_scope(),
                 ctx,
             );
             assert!(
@@ -1719,6 +1770,7 @@ fn test_denylist_matches_multiline_commands() {
                 false,
                 None,
                 Some(terminal_view_id),
+                &test_scope(),
                 ctx,
             );
             assert!(

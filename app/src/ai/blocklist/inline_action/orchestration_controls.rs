@@ -28,7 +28,9 @@ use warpui::{
 
 use crate::LLMPreferences;
 use crate::ai::blocklist::inline_action::host_picker::HostPicker;
-use crate::ai::execution_profiles::model_menu_items::available_model_menu_items;
+use crate::ai::execution_profiles::model_menu_items::{
+    CollapsedModelVariants, available_model_menu_items,
+};
 use crate::ai::harness_availability::HarnessAvailabilityModel;
 use crate::ai::harness_display;
 use crate::ai::orchestration::{
@@ -52,6 +54,7 @@ use crate::view_components::FilterableDropdown;
 use crate::view_components::dropdown::{
     Dropdown, DropdownAction, DropdownItemAction, DropdownStyle,
 };
+use crate::workspaces::user_workspaces::UserWorkspaces;
 
 // ── Shared constants ────────────────────────────────────────────────
 
@@ -279,13 +282,14 @@ fn oz_model_menu_items<A: OrchestrationControlAction, V: View>(
                 .find(|llm| llm.id.to_string() == row.id)
         })
         .collect();
+    let scope = UserWorkspaces::as_ref(ctx).team_context_for_view(ctx);
     available_model_menu_items(
         ordered_choices,
         move |llm| DropdownAction::select_action_and_close(A::model_changed(llm.id.to_string())),
         None,
         None,
-        false,
-        false,
+        CollapsedModelVariants::default(),
+        &scope,
         ctx,
     )
 }
@@ -569,7 +573,8 @@ pub fn populate_host_picker<V: View>(
             runner_id: String::new(),
         },
     );
-    let snapshot = host_snapshot(&state, ctx);
+    let scope = UserWorkspaces::as_ref(ctx).team_context_for_view(ctx);
+    let snapshot = host_snapshot(&state, &scope, ctx);
     let selected = snapshot
         .selected_id
         .unwrap_or_else(|| ORCHESTRATION_WARP_WORKER_HOST.to_string());

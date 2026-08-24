@@ -425,7 +425,7 @@ pub(super) fn finish_commit_chain(
             show_toast(msg, ctx);
         }
         Err(err) => {
-            report_error!("Commit failed", extra: { "error" => %err });
+            report_error!(anyhow::anyhow!("{err}").context("Commit failed"));
             show_toast(user_facing_git_error(err), ctx);
         }
     }

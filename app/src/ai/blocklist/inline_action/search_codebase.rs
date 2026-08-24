@@ -327,9 +327,16 @@ impl SearchCodebaseView {
         super::search_results_common::render_status_header(text, icon, app)
     }
 
-    pub fn clear_link_tooltip(&mut self, ctx: &mut ViewContext<Self>) {
-        self.detected_links_state.link_location_open_tooltip = None;
-        ctx.notify();
+    pub fn clear_link_tooltip(&mut self, ctx: &mut ViewContext<Self>) -> bool {
+        let did_clear = self
+            .detected_links_state
+            .link_location_open_tooltip
+            .take()
+            .is_some();
+        if did_clear {
+            ctx.notify();
+        }
+        did_clear
     }
 
     pub fn clear_selection(&mut self, _ctx: &mut ViewContext<Self>) {

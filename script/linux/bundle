@@ -120,23 +120,27 @@ done
 # set positional arguments in their proper place
 eval set -- "$PARAMS"
 
+# Linux has no transparent cross-arch execution (unlike macOS's Rosetta), so a
+# binary built for a different architecture than the host can never be run
+# here. Resolve the host architecture once and reuse it both for the TUI
+# native-build restriction below and for deciding whether the just-built
+# binary can stand in for a settings-schema executable further down.
+case "$(uname -m)" in
+  arm64|aarch64) HOST_ARCH="aarch64" ;;
+  x86_64|amd64) HOST_ARCH="x86_64" ;;
+  *)
+    echo "Error: Unsupported host architecture: $(uname -m)" >&2
+    exit 1
+    ;;
+esac
+
 # TUI Linux bundles use the native GNU target because their clipboard backends
 # link against host Wayland/X11 libraries. Refuse to compile on a different
 # architecture so an x86 binary can never be published under an ARM filename
 # (or vice versa). Packaging-only runs may still stage a prebuilt native binary.
-if [[ "$ARTIFACT" == "tui" && "$BUILD" == "true" ]]; then
-  case "$(uname -m)" in
-    arm64|aarch64) HOST_ARCH="aarch64" ;;
-    x86_64|amd64) HOST_ARCH="x86_64" ;;
-    *)
-      echo "Error: Unsupported native TUI build architecture: $(uname -m)" >&2
-      exit 1
-      ;;
-  esac
-  if [[ "$BUILD_ARCH" != "$HOST_ARCH" ]]; then
-    echo "Error: TUI bundles must be built natively; requested '$BUILD_ARCH' on '$HOST_ARCH'." >&2
-    exit 1
-  fi
+if [[ "$ARTIFACT" == "tui" && "$BUILD" == "true" && "$BUILD_ARCH" != "$HOST_ARCH" ]]; then
+  echo "Error: TUI bundles must be built natively; requested '$BUILD_ARCH' on '$HOST_ARCH'." >&2
+  exit 1
 fi
 
 # Statically compile the CLI and warpctrl artifacts so they can run on older Linux distros.
@@ -344,11 +348,43 @@ elif [[ "$ARTIFACT" == "tui" ]]; then
   BINARY_PATH="$OUT_DIR/$WARP_BIN"
 fi
 
+if [[ "${SKIP_SETTINGS_SCHEMA:-}" != "1" && -z "${SETTINGS_SCHEMA_EXECUTABLE:-}" && -z "${SETTINGS_SCHEMA_SOURCE:-}" ]]; then
+  if [[ "$ARTIFACT" == "tui" ]]; then
+    echo "Error: TUI bundles require SETTINGS_SCHEMA_SOURCE or SETTINGS_SCHEMA_EXECUTABLE." >&2
+    exit 1
+  elif [[ "$BUILD" != "true" ]]; then
+    echo "Error: --skip-build requires SETTINGS_SCHEMA_SOURCE or SETTINGS_SCHEMA_EXECUTABLE." >&2
+    exit 1
+  elif [[ "$BUILD_ARCH" != "$HOST_ARCH" ]]; then
+    # The CLI/warpctrl artifacts can be cross-compiled (see the musl toolchain
+    # setup above); the resulting binary cannot then be executed on this host
+    # to generate a schema, so require the caller to supply one explicitly
+    # instead of failing later with an opaque exec format error.
+    echo "Error: Cannot execute the cross-compiled '$BUILD_ARCH' binary on this '$HOST_ARCH' host to generate a settings schema; pass SETTINGS_SCHEMA_SOURCE or SETTINGS_SCHEMA_EXECUTABLE." >&2
+    exit 1
+  else
+    export SETTINGS_SCHEMA_EXECUTABLE="$EXECUTABLE_PATH"
+  fi
+fi
+
+if [[ "${SKIP_SETTINGS_SCHEMA:-}" != "1" && -n "${SETTINGS_SCHEMA_EXECUTABLE:-}" && -n "${SETTINGS_SCHEMA_SOURCE:-}" ]]; then
+  echo "Error: SETTINGS_SCHEMA_EXECUTABLE and SETTINGS_SCHEMA_SOURCE are mutually exclusive." >&2
+  exit 1
+fi
+
+if [[ "${SKIP_SETTINGS_SCHEMA:-}" != "1" && -n "${SETTINGS_SCHEMA_EXECUTABLE:-}" ]]; then
+  GENERATED_SETTINGS_SCHEMA="$CARGO_TARGET_OUTPUT_DIR/settings_schema.json"
+  echo "Generating reusable settings schema at $GENERATED_SETTINGS_SCHEMA"
+  "$SETTINGS_SCHEMA_EXECUTABLE" dump-settings-schema "$GENERATED_SETTINGS_SCHEMA"
+  unset SETTINGS_SCHEMA_EXECUTABLE
+  export SETTINGS_SCHEMA_SOURCE="$GENERATED_SETTINGS_SCHEMA"
+fi
+
 # Prepare bundled resources for standalone builds.
 if [[ "$ARTIFACT" == "cli" || "$ARTIFACT" == "warpctrl" || "$ARTIFACT" == "tui" ]]; then
   echo "Preparing standalone resources directory"
   BUNDLED_RESOURCES_DIR="$OUT_DIR/resources"
-  "$WORKSPACE_ROOT_DIR/script/prepare_bundled_resources" "$BUNDLED_RESOURCES_DIR" "$RELEASE_CHANNEL" "$CARGO_PROFILE"
+  "$WORKSPACE_ROOT_DIR/script/prepare_bundled_resources" "$BUNDLED_RESOURCES_DIR" "$RELEASE_CHANNEL"
 fi
 
 
@@ -361,6 +397,7 @@ if [ "${GITHUB_ACTIONS}" == "true" ]; then
   echo "debug_executable_path=$DEBUG_EXECUTABLE_PATH" >> "$GITHUB_OUTPUT"
   echo "packages_dir=$OUT_DIR" >> "$GITHUB_OUTPUT"
   echo "bundled_resources_dir=${BUNDLED_RESOURCES_DIR:-}" >> "$GITHUB_OUTPUT"
+  echo "settings_schema_path=${SETTINGS_SCHEMA_SOURCE:-}" >> "$GITHUB_OUTPUT"
   echo "::echo::off"
 fi
 

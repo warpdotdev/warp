@@ -151,7 +151,11 @@ pub(crate) fn create_terminal_view_surface(
         has_restored_command_blocks,
     } = config;
     let current_prompt = ctx.add_model(|ctx| {
-        CurrentPrompt::new_with_model_events(sessions.clone(), Some(&model_events), ctx)
+        CurrentPrompt::new_with_model_events(
+            sessions.clone(),
+            Some((&model_events, model.clone())),
+            ctx,
+        )
     });
     let prompt_type = ctx.add_model(|ctx| PromptType::new_dynamic(current_prompt.clone(), ctx));
     let view = ctx.add_typed_action_view(window_id, |ctx| {

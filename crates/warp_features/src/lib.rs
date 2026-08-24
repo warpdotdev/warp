@@ -966,6 +966,15 @@ pub enum FeatureFlag {
     /// Requires `OzHandoff` to also be enabled; a no-op for local runs and when
     /// `--no-snapshot` is set. Off by default while the coordinator rolls out.
     PeriodicHandoffCheckpoints,
+
+    /// Observes Ctrl-C (`0x03`) written on the shared-session viewer input
+    /// path to a terminal with a working, rich-status-capable CLI agent
+    /// session (e.g. Claude Code). Arms a short grace window; if no further
+    /// plugin activity is seen, the session (and its ambient task) resolves
+    /// to `Cancelled`. Purely client-side status synthesis: the keystroke is
+    /// always forwarded unchanged and the harness process/sandbox are never
+    /// signaled or torn down.
+    CtrlCCancelsThirdPartyHarness,
 }
 
 static FLAG_STATES: [AtomicBool; cardinality::<FeatureFlag>()] =
@@ -1035,13 +1044,12 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::TerminalLifecycleRecovery,
     FeatureFlag::PromptCacheExpiryWarning,
     FeatureFlag::JupyterNotebookRendering,
-    FeatureFlag::WaitForEventsParentRegistration,
     FeatureFlag::MultiLevelOrchestration,
-    FeatureFlag::OrchestrationUnifiedStack,
     FeatureFlag::McpJsonTreeView,
     FeatureFlag::BoxDrawingGlyphs,
     FeatureFlag::PricingTransparency,
     FeatureFlag::PeriodicHandoffCheckpoints,
+    FeatureFlag::CtrlCCancelsThirdPartyHarness,
 ];
 
 /// Features enabled for feature preview build users (e.g.: Friends of Warp).
@@ -1056,8 +1064,6 @@ pub const RELEASE_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::Changelog,
     FeatureFlag::CrashReporting,
     FeatureFlag::VideoRecording,
-    // Marked text is currently only supported on MacOS.
-    #[cfg(target_os = "macos")]
     FeatureFlag::ImeMarkedText,
     // Remote server binary is not yet supported on Windows.
     #[cfg(not(windows))]
