@@ -379,6 +379,11 @@ impl AmbientAgentRunner {
                 vec![]
             };
 
+            if let Err(err) = super::common::validate_team_scope(&args.scope, ctx) {
+                super::report_fatal_error(err, ctx);
+                return;
+            }
+
             let mut environment_args = args.environment;
             if environment_args.environment.is_none() && !environment_args.no_environment
                 && let Some(environment_id) = loaded_file

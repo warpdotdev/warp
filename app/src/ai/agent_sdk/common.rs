@@ -167,6 +167,24 @@ pub fn resolve_owner(scope: &ObjectScope, ctx: &AppContext) -> anyhow::Result<Ow
     }
 }
 
+/// Checks `--team` against the caller's memberships, for commands that leave the owner for the
+/// server to resolve.
+///
+/// Those commands send only whether team ownership was asked for, so an unusable scope would
+/// otherwise surface as a rejected request after the run has been configured. Note that the
+/// uid a caller names cannot be forwarded, so a member of several teams is still refused by
+/// the server; checking here at least names the problem in the caller's own terms.
+pub fn validate_team_scope(scope: &ObjectScope, ctx: &AppContext) -> anyhow::Result<()> {
+    if !scope.is_team() {
+        return Ok(());
+    }
+
+    UserWorkspaces::as_ref(ctx)
+        .cli_team_uid(requested_team_uid(scope)?)
+        .map(|_| ())
+        .map_err(describe_cli_team_error)
+}
+
 /// Refresh workspace metadata before executing an operation.
 ///
 /// This ensures that team state is up-to-date before creating cloud objects or performing
