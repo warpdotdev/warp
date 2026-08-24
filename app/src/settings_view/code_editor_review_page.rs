@@ -1,6 +1,5 @@
 //! The "Editor and Code Review" settings page, shown under the Code umbrella.
 
-use warp_core::features::FeatureFlag;
 use warp_core::settings::ToggleableSetting as _;
 use warp_errors::report_if_error;
 use warpui::elements::Element;
@@ -191,7 +190,7 @@ impl SettingsPageMeta for EditorAndCodeReviewPageView {
     }
 
     fn should_render(&self, _ctx: &AppContext) -> bool {
-        FeatureFlag::FullSourceCodeEmbedding.is_enabled()
+        true
     }
 
     fn scroll_to_widget(&mut self, widget_id: &'static str) {
