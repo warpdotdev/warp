@@ -25,7 +25,7 @@ use crate::terminal::model::block::BlockId;
 use crate::terminal::model::terminal_model::ShellProcessInfo;
 
 /// How often liveness signals are sampled while a monitored command is active.
-pub const SAMPLE_INTERVAL: Duration = Duration::from_secs(1);
+pub const SAMPLE_INTERVAL: Duration = Duration::from_secs(5);
 
 /// Liveness signals for the commands an agent is currently monitoring.
 ///
@@ -34,6 +34,11 @@ pub const SAMPLE_INTERVAL: Duration = Duration::from_secs(1);
 #[derive(Default)]
 pub struct LrcActivityMonitor {
     state: Mutex<MonitorState>,
+    /// Touched only by the sampler task, of which at most one runs at a time.
+    /// Kept apart from `state` so the syscall-heavy process refresh never
+    /// blocks [`Self::report`], which is called with the terminal model lock
+    /// held.
+    system: Mutex<System>,
 }
 
 #[derive(Default)]
@@ -50,7 +55,6 @@ struct MonitorState {
     /// activity rather than an ever-growing idle clock that falsely suggests
     /// a hang.
     monitoring_enabled: bool,
-    system: System,
 }
 
 /// Per-command state, accumulated across samples and reset on each report.
@@ -190,27 +194,40 @@ impl LrcActivityMonitor {
 
         let keep_sampling = !state.blocks.is_empty() || state.armed_actions > 0;
         state.sampler_running = keep_sampling;
+        drop(state);
+        if !keep_sampling {
+            *self.system.lock() = System::new();
+        }
         keep_sampling
     }
 
     /// Refreshes process information and summarizes the command's process tree.
+    ///
+    /// Discovery and measurement are split so that CPU and disk are only ever
+    /// sampled for the command's tree, never across the full process table.
     fn collect_process_sample(&self, shell: Option<&ShellProcessInfo>) -> Option<ProcessSample> {
         let shell = shell?;
         let shell_pid = Pid::from_u32(shell.pid);
 
-        let mut state = self.state.lock();
-        state.system.refresh_processes_specifics(
+        let mut system = self.system.lock();
+        system.refresh_processes_specifics(
             ProcessesToUpdate::All,
+            true, /* remove_dead_processes */
+            ProcessRefreshKind::nothing(),
+        );
+
+        let pids = command_process_tree(&system, shell_pid, foreground_pgid(shell));
+
+        system.refresh_processes_specifics(
+            ProcessesToUpdate::Some(&pids),
             true, /* remove_dead_processes */
             ProcessRefreshKind::nothing().with_cpu().with_disk_usage(),
         );
 
-        let pids = command_process_tree(&state.system, shell_pid, foreground_pgid(shell));
-
         let mut per_pid = Vec::with_capacity(pids.len());
         let mut states = Vec::with_capacity(pids.len());
         for pid in pids {
-            let Some(process) = state.system.process(pid) else {
+            let Some(process) = system.process(pid) else {
                 continue;
             };
             per_pid.push(PidSample {
