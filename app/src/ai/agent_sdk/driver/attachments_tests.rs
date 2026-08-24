@@ -204,10 +204,12 @@ async fn e2e_traversal_in_filename_cannot_escape_the_handoff_dir() {
         .create_async()
         .await;
 
+    // One level up, so the unguarded join resolves to exactly the path asserted absent below
+    // and stays inside the TempDir.
     let attachments = vec![make_attachment(
         &server.url(),
         "escape-uuid",
-        "../../escape.json",
+        "../escape.json",
     )];
     let result = fetch_and_download_handoff_snapshot_attachments(
         mock_client_returning(attachments),

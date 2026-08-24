@@ -60,8 +60,9 @@ pub(crate) async fn fetch_and_download_attachments(
 }
 
 /// Fetches handoff snapshot attachments for the active execution and downloads
-/// them into `{attachments_dir}/handoff/{filename}` so the runtime's
-/// rehydration prompt references always point at a file that exists on disk.
+/// them into `{attachments_dir}/handoff/`, each under the basename of its logical
+/// `filename`, so the runtime's rehydration prompt references always point at a
+/// file that exists on disk.
 ///
 /// Returns `Some(attachments_dir)` when at least one attachment wrote to disk, mirroring
 /// the contract of the sibling [`fetch_and_download_attachments`]. Partial failures are
@@ -199,8 +200,10 @@ async fn download_task_attachment(
     Ok(())
 }
 
-/// Download a single handoff attachment into `handoff_dir`, mapping failure to
-/// `("{filename} ({file_id})", error_message)` so the aggregator in
+/// Download a single handoff attachment into `handoff_dir`, under the basename of its logical
+/// `filename`; a name that has no basename fails before any request is sent.
+///
+/// Failures map to `("{filename} ({file_id})", error_message)` so the aggregator in
 /// [`fetch_and_download_handoff_snapshot_attachments`] can log and count per-file outcomes.
 /// Both names are carried because two checkpoint generations share one logical name, and that
 /// aggregated WARN log is the only signal a per-file failure produces.
