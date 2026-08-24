@@ -23,6 +23,7 @@ fn request_params_with_ask_user_question_enabled(ask_user_question_enabled: bool
         existing_suggestions: None,
         metadata: None,
         session_context: SessionContext::new_for_test(),
+        team_uid: None,
         model: model.clone(),
         coding_model: model.clone(),
         cli_agent_model: model.clone(),

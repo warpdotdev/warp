@@ -6,6 +6,7 @@ use anyhow::{Context, Result};
 use futures::channel::oneshot::{self, Receiver};
 use futures::stream::AbortHandle;
 use warp_errors::{report_error, report_if_error};
+use warp_graphql::workspace::FeatureModelChoice;
 use warpui::r#async::Timer;
 use warpui::{
     Entity, ModelContext, ModelHandle, RequestState, SingletonEntity, duration_with_jitter,
@@ -391,6 +392,16 @@ impl TeamUpdateManager {
                     update_manager.refresh_updated_objects(ctx);
                 });
 
+                // This response is authoritative for the account's current team membership (it's
+                // the same payload shape the poll applies), so apply it here too: without this,
+                // the left team's catalog bucket in `LLMPreferences.models_by_team` would linger
+                // until the next unrelated poll happened to omit it.
+                Self::apply_feature_model_choices(
+                    response.metadata.feature_model_choices,
+                    response.metadata.team_feature_model_choices,
+                    ctx,
+                );
+
                 ctx.emit(TeamUpdateManagerEvent::LeaveSuccess);
             }
             Err(e) => {
@@ -513,37 +524,11 @@ impl TeamUpdateManager {
                     });
                 }
 
-                // Fold both halves of the polled catalog -- the per-team map plus the
-                // workspace-level (resolved-teamless) entry -- into one scope-keyed update, so
-                // `LLMPreferences.models_by_team` reflects exactly the teams this response
-                // named (see `LLMPreferences::update_feature_model_choices_by_team`).
-                let mut feature_models_by_team = HashMap::new();
-                for (team_uid, choice) in user_workspaces_access.team_feature_model_choices {
-                    match ModelsByFeature::try_from(choice) {
-                        Ok(models) => {
-                            feature_models_by_team.insert(Some(team_uid), models);
-                        }
-                        Err(e) => report_error!(
-                            e.context("Failed to convert team feature model choice from server")
-                        ),
-                    }
-                }
-                if let Some(choice) = user_workspaces_access.feature_model_choices {
-                    match ModelsByFeature::try_from(choice) {
-                        Ok(models) => {
-                            feature_models_by_team.insert(None, models);
-                        }
-                        Err(e) => report_error!(
-                            e.context("Failed to convert feature model choice from server")
-                        ),
-                    }
-                }
-                if !feature_models_by_team.is_empty() {
-                    LLMPreferences::handle(ctx).update(ctx, |llm_preferences, ctx| {
-                        llm_preferences
-                            .update_feature_model_choices_by_team(feature_models_by_team, ctx);
-                    });
-                }
+                Self::apply_feature_model_choices(
+                    user_workspaces_access.feature_model_choices,
+                    user_workspaces_access.team_feature_model_choices,
+                    ctx,
+                );
 
                 // Update sqlite
                 self.save_to_db([ModelEvent::UpsertWorkspaces { workspaces }]);
@@ -551,6 +536,54 @@ impl TeamUpdateManager {
             Err(e) => {
                 report_error!(e);
             }
+        }
+    }
+
+    /// Folds both halves of a workspaces-metadata response's catalog -- the per-team map plus
+    /// the workspace-level (resolved-teamless) entry -- into one scope-keyed update to
+    /// `LLMPreferences.models_by_team`.
+    ///
+    /// Always applies, even when both arguments are empty: `update_feature_model_choices_by_team`
+    /// prunes any bucket the given map doesn't name, and both call sites pass an authoritative
+    /// response (the periodic/out-of-band poll and the leave-team response cover the account's
+    /// full current team membership), so an empty result here means "the user is on no team"
+    /// and every stale bucket -- notably a team just left -- must go, not linger until some
+    /// later response happens to omit it too.
+    fn apply_feature_model_choices(
+        feature_model_choices: Option<FeatureModelChoice>,
+        team_feature_model_choices: HashMap<ServerId, FeatureModelChoice>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let mut feature_models_by_team = HashMap::new();
+        for (team_uid, choice) in team_feature_model_choices {
+            match ModelsByFeature::try_from(choice) {
+                Ok(models) => {
+                    feature_models_by_team.insert(Some(team_uid), models);
+                }
+                Err(e) => {
+                    report_error!(
+                        e.context("Failed to convert team feature model choice from server")
+                    )
+                }
+            }
+        }
+        if let Some(choice) = feature_model_choices {
+            match ModelsByFeature::try_from(choice) {
+                Ok(models) => {
+                    feature_models_by_team.insert(None, models);
+                }
+                Err(e) => {
+                    report_error!(e.context("Failed to convert feature model choice from server"))
+                }
+            }
+        }
+        // `LLMPreferences` is a real singleton everywhere except test harnesses that have no
+        // reason to register it (e.g. ones only exercising cloud-object sync); skip gracefully
+        // there rather than panicking, per `has_singleton_model`'s documented purpose.
+        if ctx.has_singleton_model::<LLMPreferences>() {
+            LLMPreferences::handle(ctx).update(ctx, |llm_preferences, ctx| {
+                llm_preferences.update_feature_model_choices_by_team(feature_models_by_team, ctx);
+            });
         }
     }
 

@@ -3236,9 +3236,13 @@ impl BlocklistAIController {
 
                 if self.should_refresh_available_llms_on_stream_finish {
                     self.should_refresh_available_llms_on_stream_finish = false;
-                    let scope = ResolvedTeamScope::from_scope(&self.team_context(ctx));
-                    LLMPreferences::handle(ctx).update(ctx, |llm_preferences, ctx| {
-                        llm_preferences.refresh_authed_models(&scope, ctx);
+                    // Out-of-band pull of the folded workspaces-metadata query rather than the
+                    // unscoped `get_feature_model_choices` fetch: that legacy endpoint reads the
+                    // server's active-team resolver, not this window's team, so writing its
+                    // result into this scope's bucket could overwrite another team's catalog
+                    // with this one's.
+                    TeamUpdateManager::handle(ctx).update(ctx, |manager, ctx| {
+                        drop(manager.refresh_workspace_metadata(ctx));
                     });
                 }
                 ctx.emit(BlocklistAIControllerEvent::FinishedReceivingOutput {
@@ -3492,9 +3496,11 @@ impl BlocklistAIController {
         }
 
         if finished_event.should_refresh_model_config {
-            let scope = ResolvedTeamScope::from_scope(&self.team_context(ctx));
-            LLMPreferences::handle(ctx).update(ctx, |llm_preferences, ctx| {
-                llm_preferences.refresh_authed_models(&scope, ctx);
+            // See the other `should_refresh_available_llms_on_stream_finish` call site above for
+            // why this goes through the folded workspaces-metadata query rather than the unscoped
+            // `get_feature_model_choices` fetch.
+            TeamUpdateManager::handle(ctx).update(ctx, |manager, ctx| {
+                drop(manager.refresh_workspace_metadata(ctx));
             });
         }
     }

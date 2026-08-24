@@ -1,10 +1,18 @@
 use chrono::Utc;
 use cloud_object_client::MockObjectClient;
 use itertools::Itertools;
+use settings::{PrivatePreferences, PublicPreferences};
+use warp_graphql::workspace::{
+    AvailableLlms as GqlAvailableLlms, LlmContextWindow as GqlLlmContextWindow,
+    LlmInfo as GqlLlmInfo, LlmPricing as GqlLlmPricing, LlmProvider as GqlLlmProvider,
+    LlmUsageMetadata as GqlLlmUsageMetadata,
+};
 use warpui::{AddSingletonModel, App};
+use warpui_extras::user_preferences;
 
 use super::*;
 use crate::ai::credit_availability::{AICreditAvailability, AICreditDenialReason};
+use crate::ai::llms::{LLMId, LLMPreferences};
 use crate::auth::AuthManager;
 use crate::cloud_object::model::actions::ObjectActions;
 use crate::cloud_object::model::persistence::CloudModel;
@@ -15,7 +23,7 @@ use crate::server::server_api::team::MockTeamClient;
 use crate::server::server_api::workspace::{MockWorkspaceClient, WorkspaceClient};
 use crate::server::sync_queue::SyncQueue;
 use crate::server::telemetry::context_provider::AppTelemetryContextProvider;
-use crate::settings::PrivacySettings;
+use crate::settings::{AISettings, CodeSettings, PrivacySettings};
 use crate::system::SystemStats;
 use crate::workflows::workflow::Workflow;
 use crate::workflows::{CloudWorkflow, CloudWorkflowModel, WorkflowId};
@@ -316,6 +324,227 @@ fn test_poll_path_apply_refreshes_user_purchase_policy() {
                 UserWorkspaces::as_ref(ctx).purchase_policy().is_none(),
                 "a poll-path apply without the policy should clear the stored fallback"
             );
+        });
+    });
+}
+
+fn gql_llm_info(id: &str) -> GqlLlmInfo {
+    GqlLlmInfo {
+        display_name: id.to_string(),
+        base_model_name: id.to_string(),
+        id: id.to_string(),
+        reasoning_level: None,
+        usage_metadata: GqlLlmUsageMetadata {
+            credit_multiplier: None,
+            request_multiplier: 1,
+        },
+        description: None,
+        disable_reason: None,
+        vision_supported: false,
+        spec: None,
+        provider: GqlLlmProvider::Unknown,
+        host_configs: vec![],
+        pricing: GqlLlmPricing {
+            discount_percentage: None,
+        },
+        context_window: GqlLlmContextWindow {
+            is_configurable: false,
+            min: 0.into(),
+            max: 0.into(),
+            default: 0.into(),
+        },
+    }
+}
+
+fn gql_available_llms(model_id: &str) -> GqlAvailableLlms {
+    GqlAvailableLlms {
+        default_id: model_id.to_string(),
+        choices: vec![gql_llm_info(model_id)],
+        preferred_codex_model_id: None,
+    }
+}
+
+/// A `FeatureModelChoice` whose every feature offers exactly one model, `model_id`, so a
+/// test can tell two teams' catalogs apart by that single id.
+fn feature_model_choice_with_model(model_id: &str) -> FeatureModelChoice {
+    FeatureModelChoice {
+        agent_mode: gql_available_llms(model_id),
+        planning: gql_available_llms(model_id),
+        coding: gql_available_llms(model_id),
+        cli_agent: gql_available_llms(model_id),
+        computer_use_agent: gql_available_llms(model_id),
+    }
+}
+
+/// Registers the minimal settings/preferences singletons `LLMPreferences::new` needs, on top
+/// of this module's own `initialize_app`. Kept separate (rather than folded into
+/// `initialize_app`) because most tests in this file never touch the model catalog.
+fn initialize_llm_preferences_dependencies(app: &mut App) {
+    app.add_singleton_model(|_| {
+        PublicPreferences::new(Box::<user_preferences::in_memory::InMemoryPreferences>::default())
+    });
+    app.add_singleton_model(|_| {
+        PrivatePreferences::new(Box::<user_preferences::in_memory::InMemoryPreferences>::default())
+    });
+    app.add_singleton_model(CodeSettings::new_with_defaults);
+    app.add_singleton_model(AISettings::new_with_defaults);
+    app.update(|ctx| {
+        warpui_extras::secure_storage::register_noop("test", ctx);
+    });
+    app.add_singleton_model(ai::api_keys::ApiKeyManager::new);
+    app.add_singleton_model(|_| crate::ai::mcp::TemplatableMCPServerManager::default());
+    app.add_singleton_model(|ctx| {
+        crate::ai::execution_profiles::profiles::AIExecutionProfilesModel::new(
+            &crate::LaunchMode::new_for_unit_test(),
+            ctx,
+        )
+    });
+}
+
+/// Regression for two review findings on the multi-team catalog rebuild:
+///
+/// 1. The retained blocklist-controller refresh triggers now go through
+///    `TeamUpdateManager::refresh_workspace_metadata` -- i.e. this same `on_workspaces_updated`
+///    apply path -- instead of the legacy unscoped `get_feature_model_choices` fetch. Team A
+///    and team B below have genuinely different catalogs, so a "same payload in every bucket"
+///    defect in that path would fail the first assertion block.
+/// 2. Pruning used to be skipped whenever a response's *own* folded catalog was empty
+///    (`on_workspaces_updated` guarded the whole apply on `!feature_models_by_team.is_empty()`),
+///    which is a real state -- every team the user was on responding with no catalog entry, or
+///    the user leaving every team -- not just "no teams named at all" (naming only team B, as
+///    the middle step below does, is already non-empty and would not have exercised the old
+///    guard). A later authoritative response with an empty catalog must still evict every
+///    stale bucket it doesn't name, rather than leaving them live indefinitely.
+#[test]
+fn on_workspaces_updated_keeps_teams_distinct_and_prunes_a_team_the_response_omits() {
+    App::test((), |mut app| async move {
+        let team_client = Arc::new(MockTeamClient::new());
+        initialize_app(
+            team_client.clone(),
+            Arc::new(MockWorkspaceClient::new()),
+            vec![],
+            &mut app,
+        );
+        initialize_llm_preferences_dependencies(&mut app);
+        let llm_preferences = app.add_singleton_model(LLMPreferences::new);
+        let team_update_manager =
+            app.add_singleton_model(|ctx| TeamUpdateManager::new(team_client, None, ctx));
+
+        let team_a = ServerId::from(1);
+        let team_b = ServerId::from(2);
+        let model_a = LLMId::from("team-a-only");
+        let model_b = LLMId::from("team-b-only");
+
+        team_update_manager.update(&mut app, |manager, ctx| {
+            manager.on_workspaces_updated(
+                Ok(WorkspacesMetadataResponse {
+                    workspaces: vec![],
+                    joinable_teams: vec![],
+                    experiments: None,
+                    feature_model_choices: None,
+                    team_feature_model_choices: HashMap::from([
+                        (team_a, feature_model_choice_with_model(model_a.as_str())),
+                        (team_b, feature_model_choice_with_model(model_b.as_str())),
+                    ]),
+                    ai_credit_availability: None,
+                    user_purchase_policy: None,
+                }),
+                ctx,
+            );
+        });
+
+        llm_preferences.read(&app, |preferences, _| {
+            assert!(
+                preferences
+                    .get_llm_info_for_team_uid(Some(team_a), &model_a)
+                    .is_some(),
+                "team A's own model should be visible in its own bucket"
+            );
+            assert!(
+                preferences
+                    .get_llm_info_for_team_uid(Some(team_b), &model_b)
+                    .is_some(),
+                "team B's own model should be visible in its own bucket"
+            );
+            assert!(
+                preferences
+                    .get_llm_info_for_team_uid(Some(team_a), &model_b)
+                    .is_none(),
+                "team A's bucket must not contain team B's model"
+            );
+            assert!(
+                preferences
+                    .get_llm_info_for_team_uid(Some(team_b), &model_a)
+                    .is_none(),
+                "team B's bucket must not contain team A's model"
+            );
+        });
+
+        // Team A left the account; the next authoritative response names only team B.
+        team_update_manager.update(&mut app, |manager, ctx| {
+            manager.on_workspaces_updated(
+                Ok(WorkspacesMetadataResponse {
+                    workspaces: vec![],
+                    joinable_teams: vec![],
+                    experiments: None,
+                    feature_model_choices: None,
+                    team_feature_model_choices: HashMap::from([(
+                        team_b,
+                        feature_model_choice_with_model(model_b.as_str()),
+                    )]),
+                    ai_credit_availability: None,
+                    user_purchase_policy: None,
+                }),
+                ctx,
+            );
+        });
+
+        llm_preferences.read(&app, |preferences, _| {
+            assert!(
+                preferences
+                    .get_llm_info_for_team_uid(Some(team_a), &model_a)
+                    .is_none(),
+                "team A's catalog bucket should have been evicted once the response stopped \
+                 naming it, not left stale"
+            );
+            assert!(
+                preferences
+                    .get_llm_info_for_team_uid(Some(team_b), &model_b)
+                    .is_some(),
+                "team B's catalog should remain"
+            );
+        });
+
+        // The user then leaves team B too: the next authoritative response's folded catalog is
+        // genuinely empty (no workspace-level entry, no team entries at all). This is exactly
+        // the case the old `!feature_models_by_team.is_empty()` guard skipped applying
+        // entirely, so team B's bucket would previously have survived this update unpruned.
+        team_update_manager.update(&mut app, |manager, ctx| {
+            manager.on_workspaces_updated(
+                Ok(WorkspacesMetadataResponse {
+                    workspaces: vec![],
+                    joinable_teams: vec![],
+                    experiments: None,
+                    feature_model_choices: None,
+                    team_feature_model_choices: HashMap::new(),
+                    ai_credit_availability: None,
+                    user_purchase_policy: None,
+                }),
+                ctx,
+            );
+        });
+
+        llm_preferences.read(&app, |preferences, app| {
+            assert!(
+                preferences
+                    .get_llm_info_for_team_uid(Some(team_b), &model_b)
+                    .is_none(),
+                "an authoritative empty catalog must prune every remaining bucket, not be \
+                 skipped as a no-op"
+            );
+            // The resolved-teamless fallback must still resolve to the built-in default rather
+            // than panicking or resolving through a leftover team bucket.
+            preferences.get_default_base_model_for_team_uid(None, app);
         });
     });
 }
