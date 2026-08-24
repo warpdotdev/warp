@@ -1049,7 +1049,6 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::BoxDrawingGlyphs,
     FeatureFlag::PricingTransparency,
     FeatureFlag::PeriodicHandoffCheckpoints,
-    FeatureFlag::CtrlCCancelsThirdPartyHarness,
 ];
 
 /// Features enabled for feature preview build users (e.g.: Friends of Warp).
