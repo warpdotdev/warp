@@ -417,9 +417,13 @@ fn test_handle_pty_read_event_while_not_batching() {
 ///
 /// `start_ordered_terminal_events_listener` silently drops ordered events until this is
 /// true, so callers must wait for it instead of racing it: sending an event beforehand can
-/// flake if the listener task hasn't observed the bootstrapped state yet.
+/// flake if the listener task hasn't observed the bootstrapped state yet. Uses the same
+/// generous 2s budget as the `recv()` timeouts below it, rather than the default
+/// `assert_eventually!` tick budget, so this wait can't reintroduce a fixed-window race of
+/// its own.
 async fn wait_for_bootstrapped(network: &ModelHandle<Network>, app: &App) {
     assert_eventually!(
+        400 =>
         network.read(app, |network, _ctx| network
             .model
             .lock()
@@ -475,6 +479,9 @@ fn test_handle_non_pty_read_event_while_batching() {
             .await
             .expect("Non-PtyBytesRead message should be sent before the timeout");
         assert!(is_upstream_message_command_executed(&item.unwrap(), 1));
+
+        // Exactly two messages should have been sent to the server; no more.
+        assert_eq!(ws_proxy_rx.len(), 0);
 
         // The batching status should be reset.
         network.read(&app, |network, _ctx| {
