@@ -525,8 +525,8 @@ fn optimistic_cli_subagent_completion_with_in_flight_stream_reports_success() {
 /// `drop_pending_events_for_exiting_conversation` drops any orchestration events still
 /// queued for the conversation at the moment it's called, since they arrived too late to
 /// ever be delivered once the run is exiting. Complements the controller-level guard above.
-/// The exiting flag itself is a separate mechanism ([`OrchestrationEventService::exit_commit_handle`],
-/// exercised in `agent_sdk::driver`'s tests), not this method's concern.
+/// The exiting flag itself is a separate mechanism
+/// ([`OrchestrationEventService::exit_commit_handle`]) this method doesn't touch.
 #[test]
 fn drop_pending_events_for_exiting_conversation_drops_pending_events() {
     App::test((), |mut app| async move {

@@ -71,16 +71,15 @@ pub enum OrchestrationEventServiceEvent {
 }
 
 /// Thread-safe handle that commits a conversation's ambient run as exiting from any thread,
-/// without needing model access. `AgentDriver` uses this to commit that state synchronously on
-/// an idle-timeout's background timer thread, at the exact moment it decides to fire — before
-/// anything (including the timer's own completion signal) can make that decision observable
-/// elsewhere (QUALITY-1801). This is the only writer of the exiting flag; queued-event cleanup
-/// (`drop_pending_events_for_exiting_conversation`) runs later, once model access is available,
-/// and never needs to touch it.
+/// without needing model access — including from an idle-timeout's background timer thread, at
+/// the exact moment it decides to fire, before anything (including the timer's own completion
+/// signal) can make that decision observable elsewhere (QUALITY-1801). This is the only writer
+/// of the exiting flag; queued-event cleanup (`drop_pending_events_for_exiting_conversation`)
+/// runs later, once model access is available, and never needs to touch it.
 ///
-/// `AgentDriver` (this handle's only vendor and consumer) lives in `agent_sdk`, which is
-/// `not(target_family = "wasm")`-only; gated the same way here so the wasm build doesn't see
-/// this as dead code.
+/// Gated to `not(target_family = "wasm")`: nothing compiled into a wasm build ever needs to
+/// commit off the model thread this way, so an unguarded `pub` item here would be dead code
+/// under the wasm lint's `-D warnings`.
 #[cfg(not(target_family = "wasm"))]
 #[derive(Clone)]
 pub struct ExitCommitHandle(Arc<Mutex<HashSet<AIConversationId>>>);
@@ -137,8 +136,6 @@ impl OrchestrationEventService {
     /// (QUALITY-1801). Assumes [`ExitCommitHandle::commit`] already committed the exiting flag
     /// for this conversation — by the time this runs, on the model thread, it always has — so
     /// this only does the part that needs model access: the flag itself is not touched here.
-    ///
-    /// Only called from `agent_sdk::driver`, which is `not(target_family = "wasm")`-only.
     #[cfg(not(target_family = "wasm"))]
     pub fn drop_pending_events_for_exiting_conversation(
         &mut self,
