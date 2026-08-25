@@ -8,7 +8,7 @@ use mcp::oauth::{
     PersistedCredentialsMap, TEMPLATABLE_MCP_CREDENTIALS_KEY, load_credentials_from_secure_storage,
     write_to_secure_storage,
 };
-use mcp::runtime::{error_to_user_message, spawn_server};
+use mcp::runtime::{should_delete_credentials, spawn_error_to_user_message, spawn_server};
 use parking_lot::Mutex;
 use simple_logger::manager::LogManager;
 use url::Url;
@@ -1204,7 +1204,7 @@ impl TemplatableMCPServerManager {
                 auth_context,
             )
             .compat(),
-            move |me, server_info: Result<_, rmcp::RmcpError>, ctx| {
+            move |me, server_info: Result<_, mcp::runtime::McpSpawnError>, ctx| {
                 me.spawned_servers.remove(&installation_uuid);
                 me.pending_oauth_csrf.retain(|_, v| *v != installation_uuid);
                 me.authorization_urls.remove(&installation_uuid);
@@ -1237,7 +1237,7 @@ impl TemplatableMCPServerManager {
                         log::warn!("Failed to spawn MCP server: {e:#}");
 
                         // Store user-friendly error message.
-                        let error_message = error_to_user_message(&e);
+                        let error_message = spawn_error_to_user_message(&e);
                         me.server_error_messages
                             .insert(installation_uuid, error_message.clone());
 
@@ -1247,7 +1247,13 @@ impl TemplatableMCPServerManager {
                             ctx,
                         );
 
-                        me.delete_credentials_from_secure_storage(installation_uuid, ctx);
+                        // Only a definitive auth rejection justifies dropping
+                        // cached OAuth credentials; transient failures
+                        // (network, DNS, command-not-found) must not log the
+                        // user out of the server.
+                        if should_delete_credentials(&e) {
+                            me.delete_credentials_from_secure_storage(installation_uuid, ctx);
+                        }
 
                         if is_reconnect {
                             me.notify_reconnect_waiters(installation_uuid, Err(error_message));

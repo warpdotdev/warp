@@ -15,6 +15,37 @@ use super::sse_client::{SseClient, SseClientConfig, SseClientTransport, SseTrans
 const HEADER_LAST_EVENT_ID: &str = "Last-Event-Id";
 const EVENT_STREAM_MIME_TYPE: &str = "text/event-stream";
 
+/// Error bodies are diagnostics, not payloads; cap what we retain.
+pub(crate) const MAX_ERROR_BODY_BYTES: usize = 4096;
+
+/// Builds an [`SseTransportError::HttpStatus`] from a non-success response,
+/// capturing what `error_for_status` would discard: the `WWW-Authenticate`
+/// challenge and a bounded copy of the body, both needed to classify auth
+/// failures (e.g. the Warp proxy's `proxy_token_expired`).
+async fn http_status_error<E: std::error::Error + Send + Sync + 'static>(
+    response: reqwest::Response,
+) -> SseTransportError<E> {
+    let status = response.status();
+    let www_authenticate = response
+        .headers()
+        .get(reqwest::header::WWW_AUTHENTICATE)
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_owned);
+    let mut body = response.text().await.unwrap_or_default();
+    if body.len() > MAX_ERROR_BODY_BYTES {
+        let mut end = MAX_ERROR_BODY_BYTES;
+        while !body.is_char_boundary(end) {
+            end -= 1;
+        }
+        body.truncate(end);
+    }
+    SseTransportError::HttpStatus {
+        status,
+        body,
+        www_authenticate,
+    }
+}
+
 impl From<reqwest::Error> for SseTransportError<reqwest::Error> {
     fn from(e: reqwest::Error) -> Self {
         SseTransportError::Client(e)
@@ -34,12 +65,11 @@ impl SseClient for reqwest::Client {
         if let Some(auth_header) = auth_token {
             request_builder = request_builder.bearer_auth(auth_header);
         }
-        request_builder
-            .send()
-            .await
-            .and_then(|resp| resp.error_for_status())
-            .map_err(SseTransportError::from)
-            .map(drop)
+        let response = request_builder.send().await?;
+        if !response.status().is_success() {
+            return Err(http_status_error(response).await);
+        }
+        Ok(())
     }
 
     async fn get_stream(
@@ -58,7 +88,9 @@ impl SseClient for reqwest::Client {
             request_builder = request_builder.header(HEADER_LAST_EVENT_ID, last_event_id);
         }
         let response = request_builder.send().await?;
-        let response = response.error_for_status()?;
+        if !response.status().is_success() {
+            return Err(http_status_error(response).await);
+        }
         match response.headers().get(reqwest::header::CONTENT_TYPE) {
             Some(ct) => {
                 if !ct.as_bytes().starts_with(EVENT_STREAM_MIME_TYPE.as_bytes()) {

@@ -101,6 +101,13 @@ pub(crate) trait SseStreamReconnect {
     fn handle_control_event(&mut self, _event: &Sse) -> Result<(), Self::Error> {
         Ok(())
     }
+    /// Whether a failed reconnect attempt should terminate the stream instead
+    /// of consuming further retries (e.g. an auth rejection that later
+    /// attempts cannot fix). Warp-specific addition (not in the upstream rmcp
+    /// copy). Defaults to never.
+    fn is_fatal_error(&self, _error: &Self::Error) -> bool {
+        false
+    }
     fn handle_stream_error(
         &mut self,
         error: &(dyn std::error::Error + 'static),
@@ -240,6 +247,11 @@ where
                 match retry_result {
                     Ok(new_stream) => SseAutoReconnectStreamState::Connected { stream: new_stream },
                     Err(e) => {
+                        if this.connector.is_fatal_error(&e) {
+                            tracing::error!("sse stream error: {e}, not retrying");
+                            this.state.set(SseAutoReconnectStreamState::Terminated);
+                            return Poll::Ready(Some(Err(e)));
+                        }
                         tracing::debug!("retry sse stream error: {e}");
                         *retry_times += 1;
                         if let Some(interval) = this.retry_policy.retry(*retry_times) {

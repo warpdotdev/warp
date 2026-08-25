@@ -19,9 +19,55 @@ use uuid::Uuid;
 use warp_errors::report_error;
 
 use super::TemplatableMCPServerInfo;
+use crate::error_classification::ProxyAuthReason;
 
 type ReqwestHttpTransport = rmcp::transport::StreamableHttpClientTransport<reqwest::Client>;
 type ReqwestSseTransport = crate::sse_transport::SseClientTransport<reqwest::Client>;
+
+/// Error from [`spawn_server`], distinguishing authentication failures from
+/// other spawn failures so callers can react without string matching.
+#[derive(Debug, thiserror::Error)]
+#[allow(clippy::large_enum_variant)] // `Other` carries rmcp's (large) error type.
+pub enum McpSpawnError {
+    /// The server rejected the connection as unauthenticated, and interactive
+    /// authentication was unavailable or failed.
+    #[error("{message}")]
+    AuthRequired {
+        /// The `WWW-Authenticate` challenge, when the server provided one.
+        www_authenticate: Option<String>,
+        /// The Warp proxy re-mint reason parsed from the challenge, if any.
+        /// `Some` means a freshly minted proxy session token will fix this
+        /// without user interaction.
+        reason: Option<ProxyAuthReason>,
+        /// User-facing description of the failure.
+        message: String,
+    },
+    #[error(transparent)]
+    Other(#[from] rmcp::RmcpError),
+}
+
+impl From<rmcp::service::ClientInitializeError> for McpSpawnError {
+    fn from(error: rmcp::service::ClientInitializeError) -> Self {
+        Self::Other(error.into())
+    }
+}
+
+/// Whether a spawn failure justifies deleting cached OAuth credentials.
+///
+/// Only a definitive authentication rejection that re-minting cannot fix
+/// qualifies. Transient failures (network, DNS, command-not-found) and
+/// re-mintable proxy-token expiry must never log the user out of a server.
+pub fn should_delete_credentials(error: &McpSpawnError) -> bool {
+    matches!(error, McpSpawnError::AuthRequired { reason: None, .. })
+}
+
+/// Convert a spawn error to a user-friendly error message.
+pub fn spawn_error_to_user_message(error: &McpSpawnError) -> String {
+    match error {
+        McpSpawnError::AuthRequired { message, .. } => message.clone(),
+        McpSpawnError::Other(error) => error_to_user_message(error),
+    }
+}
 
 /// Convert an rmcp error to a user-friendly error message.
 pub fn error_to_user_message(error: &rmcp::RmcpError) -> String {
@@ -70,6 +116,19 @@ pub fn error_to_user_message(error: &rmcp::RmcpError) -> String {
     }
 }
 
+/// Bounded reconnect policy for legacy SSE streams.
+///
+/// The upstream default retries forever every second, hammering a dead or
+/// auth-rejecting endpoint indefinitely. Exhaustion ends the stream, which
+/// surfaces as a closed transport that higher layers can recover from
+/// deliberately.
+fn sse_retry_policy() -> std::sync::Arc<dyn crate::sse_transport::SseRetryPolicy> {
+    std::sync::Arc::new(crate::sse_transport::ExponentialBackoff {
+        max_times: Some(6),
+        base_duration: std::time::Duration::from_millis(1000),
+    })
+}
+
 /// Builds a `HeaderMap` from a `HashMap<String, String>` of user-provided headers.
 ///
 /// Invalid header names or values are skipped.
@@ -103,7 +162,7 @@ pub async fn spawn_server(
     transport_type: TransportType,
     logger: SimpleLogger,
     auth_context: Option<crate::oauth::AuthContext>,
-) -> Result<TemplatableMCPServerInfo, rmcp::RmcpError> {
+) -> Result<TemplatableMCPServerInfo, McpSpawnError> {
     logger.log("[note] Attention! There may be sensitive information (such as API keys) in these logs. Make sure to redact any secrets before sharing with others.".to_string());
 
     let mut is_authenticated_transport = false;
@@ -210,7 +269,7 @@ pub async fn spawn_server(
             };
 
             // Create the MCP client and connect to the server.
-            Ok::<_, rmcp::RmcpError>(make_client_info().into_dyn().serve(transport).await?)
+            Ok::<_, McpSpawnError>(make_client_info().into_dyn().serve(transport).await?)
         }
         TransportType::ServerSentEvents(sse_server) => {
             let headers: HashMap<String, String> = sse_server
@@ -267,6 +326,7 @@ pub async fn spawn_server(
                         client,
                         crate::sse_transport::SseClientConfig {
                             sse_endpoint: sse_server.url.into(),
+                            retry_policy: sse_retry_policy(),
                             ..Default::default()
                         },
                     )
@@ -280,24 +340,21 @@ pub async fn spawn_server(
                 }
                 Ok(Transport::Sse(None)) => {
                     logger.log("[info] MCP: Using (legacy) SSE transport (due to preflight failing with a 404)".to_string());
-                    let transport = if headers.is_empty() {
-                        crate::sse_transport::SseClientTransport::start(sse_server.url.clone())
-                            .await
-                            .map_err(|e| {
-                                rmcp::RmcpError::transport_creation::<ReqwestSseTransport>(e)
-                            })?
+                    let client = if headers.is_empty() {
+                        reqwest::Client::default()
                     } else {
-                        let client = build_client_with_headers(&headers)?;
-                        crate::sse_transport::SseClientTransport::start_with_client(
-                            client,
-                            crate::sse_transport::SseClientConfig {
-                                sse_endpoint: sse_server.url.clone().into(),
-                                ..Default::default()
-                            },
-                        )
-                        .await
-                        .map_err(rmcp::RmcpError::transport_creation::<ReqwestSseTransport>)?
+                        build_client_with_headers(&headers)?
                     };
+                    let transport = crate::sse_transport::SseClientTransport::start_with_client(
+                        client,
+                        crate::sse_transport::SseClientConfig {
+                            sse_endpoint: sse_server.url.clone().into(),
+                            retry_policy: sse_retry_policy(),
+                            ..Default::default()
+                        },
+                    )
+                    .await
+                    .map_err(rmcp::RmcpError::transport_creation::<ReqwestSseTransport>)?;
                     let transport = TransportLoggingWrapper {
                         transport,
                         logger: logger.clone(),
@@ -353,22 +410,26 @@ async fn determine_transport(
     url: &str,
     headers: &HashMap<String, String>,
     auth_context: Option<crate::oauth::AuthContext>,
-) -> Result<Transport, rmcp::RmcpError> {
+) -> Result<Transport, McpSpawnError> {
     use reqwest::StatusCode;
 
-    fn unexpected_error(status: reqwest::StatusCode) -> rmcp::RmcpError {
+    fn unexpected_error(status: reqwest::StatusCode) -> McpSpawnError {
         rmcp::RmcpError::transport_creation::<ReqwestHttpTransport>(format!(
             "Unexpected status code: {status}"
         ))
+        .into()
     }
     match send_initialize_request(url, headers, None).await? {
         StatusCode::OK => Ok(Transport::Http(None)),
         StatusCode::NOT_FOUND | StatusCode::METHOD_NOT_ALLOWED => Ok(Transport::Sse(None)),
         StatusCode::UNAUTHORIZED => {
             let Some(mut auth_context) = auth_context else {
-                return Err(rmcp::RmcpError::transport_creation::<ReqwestHttpTransport>(
-                    "Server requires authentication, which is not yet supported.".to_string(),
-                ));
+                return Err(McpSpawnError::AuthRequired {
+                    www_authenticate: None,
+                    reason: None,
+                    message: "Server requires authentication, which is not yet supported."
+                        .to_string(),
+                });
             };
 
             // Grab the post-authentication callback so we can invoke it once we know for sure that we successfully
@@ -381,7 +442,11 @@ async fn determine_transport(
             let (client, did_require_login) =
                 crate::oauth::make_authenticated_client(url, http_client, auth_context)
                     .await
-                    .map_err(rmcp::RmcpError::transport_creation::<ReqwestHttpTransport>)?;
+                    .map_err(|error| McpSpawnError::AuthRequired {
+                        www_authenticate: None,
+                        reason: None,
+                        message: format!("{error:#}"),
+                    })?;
 
             // Define a helper function to invoke when we've successfully authenticated.
             let emit_authenticated_notification = async move || {

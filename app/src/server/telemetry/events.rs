@@ -324,6 +324,18 @@ pub enum MCPServerTelemetryError {
 }
 
 #[cfg(not(target_family = "wasm"))]
+impl From<mcp::runtime::McpSpawnError> for MCPServerTelemetryError {
+    fn from(err: mcp::runtime::McpSpawnError) -> Self {
+        match err {
+            mcp::runtime::McpSpawnError::AuthRequired { message, .. } => {
+                Self::Initialization(message)
+            }
+            mcp::runtime::McpSpawnError::Other(err) => err.into(),
+        }
+    }
+}
+
+#[cfg(not(target_family = "wasm"))]
 impl From<rmcp::RmcpError> for MCPServerTelemetryError {
     fn from(err: rmcp::RmcpError) -> Self {
         match err {

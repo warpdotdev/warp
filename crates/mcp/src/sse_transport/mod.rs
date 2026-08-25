@@ -8,3 +8,10 @@ mod sse_client;
 
 pub use client_side_sse::{ExponentialBackoff, FixedInterval, NeverRetry, SseRetryPolicy};
 pub use sse_client::{SseClient, SseClientConfig, SseClientTransport, SseTransportError};
+
+#[cfg(test)]
+#[path = "client_side_sse_tests.rs"]
+mod client_side_sse_tests;
+#[cfg(test)]
+#[path = "reqwest_impl_tests.rs"]
+mod reqwest_impl_tests;

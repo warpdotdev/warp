@@ -29,6 +29,16 @@ pub enum SseTransportError<E: std::error::Error + Send + Sync + 'static> {
     Io(#[from] std::io::Error),
     #[error("Client error: {0}")]
     Client(E),
+    /// A non-success HTTP response, with the diagnostics `error_for_status`
+    /// would discard: a bounded copy of the body and the `WWW-Authenticate`
+    /// challenge. Warp-specific addition (not in the upstream rmcp copy) so
+    /// callers can classify auth failures.
+    #[error("HTTP status {status}: {body}")]
+    HttpStatus {
+        status: http::StatusCode,
+        body: String,
+        www_authenticate: Option<String>,
+    },
     #[error("unexpected end of stream")]
     UnexpectedEndOfStream,
     #[error("Unexpected content type: {0:?}")]
@@ -107,6 +117,17 @@ impl<C: SseClient> SseStreamReconnect for SseClientReconnect<C> {
             last_event_id = last_event_id.unwrap_or(""),
             "sse stream error: {error}"
         );
+    }
+
+    fn is_fatal_error(&self, error: &Self::Error) -> bool {
+        // An auth-rejected reconnect attempt (e.g. an expired Warp proxy
+        // token) will keep failing identically; stop hammering the server
+        // and let higher layers own recovery.
+        matches!(
+            error,
+            SseTransportError::HttpStatus { status, .. }
+                if matches!(status.as_u16(), 401 | 403)
+        )
     }
 }
 type ServerMessageStream<C> = Pin<Box<SseAutoReconnectStream<SseClientReconnect<C>>>>;
