@@ -43,10 +43,6 @@ pub enum FocusedTerminalInfoEvent {
 /// remote sessions.
 #[derive(Default, Clone, Debug)]
 pub struct FocusedTerminalInfo {
-    /// The terminal surface the flags below describe. A handle rather than an id, so the team
-    /// whose rules govern that surface resolves against whichever window it is in at read time
-    /// and follows it across a cross-window tab drag. `None` until a focused terminal has
-    /// published.
     terminal: Option<WeakViewHandle<TerminalView>>,
     contains_any_remote_blocks: bool,
     contains_any_restored_remote_blocks: bool,
@@ -2176,12 +2172,6 @@ impl AISettings {
         });
     }
 
-    /// Whether the org forbids AI given what the focused terminal contains.
-    ///
-    /// The permission is resolved from the handle [`FocusedTerminalInfo`] holds at read time, so
-    /// it tracks both an admin revoking it and the terminal being dragged to another team's
-    /// window. The content flags are checked first to skip resolution when there is no remote
-    /// content.
     pub fn is_ai_disabled_due_to_remote_session_org_policy(&self, app: &AppContext) -> bool {
         let focused_terminal = FocusedTerminalInfo::as_ref(app);
         let Some(terminal) = focused_terminal.terminal() else {
