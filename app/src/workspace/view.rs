@@ -19193,6 +19193,12 @@ impl Workspace {
     }
 
     pub fn open_prompt_suggestions_unavailable_modal(&mut self, ctx: &mut ViewContext<Self>) {
+        // Same free-AI-removal messaging as the startup notice, so it's equally
+        // out of place on WASM (e.g. an executor-role shared-session viewer).
+        if cfg!(target_family = "wasm") {
+            return;
+        }
+
         self.current_workspace_state
             .is_prompt_suggestions_unavailable_modal_open = true;
         send_telemetry_from_ctx!(
