@@ -61,6 +61,7 @@ fn respawnable_config_returns_retained_config_for_ephemeral_servers() {
                 RetainedSpawnConfig {
                     installation: installation.clone(),
                     provenance: SpawnProvenance::CliEphemeral,
+                    refresher: None,
                 },
             );
 
@@ -89,6 +90,7 @@ fn respawnable_config_requires_local_install_when_flag_disabled() {
                 RetainedSpawnConfig {
                     installation: ephemeral.clone(),
                     provenance: SpawnProvenance::CliEphemeral,
+                    refresher: None,
                 },
             );
             manager
@@ -133,6 +135,7 @@ fn respawnable_config_prefers_live_locally_installed_config() {
                 RetainedSpawnConfig {
                     installation: stale.clone(),
                     provenance: SpawnProvenance::LocallyInstalled,
+                    refresher: None,
                 },
             );
             manager
@@ -189,6 +192,7 @@ fn shutdown_clears_retained_config_and_fails_reconnect_waiters() {
                 RetainedSpawnConfig {
                     installation: installation.clone(),
                     provenance: SpawnProvenance::CliEphemeral,
+                    refresher: None,
                 },
             );
             manager.pending_reconnections.insert(uuid, vec![tx]);
@@ -246,6 +250,7 @@ fn known_server_facts_keep_tools_visible_during_reconnect_windows() {
                 RetainedSpawnConfig {
                     installation: installation.clone(),
                     provenance: SpawnProvenance::CliEphemeral,
+                    refresher: None,
                 },
             );
 
@@ -278,6 +283,7 @@ fn known_server_facts_are_inert_with_the_flag_disabled() {
                 RetainedSpawnConfig {
                     installation: installation.clone(),
                     provenance: SpawnProvenance::CliEphemeral,
+                    refresher: None,
                 },
             );
 
@@ -334,6 +340,7 @@ fn builtin_reconnect_without_credentials_fails() {
                 RetainedSpawnConfig {
                     installation: installation.clone(),
                     provenance: SpawnProvenance::Builtin,
+                    refresher: None,
                 },
             );
 

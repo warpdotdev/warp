@@ -279,3 +279,94 @@ async fn query_resources_for_calls_list_function_exactly_once() {
 
     assert_eq!(calls.load(Ordering::SeqCst), 1);
 }
+
+mod determine_transport_tests {
+    use std::collections::HashMap;
+
+    use axum::Router;
+    use axum::routing::post;
+
+    use crate::error_classification::ProxyAuthReason;
+    use crate::runtime::McpSpawnError;
+
+    const EXPIRED_CHALLENGE: &str =
+        r#"Bearer error="invalid_token", error_description="proxy_token_expired""#;
+
+    async fn serve_status(
+        status: axum::http::StatusCode,
+        www_authenticate: Option<&'static str>,
+    ) -> String {
+        let handler = move || async move {
+            let mut response =
+                axum::response::Response::new(axum::body::Body::from(r#"{"error":"denied"}"#));
+            *response.status_mut() = status;
+            if let Some(challenge) = www_authenticate {
+                response.headers_mut().insert(
+                    axum::http::header::WWW_AUTHENTICATE,
+                    axum::http::HeaderValue::from_static(challenge),
+                );
+            }
+            response
+        };
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .expect("bind listener");
+        let addr = listener.local_addr().expect("local addr");
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, Router::new().route("/mcp", post(handler))).await;
+        });
+        format!("http://{addr}/mcp")
+    }
+
+    #[tokio::test]
+    async fn expired_proxy_challenge_short_circuits_oauth() {
+        let url = serve_status(
+            axum::http::StatusCode::UNAUTHORIZED,
+            Some(EXPIRED_CHALLENGE),
+        )
+        .await;
+
+        let error = super::super::determine_transport(
+            "test-server".to_string(),
+            &url,
+            &HashMap::new(),
+            None,
+        )
+        .await
+        .map(|_| ())
+        .expect_err("expired proxy session should error");
+
+        match error {
+            McpSpawnError::AuthRequired {
+                reason,
+                www_authenticate,
+                message,
+            } => {
+                assert_eq!(reason, Some(ProxyAuthReason::ProxyTokenExpired));
+                assert_eq!(www_authenticate.as_deref(), Some(EXPIRED_CHALLENGE));
+                assert!(message.contains("proxy session"), "got: {message}");
+            }
+            other => panic!("expected AuthRequired, got: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn bare_401_without_auth_context_requires_user() {
+        let url = serve_status(axum::http::StatusCode::UNAUTHORIZED, None).await;
+
+        let error = super::super::determine_transport(
+            "test-server".to_string(),
+            &url,
+            &HashMap::new(),
+            None,
+        )
+        .await
+        .map(|_| ())
+        .expect_err("401 without auth context should error");
+
+        match error {
+            McpSpawnError::AuthRequired { reason, .. } => assert_eq!(reason, None),
+            other => panic!("expected AuthRequired, got: {other:?}"),
+        }
+    }
+}

@@ -19,7 +19,7 @@ use uuid::Uuid;
 use warp_errors::report_error;
 
 use super::TemplatableMCPServerInfo;
-use crate::error_classification::ProxyAuthReason;
+use crate::error_classification::{ProxyAuthReason, parse_www_authenticate_reason};
 
 type ReqwestHttpTransport = rmcp::transport::StreamableHttpClientTransport<reqwest::Client>;
 type ReqwestSseTransport = crate::sse_transport::SseClientTransport<reqwest::Client>;
@@ -419,13 +419,29 @@ async fn determine_transport(
         ))
         .into()
     }
-    match send_initialize_request(url, headers, None).await? {
+    let probe = send_initialize_request(url, headers, None).await?;
+    match probe.status {
         StatusCode::OK => Ok(Transport::Http(None)),
         StatusCode::NOT_FOUND | StatusCode::METHOD_NOT_ALLOWED => Ok(Transport::Sse(None)),
         StatusCode::UNAUTHORIZED => {
+            // An expired/stale Warp proxy session is not an OAuth problem:
+            // routing it into the interactive OAuth flow would show a
+            // misleading "authenticate this server" prompt. Surface it as a
+            // re-mintable auth failure instead.
+            if let Some(reason) = probe
+                .www_authenticate
+                .as_deref()
+                .and_then(parse_www_authenticate_reason)
+            {
+                return Err(McpSpawnError::AuthRequired {
+                    www_authenticate: probe.www_authenticate,
+                    reason: Some(reason),
+                    message: "The Warp proxy session for this MCP server has expired.".to_string(),
+                });
+            }
             let Some(mut auth_context) = auth_context else {
                 return Err(McpSpawnError::AuthRequired {
-                    www_authenticate: None,
+                    www_authenticate: probe.www_authenticate,
                     reason: None,
                     message: "Server requires authentication, which is not yet supported."
                         .to_string(),
@@ -458,7 +474,10 @@ async fn determine_transport(
                 }
             };
 
-            match send_initialize_request(url, headers, Some(&client)).await? {
+            match send_initialize_request(url, headers, Some(&client))
+                .await?
+                .status
+            {
                 StatusCode::OK => {
                     emit_authenticated_notification().await;
                     Ok(Transport::Http(Some(client)))
@@ -474,13 +493,22 @@ async fn determine_transport(
     }
 }
 
-/// Sends an InitializeRequest to the server, and returns the HTTP status code from the response.
+/// The observable outcome of a preflight InitializeRequest.
+struct InitializeProbe {
+    status: reqwest::StatusCode,
+    /// The `WWW-Authenticate` challenge on a 401, used to distinguish a
+    /// re-mintable Warp proxy-session expiry from a real OAuth requirement.
+    www_authenticate: Option<String>,
+}
+
+/// Sends an InitializeRequest to the server, and returns the HTTP status code
+/// (plus auth challenge, if any) from the response.
 #[allow(clippy::result_large_err)]
 async fn send_initialize_request(
     url: &str,
     headers: &HashMap<String, String>,
     auth_client: Option<&rmcp::transport::auth::AuthClient<reqwest::Client>>,
-) -> Result<reqwest::StatusCode, rmcp::RmcpError> {
+) -> Result<InitializeProbe, rmcp::RmcpError> {
     use rmcp::transport::common::http_header::{EVENT_STREAM_MIME_TYPE, JSON_MIME_TYPE};
 
     let request = rmcp::model::InitializeRequest::new(make_client_info());
@@ -510,7 +538,14 @@ async fn send_initialize_request(
         .await
         .map_err(rmcp::RmcpError::transport_creation::<ReqwestHttpTransport>)?;
 
-    Ok(response.status())
+    Ok(InitializeProbe {
+        status: response.status(),
+        www_authenticate: response
+            .headers()
+            .get(http::header::WWW_AUTHENTICATE)
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_owned),
+    })
 }
 
 /// Creates a [`ClientInfo`] for the MCP client.

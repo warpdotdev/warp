@@ -18,6 +18,8 @@ pub use native::McpIntegration;
 #[cfg(not(target_family = "wasm"))]
 use native::RetainedSpawnConfig;
 #[cfg(not(target_family = "wasm"))]
+pub(crate) use native::{InstallationRefresher, ManagedProvenance};
+#[cfg(not(target_family = "wasm"))]
 use parking_lot::Mutex;
 #[cfg(not(target_family = "wasm"))]
 use simple_logger::SimpleLogger;

@@ -190,6 +190,11 @@ const TASK_STATUS_FLUSH_TIMEOUT: Duration = Duration::from_secs(5);
 /// capacity period), while staying well under the ~35s a run had before it was marked
 /// FAILED in that incident.
 const MANAGED_MCP_RESOLVE_MAX_ATTEMPTS: usize = 6;
+/// Attempt budget for re-minting one managed MCP server's client config
+/// mid-run, when its proxy session expired and a reconnect needs a fresh
+/// token. Unlike run-startup resolution this sits on the tool-call latency
+/// path, so the budget is small; a hard failure surfaces as a tool error.
+const MANAGED_MCP_REMINT_MAX_ATTEMPTS: usize = 3;
 /// Timeout for individual harness auth preflight commands.
 const PREFLIGHT_CHECK_TIMEOUT: Duration = Duration::from_secs(30);
 pub(crate) const WARP_DRIVE_SYNC_TIMEOUT: Duration = Duration::from_secs(60);
@@ -861,6 +866,10 @@ register_error!(AgentDriverError);
 struct ResolvedMcpSpecs {
     local_uuids: Vec<Uuid>,
     ephemeral_installations: Vec<TemplatableMCPServerInstallation>,
+    /// For entries of `ephemeral_installations` resolved via
+    /// `createManagedMcpClientConfig`: the `uid` to re-mint the short-lived
+    /// proxy config with, keyed by installation UUID.
+    managed_uids: HashMap<Uuid, String>,
 }
 
 impl From<warpui::ModelDropped> for AgentDriverError {
@@ -1707,6 +1716,11 @@ impl AgentDriver {
                             message: err.to_string(),
                         }
                     })?;
+                    for installation in &installations {
+                        resolved
+                            .managed_uids
+                            .insert(installation.uuid(), uuid.to_string());
+                    }
                     resolved.ephemeral_installations.extend(installations);
                 }
                 MCPSpec::WellKnown(id) => {
@@ -1746,6 +1760,11 @@ impl AgentDriver {
                         id,
                     ) {
                         Ok(installations) => {
+                            for installation in &installations {
+                                resolved
+                                    .managed_uids
+                                    .insert(installation.uuid(), id.clone());
+                            }
                             resolved.ephemeral_installations.extend(installations);
                         }
                         Err(err) => {
@@ -2183,6 +2202,7 @@ impl AgentDriver {
     fn start_ephemeral_mcp_servers(
         &self,
         mut installations: Vec<TemplatableMCPServerInstallation>,
+        managed_uids: HashMap<Uuid, String>,
         ctx: &mut ModelContext<Self>,
     ) -> impl Future<Output = Result<(), AgentDriverError>> + use<> {
         if installations.is_empty() {
@@ -2207,15 +2227,95 @@ impl AgentDriver {
             .collect();
         let wait = self.wait_for_mcp_servers_started(named_servers, ctx);
 
-        // Spawn the ephemeral servers.
+        // Spawn the ephemeral servers. Managed ones get a refresher so a
+        // reconnect can re-mint their short-lived proxy config.
+        let task_id = self.task_id;
+        let secrets = self.secrets.clone();
         let templatable_mcp_manager = TemplatableMCPServerManager::handle(ctx);
         templatable_mcp_manager.update(ctx, move |manager, ctx| {
+            let self_heal = FeatureFlag::McpSelfHeal.is_enabled();
+            let managed_mcp_client =
+                self_heal.then(|| ServerApiProvider::as_ref(ctx).get_managed_mcp_client());
             for installation in installations {
-                manager.spawn_cli_ephemeral_server(installation, ctx);
+                match (
+                    &managed_mcp_client,
+                    managed_uids.get(&installation.uuid()).cloned(),
+                ) {
+                    (Some(managed_mcp_client), Some(managed_uid)) => {
+                        let refresher = Self::managed_installation_refresher(
+                            managed_uid.clone(),
+                            managed_mcp_client.clone(),
+                            task_id,
+                            secrets.clone(),
+                        );
+                        manager.spawn_managed_ephemeral_server(
+                            installation,
+                            crate::ai::mcp::templatable_manager::ManagedProvenance { managed_uid },
+                            refresher,
+                            ctx,
+                        );
+                    }
+                    _ => manager.spawn_cli_ephemeral_server(installation, ctx),
+                }
             }
         });
 
         Either::Left(wait)
+    }
+
+    /// Builds the refresher a managed ephemeral server uses to re-mint its
+    /// proxy config before a respawn. Re-minting is overlap-safe (proxy
+    /// sessions are stateless server-side; the old token stays valid until
+    /// its expiry), and the retry budget is small because this runs on the
+    /// tool-call latency path.
+    fn managed_installation_refresher(
+        managed_uid: String,
+        managed_mcp_client: Arc<dyn ManagedMcpClient>,
+        task_id: Option<AmbientAgentTaskId>,
+        secrets: Arc<HashMap<String, ManagedSecretValue>>,
+    ) -> crate::ai::mcp::templatable_manager::InstallationRefresher {
+        Arc::new(move |stale: TemplatableMCPServerInstallation| {
+            let managed_uid = managed_uid.clone();
+            let managed_mcp_client = managed_mcp_client.clone();
+            let secrets = secrets.clone();
+            Box::pin(async move {
+                let client_config = with_bounded_retry_using(
+                    &format!("re-mint managed MCP config '{managed_uid}'"),
+                    MANAGED_MCP_REMINT_MAX_ATTEMPTS,
+                    is_transient_graphql_or_http_error,
+                    || managed_mcp_client.create_managed_mcp_client_config(managed_uid.clone()),
+                )
+                .await
+                .map_err(|err| format!("{err:#}"))?;
+
+                let server_name = stale.templatable_mcp_server().name.clone();
+                let fresh = Self::installations_from_managed_client_config_json(
+                    &client_config.mcp_config_json,
+                    task_id,
+                    &managed_uid,
+                )
+                .map_err(|err| err.to_string())?
+                .into_iter()
+                .find(|candidate| candidate.templatable_mcp_server().name == server_name)
+                .ok_or_else(|| {
+                    format!("server '{server_name}' missing from re-minted managed MCP config")
+                })?;
+
+                // Preserve the stale instance's identities: the installation
+                // UUID keys all manager state (and is random for local runs,
+                // so re-parsing yields a different one), and the template
+                // UUID keys the log file.
+                let mut fresh_server = fresh.templatable_mcp_server().clone();
+                fresh_server.uuid = stale.template_uuid();
+                let mut rebuilt = TemplatableMCPServerInstallation::new(
+                    stale.uuid(),
+                    fresh_server,
+                    fresh.variable_values().clone(),
+                );
+                rebuilt.apply_secrets(&secrets);
+                Ok(rebuilt)
+            })
+        })
     }
 
     /// Subscribe to [`FileBasedMCPManagerEvent::CloudEnvMcpScanComplete`]
@@ -2807,6 +2907,7 @@ impl AgentDriver {
                             .await?;
                     let existing_uuids = resolved_mcp_specs.local_uuids;
                     let mut ephemeral_installations = resolved_mcp_specs.ephemeral_installations;
+                    let managed_uids = resolved_mcp_specs.managed_uids;
 
                     // Attach the built-in Factory MCP server. Interactive
                     // clients attach built-ins via
@@ -2883,7 +2984,11 @@ impl AgentDriver {
                     if !ephemeral_installations.is_empty() {
                         let result = foreground
                             .spawn(move |me, ctx| {
-                                me.start_ephemeral_mcp_servers(ephemeral_installations, ctx)
+                                me.start_ephemeral_mcp_servers(
+                                    ephemeral_installations,
+                                    managed_uids,
+                                    ctx,
+                                )
                             })
                             .await?
                             .await;

@@ -241,6 +241,111 @@ fn well_known_spec_resolves_via_managed_client() {
 }
 
 #[test]
+fn managed_resolution_records_managed_uids_for_remint() {
+    let _flag = FeatureFlag::WellKnownMcpIds.override_enabled(true);
+    let uuid = uuid::Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
+    let uuid_json = r#"{"mcpServers":{"GitHub MCP":{"command":"npx"}}}"#;
+    let linear_json = r#"{"mcpServers":{"linear":{"url":"https://app.warp.dev/mcp/integration-proxy/linear","headers":{"Authorization":"Bearer tok"}}}}"#;
+    let mut mock = MockManagedMcpClient::new();
+    mock.expect_create_managed_mcp_client_config()
+        .times(2)
+        .returning(move |requested_uid| {
+            Ok(managed_client_config_output(if requested_uid == "linear" {
+                linear_json
+            } else {
+                uuid_json
+            }))
+        });
+
+    let resolved = block_on(AgentDriver::resolve_mcp_specs_with_local_uuids(
+        &[
+            MCPSpec::Uuid(uuid),
+            MCPSpec::WellKnown("linear".to_string()),
+        ],
+        &HashSet::new(),
+        Arc::new(mock),
+        None,
+    ))
+    .unwrap();
+
+    assert_eq!(resolved.ephemeral_installations.len(), 2);
+    for installation in &resolved.ephemeral_installations {
+        let expected_uid = if installation.templatable_mcp_server().name == "linear" {
+            "linear".to_string()
+        } else {
+            uuid.to_string()
+        };
+        assert_eq!(
+            resolved.managed_uids.get(&installation.uuid()),
+            Some(&expected_uid)
+        );
+    }
+}
+
+#[test]
+fn managed_refresher_preserves_identity_and_swaps_token() {
+    let old_json = r#"{"mcpServers":{"linear":{"url":"https://app.warp.dev/mcp/proxy/abc","headers":{"Authorization":"Bearer old-token"}}}}"#;
+    let new_json = r#"{"mcpServers":{"linear":{"url":"https://app.warp.dev/mcp/proxy/abc","headers":{"Authorization":"Bearer new-token"}}}}"#;
+    let stale =
+        AgentDriver::installations_from_managed_client_config_json(old_json, None, "linear")
+            .unwrap()
+            .pop()
+            .unwrap();
+
+    let mut mock = MockManagedMcpClient::new();
+    mock.expect_create_managed_mcp_client_config()
+        .times(1)
+        .returning(move |requested_uid| {
+            assert_eq!(requested_uid, "linear");
+            Ok(managed_client_config_output(new_json))
+        });
+
+    let refresher = AgentDriver::managed_installation_refresher(
+        "linear".to_string(),
+        Arc::new(mock),
+        None,
+        Arc::new(HashMap::new()),
+    );
+    let fresh = block_on(refresher(stale.clone())).unwrap();
+
+    // Identities that key manager state and log files survive the re-mint...
+    assert_eq!(fresh.uuid(), stale.uuid());
+    assert_eq!(fresh.template_uuid(), stale.template_uuid());
+    // ...while the rendered config carries the fresh proxy token.
+    let rendered = render_installations(vec![fresh], HashMap::new());
+    let server = serde_json::to_value(&rendered["linear"]).unwrap();
+    assert_eq!(
+        server["headers"]["Authorization"].as_str().unwrap(),
+        "Bearer new-token"
+    );
+}
+
+#[test]
+fn managed_refresher_errors_when_server_name_disappears() {
+    let old_json = r#"{"mcpServers":{"linear":{"url":"https://app.warp.dev/mcp/proxy/abc","headers":{"Authorization":"Bearer old-token"}}}}"#;
+    let renamed_json = r#"{"mcpServers":{"other":{"url":"https://app.warp.dev/mcp/proxy/abc","headers":{"Authorization":"Bearer new-token"}}}}"#;
+    let stale =
+        AgentDriver::installations_from_managed_client_config_json(old_json, None, "linear")
+            .unwrap()
+            .pop()
+            .unwrap();
+
+    let mut mock = MockManagedMcpClient::new();
+    mock.expect_create_managed_mcp_client_config()
+        .times(1)
+        .returning(move |_| Ok(managed_client_config_output(renamed_json)));
+
+    let refresher = AgentDriver::managed_installation_refresher(
+        "linear".to_string(),
+        Arc::new(mock),
+        None,
+        Arc::new(HashMap::new()),
+    );
+    let error = block_on(refresher(stale)).unwrap_err();
+    assert!(error.contains("missing from re-minted"), "got: {error}");
+}
+
+#[test]
 fn well_known_resolution_failure_skips_server() {
     let _flag = FeatureFlag::WellKnownMcpIds.override_enabled(true);
     let mut mock = MockManagedMcpClient::new();

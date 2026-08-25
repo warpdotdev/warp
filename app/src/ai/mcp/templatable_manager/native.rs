@@ -75,7 +75,7 @@ enum SpawnMode {
 
 /// How a spawned server's installation was obtained; used to pick the right
 /// source of truth when respawning during reconnect.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub(crate) enum SpawnProvenance {
     /// Installed by the user and persisted in SQLite (`locally_installed_servers`).
     LocallyInstalled,
@@ -83,10 +83,35 @@ pub(crate) enum SpawnProvenance {
     FileBased,
     /// Started ephemerally by a CLI agent run (`oz agent run --mcp`).
     CliEphemeral,
+    /// Resolved from a backend-managed MCP configuration
+    /// (`createManagedMcpClientConfig`), proxied through warp-server.
+    Managed(ManagedProvenance),
     /// Built-in Warp-hosted server (the Factory MCP), authenticated with the
     /// logged-in user's session credentials.
     Builtin,
 }
+
+/// How a backend-managed installation was resolved, so its short-lived proxy
+/// config can be re-minted.
+#[derive(Clone, Debug)]
+pub(crate) struct ManagedProvenance {
+    /// The `uid` passed to `createManagedMcpClientConfig`: a managed MCP
+    /// server UUID or a well-known integration id (e.g. "linear").
+    pub(crate) managed_uid: String,
+}
+
+/// Produces a fresh installation to respawn with, e.g. by re-minting a
+/// managed server's proxy config. Takes the stale installation (for identity
+/// and naming) and returns the replacement, or a user-facing error message.
+pub(crate) type InstallationRefresher = std::sync::Arc<
+    dyn Fn(
+            TemplatableMCPServerInstallation,
+        ) -> futures_util::future::BoxFuture<
+            'static,
+            Result<TemplatableMCPServerInstallation, String>,
+        > + Send
+        + Sync,
+>;
 
 /// The exact installation a server instance was spawned with, retained so a
 /// reconnect can respawn servers whose configs exist nowhere else (ephemeral
@@ -95,6 +120,9 @@ pub(crate) enum SpawnProvenance {
 pub(crate) struct RetainedSpawnConfig {
     pub(crate) installation: TemplatableMCPServerInstallation,
     pub(crate) provenance: SpawnProvenance,
+    /// Refreshes the installation before a respawn (managed servers re-mint
+    /// their proxy token). `None` for servers whose config never goes stale.
+    pub(crate) refresher: Option<InstallationRefresher>,
 }
 
 impl SpawnMode {
@@ -808,6 +836,30 @@ impl TemplatableMCPServerManager {
         );
     }
 
+    /// Spawns an ephemeral, backend-managed MCP server resolved via
+    /// `createManagedMcpClientConfig`. The `refresher` re-mints the server's
+    /// short-lived proxy config; reconnects invoke it before respawning so an
+    /// expired proxy token heals without user interaction.
+    pub(crate) fn spawn_managed_ephemeral_server(
+        &mut self,
+        installation: TemplatableMCPServerInstallation,
+        provenance: ManagedProvenance,
+        refresher: InstallationRefresher,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let installation_uuid = installation.uuid();
+        // Managed ephemerals are CLI-run-scoped, like the plain CLI path.
+        self.cli_spawned_server_uuids.insert(installation_uuid);
+        self.spawn_ephemeral_server_with_provenance(
+            installation,
+            SpawnProvenance::Managed(provenance),
+            ctx,
+        );
+        if let Some(config) = self.spawn_configs.get_mut(&installation_uuid) {
+            config.refresher = Some(refresher);
+        }
+    }
+
     /// Reconciles built-in Warp-hosted MCP servers (currently the Factory
     /// MCP) with the feature-flag and auth state: spawns the server when it
     /// should be running and isn't, and shuts it down when it shouldn't be.
@@ -928,12 +980,18 @@ impl TemplatableMCPServerManager {
 
         // Retain the exact installation this instance is spawned with so a
         // later reconnect can respawn it even when the config exists nowhere
-        // else (see `respawnable_config`).
+        // else (see `respawnable_config`). Preserve any refresher installed
+        // by `spawn_managed_ephemeral_server` across respawns.
+        let refresher = self
+            .spawn_configs
+            .get(&installation_uuid)
+            .and_then(|config| config.refresher.clone());
         self.spawn_configs.insert(
             installation_uuid,
             RetainedSpawnConfig {
                 installation: installation.clone(),
                 provenance,
+                refresher,
             },
         );
 
@@ -2012,6 +2070,45 @@ impl TemplatableMCPServerManager {
             }
         };
 
+        // Managed servers re-mint their short-lived proxy config before
+        // respawning: the retained Authorization header may have expired.
+        if FeatureFlag::McpSelfHeal.is_enabled()
+            && let Some(refresher) = self
+                .spawn_configs
+                .get(&installation_uuid)
+                .and_then(|config| config.refresher.clone())
+        {
+            if let SpawnProvenance::Managed(managed) = &provenance {
+                log::info!(
+                    "Re-minting managed MCP config '{}' before reconnecting {installation_uuid}",
+                    managed.managed_uid
+                );
+            }
+            ctx.spawn(
+                refresher(installation).compat(),
+                move |me, result: Result<TemplatableMCPServerInstallation, String>, ctx| {
+                    match result {
+                        Ok(fresh) => {
+                            me.spawn_server_impl(fresh, provenance, SpawnMode::Reconnect, ctx)
+                        }
+                        Err(message) => {
+                            log::warn!(
+                                "Failed to refresh managed MCP config for {installation_uuid}: {message}"
+                            );
+                            me.change_server_state(
+                                installation_uuid,
+                                MCPServerState::FailedToStart,
+                                ctx,
+                            );
+                            me.record_reconnect_failure(installation_uuid);
+                            me.notify_reconnect_waiters(installation_uuid, Err(message));
+                        }
+                    }
+                },
+            );
+            return;
+        }
+
         self.spawn_server_impl(installation, provenance, SpawnMode::Reconnect, ctx);
     }
 
@@ -2045,7 +2142,7 @@ impl TemplatableMCPServerManager {
                 .ok_or_else(|| "Installation not found".to_string());
         };
 
-        let provenance = retained.provenance;
+        let provenance = retained.provenance.clone();
         let retained_installation = retained.installation.clone();
         match provenance {
             SpawnProvenance::LocallyInstalled => Ok((
