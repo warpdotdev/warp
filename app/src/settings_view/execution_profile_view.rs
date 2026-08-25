@@ -105,20 +105,15 @@ impl View for ExecutionProfileView {
         let profile = permissions.permissions_profile_for_id(&self.profile_id, &scope, app);
 
         let llm_preferences = LLMPreferences::as_ref(app);
-        // `render` has no view handle to mint a real per-window scope from (this row is reused
-        // across panes/windows via the shared profile); reads the account's inherited/default
-        // team uid directly for display purposes, mirroring the headless-CLI accessors below
-        // rather than a `TeamScope`.
-        let team_uid = UserWorkspaces::as_ref(app).inherited_or_default_team_uid(None);
 
         let base_model = profile
             .base_model
             .as_ref()
-            .and_then(|id| llm_preferences.get_llm_info_for_team_uid(team_uid, id))
+            .and_then(|id| llm_preferences.get_llm_info_for_scope(&scope, id))
             .map(|info| info.display_name.clone())
             .unwrap_or_else(|| {
                 llm_preferences
-                    .get_default_base_model_for_team_uid(team_uid, app)
+                    .get_default_base_model(&scope, app)
                     .display_name
                     .clone()
             });
@@ -126,11 +121,11 @@ impl View for ExecutionProfileView {
         let cli_agent_model = profile
             .cli_agent_model
             .as_ref()
-            .and_then(|id| llm_preferences.get_llm_info_for_team_uid(team_uid, id))
+            .and_then(|id| llm_preferences.get_llm_info_for_scope(&scope, id))
             .map(|info| info.display_name.clone())
             .unwrap_or_else(|| {
                 llm_preferences
-                    .get_default_cli_agent_model_for_team_uid(team_uid, app)
+                    .get_default_cli_agent_model(&scope, app)
                     .display_name
                     .clone()
             });
@@ -138,11 +133,11 @@ impl View for ExecutionProfileView {
         let computer_use_model = profile
             .computer_use_model
             .as_ref()
-            .and_then(|id| llm_preferences.get_llm_info_for_team_uid(team_uid, id))
+            .and_then(|id| llm_preferences.get_llm_info_for_scope(&scope, id))
             .map(|info| info.display_name.clone())
             .unwrap_or_else(|| {
                 llm_preferences
-                    .get_default_computer_use_model_for_team_uid(team_uid, app)
+                    .get_default_computer_use_model(&scope, app)
                     .display_name
                     .clone()
             });

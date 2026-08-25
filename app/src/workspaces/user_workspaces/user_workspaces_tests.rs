@@ -3765,10 +3765,7 @@ fn gql_feature_model_choice(model_id: &str) -> GqlFeatureModelChoice {
 
 #[test]
 fn team_feature_model_choices_conversion_keeps_each_teams_choice_distinct() {
-    // Regression for the defect the multi-team catalog rebuild exists to prevent, at the
-    // boundary where it actually lived: `From<GqlUser> for WorkspacesMetadataResponse`
-    // folding `teams[].featureModelChoice` into `team_feature_model_choices` must key each
-    // team's own choice by its own uid, not duplicate one team's payload into every entry.
+    // Each team's uid must map to its own model choice, never a shared or swapped one.
     let mut team_a = gql_team("team-a", "Team A", &["test-user"]);
     team_a.feature_model_choice = gql_feature_model_choice("team-a-only");
     let mut team_b = gql_team("team-b", "Team B", &["test-user"]);

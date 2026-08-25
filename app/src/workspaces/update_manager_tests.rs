@@ -401,14 +401,8 @@ fn initialize_llm_preferences_dependencies(app: &mut App) {
     });
 }
 
-/// Applying a folded workspaces-metadata response keeps every team's catalog independently
-/// correct: two teams with distinct catalogs resolve to their own choices rather than a
-/// shared payload, and a later response naming fewer teams -- down to none -- prunes every
-/// bucket it no longer names instead of leaving it cached. This exercises
-/// `TeamUpdateManager::apply_feature_model_choices`, the apply path shared by the periodic
-/// poll, the out-of-band refresh, and `leave_team`. See
-/// `user_workspaces_tests::team_feature_model_choices_conversion_keeps_each_teams_choice_distinct`
-/// for the same guarantee at the GraphQL-fold boundary this response is built from.
+/// Each team's catalog stays independently correct, and a team's catalog is evicted once a
+/// later response stops naming it.
 #[test]
 fn on_workspaces_updated_keeps_teams_distinct_and_prunes_a_team_the_response_omits() {
     App::test((), |mut app| async move {
