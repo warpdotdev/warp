@@ -287,7 +287,9 @@ struct DiffResult {
     warnings: Vec<DiffWarning>,
 }
 
-/// A pending file-creation request, keyed by file path in `apply_edits_internal`.
+/// A pending file-creation request, keyed by file path in `apply_edits_internal`. A request with
+/// `rewrite` set replaces an existing file's contents rather than raising an already-exists error,
+/// so an intentional full rewrite need not be expressed as a delete followed by a create.
 struct NewFileRequest {
     content: String,
     rewrite: bool,
