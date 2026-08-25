@@ -56,6 +56,17 @@ pub struct TemplatableMCPServerManager {
     /// hold resolved secrets and proxy tokens; never log them.
     #[cfg(not(target_family = "wasm"))]
     spawn_configs: HashMap<Uuid, RetainedSpawnConfig>,
+    /// Facts about every server that connected successfully this session,
+    /// keyed by installation UUID. Survives reconnect windows (when the live
+    /// entry leaves `active_servers`) so tools stay routable and visible
+    /// while a server is being respawned.
+    #[cfg(not(target_family = "wasm"))]
+    known_servers: HashMap<Uuid, KnownServerFacts>,
+    /// Backoff state for servers whose reconnects keep failing, keyed by
+    /// installation UUID. Prevents a persistently failing server from being
+    /// respawned in a tight loop.
+    #[cfg(not(target_family = "wasm"))]
+    reconnect_backoff: HashMap<Uuid, ReconnectBackoff>,
 
     #[cfg_attr(target_family = "wasm", allow(dead_code))]
     spawned_servers: HashMap<Uuid, SpawnedServerInfo>,
@@ -126,6 +137,22 @@ struct SpawnedServerInfo {
     abort_handle: AbortHandle,
     #[cfg(not(target_family = "wasm"))]
     oauth_result_tx: async_channel::Sender<oauth::CallbackResult>,
+}
+
+/// Cached facts about a server that connected successfully this session.
+#[cfg(not(target_family = "wasm"))]
+struct KnownServerFacts {
+    name: String,
+    tools: Vec<rmcp::model::Tool>,
+    resources: Vec<rmcp::model::Resource>,
+}
+
+/// Backoff state for a server whose reconnects keep failing.
+#[cfg(not(target_family = "wasm"))]
+#[derive(Default)]
+struct ReconnectBackoff {
+    consecutive_failures: u32,
+    blocked_until: Option<instant::Instant>,
 }
 
 /// The current status of the Figma MCP server.
@@ -207,16 +234,50 @@ impl TemplatableMCPServerManager {
             .map(|s| s.as_str())
     }
 
+    /// Whether the given server is between connections (e.g. reconnecting)
+    /// but still eligible to run, so its cached facts should keep its tools
+    /// routable and visible.
+    #[cfg(not(target_family = "wasm"))]
+    fn is_reconnecting_known_server(&self, uuid: &Uuid) -> bool {
+        warp_core::features::FeatureFlag::McpSelfHeal.is_enabled()
+            && !self.active_servers.contains_key(uuid)
+            && self.spawn_configs.contains_key(uuid)
+    }
+
+    /// Known servers that are currently between connections but still
+    /// eligible to run (see [`Self::is_reconnecting_known_server`]).
+    #[cfg(not(target_family = "wasm"))]
+    fn reconnecting_known_servers(&self) -> impl Iterator<Item = (Uuid, &KnownServerFacts)> {
+        self.known_servers
+            .iter()
+            .filter(|(uuid, _)| self.is_reconnecting_known_server(uuid))
+            .map(|(uuid, facts)| (*uuid, facts))
+    }
+
     pub fn resources(&self) -> impl Iterator<Item = &rmcp::model::Resource> {
-        self.active_servers
+        let active = self
+            .active_servers
             .values()
-            .flat_map(|server| server.resources().iter())
+            .flat_map(|server| server.resources().iter());
+        #[cfg(not(target_family = "wasm"))]
+        let active = active.chain(
+            self.reconnecting_known_servers()
+                .flat_map(|(_, facts)| facts.resources.iter()),
+        );
+        active
     }
 
     pub fn tools(&self) -> impl Iterator<Item = &rmcp::model::Tool> {
-        self.active_servers
+        let active = self
+            .active_servers
             .values()
-            .flat_map(|server| server.tools().iter())
+            .flat_map(|server| server.tools().iter());
+        #[cfg(not(target_family = "wasm"))]
+        let active = active.chain(
+            self.reconnecting_known_servers()
+                .flat_map(|(_, facts)| facts.tools.iter()),
+        );
+        active
     }
 
     /// Returns a reconnecting peer for a server that has the given resource.
@@ -231,24 +292,49 @@ impl TemplatableMCPServerManager {
         self.active_servers
             .iter()
             .find(|(_, server)| server.has_resource(resource))
-            .map(|(installation_uuid, _)| {
-                super::reconnecting_peer::ReconnectingPeer::new(*installation_uuid, spawner.clone())
+            .map(|(installation_uuid, _)| *installation_uuid)
+            .or_else(|| {
+                // A reconnecting server's resources stay routable; the peer
+                // triggers the reconnect on use.
+                self.reconnecting_known_servers()
+                    .find(|(_, facts)| {
+                        facts
+                            .resources
+                            .iter()
+                            .any(|other_resource| other_resource.uri == resource.uri)
+                    })
+                    .map(|(installation_uuid, _)| installation_uuid)
+            })
+            .map(|installation_uuid| {
+                super::reconnecting_peer::ReconnectingPeer::new(installation_uuid, spawner.clone())
             })
     }
 
     pub fn tools_for_server(&self, uuid: Uuid) -> Vec<rmcp::model::Tool> {
-        self.active_servers
-            .get(&uuid)
-            .map(|server| server.tools().clone())
-            .unwrap_or_default()
+        if let Some(server) = self.active_servers.get(&uuid) {
+            return server.tools().clone();
+        }
+        #[cfg(not(target_family = "wasm"))]
+        if self.is_reconnecting_known_server(&uuid)
+            && let Some(facts) = self.known_servers.get(&uuid)
+        {
+            return facts.tools.clone();
+        }
+        Vec::new()
     }
 
     #[cfg(feature = "tui")]
     pub fn resources_for_server(&self, uuid: Uuid) -> Vec<rmcp::model::Resource> {
-        self.active_servers
-            .get(&uuid)
-            .map(|server| server.resources().clone())
-            .unwrap_or_default()
+        if let Some(server) = self.active_servers.get(&uuid) {
+            return server.resources().clone();
+        }
+        #[cfg(not(target_family = "wasm"))]
+        if self.is_reconnecting_known_server(&uuid)
+            && let Some(facts) = self.known_servers.get(&uuid)
+        {
+            return facts.resources.clone();
+        }
+        Vec::new()
     }
     #[cfg(all(not(target_family = "wasm"), feature = "tui"))]
     pub fn authorization_url(&self, uuid: Uuid) -> Option<&str> {
@@ -292,7 +378,16 @@ impl TemplatableMCPServerManager {
                 Box::new(self.active_servers.values())
             };
 
-        candidates.find_map(|server| server.tool_input_schema(tool_name))
+        let schema = candidates.find_map(|server| server.tool_input_schema(tool_name));
+        #[cfg(not(target_family = "wasm"))]
+        let schema = schema.or_else(|| {
+            self.reconnecting_known_servers()
+                .filter(|(uuid, _)| installation_id.is_none_or(|id| id == *uuid))
+                .flat_map(|(_, facts)| facts.tools.iter())
+                .find(|tool| tool.name == tool_name)
+                .map(|tool| tool.input_schema.clone())
+        });
+        schema
     }
 
     #[cfg(not(target_family = "wasm"))]
@@ -301,6 +396,15 @@ impl TemplatableMCPServerManager {
             .iter()
             .find(|(_, server)| server.has_tool(&tool))
             .map(|(uuid, _)| uuid)
+            .or_else(|| {
+                self.known_servers
+                    .iter()
+                    .find(|(uuid, facts)| {
+                        self.is_reconnecting_known_server(uuid)
+                            && facts.tools.iter().any(|t| t.name == tool.as_str())
+                    })
+                    .map(|(uuid, _)| uuid)
+            })
     }
 
     /// Returns the installation UUID of the server that provides a resource matching the given
@@ -311,6 +415,21 @@ impl TemplatableMCPServerManager {
             .iter()
             .find(|(_, server)| server.has_resource_name_or_uri(name, uri))
             .map(|(uuid, _)| uuid)
+            .or_else(|| {
+                self.known_servers
+                    .iter()
+                    .find(|(uuid, facts)| {
+                        self.is_reconnecting_known_server(uuid)
+                            && facts.resources.iter().any(|resource| {
+                                if let Some(uri) = uri {
+                                    resource.uri == uri
+                                } else {
+                                    resource.name == name
+                                }
+                            })
+                    })
+                    .map(|(uuid, _)| uuid)
+            })
     }
 
     /// Returns installed templatable servers that are currently active.

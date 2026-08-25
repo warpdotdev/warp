@@ -2,7 +2,9 @@
 
 use std::future::Future;
 
+use mcp::error_classification::{McpErrorClass, classify_service_error, is_safe_to_resend};
 use uuid::Uuid;
+use warp_core::features::FeatureFlag;
 use warpui::ModelSpawner;
 
 use super::TemplatableMCPServerManager;
@@ -89,14 +91,16 @@ impl ReconnectingPeer {
         Ok(peer)
     }
 
-    /// Executes a request with automatic retry on `TransportClosed` errors.
+    /// Executes a request with automatic retry on recoverable transport errors.
     ///
-    /// If the initial request fails with `TransportClosed`, the reconnecting peer will
-    /// detect the closed transport and attempt to reconnect before the retry.
+    /// If the initial request fails in a way a reconnect can fix (closed
+    /// transport, or — with `McpSelfHeal` — a recoverable send failure), the
+    /// reconnecting peer triggers reconnection before the retry.
     ///
     /// Note: We intentionally retry only once to avoid infinite reconnection loops if the
     /// server is persistently failing. If the retry also fails, the error propagates to the
-    /// caller.
+    /// caller. The manager additionally applies a per-server backoff to repeated
+    /// reconnect failures.
     async fn with_reconnect_retry<T, R, F, Fut>(
         &self,
         params: T,
@@ -109,7 +113,7 @@ impl ReconnectingPeer {
     {
         let peer = self.get_connected_peer().await?;
         match f(peer, params.clone()).await {
-            Err(rmcp::ServiceError::TransportClosed) => {
+            Err(error) if should_retry_after_reconnect(&error) => {
                 let peer = self.get_connected_peer().await?;
                 f(peer, params).await
             }
@@ -134,4 +138,96 @@ impl ReconnectingPeer {
         self.with_reconnect_retry(params, |peer, p| async move { peer.read_resource(p).await })
             .await
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use mcp::error_classification::ProxyAuthReason;
+    use rmcp::transport::DynamicTransportError;
+    use rmcp::transport::streamable_http_client::{AuthRequiredError, StreamableHttpError};
+
+    use super::*;
+
+    fn send_error(error: StreamableHttpError<reqwest::Error>) -> rmcp::ServiceError {
+        rmcp::ServiceError::TransportSend(DynamicTransportError::from_parts(
+            "test-transport",
+            std::any::TypeId::of::<()>(),
+            Box::new(error),
+        ))
+    }
+
+    fn expired_proxy_token_error() -> rmcp::ServiceError {
+        send_error(StreamableHttpError::AuthRequired(AuthRequiredError::new(
+            r#"Bearer error="invalid_token", error_description="proxy_token_expired""#.to_string(),
+        )))
+    }
+
+    #[test]
+    fn transport_closed_always_retries() {
+        let _flag = FeatureFlag::McpSelfHeal.override_enabled(false);
+        assert!(should_retry_after_reconnect(
+            &rmcp::ServiceError::TransportClosed
+        ));
+    }
+
+    #[test]
+    fn recoverable_send_failures_retry_only_with_the_flag() {
+        {
+            let _flag = FeatureFlag::McpSelfHeal.override_enabled(true);
+            assert!(should_retry_after_reconnect(&expired_proxy_token_error()));
+            // Sanity-check the classification the decision builds on.
+            assert!(matches!(
+                classify_service_error(&expired_proxy_token_error()),
+                McpErrorClass::AuthExpiredRecoverable(ProxyAuthReason::ProxyTokenExpired)
+            ));
+        }
+        let _flag = FeatureFlag::McpSelfHeal.override_enabled(false);
+        assert!(!should_retry_after_reconnect(&expired_proxy_token_error()));
+    }
+
+    #[test]
+    fn possibly_executed_or_user_fixable_failures_never_retry() {
+        let _flag = FeatureFlag::McpSelfHeal.override_enabled(true);
+        // A 5xx after the server accepted the request may have run the tool.
+        assert!(!should_retry_after_reconnect(&send_error(
+            StreamableHttpError::UnexpectedServerResponse(
+                "HTTP 500 Internal Server Error: boom".to_string().into()
+            )
+        )));
+        // A downstream auth rejection needs the user, not a retry.
+        assert!(!should_retry_after_reconnect(&send_error(
+            StreamableHttpError::UnexpectedServerResponse(
+                "HTTP 401 Unauthorized: nope".to_string().into()
+            )
+        )));
+        // Timeouts mean the request was delivered; don't double-execute.
+        assert!(!should_retry_after_reconnect(
+            &rmcp::ServiceError::Timeout {
+                timeout: std::time::Duration::from_secs(1)
+            }
+        ));
+    }
+}
+
+/// Whether a failed request should be retried after reconnecting.
+///
+/// `TransportClosed` always retries (pre-existing behavior). With
+/// `McpSelfHeal` enabled, send-stage failures also retry when the request
+/// provably never executed (no double-running non-idempotent tools) and the
+/// failure is one a reconnect can fix — a transient transport error or an
+/// expired Warp proxy session that reconnection re-mints.
+fn should_retry_after_reconnect(error: &rmcp::ServiceError) -> bool {
+    if matches!(error, rmcp::ServiceError::TransportClosed) {
+        return true;
+    }
+    if !FeatureFlag::McpSelfHeal.is_enabled() {
+        return false;
+    }
+    if !is_safe_to_resend(error) {
+        return false;
+    }
+    matches!(
+        classify_service_error(error),
+        McpErrorClass::Transient | McpErrorClass::AuthExpiredRecoverable(_)
+    )
 }

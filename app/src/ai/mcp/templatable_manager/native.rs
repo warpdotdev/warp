@@ -24,8 +24,8 @@ use warpui::windowing::WindowManager;
 use warpui::{AppContext, ModelContext, SingletonEntity};
 
 use super::{
-    MCPServerState, SpawnedServerInfo, TemplatableMCPServerInfo, TemplatableMCPServerManager,
-    TemplatableMCPServerManagerEvent,
+    KnownServerFacts, MCPServerState, SpawnedServerInfo, TemplatableMCPServerInfo,
+    TemplatableMCPServerManager, TemplatableMCPServerManagerEvent,
 };
 use crate::ai::mcp::file_based_manager::FileBasedMCPManagerEvent;
 use crate::ai::mcp::parsing::resolve_json;
@@ -424,6 +424,8 @@ impl TemplatableMCPServerManager {
             server_states: Default::default(),
             active_servers: Default::default(),
             spawn_configs: Default::default(),
+            known_servers: Default::default(),
+            reconnect_backoff: Default::default(),
             spawned_servers: Default::default(),
             server_credentials: Default::default(),
             file_based_server_credentials: Default::default(),
@@ -1212,6 +1214,17 @@ impl TemplatableMCPServerManager {
                 let error = match server_info {
                     Ok(info) => {
                         let peer = info.peer();
+                        // Cache the server's facts so its tools stay routable
+                        // and visible during later reconnect windows.
+                        me.known_servers.insert(
+                            installation_uuid,
+                            KnownServerFacts {
+                                name: info.name().to_string(),
+                                tools: info.tools().clone(),
+                                resources: info.resources().clone(),
+                            },
+                        );
+                        me.reconnect_backoff.remove(&installation_uuid);
                         me.active_servers.insert(installation_uuid, info);
 
                         // Clear any previous error message on successful connection.
@@ -1256,6 +1269,7 @@ impl TemplatableMCPServerManager {
                         }
 
                         if is_reconnect {
+                            me.record_reconnect_failure(installation_uuid);
                             me.notify_reconnect_waiters(installation_uuid, Err(error_message));
                         }
 
@@ -1314,6 +1328,8 @@ impl TemplatableMCPServerManager {
         // An explicitly stopped server must not be resurrected by a later
         // reconnect; a respawn re-retains its config.
         self.spawn_configs.remove(&installation_uuid);
+        self.known_servers.remove(&installation_uuid);
+        self.reconnect_backoff.remove(&installation_uuid);
         // Close the log stream now rather than when async teardown drops the
         // last logger clone, so an immediate respawn of the same server can
         // re-register its log path.
@@ -1942,6 +1958,25 @@ impl TemplatableMCPServerManager {
             return;
         }
 
+        // Circuit breaker: don't respawn a server that keeps failing to
+        // reconnect in a tight loop.
+        if FeatureFlag::McpSelfHeal.is_enabled()
+            && let Some(backoff) = self.reconnect_backoff.get(&installation_uuid)
+            && let Some(blocked_until) = backoff.blocked_until
+            && instant::Instant::now() < blocked_until
+        {
+            let server_name = self
+                .known_servers
+                .get(&installation_uuid)
+                .map(|facts| facts.name.as_str())
+                .unwrap_or("MCP server");
+            let _ = result_tx.send(Err(format!(
+                "'{server_name}' keeps failing to reconnect; backing off before the next \
+                 attempt. Check the server's logs for the underlying failure."
+            )));
+            return;
+        }
+
         // Start tracking this reconnection with this caller as the first waiter.
         self.pending_reconnections
             .insert(installation_uuid, vec![result_tx]);
@@ -2037,6 +2072,26 @@ impl TemplatableMCPServerManager {
         }
     }
 
+    /// Records a failed reconnect attempt and blocks further attempts for a
+    /// jittered, exponentially growing interval (500ms doubling to a ~32s
+    /// cap, mirroring `retry_strategies`). Cleared on the next successful
+    /// connection.
+    fn record_reconnect_failure(&mut self, installation_uuid: Uuid) {
+        const INITIAL_BACKOFF: std::time::Duration = std::time::Duration::from_millis(500);
+        const BACKOFF_JITTER: f32 = 0.3;
+        const BACKOFF_MAX_EXPONENT: u32 = 6;
+
+        let backoff = self.reconnect_backoff.entry(installation_uuid).or_default();
+        backoff.consecutive_failures = backoff.consecutive_failures.saturating_add(1);
+        let exponent = backoff
+            .consecutive_failures
+            .saturating_sub(1)
+            .min(BACKOFF_MAX_EXPONENT);
+        let delay =
+            warpui::duration_with_jitter(INITIAL_BACKOFF * 2u32.pow(exponent), BACKOFF_JITTER);
+        backoff.blocked_until = Some(instant::Instant::now() + delay);
+    }
+
     /// Notifies all pending reconnection waiters for the given installation UUID.
     ///
     /// This removes the waiters from `pending_reconnections` and sends the result to each.
@@ -2065,9 +2120,21 @@ impl TemplatableMCPServerManager {
         self.active_servers
             .iter()
             .find(|(_, server)| server.has_tool(&tool_name))
-            .map(|(installation_uuid, _)| {
+            .map(|(installation_uuid, _)| *installation_uuid)
+            .or_else(|| {
+                // A reconnecting server's tools stay routable; the peer
+                // triggers the reconnect on use.
+                self.known_servers
+                    .iter()
+                    .find(|(uuid, facts)| {
+                        self.is_reconnecting_known_server(uuid)
+                            && facts.tools.iter().any(|tool| tool.name == *tool_name)
+                    })
+                    .map(|(installation_uuid, _)| *installation_uuid)
+            })
+            .map(|installation_uuid| {
                 crate::ai::mcp::reconnecting_peer::ReconnectingPeer::new(
-                    *installation_uuid,
+                    installation_uuid,
                     spawner.clone(),
                 )
             })
@@ -2082,15 +2149,24 @@ impl TemplatableMCPServerManager {
         tool_name: String,
     ) -> Option<crate::ai::mcp::reconnecting_peer::ReconnectingPeer> {
         let spawner = self.spawner.as_ref()?;
-        let server = self.active_servers.get(&installation_id)?;
-        if server.has_tool(&tool_name) {
-            Some(crate::ai::mcp::reconnecting_peer::ReconnectingPeer::new(
+        let has_tool = match self.active_servers.get(&installation_id) {
+            Some(server) => server.has_tool(&tool_name),
+            None => {
+                // A reconnecting server's tools stay routable; the peer
+                // triggers the reconnect on use.
+                self.is_reconnecting_known_server(&installation_id)
+                    && self
+                        .known_servers
+                        .get(&installation_id)
+                        .is_some_and(|facts| facts.tools.iter().any(|tool| tool.name == *tool_name))
+            }
+        };
+        has_tool.then(|| {
+            crate::ai::mcp::reconnecting_peer::ReconnectingPeer::new(
                 installation_id,
                 spawner.clone(),
-            ))
-        } else {
-            None
-        }
+            )
+        })
     }
 
     fn spawn_file_based_servers(

@@ -6,6 +6,7 @@ use uuid::Uuid;
 use warp_core::features::FeatureFlag;
 use warpui::{App, ModelHandle};
 
+use super::super::KnownServerFacts;
 use super::{RetainedSpawnConfig, SpawnProvenance};
 use crate::ai::mcp::{
     JsonTemplate, TemplatableMCPServer, TemplatableMCPServerInstallation,
@@ -204,6 +205,117 @@ fn shutdown_clears_retained_config_and_fails_reconnect_waiters() {
             .try_recv()
             .expect("shutdown should notify pending reconnect waiters");
         assert_eq!(waiter_result.unwrap_err(), "Server was shut down");
+    });
+}
+
+fn known_facts(name: &str, tool_names: &[&str]) -> KnownServerFacts {
+    KnownServerFacts {
+        name: name.to_string(),
+        tools: tool_names
+            .iter()
+            .map(|tool| {
+                rmcp::model::Tool::new(
+                    tool.to_string(),
+                    "test tool",
+                    rmcp::model::JsonObject::new(),
+                )
+            })
+            .collect(),
+        resources: Vec::new(),
+    }
+}
+
+#[test]
+fn known_server_facts_keep_tools_visible_during_reconnect_windows() {
+    let _flag = FeatureFlag::McpSelfHeal.override_enabled(true);
+    App::test((), |mut app| async move {
+        let manager = setup_app(&mut app);
+        let installation = test_installation("cli-server");
+        let uuid = installation.uuid();
+
+        manager.update(&mut app, |manager, _ctx| {
+            manager
+                .known_servers
+                .insert(uuid, known_facts("cli-server", &["do_thing"]));
+
+            // Not eligible without a retained spawn config (e.g. deleted).
+            assert!(manager.tools_for_server(uuid).is_empty());
+
+            manager.spawn_configs.insert(
+                uuid,
+                RetainedSpawnConfig {
+                    installation: installation.clone(),
+                    provenance: SpawnProvenance::CliEphemeral,
+                },
+            );
+
+            let tools = manager.tools_for_server(uuid);
+            assert_eq!(tools.len(), 1);
+            assert_eq!(tools[0].name, "do_thing");
+            assert_eq!(manager.tools().count(), 1);
+            assert_eq!(
+                manager.server_from_tool("do_thing".to_string()),
+                Some(&uuid)
+            );
+        });
+    });
+}
+
+#[test]
+fn known_server_facts_are_inert_with_the_flag_disabled() {
+    let _flag = FeatureFlag::McpSelfHeal.override_enabled(false);
+    App::test((), |mut app| async move {
+        let manager = setup_app(&mut app);
+        let installation = test_installation("cli-server");
+        let uuid = installation.uuid();
+
+        manager.update(&mut app, |manager, _ctx| {
+            manager
+                .known_servers
+                .insert(uuid, known_facts("cli-server", &["do_thing"]));
+            manager.spawn_configs.insert(
+                uuid,
+                RetainedSpawnConfig {
+                    installation: installation.clone(),
+                    provenance: SpawnProvenance::CliEphemeral,
+                },
+            );
+
+            assert!(manager.tools_for_server(uuid).is_empty());
+            assert_eq!(manager.tools().count(), 0);
+            assert_eq!(manager.server_from_tool("do_thing".to_string()), None);
+        });
+    });
+}
+
+#[test]
+fn repeated_reconnect_failures_trip_the_circuit_breaker() {
+    let _flag = FeatureFlag::McpSelfHeal.override_enabled(true);
+    App::test((), |mut app| async move {
+        let manager = setup_app(&mut app);
+        let installation = test_installation("flaky-server");
+        let uuid = installation.uuid();
+        let (tx, mut rx) = tokio::sync::oneshot::channel();
+
+        manager.update(&mut app, |manager, ctx| {
+            manager
+                .known_servers
+                .insert(uuid, known_facts("flaky-server", &[]));
+            manager.record_reconnect_failure(uuid);
+            manager.record_reconnect_failure(uuid);
+
+            let backoff = manager.reconnect_backoff.get(&uuid).expect("backoff entry");
+            assert_eq!(backoff.consecutive_failures, 2);
+            assert!(backoff.blocked_until.expect("blocked") > std::time::Instant::now());
+
+            manager.reconnect_server(uuid, tx, ctx);
+            // Blocked: no reconnection was started.
+            assert!(!manager.pending_reconnections.contains_key(&uuid));
+        });
+
+        let result = rx.try_recv().expect("breaker answers immediately");
+        let err = result.expect_err("breaker refuses the reconnect");
+        assert!(err.contains("flaky-server"), "unexpected error: {err}");
     });
 }
 

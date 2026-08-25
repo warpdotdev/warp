@@ -213,6 +213,89 @@ fn classify_reqwest_error(error: &reqwest::Error) -> McpErrorClass {
     McpErrorClass::Transient
 }
 
+/// Whether a failed operation provably never delivered the request to the
+/// server, making an automatic resend safe even for non-idempotent tools.
+///
+/// Failures where the server may have started executing the request (e.g. a
+/// 5xx after accepting it, or a response timeout) return false.
+pub fn is_safe_to_resend(error: &rmcp::ServiceError) -> bool {
+    match error {
+        // A closed transport fails the send before anything leaves.
+        rmcp::ServiceError::TransportClosed => true,
+        rmcp::ServiceError::TransportSend(dynamic_error) => {
+            let error = &dynamic_error.error;
+            if let Some(error) = error.downcast_ref::<StreamableHttpError<reqwest::Error>>() {
+                return streamable_send_is_undelivered(error);
+            }
+            if let Some(error) = error.downcast_ref::<SseTransportError<reqwest::Error>>() {
+                return sse_send_is_undelivered(error, reqwest_send_is_undelivered);
+            }
+            if let Some(error) =
+                error.downcast_ref::<SseTransportError<SseTransportError<reqwest::Error>>>()
+            {
+                return sse_send_is_undelivered(error, |inner| {
+                    sse_send_is_undelivered(inner, reqwest_send_is_undelivered)
+                });
+            }
+            // Unknown transports (e.g. the stdio child process): a failed
+            // send means the pipe broke before delivery.
+            true
+        }
+        _ => false,
+    }
+}
+
+/// Statuses a server returns without executing the request body.
+fn status_rejected_before_execution(status: u16) -> bool {
+    matches!(status, 401 | 403 | 407 | 408 | 429)
+}
+
+fn streamable_send_is_undelivered(error: &StreamableHttpError<reqwest::Error>) -> bool {
+    match error {
+        StreamableHttpError::AuthRequired(_) | StreamableHttpError::InsufficientScope(_) => true,
+        StreamableHttpError::UnexpectedServerResponse(message) => message
+            .strip_prefix("HTTP ")
+            .and_then(|rest| rest.get(..3))
+            .and_then(|status| status.parse::<u16>().ok())
+            .is_some_and(status_rejected_before_execution),
+        StreamableHttpError::Client(client_error) => reqwest_send_is_undelivered(client_error),
+        StreamableHttpError::Sse(_)
+        | StreamableHttpError::Io(_)
+        | StreamableHttpError::UnexpectedEndOfStream
+        | StreamableHttpError::TransportChannelClosed
+        | StreamableHttpError::SessionExpired => true,
+        _ => false,
+    }
+}
+
+fn sse_send_is_undelivered<E: std::error::Error + Send + Sync + 'static>(
+    error: &SseTransportError<E>,
+    client_is_undelivered: impl FnOnce(&E) -> bool,
+) -> bool {
+    match error {
+        SseTransportError::HttpStatus { status, .. } => {
+            status_rejected_before_execution(status.as_u16())
+        }
+        SseTransportError::Client(client_error) => client_is_undelivered(client_error),
+        // Token sourcing failed before any request was sent.
+        SseTransportError::Auth(_) => true,
+        SseTransportError::Sse(_)
+        | SseTransportError::Io(_)
+        | SseTransportError::UnexpectedEndOfStream => true,
+        SseTransportError::UnexpectedContentType(_)
+        | SseTransportError::InvalidUri(_)
+        | SseTransportError::InvalidUriParts(_) => false,
+    }
+}
+
+fn reqwest_send_is_undelivered(error: &reqwest::Error) -> bool {
+    match error.status() {
+        Some(status) => status_rejected_before_execution(status.as_u16()),
+        // No status: the request never reached the server.
+        None => true,
+    }
+}
+
 #[cfg(test)]
 #[path = "error_classification_tests.rs"]
 mod tests;

@@ -174,6 +174,45 @@ fn unknown_transport_errors_are_transient() {
 }
 
 #[test]
+fn resend_safety_tracks_whether_the_request_could_have_executed() {
+    // Send-stage failures where nothing was delivered are safe to resend.
+    assert!(is_safe_to_resend(&rmcp::ServiceError::TransportClosed));
+    assert!(is_safe_to_resend(&transport_send_error(Box::new(
+        std::io::Error::other("broken pipe")
+    ))));
+    // Rejections that happen before execution (auth, rate limits) are safe.
+    assert!(is_safe_to_resend(&transport_send_error(Box::new(
+        StreamableHttpError::<reqwest::Error>::UnexpectedServerResponse(
+            "HTTP 401 Unauthorized: expired".to_string().into(),
+        )
+    ))));
+    assert!(is_safe_to_resend(&transport_send_error(Box::new(
+        SseTransportError::<reqwest::Error>::HttpStatus {
+            status: http::StatusCode::TOO_MANY_REQUESTS,
+            body: String::new(),
+            www_authenticate: None,
+        }
+    ))));
+    // A 5xx after the server accepted the request may have executed the tool.
+    assert!(!is_safe_to_resend(&transport_send_error(Box::new(
+        StreamableHttpError::<reqwest::Error>::UnexpectedServerResponse(
+            "HTTP 500 Internal Server Error: boom".to_string().into(),
+        )
+    ))));
+    assert!(!is_safe_to_resend(&transport_send_error(Box::new(
+        SseTransportError::<reqwest::Error>::HttpStatus {
+            status: http::StatusCode::BAD_GATEWAY,
+            body: String::new(),
+            www_authenticate: None,
+        }
+    ))));
+    // A timed-out response means the request was delivered.
+    assert!(!is_safe_to_resend(&rmcp::ServiceError::Timeout {
+        timeout: std::time::Duration::from_secs(1)
+    }));
+}
+
+#[test]
 fn credentials_are_deleted_only_on_unrecoverable_auth_rejections() {
     assert!(should_delete_credentials(&McpSpawnError::AuthRequired {
         www_authenticate: None,
