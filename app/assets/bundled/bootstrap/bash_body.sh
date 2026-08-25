@@ -1388,8 +1388,13 @@ esac
           shell_plugins+=("starship")
         fi
 
+        # Join into a newline-separated list (one tag per line, matching zsh's `print -l --`)
+        # before escaping -- "$shell_plugins" alone would only expand to the array's first
+        # element.
+        local shell_plugins_list="$(printf '%s\n' "${shell_plugins[@]}")"
+
         if [ "$WARP_IN_MSYS2" = false ]; then
-          local escaped_shell_plugins=$(warp_escape_json "$shell_plugins")
+          local escaped_shell_plugins=$(warp_escape_json "$shell_plugins_list")
           local escaped_path="$(warp_escape_json "$PATH")"
           local escaped_shell_options=$(warp_escape_json "$shell_options")
         fi
@@ -1412,7 +1417,7 @@ esac
           warp_send_hook_kv_pair_escaped "function_names" "$function_names"
           warp_send_hook_kv_pair_escaped "builtins" "$builtins"
           warp_send_hook_kv_pair_escaped "keywords" "$keywords"
-          warp_send_hook_kv_pair "shell_plugins" "$shell_plugins"
+          warp_send_hook_kv_pair_escaped "shell_plugins" "$shell_plugins_list"
           warp_send_hook_kv_pair "shell_version" "$BASH_VERSION"
           warp_send_hook_kv_pair "shell_options" "$shell_options"
           warp_send_hook_kv_pair "rcfiles_start_time" "$rcfiles_start_time"
@@ -1427,7 +1432,7 @@ esac
           local escaped_editor="$(warp_escape_json "$EDITOR")"
           local escaped_shell_path="$(warp_escape_json "$BASH")"
           local escaped_cdpath="$(warp_escape_json "$CDPATH")"
-          local escaped_json="{\"hook\": \"Bootstrapped\", \"value\": {\"histfile\": \"$escaped_histfile\", \"session_id\": $WARP_SESSION_ID, \"shell\": \"bash\",  \"home_dir\": \"$HOME\", \"user\":\"$_user\", \"host\":\"$_hostname\", \"path\": \"$escaped_path\", \"cdpath\": \"$escaped_cdpath\", \"editor\": \"$escaped_editor\", \"env_var_names\": \"$escaped_env_var_names\", \"abbreviations\": \"$escaped_abbrs\", \"aliases\": \"$escaped_aliases\", \"function_names\": \"$escaped_function_names\", \"builtins\": \"$escaped_builtins\", \"keywords\": \"$escaped_keywords\", \"shell_version\": \"$BASH_VERSION\", \"shell_options\": \"$escaped_shell_options\", \"rcfiles_start_time\": \"$rcfiles_start_time\", \"rcfiles_end_time\": \"$rcfiles_end_time\", \"vi_mode_enabled\": \"$vi_mode_enabled\", \"os_category\": \"$os_category\", \"linux_distribution\": \"$linux_distribution\", \"wsl_name\": \"$WSL_DISTRO_NAME\", \"shell_path\": \"$escaped_shell_path\"}}"
+          local escaped_json="{\"hook\": \"Bootstrapped\", \"value\": {\"histfile\": \"$escaped_histfile\", \"session_id\": $WARP_SESSION_ID, \"shell\": \"bash\",  \"home_dir\": \"$HOME\", \"user\":\"$_user\", \"host\":\"$_hostname\", \"path\": \"$escaped_path\", \"cdpath\": \"$escaped_cdpath\", \"editor\": \"$escaped_editor\", \"env_var_names\": \"$escaped_env_var_names\", \"abbreviations\": \"$escaped_abbrs\", \"aliases\": \"$escaped_aliases\", \"function_names\": \"$escaped_function_names\", \"builtins\": \"$escaped_builtins\", \"keywords\": \"$escaped_keywords\", \"shell_version\": \"$BASH_VERSION\", \"shell_options\": \"$escaped_shell_options\", \"rcfiles_start_time\": \"$rcfiles_start_time\", \"rcfiles_end_time\": \"$rcfiles_end_time\", \"shell_plugins\": \"$escaped_shell_plugins\", \"vi_mode_enabled\": \"$vi_mode_enabled\", \"os_category\": \"$os_category\", \"linux_distribution\": \"$linux_distribution\", \"wsl_name\": \"$WSL_DISTRO_NAME\", \"shell_path\": \"$escaped_shell_path\"}}"
           warp_send_json_message "$escaped_json"
         fi
     }
