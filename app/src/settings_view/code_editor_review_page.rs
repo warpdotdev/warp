@@ -72,6 +72,13 @@ impl EditorAndCodeReviewPageView {
         #[cfg(not(feature = "local_fs"))]
         let mut widgets: Vec<Box<dyn SettingsWidget<View = Self>>> = vec![];
 
+        if AppEditorSettings::as_ref(ctx)
+            .code_editor_line_number_mode
+            .is_supported_on_current_platform()
+        {
+            widgets.push(Box::new(CodeEditorLineNumberModeWidget::default()));
+        }
+
         widgets.extend([
             Box::new(AutoOpenCodeReviewPaneCodeWidget::default())
                 as Box<dyn SettingsWidget<View = Self>>,
@@ -83,13 +90,6 @@ impl EditorAndCodeReviewPageView {
             Box::new(FormatOnSaveToggleWidget::default()),
             Box::new(AutoSaveToggleWidget::default()),
         ]);
-
-        if AppEditorSettings::as_ref(ctx)
-            .code_editor_line_number_mode
-            .is_supported_on_current_platform()
-        {
-            widgets.push(Box::new(CodeEditorLineNumberModeWidget::default()));
-        }
 
         PageType::new_uncategorized(widgets, Some(PageTitle::new(PAGE_TITLE)))
     }
