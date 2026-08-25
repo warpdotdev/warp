@@ -480,7 +480,6 @@ fn test_handle_non_pty_read_event_while_batching() {
             .expect("Non-PtyBytesRead message should be sent before the timeout");
         assert!(is_upstream_message_command_executed(&item.unwrap(), 1));
 
-        // Exactly two messages should have been sent to the server; no more.
         assert_eq!(ws_proxy_rx.len(), 0);
 
         // The batching status should be reset.
