@@ -121,13 +121,6 @@ impl DiffApplicationError {
                 format!("{file} does not exist. Is the path correct?")
             }
             DiffApplicationError::AlreadyExists { file } => {
-                // Deliberately neutral: this client always advertises
-                // supports_create_file_rewrite, but a server predating that capability
-                // ignores the flag and serves the legacy create_file schema (no `rewrite`
-                // argument). Naming `rewrite: true` here would send the model into a retry
-                // that such a server can't honor, manufacturing exactly the extra exchange
-                // the flag exists to remove. A model whose create_file schema does include
-                // `rewrite` already knows about it from that schema and can choose to use it.
                 format!("Could not create {file} because it already exists.")
             }
             DiffApplicationError::ReadFailed { file, .. } => {
@@ -297,8 +290,6 @@ struct DiffResult {
 /// A pending file-creation request, keyed by file path in `apply_edits_internal`.
 struct NewFileRequest {
     content: String,
-    /// If `true` and the file already exists, its contents are fully replaced instead of
-    /// raising an already-exists error.
     rewrite: bool,
 }
 
