@@ -78,9 +78,15 @@ pub enum OrchestrationEventServiceEvent {
 /// visible to `conversation_ready_for_pending_events` immediately, without waiting for the
 /// model-side cleanup that `mark_conversation_exiting` still performs once it eventually runs
 /// (QUALITY-1801).
+///
+/// `AgentDriver` (this handle's only vendor and consumer) lives in `agent_sdk`, which is
+/// `not(target_family = "wasm")`-only; gated the same way here so the wasm build doesn't see
+/// this as dead code.
+#[cfg(not(target_family = "wasm"))]
 #[derive(Clone)]
 pub struct ExitCommitHandle(Arc<Mutex<HashSet<AIConversationId>>>);
 
+#[cfg(not(target_family = "wasm"))]
 impl ExitCommitHandle {
     /// Commits `conversation_id` as exiting. Safe to call from any thread, including
     /// concurrently with a model-thread read of `is_conversation_exiting`.
@@ -122,6 +128,7 @@ impl OrchestrationEventService {
 
     /// Vends a thread-safe handle that can commit conversations as exiting from any thread. See
     /// [`ExitCommitHandle`].
+    #[cfg(not(target_family = "wasm"))]
     pub fn exit_commit_handle(&self) -> ExitCommitHandle {
         ExitCommitHandle(Arc::clone(&self.exiting_conversations))
     }
@@ -134,6 +141,9 @@ impl OrchestrationEventService {
     /// the teardown already underway and get cancelled, leaving the run stuck `InProgress`
     /// (QUALITY-1801). Any events still queued for the conversation can no longer be
     /// delivered, so they are dropped here with a warning rather than left to leak.
+    ///
+    /// Only called from `agent_sdk::driver`, which is `not(target_family = "wasm")`-only.
+    #[cfg(not(target_family = "wasm"))]
     pub fn mark_conversation_exiting(&mut self, conversation_id: AIConversationId) {
         if let Ok(mut exiting) = self.exiting_conversations.lock() {
             exiting.insert(conversation_id);
