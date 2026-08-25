@@ -474,6 +474,10 @@ fn render_command_token_description(
 /// - The user is out of credits (or at their auto-reload limit)
 /// - The input is focused
 /// - There is not a BYO API key for the current model
+/// - On WASM, this pane is not merely viewing a shared session or conversation
+///   transcript (e.g. a factory-onboarding link), since the credits upsell isn't
+///   relevant to someone just observing a session
+#[allow(clippy::too_many_arguments)]
 pub(super) fn maybe_add_buy_credits_banner(
     stack: &mut Stack,
     buy_credits_banner: &ViewHandle<BuyCreditsBanner>,
@@ -481,8 +485,15 @@ pub(super) fn maybe_add_buy_credits_banner(
     terminal_view_id: EntityId,
     is_input_at_top: bool,
     scope: &dyn TeamScope,
+    model: &TerminalModel,
     app: &AppContext,
 ) {
+    if cfg!(target_family = "wasm")
+        && (model.is_conversation_transcript_viewer() || model.shared_session_status().is_viewer())
+    {
+        return;
+    }
+
     let workspaces = UserWorkspaces::as_ref(app);
     let can_purchase_addon_credits = workspaces
         .purchase_policy()

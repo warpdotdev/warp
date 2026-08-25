@@ -330,6 +330,7 @@ impl Input {
             self.terminal_view_id,
             self.is_input_at_top(&model, app),
             &self.team_scope(app),
+            &model,
             app,
         );
 
@@ -490,6 +491,7 @@ impl Input {
             self.terminal_view_id,
             self.is_input_at_top(&model, app),
             &self.team_scope(app),
+            &model,
             app,
         );
 
@@ -695,6 +697,7 @@ impl Input {
             self.terminal_view_id,
             self.is_input_at_top(&model, app),
             &self.team_scope(app),
+            &model,
             app,
         );
 
