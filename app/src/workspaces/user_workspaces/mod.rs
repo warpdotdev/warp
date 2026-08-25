@@ -311,6 +311,10 @@ impl UserWorkspaces {
             .and_then(|w| w.teams.iter().find(|t| t.uid == team_uid))
     }
 
+    pub fn is_member_of_team(&self, team_uid: ServerId) -> bool {
+        self.team_from_uid(team_uid).is_some()
+    }
+
     pub fn register_window(
         &mut self,
         window_id: WindowId,

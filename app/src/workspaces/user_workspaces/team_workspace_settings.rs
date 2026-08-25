@@ -17,7 +17,7 @@ use std::rc::Rc;
 use regex::Regex;
 use warpui::{AppContext, Entity, SingletonEntity, ViewContext, WeakViewHandle, WindowId};
 
-use super::{SoleTeamError, UserWorkspaces};
+use super::UserWorkspaces;
 use crate::ai::llms::{LLMId, LLMProvider};
 use crate::server::ids::ServerId;
 use crate::settings::AgentModeCommandExecutionPredicate;
@@ -117,11 +117,9 @@ impl TeamScope for TeamlessScopeForTest {
 pub type TeamContextResolver = Rc<dyn for<'a> Fn(&'a AppContext) -> TeamContext<'a>>;
 
 #[derive(Debug, thiserror::Error)]
-pub enum CliTeamError {
-    #[error(transparent)]
-    NoSoleTeam(#[from] SoleTeamError),
-    #[error("you are not on team {team_uid}")]
-    NotAMember { team_uid: ServerId },
+#[error("you are not on team {team_uid}")]
+pub struct NotATeamMemberError {
+    pub team_uid: ServerId,
 }
 
 impl UserWorkspaces {
@@ -147,31 +145,19 @@ impl UserWorkspaces {
         TeamContext { team_uid }
     }
 
-    /// The team a CLI invocation acts as: the one it named, or its sole team when it named none.
+    /// The scope a headless CLI invocation reads team policy through, for a team the caller has
+    /// already resolved.
     ///
-    /// Membership is checked here so a mistyped uid fails loudly, rather than resolving to a team
-    /// whose policy [`Self::team_byo_for_scope`] cannot find and being denied everything for a
-    /// reason the user cannot see.
-    pub(crate) fn cli_team_uid(
-        &self,
-        requested: Option<ServerId>,
-    ) -> Result<ServerId, CliTeamError> {
-        match requested {
-            Some(team_uid) => self
-                .team_from_uid(team_uid)
-                .map(|team| team.uid)
-                .ok_or(CliTeamError::NotAMember { team_uid }),
-            None => Ok(self.sole_team_uid()?),
-        }
-    }
-
-    /// [`Self::cli_team_uid`] as a scope, for the policy reads a CLI command makes. Both are fed
-    /// the same requested uid so an object's owner and the credentials it may use cannot disagree.
+    /// The sole exception to scopes being window-derived. *Which* team a CLI invocation acts as is
+    /// the caller's to settle; all this enforces is that the answer is a team the user is on, so a
+    /// scope can never name one whose policy [`Self::team_byo_for_scope`] would fail to find.
     pub(crate) fn team_scope_for_cli(
         &self,
-        requested: Option<ServerId>,
-    ) -> Result<TeamScopeForCli, CliTeamError> {
-        self.cli_team_uid(requested).map(TeamScopeForCli)
+        team_uid: ServerId,
+    ) -> Result<TeamScopeForCli, NotATeamMemberError> {
+        self.is_member_of_team(team_uid)
+            .then_some(TeamScopeForCli(team_uid))
+            .ok_or(NotATeamMemberError { team_uid })
     }
 
     pub(crate) fn team_context_for_view<T: Entity>(&self, ctx: &ViewContext<T>) -> TeamContext<'_> {

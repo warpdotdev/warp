@@ -26,7 +26,9 @@ use crate::server::ids::{ServerId, SyncId};
 use crate::server::server_api::ServerApiProvider;
 use crate::server::server_api::ai::AIClient;
 use crate::workspaces::update_manager::TeamUpdateManager;
-use crate::workspaces::user_workspaces::team_workspace_settings::{CliTeamError, TeamScopeForCli};
+use crate::workspaces::user_workspaces::team_workspace_settings::{
+    NotATeamMemberError, TeamScopeForCli,
+};
 use crate::workspaces::user_workspaces::{SoleTeamError, TeamScope as _, UserWorkspaces};
 
 /// How long to wait for workspace metadata to refresh.
@@ -132,10 +134,19 @@ fn describe_team_choices(team_uids: &[ServerId], ctx: &AppContext) -> String {
         .join("\n")
 }
 
-fn describe_cli_team_error(error: CliTeamError, ctx: &AppContext) -> anyhow::Error {
+/// Why a `--team` invocation could not be pinned to a single team.
+#[derive(Debug, thiserror::Error)]
+enum TeamResolutionError {
+    #[error(transparent)]
+    NoSoleTeam(#[from] SoleTeamError),
+    #[error(transparent)]
+    NotAMember(#[from] NotATeamMemberError),
+}
+
+fn describe_team_resolution_error(error: TeamResolutionError, ctx: &AppContext) -> anyhow::Error {
     match error {
-        CliTeamError::NoSoleTeam(error) => describe_sole_team_error(error, ctx),
-        CliTeamError::NotAMember { team_uid } => {
+        TeamResolutionError::NoSoleTeam(error) => describe_sole_team_error(error, ctx),
+        TeamResolutionError::NotAMember(NotATeamMemberError { team_uid }) => {
             anyhow::anyhow!("You are not on team {team_uid}")
         }
     }
@@ -151,13 +162,27 @@ fn requested_team_uid(scope: &ObjectScope) -> anyhow::Result<Option<ServerId>> {
         .transpose()
 }
 
+/// The team a CLI invocation acts as: the one it named, or its sole team when it named none.
+///
+/// Membership is checked so a mistyped uid fails loudly, rather than resolving to a team whose
+/// policy lookups find nothing and being denied everything for a reason the user cannot see.
+fn resolve_team_uid(scope: &ObjectScope, ctx: &AppContext) -> anyhow::Result<ServerId> {
+    let workspaces = UserWorkspaces::as_ref(ctx);
+    let resolved = match requested_team_uid(scope)? {
+        Some(team_uid) if workspaces.is_member_of_team(team_uid) => Ok(team_uid),
+        Some(team_uid) => Err(NotATeamMemberError { team_uid }.into()),
+        None => workspaces.sole_team_uid().map_err(Into::into),
+    };
+    resolved.map_err(|err| describe_team_resolution_error(err, ctx))
+}
+
 /// The team a CLI command's policy reads are scoped to, resolved from the same `--team` the
 /// object's owner is resolved from so the two cannot disagree.
 fn resolve_team_scope(scope: &ObjectScope, ctx: &AppContext) -> anyhow::Result<TeamScopeForCli> {
-    let requested = requested_team_uid(scope)?;
+    let team_uid = resolve_team_uid(scope, ctx)?;
     UserWorkspaces::as_ref(ctx)
-        .team_scope_for_cli(requested)
-        .map_err(|err| describe_cli_team_error(err, ctx))
+        .team_scope_for_cli(team_uid)
+        .map_err(|err| describe_team_resolution_error(err.into(), ctx))
 }
 
 /// [`validate_agent_mode_base_model_id`], also rejecting a model `scope`'s team does not let this
@@ -208,10 +233,9 @@ pub fn resolve_owner(scope: &ObjectScope, ctx: &AppContext) -> anyhow::Result<Ow
     }
 
     if scope.is_team() {
-        let team_uid = UserWorkspaces::as_ref(ctx)
-            .cli_team_uid(requested_team_uid(scope)?)
-            .map_err(|err| describe_cli_team_error(err, ctx))?;
-        return Ok(Owner::Team { team_uid });
+        return Ok(Owner::Team {
+            team_uid: resolve_team_uid(scope, ctx)?,
+        });
     }
 
     match UserWorkspaces::as_ref(ctx).sole_team_uid() {
@@ -227,20 +251,12 @@ pub fn resolve_owner(scope: &ObjectScope, ctx: &AppContext) -> anyhow::Result<Ow
 
 /// Checks `--team` against the caller's memberships, for commands that leave the owner for the
 /// server to resolve.
-///
-/// Those commands send only whether team ownership was asked for, so an unusable scope would
-/// otherwise surface as a rejected request after the run has been configured. Note that the
-/// uid a caller names cannot be forwarded, so a member of several teams is still refused by
-/// the server; checking here at least names the problem in the caller's own terms.
 pub fn validate_team_scope(scope: &ObjectScope, ctx: &AppContext) -> anyhow::Result<()> {
     if !scope.is_team() {
         return Ok(());
     }
 
-    UserWorkspaces::as_ref(ctx)
-        .cli_team_uid(requested_team_uid(scope)?)
-        .map(|_| ())
-        .map_err(|err| describe_cli_team_error(err, ctx))
+    resolve_team_uid(scope, ctx).map(|_| ())
 }
 
 /// Refresh workspace metadata before executing an operation.
