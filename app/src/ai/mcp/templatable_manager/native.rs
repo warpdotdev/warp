@@ -454,6 +454,7 @@ impl TemplatableMCPServerManager {
             spawn_configs: Default::default(),
             known_servers: Default::default(),
             reconnect_backoff: Default::default(),
+            spawn_generation: Default::default(),
             spawned_servers: Default::default(),
             server_credentials: Default::default(),
             file_based_server_credentials: Default::default(),
@@ -994,6 +995,11 @@ impl TemplatableMCPServerManager {
                 refresher,
             },
         );
+        let generation = {
+            let entry = self.spawn_generation.entry(installation_uuid).or_insert(0);
+            *entry += 1;
+            *entry
+        };
 
         let resolved_json = resolve_json(&installation);
         let template_uuid = installation.template_uuid();
@@ -1265,6 +1271,12 @@ impl TemplatableMCPServerManager {
             )
             .compat(),
             move |me, server_info: Result<_, mcp::runtime::McpSpawnError>, ctx| {
+                if me.spawn_generation.get(&installation_uuid).copied() != Some(generation) {
+                    log::debug!(
+                        "Ignoring stale spawn completion for {installation_uuid} (superseded)"
+                    );
+                    return;
+                }
                 me.spawned_servers.remove(&installation_uuid);
                 me.pending_oauth_csrf.retain(|_, v| *v != installation_uuid);
                 me.authorization_urls.remove(&installation_uuid);
@@ -1283,6 +1295,24 @@ impl TemplatableMCPServerManager {
                             },
                         );
                         me.reconnect_backoff.remove(&installation_uuid);
+
+                        // Watch for the transport dying so a dead server does
+                        // not keep showing Running with stale tools until the
+                        // next tool call happens to notice.
+                        let mut transport_closed = info.transport_closed();
+                        ctx.spawn(
+                            async move {
+                                while !*transport_closed.borrow() {
+                                    if transport_closed.changed().await.is_err() {
+                                        break;
+                                    }
+                                }
+                            },
+                            move |me, _, ctx| {
+                                me.handle_transport_closed(installation_uuid, generation, ctx);
+                            },
+                        );
+
                         me.active_servers.insert(installation_uuid, info);
 
                         // Clear any previous error message on successful connection.
@@ -1324,6 +1354,13 @@ impl TemplatableMCPServerManager {
                         // user out of the server.
                         if should_delete_credentials(&e) {
                             me.delete_credentials_from_secure_storage(installation_uuid, ctx);
+                        }
+
+                        // The built-in server's token is recorded optimistically
+                        // before the spawn resolves; forget it on failure so the
+                        // next auth event retries even with an unchanged token.
+                        if me.builtin_server_uuids.contains(&installation_uuid) {
+                            me.builtin_server_token = None;
                         }
 
                         if is_reconnect {
@@ -2065,6 +2102,11 @@ impl TemplatableMCPServerManager {
         let (installation, provenance) = match self.respawnable_config(installation_uuid, ctx) {
             Ok(found) => found,
             Err(message) => {
+                // Surface the failure instead of leaving a stale state (the
+                // background monitor may have just set `Reconnecting`).
+                self.server_error_messages
+                    .insert(installation_uuid, message.clone());
+                self.change_server_state(installation_uuid, MCPServerState::FailedToStart, ctx);
                 self.notify_reconnect_waiters(installation_uuid, Err(message));
                 return;
             }
@@ -2220,6 +2262,81 @@ impl TemplatableMCPServerManager {
         self.authorization_urls.remove(&installation_uuid);
 
         self.spawn_server_impl(installation, provenance, SpawnMode::Reconnect, ctx);
+    }
+
+    /// Reacts to a spawned server's transport dying: flips the server into
+    /// `Reconnecting` and starts a background reconnect, unless the instance
+    /// was superseded, explicitly stopped, already reconnecting, backing
+    /// off after repeated failures, or would require interactive login.
+    fn handle_transport_closed(
+        &mut self,
+        installation_uuid: Uuid,
+        generation: u64,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        if self.spawn_generation.get(&installation_uuid).copied() != Some(generation) {
+            return;
+        }
+        if !FeatureFlag::McpSelfHeal.is_enabled() {
+            // Pre-self-heal behavior: dead transports are only discovered
+            // lazily by the next tool call.
+            return;
+        }
+        if !self.spawn_configs.contains_key(&installation_uuid) {
+            // Explicitly stopped or deleted; the close was expected.
+            return;
+        }
+        if self.pending_reconnections.contains_key(&installation_uuid) {
+            return;
+        }
+        if let Some(backoff) = self.reconnect_backoff.get(&installation_uuid)
+            && let Some(blocked_until) = backoff.blocked_until
+            && instant::Instant::now() < blocked_until
+        {
+            // Repeated failures: give up on background retries and surface
+            // the failure; a later tool call can still retry lazily.
+            self.change_server_state(installation_uuid, MCPServerState::FailedToStart, ctx);
+            return;
+        }
+        // Don't background-reconnect a server that would pop an interactive
+        // login (OAuth transport with no cached credentials and no managed
+        // refresher); surface the failure instead.
+        let needs_interactive_auth = self
+            .active_servers
+            .get(&installation_uuid)
+            .is_some_and(TemplatableMCPServerInfo::is_authenticated_transport)
+            && !self.has_cached_oauth_credentials(installation_uuid, ctx)
+            && self
+                .spawn_configs
+                .get(&installation_uuid)
+                .is_none_or(|config| config.refresher.is_none());
+        if needs_interactive_auth {
+            self.server_error_messages.insert(
+                installation_uuid,
+                "Connection lost; the server requires re-authentication".to_string(),
+            );
+            self.change_server_state(installation_uuid, MCPServerState::FailedToStart, ctx);
+            return;
+        }
+
+        log::info!("MCP server {installation_uuid} transport closed; reconnecting");
+        self.change_server_state(installation_uuid, MCPServerState::Reconnecting, ctx);
+        let (result_tx, _result_rx) = tokio::sync::oneshot::channel();
+        self.reconnect_server(installation_uuid, result_tx, ctx);
+    }
+
+    /// Whether OAuth credentials for this server are cached (so a respawn
+    /// can authenticate without interactive login).
+    fn has_cached_oauth_credentials(
+        &self,
+        installation_uuid: Uuid,
+        app: &warpui::AppContext,
+    ) -> bool {
+        if let Some(hash) = FileBasedMCPManager::as_ref(app).get_hash_by_uuid(installation_uuid) {
+            return self.file_based_server_credentials.contains_key(&hash);
+        }
+        self.get_template_uuid(installation_uuid)
+            .is_some_and(|uuid| self.server_credentials.contains_key(&uuid))
     }
 
     /// Records a failed reconnect attempt and blocks further attempts for a

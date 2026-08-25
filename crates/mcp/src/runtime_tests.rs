@@ -370,3 +370,65 @@ mod determine_transport_tests {
         }
     }
 }
+
+mod transport_closed_signal_tests {
+    use rmcp::RoleClient;
+
+    /// A transport whose input ends immediately.
+    #[derive(Clone)]
+    struct EndedTransport;
+
+    impl rmcp::transport::Transport<RoleClient> for EndedTransport {
+        type Error = std::io::Error;
+
+        fn send(
+            &mut self,
+            _item: rmcp::service::TxJsonRpcMessage<RoleClient>,
+        ) -> impl std::future::Future<Output = Result<(), Self::Error>> + Send + 'static {
+            std::future::ready(Ok(()))
+        }
+
+        fn receive(
+            &mut self,
+        ) -> impl std::future::Future<Output = Option<rmcp::service::RxJsonRpcMessage<RoleClient>>> + Send
+        {
+            std::future::ready(None)
+        }
+
+        fn close(&mut self) -> impl std::future::Future<Output = Result<(), Self::Error>> + Send {
+            std::future::ready(Ok(()))
+        }
+    }
+
+    #[tokio::test]
+    async fn end_of_input_fires_the_closed_signal() {
+        use rmcp::transport::Transport as _;
+
+        let (closed_tx, closed_rx) = tokio::sync::watch::channel(false);
+        let mut wrapper = super::super::TransportLoggingWrapper {
+            transport: EndedTransport,
+            logger: simple_logger::SimpleLogger::new_discarding_for_test(),
+            closed_tx,
+        };
+
+        assert!(!*closed_rx.borrow());
+        let received: Option<rmcp::service::RxJsonRpcMessage<RoleClient>> = wrapper.receive().await;
+        assert!(received.is_none());
+        assert!(*closed_rx.borrow(), "end of input must flip the signal");
+    }
+
+    #[tokio::test]
+    async fn explicit_close_fires_the_closed_signal() {
+        use rmcp::transport::Transport as _;
+
+        let (closed_tx, closed_rx) = tokio::sync::watch::channel(false);
+        let mut wrapper = super::super::TransportLoggingWrapper {
+            transport: EndedTransport,
+            logger: simple_logger::SimpleLogger::new_discarding_for_test(),
+            closed_tx,
+        };
+
+        let _: Result<(), std::io::Error> = wrapper.close().await;
+        assert!(*closed_rx.borrow(), "close must flip the signal");
+    }
+}

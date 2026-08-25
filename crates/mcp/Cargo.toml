@@ -41,3 +41,4 @@ windows = { workspace = true, features = ["Win32_System_Threading"] }
 
 [dev-dependencies]
 axum.workspace = true
+simple_logger = { workspace = true, features = ["test-util"] }

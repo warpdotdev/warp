@@ -53,6 +53,9 @@ pub enum MCPServerState {
     Authenticating,
     Running,
     ShuttingDown,
+    /// The transport died and the server is being respawned in the
+    /// background; cached tools stay routable in the meantime.
+    Reconnecting,
     FailedToStart,
 }
 

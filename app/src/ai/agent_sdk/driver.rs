@@ -2040,6 +2040,7 @@ impl AgentDriver {
                 MCPServerState::NotRunning
                 | MCPServerState::Starting
                 | MCPServerState::Authenticating
+                | MCPServerState::Reconnecting
                 | MCPServerState::ShuttingDown => return,
             }
             if pending_servers.is_empty() {

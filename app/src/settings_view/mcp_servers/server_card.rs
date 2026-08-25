@@ -162,6 +162,9 @@ impl From<MCPServerState> for ServerCardStatus {
         match state {
             MCPServerState::NotRunning => ServerCardStatus::Installed,
             MCPServerState::Starting => ServerCardStatus::StartingServer,
+            // Presented like a fresh start; the reconnect either lands back
+            // in Running or surfaces as Error.
+            MCPServerState::Reconnecting => ServerCardStatus::StartingServer,
             MCPServerState::Authenticating => ServerCardStatus::Authenticating,
             MCPServerState::Running => ServerCardStatus::Running,
             MCPServerState::ShuttingDown => ServerCardStatus::ShuttingDown,

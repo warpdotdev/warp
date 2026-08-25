@@ -68,7 +68,8 @@ impl RotationConfig {
 /// clones are still alive briefly in background tasks or callback state.
 pub(crate) struct LogFileWriter {
     log_tx: Sender<String>,
-    _logging_task: BackgroundTask,
+    /// `None` only for the discarding test logger, which has no writer task.
+    _logging_task: Option<BackgroundTask>,
 }
 
 impl LogFileWriter {
@@ -202,12 +203,25 @@ impl SimpleLogger {
         Self {
             writer: Arc::new(LogFileWriter {
                 log_tx,
-                _logging_task: logging_task,
+                _logging_task: Some(logging_task),
             }),
         }
     }
 
     /// Log a message to the file.
+    /// A logger that discards all lines; for tests that need a
+    /// `SimpleLogger` without touching the filesystem or an executor.
+    #[cfg(any(test, feature = "test-util"))]
+    pub fn new_discarding_for_test() -> Self {
+        let (log_tx, _log_rx) = async_channel::unbounded::<String>();
+        Self {
+            writer: Arc::new(LogFileWriter {
+                log_tx,
+                _logging_task: None,
+            }),
+        }
+    }
+
     pub fn log(&self, message: String) {
         let _ = self.writer.log_tx.try_send(message);
     }

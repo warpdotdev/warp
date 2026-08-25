@@ -165,6 +165,10 @@ pub async fn spawn_server(
 ) -> Result<TemplatableMCPServerInfo, McpSpawnError> {
     logger.log("[note] Attention! There may be sensitive information (such as API keys) in these logs. Make sure to redact any secrets before sharing with others.".to_string());
 
+    // Every transport is wrapped in `TransportLoggingWrapper`, which flips
+    // this to true when the connection dies; see
+    // `TemplatableMCPServerInfo::transport_closed`.
+    let (closed_tx, transport_closed) = tokio::sync::watch::channel(false);
     let mut is_authenticated_transport = false;
     let service = match transport_type {
         TransportType::CLIServer(cli_server) => {
@@ -266,6 +270,7 @@ pub async fn spawn_server(
             let transport = TransportLoggingWrapper {
                 transport,
                 logger: logger.clone(),
+                closed_tx: closed_tx.clone(),
             };
 
             // Create the MCP client and connect to the server.
@@ -294,6 +299,7 @@ pub async fn spawn_server(
                     let transport = TransportLoggingWrapper {
                         transport,
                         logger: logger.clone(),
+                        closed_tx: closed_tx.clone(),
                     };
                     Ok(make_client_info().into_dyn().serve(transport).await?)
                 }
@@ -315,6 +321,7 @@ pub async fn spawn_server(
                     let transport = TransportLoggingWrapper {
                         transport,
                         logger: logger.clone(),
+                        closed_tx: closed_tx.clone(),
                     };
                     Ok(make_client_info().into_dyn().serve(transport).await?)
                 }
@@ -335,6 +342,7 @@ pub async fn spawn_server(
                     let transport = TransportLoggingWrapper {
                         transport,
                         logger: logger.clone(),
+                        closed_tx: closed_tx.clone(),
                     };
                     Ok(make_client_info().into_dyn().serve(transport).await?)
                 }
@@ -358,6 +366,7 @@ pub async fn spawn_server(
                     let transport = TransportLoggingWrapper {
                         transport,
                         logger: logger.clone(),
+                        closed_tx: closed_tx.clone(),
                     };
                     Ok(make_client_info().into_dyn().serve(transport).await?)
                 }
@@ -388,6 +397,7 @@ pub async fn spawn_server(
         installation_id: uuid,
         description,
         is_authenticated_transport,
+        transport_closed,
     })
 }
 
@@ -634,10 +644,14 @@ where
     }
 }
 
-/// A wrapper around a [`rmcp::transport::Transport`] that logs all requests and responses.
+/// A wrapper around a [`rmcp::transport::Transport`] that logs all requests
+/// and responses, and signals transport death through a watch channel.
 struct TransportLoggingWrapper<T> {
     transport: T,
     logger: SimpleLogger,
+    /// Flipped to `true` when `receive` observes end-of-input or the
+    /// transport is closed.
+    closed_tx: tokio::sync::watch::Sender<bool>,
 }
 
 impl<T: rmcp::transport::Transport<R>, R: rmcp::service::ServiceRole> rmcp::transport::Transport<R>
@@ -669,16 +683,23 @@ impl<T: rmcp::transport::Transport<R>, R: rmcp::service::ServiceRole> rmcp::tran
         let logger = self.logger.clone();
         async move {
             let result = self.transport.receive().await;
-            if let Some(item) = &result
-                && let Ok(json) = serde_json::to_string(item)
-            {
-                logger.log(format!("[info] MCP: Received response: {json}"));
+            match &result {
+                Some(item) => {
+                    if let Ok(json) = serde_json::to_string(item) {
+                        logger.log(format!("[info] MCP: Received response: {json}"));
+                    }
+                }
+                None => {
+                    // End of input: the server hung up or the child died.
+                    let _ = self.closed_tx.send(true);
+                }
             }
             result
         }
     }
 
     fn close(&mut self) -> impl Future<Output = Result<(), Self::Error>> + Send {
+        let _ = self.closed_tx.send(true);
         self.transport.close()
     }
 }

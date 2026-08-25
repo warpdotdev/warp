@@ -69,6 +69,12 @@ pub struct TemplatableMCPServerManager {
     /// respawned in a tight loop.
     #[cfg(not(target_family = "wasm"))]
     reconnect_backoff: HashMap<Uuid, ReconnectBackoff>,
+    /// Monotonic spawn generation per installation UUID. Spawn completion
+    /// callbacks and transport monitors capture their generation and no-op
+    /// when superseded, so a stale instance can never clobber the state of
+    /// a newer one.
+    #[cfg(not(target_family = "wasm"))]
+    spawn_generation: HashMap<Uuid, u64>,
 
     #[cfg_attr(target_family = "wasm", allow(dead_code))]
     spawned_servers: HashMap<Uuid, SpawnedServerInfo>,

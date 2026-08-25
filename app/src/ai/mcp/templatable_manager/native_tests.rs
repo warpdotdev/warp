@@ -351,3 +351,131 @@ fn builtin_reconnect_without_credentials_fails() {
         });
     });
 }
+
+#[test]
+fn transport_closed_reconnects_and_surfaces_lookup_failures() {
+    let _flag = FeatureFlag::McpSelfHeal.override_enabled(true);
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| AuthStateProvider::new_logged_out_for_test());
+        let manager = setup_app(&mut app);
+        let installation = test_installation("warp-factory");
+        let uuid = installation.uuid();
+
+        manager.update(&mut app, |manager, ctx| {
+            manager.spawn_configs.insert(
+                uuid,
+                RetainedSpawnConfig {
+                    installation: installation.clone(),
+                    provenance: SpawnProvenance::Builtin,
+                    refresher: None,
+                },
+            );
+            manager.spawn_generation.insert(uuid, 1);
+
+            // The builtin lookup fails without credentials, so the reconnect
+            // started by the monitor surfaces as FailedToStart rather than
+            // leaving the server stuck in Reconnecting.
+            manager.handle_transport_closed(uuid, 1, ctx);
+
+            assert!(matches!(
+                manager.get_server_state(uuid),
+                Some(crate::ai::mcp::MCPServerState::FailedToStart)
+            ));
+            assert!(
+                manager
+                    .get_server_error_message(uuid)
+                    .is_some_and(|message| message.contains("bearer token"))
+            );
+        });
+    });
+}
+
+#[test]
+fn transport_closed_ignores_stale_generations_and_stopped_servers() {
+    let _flag = FeatureFlag::McpSelfHeal.override_enabled(true);
+    App::test((), |mut app| async move {
+        let manager = setup_app(&mut app);
+        let installation = test_installation("cli-server");
+        let uuid = installation.uuid();
+
+        manager.update(&mut app, |manager, ctx| {
+            manager.spawn_configs.insert(
+                uuid,
+                RetainedSpawnConfig {
+                    installation: installation.clone(),
+                    provenance: SpawnProvenance::CliEphemeral,
+                    refresher: None,
+                },
+            );
+            manager.spawn_generation.insert(uuid, 2);
+
+            // A monitor from a superseded instance must not touch state.
+            manager.handle_transport_closed(uuid, 1, ctx);
+            assert!(manager.get_server_state(uuid).is_none());
+
+            // An explicitly stopped server (no retained config) is left alone.
+            manager.spawn_configs.remove(&uuid);
+            manager.handle_transport_closed(uuid, 2, ctx);
+            assert!(manager.get_server_state(uuid).is_none());
+        });
+    });
+}
+
+#[test]
+fn transport_closed_respects_the_circuit_breaker() {
+    let _flag = FeatureFlag::McpSelfHeal.override_enabled(true);
+    App::test((), |mut app| async move {
+        let manager = setup_app(&mut app);
+        let installation = test_installation("flaky-server");
+        let uuid = installation.uuid();
+
+        manager.update(&mut app, |manager, ctx| {
+            manager.spawn_configs.insert(
+                uuid,
+                RetainedSpawnConfig {
+                    installation: installation.clone(),
+                    provenance: SpawnProvenance::CliEphemeral,
+                    refresher: None,
+                },
+            );
+            manager.spawn_generation.insert(uuid, 1);
+            manager.record_reconnect_failure(uuid);
+            manager.record_reconnect_failure(uuid);
+            manager.record_reconnect_failure(uuid);
+
+            manager.handle_transport_closed(uuid, 1, ctx);
+
+            // Backing off: no background spawn storm, failure surfaced.
+            assert!(!manager.pending_reconnections.contains_key(&uuid));
+            assert!(matches!(
+                manager.get_server_state(uuid),
+                Some(crate::ai::mcp::MCPServerState::FailedToStart)
+            ));
+        });
+    });
+}
+
+#[test]
+fn transport_closed_is_inert_with_the_flag_disabled() {
+    let _flag = FeatureFlag::McpSelfHeal.override_enabled(false);
+    App::test((), |mut app| async move {
+        let manager = setup_app(&mut app);
+        let installation = test_installation("cli-server");
+        let uuid = installation.uuid();
+
+        manager.update(&mut app, |manager, ctx| {
+            manager.spawn_configs.insert(
+                uuid,
+                RetainedSpawnConfig {
+                    installation: installation.clone(),
+                    provenance: SpawnProvenance::CliEphemeral,
+                    refresher: None,
+                },
+            );
+            manager.spawn_generation.insert(uuid, 1);
+
+            manager.handle_transport_closed(uuid, 1, ctx);
+            assert!(manager.get_server_state(uuid).is_none());
+        });
+    });
+}

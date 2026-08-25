@@ -20,3 +20,6 @@ warpui_core.workspace = true
 [dev-dependencies]
 instant = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt"] }
+
+[features]
+test-util = []

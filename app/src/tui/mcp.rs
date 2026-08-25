@@ -722,7 +722,9 @@ fn transport_type(transport: TransportType) -> TuiMcpTransport {
 fn runtime_status(uuid: Uuid, runtime_manager: &TemplatableMCPServerManager) -> TuiMcpServerStatus {
     match runtime_manager.get_server_state(uuid) {
         None | Some(MCPServerState::NotRunning) => TuiMcpServerStatus::Offline,
-        Some(MCPServerState::Starting) => TuiMcpServerStatus::Starting,
+        Some(MCPServerState::Starting | MCPServerState::Reconnecting) => {
+            TuiMcpServerStatus::Starting
+        }
         Some(MCPServerState::Authenticating) => TuiMcpServerStatus::Authenticating,
         Some(MCPServerState::Running) => TuiMcpServerStatus::Running,
         Some(MCPServerState::ShuttingDown) => TuiMcpServerStatus::Stopping,

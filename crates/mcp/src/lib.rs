@@ -26,6 +26,10 @@ pub struct TemplatableMCPServerInfo {
     /// to provide a "log out" button.
     #[allow(dead_code)]
     is_authenticated_transport: bool,
+    /// Flips to `true` when the transport observes end-of-input or is
+    /// closed — a push-based death signal, since rmcp's cancellation token
+    /// does not fire when a server dies naturally.
+    transport_closed: tokio::sync::watch::Receiver<bool>,
 }
 
 impl TemplatableMCPServerInfo {
@@ -54,6 +58,12 @@ impl TemplatableMCPServerInfo {
 
     pub fn peer(&self) -> rmcp::Peer<rmcp::RoleClient> {
         self.service.clone()
+    }
+
+    /// A watch receiver that flips to `true` once the underlying transport
+    /// has closed (end-of-input, explicit close, or teardown).
+    pub fn transport_closed(&self) -> tokio::sync::watch::Receiver<bool> {
+        self.transport_closed.clone()
     }
 
     pub fn peer_if_connected(&self) -> Option<rmcp::Peer<rmcp::RoleClient>> {
