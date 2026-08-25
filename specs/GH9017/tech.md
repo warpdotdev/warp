@@ -62,6 +62,8 @@ Rejected alternative: a parallel `LogicalLineCount` sumtree dimension threaded t
 
 Also rejected: leaving the gutter alone and documenting the jump as a known limitation (#13192). Behavior 7 and 9 are the reason this issue's prior attempts did not land; shipping wrap with wrong line numbers and misaligned hunks converts a readability win into a code-review correctness bug.
 
+Note what the diff view is **not**: it is a single unified column. `compute_unified_diff` (`app/src/code/editor/diff.rs:92-130`) produces a git-style unified diff, and removed lines are rendered as inline `TemporaryBlock`s in the same render tree as the new lines — there is no split side-by-side layout and therefore no left/right row-pairing to preserve under wrap. Wrapped rows in a hunk stay contiguous because every row of the hunk, including the temporary removal blocks, wraps against the same pane width in the same column. Temporary blocks enter the gutter loop like any other block (`element.rs:590-624`), so change 1's logical numbering covers them without a separate mechanism. This is why the tech spec needs no diff-specific layout work at all; the only diff-side requirement is that hunk decorations resolve against logical lines (change 1 + test 4).
+
 ### 2. Add a runtime width-setting setter to `RenderState`
 
 In `crates/editor/src/render/model/mod.rs`:
@@ -97,7 +99,12 @@ word_wrap: WordWrap {
 }
 ```
 
-`CodeEditorView` already subscribes to `AppEditorSettings` (`view.rs:305-315`); add the analogous `CodeSettings` subscription for governed surfaces, and on change call `model.set_soft_wrap(...)`. Behavior 5 (re-wrap on resize) is served by the existing `RenderEvent::NeedsResize` emission from `set_viewport_size`; ensure the governed surfaces relayout on that event when wrap is active, and keep the existing debounce so a drag-resize does not relayout per frame.
+The setting must reach an editor through **two** paths, not one:
+
+- **At construction.** `CodeEditorView::new` (`view.rs:291-320`) reads the current `CodeSettings` when the surface is governed by the setting and passes the initial width setting into `CodeEditorModel` construction, so a pane opened or restored with wrap already on renders wrapped from its first frame. A subscription-only wiring would show every restored pane unwrapped until the next setting change.
+- **On change.** `CodeEditorView` already subscribes to `AppEditorSettings` (`view.rs:305-315`); add the analogous `CodeSettings` subscription for governed surfaces, and on change call `model.set_soft_wrap(...)`.
+
+Behavior 5 (re-wrap on resize) is served by the existing `RenderEvent::NeedsResize` emission from `set_viewport_size`; ensure the governed surfaces relayout on that event when wrap is active, and keep the existing debounce so a drag-resize does not relayout per frame.
 
 ### 5. Settings row and keyless editable action
 
@@ -116,8 +123,10 @@ Go-to-line (`model.rs:2028-2048`, `2098-2100`) and relative-mode's cursor anchor
 2. `app/src/code/editor/element_tests.rs` — table-driven `logical_line_number` coverage on a buffer with (a) no long lines, (b) one line wrapping to several rows, (c) several consecutive wrapping lines, asserting the number for every following line is identical in both wrap modes. Directly pins invariants 7 and 8. The wrapped case must use a line long enough to wrap at the test viewport width *derived from that width*, and an independent literal expectation for the resulting numbers, so the test cannot pass by construction if wrapping silently stops happening.
 3. `app/src/code/editor/element_tests.rs` — gutter numbers with `starting_line_number` set (lens/embedded editors) are unchanged by wrap, covering the existing offset path.
 4. `app/src/code/editor/diff` tests — `diff_hunk(logical_line)` and `removed_diff_range(logical_line)` resolve to the same hunks with wrap on as with wrap off, for an addition, a deletion, and a replacement hunk where at least one line wraps. Pins invariant 9.
-5. Buffer-identity test: toggling `set_soft_wrap` on and off around an unmodified buffer leaves the buffer contents and version byte-identical, and a save after wrapping produces identical bytes. Pins invariant 4.
-6. Hidden-section test: a collapsed section preceded by a wrapping line reports the same line range in both modes. Pins invariant 14.
+5. Construction-path test: a governed editor constructed with the persisted setting on lays out `FitViewport` from the first frame (no unwrap-then-rewrap flash); one constructed with it off lays out `InfiniteWidth`. Pins the initialization half of change 4.
+
+6. Buffer-identity test: toggling `set_soft_wrap` on and off around an unmodified buffer leaves the buffer contents and version byte-identical, and a save after wrapping produces identical bytes. Pins invariant 4.
+7. Hidden-section test: a collapsed section preceded by a wrapping line reports the same line range in both modes. Pins invariant 14.
 
 ### Integration tests
 

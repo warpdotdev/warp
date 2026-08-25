@@ -43,7 +43,7 @@ Add a persistent word-wrap (soft-wrap) setting to Warp's built-in file editor an
 
 9. Diff decorations stay aligned with their logical lines when wrap is on: an added/removed/changed hunk continues to highlight exactly the lines it highlights with wrap off, and hunk collapse/expand behavior is unchanged.
 
-10. In the diff view, the left (old) and right (new) sides wrap independently to their own pane widths, but aligned old/new hunks keep their existing row-pairing behavior for synchronization and navigation.
+10. The code review diff view is a single unified column (removed lines render as inline blocks between the surrounding new lines), not a split side-by-side layout. When wrap is on, every row — changed, added, and the inline removed blocks — wraps to the same pane width, so a hunk remains one contiguous, correctly ordered region. Hunk collapse/expand, navigation between hunks, and the added/removed line counters keep their existing semantics because they are computed from the diff, not from layout.
 
 11. Go-to-line (line:column) continues to address logical lines: entering a line number present with wrap off lands on the same content with wrap on.
 
