@@ -413,7 +413,6 @@ pub struct AgentRunClientSetupMetricPayload {
 }
 #[derive(Debug, Clone, serde::Serialize, PartialEq, Eq)]
 pub struct AgentRunEnvironmentSnapshotRequest {
-    pub snapshot_uuid: String,
     pub captured_at: DateTime<Utc>,
     pub unresolved_repository_count: usize,
     pub repositories: Vec<AgentRunRepositoryRevision>,

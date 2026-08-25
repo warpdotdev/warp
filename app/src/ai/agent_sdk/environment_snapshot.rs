@@ -45,7 +45,6 @@ impl EnvironmentSnapshot {
 impl From<EnvironmentSnapshot> for AgentRunEnvironmentSnapshotRequest {
     fn from(snapshot: EnvironmentSnapshot) -> Self {
         Self {
-            snapshot_uuid: uuid::Uuid::new_v4().to_string(),
             captured_at: snapshot.captured_at,
             unresolved_repository_count: snapshot.unresolved_repository_count,
             repositories: snapshot

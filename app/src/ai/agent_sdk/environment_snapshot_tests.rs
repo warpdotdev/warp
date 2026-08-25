@@ -41,7 +41,7 @@ fn request_conversion_uses_expected_wire_shape() {
     let request = request();
     let json = serde_json::to_value(&request).unwrap();
 
-    assert!(uuid::Uuid::parse_str(&request.snapshot_uuid).is_ok());
+    assert!(json.get("snapshot_uuid").is_none());
     assert_eq!(json["unresolved_repository_count"], 1);
     assert_eq!(json["repositories"][0]["code_forge"], "GITHUB");
     assert_eq!(json["repositories"][0]["repo_owner"], "warpdotdev");
@@ -63,16 +63,16 @@ fn empty_snapshot_serializes_as_an_explicit_empty_report() {
 }
 
 #[tokio::test]
-async fn transient_failures_retry_with_stable_snapshot_uuid() {
-    let snapshot_uuids = Arc::new(Mutex::new(Vec::new()));
-    let snapshot_uuids_for_mock = snapshot_uuids.clone();
+async fn transient_failures_retry_with_stable_request() {
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let requests_for_mock = requests.clone();
     let mut mock = MockAIClient::new();
     mock.expect_post_agent_run_environment_snapshot()
         .times(2)
         .returning(move |_, request| {
-            let mut snapshot_uuids = snapshot_uuids_for_mock.lock().unwrap();
-            snapshot_uuids.push(request.snapshot_uuid);
-            if snapshot_uuids.len() == 1 {
+            let mut requests = requests_for_mock.lock().unwrap();
+            requests.push(request);
+            if requests.len() == 1 {
                 Err(anyhow::anyhow!("transient transport failure"))
             } else {
                 Ok(())
@@ -83,9 +83,9 @@ async fn transient_failures_retry_with_stable_snapshot_uuid() {
         .await
         .unwrap();
 
-    let snapshot_uuids = snapshot_uuids.lock().unwrap();
-    assert_eq!(snapshot_uuids.len(), 2);
-    assert_eq!(snapshot_uuids[0], snapshot_uuids[1]);
+    let requests = requests.lock().unwrap();
+    assert_eq!(requests.len(), 2);
+    assert_eq!(requests[0], requests[1]);
 }
 
 #[tokio::test]
