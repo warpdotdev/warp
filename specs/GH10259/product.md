@@ -27,7 +27,7 @@ Render `<details>`/`<summary>` HTML blocks in Warp-rendered markdown as collapsi
 
 ### Rendering
 
-1. A `<details>` block whose opening tag starts a line renders as a disclosure section: a summary row followed by the body content. On an interactive surface the summary row carries a disclosure indicator; behavior 16 governs surfaces that are not interactive.
+1. A `<details>` block whose opening tag starts a line renders as a disclosure section: a summary row followed by the body content. On an interactive surface the summary row carries a disclosure indicator; behavior 15 governs surfaces that are not interactive.
 
 2. The body renders as ordinary markdown. Headings, lists, tables, code blocks, images, and nested `<details>` inside the body render exactly as they would outside it.
 
@@ -47,15 +47,13 @@ Render `<details>`/`<summary>` HTML blocks in Warp-rendered markdown as collapsi
 
 9. Nested `<details>` sections render as independently toggleable sections. Collapsing an outer section hides its nested sections; expanding it restores each nested section to the state it already had.
 
-### Limits
+### Nesting guard
 
-10. Nesting is supported to a depth of 8. A `<details>` opening tag at depth 9 or deeper renders as literal text, and its content renders as ordinary markdown. The now-unmatched `</details>` renders as literal text under behavior 12(b).
-
-11. A single rendered document renders at most 512 disclosure widgets. Beyond that count, each further `<details>` renders as literal text with its content as ordinary markdown. A `<details>` that falls back under either limit does not consume a widget slot, since the count tracks widgets actually rendered. Both limits are fixed constants, so the same input always produces the same rendering.
+10. Nesting is supported to a depth of 64. A `<details>` opening tag at depth 65 or deeper renders as literal text, and its content renders as ordinary markdown. The now-unmatched `</details>` renders as literal text under behavior 11(b). The depth is a fixed constant, so the same input always produces the same rendering. This bound is a stack-safety guard on the recursive body parse, not a product limit: it sits far above any realistic content — content in the wild rarely nests past 3 — and far below the depth at which the recursion could exhaust a stack. The tech spec derives the number.
 
 ### Malformed and unsupported input
 
-12. Malformed and unsupported input degrades deterministically, and markup the parser does not consume renders as visible literal text rather than being silently dropped:
+11. Malformed and unsupported input degrades deterministically, and markup the parser does not consume renders as visible literal text rather than being silently dropped:
 
     a. A `<details>` with no matching `</details>` takes the rest of the enclosing content as its body. A nested unclosed `<details>` ends where its parent ends.
 
@@ -63,21 +61,29 @@ Render `<details>`/`<summary>` HTML blocks in Warp-rendered markdown as collapsi
 
     c. A `<details>` or `</details>` tag that does not start a line renders as literal text and does not open or close a section. Leading whitespace is permitted before an opening tag; any other preceding character on the line, including a backtick, disqualifies it.
 
-    d. A self-closing `<details/>` opens a section with no distinct closing tag, so it degrades under 12(a).
+    d. A self-closing `<details/>` opens a section with no distinct closing tag, so it degrades under 11(a).
 
     e. A `<details>` with no `<summary>` renders with the literal summary label `Details`.
 
     f. Only a `<summary>` that opens the details body is the summary. A `<summary>` appearing after body content renders as literal text, as does each `<summary>` after the first.
 
-    g. A `<summary>` with no matching `</summary>` takes the rest of the details body as its summary, leaving the body empty. When the enclosing `<details>` is itself unclosed under 12(a), the summary ends at the end of the enclosing content, so a single unclosed `<summary>` can consume the remainder of the document into one summary row.
+    g. A `<summary>` with no matching `</summary>` takes the rest of the details body as its summary, leaving the body empty. When the enclosing `<details>` is itself unclosed under 11(a), the summary ends at the end of the enclosing content, so a single unclosed `<summary>` can consume the remainder of the document into one summary row.
 
     h. A `</summary>` with no open `<summary>` renders as literal text.
 
-    i. Markdown block structure inside `<summary>` is not honored: a code fence, a nested `<details>`, or a nested `<summary>` inside a summary renders as literal inline text, and a multi-line summary renders as one line.
+    i. Markdown block structure inside `<summary>` is not honored: a code fence, a nested `<details>`, or a nested `<summary>` inside a summary renders as literal inline text, and a multi-line summary renders as one line. GitHub renders block content inside a summary as real blocks; Warp models a summary as a single inline run, so this diverges — see "Divergences from GitHub rendering".
 
-13. Tags inside a code region are content, not markup. A `<details>`, `</details>`, `<summary>`, or `</summary>` line inside a fenced code block in the body renders verbatim in the code block and does not open or close any section. A tag inside an inline code span likewise never opens or closes a section, because it fails the line-start rule in 12(c).
+12. Tags inside a code region are content, not markup. A `<details>`, `</details>`, `<summary>`, or `</summary>` line inside a fenced code block in the body renders verbatim in the code block and does not open or close any section. A tag inside an inline code span likewise never opens or closes a section, because it fails the line-start rule in 11(c).
 
-14. A code fence opened inside a details body and never closed leaves the rest of the body inside that fence, so no later `</details>` closes the section and the section degrades under 12(a).
+13. A code fence opened inside a details body and never closed leaves the rest of the body inside that fence, so no later `</details>` closes the section and the section degrades under 11(a).
+
+### Block-level scope
+
+14. A `<details>` opens a section only at document level or at the block level of a details body.
+
+    a. A `<details>` indented under a list item terminates the list and opens a section as its own block. GitHub nests it inside the list item and continues the list; Warp diverges — see "Divergences from GitHub rendering".
+
+    b. A `<details>` inside a blockquote does not open a section and renders as literal text, as does its `</details>`. GitHub nests the disclosure section inside the blockquote; Warp diverges — see "Divergences from GitHub rendering".
 
 ### Surfaces
 
@@ -87,13 +93,20 @@ Render `<details>`/`<summary>` HTML blocks in Warp-rendered markdown as collapsi
 
 ### Streaming and editing
 
-17. While markdown streams in, a `<details>` whose closing tag has not yet arrived renders progressively under behavior 12(a), and content above it does not reflow as the block grows.
+17. While markdown streams in, a `<details>` whose closing tag has not yet arrived renders progressively under behavior 11(a), and content above it does not reflow as the block grows.
 
-18. Editing inside or around a details region in the notebook/plan editor always leaves a well-defined document. Deleting one of the region's boundaries degrades under the same rules as behavior 12(a) and 12(b) rather than producing an undefined state.
+18. Editing inside or around a details region in the notebook/plan editor always leaves a well-defined document. The buffer accepts every edit — markdown is a plain-text format and the editor never rejects a keystroke because of what it would produce — so deleting one of the region's boundaries degrades under the same rules as behavior 11(a) and 11(b) rather than producing an undefined state. The nesting guard in behavior 10 applies where content is read back out, not to the edits themselves.
 
 19. Existing rendering is unchanged for documents containing neither tag. Markdown that contains no `<details>` and no `<summary>` renders exactly as it does today.
 
-## Open questions
+## Divergences from GitHub rendering
 
-- Whether the agent conversation surface reuses the existing block-folding interaction used for command blocks, or gets a dedicated disclosure component. The tech spec proposes a dedicated opt-in widget on the shared formatted-text element; this spec constrains behaviors 6 and 15, not the component choice, and the proposal is open to being redirected. The editor surface has no equivalent question — it folds through the existing hidden-lines mechanism described in the tech spec.
-- Whether a `<details>` opening inside a list item or a blockquote should nest inside that block or terminate it. This spec covers only a `<details>` at document or details-body block level; the tech spec notes the parser consequence.
+GitHub-flavored markdown is the reference implementation for this feature, and Warp matches it everywhere except the three cases below. These are not decisions to remain divergent. Each one requires a structural change to the parser's intermediate representation, which is a flat sequence of lines with no container blocks; this spec scopes the implementation to the subset that representation supports today, and convergence on all three is future work.
+
+| Case | GitHub | Warp | Structural reason |
+|---|---|---|---|
+| `<details>` indented under a list item (behavior 14(a)) | Nests inside the list item; the list continues afterwards | Terminates the list, then opens a section as its own block | List items are flat lines carrying an indent level, not containers with child blocks, so there is no list-item body for a section to nest inside |
+| `<details>` inside a blockquote (behavior 14(b)) | Nests inside the blockquote | Renders as literal text | The intermediate representation has no blockquote variant at all, so there is nothing to nest into |
+| Block content inside `<summary>` (behavior 11(i)) | Renders as real blocks, so a heading in a summary is a heading | Renders as literal inline text on one line | A summary is modeled as a single inline run, in both the parser IR and the editor buffer |
+
+An unindented `<details>` following a list item terminates the list on both GitHub and Warp, and is not a divergence.
