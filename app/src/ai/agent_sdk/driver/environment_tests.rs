@@ -88,17 +88,26 @@ fn parse_resolved_head_shas_keeps_one_line_per_repo_including_failures() {
 
 #[test]
 fn resolved_head_command_prints_one_line_per_repo() {
+    let workspace = Path::new("/workspace");
     let command = unwrap_sh_c_script(&build_resolved_head_command(
         &[
             clone_request(repo(CodeForge::GitHub, "warpdotdev", "warp"), None),
             clone_request(repo(CodeForge::GitHub, "warpdotdev", "warp-server"), None),
         ],
-        Path::new("/workspace"),
+        workspace,
     ));
+    let warp_dir = workspace.join("warp");
+    let warp_server_dir = workspace.join("warp-server");
 
     assert!(command.starts_with("set +e\n"));
-    assert!(command.contains("git -C '/workspace/warp' rev-parse --verify HEAD"));
-    assert!(command.contains("git -C '/workspace/warp-server' rev-parse --verify HEAD"));
+    assert!(command.contains(&format!(
+        "git -C '{}' rev-parse --verify HEAD",
+        warp_dir.to_string_lossy()
+    )));
+    assert!(command.contains(&format!(
+        "git -C '{}' rev-parse --verify HEAD",
+        warp_server_dir.to_string_lossy()
+    )));
     assert_eq!(command.matches("printf '%s\\n'").count(), 2);
 }
 
