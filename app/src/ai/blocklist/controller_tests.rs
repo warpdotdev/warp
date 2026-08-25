@@ -522,11 +522,13 @@ fn optimistic_cli_subagent_completion_with_in_flight_stream_reports_success() {
     });
 }
 
-/// `mark_conversation_exiting` drops any orchestration events still queued for the
-/// conversation at the moment it's called, since they arrived too late to ever be
-/// delivered once the run is exiting. Complements the controller-level guard above.
+/// `drop_pending_events_for_exiting_conversation` drops any orchestration events still
+/// queued for the conversation at the moment it's called, since they arrived too late to
+/// ever be delivered once the run is exiting. Complements the controller-level guard above.
+/// The exiting flag itself is a separate mechanism ([`OrchestrationEventService::exit_commit_handle`],
+/// exercised in `agent_sdk::driver`'s tests), not this method's concern.
 #[test]
-fn mark_conversation_exiting_drops_pending_events() {
+fn drop_pending_events_for_exiting_conversation_drops_pending_events() {
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);
         let terminal = add_window_with_terminal(&mut app, None);
@@ -559,9 +561,8 @@ fn mark_conversation_exiting_drops_pending_events() {
         terminal.update(&mut app, |_, ctx| {
             OrchestrationEventService::handle(ctx).update(ctx, |service, _| {
                 assert!(service.has_pending_events(conversation_id));
-                service.mark_conversation_exiting(conversation_id);
+                service.drop_pending_events_for_exiting_conversation(conversation_id);
                 assert!(!service.has_pending_events(conversation_id));
-                assert!(service.is_conversation_exiting(conversation_id));
             });
         });
     });

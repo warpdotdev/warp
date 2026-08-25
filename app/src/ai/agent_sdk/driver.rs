@@ -270,12 +270,6 @@ impl IdleWait for RealIdleWait {
     }
 }
 
-// The test-only overrides for this seam (`test_idle_wait_override`/`set_test_idle_wait_override`)
-// and for the post-commit gate below (`test_post_commit_gate`/`set_test_post_commit_gate`) live
-// in `driver_tests.rs` (see `tests::test_idle_wait_override` and `tests::test_post_commit_gate`),
-// since they are only ever read here, synchronously, at `execute_run` construction time on the
-// calling thread — the same thread a test runs on — and have no other production use.
-
 /// IdleTimeoutSender is wrapper around a sender that signals when a run is done after
 /// an idle timeout. Used for both Oz runs and third-party harnesses.
 ///
@@ -336,9 +330,6 @@ impl<T: Send + 'static> IdleTimeoutSender<T> {
         self.on_commit = Arc::new(on_commit);
         self
     }
-
-    // `with_wait` (overrides the wait mechanism for tests) lives in `driver_tests.rs`, in a
-    // separate `impl` block for this same type — it has no production use.
 
     /// End the run by sending `value` immediately.
     fn end_run_now(&self, value: T) {
@@ -4464,19 +4455,17 @@ impl AgentDriver {
             });
         }
 
-        // Wrap `internal_rx` instead of returning it directly: this is where the model-side
-        // cleanup for an exiting conversation happens — dropping any orchestration events still
-        // queued for it (see `mark_conversation_exiting`) — for every exit path, immediate or
-        // deferred. `run_exit`'s `on_commit` hook already commits the exiting flag itself,
-        // synchronously, before this ever runs (QUALITY-1801); this forwarder's own
-        // `mark_conversation_exiting` call is a second, idempotent write of that same flag, but
-        // it is the only place the pending-event drop happens, so it stays load-bearing on its
-        // own for that part.
+        // Wrap `internal_rx` instead of returning it directly: once the run's `on_commit` has
+        // committed the exiting flag (synchronously, on whichever thread completed the run),
+        // this drops any orchestration events still queued for the conversation, for every exit
+        // path, immediate or deferred. That drop needs model access, which `on_commit` doesn't
+        // have on a background timer thread, so it happens here instead, once the completion
+        // value reaches this model's own executor.
         let (external_tx, external_rx) = oneshot::channel();
         ctx.spawn(internal_rx, move |me, result, ctx| {
             if let Some(conversation_id) = me.run_conversation_id {
                 OrchestrationEventService::handle(ctx).update(ctx, |service, _| {
-                    service.mark_conversation_exiting(conversation_id);
+                    service.drop_pending_events_for_exiting_conversation(conversation_id);
                 });
             }
             if let Ok(status) = result {

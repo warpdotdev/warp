@@ -2179,7 +2179,7 @@ fn driver_wired_for_terminal(
         driver
     });
     // Installs the real history-model subscription under test (including
-    // `mark_conversation_exiting`), without submitting a query.
+    // `drop_pending_events_for_exiting_conversation`), without submitting a query.
     let _run_exit_rx = driver_handle.update(app, |driver, ctx| {
         driver.execute_run(AgentRunPrompt::Local(String::new()), ctx)
     });
@@ -2540,11 +2540,11 @@ fn ambient_driver_elapsed_idle_window_blocks_buffered_child_event_from_restartin
 /// [`OrchestrationEventService::exit_commit_handle`]'s `commit` has run — exactly what
 /// `IdleTimeoutSender`'s `on_commit` hook does, synchronously, on the timer's own thread,
 /// before it ever touches the completion channel — the guard must block injection
-/// immediately, even before any model-side cleanup (`mark_conversation_exiting`'s
-/// pending-event drop) has had a chance to run. This isolates, deterministically and without
-/// any timer at all, the property the async-forwarder-only design could not guarantee: a
-/// check that runs in the gap between the timer deciding to fire and the model callback
-/// actually running must still see the commitment.
+/// immediately, even before any model-side cleanup
+/// (`drop_pending_events_for_exiting_conversation`) has had a chance to run. This isolates,
+/// deterministically and without any timer at all, the property the async-forwarder-only
+/// design could not guarantee: a check that runs in the gap between the timer deciding to
+/// fire and the model callback actually running must still see the commitment.
 #[test]
 fn exit_commit_handle_blocks_injection_before_model_side_cleanup_runs() {
     App::test((), |mut app| async move {
@@ -2562,15 +2562,14 @@ fn exit_commit_handle_blocks_injection_before_model_side_cleanup_runs() {
         });
 
         // Commit directly via the handle, exactly as `on_commit` does on a background timer
-        // thread — with no accompanying model-side `mark_conversation_exiting` call,
-        // simulating the moment right after the timer fires but before the async forwarder
-        // callback has run.
+        // thread — with no accompanying model-side cleanup call, simulating the moment right
+        // after the timer fires but before the async forwarder callback has run.
         let commit_handle = OrchestrationEventService::handle(&app)
             .read(&app, |service, _| service.exit_commit_handle());
         commit_handle.commit(conversation_id);
 
         // The guard must already block, even though nothing has cleaned up pending events
-        // for this conversation (`mark_conversation_exiting` never ran).
+        // for this conversation (`drop_pending_events_for_exiting_conversation` never ran).
         enqueue_buffered_child_message(&mut app, conversation_id);
 
         BlocklistAIHistoryModel::handle(&app).read(&app, |history, _| {
@@ -2639,10 +2638,10 @@ fn ambient_driver_resumed_conversation_elapsed_idle_window_commits_exiting() {
 
         // Two gates, as in the interleaving test above: `elapse_wait` controls when the
         // deferred deadline is reached, and `post_commit_wait` pauses `on_commit` strictly
-        // *before* the completion value is sent — so the async forwarder (which marks
-        // exiting via `me.run_conversation_id`, unaffected by this bug) is provably blocked
-        // from ever running while we check. Without this, the forwarder would eventually
-        // mark exiting on its own and mask a broken (never-populated) thread-safe seed.
+        // *before* the completion value is sent. `on_commit` is the only thing that can set
+        // the exiting flag — the forwarder only drops pending events — so a broken
+        // (never-populated) thread-safe seed would leave the flag unset forever; these gates
+        // just keep the check deterministic rather than racing the background timer.
         let (elapse_wait, elapse_release_tx) = manual_idle_wait();
         let (post_commit_wait, post_commit_release_tx) = manual_idle_wait();
         set_test_idle_wait_override(Some(elapse_wait));
