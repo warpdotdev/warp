@@ -171,6 +171,7 @@ jobs:
         uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version: stable
+          cache: false
 
       - name: Get channel configuration
         id: get-config
@@ -221,10 +222,11 @@ jobs:
 
       - name: Upload DMG to Google Cloud Storage
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
-        uses: google-github-actions/upload-cloud-storage@e95a15f226403ed658d3e65f40205649f342ba2c # v1
+        uses: google-github-actions/upload-cloud-storage@6397bd7208e18d13ba2619ee21b9873edc94427a # v3.0.0
         with:
           path: ${{ steps.bundle_app.outputs.dmg_path }}
           destination: warp-releases/${{ steps.get-config.outputs.channel }}/${{ needs.prepare_release.outputs.release_tag }}
+          process_gcloudignore: false
           headers: |-
             cache-control: ${{ steps.get-config.outputs.gcs_cache_control_value }}
 
@@ -237,7 +239,7 @@ jobs:
 
       - name: Set up Sentry CLI
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
-        uses: matbour/setup-sentry-cli@3e938c54b3018bdd019973689ef984e033b0454b # v2.0.0
+        uses: warpdotdev/setup-sentry-cli@8ae49c71bd731e547de697f75770727f86c95ecd # v2.0.0
         with:
           token: ${{ secrets.SENTRY_RELEASE_TOKEN }}
           organization: warpdotdev
@@ -294,6 +296,7 @@ jobs:
         uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version: stable
+          cache: false
 
       - name: Get channel configuration
         id: get-config
@@ -362,7 +365,7 @@ jobs:
 
       - name: Set up Sentry CLI
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
-        uses: matbour/setup-sentry-cli@3e938c54b3018bdd019973689ef984e033b0454b # v2.0.0
+        uses: warpdotdev/setup-sentry-cli@8ae49c71bd731e547de697f75770727f86c95ecd # v2.0.0
         with:
           token: ${{ secrets.SENTRY_RELEASE_TOKEN }}
           organization: warpdotdev
@@ -416,10 +419,11 @@ jobs:
 
       - name: Upload DMG to Google Cloud Storage
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
-        uses: google-github-actions/upload-cloud-storage@e95a15f226403ed658d3e65f40205649f342ba2c # v1
+        uses: google-github-actions/upload-cloud-storage@6397bd7208e18d13ba2619ee21b9873edc94427a # v3.0.0
         with:
           path: ${{ steps.bundle_app.outputs.dmg_path }}
           destination: warp-releases/${{ steps.get-config.outputs.channel }}/${{ needs.prepare_release.outputs.release_tag }}
+          process_gcloudignore: false
           # IMPORTANT: both the key and value of the cache-control header must be all lowercase;
           # uppercase values will not be respected by Cloud CDN and using "Cache-Control" will be
           # ignored by the upload-cloud-storage action.
@@ -596,10 +600,11 @@ jobs:
 
       - name: Upload CLI to Google Cloud Storage
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
-        uses: google-github-actions/upload-cloud-storage@e95a15f226403ed658d3e65f40205649f342ba2c # v1
+        uses: google-github-actions/upload-cloud-storage@6397bd7208e18d13ba2619ee21b9873edc94427a # v3.0.0
         with:
           path: oz-${{ steps.get-config.outputs.channel }}-macos-${{ matrix.arch }}.tar.gz
           destination: warp-releases/${{ steps.get-config.outputs.channel }}/${{ needs.prepare_release.outputs.release_tag }}/cli/macos/${{ matrix.arch }}
+          process_gcloudignore: false
           headers: |-
             cache-control: ${{ steps.get-config.outputs.gcs_cache_control_value }}
 
@@ -612,7 +617,7 @@ jobs:
 
       - name: Set up Sentry CLI
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
-        uses: matbour/setup-sentry-cli@3e938c54b3018bdd019973689ef984e033b0454b # v2.0.0
+        uses: warpdotdev/setup-sentry-cli@8ae49c71bd731e547de697f75770727f86c95ecd # v2.0.0
         with:
           token: ${{ secrets.SENTRY_RELEASE_TOKEN }}
           organization: warpdotdev
@@ -771,7 +776,7 @@ jobs:
 
       - name: Set up Sentry CLI
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
-        uses: matbour/setup-sentry-cli@3e938c54b3018bdd019973689ef984e033b0454b # v2.0.0
+        uses: warpdotdev/setup-sentry-cli@8ae49c71bd731e547de697f75770727f86c95ecd # v2.0.0
         with:
           token: ${{ secrets.SENTRY_RELEASE_TOKEN }}
           organization: warpdotdev
@@ -816,10 +821,11 @@ jobs:
 
       - name: Upload TUI to Google Cloud Storage
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
-        uses: google-github-actions/upload-cloud-storage@e95a15f226403ed658d3e65f40205649f342ba2c # v1
+        uses: google-github-actions/upload-cloud-storage@6397bd7208e18d13ba2619ee21b9873edc94427a # v3.0.0
         with:
           path: warp-tui-${{ steps.get-config.outputs.channel }}-macos-${{ matrix.arch }}.tar.gz
           destination: warp-releases/${{ steps.get-config.outputs.channel }}/${{ needs.prepare_release.outputs.release_tag }}/tui/macos/${{ matrix.arch }}
+          process_gcloudignore: false
           headers: |-
             cache-control: ${{ steps.get-config.outputs.gcs_cache_control_value }}
 
@@ -1029,10 +1035,11 @@ jobs:
 
       - name: Upload TUI to Google Cloud Storage
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
-        uses: google-github-actions/upload-cloud-storage@e95a15f226403ed658d3e65f40205649f342ba2c # v1
+        uses: google-github-actions/upload-cloud-storage@6397bd7208e18d13ba2619ee21b9873edc94427a # v3.0.0
         with:
           path: warp-tui-${{ steps.get-config.outputs.channel }}-linux-${{ matrix.arch }}.tar.gz
           destination: warp-releases/${{ steps.get-config.outputs.channel }}/${{ needs.prepare_release.outputs.release_tag }}/tui/linux/${{ matrix.arch }}
+          process_gcloudignore: false
           headers: |-
             cache-control: ${{ steps.get-config.outputs.gcs_cache_control_value }}
 
@@ -1164,7 +1171,7 @@ jobs:
 
       - name: Set up Sentry CLI
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
-        uses: matbour/setup-sentry-cli@3e938c54b3018bdd019973689ef984e033b0454b # v2.0.0
+        uses: warpdotdev/setup-sentry-cli@8ae49c71bd731e547de697f75770727f86c95ecd # v2.0.0
         with:
           token: ${{ secrets.SENTRY_RELEASE_TOKEN }}
           organization: warpdotdev
@@ -1189,13 +1196,14 @@ jobs:
 
       - name: Upload packages to Google Cloud Storage
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
-        uses: google-github-actions/upload-cloud-storage@e95a15f226403ed658d3e65f40205649f342ba2c # v1
+        uses: google-github-actions/upload-cloud-storage@6397bd7208e18d13ba2619ee21b9873edc94427a # v3.0.0
         with:
           path: ${{ steps.bundle_app.outputs.packages_dir }}
           # Only upload the files from within `packages_dir`, don't include the
           # (parent) folder itself.
           parent: false
           destination: warp-releases/${{ steps.get-config.outputs.channel }}/${{ needs.prepare_release.outputs.release_tag }}
+          process_gcloudignore: false
           # IMPORTANT: both the key and value of the cache-control header must be all lowercase;
           # uppercase values will not be respected by Cloud CDN and using "Cache-Control" will be
           # ignored by the upload-cloud-storage action.
@@ -1417,7 +1425,7 @@ jobs:
 
       - name: Set up Sentry CLI
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
-        uses: matbour/setup-sentry-cli@3e938c54b3018bdd019973689ef984e033b0454b # v2.0.0
+        uses: warpdotdev/setup-sentry-cli@8ae49c71bd731e547de697f75770727f86c95ecd # v2.0.0
         with:
           token: ${{ secrets.SENTRY_RELEASE_TOKEN }}
           organization: warpdotdev
@@ -1442,13 +1450,14 @@ jobs:
 
       - name: Upload CLI packages to Google Cloud Storage
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
-        uses: google-github-actions/upload-cloud-storage@e95a15f226403ed658d3e65f40205649f342ba2c # v1
+        uses: google-github-actions/upload-cloud-storage@6397bd7208e18d13ba2619ee21b9873edc94427a # v3.0.0
         with:
           path: ${{ steps.bundle_cli.outputs.packages_dir }}
           # Only upload the files from within `packages_dir`, don't include the
           # (parent) folder itself.
           parent: false
           destination: warp-releases/${{ steps.get-config.outputs.channel }}/${{ needs.prepare_release.outputs.release_tag }}
+          process_gcloudignore: false
           # IMPORTANT: both the key and value of the cache-control header must be all lowercase;
           # uppercase values will not be respected by Cloud CDN and using "Cache-Control" will be
           # ignored by the upload-cloud-storage action.
@@ -1465,10 +1474,11 @@ jobs:
 
       - name: Upload CLI tar.gz to Google Cloud Storage
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
-        uses: google-github-actions/upload-cloud-storage@e95a15f226403ed658d3e65f40205649f342ba2c # v1
+        uses: google-github-actions/upload-cloud-storage@6397bd7208e18d13ba2619ee21b9873edc94427a # v3.0.0
         with:
           path: oz-${{ steps.get-config.outputs.channel }}-linux-x86_64.tar.gz
           destination: warp-releases/${{ steps.get-config.outputs.channel }}/${{ needs.prepare_release.outputs.release_tag }}/cli/linux/x86_64
+          process_gcloudignore: false
           headers: |-
             cache-control: ${{ steps.get-config.outputs.gcs_cache_control_value }}
 
@@ -1690,7 +1700,7 @@ jobs:
       
       - name: Set up Sentry CLI
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
-        uses: matbour/setup-sentry-cli@3e938c54b3018bdd019973689ef984e033b0454b # v2.0.0
+        uses: warpdotdev/setup-sentry-cli@8ae49c71bd731e547de697f75770727f86c95ecd # v2.0.0
         with:
           token: ${{ secrets.SENTRY_RELEASE_TOKEN }}
           organization: warpdotdev
@@ -1884,11 +1894,12 @@ jobs:
 
       - name: Upload app packages to Google Cloud Storage
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
-        uses: google-github-actions/upload-cloud-storage@e95a15f226403ed658d3e65f40205649f342ba2c # v1
+        uses: google-github-actions/upload-cloud-storage@6397bd7208e18d13ba2619ee21b9873edc94427a # v3.0.0
         with:
           path: ${{ steps.bundle_app.outputs.packages_dir }}
           parent: false
           destination: warp-releases/${{ steps.get-config.outputs.channel }}/${{ needs.prepare_release.outputs.release_tag }}
+          process_gcloudignore: false
           # IMPORTANT: both the key and value of the cache-control header must be all lowercase;
           # uppercase values will not be respected by Cloud CDN and using "Cache-Control" will be
           # ignored by the upload-cloud-storage action.
@@ -1896,12 +1907,13 @@ jobs:
             cache-control: ${{ steps.get-config.outputs.gcs_cache_control_value }}
 
       - name: Upload CLI packages to Google Cloud Storage
-        uses: google-github-actions/upload-cloud-storage@e95a15f226403ed658d3e65f40205649f342ba2c # v1
+        uses: google-github-actions/upload-cloud-storage@6397bd7208e18d13ba2619ee21b9873edc94427a # v3.0.0
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' && steps.bundle_cli.outputs.packages_dir != steps.bundle_app.outputs.packages_dir }}
         with:
           path: ${{ steps.bundle_cli.outputs.packages_dir }}
           parent: false
           destination: warp-releases/${{ steps.get-config.outputs.channel }}/${{ needs.prepare_release.outputs.release_tag }}
+          process_gcloudignore: false
           # IMPORTANT: both the key and value of the cache-control header must be all lowercase;
           # uppercase values will not be respected by Cloud CDN and using "Cache-Control" will be
           # ignored by the upload-cloud-storage action.
@@ -1910,10 +1922,11 @@ jobs:
 
       - name: Upload CLI tar.gz to Google Cloud Storage
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
-        uses: google-github-actions/upload-cloud-storage@e95a15f226403ed658d3e65f40205649f342ba2c # v1
+        uses: google-github-actions/upload-cloud-storage@6397bd7208e18d13ba2619ee21b9873edc94427a # v3.0.0
         with:
           path: oz-${{ steps.get-config.outputs.channel }}-linux-aarch64.tar.gz
           destination: warp-releases/${{ steps.get-config.outputs.channel }}/${{ needs.prepare_release.outputs.release_tag }}/cli/linux/aarch64
+          process_gcloudignore: false
           headers: |-
             cache-control: ${{ steps.get-config.outputs.gcs_cache_control_value }}
 
@@ -1970,7 +1983,7 @@ jobs:
 
       - name: Set up Sentry CLI
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
-        uses: matbour/setup-sentry-cli@3e938c54b3018bdd019973689ef984e033b0454b # v2.0.0
+        uses: warpdotdev/setup-sentry-cli@8ae49c71bd731e547de697f75770727f86c95ecd # v2.0.0
         with:
           token: ${{ secrets.SENTRY_RELEASE_TOKEN }}
           organization: warpdotdev
@@ -2000,7 +2013,7 @@ jobs:
 
       - name: Upload packages to Google Cloud Storage
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
-        uses: google-github-actions/upload-cloud-storage@e95a15f226403ed658d3e65f40205649f342ba2c # v1
+        uses: google-github-actions/upload-cloud-storage@6397bd7208e18d13ba2619ee21b9873edc94427a # v3.0.0
         with:
           path: ${{ steps.bundle_app.outputs.packages_dir }}
           # Only upload the files from within `packages_dir`, don't include the
@@ -2008,6 +2021,7 @@ jobs:
           gzip: false
           parent: false
           destination: ${{ steps.get-config.outputs.web_gcs_bucket_prefix }}-releases/${{ steps.get-config.outputs.channel }}/${{ needs.prepare_release.outputs.release_tag }}
+          process_gcloudignore: false
           # IMPORTANT: both the key and value of the cache-control header must be all lowercase;
           # uppercase values will not be respected by Cloud CDN and using "Cache-Control" will be
           # ignored by the upload-cloud-storage action.
@@ -2017,13 +2031,14 @@ jobs:
 
       - name: Upload assets to Google Cloud Storage
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
-        uses: google-github-actions/upload-cloud-storage@e95a15f226403ed658d3e65f40205649f342ba2c # v1
+        uses: google-github-actions/upload-cloud-storage@6397bd7208e18d13ba2619ee21b9873edc94427a # v3.0.0
         with:
           path: ${{ steps.bundle_app.outputs.assets_dir }}
           parent: false
           # All asset filenames contain the file hash for cashing purposes, so we store them all in
           # one directory so they can be cached across releases.
           destination: ${{ steps.get-config.outputs.web_gcs_bucket_prefix }}-static-assets/
+          process_gcloudignore: false
           # IMPORTANT: both the key and value of the cache-control header must be all lowercase;
           # uppercase values will not be respected by Cloud CDN and using "Cache-Control" will be
           # ignored by the upload-cloud-storage action.
@@ -2231,10 +2246,11 @@ jobs:
 
       - name: Upload TUI installer to Google Cloud Storage
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
-        uses: google-github-actions/upload-cloud-storage@e95a15f226403ed658d3e65f40205649f342ba2c # v1
+        uses: google-github-actions/upload-cloud-storage@6397bd7208e18d13ba2619ee21b9873edc94427a # v3.0.0
         with:
           path: ${{ steps.bundle_tui.outputs.installer_path }}
           destination: warp-releases/${{ steps.get-config.outputs.channel }}/${{ needs.prepare_release.outputs.release_tag }}/tui/windows/${{ matrix.release_arch }}
+          process_gcloudignore: false
           headers: |-
             cache-control: ${{ steps.get-config.outputs.gcs_cache_control_value }}
 
@@ -2433,15 +2449,13 @@ jobs:
           SIGN_TOOL_CMD: ${{ steps.setup_signing.outputs.sign_tool_cmd }}
           SETTINGS_SCHEMA_SOURCE: ${{ github.workspace }}/.release-artifacts/settings-schema-windows/settings_schema.json
 
-      # TEMPORARY: pinned to our fork of matbour/setup-sentry-cli. Upstream's platform
-      # table has no win32/arm64 entry, so it fails with "Unsupported platform:
-      # win32/arm64" on the native Windows arm64 runner. The fork is upstream plus that
-      # single mapping entry, submitted upstream as
-      # https://github.com/matbour/setup-sentry-cli/pull/24 -- switch this call site back
-      # to matbour/setup-sentry-cli once that lands in a release.
+      # This runner has no upstream match: matbour/setup-sentry-cli has no win32/arm64 entry
+      # in its platform table, so it fails with "Unsupported platform: win32/arm64" here. The
+      # fork adds that entry (submitted upstream as matbour/setup-sentry-cli#24, not yet in a
+      # release).
       - name: Set up Sentry CLI
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
-        uses: warpdotdev/setup-sentry-cli@80a37ad0848719ac9d0390ee4197fd070af6718e # v2.0.0 + win32/arm64
+        uses: warpdotdev/setup-sentry-cli@8ae49c71bd731e547de697f75770727f86c95ecd # v2.0.0
         with:
           token: ${{ secrets.SENTRY_RELEASE_TOKEN }}
           organization: warpdotdev
@@ -2479,10 +2493,11 @@ jobs:
 
       - name: Upload installer to Google Cloud Storage
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
-        uses: google-github-actions/upload-cloud-storage@e95a15f226403ed658d3e65f40205649f342ba2c # v1
+        uses: google-github-actions/upload-cloud-storage@6397bd7208e18d13ba2619ee21b9873edc94427a # v3.0.0
         with:
           path: ${{ steps.bundle_app.outputs.installer_path }}
           destination: warp-releases/${{ steps.get-config.outputs.channel }}/${{ needs.prepare_release.outputs.release_tag }}
+          process_gcloudignore: false
           # IMPORTANT: both the key and value of the cache-control header must be all lowercase;
           # uppercase values will not be respected by Cloud CDN and using "Cache-Control" will be
           # ignored by the upload-cloud-storage action.
@@ -2814,7 +2829,8 @@ jobs:
           credentials_json: ${{ secrets.GOOGLE_APPLICATION_CREDENTIALS }}
 
       - name: Upload changelog.json to Google Cloud Storage
-        uses: google-github-actions/upload-cloud-storage@e95a15f226403ed658d3e65f40205649f342ba2c # v1
+        uses: google-github-actions/upload-cloud-storage@6397bd7208e18d13ba2619ee21b9873edc94427a # v3.0.0
         with:
           path: changelog.json
           destination: warp-releases/${{ steps.get-config.outputs.channel }}/${{ needs.prepare_release.outputs.release_tag }}
+          process_gcloudignore: false
