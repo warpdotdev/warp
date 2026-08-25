@@ -5,17 +5,15 @@ use cloud_object_models::CodeForge;
 use command::blocking::Command;
 use tempfile::TempDir;
 use warp_cli::agent::{RepositoryForge, RepositoryHeadOverride, RepositoryHeadRef};
-use warp_core::command::ExitCode;
 
 use super::{
     PrepareEnvironmentError, RepositoryCloneRequest, build_parallel_clone_command,
-    build_remove_repository_origins_command, checkout_command_for, checkout_result,
-    environment_snapshot, is_valid_git_object_id, merge_repos_deduped, repository_clone_requests,
-    single_repo_name, validate_repository_head_overrides,
+    build_remove_repository_origins_command, checkout_command_for, environment_snapshot,
+    is_valid_git_object_id, merge_repos_deduped, parse_resolved_head_sha,
+    repository_clone_requests, single_repo_name, validate_repository_head_overrides,
 };
 use crate::ai::cloud_environments::{AmbientAgentEnvironment, SourceRepo};
 use crate::terminal::shell::ShellType;
-const TEST_NAMESPACE: &str = "0123456789ab";
 
 fn commit_head_override(
     code_forge: RepositoryForge,
@@ -29,42 +27,6 @@ fn commit_head_override(
         repo_name: repo.to_string(),
         head: RepositoryHeadRef::CommitSha(sha.to_string()),
     }
-}
-
-#[test]
-fn parallel_clone_shell_emits_resolved_head_for_fresh_clone() {
-    let fixture = build_fixture();
-    let target = fixture.working_dir.join(&fixture.repo_name);
-
-    let output = run_parallel_clone_repo_helper(&fixture, &target, None);
-
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let stdout = String::from_utf8(output.stdout).unwrap();
-    assert!(stdout.contains(&format!("{TEST_NAMESPACE}\t0\t{}", fixture.base_sha)));
-}
-
-#[test]
-fn parallel_clone_shell_ignores_revision_resolution_failure_for_reused_directory() {
-    let fixture = build_fixture();
-    let target = fixture.working_dir.join("not-a-git-repository");
-    fs::create_dir_all(&target).unwrap();
-
-    let output = run_parallel_clone_repo_helper(&fixture, &target, None);
-
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    assert!(
-        !String::from_utf8(output.stdout)
-            .unwrap()
-            .contains(TEST_NAMESPACE)
-    );
 }
 
 #[test]
@@ -85,7 +47,28 @@ fn git_object_id_validation_accepts_lowercase_sha1_and_sha256() {
 }
 
 #[test]
-fn environment_snapshot_parses_only_valid_namespaced_unique_records_in_request_order() {
+fn parse_resolved_head_sha_accepts_trimmed_valid_object_ids() {
+    assert_eq!(
+        parse_resolved_head_sha(b"0123456789abcdef0123456789abcdef01234567\n").as_deref(),
+        Some("0123456789abcdef0123456789abcdef01234567")
+    );
+    assert_eq!(
+        parse_resolved_head_sha(
+            b"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\n"
+        )
+        .as_deref(),
+        Some("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
+    );
+    assert_eq!(
+        parse_resolved_head_sha(b"0123456789ABCDEF0123456789ABCDEF01234567\n"),
+        None
+    );
+    assert_eq!(parse_resolved_head_sha(b"not-a-sha\n"), None);
+    assert_eq!(parse_resolved_head_sha(b""), None);
+}
+
+#[test]
+fn environment_snapshot_keeps_resolved_heads_in_request_order() {
     let requests = vec![
         clone_request(
             repo(CodeForge::GitHub, "warpdotdev", "warp"),
@@ -100,12 +83,12 @@ fn environment_snapshot_parses_only_valid_namespaced_unique_records_in_request_o
     ];
     let first_sha = "0123456789abcdef0123456789abcdef01234567";
     let second_sha = "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789";
-    let output = format!(
-        "noise\nwrong-namespace\t0\t{first_sha}\n{TEST_NAMESPACE}\t1\t{second_sha}\n{TEST_NAMESPACE}\t0\t{first_sha}\n"
-    );
 
-    let snapshot =
-        environment_snapshot(&requests, Path::new("/workspace"), TEST_NAMESPACE, &output);
+    let snapshot = environment_snapshot(
+        &requests,
+        Path::new("/workspace"),
+        &[Some(first_sha.to_string()), Some(second_sha.to_string())],
+    );
 
     assert_eq!(snapshot.repositories.len(), 2);
     assert_eq!(snapshot.repositories[0].repo_owner, "warpdotdev");
@@ -120,26 +103,23 @@ fn environment_snapshot_parses_only_valid_namespaced_unique_records_in_request_o
 }
 
 #[test]
-fn environment_snapshot_omits_missing_malformed_duplicate_and_invalid_records() {
+fn environment_snapshot_omits_unresolved_heads() {
     let requests = vec![
         clone_request(repo(CodeForge::GitHub, "one", "first"), None),
         clone_request(repo(CodeForge::GitHub, "two", "second"), None),
-        clone_request(repo(CodeForge::GitLab, "three", "third"), None),
-        clone_request(repo(CodeForge::GitLab, "four", "fourth"), None),
     ];
-    let sha = "0123456789abcdef0123456789abcdef01234567";
-    let output = format!(
-        "{TEST_NAMESPACE}\t0\t{sha}\n\
-         {TEST_NAMESPACE}\t0\t{sha}\n\
-         {TEST_NAMESPACE}\tnot-an-index\t{sha}\n\
-         {TEST_NAMESPACE}\t2\tuppercaseABCDEF0123456789abcdef0123456789\n\
-         {TEST_NAMESPACE}\t3\t{sha}\textra\n"
+
+    let snapshot = environment_snapshot(
+        &requests,
+        Path::new("/workspace"),
+        &[
+            None,
+            Some("0123456789abcdef0123456789abcdef01234567".to_string()),
+        ],
     );
 
-    let snapshot =
-        environment_snapshot(&requests, Path::new("/workspace"), TEST_NAMESPACE, &output);
-
-    assert!(snapshot.repositories.is_empty());
+    assert_eq!(snapshot.repositories.len(), 1);
+    assert_eq!(snapshot.repositories[0].repo_name, "second");
 }
 fn branch_head_override(
     code_forge: RepositoryForge,
@@ -289,7 +269,6 @@ fn parallel_clone_command_runs_repos_in_background_and_waits() {
             .map(|repo| clone_request(repo, None))
             .collect::<Vec<_>>(),
         ShellType::Bash,
-        TEST_NAMESPACE,
     );
 
     assert!(command.starts_with("sh -c '"));
@@ -309,10 +288,9 @@ fn parallel_clone_command_runs_repos_in_background_and_waits() {
     assert!(command.contains("pids=\"$pids $!\""));
     assert!(command.contains("wait \"$pid\""));
     assert!(command.contains("===== warpdotdev/warp ====="));
-    assert!(command.contains("grep -v"));
+    assert!(command.contains("cat \"$log_file_0\""));
     assert!(command.contains("===== platform/backend/api ====="));
-    assert!(command.contains("===== repository revision results ====="));
-    assert!(command.contains("0123456789ab[[:space:]]"));
+    assert!(!command.contains("repository revision results"));
     assert!(command.contains("exit \"$failed\""));
 }
 
@@ -342,19 +320,17 @@ fn parallel_clone_command_threads_checkout_ref_and_pins_after_clone() {
             })
             .collect::<Vec<_>>(),
         ShellType::Bash,
-        TEST_NAMESPACE,
     );
 
-    assert!(command.contains("checkout_ref=\"$5\""));
+    assert!(command.contains("checkout_ref=\"$4\""));
     assert!(command.contains("'abc123'"));
     assert!(command.contains("'feature'"));
     assert!(command.contains("if [ -n \"$checkout_ref\" ]; then"));
     assert!(command.contains(
-        "git -C \"$target\" fetch --filter=blob:none origin \"$checkout_ref\" || ! git -C \"$target\" checkout --detach FETCH_HEAD"
+        "git -C \"$target\" fetch --filter=blob:none origin \"$checkout_ref\" && git -C \"$target\" checkout --detach FETCH_HEAD"
     ));
     assert!(command.contains("git clone --filter=blob:none \"$repo_url\" \"$target\""));
-    assert!(command.contains("git -C \"$target\" rev-parse --verify HEAD"));
-    assert!(command.contains(TEST_NAMESPACE));
+    assert!(!command.contains("rev-parse --verify HEAD"));
 }
 
 #[test]
@@ -381,10 +357,9 @@ fn parallel_clone_command_fetches_commit_shas_without_cloning_later_history() {
             ),
         ],
         ShellType::Bash,
-        TEST_NAMESPACE,
     );
 
-    assert!(command.contains("is_commit_sha=\"$6\""));
+    assert!(command.contains("is_commit_sha=\"$5\""));
     assert!(command.contains("'1'"));
     assert!(command.contains("'0'"));
     assert!(command.contains("git init --quiet \"$target\""));
@@ -637,14 +612,13 @@ fn applied_head_overrides_are_threaded_through_the_existing_clone_command() {
     let command = build_parallel_clone_command(
         &repository_clone_requests(&repos, &overrides).unwrap(),
         ShellType::Bash,
-        TEST_NAMESPACE,
     );
 
     assert!(command.contains("'develop'"));
     assert!(!command.contains("'abc123'"));
     assert!(command.contains("'old-pin'"));
     assert!(command.contains(
-        "git -C \"$target\" fetch --filter=blob:none origin \"$checkout_ref\" || ! git -C \"$target\" checkout --detach FETCH_HEAD"
+        "git -C \"$target\" fetch --filter=blob:none origin \"$checkout_ref\" && git -C \"$target\" checkout --detach FETCH_HEAD"
     ));
     assert!(!command.contains("checkout_commit"));
     assert!(!command.contains("checkout_branch"));
@@ -666,7 +640,6 @@ fn applied_commit_override_uses_sha_only_fetch() {
     let command = build_parallel_clone_command(
         &repository_clone_requests(&repos, &overrides).unwrap(),
         ShellType::Bash,
-        TEST_NAMESPACE,
     );
 
     assert!(command.contains("'0123456789abcdef0123456789abcdef01234567'"));
@@ -699,17 +672,6 @@ fn repository_origin_removal_targets_all_environment_repositories() {
     assert!(command.contains(&warp_server_dir));
     assert!(command.contains("remote get-url origin"));
     assert!(command.contains("remote remove origin"));
-}
-
-#[test]
-fn checkout_result_maps_nonzero_exit_to_checkout_failed() {
-    assert!(checkout_result("warpdotdev/warp", "abc123", ExitCode::from(0)).is_ok());
-    let err = checkout_result("warpdotdev/warp", "abc123", ExitCode::from(1)).unwrap_err();
-    assert!(matches!(
-        err,
-        PrepareEnvironmentError::CheckoutFailed { repo_name, checkout_ref }
-            if repo_name == "warpdotdev/warp" && checkout_ref == "abc123"
-    ));
 }
 
 // --- Real-git fixture tests -------------------------------------------------
@@ -886,11 +848,7 @@ fn run_parallel_clone_repo_helper(
             None,
         ),
     ];
-    let script = unwrap_sh_c_script(&build_parallel_clone_command(
-        &repos,
-        ShellType::Bash,
-        TEST_NAMESPACE,
-    ));
+    let script = unwrap_sh_c_script(&build_parallel_clone_command(&repos, ShellType::Bash));
 
     // Keep only the clone_repo function definition; drop background clones /
     // waits / logs. Locate by name so we don't grab cleanup_clone_logs instead.
@@ -904,7 +862,7 @@ fn run_parallel_clone_repo_helper(
         + 2;
     let helper = &script[helper_start..helper_end];
     let invoke = format!(
-        "set -e\n{helper}\nclone_repo '0' 'warpdotdev/{repo}' '{origin}' '{target}' '{checkout_ref}' '{is_commit_sha}' '{TEST_NAMESPACE}' 's{TEST_NAMESPACE}'\n",
+        "set -e\n{helper}\nclone_repo 'warpdotdev/{repo}' '{origin}' '{target}' '{checkout_ref}' '{is_commit_sha}'\n",
         repo = fixture.repo_name,
         origin = fixture.origin_url,
         target = target.display(),
@@ -1109,18 +1067,6 @@ fn checkout_command_fails_for_unknown_ref() {
 
     let status = run_command(&command);
     assert!(!status.success(), "unknown ref should fail");
-
-    // A non-zero exit is what the clone path maps to CheckoutFailed, rather than
-    // silently leaving the clone on the default branch.
-    let result = checkout_result(
-        "warpdotdev/fixture",
-        "deadbeef",
-        ExitCode::from(status.code().unwrap_or(1)),
-    );
-    assert!(matches!(
-        result,
-        Err(PrepareEnvironmentError::CheckoutFailed { .. })
-    ));
 
     // HEAD must remain on the default branch tip.
     assert_eq!(
