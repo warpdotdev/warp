@@ -276,7 +276,7 @@ use crate::ai::document::ai_document_model::{AIDocumentId, AIDocumentModel, AIDo
 use crate::ai::execution_profiles::ExecutionProfileId;
 use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
 use crate::ai::get_relevant_files::controller::GetRelevantFilesController;
-use crate::ai::llms::{LLMId, LLMModelHost, LLMPreferences};
+use crate::ai::llms::{LLMId, LLMModelHost, LLMPreferences, ResolvedTeamScope};
 use crate::ai::loading::shimmering_warp_loading_text;
 #[cfg(feature = "local_fs")]
 use crate::ai::persisted_workspace::PersistedWorkspace;
@@ -10862,9 +10862,14 @@ impl TerminalView {
             return;
         }
 
-        // Check if the model supports AWS Bedrock routing
+        // Check if the model supports AWS Bedrock routing. Scoped to this terminal's own team:
+        // `host_configs` (whether Bedrock is enabled for this model) can differ per team, and an
+        // arbitrary team's answer could show the banner when this team disables Bedrock, or hide
+        // it when this team enables it.
+        let scope =
+            ResolvedTeamScope::from_scope(&UserWorkspaces::as_ref(ctx).team_context_for_view(ctx));
         let llm_prefs = LLMPreferences::as_ref(ctx);
-        let Some(llm_info) = llm_prefs.get_llm_info(model_id) else {
+        let Some(llm_info) = llm_prefs.get_llm_info_for_scope(&scope, model_id) else {
             return;
         };
 

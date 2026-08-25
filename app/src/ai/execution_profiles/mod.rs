@@ -52,7 +52,7 @@ fn effective_base_model<'a>(profile: &AIExecutionProfile, app: &'a AppContext) -
     profile
         .base_model
         .as_ref()
-        .and_then(|id| prefs.get_llm_info(id))
+        .and_then(|id| prefs.get_llm_info_for_team_uid(team_uid, id))
         .unwrap_or_else(|| prefs.get_default_base_model_for_team_uid(team_uid, app))
 }
 

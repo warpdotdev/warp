@@ -401,20 +401,14 @@ fn initialize_llm_preferences_dependencies(app: &mut App) {
     });
 }
 
-/// Regression for two review findings on the multi-team catalog rebuild:
-///
-/// 1. The retained blocklist-controller refresh triggers now go through
-///    `TeamUpdateManager::refresh_workspace_metadata` -- i.e. this same `on_workspaces_updated`
-///    apply path -- instead of the legacy unscoped `get_feature_model_choices` fetch. Team A
-///    and team B below have genuinely different catalogs, so a "same payload in every bucket"
-///    defect in that path would fail the first assertion block.
-/// 2. Pruning used to be skipped whenever a response's *own* folded catalog was empty
-///    (`on_workspaces_updated` guarded the whole apply on `!feature_models_by_team.is_empty()`),
-///    which is a real state -- every team the user was on responding with no catalog entry, or
-///    the user leaving every team -- not just "no teams named at all" (naming only team B, as
-///    the middle step below does, is already non-empty and would not have exercised the old
-///    guard). A later authoritative response with an empty catalog must still evict every
-///    stale bucket it doesn't name, rather than leaving them live indefinitely.
+/// Applying a folded workspaces-metadata response keeps every team's catalog independently
+/// correct: two teams with distinct catalogs resolve to their own choices rather than a
+/// shared payload, and a later response naming fewer teams -- down to none -- prunes every
+/// bucket it no longer names instead of leaving it cached. This exercises
+/// `TeamUpdateManager::apply_feature_model_choices`, the apply path shared by the periodic
+/// poll, the out-of-band refresh, and `leave_team`. See
+/// `user_workspaces_tests::team_feature_model_choices_conversion_keeps_each_teams_choice_distinct`
+/// for the same guarantee at the GraphQL-fold boundary this response is built from.
 #[test]
 fn on_workspaces_updated_keeps_teams_distinct_and_prunes_a_team_the_response_omits() {
     App::test((), |mut app| async move {

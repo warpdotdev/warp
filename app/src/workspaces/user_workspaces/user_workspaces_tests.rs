@@ -27,7 +27,9 @@ use warp_graphql::workspace::{
     ComputerUseAutonomyValue as GqlComputerUseAutonomyValue,
     ComputerUseSettingInfo as GqlComputerUseSettingInfo,
     FeatureModelChoice as GqlFeatureModelChoice, LinkSharingSettings as GqlLinkSharingSettings,
-    LinkSharingSettingsInfo as GqlLinkSharingSettingsInfo, LlmSettings as GqlLlmSettings,
+    LinkSharingSettingsInfo as GqlLinkSharingSettingsInfo, LlmContextWindow as GqlLlmContextWindow,
+    LlmInfo as GqlLlmInfo, LlmPricing as GqlLlmPricing, LlmProvider as GqlLlmProvider,
+    LlmSettings as GqlLlmSettings, LlmUsageMetadata as GqlLlmUsageMetadata,
     MembershipRole as GqlMembershipRole,
     SandboxedAgentSettingsInfo as GqlSandboxedAgentSettingsInfo,
     SecretRedactionRegexListInfo as GqlSecretRedactionRegexListInfo,
@@ -3713,4 +3715,93 @@ fn test_workspace_policy_wins_over_user_level_policy() {
             );
         });
     })
+}
+
+/// A `GqlLlmInfo` fixture identified by `id`, for the model-choice fixtures below.
+fn gql_llm_info(id: &str) -> GqlLlmInfo {
+    GqlLlmInfo {
+        display_name: id.to_string(),
+        base_model_name: id.to_string(),
+        id: id.to_string(),
+        reasoning_level: None,
+        usage_metadata: GqlLlmUsageMetadata {
+            credit_multiplier: None,
+            request_multiplier: 1,
+        },
+        description: None,
+        disable_reason: None,
+        vision_supported: false,
+        spec: None,
+        provider: GqlLlmProvider::Unknown,
+        host_configs: vec![],
+        pricing: GqlLlmPricing {
+            discount_percentage: None,
+        },
+        context_window: GqlLlmContextWindow {
+            is_configurable: false,
+            min: 0.into(),
+            max: 0.into(),
+            default: 0.into(),
+        },
+    }
+}
+
+/// A `GqlFeatureModelChoice` whose every feature offers exactly one model, `model_id`, so a
+/// test can tell two teams' choices apart by that single id.
+fn gql_feature_model_choice(model_id: &str) -> GqlFeatureModelChoice {
+    let llms = GqlAvailableLlms {
+        default_id: model_id.to_string(),
+        choices: vec![gql_llm_info(model_id)],
+        preferred_codex_model_id: None,
+    };
+    GqlFeatureModelChoice {
+        agent_mode: llms.clone(),
+        planning: llms.clone(),
+        coding: llms.clone(),
+        cli_agent: llms.clone(),
+        computer_use_agent: llms,
+    }
+}
+
+#[test]
+fn team_feature_model_choices_conversion_keeps_each_teams_choice_distinct() {
+    // Regression for the defect the multi-team catalog rebuild exists to prevent, at the
+    // boundary where it actually lived: `From<GqlUser> for WorkspacesMetadataResponse`
+    // folding `teams[].featureModelChoice` into `team_feature_model_choices` must key each
+    // team's own choice by its own uid, not duplicate one team's payload into every entry.
+    let mut team_a = gql_team("team-a", "Team A", &["test-user"]);
+    team_a.feature_model_choice = gql_feature_model_choice("team-a-only");
+    let mut team_b = gql_team("team-b", "Team B", &["test-user"]);
+    team_b.feature_model_choice = gql_feature_model_choice("team-b-only");
+    let mut workspace = gql_workspace("workspace_uid123456789", None);
+    workspace.teams = vec![team_a, team_b];
+
+    let response: WorkspacesMetadataResponse = gql_user(None, vec![workspace]).into();
+
+    assert_eq!(
+        response.team_feature_model_choices.len(),
+        2,
+        "both teams' choices should survive the fold"
+    );
+
+    let team_a_uid = ServerId::from_string_lossy(format!("{:0>22}", "team-a"));
+    let team_b_uid = ServerId::from_string_lossy(format!("{:0>22}", "team-b"));
+
+    let choice_a = response
+        .team_feature_model_choices
+        .get(&team_a_uid)
+        .expect("team A's choice should be keyed by team A's own uid");
+    let choice_b = response
+        .team_feature_model_choices
+        .get(&team_b_uid)
+        .expect("team B's choice should be keyed by team B's own uid");
+
+    assert_eq!(
+        choice_a.agent_mode.choices[0].id, "team-a-only",
+        "team A's uid must map to team A's own choice, not a shared or swapped payload"
+    );
+    assert_eq!(
+        choice_b.agent_mode.choices[0].id, "team-b-only",
+        "team B's uid must map to team B's own choice, not a shared or swapped payload"
+    );
 }
