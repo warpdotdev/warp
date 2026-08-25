@@ -1289,7 +1289,7 @@ fn test_layout_delta_chunk_boundary_preserves_order_hidden_collapsing_and_traili
 
             let delta = EditDelta {
                 old_offset: CharOffset::from(1)..offset,
-                new_lines,
+                new_lines: Arc::new(new_lines),
                 ..Default::default()
             };
 
@@ -1374,7 +1374,7 @@ fn test_layout_delta_single_chunk_matches_direct_layout() {
 
             let delta = EditDelta {
                 old_offset: CharOffset::from(1)..CharOffset::from(1 + total_len),
-                new_lines,
+                new_lines: Arc::new(new_lines),
                 ..Default::default()
             };
 
@@ -1482,7 +1482,7 @@ fn test_layout_delta_block_location_is_global_across_chunk_boundaries() {
 
             let delta = EditDelta {
                 old_offset: CharOffset::from(1)..offset,
-                new_lines,
+                new_lines: Arc::new(new_lines),
                 ..Default::default()
             };
 
@@ -1585,7 +1585,7 @@ fn test_layout_delta_trailing_newline_carries_over_when_final_chunk_fully_fails(
 
             let delta = EditDelta {
                 old_offset: CharOffset::from(1)..offset,
-                new_lines,
+                new_lines: Arc::new(new_lines),
                 ..Default::default()
             };
 
