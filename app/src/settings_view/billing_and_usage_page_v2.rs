@@ -1126,9 +1126,7 @@ impl BillingAndUsagePageV2View {
         app: &AppContext,
     ) -> AddonCreditsPanelState {
         let workspaces = UserWorkspaces::as_ref(app);
-        let purchase_policy = workspaces.purchase_policy_for_team(
-            team_uid.and_then(|team_uid| workspaces.team_from_uid(team_uid)),
-        );
+        let purchase_policy = workspaces.purchase_policy();
         let team_can_purchase = purchase_policy.is_some_and(|policy| policy.allows_purchases());
         let premium_bps = purchase_policy.map_or(0, |policy| policy.effective_premium_bps());
         let can_upgrade = workspace
@@ -1788,7 +1786,7 @@ impl BillingAndUsagePageV2View {
         let team = workspaces.team_for_view_handle(&self.self_handle, app);
         let show_addon_credits_panel = ws.is_some()
             || workspaces
-                .purchase_policy_for_team(team)
+                .purchase_policy()
                 .is_some_and(|policy| policy.allows_purchases());
         if show_addon_credits_panel {
             let is_payg_zero = ws.is_some_and(|ws| {

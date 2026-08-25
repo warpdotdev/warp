@@ -402,6 +402,7 @@ impl PassiveSuggestionsModel {
             .cloned();
         let shell = self.active_session.as_ref(ctx).shell_launch_data(ctx);
 
+        let scope = self.ai_controller.as_ref(ctx).team_context(ctx);
         let can_read_file = BlocklistAIPermissions::as_ref(ctx)
             .can_read_files(
                 None,
@@ -416,6 +417,7 @@ impl PassiveSuggestionsModel {
                     })
                     .collect(),
                 Some(self.terminal_view_id),
+                &scope,
                 ctx,
             )
             .is_allowed();

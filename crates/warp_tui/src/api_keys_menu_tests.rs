@@ -2,7 +2,7 @@ use ai::LLMProvider;
 use ai::api_keys::ApiKeyManager;
 use warp::editor::CodeEditorModel;
 use warp::settings::AISettings;
-use warp::tui_export::register_tui_session_view_test_singletons;
+use warp::tui_export::{UserWorkspaces, register_tui_session_view_test_singletons};
 use warp_editor::model::CoreEditorModel;
 use warpui::SingletonEntity as _;
 use warpui_core::{App, ModelHandle};
@@ -22,7 +22,14 @@ fn add_menu(
     app.update(|ctx| {
         let input = ctx.add_model(|ctx| CodeEditorModel::new_tui(80, ctx));
         let mode = ctx.add_model(|_| TuiInputSuggestionsModeModel::new());
-        let menu = ctx.add_model(|ctx| TuiApiKeysMenuModel::new(input.clone(), mode.clone(), ctx));
+        let menu = ctx.add_model(|ctx| {
+            TuiApiKeysMenuModel::new(
+                input.clone(),
+                mode.clone(),
+                UserWorkspaces::teamless_context_resolver_for_test(),
+                ctx,
+            )
+        });
         menu.update(ctx, |menu, ctx| menu.open(ctx));
         (input, mode, menu)
     })
@@ -162,7 +169,14 @@ fn open_and_connect_grok_matches_selecting_the_grok_row() {
         let reference = app.update(|ctx| {
             let input = ctx.add_model(|ctx| CodeEditorModel::new_tui(80, ctx));
             let mode = ctx.add_model(|_| TuiInputSuggestionsModeModel::new());
-            let menu = ctx.add_model(|ctx| TuiApiKeysMenuModel::new(input, mode, ctx));
+            let menu = ctx.add_model(|ctx| {
+                TuiApiKeysMenuModel::new(
+                    input,
+                    mode,
+                    UserWorkspaces::teamless_context_resolver_for_test(),
+                    ctx,
+                )
+            });
             menu.update(ctx, |menu, ctx| {
                 menu.open(ctx);
                 assert!(menu.select_at_snapshot_index(3, ctx));
@@ -175,7 +189,14 @@ fn open_and_connect_grok_matches_selecting_the_grok_row() {
         let shortcut = app.update(|ctx| {
             let input = ctx.add_model(|ctx| CodeEditorModel::new_tui(80, ctx));
             let mode = ctx.add_model(|_| TuiInputSuggestionsModeModel::new());
-            let menu = ctx.add_model(|ctx| TuiApiKeysMenuModel::new(input, mode, ctx));
+            let menu = ctx.add_model(|ctx| {
+                TuiApiKeysMenuModel::new(
+                    input,
+                    mode,
+                    UserWorkspaces::teamless_context_resolver_for_test(),
+                    ctx,
+                )
+            });
             menu.update(ctx, |menu, ctx| menu.open_and_connect_grok(ctx));
             menu
         });

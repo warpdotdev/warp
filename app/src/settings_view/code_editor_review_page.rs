@@ -1,6 +1,5 @@
 //! The "Editor and Code Review" settings page, shown under the Code umbrella.
 
-use warp_core::features::FeatureFlag;
 use warp_core::settings::{Setting as _, ToggleableSetting as _};
 use warp_errors::report_if_error;
 use warpui::elements::Element;
@@ -42,9 +41,7 @@ pub struct EditorAndCodeReviewPageView {
 impl EditorAndCodeReviewPageView {
     pub fn new(ctx: &mut ViewContext<Self>) -> Self {
         #[cfg(feature = "local_fs")]
-        let external_editor_view = FeatureFlag::OpenWarpNewSettingsModes
-            .is_enabled()
-            .then(|| ctx.add_typed_action_view(ExternalEditorView::new));
+        let external_editor_view = Some(ctx.add_typed_action_view(ExternalEditorView::new));
 
         let code_editor_line_number_mode_dropdown = ctx.add_typed_action_view(Dropdown::new);
         Self::update_code_editor_line_number_mode_dropdown(
@@ -264,8 +261,7 @@ impl SettingsPageMeta for EditorAndCodeReviewPageView {
     }
 
     fn should_render(&self, _ctx: &AppContext) -> bool {
-        FeatureFlag::FullSourceCodeEmbedding.is_enabled()
-            || FeatureFlag::OpenWarpNewSettingsModes.is_enabled()
+        true
     }
 
     fn scroll_to_widget(&mut self, widget_id: &'static str) {
@@ -288,10 +284,6 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
     context: &ContextPredicate,
     builder: fn(SettingsAction) -> T,
 ) {
-    if !FeatureFlag::OpenWarpNewSettingsModes.is_enabled() {
-        return;
-    }
-
     ToggleSettingActionPair::add_toggle_setting_action_pairs_as_bindings(
         vec![
             ToggleSettingActionPair::new(

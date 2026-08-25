@@ -56,6 +56,10 @@ pub enum PrepareEnvironmentError {
         first_owner: String,
         second_owner: String,
     },
+    #[error(
+        "Repository {repo_name} has a code forge this client build doesn't support; update Warp to a version that does"
+    )]
+    UnsupportedRepositoryForge { repo_name: String },
     #[error("Terminal driver error while preparing environment: {source}")]
     TerminalDriver { source: AgentDriverError },
 }
@@ -299,7 +303,7 @@ async fn prepare_environment_impl(
         setup_events
             .record_result(SetupStep::EnvironmentRepoClone, async {
                 clone_checkout_requests(
-                    &repository_clone_requests(source_repos, repository_head_overrides),
+                    &repository_clone_requests(source_repos, repository_head_overrides)?,
                     working_dir,
                     spawner,
                 )
@@ -465,14 +469,19 @@ fn record_codebase_indexing(
     });
 }
 
-fn repository_forge_for_repo(repo: &SourceRepo) -> RepositoryForge {
+// `None` covers both a repo-less container forge and one this client build
+// doesn't recognize. Unlike `None`, a future server can assign the latter to
+// a real repository before this client updates, so callers must treat it as
+// an ordinary "can't clone this" outcome rather than an invariant violation.
+fn repository_forge_for_repo(repo: &SourceRepo) -> Option<RepositoryForge> {
     match repo.code_forge.unwrap_or_default() {
-        CodeForge::GitHub => RepositoryForge::GitHub,
-        CodeForge::GitLab => RepositoryForge::GitLab,
+        CodeForge::GitHub => Some(RepositoryForge::GitHub),
+        CodeForge::GitLab => Some(RepositoryForge::GitLab),
+        CodeForge::None | CodeForge::Unknown => None,
     }
 }
 fn head_override_matches_repo(head_override: &RepositoryHeadOverride, repo: &SourceRepo) -> bool {
-    head_override.code_forge == repository_forge_for_repo(repo)
+    Some(head_override.code_forge) == repository_forge_for_repo(repo)
         && head_override.repo_owner == repo.owner
         && head_override.repo_name == repo.repo
 }
@@ -495,16 +504,25 @@ struct RepositoryCloneRequest {
 fn repository_clone_requests(
     repos: &[SourceRepo],
     overrides: &[RepositoryHeadOverride],
-) -> Vec<RepositoryCloneRequest> {
+) -> Result<Vec<RepositoryCloneRequest>, PrepareEnvironmentError> {
     repos
         .iter()
         .cloned()
         .map(|repo| {
+            // A repository this client can't identify a host for can never
+            // clone; fail clearly here rather than attempt one with an empty
+            // host, which would otherwise be the only signal something is
+            // wrong.
+            if repository_forge_for_repo(&repo).is_none() {
+                return Err(PrepareEnvironmentError::UnsupportedRepositoryForge {
+                    repo_name: format!("{}/{}", repo.owner, repo.repo),
+                });
+            }
             let checkout = match head_override_for_repo(overrides, &repo) {
                 Some(head_override) => Some(head_override.head.clone()),
                 None => repo.checkout_ref.clone().map(RepositoryHeadRef::Branch),
             };
-            RepositoryCloneRequest { repo, checkout }
+            Ok(RepositoryCloneRequest { repo, checkout })
         })
         .collect()
 }
@@ -661,7 +679,12 @@ pub(super) async fn clone_repos(
     working_dir: &Path,
     spawner: &ModelSpawner<TerminalDriver>,
 ) -> Result<(), PrepareEnvironmentError> {
-    clone_checkout_requests(&repository_clone_requests(repos, &[]), working_dir, spawner).await
+    clone_checkout_requests(
+        &repository_clone_requests(repos, &[])?,
+        working_dir,
+        spawner,
+    )
+    .await
 }
 
 async fn clone_checkout_requests(

@@ -76,6 +76,20 @@ pub(crate) const TAB_ACTIVATE_BINDING_NAMES: [&str; 8] = [
     "workspace:activate_seventh_tab",
     "workspace:activate_eighth_tab",
 ];
+pub(crate) const TAB_ACTIVATE_LAST_BINDING_NAME: &str = "workspace:activate_last_tab";
+
+pub(crate) fn tab_activate_binding_name(
+    tab_index: usize,
+    tab_count: usize,
+) -> Option<&'static str> {
+    if tab_index >= tab_count {
+        return None;
+    }
+    if let Some(binding_name) = TAB_ACTIVATE_BINDING_NAMES.get(tab_index).copied() {
+        return Some(binding_name);
+    }
+    (tab_index == tab_count - 1).then_some(TAB_ACTIVATE_LAST_BINDING_NAME)
+}
 
 /// Modifier kinds relevant to revealing tab shortcut hints. The Super kind is
 /// the Cmd key on macOS and the Windows/Super key elsewhere; a `Keystroke`'s
@@ -202,6 +216,8 @@ pub(crate) fn reveals_tab_shortcut_hints(ctx: &AppContext) -> bool {
     }
     let binding_kinds: HashSet<_> = TAB_ACTIVATE_BINDING_NAMES
         .iter()
+        .copied()
+        .chain(std::iter::once(TAB_ACTIVATE_LAST_BINDING_NAME))
         .filter_map(|name| keybinding_name_to_keystroke(name, ctx))
         .flat_map(|keystroke| keystroke_modifier_kinds(&keystroke))
         .collect();
@@ -1169,12 +1185,12 @@ impl<'a> TabComponent<'a> {
             .as_ref(ctx)
             .is_terminal_pane_being_shared(ctx);
         let should_show_indicators = *TabSettings::as_ref(ctx).show_indicators.value();
-        let shortcut_hint_label =
-            if reveals_tab_shortcut_hints(ctx) && tab_index < TAB_ACTIVATE_BINDING_NAMES.len() {
-                keybinding_name_to_display_string(TAB_ACTIVATE_BINDING_NAMES[tab_index], ctx)
-            } else {
-                None
-            };
+        let shortcut_hint_label = if reveals_tab_shortcut_hints(ctx) {
+            tab_activate_binding_name(tab_index, tab_bar.tab_count)
+                .and_then(|binding_name| keybinding_name_to_display_string(binding_name, ctx))
+        } else {
+            None
+        };
         let are_inputs_synced = SyncedInputState::as_ref(ctx)
             .should_sync_this_pane_group(tab.pane_group.id(), tab.pane_group.window_id(ctx));
 

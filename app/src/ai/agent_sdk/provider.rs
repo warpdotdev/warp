@@ -7,6 +7,7 @@ use warp_core::channel::ChannelState;
 use warpui::platform::TerminationMode;
 use warpui::{AppContext, ModelContext, SingletonEntity};
 
+use crate::ai::agent_sdk::common::describe_sole_team_error;
 use crate::ai::agent_sdk::output::{self, TableFormat};
 use crate::workspaces::user_workspaces::UserWorkspaces;
 
@@ -58,12 +59,9 @@ impl ProviderCommandRunner {
         // TODO(bens): initiate the OAuth flow and use the login-less auth URL
         let slug = provider_type.slug();
         let url = if use_team_auth {
-            let team_uid = match UserWorkspaces::as_ref(ctx).sole_team_uid() {
-                Some(uid) => uid,
-                None => {
-                    return Err(anyhow::anyhow!("User is not on a team"));
-                }
-            };
+            let team_uid = UserWorkspaces::as_ref(ctx)
+                .sole_team_uid()
+                .map_err(|err| describe_sole_team_error(err, ctx))?;
             format!("{server_url}/oauth/connect/{slug}?principalType=team&principalId={team_uid}")
         } else {
             format!("{server_url}/oauth/connect/{slug}")

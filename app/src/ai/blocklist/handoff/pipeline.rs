@@ -547,11 +547,13 @@ pub fn prepare_handoff(
     let model_id = preferences.cloud_runnable_oz_model_id_or_fallback(active_model_id);
     let model_is_cloud_runnable =
         preferences.is_cloud_runnable_oz_model_id(&LLMId::from(model_id.as_str()));
+    let scope = controller.as_ref(ctx).team_context(ctx);
+    let computer_use_enabled = resolve_cloud_agent_computer_use_state(&scope, ctx).enabled;
     let config = AgentConfigSnapshot {
         environment_id: environment_id.map(|id| id.to_string()),
         model_id: Some(model_id.clone()),
-        computer_use_enabled: Some(resolve_cloud_agent_computer_use_state(ctx).enabled),
-        worker_host: resolve_default_host_slug(ctx),
+        computer_use_enabled: Some(computer_use_enabled),
+        worker_host: resolve_default_host_slug(&scope, ctx),
         ..Default::default()
     };
     let snapshot_disabled = should_disable_snapshot(ctx);

@@ -535,7 +535,11 @@ impl ResponseStream {
                 .get_llm_info(&params.model)
                 .is_some_and(|info| info.provider == LLMProvider::Xai);
             if uses_grok_subscription {
-                let byo_allowed = UserWorkspaces::as_ref(ctx).is_byo_api_key_enabled(ctx);
+                // Both halves, because this branch writes a member credential into `api_keys`,
+                // which stays `Some(..)` for org-level credentials even when the team disallows
+                // member BYO. Gating here also skips refreshing a token that won't be sent.
+                let byo_allowed = params.member_byo_credentials_allowed
+                    && UserWorkspaces::as_ref(ctx).is_byo_api_key_enabled(ctx);
                 // Reserve + start the shared refresh on `ApiKeyManager`'s context;
                 // the in-flight guard is released there even if this stream is
                 // dropped mid-refresh. `None` means the token is already usable.
