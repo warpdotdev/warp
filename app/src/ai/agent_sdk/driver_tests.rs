@@ -2260,12 +2260,22 @@ fn ambient_driver_immediate_exit_blocks_buffered_child_event_from_restarting_maa
                 "no follow-up request should have started"
             );
         });
-        OrchestrationEventService::handle(&app).read(&app, |service, _| {
-            assert!(
-                !service.has_pending_events(conversation_id),
-                "the buffered event should have been dropped, not left queued"
-            );
-        });
+        // The flag that blocks injection (checked above via `is_conversation_exiting`) is set
+        // synchronously by `on_commit`, but the full model-side cleanup that drops queued
+        // events lives in `execute_run`'s forwarder, which only runs once the async round trip
+        // back from `run_exit`'s internal signal completes — so this is polled rather than
+        // checked immediately.
+        poll_until(
+            &app,
+            Duration::from_secs(2),
+            "the buffered event to be dropped by the forwarder's model-side cleanup",
+            |app| {
+                OrchestrationEventService::handle(app).read(app, |service, _| {
+                    !service.has_pending_events(conversation_id)
+                })
+            },
+        )
+        .await;
     });
 }
 
@@ -2339,6 +2349,56 @@ fn ambient_driver_with_idle_window_still_injects_buffered_child_event() {
     });
 }
 
+// Lets a test substitute the `IdleWait` used by the next `execute_run` call on this thread, so
+// a deferred idle window's deadline can be reached deterministically instead of via a real
+// `thread::sleep`. `execute_run` runs synchronously on the same thread as the test that calls
+// it, so this thread-local is read exactly once, synchronously, at construction time. Exposed
+// to `driver.rs` as `pub(super)`, since `execute_run` (defined there) is the sole reader.
+thread_local! {
+    static TEST_IDLE_WAIT: std::cell::RefCell<Option<Arc<dyn super::IdleWait>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+pub(super) fn test_idle_wait_override() -> Option<Arc<dyn super::IdleWait>> {
+    TEST_IDLE_WAIT.with(|cell| cell.borrow().clone())
+}
+
+pub(super) fn set_test_idle_wait_override(wait: Option<Arc<dyn super::IdleWait>>) {
+    TEST_IDLE_WAIT.with(|cell| *cell.borrow_mut() = wait);
+}
+
+// A second, independent gate consulted from inside `execute_run`'s `on_commit` closure,
+// immediately after it commits exiting state and before returning (i.e. strictly before
+// `end_run_now`/`end_run_after` send the completion value). Lets a test pause deterministically
+// in the window where the commit has already happened but the completion signal — and
+// everything downstream of it, including the async forwarder that runs model-side cleanup — has
+// provably not yet been observed by anything.
+thread_local! {
+    static TEST_POST_COMMIT_GATE: std::cell::RefCell<Option<Arc<dyn super::IdleWait>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+// Read synchronously at `execute_run` construction time (main thread) and captured by value
+// into the `on_commit` closure, rather than re-read via this thread-local at commit time: a
+// deferred window's commit runs on a background `thread::spawn`, which does not see a
+// same-named thread-local set by the test on the main thread.
+pub(super) fn test_post_commit_gate() -> Option<Arc<dyn super::IdleWait>> {
+    TEST_POST_COMMIT_GATE.with(|cell| cell.borrow().clone())
+}
+
+pub(super) fn set_test_post_commit_gate(gate: Option<Arc<dyn super::IdleWait>>) {
+    TEST_POST_COMMIT_GATE.with(|cell| *cell.borrow_mut() = gate);
+}
+
+impl<T: Send + 'static> super::IdleTimeoutSender<T> {
+    /// Overrides the wait mechanism `end_run_after` uses, so a test can control exactly when a
+    /// deferred deadline is considered reached instead of depending on a real `thread::sleep`.
+    pub(super) fn with_wait(mut self, wait: Arc<dyn super::IdleWait>) -> Self {
+        self.wait = wait;
+        self
+    }
+}
+
 /// Test-only [`super::IdleWait`] that blocks until the test releases it, so a deferred idle
 /// window's deadline can be reached at a moment of the test's choosing instead of depending on
 /// a real, wall-clock-dependent `thread::sleep`. Needed both to make the elapsed-window test
@@ -2395,12 +2455,12 @@ fn ambient_driver_elapsed_idle_window_blocks_buffered_child_event_from_restartin
 
         let (elapse_wait, elapse_release_tx) = manual_idle_wait();
         let (post_commit_wait, post_commit_release_tx) = manual_idle_wait();
-        super::set_test_idle_wait_override(Some(elapse_wait));
-        super::set_test_post_commit_gate(Some(post_commit_wait));
+        set_test_idle_wait_override(Some(elapse_wait));
+        set_test_post_commit_gate(Some(post_commit_wait));
         let _driver =
             driver_wired_for_terminal(&mut app, terminal_view, Some(Duration::from_secs(300)));
-        super::set_test_idle_wait_override(None);
-        super::set_test_post_commit_gate(None);
+        set_test_idle_wait_override(None);
+        set_test_post_commit_gate(None);
 
         let (conversation_id, stream) =
             conversation_with_in_progress_mock_stream(&mut app, terminal_id, &ai_controller);
@@ -2585,16 +2645,16 @@ fn ambient_driver_resumed_conversation_elapsed_idle_window_commits_exiting() {
         // mark exiting on its own and mask a broken (never-populated) thread-safe seed.
         let (elapse_wait, elapse_release_tx) = manual_idle_wait();
         let (post_commit_wait, post_commit_release_tx) = manual_idle_wait();
-        super::set_test_idle_wait_override(Some(elapse_wait));
-        super::set_test_post_commit_gate(Some(post_commit_wait));
+        set_test_idle_wait_override(Some(elapse_wait));
+        set_test_post_commit_gate(Some(post_commit_wait));
         let _driver = driver_wired_for_resumed_conversation(
             &mut app,
             terminal_view,
             Some(Duration::from_secs(300)),
             conversation_id,
         );
-        super::set_test_idle_wait_override(None);
-        super::set_test_post_commit_gate(None);
+        set_test_idle_wait_override(None);
+        set_test_post_commit_gate(None);
 
         complete_mock_stream_successfully(&mut app, &stream);
         stream.update(&mut app, |stream, ctx| {

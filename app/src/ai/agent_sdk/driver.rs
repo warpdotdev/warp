@@ -270,51 +270,11 @@ impl IdleWait for RealIdleWait {
     }
 }
 
-// Lets a test substitute the `IdleWait` used by the next `execute_run` call on this thread,
-// so a deferred idle window's deadline can be reached deterministically instead of via a real
-// `thread::sleep`. `execute_run` runs synchronously on the same thread as the test that calls
-// it, so this thread-local is read exactly once, synchronously, at construction time.
-#[cfg(test)]
-thread_local! {
-    static TEST_IDLE_WAIT: std::cell::RefCell<Option<Arc<dyn IdleWait>>> =
-        const { std::cell::RefCell::new(None) };
-}
-
-#[cfg(test)]
-fn test_idle_wait_override() -> Option<Arc<dyn IdleWait>> {
-    TEST_IDLE_WAIT.with(|cell| cell.borrow().clone())
-}
-
-#[cfg(test)]
-fn set_test_idle_wait_override(wait: Option<Arc<dyn IdleWait>>) {
-    TEST_IDLE_WAIT.with(|cell| *cell.borrow_mut() = wait);
-}
-
-// A second, independent gate consulted from inside `execute_run`'s `on_commit` closure,
-// immediately after it commits exiting state and before returning (i.e. strictly before
-// `end_run_now`/`end_run_after` send the completion value). Lets a test pause deterministically
-// in the window where the commit has already happened but the completion signal — and
-// everything downstream of it, including the async forwarder that runs model-side cleanup —
-// has provably not yet been observed by anything.
-#[cfg(test)]
-thread_local! {
-    static TEST_POST_COMMIT_GATE: std::cell::RefCell<Option<Arc<dyn IdleWait>>> =
-        const { std::cell::RefCell::new(None) };
-}
-
-// Read synchronously at `execute_run` construction time (main thread) and captured by value
-// into the `on_commit` closure, rather than re-read via this thread-local at commit time: a
-// deferred window's commit runs on a background `thread::spawn`, which does not see a
-// same-named thread-local set by the test on the main thread.
-#[cfg(test)]
-fn test_post_commit_gate() -> Option<Arc<dyn IdleWait>> {
-    TEST_POST_COMMIT_GATE.with(|cell| cell.borrow().clone())
-}
-
-#[cfg(test)]
-fn set_test_post_commit_gate(gate: Option<Arc<dyn IdleWait>>) {
-    TEST_POST_COMMIT_GATE.with(|cell| *cell.borrow_mut() = gate);
-}
+// The test-only overrides for this seam (`test_idle_wait_override`/`set_test_idle_wait_override`)
+// and for the post-commit gate below (`test_post_commit_gate`/`set_test_post_commit_gate`) live
+// in `driver_tests.rs` (see `tests::test_idle_wait_override` and `tests::test_post_commit_gate`),
+// since they are only ever read here, synchronously, at `execute_run` construction time on the
+// calling thread — the same thread a test runs on — and have no other production use.
 
 /// IdleTimeoutSender is wrapper around a sender that signals when a run is done after
 /// an idle timeout. Used for both Oz runs and third-party harnesses.
@@ -377,13 +337,8 @@ impl<T: Send + 'static> IdleTimeoutSender<T> {
         self
     }
 
-    /// Overrides the wait mechanism `end_run_after` uses, so a test can control exactly when a
-    /// deferred deadline is considered reached instead of depending on a real `thread::sleep`.
-    #[cfg(test)]
-    fn with_wait(mut self, wait: Arc<dyn IdleWait>) -> Self {
-        self.wait = wait;
-        self
-    }
+    // `with_wait` (overrides the wait mechanism for tests) lives in `driver_tests.rs`, in a
+    // separate `impl` block for this same type — it has no production use.
 
     /// End the run by sending `value` immediately.
     fn end_run_now(&self, value: T) {
@@ -4078,7 +4033,7 @@ impl AgentDriver {
             Arc::new(Mutex::new(self.run_conversation_id));
         let exit_commit_handle = OrchestrationEventService::as_ref(ctx).exit_commit_handle();
         #[cfg(test)]
-        let post_commit_gate = test_post_commit_gate();
+        let post_commit_gate = tests::test_post_commit_gate();
         #[cfg_attr(not(test), allow(unused_mut))]
         let mut run_exit = IdleTimeoutSender::new(internal_tx).with_on_commit({
             let committed_conversation_id = Arc::clone(&committed_conversation_id);
@@ -4100,7 +4055,7 @@ impl AgentDriver {
         });
         #[cfg(test)]
         {
-            if let Some(wait) = test_idle_wait_override() {
+            if let Some(wait) = tests::test_idle_wait_override() {
                 run_exit = run_exit.with_wait(wait);
             }
         }
@@ -4368,20 +4323,16 @@ impl AgentDriver {
                             {
                                 me.arm_debug_window(run_exit.clone(), output_status, window, ctx);
                             }
-                            // No idle window follows, so nothing (e.g. a follow-up query
-                            // cancelling the idle timeout below) can pull the run back to
-                            // `InProgress` before it exits. Block any orchestration events
-                            // still buffered for this conversation from starting a new
-                            // request here: it would only race the teardown that begins
-                            // right after this handler returns and get cancelled, leaving
-                            // the run stuck `InProgress` (QUALITY-1801).
-                            None => {
-                                OrchestrationEventService::handle(ctx).update(ctx, |service, _| {
-                                    service.mark_conversation_exiting(*conversation_id);
-                                });
-                                run_exit.complete_with_optional_idle(None, output_status);
-                            }
-                            Some(_) => {
+                            // Whether the run exits immediately (no idle window) or a deferred
+                            // window later elapses on its own, `run_exit`'s `on_commit` hook
+                            // (see `execute_run`) commits the conversation exiting
+                            // synchronously, on whichever thread completes the run, strictly
+                            // before the completion signal is observable. That covers both
+                            // cases uniformly, closing off any orchestration event still
+                            // buffered for this conversation before it could otherwise race the
+                            // teardown that follows and get cancelled, leaving the run stuck
+                            // `InProgress` (QUALITY-1801).
+                            None | Some(_) => {
                                 run_exit.complete_with_optional_idle(idle_window, output_status);
                             }
                         }
@@ -4513,14 +4464,14 @@ impl AgentDriver {
             });
         }
 
-        // Wrap `internal_rx` instead of returning it directly so every exit path — an
-        // immediate completion above and an `--idle-on-complete`/`--idle-on-fail` window that
-        // later elapses on a background timer with no further hook into the model layer — marks
-        // the conversation exiting before the caller can observe the result. The immediate branch
-        // above already marks it synchronously with the `UpdatedConversationStatus` dispatch, so
-        // this is redundant there; for a window that elapses on its own, this is the only signal
-        // the model layer gets, and it must land before any buffered orchestration event still
-        // pending for this conversation can flip it back to `InProgress` (QUALITY-1801).
+        // Wrap `internal_rx` instead of returning it directly: this is where the model-side
+        // cleanup for an exiting conversation happens — dropping any orchestration events still
+        // queued for it (see `mark_conversation_exiting`) — for every exit path, immediate or
+        // deferred. `run_exit`'s `on_commit` hook already commits the exiting flag itself,
+        // synchronously, before this ever runs (QUALITY-1801); this forwarder's own
+        // `mark_conversation_exiting` call is a second, idempotent write of that same flag, but
+        // it is the only place the pending-event drop happens, so it stays load-bearing on its
+        // own for that part.
         let (external_tx, external_rx) = oneshot::channel();
         ctx.spawn(internal_rx, move |me, result, ctx| {
             if let Some(conversation_id) = me.run_conversation_id {
