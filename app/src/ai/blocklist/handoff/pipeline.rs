@@ -46,7 +46,7 @@ use crate::ai::blocklist::{
 };
 use crate::ai::cloud_environments::CloudAmbientAgentEnvironment;
 use crate::ai::execution_profiles::resolve_cloud_agent_computer_use_state;
-use crate::ai::llms::{LLMId, LLMPreferences, ResolvedTeamScope};
+use crate::ai::llms::{LLMId, LLMPreferences};
 use crate::ai::orchestration::{
     CloudAgentStartupBlocker, CloudAgentStartupFailure, CloudAgentStartupIssue,
     classify_cloud_agent_startup_error, oz_run_url, resolve_default_environment_id,
@@ -58,6 +58,7 @@ use crate::server::server_api::ai::{
     AIClient, AgentConfigSnapshot, AttachmentInput, InitialSnapshotToken, SpawnAgentRequest,
 };
 use crate::settings::AISettings;
+use crate::workspaces::user_workspaces::ResolvedTeamScope;
 
 const HANDOFF_CONTINUE_PROMPT: &str = "Continue";
 const HANDOFF_APPLY_SNAPSHOT_PROMPT: &str = "Apply the workspace changes from my previous session.";

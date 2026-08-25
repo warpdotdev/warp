@@ -279,7 +279,7 @@ mod team_settings_conversion {
             AdminEnablementSetting::Enable
         );
 
-        // AI permissions preserve the enforcement bit and the list split entries.
+        // AI permissions preserve the enforcement bit and compile the merged patterns.
         assert!(settings.ai_permissions.allow_ai_in_remote_sessions.value);
         assert!(
             settings
@@ -288,22 +288,15 @@ mod team_settings_conversion {
                 .is_enforced_by_workspace
         );
         assert_eq!(
-            settings.ai_permissions.remote_session_regex_list.values,
-            vec!["foo.*".to_string()]
-        );
-        assert_eq!(
             settings
                 .ai_permissions
                 .remote_session_regex_list
-                .workspace_entries,
-            vec!["ws.*".to_string()]
-        );
-        assert_eq!(
-            settings
-                .ai_permissions
-                .remote_session_regex_list
-                .team_entries,
-            vec!["team.*".to_string()]
+                .iter()
+                .map(|regex| regex.as_str())
+                .collect::<Vec<_>>(),
+            vec!["foo.*"],
+            "only the merged `values` compile into the effective list; the workspace/team \
+             split entries have no Rust-client reader to preserve them for"
         );
 
         // Secret redaction keeps the merged values and the workspace split entries.
@@ -372,6 +365,26 @@ mod team_settings_conversion {
         assert_eq!(
             settings.sandboxed_agent.execute_commands_denylist.values,
             vec!["danger".to_string()]
+        );
+    }
+
+    #[test]
+    fn drops_an_uncompilable_remote_session_pattern_without_failing_the_rest() {
+        // Compilation now happens at convert time (mirroring the workspace-level path), so an
+        // org's one bad pattern must not take down the rest of its list.
+        let mut gql = sample_gql_team_settings();
+        gql.ai_permissions.remote_session_regex_list = str_list(&["foo.*", "("], &[], &[]);
+
+        let settings = team_settings_from_gql(gql);
+
+        assert_eq!(
+            settings
+                .ai_permissions
+                .remote_session_regex_list
+                .iter()
+                .map(|regex| regex.as_str())
+                .collect::<Vec<_>>(),
+            vec!["foo.*"]
         );
     }
 

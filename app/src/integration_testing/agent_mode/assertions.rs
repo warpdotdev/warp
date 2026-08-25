@@ -16,9 +16,9 @@ use crate::ai::agent::{
     AIAgentOutputMessageType, AIAgentOutputStatus, AIAgentTextSection, FileEdit,
     FinishedAIAgentOutput, ReadFilesRequest, TodoOperation,
 };
-use crate::ai::llms::{LLMId, LLMPreferences, ResolvedTeamScope};
+use crate::ai::llms::{LLMId, LLMPreferences};
 use crate::integration_testing::view_getters::terminal_view;
-use crate::workspaces::user_workspaces::UserWorkspaces;
+use crate::workspaces::user_workspaces::{ResolvedTeamScope, UserWorkspaces};
 
 type TextAssertion = Box<dyn Fn(&str) -> bool + 'static>;
 type ActionAssertion = Box<dyn Fn(&AIAgentActionType) -> bool + 'static>;

@@ -11,12 +11,13 @@ use warpui::{AppContext, ModelHandle, SingletonEntity, WeakViewHandle};
 
 use crate::ai::blocklist::agent_view::{AgentViewController, AgentViewEntryOrigin};
 use crate::ai::blocklist::{BlocklistAIContextModel, BlocklistAIHistoryModel, InputConfig};
-use crate::ai::llms::{LLMId, LLMPreferences, ResolvedTeamScope};
+use crate::ai::llms::{LLMId, LLMPreferences};
 use crate::terminal::cli_agent_sessions::{
     CLIAgentInputEntrypoint, CLIAgentInputState, CLIAgentRichInputCloseReason, CLIAgentSession,
     CLIAgentSessionContext, CLIAgentSessionStatus, CLIAgentSessionsModel,
 };
 use crate::terminal::{CLIAgent, TerminalView};
+use crate::workspaces::user_workspaces::ResolvedTeamScope;
 
 /// Handles updating the local LLM preferences when a selected agent model update is received.
 /// This function is shared between the viewer and sharer to ensure consistent behavior.

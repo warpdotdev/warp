@@ -681,7 +681,8 @@ fn test_tools_panel_does_not_suppress_vertical_tab_bar_traffic_light_padding() {
 fn copy_model_and_profile_preserves_explicit_model_over_source_profile_default() {
     use warpui::EntityId;
 
-    use crate::ai::llms::{AvailableLLMs, LLMId, LLMInfo, ModelsByFeature, TeamlessScopeForTest};
+    use crate::ai::llms::{AvailableLLMs, LLMId, LLMInfo, ModelsByFeature};
+    use crate::workspaces::user_workspaces::TeamlessScopeForTest;
 
     App::test((), |mut app| async move {
         initialize_app(&mut app);

@@ -33,7 +33,7 @@ use crate::ai::blocklist::{
     BlocklistAIContextEvent, BlocklistAIContextModel, BlocklistAIControllerEvent,
     BlocklistAIHistoryEvent, BlocklistAIHistoryModel, InputConfig, SerializedBlockListItem,
 };
-use crate::ai::llms::{LLMPreferences, LLMPreferencesEvent, ResolvedTeamScope};
+use crate::ai::llms::{LLMPreferences, LLMPreferencesEvent};
 use crate::context_chips::current_prompt::CurrentPrompt;
 use crate::context_chips::prompt_snapshot::PromptSnapshot;
 use crate::context_chips::prompt_type::PromptType;
@@ -72,7 +72,7 @@ use crate::terminal::{TerminalManager as TerminalManagerTrait, TerminalModel, Te
 use crate::view_components::ToastFlavor;
 #[cfg(not(any(test, feature = "integration_tests")))]
 use crate::workspaces::user_workspaces::TeamScope;
-use crate::workspaces::user_workspaces::UserWorkspaces;
+use crate::workspaces::user_workspaces::{ResolvedTeamScope, UserWorkspaces};
 
 const ACL_UPDATE_FAILURE_RESPONSE: &str = "Something went wrong. Please try again.";
 

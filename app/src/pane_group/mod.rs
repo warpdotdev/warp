@@ -1752,7 +1752,7 @@ impl PaneGroup {
                     && let Ok(llm_id) = serde_json::from_str::<LLMId>(llm_override)
                 {
                     log::info!("Selecting base agent model {llm_id} (from terminal snapshot)");
-                    let scope = crate::ai::llms::ResolvedTeamScope::from_scope(
+                    let scope = crate::workspaces::user_workspaces::ResolvedTeamScope::from_scope(
                         &crate::workspaces::user_workspaces::UserWorkspaces::as_ref(ctx)
                             .team_context_for_view(ctx),
                     );

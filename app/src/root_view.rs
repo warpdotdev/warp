@@ -40,7 +40,7 @@ use warpui::{
 use crate::ai::AIRequestUsageModel;
 use crate::ai::agent::api::ServerConversationToken;
 use crate::ai::blocklist::SerializedBlockListItem;
-use crate::ai::llms::{LLMPreferences, LLMPreferencesEvent, ResolvedTeamScope};
+use crate::ai::llms::{LLMPreferences, LLMPreferencesEvent};
 use crate::ai::onboarding::{
     build_onboarding_models, current_onboarding_auth_state, onboarding_pricing_promotion_message,
 };
@@ -107,7 +107,7 @@ use crate::workspace::view::OnboardingTutorial;
 use crate::workspace::{PaneViewLocator, Workspace, WorkspaceAction, WorkspaceRegistry};
 use crate::workspaces::team_tester::TeamTesterStatus;
 use crate::workspaces::update_manager::TeamUpdateManager;
-use crate::workspaces::user_workspaces::{UserWorkspaces, UserWorkspacesEvent};
+use crate::workspaces::user_workspaces::{ResolvedTeamScope, UserWorkspaces, UserWorkspacesEvent};
 use crate::workspaces::workspace::FtueAccountClass;
 use crate::{
     ChannelState, GlobalResourceHandles, GlobalResourceHandlesProvider, UpdateQuakeModeEventArg,
@@ -626,9 +626,7 @@ fn requires_post_onboarding_login(
     warp_drive_enabled: bool,
 ) -> bool {
     !is_logged_in
-        && (FeatureFlag::AccountFirstOnboarding.is_enabled()
-            || ((ai_enabled || warp_drive_enabled)
-                && FeatureFlag::OpenWarpNewSettingsModes.is_enabled()))
+        && (FeatureFlag::AccountFirstOnboarding.is_enabled() || ai_enabled || warp_drive_enabled)
 }
 /// Replaces the settings and tutorial snapshots consumed when post-auth
 /// onboarding eventually completes.
@@ -1899,16 +1897,9 @@ impl RootView {
                 if #[cfg(target_family = "wasm")] {
                     AuthOnboardingState::WebImport(AuthOnboardingTarget::Workspace(workspace_args.into()))
                 } else {
-                    // Account-first onboarding and the current settings-modes flow both run before
-                    // login for users who have not completed onboarding locally.
-                    let pre_login_onboarding_enabled =
-                        FeatureFlag::AccountFirstOnboarding.is_enabled()
-                            || FeatureFlag::OpenWarpNewSettingsModes.is_enabled();
-                    let has_completed_local_onboarding = pre_login_onboarding_enabled
-                        && has_completed_local_onboarding(ctx);
-                    let should_show_pre_login_onboarding = pre_login_onboarding_enabled
-                        && FeatureFlag::AgentOnboarding.is_enabled()
-                        && !has_completed_local_onboarding;
+                    // Onboarding runs before login for users who have not completed it locally.
+                    let should_show_pre_login_onboarding = FeatureFlag::AgentOnboarding.is_enabled()
+                        && !has_completed_local_onboarding(ctx);
                     if FeatureFlag::ForceLogin.is_enabled() {
                         // ForceLogin is true for Preview
                         AuthOnboardingState::Auth(workspace_args.into())
@@ -2176,7 +2167,6 @@ impl RootView {
                 models,
                 default_model_id,
                 enforces_autonomy,
-                FeatureFlag::AgentView.is_enabled(),
                 auth_state,
                 ctx,
             );
@@ -3891,9 +3881,7 @@ impl RootView {
             return;
         };
 
-        if FeatureFlag::OpenWarpNewSettingsModes.is_enabled()
-            && FeatureFlag::TabConfigs.is_enabled()
-        {
+        if FeatureFlag::TabConfigs.is_enabled() {
             let intention = tutorial.intention();
             if matches!(intention, OnboardingIntention::AgentDrivenDevelopment) {
                 workspace.update(ctx, |view, ctx| {

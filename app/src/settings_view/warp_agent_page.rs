@@ -73,9 +73,7 @@ use crate::ai::blocklist::agent_view::agent_input_footer::editor::{
 use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
 #[cfg(not(target_family = "wasm"))]
 use crate::ai::geap_credentials::force_refresh_geap_credentials;
-use crate::ai::llms::{
-    LLMId, LLMPreferences, LLMProvider, ResolvedTeamScope, is_using_api_key_for_provider,
-};
+use crate::ai::llms::{LLMId, LLMPreferences, LLMProvider, is_using_api_key_for_provider};
 use crate::appearance::{Appearance, AppearanceEvent};
 use crate::auth::AuthStateProvider;
 use crate::editor::{
@@ -105,7 +103,7 @@ use crate::view_components::action_button::{
     ActionButton, ButtonSize, DangerSecondaryTheme, SecondaryTheme,
 };
 use crate::view_components::{Dropdown, DropdownItem, FilterableDropdown};
-use crate::workspaces::user_workspaces::{TeamContext, UserWorkspacesEvent};
+use crate::workspaces::user_workspaces::{ResolvedTeamScope, TeamContext, UserWorkspacesEvent};
 use crate::workspaces::workspace::{AdminEnablementSetting, CustomerType};
 use crate::{TelemetryEvent, UserWorkspaces, send_telemetry_from_ctx};
 
@@ -4150,10 +4148,6 @@ impl SettingsWidget for ConversationLayoutPreferenceWidget {
 
     fn search_terms(&self) -> &str {
         "other preferred layout opening existing agent conversations new tab split pane"
-    }
-
-    fn should_render(&self, _app: &AppContext) -> bool {
-        FeatureFlag::OpenWarpNewSettingsModes.is_enabled()
     }
 
     fn render(

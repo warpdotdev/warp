@@ -1093,7 +1093,8 @@ impl<T> SplitListSetting<T> {
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct TeamAiPermissionsSettings {
     pub allow_ai_in_remote_sessions: EnforceableSetting<bool>,
-    pub remote_session_regex_list: SplitListSetting<String>,
+    #[serde(with = "serde_regex")]
+    pub remote_session_regex_list: Vec<Regex>,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]

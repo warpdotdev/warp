@@ -14,9 +14,10 @@
 
 use std::rc::Rc;
 
+use regex::Regex;
 use warpui::{AppContext, Entity, SingletonEntity, ViewContext, WeakViewHandle, WindowId};
 
-use super::{SoleTeamError, UserWorkspaces};
+use super::UserWorkspaces;
 use crate::ai::llms::{LLMId, LLMProvider};
 use crate::server::ids::ServerId;
 use crate::settings::AgentModeCommandExecutionPredicate;
@@ -26,65 +27,34 @@ use crate::workspaces::workspace::{
     AdminEnablementSetting, AiAutonomySettings, TeamByoSettings, Workspace,
 };
 
-/// The team an operation is scoped to, captured once from the window that started it.
+mod sealed {
+    pub trait Sealed {}
+}
+
+/// Reads a [`TeamContextForOperation`] or [`TeamContext`]'s team.
 ///
-/// A logical operation carries its `TeamContextForOperation` from start to finish instead of
-/// asking a window which team is selected now, so concurrent windows on different teams stay
-/// independent and a later team switch cannot retarget work already in flight.
+/// Either of [`TeamContextForOperation`] or [`TeamContext`] is the "key" external
+/// modules use to obtain a team-level setting. The only external modules can obtain
+/// this "key" is by exchanging a ViewContext or a ViewHandle for one. Once minted,
+/// both [`TeamContextForOperation`] or [`TeamContext`] cannot be copied, cloned, or
+/// moved. This ensures that the external operations which need TeamScopes (i.e. to
+/// exchange for a team setting) is scoped to the view (and therefore team-scoped
+/// window) that started the operation. External callers shouldn't copy a TeamContext
+/// to a Singleton model for example, risking leaking that TeamContext / team info to
+/// a different window with another team.
 ///
-/// Deliberately neither `Clone` nor `Copy`. Moves make the handoff between the parts of an
-/// operation explicit and reviewable, whereas copies let a scope leak sideways into work
-/// that never established it. Wanting to duplicate one is a sign the second consumer is
-/// really a separate operation that should capture its own scope; if the parts genuinely
-/// share a lifetime, restructure so they share the single owner instead.
-///
-/// This is scope, not authority: the server still authorizes every request made under it.
-///
-/// Prefer [`TeamContext`] when reasonable: convert a `ViewContext` to a `WeakViewHandle`,
-/// carry the handle through moved futures and callbacks, and mint the render context only at
-/// the point of use, so a policy read reflects the window's team at that moment. Reach for
-/// this type instead when the work's *destination* must not move once chosen -- e.g. creating
-/// a Drive object in the team the user was in when they clicked New -- and be ready to justify
-/// that choice; pinning is deliberate, not the default.
-///
-/// Only [`UserWorkspaces::team_context_for_operation`] mints one, always from a real window;
-/// there is no way to fabricate one without a window (there is deliberately no `teamless()`
-/// constructor). Its `team_uid` can still be `None` -- that means the minting window itself
-/// has no team selected, and a getter that accepts this scope should act as if the operation
-/// is not on a team. It must not read some other team's settings as a substitute: see
-/// [`TeamScope`]'s contract. Code with no window at all (e.g. background GEAP token refresh)
-/// is not this type's job -- it needs its own accessor that reads across every one of the
-/// user's teams explicitly, in the shape of `UserWorkspaces::teams_allow_codebase_context`.
+/// Sealed: only this module implements [`sealed::Sealed`], so a scope can never be minted
+/// outside [`UserWorkspaces`].
+#[allow(private_bounds)]
+pub trait TeamScope: sealed::Sealed {
+    fn team_uid(&self) -> Option<ServerId>;
+}
+
 pub(crate) struct TeamContextForOperation {
     team_uid: Option<ServerId>,
 }
 
-/// Reads a [`TeamContextForOperation`] or [`TeamContext`]'s team, regardless of which one a
-/// caller was handed. Implemented only by those two types — see their docs for what each one
-/// promises about when it was resolved and what it can be used for.
-///
-/// The contract every settings getter built on this trait must follow: take a scope directly
-/// (`&impl TeamScope` or `&dyn TeamScope`), never an optional one (`Option<&dyn TeamScope>`).
-/// A caller with no scope to give has to confront that rather than pass `None` and inherit
-/// some fallback. `team_uid() == None` means the scope's own window/operation has no team, so
-/// the getter must not substitute some *other* team's settings.
-///
-/// `current_workspace().settings` is not such a substitute. It is a backwards-compatibility
-/// shape, from when a workspace held exactly one team, a user was in at most one workspace, and
-/// being in the workspace meant being in that team -- "the workspace's settings" was then
-/// unambiguously "your team's settings", and old clients read nothing else.
-///
-/// The server still has to populate it, so `GetEffectiveWorkspaceSettingsForWorkspace` elects a
-/// team to stand in: the first of the viewer's own teams in that workspace, or the workspace
-/// layer over default team settings when they are on none. So a user on one team reads that
-/// team, and a user on several reads an arbitrary one of theirs.
-///
-/// Code with no window at all must not construct a scope to route around this; it should read
-/// across every team explicitly, the way `UserWorkspaces::teams_allow_codebase_context` does.
-#[allow(dead_code)]
-pub trait TeamScope {
-    fn team_uid(&self) -> Option<ServerId>;
-}
+impl sealed::Sealed for TeamContextForOperation {}
 
 impl TeamScope for TeamContextForOperation {
     fn team_uid(&self) -> Option<ServerId> {
@@ -105,9 +75,10 @@ impl TeamContextForOperation {
 ///
 /// It is resolved at the point of use so policy reads follow the view between windows.
 pub struct TeamContext<'a> {
-    #[allow(dead_code)]
     team_uid: Option<&'a ServerId>,
 }
+
+impl sealed::Sealed for TeamContext<'_> {}
 
 impl TeamScope for TeamContext<'_> {
     fn team_uid(&self) -> Option<ServerId> {
@@ -115,31 +86,73 @@ impl TeamScope for TeamContext<'_> {
     }
 }
 
-/// Resolves a [`TeamContext`] on demand from a view captured up front. See
-/// [`UserWorkspaces::team_context_resolver`] for when this is the right tool.
-pub type TeamContextResolver = Rc<dyn for<'a> Fn(&'a AppContext) -> TeamContext<'a>>;
-
 /// The team a headless CLI invocation acts as, named on the command line instead of resolved
 /// from a window.
-///
-/// Deliberately cannot be teamless. The other two scopes can be, because a window genuinely may
-/// have no team selected; a CLI caller that cannot name one has instead failed to say what it
-/// meant, and is told to pass `--team=<UID>`. Minted only by
-/// [`UserWorkspaces::team_scope_for_cli`], which checks membership first.
+#[cfg(not(target_family = "wasm"))]
 pub struct TeamScopeForCli(ServerId);
 
+#[cfg(not(target_family = "wasm"))]
+impl sealed::Sealed for TeamScopeForCli {}
+
+#[cfg(not(target_family = "wasm"))]
 impl TeamScope for TeamScopeForCli {
     fn team_uid(&self) -> Option<ServerId> {
         Some(self.0)
     }
 }
 
+/// A team scope already resolved from a real [`TeamScope`], carried as a plain value instead
+/// of a live borrow. [`TeamContext<'_>`] borrows the singleton that resolved it, which can't
+/// coexist with a later mutable borrow of that same context in the same scope (e.g. resolving
+/// a scope from `ctx` and then passing `ctx` mutably to `self.update(...)`); this detaches the
+/// answer from that borrow so both can happen in sequence. Never construct one from a raw id
+/// supplied by anything other than an already-resolved [`TeamScope`].
+pub struct ResolvedTeamScope(Option<ServerId>);
+
+impl ResolvedTeamScope {
+    pub fn from_scope(scope: &(impl TeamScope + ?Sized)) -> Self {
+        Self(scope.team_uid())
+    }
+
+    /// A resolved-teamless scope, for callers with no window to resolve a live [`TeamScope`]
+    /// from (e.g. the `agent_mode_evals` eager fetch, which always runs teamless).
+    #[cfg(feature = "agent_mode_evals")]
+    pub fn teamless() -> Self {
+        Self(None)
+    }
+}
+
+impl sealed::Sealed for ResolvedTeamScope {}
+
+impl TeamScope for ResolvedTeamScope {
+    fn team_uid(&self) -> Option<ServerId> {
+        self.0
+    }
+}
+
+/// A teamless [`TeamScope`] for tests that pass a scope without standing up a window.
+#[cfg(test)]
+pub(crate) struct TeamlessScopeForTest;
+
+#[cfg(test)]
+impl sealed::Sealed for TeamlessScopeForTest {}
+
+#[cfg(test)]
+impl TeamScope for TeamlessScopeForTest {
+    fn team_uid(&self) -> Option<ServerId> {
+        None
+    }
+}
+
+/// Resolves a [`TeamContext`] on demand from a view captured up front. See
+/// [`UserWorkspaces::team_context_resolver`].
+pub type TeamContextResolver = Rc<dyn for<'a> Fn(&'a AppContext) -> TeamContext<'a>>;
+
+#[cfg(not(target_family = "wasm"))]
 #[derive(Debug, thiserror::Error)]
-pub enum CliTeamError {
-    #[error(transparent)]
-    NoSoleTeam(#[from] SoleTeamError),
-    #[error("you are not on team {team_uid}")]
-    NotAMember { team_uid: ServerId },
+#[error("you are not on team {team_uid}")]
+pub struct NotATeamMemberError {
+    pub team_uid: ServerId,
 }
 
 impl UserWorkspaces {
@@ -156,58 +169,6 @@ impl UserWorkspaces {
         }
     }
 
-    /// Captures `view` as a reusable source of [`TeamContext`], for consumers that cannot name
-    /// a view at the boundaries where they need one.
-    ///
-    /// Reach for this only when that is genuinely the case -- a model or executor several
-    /// layers below the view that owns it, such as `BlocklistAIActionModel` and the action
-    /// executors it builds, whose methods receive an [`AppContext`] and no handle. Threading a
-    /// `WeakViewHandle` of the owning view's type through those layers would make each of them
-    /// generic over a view they otherwise know nothing about.
-    ///
-    /// A view resolving *itself* is not that case: it should hold a `WeakViewHandle<Self>` and
-    /// call [`Self::team_context`] at the point of use, which costs the same one field and
-    /// keeps the resolution target visible in the struct rather than captured in a closure.
-    ///
-    /// The captured handle is resolved on each call, so the scope still follows the view's
-    /// window; it is the handle that is fixed here, not the team.
-    pub fn team_context_resolver<T: Entity>(view: WeakViewHandle<T>) -> TeamContextResolver {
-        Rc::new(move |app| Self::as_ref(app).team_context(&view, app))
-    }
-
-    /// A resolver for tests that build a model without a window to resolve against.
-    #[cfg(any(test, feature = "test-util"))]
-    pub fn teamless_context_resolver_for_test() -> TeamContextResolver {
-        Rc::new(|_| TeamContext { team_uid: None })
-    }
-
-    /// The team a CLI invocation acts as: the one it named, or its sole team when it named none.
-    ///
-    /// Membership is checked here so a mistyped uid fails loudly, rather than resolving to a team
-    /// whose policy [`Self::team_byo_for_scope`] cannot find and being denied everything for a
-    /// reason the user cannot see.
-    pub fn cli_team_uid(&self, requested: Option<ServerId>) -> Result<ServerId, CliTeamError> {
-        match requested {
-            Some(team_uid) => self
-                .team_from_uid(team_uid)
-                .map(|team| team.uid)
-                .ok_or(CliTeamError::NotAMember { team_uid }),
-            None => Ok(self.sole_team_uid()?),
-        }
-    }
-
-    /// [`Self::cli_team_uid`] as a scope, for the policy reads a CLI command makes. Both are fed
-    /// the same requested uid so an object's owner and the credentials it may use cannot disagree.
-    pub fn team_scope_for_cli(
-        &self,
-        requested: Option<ServerId>,
-    ) -> Result<TeamScopeForCli, CliTeamError> {
-        self.cli_team_uid(requested).map(TeamScopeForCli)
-    }
-
-    /// A view that has left its window resolves the same way as a window with no team: to no
-    /// team. Both mean there is no team to govern the read, and a caller on a render path has
-    /// no better answer to give than that.
     pub(crate) fn team_context<'a, T: Entity>(
         &'a self,
         view: &WeakViewHandle<T>,
@@ -217,18 +178,36 @@ impl UserWorkspaces {
         TeamContext { team_uid }
     }
 
-    /// [`Self::team_context`] for code holding a [`ViewContext`] rather than a
-    /// [`WeakViewHandle`]: a view inside its own constructor, where a handle would not yet
-    /// resolve, or a nested `update` closure over a child view whose own type is not worth
-    /// naming. [`ViewContext::window_id`] is a plain field valid in both cases, which is why
-    /// this takes the context.
+    /// The scope a headless CLI invocation reads team policy through, for a team the caller has
+    /// already resolved.
     ///
-    /// The exchange for a scope is deliberately a view or a `ViewContext`, never a raw
-    /// [`WindowId`]: an id-taking form would incentivise passing ids around, and an id is
-    /// weaker evidence than a live context because a pane dragged between windows carries its
-    /// models with it.
+    /// The sole exception to scopes being window-derived. *Which* team a CLI invocation acts as is
+    /// the caller's to settle; all this enforces is that the answer is a team the user is on, so a
+    /// scope can never name one whose policy [`Self::team_byo_for_scope`] would fail to find.
+    #[cfg(not(target_family = "wasm"))]
+    pub(crate) fn team_scope_for_cli(
+        &self,
+        team_uid: ServerId,
+    ) -> Result<TeamScopeForCli, NotATeamMemberError> {
+        self.is_member_of_team(team_uid)
+            .then_some(TeamScopeForCli(team_uid))
+            .ok_or(NotATeamMemberError { team_uid })
+    }
+
     pub(crate) fn team_context_for_view<T: Entity>(&self, ctx: &ViewContext<T>) -> TeamContext<'_> {
         self.team_context_for_window_id(ctx.window_id())
+    }
+
+    /// Captures `view` as a reusable source of [`TeamContext`], for consumers that cannot name
+    /// a view at the boundaries where they need one.
+    pub fn team_context_resolver<T: Entity>(view: WeakViewHandle<T>) -> TeamContextResolver {
+        Rc::new(move |app| Self::as_ref(app).team_context(&view, app))
+    }
+
+    /// A resolver for tests that build a model without a window to resolve against.
+    #[cfg(any(test, feature = "test-util"))]
+    pub fn teamless_context_resolver_for_test() -> TeamContextResolver {
+        Rc::new(|_| TeamContext { team_uid: None })
     }
 
     fn team_context_for_window_id(&self, window_id: WindowId) -> TeamContext<'_> {
@@ -480,5 +459,65 @@ impl UserWorkspaces {
                 .ai_autonomy_policy
                 .is_some_and(|policy| policy.is_enabled)
         })
+    }
+
+    /// Whether AI is allowed in remote sessions under `scope`'s team. See
+    /// [`Self::scoped_or_workspace_setting`] for the no-team fallback. An unresolvable named
+    /// team denies rather than guessing, for a control gating AI in an environment the user
+    /// may not control.
+    ///
+    /// `current_workspace()` is only `None` when logged out or before the first metadata fetch
+    /// (an authenticated user, teamless or not, always has at least a personal workspace). There
+    /// is no admin policy to read in that state, so it permits, preserving the pre-refactor
+    /// default. The helper's single `absent` value cannot express both that and the
+    /// unresolvable-team deny, so the no-workspace case is handled explicitly first.
+    pub(crate) fn is_ai_allowed_in_remote_sessions<S: TeamScope + ?Sized>(
+        &self,
+        scope: &S,
+    ) -> bool {
+        if scope.team_uid().is_none() && self.current_workspace().is_none() {
+            return true;
+        }
+        self.scoped_or_workspace_setting(
+            scope,
+            |team| {
+                team.settings
+                    .ai_permissions
+                    .allow_ai_in_remote_sessions
+                    .value
+            },
+            |workspace| {
+                workspace
+                    .settings
+                    .ai_permissions_settings
+                    .allow_ai_in_remote_sessions
+            },
+            false,
+        )
+    }
+
+    /// The remote-session command patterns configured by `scope`'s team. See
+    /// [`Self::scoped_or_workspace_setting`] for the no-team fallback.
+    pub(crate) fn get_remote_session_regex_list<S: TeamScope + ?Sized>(
+        &self,
+        scope: &S,
+    ) -> &[Regex] {
+        self.scoped_or_workspace_setting(
+            scope,
+            |team| {
+                team.settings
+                    .ai_permissions
+                    .remote_session_regex_list
+                    .as_slice()
+            },
+            |workspace| {
+                workspace
+                    .settings
+                    .ai_permissions_settings
+                    .remote_session_regex_list
+                    .as_slice()
+            },
+            &[],
+        )
     }
 }

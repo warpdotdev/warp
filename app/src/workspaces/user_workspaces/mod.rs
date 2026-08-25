@@ -2,7 +2,6 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use anyhow::Result;
-use regex::Regex;
 use warp_core::features::FeatureFlag;
 use warp_core::settings::{ChangeEventReason, Setting};
 use warp_errors::report_error;
@@ -49,7 +48,9 @@ use crate::workspaces::workspace::{
 pub(crate) mod billing_workspace_settings;
 pub(crate) mod team_workspace_settings;
 pub(crate) use team_workspace_settings::TeamContextForOperation;
-pub use team_workspace_settings::{TeamContext, TeamContextResolver, TeamScope};
+#[cfg(test)]
+pub(crate) use team_workspace_settings::TeamlessScopeForTest;
+pub use team_workspace_settings::{ResolvedTeamScope, TeamContext, TeamContextResolver, TeamScope};
 
 const STRIPE_SUBSCRIPTION_INTERVAL_PAGE_PREFIX: &str = "/upgrade";
 
@@ -312,6 +313,10 @@ impl UserWorkspaces {
     pub fn team_from_uid(&self, team_uid: ServerId) -> Option<&Team> {
         self.current_workspace()
             .and_then(|w| w.teams.iter().find(|t| t.uid == team_uid))
+    }
+
+    pub fn is_member_of_team(&self, team_uid: ServerId) -> bool {
+        self.team_from_uid(team_uid).is_some()
     }
 
     pub fn register_window(
@@ -1569,29 +1574,6 @@ impl UserWorkspaces {
                     .settings
                     .cloud_conversation_storage_settings
                     .setting
-                    .clone()
-            })
-            .unwrap_or_default()
-    }
-
-    pub fn is_ai_allowed_in_remote_sessions(&self) -> bool {
-        self.current_workspace()
-            .map(|workspace| {
-                workspace
-                    .settings
-                    .ai_permissions_settings
-                    .allow_ai_in_remote_sessions
-            })
-            .unwrap_or(true)
-    }
-
-    pub fn get_remote_session_regex_list(&self) -> Vec<Regex> {
-        self.current_workspace()
-            .map(|workspace| {
-                workspace
-                    .settings
-                    .ai_permissions_settings
-                    .remote_session_regex_list
                     .clone()
             })
             .unwrap_or_default()

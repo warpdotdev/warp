@@ -47,7 +47,7 @@ use crate::ai::harness_availability::{
     HarnessAvailabilityEvent, HarnessAvailabilityModel, HarnessModelInfo,
 };
 use crate::ai::llms::{
-    ByoKeySource, LLMId, LLMInfo, LLMPreferences, LLMPreferencesEvent, LLMSpec, ResolvedTeamScope,
+    ByoKeySource, LLMId, LLMInfo, LLMPreferences, LLMPreferencesEvent, LLMSpec,
     byo_key_source_for_model, dedupe_model_display_names, is_model_allowed_for_scope,
     should_show_key_icon_for_model,
 };
@@ -66,7 +66,7 @@ use crate::view_components::action_button::{
 };
 use crate::view_components::{FeaturePopup, NewFeaturePopupEvent, NewFeaturePopupLabel};
 use crate::workspace::WorkspaceAction;
-use crate::workspaces::user_workspaces::{TeamContext, UserWorkspaces};
+use crate::workspaces::user_workspaces::{ResolvedTeamScope, TeamContext, UserWorkspaces};
 
 const MENU_WIDTH: f32 = 280.;
 const NEW_MODEL_CHOICES_POPUP_DELAY: Duration = Duration::from_millis(500);

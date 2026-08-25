@@ -19,6 +19,8 @@ use crate::auth::AuthStateProvider;
 use crate::server::ids::ServerId;
 use crate::server::server_api::ServerApiProvider;
 use crate::user_config::{WarpConfig, WarpConfigUpdateEvent};
+#[cfg(feature = "agent_mode_evals")]
+use crate::workspaces::user_workspaces::ResolvedTeamScope;
 use crate::workspaces::user_workspaces::{TeamScope, UserWorkspaces, UserWorkspacesEvent};
 
 /// Checks if a user's' API key is being used for the given provider.
@@ -720,38 +722,6 @@ struct TeamModelState {
     agent_mode_models_unavailable: bool,
 }
 
-/// A team scope already resolved from a real [`TeamScope`], carried as a plain `Copy` value
-/// instead of a live borrow. `TeamContext<'a>` borrows the singleton that resolved it, which
-/// can't coexist with a later mutable borrow of that same context in the same scope (e.g.
-/// resolving a scope from `ctx` and then passing `ctx` mutably to `self.update(...)`); this
-/// detaches the answer from that borrow so both can happen in sequence. Never construct one
-/// from a raw id supplied by anything other than an already-resolved [`TeamScope`].
-pub struct ResolvedTeamScope(Option<ServerId>);
-
-impl ResolvedTeamScope {
-    pub fn from_scope(scope: &(impl TeamScope + ?Sized)) -> Self {
-        Self(scope.team_uid())
-    }
-}
-
-impl TeamScope for ResolvedTeamScope {
-    fn team_uid(&self) -> Option<ServerId> {
-        self.0
-    }
-}
-
-/// A fixed resolved-teamless scope for tests that exercise catalog logic directly without
-/// setting up a real window/view to mint a [`TeamContext`](crate::workspaces::user_workspaces::TeamContext) from.
-#[cfg(test)]
-pub(crate) struct TeamlessScopeForTest;
-
-#[cfg(test)]
-impl TeamScope for TeamlessScopeForTest {
-    fn team_uid(&self) -> Option<ServerId> {
-        None
-    }
-}
-
 /// Singleton model holding user/workspace LLM preferences, including the set of LLMs available for
 /// use as well as the user's preferred LLM for Agent Mode.
 ///
@@ -850,7 +820,7 @@ impl LLMPreferences {
         // resolved-teamless entry; the polled workspaces-metadata query keeps real team scopes
         // fresh once a window resolves one.
         #[cfg(feature = "agent_mode_evals")]
-        me.refresh_available_models(&ResolvedTeamScope(None), ctx);
+        me.refresh_available_models(&ResolvedTeamScope::teamless(), ctx);
 
         me
     }

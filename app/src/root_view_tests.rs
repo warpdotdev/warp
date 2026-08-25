@@ -86,7 +86,6 @@ fn account_first_requires_login_even_without_ai_or_drive_settings() {
 #[test]
 fn fallback_flow_only_requires_login_for_account_backed_settings() {
     let _account_first = FeatureFlag::AccountFirstOnboarding.override_enabled(false);
-    let _settings_modes = FeatureFlag::OpenWarpNewSettingsModes.override_enabled(true);
 
     assert!(!requires_post_onboarding_login(false, false, false));
     assert!(requires_post_onboarding_login(false, true, false));
@@ -350,7 +349,6 @@ fn test_show_needs_sso_link_view_blocks_pre_terminal_onboarding_states() {
                     false,
                     Vec::new(),
                     LLMId::from("auto"),
-                    false,
                     false,
                     OnboardingAuthState::LoggedOut,
                     ctx,

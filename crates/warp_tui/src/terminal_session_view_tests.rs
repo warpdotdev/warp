@@ -25,14 +25,13 @@ use warp::tui_export::{
     AskUserQuestionType, BlockPadding, BlocklistAIHistoryEvent, BlocklistAIHistoryModel,
     ConversationStatus, ConversationUsageTotals, Harness, InputTypeAutoDetectionSource, LLMId,
     LLMPreferences, LinkedWorkflowData, LongRunningCommandControlState, MessageId,
-    OutputStatusUpdateCallback, ParsedSlashCommandInput, PtyIntent, PtyIntentEvent, ServerId,
-    ServerOutputId, Session, Shared, SizeInfo, SizeUpdate, SlashCommandDataSource as _,
-    SlashCommandKind, TaskId, TeamScope, TranscriptScope, TuiMcpAction, TuiMcpServerId,
-    TuiOnboardingMarker, TuiOnboardingMarkers, TuiUpArrowHistoryItemKind, UserTakeOverReason,
-    UserWorkspaces, WarpConfig, WarpConfigUpdateEvent, export_conversation_markdown,
-    forkable_tui_conversation_for_test, queue_tui_permission_action,
-    register_tui_session_view_test_singletons, set_tui_default_team_admin_for_test,
-    set_tui_workspace_teams_for_test, slash_commands,
+    OutputStatusUpdateCallback, ParsedSlashCommandInput, PtyIntent, PtyIntentEvent, ServerOutputId,
+    Session, Shared, SizeInfo, SizeUpdate, SlashCommandDataSource as _, SlashCommandKind, TaskId,
+    TranscriptScope, TuiMcpAction, TuiMcpServerId, TuiOnboardingMarker, TuiOnboardingMarkers,
+    TuiUpArrowHistoryItemKind, UserTakeOverReason, UserWorkspaces, WarpConfig,
+    WarpConfigUpdateEvent, export_conversation_markdown, forkable_tui_conversation_for_test,
+    queue_tui_permission_action, register_tui_session_view_test_singletons,
+    set_tui_default_team_admin_for_test, set_tui_workspace_teams_for_test, slash_commands,
 };
 use warp_core::channel::{Channel, ChannelState};
 use warp_core::features::FeatureFlag;
@@ -127,16 +126,6 @@ use crate::zero_state_animation::{
 struct FocusTestFixture {
     window_id: warpui_core::WindowId,
     sessions: ModelHandle<TuiSessions>,
-}
-
-/// A teamless scope for tests whose window has no team registered, for the handful of catalog
-/// call sites here that still take a live [`TeamScope`] rather than a raw team uid.
-struct TeamlessTestScope;
-
-impl TeamScope for TeamlessTestScope {
-    fn team_uid(&self) -> Option<ServerId> {
-        None
-    }
 }
 
 #[test]
@@ -1670,7 +1659,7 @@ fn accepted_model_only_changes_the_current_session() {
     App::test((), |mut app| async move {
         let fixture = focus_test_fixture(&mut app);
         LLMPreferences::handle(&app).update(&mut app, |preferences, ctx| {
-            let scope = TeamlessTestScope;
+            let scope = UserWorkspaces::teamless_context_resolver_for_test()(ctx);
             let mut alternate = preferences.get_default_base_model(&scope, ctx).clone();
             alternate.id = "tui-session-override".into();
             alternate.display_name = "TUI session override".to_owned();
@@ -1679,7 +1668,7 @@ fn accepted_model_only_changes_the_current_session() {
         let (first_view, _) = add_focus_test_session(&mut app, &fixture, true);
         let (second_view, _) = add_focus_test_session(&mut app, &fixture, false);
         let (profile_default_id, alternate_id) = app.read(|ctx| {
-            let scope = TeamlessTestScope;
+            let scope = UserWorkspaces::teamless_context_resolver_for_test()(ctx);
             let preferences = LLMPreferences::as_ref(ctx);
             let profile_default_id = preferences
                 .get_active_profile_base_model(&scope, ctx, None)
@@ -1699,7 +1688,7 @@ fn accepted_model_only_changes_the_current_session() {
         });
 
         app.read(|ctx| {
-            let scope = TeamlessTestScope;
+            let scope = UserWorkspaces::teamless_context_resolver_for_test()(ctx);
             let preferences = LLMPreferences::as_ref(ctx);
             let first_surface_id = first_view.as_ref(ctx).terminal_surface_id;
             let second_surface_id = second_view.as_ref(ctx).terminal_surface_id;
@@ -1735,7 +1724,7 @@ fn model_menu_labels_the_profile_default_model() {
         });
 
         view.read(&app, |view, ctx| {
-            let scope = TeamlessTestScope;
+            let scope = UserWorkspaces::teamless_context_resolver_for_test()(ctx);
             let default_name = LLMPreferences::as_ref(ctx)
                 .get_active_profile_base_model(&scope, ctx, Some(view.terminal_surface_id))
                 .display_name
@@ -2661,7 +2650,7 @@ fn footer_model_label_is_a_bounded_click_target() {
         });
 
         let model_name = view.read(&app, |view, ctx| {
-            let scope = TeamlessTestScope;
+            let scope = UserWorkspaces::teamless_context_resolver_for_test()(ctx);
             LLMPreferences::as_ref(ctx)
                 .get_active_base_model(&scope, ctx, Some(view.terminal_surface_id))
                 .display_name

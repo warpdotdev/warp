@@ -14,7 +14,7 @@ use crate::ai::agent::conversation::AIConversation;
 use crate::ai::agent::{AIAgentActionType, AIAgentOutputStatus, FinishedAIAgentOutput};
 use crate::ai::execution_profiles::ActionPermission;
 use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
-use crate::ai::llms::{LLMId, LLMPreferences, ResolvedTeamScope};
+use crate::ai::llms::{LLMId, LLMPreferences};
 use crate::integration_testing::agent_mode::{
     ConversationTarget, assert_latest_task_succeeds_or_blocked, assert_task_is_blocked,
 };
@@ -23,7 +23,7 @@ use crate::integration_testing::step::{
 };
 use crate::integration_testing::terminal::assert_input_is_focused;
 use crate::integration_testing::view_getters::terminal_view;
-use crate::workspaces::user_workspaces::UserWorkspaces;
+use crate::workspaces::user_workspaces::{ResolvedTeamScope, UserWorkspaces};
 
 pub const AGENT_MODE_RUNNING_STEP_GROUP_NAME: &str = "Agent mode running";
 

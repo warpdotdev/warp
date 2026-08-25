@@ -1,6 +1,6 @@
 use ai::LLMId;
 use chrono::{DateTime, Utc};
-use onboarding::slides::{AgentAutonomy, AgentDevelopmentSettings, ProjectOnboardingSettings};
+use onboarding::slides::{AgentAutonomy, AgentDevelopmentSettings};
 use onboarding::{SelectedSettings, UICustomizationSettings};
 use warp_core::features::FeatureFlag;
 use warpui::{App, SingletonEntity};
@@ -136,7 +136,6 @@ fn apply_onboarding_settings_preserves_existing_cloud_profile_on_existing_user_l
                 disable_oz: false,
                 show_agent_notifications: true,
             },
-            project_settings: ProjectOnboardingSettings::default(),
             ui_customization: None,
         };
 
@@ -210,7 +209,6 @@ fn account_first_settings_enable_agent_for_authenticated_users_and_apply_ui_choi
                 disable_oz: false,
                 show_agent_notifications: true,
             },
-            project_settings: ProjectOnboardingSettings::default(),
             ui_customization: Some(UICustomizationSettings {
                 use_vertical_tabs: false,
                 show_conversation_history: false,
@@ -252,7 +250,6 @@ fn account_first_settings_enable_agent_for_authenticated_users_and_apply_ui_choi
 /// account and on once they have one.
 #[test]
 fn apply_onboarding_settings_gates_third_party_ai_on_account() {
-    let _flag = FeatureFlag::OpenWarpNewSettingsModes.override_enabled(true);
     App::test((), |mut app| async move {
         initialize_settings_for_tests(&mut app);
         app.add_singleton_model(|_| AuthStateProvider::new_for_test());
@@ -277,7 +274,6 @@ fn apply_onboarding_settings_gates_third_party_ai_on_account() {
                 disable_oz: true,
                 show_agent_notifications: true,
             },
-            project_settings: ProjectOnboardingSettings::default(),
             ui_customization: None,
         };
 

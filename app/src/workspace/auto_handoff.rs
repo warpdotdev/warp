@@ -15,12 +15,12 @@ use crate::ai::active_agent_views_model::{ActiveAgentViewsModel, ConversationOrT
 use crate::ai::agent::conversation::{AIConversation, AIConversationId};
 use crate::ai::ambient_agents::telemetry::CloudAgentTelemetryEvent;
 use crate::ai::blocklist::orchestration_topology::has_local_orchestrated_children;
-use crate::ai::llms::{LLMPreferences, ResolvedTeamScope};
+use crate::ai::llms::LLMPreferences;
 use crate::settings::AISettings;
 use crate::system::{SystemStats, SystemStatsEvent};
 use crate::terminal::view::TerminalView;
 use crate::view_components::DismissibleToast;
-use crate::workspaces::user_workspaces::UserWorkspaces;
+use crate::workspaces::user_workspaces::{ResolvedTeamScope, UserWorkspaces};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum AutoCloudHandoffSkipReason {

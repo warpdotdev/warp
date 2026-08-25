@@ -55,9 +55,7 @@ use crate::ai::execution_profiles::{
     AIExecutionProfile, AIExecutionProfileAppExt, ActionPermission, ExecutionProfileId,
     WriteToPtyPermission, long_context_pricing_warning_title,
 };
-use crate::ai::llms::{
-    LLMContextWindow, LLMId, LLMPreferences, LLMPreferencesEvent, ResolvedTeamScope,
-};
+use crate::ai::llms::{LLMContextWindow, LLMId, LLMPreferences, LLMPreferencesEvent};
 use crate::ai::mcp::TemplatableMCPServerManager;
 use crate::ai::paths::host_native_absolute_path;
 use crate::ai::{AIRequestUsageModel, AIRequestUsageModelEvent};
@@ -85,7 +83,9 @@ use crate::view_components::{
     Dropdown, DropdownItem, FilterableDropdown, SubmittableTextInput, SubmittableTextInputEvent,
     WarningBoxConfig, render_warning_box,
 };
-use crate::workspaces::user_workspaces::{TeamContext, TeamScope, UserWorkspacesEvent};
+use crate::workspaces::user_workspaces::{
+    ResolvedTeamScope, TeamContext, TeamScope, UserWorkspacesEvent,
+};
 use crate::{TelemetryEvent, UserWorkspaces, send_telemetry_from_ctx};
 
 const AI_SETTINGS_DROPDOWN_WIDTH: f32 = 250.;

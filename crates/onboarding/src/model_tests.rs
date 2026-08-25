@@ -48,7 +48,6 @@ fn add_model(app: &mut App) -> ModelHandle<OnboardingStateModel> {
             Vec::new(),
             LLMId::from("auto"),
             false,
-            true,
             OnboardingAuthState::FreeUser,
         )
     })
@@ -61,7 +60,6 @@ fn step(app: &App, model: &ModelHandle<OnboardingStateModel>) -> OnboardingStep 
 #[test]
 fn account_first_path_is_linear_and_reversible() {
     let _account_first = FeatureFlag::AccountFirstOnboarding.override_enabled(true);
-    let _settings_modes = FeatureFlag::OpenWarpNewSettingsModes.override_enabled(true);
     App::test((), |mut app| async move {
         let model = add_test_model(&mut app);
 
@@ -294,7 +292,6 @@ fn account_first_path_uses_agent_ui_defaults() {
 
 #[test]
 fn agent_path_routes_through_ai_setup() {
-    let _flag = FeatureFlag::OpenWarpNewSettingsModes.override_enabled(true);
     App::test((), |mut app| async move {
         let model = add_test_model(&mut app);
 
@@ -330,7 +327,6 @@ fn agent_path_routes_through_ai_setup() {
 
 #[test]
 fn third_party_choice_routes_to_third_party_slide() {
-    let _flag = FeatureFlag::OpenWarpNewSettingsModes.override_enabled(true);
     App::test((), |mut app| async move {
         let model = add_test_model(&mut app);
 
@@ -355,7 +351,6 @@ fn third_party_choice_routes_to_third_party_slide() {
 
 #[test]
 fn confirm_no_ai_switches_to_terminal_path() {
-    let _flag = FeatureFlag::OpenWarpNewSettingsModes.override_enabled(true);
     App::test((), |mut app| async move {
         let model = add_test_model(&mut app);
 
@@ -391,7 +386,6 @@ fn confirm_no_ai_switches_to_terminal_path() {
 
 #[test]
 fn confirm_no_ai_from_intention_then_back_returns_to_intention() {
-    let _flag = FeatureFlag::OpenWarpNewSettingsModes.override_enabled(true);
     App::test((), |mut app| async move {
         let model = add_test_model(&mut app);
 
@@ -415,7 +409,6 @@ fn confirm_no_ai_from_intention_then_back_returns_to_intention() {
 
 #[test]
 fn cancel_no_ai_from_intention_routes_to_ai_setup() {
-    let _flag = FeatureFlag::OpenWarpNewSettingsModes.override_enabled(true);
     App::test((), |mut app| async move {
         let model = add_test_model(&mut app);
 
@@ -440,7 +433,6 @@ fn cancel_no_ai_from_intention_routes_to_ai_setup() {
 
 #[test]
 fn dismiss_no_ai_closes_without_changing_path() {
-    let _flag = FeatureFlag::OpenWarpNewSettingsModes.override_enabled(true);
     App::test((), |mut app| async move {
         let model = add_test_model(&mut app);
 
@@ -461,7 +453,6 @@ fn dismiss_no_ai_closes_without_changing_path() {
 
 #[test]
 fn terminal_settings_disable_ai() {
-    let _flag = FeatureFlag::OpenWarpNewSettingsModes.override_enabled(true);
     App::test((), |mut app| async move {
         let model = add_test_model(&mut app);
         model.update(&mut app, |model, ctx| model.set_intention_terminal(ctx));
@@ -477,7 +468,6 @@ fn terminal_settings_disable_ai() {
 
 #[test]
 fn agent_intent_keeps_ai_enabled_for_any_setup_choice() {
-    let _flag = FeatureFlag::OpenWarpNewSettingsModes.override_enabled(true);
     App::test((), |mut app| async move {
         let model = add_test_model(&mut app);
 
@@ -501,7 +491,6 @@ fn agent_intent_keeps_ai_enabled_for_any_setup_choice() {
 
 #[test]
 fn terminal_path_skips_third_party() {
-    let _flag = FeatureFlag::OpenWarpNewSettingsModes.override_enabled(true);
     App::test((), |mut app| async move {
         let model = add_test_model(&mut app);
         model.update(&mut app, |model, ctx| model.set_intention_terminal(ctx));
@@ -527,7 +516,6 @@ fn terminal_path_skips_third_party() {
 
 #[test]
 fn progress_reports_v3_positions_for_agent_path() {
-    let _flag = FeatureFlag::OpenWarpNewSettingsModes.override_enabled(true);
     App::test((), |mut app| async move {
         let model = add_test_model(&mut app);
 
@@ -550,7 +538,6 @@ fn progress_reports_v3_positions_for_agent_path() {
 
 #[test]
 fn progress_reports_v3_positions_for_third_party_path() {
-    let _flag = FeatureFlag::OpenWarpNewSettingsModes.override_enabled(true);
     App::test((), |mut app| async move {
         let model = add_test_model(&mut app);
         model.update(&mut app, |model, ctx| {
@@ -576,7 +563,6 @@ fn progress_reports_v3_positions_for_third_party_path() {
 
 #[test]
 fn progress_reports_terminal_path_uses_three_dot_variant() {
-    let _flag = FeatureFlag::OpenWarpNewSettingsModes.override_enabled(true);
     App::test((), |mut app| async move {
         let model = add_test_model(&mut app);
         model.update(&mut app, |model, ctx| model.set_intention_terminal(ctx));

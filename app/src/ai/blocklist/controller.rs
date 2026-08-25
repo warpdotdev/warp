@@ -61,7 +61,7 @@ use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::document::ai_document_model::{
     AIDocumentId, AIDocumentModel, AIDocumentUserEditStatus,
 };
-use crate::ai::llms::{LLMId, LLMPreferences, ResolvedTeamScope};
+use crate::ai::llms::{LLMId, LLMPreferences};
 use crate::ai::skills::{ActiveSkillLookupError, SkillManager};
 use crate::cloud_object::model::persistence::CloudModel;
 use crate::features::FeatureFlag;
@@ -85,7 +85,7 @@ use crate::terminal::view::inline_banner::ZeroStatePromptSuggestionType;
 use crate::workspace::OneTimeModalModel;
 use crate::workspaces::update_manager::TeamUpdateManager;
 use crate::workspaces::user_workspaces::{
-    TeamContext, TeamContextResolver, TeamScope, UserWorkspaces,
+    ResolvedTeamScope, TeamContext, TeamContextResolver, TeamScope, UserWorkspaces,
 };
 
 #[derive(Debug, Clone)]

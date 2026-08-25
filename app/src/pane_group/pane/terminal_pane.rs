@@ -1670,7 +1670,7 @@ fn launch_local_no_harness_child(
                     conversation_id,
                     ..
                 }) => {
-                    let scope = crate::ai::llms::ResolvedTeamScope::from_scope(
+                    let scope = crate::workspaces::user_workspaces::ResolvedTeamScope::from_scope(
                         &UserWorkspaces::as_ref(ctx).team_context_for_view(ctx),
                     );
                     apply_child_agent_model_override(
@@ -1829,9 +1829,10 @@ fn launch_local_harness_child(
                         conversation_id,
                         ..
                     }) => {
-                        let scope = crate::ai::llms::ResolvedTeamScope::from_scope(
-                            &UserWorkspaces::as_ref(ctx).team_context_for_view(ctx),
-                        );
+                        let scope =
+                            crate::workspaces::user_workspaces::ResolvedTeamScope::from_scope(
+                                &UserWorkspaces::as_ref(ctx).team_context_for_view(ctx),
+                            );
                         apply_child_agent_model_override(
                             &scope,
                             terminal_view_id,

@@ -21,9 +21,9 @@ use crate::ai::attachment_utils::{
 };
 use crate::ai::blocklist::agent_view::AgentViewEntryOrigin;
 use crate::ai::blocklist::history_model::BlocklistAIHistoryModel;
-use crate::ai::llms::ResolvedTeamScope;
 use crate::server::server_api::ServerApiProvider;
 use crate::terminal::model::block::BlockId;
+use crate::workspaces::user_workspaces::ResolvedTeamScope;
 
 #[derive(Default)]
 pub(super) struct SharedSessionState {

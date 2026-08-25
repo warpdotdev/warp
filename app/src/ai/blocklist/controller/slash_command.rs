@@ -20,9 +20,9 @@ use crate::ai::blocklist::context_model::{
     BlocklistAIContextModel, PendingAttachment, PendingFile,
 };
 use crate::ai::blocklist::queued_query::{QueuedQueryId, QueuedQueryModel};
-use crate::ai::llms::ResolvedTeamScope;
 use crate::search::slash_command_menu::static_commands::commands;
 use crate::terminal::input::slash_commands::SlashCommandTrigger;
+use crate::workspaces::user_workspaces::ResolvedTeamScope;
 
 pub enum SlashCommandRequest {
     CreateNewProject {

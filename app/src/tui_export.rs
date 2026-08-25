@@ -139,8 +139,7 @@ pub use crate::ai::harness_availability::{
     HarnessAvailabilityModel, HarnessModelInfo,
 };
 pub use crate::ai::llms::{
-    LLMId, LLMInfo, LLMPreferences, LLMPreferencesEvent, ResolvedTeamScope,
-    should_show_bedrock_icon_for_model,
+    LLMId, LLMInfo, LLMPreferences, LLMPreferencesEvent, should_show_bedrock_icon_for_model,
     should_show_gemini_enterprise_agent_platform_icon_for_model, should_show_key_icon_for_model,
 };
 pub use crate::ai::orchestration::{
@@ -278,7 +277,8 @@ pub use crate::util::time_format::format_elapsed_seconds;
 #[cfg(feature = "voice_input")]
 pub use crate::voice::transcriber::{Transcriber, VoiceTranscriber};
 pub use crate::workspaces::user_workspaces::{
-    TeamContext, TeamContextResolver, TeamScope, UserWorkspaces, UserWorkspacesEvent,
+    ResolvedTeamScope, TeamContext, TeamContextResolver, TeamScope, UserWorkspaces,
+    UserWorkspacesEvent,
 };
 pub use crate::workspaces::workspace::{AiCreditsUsageAndCostType, UsageVisibilityGranularity};
 
