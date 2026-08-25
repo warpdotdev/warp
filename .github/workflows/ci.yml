@@ -787,7 +787,7 @@ jobs:
           if ${{ matrix.os == 'wasm' }}; then
             ./script/wasm/bundle --channel oss --nouniversal --check-only
           else
-            ./script/bundle --channel oss --nouniversal --check-only --features crash_reporting,release_bundle,gui
+            ./script/bundle --channel oss --nouniversal --check-only
           fi
         env:
           # Attach the GitHub auth token so that requests to the GitHub API
