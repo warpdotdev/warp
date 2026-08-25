@@ -28,7 +28,6 @@ pub(crate) struct RepositoryRevision {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct EnvironmentSnapshot {
     pub captured_at: DateTime<Utc>,
-    pub unresolved_repository_count: usize,
     pub repositories: Vec<RepositoryRevision>,
 }
 
@@ -36,7 +35,6 @@ impl EnvironmentSnapshot {
     pub(crate) fn empty() -> Self {
         Self {
             captured_at: Utc::now(),
-            unresolved_repository_count: 0,
             repositories: Vec::new(),
         }
     }
@@ -46,7 +44,6 @@ impl From<EnvironmentSnapshot> for AgentRunEnvironmentSnapshotRequest {
     fn from(snapshot: EnvironmentSnapshot) -> Self {
         Self {
             captured_at: snapshot.captured_at,
-            unresolved_repository_count: snapshot.unresolved_repository_count,
             repositories: snapshot
                 .repositories
                 .into_iter()

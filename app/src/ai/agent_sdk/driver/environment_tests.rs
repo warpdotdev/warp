@@ -107,7 +107,6 @@ fn environment_snapshot_parses_only_valid_namespaced_unique_records_in_request_o
     let snapshot =
         environment_snapshot(&requests, Path::new("/workspace"), TEST_NAMESPACE, &output);
 
-    assert_eq!(snapshot.unresolved_repository_count, 0);
     assert_eq!(snapshot.repositories.len(), 2);
     assert_eq!(snapshot.repositories[0].repo_owner, "warpdotdev");
     assert_eq!(snapshot.repositories[0].checkout_path, "warp");
@@ -141,7 +140,6 @@ fn environment_snapshot_omits_missing_malformed_duplicate_and_invalid_records() 
         environment_snapshot(&requests, Path::new("/workspace"), TEST_NAMESPACE, &output);
 
     assert!(snapshot.repositories.is_empty());
-    assert_eq!(snapshot.unresolved_repository_count, requests.len());
 }
 fn branch_head_override(
     code_forge: RepositoryForge,

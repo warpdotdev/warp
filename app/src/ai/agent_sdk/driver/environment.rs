@@ -134,16 +134,15 @@ fn environment_snapshot(
             })
         })
         .collect::<Vec<_>>();
-    let unresolved_repository_count = repos.len().saturating_sub(repositories.len());
-    if unresolved_repository_count > 0 {
+    if repositories.len() < repos.len() {
         log::warn!(
-            "Could not capture resolved HEAD for {unresolved_repository_count}/{} structured repositories",
+            "Could not capture resolved HEAD for {}/{} structured repositories",
+            repos.len() - repositories.len(),
             repos.len()
         );
     }
     EnvironmentSnapshot {
         captured_at: Utc::now(),
-        unresolved_repository_count,
         repositories,
     }
 }

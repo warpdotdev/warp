@@ -17,7 +17,6 @@ fn task_id() -> AmbientAgentTaskId {
 fn request() -> AgentRunEnvironmentSnapshotRequest {
     EnvironmentSnapshot {
         captured_at: Utc::now(),
-        unresolved_repository_count: 1,
         repositories: vec![RepositoryRevision {
             code_forge: CodeForge::GitHub,
             repo_owner: "warpdotdev".to_string(),
@@ -42,7 +41,7 @@ fn request_conversion_uses_expected_wire_shape() {
     let json = serde_json::to_value(&request).unwrap();
 
     assert!(json.get("snapshot_uuid").is_none());
-    assert_eq!(json["unresolved_repository_count"], 1);
+    assert!(json.get("unresolved_repository_count").is_none());
     assert_eq!(json["repositories"][0]["code_forge"], "GITHUB");
     assert_eq!(json["repositories"][0]["repo_owner"], "warpdotdev");
     assert_eq!(json["repositories"][0]["checkout_path"], "warp");
@@ -58,7 +57,7 @@ fn empty_snapshot_serializes_as_an_explicit_empty_report() {
     let request = AgentRunEnvironmentSnapshotRequest::from(EnvironmentSnapshot::empty());
     let json = serde_json::to_value(request).unwrap();
 
-    assert_eq!(json["unresolved_repository_count"], 0);
+    assert!(json.get("unresolved_repository_count").is_none());
     assert_eq!(json["repositories"], serde_json::json!([]));
 }
 
