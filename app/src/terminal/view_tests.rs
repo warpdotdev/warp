@@ -4080,6 +4080,105 @@ fn read_from_clipboard(ctx: &mut ViewContext<TerminalView>) -> String {
     TerminalView::read_from_clipboard(Some(ShellFamily::Posix), ctx)
 }
 
+fn add_multiline_command_block(view: &mut TerminalView) -> Lines {
+    let command = (0..30)
+        .map(|line| format!("line_{line:02}\n"))
+        .collect::<String>();
+    let mut model = view.model.lock();
+    let blocks = model.block_list_mut();
+    let block_index = insert_block(blocks, &command, "");
+    blocks
+        .block_at(block_index)
+        .expect("block should exist")
+        .command_grid_offset()
+}
+
+#[test]
+fn test_block_text_selection_nearest_boundary_update_keeps_drag_endpoint() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+
+        terminal.update(&mut app, |view, ctx| {
+            let command_grid_offset = add_multiline_command_block(view);
+            let start = BlockListPoint::new(command_grid_offset, 2);
+            let first_drag = BlockListPoint::new(command_grid_offset + 20.0, 2);
+            let second_drag = BlockListPoint::new(command_grid_offset + 4.0, 4);
+
+            view.begin_block_text_selection(
+                start,
+                Side::Left,
+                SelectionType::Simple,
+                Vector2F::zero(),
+                ctx,
+            );
+            view.update_block_text_selection(
+                first_drag,
+                Side::Right,
+                Lines::zero(),
+                Vector2F::new(100.0, 100.0),
+                ctx,
+            );
+            view.update_block_text_selection(
+                second_drag,
+                Side::Right,
+                Lines::zero(),
+                Vector2F::new(110.0, 110.0),
+                ctx,
+            );
+
+            let semantic_selection = SemanticSelection::mock(false, "");
+            let model = view.model.lock();
+            let selection_range = model
+                .block_list()
+                .renderable_selection(&semantic_selection, false)
+                .expect("selection range should exist");
+            assert_eq!(selection_range.first().start, start);
+            assert_eq!(selection_range.first().end, second_drag);
+        });
+    })
+}
+
+#[test]
+fn test_block_text_selection_nearest_boundary_extend_moves_boundary() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+
+        terminal.update(&mut app, |view, ctx| {
+            let command_grid_offset = add_multiline_command_block(view);
+            let start = BlockListPoint::new(command_grid_offset, 2);
+            let first_drag = BlockListPoint::new(command_grid_offset + 20.0, 2);
+            let shift_click = BlockListPoint::new(command_grid_offset + 4.0, 4);
+
+            view.begin_block_text_selection(
+                start,
+                Side::Left,
+                SelectionType::Simple,
+                Vector2F::zero(),
+                ctx,
+            );
+            view.update_block_text_selection(
+                first_drag,
+                Side::Right,
+                Lines::zero(),
+                Vector2F::new(100.0, 100.0),
+                ctx,
+            );
+            view.extend_block_text_selection(shift_click, Side::Left, Vector2F::zero(), ctx);
+
+            let semantic_selection = SemanticSelection::mock(false, "");
+            let model = view.model.lock();
+            let selection_range = model
+                .block_list()
+                .renderable_selection(&semantic_selection, false)
+                .expect("selection range should exist");
+            assert_eq!(selection_range.first().start, shift_click);
+            assert_eq!(selection_range.first().end, first_drag);
+        });
+    })
+}
+
 #[test]
 fn test_insert() {
     App::test((), |mut app| async move {
