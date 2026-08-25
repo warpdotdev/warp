@@ -2169,6 +2169,59 @@ impl TemplatableMCPServerManager {
         }
     }
 
+    /// Returns the installation a server was last spawned with, if retained.
+    pub(crate) fn retained_installation(
+        &self,
+        installation_uuid: Uuid,
+    ) -> Option<TemplatableMCPServerInstallation> {
+        self.spawn_configs
+            .get(&installation_uuid)
+            .map(|config| config.installation.clone())
+    }
+
+    /// Respawns a running server with a pre-refreshed installation (e.g. a
+    /// managed server whose proxy token was proactively re-minted). Unlike
+    /// `reconnect_server` this does not invoke the retained refresher — the
+    /// caller already holds the fresh config — and it defers to any reactive
+    /// reconnect already in flight instead of double-spawning.
+    pub(crate) fn respawn_with_installation(
+        &mut self,
+        installation: TemplatableMCPServerInstallation,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let installation_uuid = installation.uuid();
+        if self.pending_reconnections.contains_key(&installation_uuid) {
+            log::debug!(
+                "Skipping proactive respawn of {installation_uuid}: a reconnect is in flight"
+            );
+            return;
+        }
+        let Some(provenance) = self
+            .spawn_configs
+            .get(&installation_uuid)
+            .map(|config| config.provenance.clone())
+        else {
+            log::debug!("Skipping proactive respawn of {installation_uuid}: no retained config");
+            return;
+        };
+
+        log::info!("Respawning MCP server {installation_uuid} with a refreshed config");
+        if let Some(server_info) = self.active_servers.remove(&installation_uuid) {
+            ctx.spawn(server_info.shutdown(), |_, _, _| {});
+        }
+        if let Some(spawned_info) = self.spawned_servers.remove(&installation_uuid) {
+            spawned_info.abort_handle.abort();
+        }
+        if let Some(logger) = self.server_loggers.remove(&installation_uuid) {
+            logger.close();
+        }
+        self.pending_oauth_csrf
+            .retain(|_, v| *v != installation_uuid);
+        self.authorization_urls.remove(&installation_uuid);
+
+        self.spawn_server_impl(installation, provenance, SpawnMode::Reconnect, ctx);
+    }
+
     /// Records a failed reconnect attempt and blocks further attempts for a
     /// jittered, exponentially growing interval (500ms doubling to a ~32s
     /// cap, mirroring `retry_strategies`). Cleared on the next successful

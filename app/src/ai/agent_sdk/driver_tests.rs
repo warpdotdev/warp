@@ -283,6 +283,35 @@ fn managed_resolution_records_managed_uids_for_remint() {
 }
 
 #[test]
+fn managed_resolution_records_expirations_for_proactive_refresh() {
+    let uuid = uuid::Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
+    let config_json = r#"{"mcpServers":{"linear":{"url":"https://app.warp.dev/mcp/proxy/abc","headers":{"Authorization":"Bearer tok"}}}}"#;
+    let expires_at = chrono::Utc::now() + chrono::TimeDelta::hours(3);
+    let mut mock = MockManagedMcpClient::new();
+    mock.expect_create_managed_mcp_client_config()
+        .times(1)
+        .returning(move |_| {
+            let mut output = managed_client_config_output(config_json);
+            output.expires_at = Some(warp_graphql::scalars::Time::new(expires_at));
+            Ok(output)
+        });
+
+    let resolved = block_on(AgentDriver::resolve_mcp_specs_with_local_uuids(
+        &[MCPSpec::Uuid(uuid)],
+        &HashSet::new(),
+        Arc::new(mock),
+        None,
+    ))
+    .unwrap();
+
+    let installation_uuid = resolved.ephemeral_installations[0].uuid();
+    assert_eq!(
+        resolved.managed_expirations.get(&installation_uuid),
+        Some(&expires_at)
+    );
+}
+
+#[test]
 fn managed_refresher_preserves_identity_and_swaps_token() {
     let old_json = r#"{"mcpServers":{"linear":{"url":"https://app.warp.dev/mcp/proxy/abc","headers":{"Authorization":"Bearer old-token"}}}}"#;
     let new_json = r#"{"mcpServers":{"linear":{"url":"https://app.warp.dev/mcp/proxy/abc","headers":{"Authorization":"Bearer new-token"}}}}"#;

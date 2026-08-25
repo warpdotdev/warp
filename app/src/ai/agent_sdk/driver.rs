@@ -119,6 +119,7 @@ mod error_classification;
 pub(crate) mod git_credentials;
 pub(crate) mod harness;
 mod harness_output_monitor;
+pub(crate) mod managed_mcp_refresh;
 pub(super) mod output;
 mod snapshot;
 pub(crate) mod terminal;
@@ -139,6 +140,7 @@ async fn with_credential_refreshes<F, T>(
     git_task_id: Option<String>,
     ai_client: Arc<dyn AIClient>,
     oidc_strategy: Option<(String, String, String)>,
+    managed_mcp_refresh: Option<managed_mcp_refresh::ManagedMcpRefreshParams>,
     foreground: &ModelSpawner<AgentDriver>,
 ) -> T
 where
@@ -162,12 +164,26 @@ where
     }
     .fuse();
 
+    let managed_mcp_refresh = async move {
+        match managed_mcp_refresh {
+            Some(params) => managed_mcp_refresh::refresh_loop(params, foreground).await,
+            None => future::pending::<()>().await,
+        }
+    }
+    .fuse();
+
     let run_future = run_future.fuse();
-    futures::pin_mut!(run_future, git_refresh, bedrock_refresh);
+    futures::pin_mut!(
+        run_future,
+        git_refresh,
+        bedrock_refresh,
+        managed_mcp_refresh
+    );
     futures::select! {
         result = run_future => result,
         _ = git_refresh => unreachable!("git credentials refresh loop resolved unexpectedly"),
         _ = bedrock_refresh => unreachable!("Bedrock credentials refresh loop resolved unexpectedly"),
+        _ = managed_mcp_refresh => unreachable!("managed MCP refresh loop resolved unexpectedly"),
     }
 }
 
@@ -870,6 +886,9 @@ struct ResolvedMcpSpecs {
     /// `createManagedMcpClientConfig`: the `uid` to re-mint the short-lived
     /// proxy config with, keyed by installation UUID.
     managed_uids: HashMap<Uuid, String>,
+    /// Expiry of the proxy config minted for each managed installation,
+    /// keyed by installation UUID; drives the proactive re-mint schedule.
+    managed_expirations: HashMap<Uuid, chrono::DateTime<Utc>>,
 }
 
 impl From<warpui::ModelDropped> for AgentDriverError {
@@ -1720,6 +1739,11 @@ impl AgentDriver {
                         resolved
                             .managed_uids
                             .insert(installation.uuid(), uuid.to_string());
+                        if let Some(expires_at) = client_config.expires_at {
+                            resolved
+                                .managed_expirations
+                                .insert(installation.uuid(), expires_at.utc());
+                        }
                     }
                     resolved.ephemeral_installations.extend(installations);
                 }
@@ -1764,6 +1788,11 @@ impl AgentDriver {
                                 resolved
                                     .managed_uids
                                     .insert(installation.uuid(), id.clone());
+                                if let Some(expires_at) = client_config.expires_at {
+                                    resolved
+                                        .managed_expirations
+                                        .insert(installation.uuid(), expires_at.utc());
+                                }
                             }
                             resolved.ephemeral_installations.extend(installations);
                         }
@@ -2288,34 +2317,50 @@ impl AgentDriver {
                 .await
                 .map_err(|err| format!("{err:#}"))?;
 
-                let server_name = stale.templatable_mcp_server().name.clone();
-                let fresh = Self::installations_from_managed_client_config_json(
+                Self::rebuild_managed_installation(
+                    &stale,
                     &client_config.mcp_config_json,
                     task_id,
                     &managed_uid,
+                    &secrets,
                 )
-                .map_err(|err| err.to_string())?
-                .into_iter()
-                .find(|candidate| candidate.templatable_mcp_server().name == server_name)
-                .ok_or_else(|| {
-                    format!("server '{server_name}' missing from re-minted managed MCP config")
-                })?;
-
-                // Preserve the stale instance's identities: the installation
-                // UUID keys all manager state (and is random for local runs,
-                // so re-parsing yields a different one), and the template
-                // UUID keys the log file.
-                let mut fresh_server = fresh.templatable_mcp_server().clone();
-                fresh_server.uuid = stale.template_uuid();
-                let mut rebuilt = TemplatableMCPServerInstallation::new(
-                    stale.uuid(),
-                    fresh_server,
-                    fresh.variable_values().clone(),
-                );
-                rebuilt.apply_secrets(&secrets);
-                Ok(rebuilt)
             })
         })
+    }
+
+    /// Rebuilds a managed installation from a freshly minted client config,
+    /// preserving the stale instance's identities: the installation UUID
+    /// keys all manager state (and is random for local runs, so re-parsing
+    /// yields a different one), and the template UUID keys the log file.
+    pub(crate) fn rebuild_managed_installation(
+        stale: &TemplatableMCPServerInstallation,
+        mcp_config_json: &str,
+        task_id: Option<AmbientAgentTaskId>,
+        managed_uid: &str,
+        secrets: &HashMap<String, ManagedSecretValue>,
+    ) -> Result<TemplatableMCPServerInstallation, String> {
+        let server_name = stale.templatable_mcp_server().name.clone();
+        let fresh = Self::installations_from_managed_client_config_json(
+            mcp_config_json,
+            task_id,
+            managed_uid,
+        )
+        .map_err(|err| err.to_string())?
+        .into_iter()
+        .find(|candidate| candidate.templatable_mcp_server().name == server_name)
+        .ok_or_else(|| {
+            format!("server '{server_name}' missing from re-minted managed MCP config")
+        })?;
+
+        let mut fresh_server = fresh.templatable_mcp_server().clone();
+        fresh_server.uuid = stale.template_uuid();
+        let mut rebuilt = TemplatableMCPServerInstallation::new(
+            stale.uuid(),
+            fresh_server,
+            fresh.variable_values().clone(),
+        );
+        rebuilt.apply_secrets(secrets);
+        Ok(rebuilt)
     }
 
     /// Subscribe to [`FileBasedMCPManagerEvent::CloudEnvMcpScanComplete`]
@@ -2828,6 +2873,7 @@ impl AgentDriver {
             task_id_for_refresh,
             ai_client_for_refresh,
             oidc_strategy_for_refresh,
+            managed_mcp_refresh_params,
         ) = async {
             let (setup_events, environment_snapshot_reporter) = foreground
                 .spawn(|me, ctx| {
@@ -2894,6 +2940,10 @@ impl AgentDriver {
             .await?;
 
         // For the Oz harness only: set up MCP servers, model overrides, and profile information.
+        let mut managed_mcp_refresh_params: Option<managed_mcp_refresh::ManagedMcpRefreshParams> =
+            None;
+        let mut managed_refresh_entries: Vec<managed_mcp_refresh::ManagedRefreshEntry> =
+            Vec::new();
         if matches!(&task.harness, HarnessKind::Oz) {
             let mcp_specs = task.mcp_specs.clone();
             let managed_mcp_client = foreground
@@ -2908,6 +2958,19 @@ impl AgentDriver {
                     let existing_uuids = resolved_mcp_specs.local_uuids;
                     let mut ephemeral_installations = resolved_mcp_specs.ephemeral_installations;
                     let managed_uids = resolved_mcp_specs.managed_uids;
+                    let managed_expirations = resolved_mcp_specs.managed_expirations;
+                    managed_refresh_entries = managed_uids
+                        .iter()
+                        .filter_map(|(installation_uuid, managed_uid)| {
+                            managed_expirations.get(installation_uuid).map(|expires_at| {
+                                managed_mcp_refresh::ManagedRefreshEntry {
+                                    installation_uuid: *installation_uuid,
+                                    managed_uid: managed_uid.clone(),
+                                    expires_at: *expires_at,
+                                }
+                            })
+                        })
+                        .collect();
 
                     // Attach the built-in Factory MCP server. Interactive
                     // clients attach built-ins via
@@ -3002,6 +3065,26 @@ impl AgentDriver {
                 })
                 .await;
             Self::handle_mcp_startup_result(mcp_startup_result, &foreground).await?;
+
+            // Proactively re-mint managed proxy configs before they expire.
+            if FeatureFlag::McpSelfHeal.is_enabled() && !managed_refresh_entries.is_empty() {
+                let (managed_mcp_client, task_id, secrets) = foreground
+                    .spawn(|me, ctx| {
+                        (
+                            ServerApiProvider::as_ref(ctx).get_managed_mcp_client(),
+                            me.task_id,
+                            me.secrets.clone(),
+                        )
+                    })
+                    .await?;
+                managed_mcp_refresh_params =
+                    Some(managed_mcp_refresh::ManagedMcpRefreshParams {
+                        entries: std::mem::take(&mut managed_refresh_entries),
+                        managed_mcp_client,
+                        task_id,
+                        secrets,
+                    });
+            }
             let profile = task.profile.clone();
             setup_events
                 .record_result(SetupStep::AgentProfileConfiguration, async {
@@ -3259,6 +3342,7 @@ impl AgentDriver {
                 task_id_for_refresh,
                 ai_client_for_refresh,
                 oidc_strategy_for_refresh,
+                managed_mcp_refresh_params,
             ))
         }
         .instrument(setup_span)
@@ -3284,6 +3368,7 @@ impl AgentDriver {
                     task_id_for_refresh,
                     ai_client_for_refresh,
                     oidc_strategy_for_refresh,
+                    managed_mcp_refresh_params,
                     &foreground,
                 )
                 .await?;
@@ -3337,6 +3422,7 @@ impl AgentDriver {
                     task_id_for_refresh,
                     ai_client_for_refresh,
                     oidc_strategy_for_refresh,
+                    managed_mcp_refresh_params,
                     &foreground,
                 )
                 .await
