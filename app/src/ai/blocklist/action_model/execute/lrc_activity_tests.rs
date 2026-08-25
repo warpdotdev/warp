@@ -52,7 +52,9 @@ fn a_quiet_process_tree_accumulates_time_since_last_activity() {
         );
     }
 
-    let report = activity.take_report(start + Duration::from_secs(5));
+    let report = activity
+        .take_report(start + Duration::from_secs(5))
+        .expect("report");
     assert_eq!(report.since_last_activity, Some(Duration::from_secs(4)));
 }
 
@@ -68,7 +70,9 @@ fn first_sighting_of_a_process_contributes_no_cpu_delta() {
         start + Duration::from_secs(1),
     );
 
-    let report = activity.take_report(start + Duration::from_secs(1));
+    let report = activity
+        .take_report(start + Duration::from_secs(1))
+        .expect("report");
     let process = report.process.expect("process tier should be reported");
     assert_eq!(process.cpu_time_delta, Duration::ZERO);
     assert_eq!(process.live_process_count, 1);
@@ -88,7 +92,9 @@ fn cpu_time_counts_as_activity() {
         start + Duration::from_secs(2),
     );
 
-    let report = activity.take_report(start + Duration::from_secs(3));
+    let report = activity
+        .take_report(start + Duration::from_secs(3))
+        .expect("report");
     let process = report.process.expect("process tier should be reported");
     assert_eq!(process.cpu_time_delta, Duration::from_millis(750));
     // The last activity was the CPU accrual at t+2, not the report at t+3.
@@ -103,7 +109,9 @@ fn io_writes_count_as_activity() {
     activity.apply_sample(io_sample(&[(100, 0)]), start + Duration::from_secs(1));
     activity.apply_sample(io_sample(&[(100, 4_096)]), start + Duration::from_secs(5));
 
-    let report = activity.take_report(start + Duration::from_secs(5));
+    let report = activity
+        .take_report(start + Duration::from_secs(5))
+        .expect("report");
     let process = report.process.expect("process tier should be reported");
     assert_eq!(process.io_write_bytes_delta, 4_096);
     assert_eq!(report.since_last_activity, Some(Duration::ZERO));
@@ -123,7 +131,9 @@ fn cpu_delta_is_summed_across_the_process_tree() {
         start + Duration::from_secs(2),
     );
 
-    let report = activity.take_report(start + Duration::from_secs(2));
+    let report = activity
+        .take_report(start + Duration::from_secs(2))
+        .expect("report");
     let process = report.process.expect("process tier should be reported");
     assert_eq!(process.cpu_time_delta, Duration::from_millis(500));
     assert_eq!(process.live_process_count, 2);
@@ -141,7 +151,9 @@ fn cpu_delta_accumulates_across_samples_within_one_report() {
         );
     }
 
-    let report = activity.take_report(start + Duration::from_secs(4));
+    let report = activity
+        .take_report(start + Duration::from_secs(4))
+        .expect("report");
     let process = report.process.expect("process tier should be reported");
     // 3 deltas of 100ms; the first sample established the baseline.
     assert_eq!(process.cpu_time_delta, Duration::from_millis(300));
@@ -157,9 +169,11 @@ fn cpu_delta_resets_between_reports() {
         process_sample(&[(100, 500)]),
         start + Duration::from_secs(2),
     );
-    activity.take_report(start + Duration::from_secs(2));
+    let _ = activity.take_report(start + Duration::from_secs(2));
 
-    let second = activity.take_report(start + Duration::from_secs(3));
+    let second = activity
+        .take_report(start + Duration::from_secs(3))
+        .expect("report");
     let process = second.process.expect("process tier should be reported");
     assert_eq!(process.cpu_time_delta, Duration::ZERO);
 }
@@ -177,12 +191,14 @@ fn exited_process_tree_reports_no_live_processes_and_no_stale_cpu() {
         process_sample(&[(100, 2_000)]),
         start + Duration::from_secs(2),
     );
-    activity.take_report(start + Duration::from_secs(2));
+    let _ = activity.take_report(start + Duration::from_secs(2));
 
     // The command's processes are gone: an empty tree, not a missing sample.
     activity.apply_sample(process_sample(&[]), start + Duration::from_secs(3));
 
-    let report = activity.take_report(start + Duration::from_secs(4));
+    let report = activity
+        .take_report(start + Duration::from_secs(4))
+        .expect("report");
     let process = report.process.expect("process tier should be reported");
     assert_eq!(process.live_process_count, 0);
     assert_eq!(process.cpu_time_delta, Duration::ZERO);
@@ -198,7 +214,7 @@ fn a_pid_that_exits_stops_contributing_to_later_deltas() {
         start + Duration::from_secs(1),
     );
     activity.apply_sample(process_sample(&[]), start + Duration::from_secs(2));
-    activity.take_report(start + Duration::from_secs(2));
+    let _ = activity.take_report(start + Duration::from_secs(2));
 
     // The same pid number reappears, now belonging to an unrelated process with
     // a large lifetime CPU total. It must be treated as newly seen.
@@ -207,7 +223,9 @@ fn a_pid_that_exits_stops_contributing_to_later_deltas() {
         start + Duration::from_secs(3),
     );
 
-    let report = activity.take_report(start + Duration::from_secs(3));
+    let report = activity
+        .take_report(start + Duration::from_secs(3))
+        .expect("report");
     let process = report.process.expect("process tier should be reported");
     assert_eq!(process.cpu_time_delta, Duration::ZERO);
 }
@@ -221,7 +239,7 @@ fn process_churn_counts_as_activity() {
         process_sample(&[(100, 500)]),
         start + Duration::from_secs(1),
     );
-    activity.take_report(start + Duration::from_secs(1));
+    let _ = activity.take_report(start + Duration::from_secs(1));
 
     // A build that spawns and reaps compilers may show no CPU delta on any
     // single pid, but the changing set of processes is real progress.
@@ -230,7 +248,9 @@ fn process_churn_counts_as_activity() {
         start + Duration::from_secs(5),
     );
 
-    let report = activity.take_report(start + Duration::from_secs(5));
+    let report = activity
+        .take_report(start + Duration::from_secs(5))
+        .expect("report");
     assert_eq!(report.since_last_activity, Some(Duration::ZERO));
 }
 
@@ -243,14 +263,16 @@ fn same_count_pid_replacement_counts_as_activity() {
         process_sample(&[(100, 500)]),
         start + Duration::from_secs(1),
     );
-    activity.take_report(start + Duration::from_secs(1));
+    let _ = activity.take_report(start + Duration::from_secs(1));
 
     activity.apply_sample(
         process_sample(&[(101, 500)]),
         start + Duration::from_secs(5),
     );
 
-    let report = activity.take_report(start + Duration::from_secs(5));
+    let report = activity
+        .take_report(start + Duration::from_secs(5))
+        .expect("report");
     let process = report.process.expect("process tier should be reported");
     assert_eq!(process.cpu_time_delta, Duration::ZERO);
     assert_eq!(process.live_process_count, 1);
@@ -280,7 +302,9 @@ fn a_fully_quiet_process_tree_is_still_reported() {
         );
     }
 
-    let report = activity.take_report(start + Duration::from_secs(5));
+    let report = activity
+        .take_report(start + Duration::from_secs(5))
+        .expect("report");
     let process = report
         .process
         .expect("an all-zero reading is still a reading");
@@ -288,29 +312,27 @@ fn a_fully_quiet_process_tree_is_still_reported() {
     assert_eq!(process.io_write_bytes_delta, 0);
     assert_eq!(process.live_process_count, 1);
     assert_eq!(process.state, LrcProcessState::Sleeping);
-    assert!(!report.signals_unavailable);
 }
 
 /// A command is registered when its first snapshot is built, before the sampler
 /// has run for it. Reporting the still-zero counters then would describe a
 /// healthy command as a process tree with nothing running.
 #[test]
-fn the_process_tier_is_withheld_until_it_has_actually_been_sampled() {
+fn no_report_until_the_process_tree_has_actually_been_sampled() {
     let start = Instant::now();
     let mut activity = BlockActivity::new(start);
 
-    let first = activity.take_report(start);
-    assert!(first.process.is_none());
-    assert!(first.signals_unavailable);
+    assert!(activity.take_report(start).is_none());
 
     activity.apply_sample(
         process_sample(&[(100, 1_000)]),
         start + Duration::from_secs(1),
     );
 
-    let second = activity.take_report(start + Duration::from_secs(1));
-    assert!(second.process.is_some());
-    assert!(!second.signals_unavailable);
+    let report = activity
+        .take_report(start + Duration::from_secs(1))
+        .expect("a sampled tree produces a report");
+    assert!(report.process.is_some());
 }
 
 #[test]
@@ -330,18 +352,14 @@ fn a_remote_terminal_does_not_start_the_sampler() {
 }
 
 #[test]
-fn a_local_terminal_reports_and_starts_the_sampler() {
+fn a_local_terminal_starts_the_sampler_but_reports_nothing_before_sampling() {
     let monitor = LrcActivityMonitor::new();
     monitor.set_monitoring_enabled(true);
 
     assert!(monitor.arm());
-    let report = monitor
-        .report(&BlockId::new())
-        .expect("local terminals report activity");
-    // The sampler has not observed this block yet, so the first report only
-    // says that no reading was taken.
-    assert!(report.signals_unavailable);
-    assert!(report.process.is_none());
+    // The sampler has not observed this block yet: no report is better than a
+    // fabricated all-zeros reading.
+    assert!(monitor.report(&BlockId::new()).is_none());
 }
 
 /// A builtin or shell function runs in the shell process itself, which then

@@ -194,11 +194,15 @@ impl Display for AIAgentActionResultType {
 /// computes silently is indistinguishable from a hung one when judged from the
 /// terminal grid alone. Process-tree activity gives the agent something to look
 /// at besides the grid before deciding to cancel.
+///
+/// Best-effort: built only when the sampler actually took a reading, so every
+/// value carried here is a real measurement, including zeros. When nothing was
+/// collected, no `LrcActivity` exists at all — there is no in-band "signals
+/// unavailable" marker.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, Eq, PartialEq)]
 pub struct LrcActivity {
     /// Time since the process tree last showed activity — CPU accrual, I/O
-    /// writes, or a change in the set of live processes. `None` when no
-    /// activity has ever been observed.
+    /// writes, or a change in the set of live processes.
     ///
     /// This is derived from a fixed-rate sampler rather than from the interval
     /// between agent polls, so it stays accurate no matter how far apart the
@@ -206,16 +210,10 @@ pub struct LrcActivity {
     pub since_last_activity: Option<Duration>,
 
     /// Present whenever the process tree was actually inspected, including when
-    /// every reading in it is zero: an exited tree is a real answer. Absent only
-    /// when no reading was taken, which is always accompanied by
-    /// [`Self::signals_unavailable`].
+    /// every reading in it is zero: an exited tree is a real answer. Optional
+    /// only for restoring conversations recorded by other client versions;
+    /// reports built by this client always populate it.
     pub process: Option<LrcProcessActivity>,
-
-    /// Set when the process tree could not be collected: a first snapshot built
-    /// before the sampler has had a chance to look. Distinguishes "we looked
-    /// and found nothing" from "we could not look", which the agent must not
-    /// read as evidence of a hang.
-    pub signals_unavailable: bool,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, Eq, PartialEq)]
@@ -244,31 +242,6 @@ pub enum LrcProcessState {
     Zombie,
     #[default]
     Unknown,
-}
-
-impl LrcProcessState {
-    /// The wire representation understood by the server.
-    pub fn as_wire_str(&self) -> &'static str {
-        match self {
-            LrcProcessState::Running => "running",
-            LrcProcessState::Sleeping => "sleeping",
-            LrcProcessState::DiskWait => "disk_wait",
-            LrcProcessState::Stopped => "stopped",
-            LrcProcessState::Zombie => "zombie",
-            LrcProcessState::Unknown => "unknown",
-        }
-    }
-
-    pub fn from_wire_str(state: &str) -> Self {
-        match state {
-            "running" => LrcProcessState::Running,
-            "sleeping" => LrcProcessState::Sleeping,
-            "disk_wait" => LrcProcessState::DiskWait,
-            "stopped" => LrcProcessState::Stopped,
-            "zombie" => LrcProcessState::Zombie,
-            _ => LrcProcessState::Unknown,
-        }
-    }
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]

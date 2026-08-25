@@ -3,6 +3,8 @@ use warp_multi_agent_api::apply_file_diffs_result::success::UpdatedFileContent;
 use warp_multi_agent_api::ask_user_question_result::answer_item::{
     self, Answer as AskUserQuestionAnswer,
 };
+use warp_multi_agent_api::long_running_shell_command_activity::ProcessActivity as ApiProcessActivity;
+use warp_multi_agent_api::long_running_shell_command_activity::process_activity::State as ApiProcessState;
 use warp_multi_agent_api::{self as api};
 
 use super::*;
@@ -16,28 +18,28 @@ fn local_datetime_to_timestamp(timestamp: DateTime<Local>) -> prost_types::Times
     }
 }
 
-/// A clock that has never ticked is sent as `0` seconds rather than omitted,
-/// because `signals_unavailable` and the process submessage already say whether
-/// anything was observed.
-fn duration_to_secs_f32(duration: Option<Duration>) -> f32 {
-    duration.unwrap_or_default().as_secs_f32()
+/// `None` for durations that cannot have come from this client (negative
+/// components), rather than clamping them into a plausible-looking reading.
+fn proto_to_duration(duration: &prost_types::Duration) -> Option<Duration> {
+    let seconds = u64::try_from(duration.seconds).ok()?;
+    let nanos = u32::try_from(duration.nanos).ok()?;
+    Some(Duration::new(seconds, nanos))
 }
 
-impl From<LrcActivity> for api::LongRunningCommandActivity {
+impl From<LrcActivity> for api::LongRunningShellCommandActivity {
     fn from(activity: LrcActivity) -> Self {
         Self {
-            seconds_since_last_activity: duration_to_secs_f32(activity.since_last_activity),
+            since_last_activity: activity.since_last_activity.map(duration_to_proto),
             process: activity.process.map(Into::into),
-            signals_unavailable: activity.signals_unavailable,
         }
     }
 }
 
-impl From<LrcProcessActivity> for api::long_running_command_activity::ProcessActivity {
+impl From<LrcProcessActivity> for ApiProcessActivity {
     fn from(process: LrcProcessActivity) -> Self {
         Self {
             cpu_time_delta_ms: process.cpu_time_delta.as_millis() as u64,
-            state: process.state.as_wire_str().to_owned(),
+            state: ApiProcessState::from(process.state) as i32,
             live_process_count: process.live_process_count,
             io_write_bytes_delta: process.io_write_bytes_delta,
         }
@@ -46,27 +48,57 @@ impl From<LrcProcessActivity> for api::long_running_command_activity::ProcessAct
 
 /// Restores activity from the wire, for rebuilding a conversation that was
 /// previously sent to the server.
-impl From<&api::LongRunningCommandActivity> for LrcActivity {
-    fn from(activity: &api::LongRunningCommandActivity) -> Self {
+impl From<&api::LongRunningShellCommandActivity> for LrcActivity {
+    fn from(activity: &api::LongRunningShellCommandActivity) -> Self {
         Self {
-            since_last_activity: secs_f32_to_duration(activity.seconds_since_last_activity),
+            since_last_activity: activity
+                .since_last_activity
+                .as_ref()
+                .and_then(proto_to_duration),
             process: activity.process.as_ref().map(Into::into),
-            signals_unavailable: activity.signals_unavailable,
         }
     }
 }
 
-fn secs_f32_to_duration(seconds: f32) -> Option<Duration> {
-    Duration::try_from_secs_f32(seconds).ok()
-}
-
-impl From<&api::long_running_command_activity::ProcessActivity> for LrcProcessActivity {
-    fn from(process: &api::long_running_command_activity::ProcessActivity) -> Self {
+impl From<&ApiProcessActivity> for LrcProcessActivity {
+    fn from(process: &ApiProcessActivity) -> Self {
         Self {
             cpu_time_delta: Duration::from_millis(process.cpu_time_delta_ms),
-            state: LrcProcessState::from_wire_str(&process.state),
+            // The prost getter resolves an unrecognized wire value to
+            // `Unspecified`, which maps to `Unknown` below.
+            state: process.state().into(),
             live_process_count: process.live_process_count,
             io_write_bytes_delta: process.io_write_bytes_delta,
+        }
+    }
+}
+
+impl From<LrcProcessState> for ApiProcessState {
+    fn from(state: LrcProcessState) -> Self {
+        match state {
+            LrcProcessState::Running => ApiProcessState::Running,
+            LrcProcessState::Sleeping => ApiProcessState::Sleeping,
+            LrcProcessState::DiskWait => ApiProcessState::DiskWait,
+            LrcProcessState::Stopped => ApiProcessState::Stopped,
+            LrcProcessState::Zombie => ApiProcessState::Zombie,
+            // Explicitly `Unknown`, never the `Unspecified` zero value: the
+            // proto3-rewritten Rust bindings omit zero-valued enums from the
+            // wire, and "the client looked and could not classify" must not
+            // read back as "never populated".
+            LrcProcessState::Unknown => ApiProcessState::Unknown,
+        }
+    }
+}
+
+impl From<ApiProcessState> for LrcProcessState {
+    fn from(state: ApiProcessState) -> Self {
+        match state {
+            ApiProcessState::Running => LrcProcessState::Running,
+            ApiProcessState::Sleeping => LrcProcessState::Sleeping,
+            ApiProcessState::DiskWait => LrcProcessState::DiskWait,
+            ApiProcessState::Stopped => LrcProcessState::Stopped,
+            ApiProcessState::Zombie => LrcProcessState::Zombie,
+            ApiProcessState::Unspecified | ApiProcessState::Unknown => LrcProcessState::Unknown,
         }
     }
 }

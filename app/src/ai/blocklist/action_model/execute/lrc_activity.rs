@@ -129,8 +129,9 @@ impl LrcActivityMonitor {
     }
 
     /// Builds the activity report for `block_id`, registering it on first
-    /// sight. Returns `None` when monitoring is disabled for this terminal.
-    ///
+    /// sight. Returns `None` when monitoring is disabled for this terminal, or
+    /// when the sampler has not yet observed the command's process tree
+    /// (normal on the first read of a command)
     /// Called while the terminal model lock is held, so it must not try to
     /// acquire it. The sampler never holds the monitor lock while taking the
     /// terminal lock, so this ordering cannot deadlock.
@@ -145,7 +146,7 @@ impl LrcActivityMonitor {
             .blocks
             .entry(block_id.clone())
             .or_insert_with(|| BlockActivity::new(now));
-        Some(block_activity.take_report(now))
+        block_activity.take_report(now)
     }
 
     /// Removes state for a command that is no longer being monitored.
@@ -295,28 +296,28 @@ impl BlockActivity {
     }
 
     /// Produces the report for a snapshot and resets the per-report accumulators.
-    fn take_report(&mut self, now: Instant) -> LrcActivity {
-        // An all-zero process tier is a meaningful reading — an exited tree —
-        // so it is reported rather than suppressed. It is only withheld when no
-        // reading was taken at all, which must not be mistaken for one.
-        let process_collected = self.process.sampled;
-        let process = process_collected.then(|| LrcProcessActivity {
-            cpu_time_delta: Duration::from_millis(self.process.cpu_ms_since_report),
-            state: self.process.state,
-            live_process_count: self.process.live_process_count,
-            io_write_bytes_delta: self.process.io_write_bytes_since_report,
-        });
+    ///
+    /// Returns `None` until the sampler has actually observed the process tree.
+    /// All-zero tier from a real sample, by contrast, is a meaningful reading and is reported.
+    fn take_report(&mut self, now: Instant) -> Option<LrcActivity> {
+        if !self.process.sampled {
+            return None;
+        }
 
         let report = LrcActivity {
             since_last_activity: Some(now.saturating_duration_since(self.last_activity)),
-            process,
-            signals_unavailable: !process_collected,
+            process: Some(LrcProcessActivity {
+                cpu_time_delta: Duration::from_millis(self.process.cpu_ms_since_report),
+                state: self.process.state,
+                live_process_count: self.process.live_process_count,
+                io_write_bytes_delta: self.process.io_write_bytes_since_report,
+            }),
         };
 
         self.process.cpu_ms_since_report = 0;
         self.process.io_write_bytes_since_report = 0;
 
-        report
+        Some(report)
     }
 }
 
