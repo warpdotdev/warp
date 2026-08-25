@@ -212,3 +212,32 @@ mod unix {
         });
     }
 }
+
+#[cfg(windows)]
+mod windows {
+    use std::path::PathBuf;
+
+    use super::super::*;
+
+    #[test]
+    fn executes_login_command_with_windows_powershell() {
+        futures_lite::future::block_on(async {
+            let powershell_path = PathBuf::from(
+                std::env::var_os("SystemRoot").expect("SystemRoot should be set on Windows"),
+            )
+            .join(r"System32\WindowsPowerShell\v1.0\powershell.exe");
+            let executor = LocalCommandExecutor::new(Some(powershell_path), ShellType::PowerShell);
+
+            let output = executor
+                .execute_local_command_in_login_shell("exit 0", None, None)
+                .await
+                .expect("execute command with Windows PowerShell");
+
+            assert!(
+                output.success(),
+                "Windows PowerShell command failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        });
+    }
+}
