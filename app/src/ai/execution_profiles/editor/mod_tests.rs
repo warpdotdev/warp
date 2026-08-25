@@ -12,7 +12,7 @@ use crate::ai::execution_profiles::{
 };
 use crate::ai::llms::{
     AvailableLLMs, LLMContextWindow, LLMInfo, LLMPreferences, LLMProvider, LLMUsageMetadata,
-    ModelsByFeature,
+    ModelsByFeature, TeamlessScopeForTest,
 };
 use crate::ai::mcp::TemplatableMCPServerManager;
 use crate::auth::AuthStateProvider;
@@ -97,7 +97,10 @@ fn assert_context_window_limit_for_request(
             ..Default::default()
         };
         app.read(|ctx| {
-            assert_eq!(profile.context_window_limit_for_request(ctx), expected);
+            assert_eq!(
+                profile.context_window_limit_for_request(&TeamlessScopeForTest, ctx),
+                expected
+            );
         });
     });
 }

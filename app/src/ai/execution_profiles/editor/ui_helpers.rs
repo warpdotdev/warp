@@ -429,7 +429,7 @@ fn render_context_window_row(
     let scope = view.team_context(app);
     if BlocklistAIPermissions::as_ref(app)
         .permissions_profile_for_id(view.profile_id(), &scope, app)
-        .should_show_long_context_pricing_warning(view.dragged_context_window_value, app)
+        .should_show_long_context_pricing_warning(view.dragged_context_window_value, &scope, app)
     {
         column.add_child(render_long_context_pricing_warning(appearance));
     }

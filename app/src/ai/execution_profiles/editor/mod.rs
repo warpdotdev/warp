@@ -1447,7 +1447,7 @@ impl ExecutionProfileEditorView {
             &scope,
             app,
         );
-        profile.configurable_context_window(app)
+        profile.configurable_context_window(&scope, app)
     }
 
     fn current_context_window_display_value(&self, app: &AppContext) -> Option<u32> {
@@ -1457,7 +1457,7 @@ impl ExecutionProfileEditorView {
             &scope,
             app,
         );
-        profile.context_window_display_value(app)
+        profile.context_window_display_value(&scope, app)
     }
 
     fn handle_context_window_editor_event(
@@ -1539,7 +1539,7 @@ fn initial_context_window_display_value(
     app: &AppContext,
 ) -> u32 {
     profile_data
-        .context_window_display_value(app)
+        .context_window_display_value(scope, app)
         .unwrap_or_else(|| {
             LLMPreferences::as_ref(app)
                 .get_default_base_model(scope, app)
