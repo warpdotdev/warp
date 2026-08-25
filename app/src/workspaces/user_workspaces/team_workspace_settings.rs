@@ -88,10 +88,13 @@ impl TeamScope for TeamContext<'_> {
 
 /// The team a headless CLI invocation acts as, named on the command line instead of resolved
 /// from a window.
+#[cfg(not(target_family = "wasm"))]
 pub struct TeamScopeForCli(ServerId);
 
+#[cfg(not(target_family = "wasm"))]
 impl sealed::Sealed for TeamScopeForCli {}
 
+#[cfg(not(target_family = "wasm"))]
 impl TeamScope for TeamScopeForCli {
     fn team_uid(&self) -> Option<ServerId> {
         Some(self.0)
@@ -116,6 +119,7 @@ impl TeamScope for TeamlessScopeForTest {
 /// [`UserWorkspaces::team_context_resolver`].
 pub type TeamContextResolver = Rc<dyn for<'a> Fn(&'a AppContext) -> TeamContext<'a>>;
 
+#[cfg(not(target_family = "wasm"))]
 #[derive(Debug, thiserror::Error)]
 #[error("you are not on team {team_uid}")]
 pub struct NotATeamMemberError {
@@ -151,6 +155,7 @@ impl UserWorkspaces {
     /// The sole exception to scopes being window-derived. *Which* team a CLI invocation acts as is
     /// the caller's to settle; all this enforces is that the answer is a team the user is on, so a
     /// scope can never name one whose policy [`Self::team_byo_for_scope`] would fail to find.
+    #[cfg(not(target_family = "wasm"))]
     pub(crate) fn team_scope_for_cli(
         &self,
         team_uid: ServerId,
