@@ -1241,7 +1241,7 @@ fn mock_workspace_with_shared_session(app: &mut App) -> ViewHandle<Workspace> {
 }
 
 // Creates a workspace as a viewer of a shared session.
-fn mock_workspace_viewing_shared_session(app: &mut App) -> ViewHandle<Workspace> {
+pub(crate) fn mock_workspace_viewing_shared_session(app: &mut App) -> ViewHandle<Workspace> {
     // Create the workspace as a session-sharing sharer.
     let global_resource_handles = GlobalResourceHandles::mock(app);
 

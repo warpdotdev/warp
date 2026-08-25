@@ -3,6 +3,7 @@ use onboarding::{
     AgentOnboardingView, OfferVariant, OnboardingAuthState, OnboardingIntention, SelectedSettings,
     UICustomizationSettings,
 };
+use session_sharing_protocol::common::SessionId;
 use warp_core::features::FeatureFlag;
 use warp_core::user_preferences::GetUserPreferences as _;
 use warpui::elements::Empty;
@@ -16,8 +17,10 @@ use super::{
     HAS_COMPLETED_ONBOARDING_KEY, NewWorkspaceSource, RootView, WorkspaceArgs,
     has_completed_local_onboarding, offer_variant_for_account_class,
     refresh_pending_onboarding_choices, requires_post_onboarding_login,
+    should_show_pre_login_onboarding_for,
 };
 use crate::GlobalResourceHandles;
+use crate::ai::agent::api::ServerConversationToken;
 use crate::appearance::Appearance;
 use crate::auth::AuthStateProvider;
 use crate::auth::auth_manager::AuthManager;
@@ -432,5 +435,245 @@ fn test_show_needs_sso_link_view_blocks_pre_terminal_onboarding_states() {
             marker,
             "PostAuthOnboarding",
         );
+    });
+}
+
+/// Regression test: a logged-out user cold-starting a window on a shared-session or cloud-
+/// conversation deep link used to be sent through pre-login onboarding whenever it hadn't
+/// been completed locally, deferring the link behind the full FTUE instead of honoring it.
+/// Deep links must skip that gate regardless of the onboarding flag or local completion
+/// state; other window sources are unaffected.
+#[test]
+fn should_show_pre_login_onboarding_for_skips_content_deep_links() {
+    let _agent_onboarding = FeatureFlag::AgentOnboarding.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        app.update(crate::settings::init_and_register_user_preferences);
+        set_local_onboarding_completed(&mut app, false);
+
+        app.update(|ctx| {
+            assert!(should_show_pre_login_onboarding_for(
+                &NewWorkspaceSource::Empty {
+                    previous_active_window: None,
+                    shell: None,
+                },
+                ctx,
+            ));
+            assert!(!should_show_pre_login_onboarding_for(
+                &NewWorkspaceSource::SharedSessionAsViewer {
+                    session_id: SessionId::new(),
+                },
+                ctx,
+            ));
+            assert!(!should_show_pre_login_onboarding_for(
+                &NewWorkspaceSource::FromCloudConversationId {
+                    conversation_id: ServerConversationToken::new("token".to_string()),
+                },
+                ctx,
+            ));
+        });
+    });
+}
+
+/// Regression test: `join_shared_session_in_existing_window` used to silently drop a
+/// shared-session deep link unless the window had already reached `Terminal`
+/// ("Auth not complete before trying to join shared session"). Every pre-terminal state
+/// must instead retarget its pending workspace to the session, so the link is honored once
+/// auth and/or onboarding complete rather than being lost.
+#[test]
+fn retarget_pending_workspace_for_shared_session_covers_pre_terminal_states() {
+    App::test((), |mut app| async move {
+        initialize_settings_for_tests(&mut app);
+        app.add_singleton_model(|_ctx| ServerApiProvider::new_for_test());
+        app.add_singleton_model(|_| AuthStateProvider::new_for_test());
+        app.add_singleton_model(AuthManager::new_for_test);
+        app.add_singleton_model(|_| Appearance::mock());
+        app.add_singleton_model(|_| KeybindingChangedNotifier::new());
+        app.add_singleton_model(UserWorkspaces::default_mock);
+
+        let (_, harness) = app.add_window(WindowStyle::NotStealFocus, |ctx| {
+            let login_slide_view = ctx.add_typed_action_view(|ctx| {
+                LoginSlideView::new(
+                    true,
+                    false,
+                    "Dark",
+                    false,
+                    OnboardingIntention::AgentDrivenDevelopment,
+                    LoginSlideSource::OnboardingFlow,
+                    ctx,
+                )
+            });
+            let onboarding_view = ctx.add_typed_action_view(|ctx| {
+                AgentOnboardingView::new(
+                    onboarding_theme_picker_themes(),
+                    false,
+                    Vec::new(),
+                    LLMId::from("auto"),
+                    false,
+                    OnboardingAuthState::LoggedOut,
+                    ctx,
+                )
+            });
+            SsoLinkTestHarnessView {
+                login_slide_view,
+                onboarding_view,
+            }
+        });
+
+        let (login_slide_view, onboarding_view) = app.read(|ctx| {
+            let harness = harness.as_ref(ctx);
+            (
+                harness.login_slide_view.clone(),
+                harness.onboarding_view.clone(),
+            )
+        });
+
+        fn workspace_args(app: &mut App) -> Box<WorkspaceArgs> {
+            Box::new(WorkspaceArgs {
+                global_resource_handles: GlobalResourceHandles::mock(app),
+                server_time: None,
+                workspace_setting: NewWorkspaceSource::Empty {
+                    previous_active_window: None,
+                    shell: None,
+                },
+            })
+        }
+
+        fn assert_target_retargeted(
+            target: &AuthOnboardingTarget,
+            session_id: SessionId,
+            case: &str,
+        ) {
+            match target {
+                AuthOnboardingTarget::Workspace(args) => match args.workspace_setting {
+                    NewWorkspaceSource::SharedSessionAsViewer { session_id: id } => {
+                        assert_eq!(
+                            id, session_id,
+                            "{case}: should retarget to the requested session"
+                        );
+                    }
+                    _ => panic!(
+                        "{case}: workspace should have been retargeted to the shared session"
+                    ),
+                },
+                AuthOnboardingTarget::Terminal(_) => {
+                    panic!("{case}: expected a pending workspace, found an existing terminal")
+                }
+            }
+        }
+
+        let session_id = SessionId::new();
+
+        let mut state = AuthOnboardingState::Auth(workspace_args(&mut app));
+        assert!(state.retarget_pending_workspace_for_shared_session(session_id));
+        let AuthOnboardingState::Auth(args) = &state else {
+            panic!("Auth: expected to remain in Auth");
+        };
+        assert_target_retargeted(
+            &AuthOnboardingTarget::Workspace(args.clone()),
+            session_id,
+            "Auth",
+        );
+
+        let mut state = AuthOnboardingState::Onboarding {
+            onboarding_view: onboarding_view.clone(),
+            target: AuthOnboardingTarget::Workspace(workspace_args(&mut app)),
+        };
+        assert!(state.retarget_pending_workspace_for_shared_session(session_id));
+        let AuthOnboardingState::Onboarding { target, .. } = &state else {
+            panic!("Onboarding: expected to remain in Onboarding");
+        };
+        assert_target_retargeted(target, session_id, "Onboarding");
+
+        let mut state = AuthOnboardingState::LoginSlide {
+            login_slide_view: login_slide_view.clone(),
+            onboarding_view: onboarding_view.clone(),
+            target: AuthOnboardingTarget::Workspace(workspace_args(&mut app)),
+        };
+        assert!(state.retarget_pending_workspace_for_shared_session(session_id));
+        let AuthOnboardingState::LoginSlide { target, .. } = &state else {
+            panic!("LoginSlide: expected to remain in LoginSlide");
+        };
+        assert_target_retargeted(target, session_id, "LoginSlide");
+
+        let mut state = AuthOnboardingState::PostAuthOnboarding {
+            onboarding_view: onboarding_view.clone(),
+            target: AuthOnboardingTarget::Workspace(workspace_args(&mut app)),
+            account_class: FtueAccountClass::FreeStandard,
+            upgrade_started: false,
+        };
+        assert!(state.retarget_pending_workspace_for_shared_session(session_id));
+        let AuthOnboardingState::PostAuthOnboarding { target, .. } = &state else {
+            panic!("PostAuthOnboarding: expected to remain in PostAuthOnboarding");
+        };
+        assert_target_retargeted(target, session_id, "PostAuthOnboarding");
+
+        let mut state = AuthOnboardingState::NeedsSsoLink(AuthOnboardingTarget::Workspace(
+            workspace_args(&mut app),
+        ));
+        assert!(state.retarget_pending_workspace_for_shared_session(session_id));
+        let AuthOnboardingState::NeedsSsoLink(target) = &state else {
+            panic!("NeedsSsoLink: expected to remain in NeedsSsoLink");
+        };
+        assert_target_retargeted(target, session_id, "NeedsSsoLink");
+    });
+}
+
+/// Regression test: on `AuthComplete`, `complete_auth_and_create_workspace` can run against
+/// an already-`Terminal` state (e.g. wasm's web-import handoff, or the "skip onboarding
+/// survey" experiment branch, both of which call it unconditionally after landing in
+/// `Terminal`) and used to wrap a not-yet-onboarded user's live workspace in product
+/// onboarding regardless of what that workspace was opened for. A workspace opened
+/// directly against a shared session must stay in `Terminal` instead of being interrupted;
+/// a workspace with no such deep link is unaffected and still gets onboarding as before.
+#[test]
+fn complete_auth_and_create_workspace_skips_onboarding_for_content_deep_link_terminal() {
+    let _agent_onboarding = FeatureFlag::AgentOnboarding.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        crate::workspace::view::tests::initialize_app(&mut app);
+
+        // Constructed while the test user's default `is_onboarded = true` holds, so the
+        // plain workspace's own `check_and_trigger_onboarding` (which would otherwise mark
+        // the user onboarded on construction) is a no-op here.
+        let deep_link_workspace =
+            crate::workspace::view::tests::mock_workspace_viewing_shared_session(&mut app);
+        let plain_workspace = crate::workspace::view::tests::mock_workspace(&mut app);
+
+        let global_resource_handles = GlobalResourceHandles::mock(&mut app);
+        let (_, root_view) = app.add_window(WindowStyle::NotStealFocus, |ctx| {
+            RootView::new(
+                global_resource_handles,
+                NewWorkspaceSource::Empty {
+                    previous_active_window: None,
+                    shell: None,
+                },
+                ctx,
+            )
+        });
+
+        root_view.update(&mut app, |_root_view, ctx| {
+            AuthStateProvider::as_ref(ctx).get().set_is_onboarded(false);
+
+            let mut state = AuthOnboardingState::Terminal(deep_link_workspace.clone());
+            state.complete_auth_and_create_workspace(ctx);
+            match &state {
+                AuthOnboardingState::Terminal(workspace) => {
+                    assert_eq!(
+                        workspace.id(),
+                        deep_link_workspace.id(),
+                        "a shared-session workspace must not be replaced by onboarding"
+                    );
+                }
+                _ => panic!("a shared-session workspace must not be wrapped in onboarding"),
+            }
+
+            let mut state = AuthOnboardingState::Terminal(plain_workspace.clone());
+            state.complete_auth_and_create_workspace(ctx);
+            assert!(
+                matches!(state, AuthOnboardingState::Onboarding { .. }),
+                "a workspace opened with no content deep link should still get onboarding"
+            );
+        });
     });
 }

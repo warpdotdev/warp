@@ -1176,6 +1176,10 @@ pub struct Workspace {
     /// Pinned position for the vertical tabs callout so it doesn't move when
     /// the user toggles between vertical and horizontal tabs.
     hoa_vtabs_callout_pinned_position: Option<Vector2F>,
+    /// When true, this workspace was opened directly against a specific piece of content
+    /// (e.g. a shared session or a cloud conversation) rather than as a general-purpose
+    /// window. Such workspaces must not be retroactively wrapped in product onboarding.
+    opened_from_content_deep_link: bool,
     /// When true, this workspace was created to receive a transferred PaneGroup.
     /// The placeholder tab will be replaced when adopt_transferred_pane_group is called.
     pending_pane_group_transfer: bool,
@@ -1212,6 +1216,12 @@ pub struct Workspace {
 }
 
 impl Workspace {
+    /// Whether this workspace was opened directly against a shared session, cloud
+    /// conversation, or similar deep-linked content.
+    pub(crate) fn opened_from_content_deep_link(&self) -> bool {
+        self.opened_from_content_deep_link
+    }
+
     pub fn is_tab_drag_preview(&self) -> bool {
         self.is_tab_drag_preview
     }
@@ -2862,6 +2872,7 @@ impl Workspace {
         let resizable_data = ResizableData::handle(ctx);
         let window_id = ctx.window_id();
         let has_horizontal_split = workspace_setting.has_horizontal_split();
+        let opened_from_content_deep_link = workspace_setting.is_content_deep_link();
 
         let (left_panel_size, right_panel_size) =
             compute_default_panel_widths(ctx, window_id, has_horizontal_split);
@@ -3525,6 +3536,7 @@ impl Workspace {
             lightbox_view: None,
             hoa_onboarding_flow: None,
             hoa_vtabs_callout_pinned_position: None,
+            opened_from_content_deep_link,
             pending_pane_group_transfer: false,
             suppress_detach_panes_on_window_close: false,
             is_tab_drag_preview: false,
