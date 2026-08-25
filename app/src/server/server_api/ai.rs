@@ -1434,11 +1434,13 @@ pub trait AIClient: 'static + Send + Sync {
 
     async fn create_file_artifact_upload_target(
         &self,
+        task_id: &AmbientAgentTaskId,
         request: CreateFileArtifactUploadRequest,
     ) -> anyhow::Result<CreateFileArtifactUploadResponse, anyhow::Error>;
 
     async fn confirm_file_artifact_upload(
         &self,
+        task_id: &AmbientAgentTaskId,
         artifact_uid: String,
         checksum: String,
     ) -> anyhow::Result<FileArtifactRecord, anyhow::Error>;
@@ -2718,6 +2720,7 @@ impl AIClient for ServerApi {
 
     async fn create_file_artifact_upload_target(
         &self,
+        task_id: &AmbientAgentTaskId,
         request: CreateFileArtifactUploadRequest,
     ) -> anyhow::Result<CreateFileArtifactUploadResponse, anyhow::Error> {
         let variables = CreateFileArtifactUploadTargetVariables {
@@ -2733,7 +2736,9 @@ impl AIClient for ServerApi {
             request_context: get_request_context(),
         };
         let operation = CreateFileArtifactUploadTarget::build(variables);
-        let response = self.send_graphql_request(operation, None).await?;
+        let response = self
+            .send_graphql_request_for_task(task_id, operation, None)
+            .await?;
 
         match response.create_file_artifact_upload_target {
             CreateFileArtifactUploadTargetResult::CreateFileArtifactUploadTargetOutput(output) => {
@@ -2773,6 +2778,7 @@ impl AIClient for ServerApi {
 
     async fn confirm_file_artifact_upload(
         &self,
+        task_id: &AmbientAgentTaskId,
         artifact_uid: String,
         checksum: String,
     ) -> anyhow::Result<FileArtifactRecord, anyhow::Error> {
@@ -2784,7 +2790,9 @@ impl AIClient for ServerApi {
             request_context: get_request_context(),
         };
         let operation = ConfirmFileArtifactUpload::build(variables);
-        let response = self.send_graphql_request(operation, None).await?;
+        let response = self
+            .send_graphql_request_for_task(task_id, operation, None)
+            .await?;
 
         match response.confirm_file_artifact_upload {
             ConfirmFileArtifactUploadResult::ConfirmFileArtifactUploadOutput(output) => {

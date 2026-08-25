@@ -323,6 +323,20 @@ impl BaseClient {
         &self,
         timeout: Option<Duration>,
     ) -> Result<RequestOptions> {
+        self.graphql_request_options_with_ambient_policy(
+            timeout,
+            AmbientHeaderPolicy::inherit_all(),
+        )
+        .await
+    }
+
+    /// Returns GraphQL options for a session-authenticated operation with request-local ambient
+    /// agent headers.
+    pub async fn graphql_request_options_with_ambient_policy(
+        &self,
+        timeout: Option<Duration>,
+        ambient_header_policy: AmbientHeaderPolicy,
+    ) -> Result<RequestOptions> {
         let auth_token = self
             .get_or_refresh_access_token()
             .await
@@ -330,10 +344,9 @@ impl BaseClient {
         let mut options = self.graphql_request_options_with_token(auth_token.bearer_token());
         options.timeout = timeout;
         options.headers = self.authenticated_graphql.headers.clone();
-        options.headers.extend(
-            self.ambient_headers(AmbientHeaderPolicy::inherit_all())
-                .await?,
-        );
+        options
+            .headers
+            .extend(self.ambient_headers(ambient_header_policy).await?);
         Ok(options)
     }
 

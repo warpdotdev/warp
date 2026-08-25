@@ -1,7 +1,9 @@
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::{env, fs};
 
 use chrono::Utc;
+use mockito::Server;
 use tempfile::tempdir;
 use warp_cli::artifact::UploadArtifactArgs;
 
@@ -11,6 +13,11 @@ use crate::ai::agent::conversation::{AIAgentHarness, ServerAIConversationMetadat
 use crate::cloud_object::{Revision, ServerMetadata, ServerPermissions};
 use crate::persistence::model::ConversationUsageMetadata;
 use crate::server::ids::ServerId;
+use crate::server::server_api::ServerApi;
+use crate::server::server_api::ai::{
+    CreateFileArtifactUploadResponse, FileArtifactRecord, FileArtifactUploadTargetInfo,
+    MockAIClient,
+};
 
 fn create_mock_server_metadata() -> ServerMetadata {
     ServerMetadata {
@@ -103,6 +110,86 @@ fn file_size_and_prefix_for_path_returns_full_contents_when_prefix_exceeds_file(
     );
 }
 
+#[test]
+fn upload_uses_resolved_task_identity_for_create_and_confirm() {
+    let tempdir = tempdir().unwrap();
+    let path = tempdir.path().join("artifact.txt");
+    fs::write(&path, b"artifact contents").unwrap();
+    let mut server = Server::new();
+    let upload = server
+        .mock("PUT", "/upload")
+        .match_body("artifact contents")
+        .with_status(200)
+        .create();
+
+    let task_id: AmbientAgentTaskId = "550e8400-e29b-41d4-a716-446655440000".parse().unwrap();
+    let mut ai_client = MockAIClient::new();
+    ai_client
+        .expect_create_file_artifact_upload_target()
+        .withf(|actual_task_id, request| {
+            actual_task_id.to_string() == "550e8400-e29b-41d4-a716-446655440000"
+                && request.conversation_id.as_deref() == Some("conversation-123")
+        })
+        .once()
+        .returning(move |_, _| {
+            Ok(CreateFileArtifactUploadResponse {
+                artifact: FileArtifactRecord {
+                    artifact_uid: "artifact-123".to_string(),
+                    filepath: "artifact.txt".to_string(),
+                    description: None,
+                    mime_type: "text/plain".to_string(),
+                    size_bytes: Some(17),
+                },
+                upload_target: FileArtifactUploadTargetInfo {
+                    url: format!("{}/upload", server.url()),
+                    method: "PUT".to_string(),
+                    headers: Vec::new(),
+                    fields: Vec::new(),
+                },
+            })
+        });
+    ai_client
+        .expect_confirm_file_artifact_upload()
+        .withf(|actual_task_id, artifact_uid, checksum| {
+            actual_task_id.to_string() == "550e8400-e29b-41d4-a716-446655440000"
+                && artifact_uid == "artifact-123"
+                && !checksum.is_empty()
+        })
+        .once()
+        .returning(|_, _, _| {
+            Ok(FileArtifactRecord {
+                artifact_uid: "artifact-123".to_string(),
+                filepath: "artifact.txt".to_string(),
+                description: None,
+                mime_type: "text/plain".to_string(),
+                size_bytes: Some(17),
+            })
+        });
+
+    let uploader =
+        FileArtifactUploader::new(Arc::new(ai_client), Arc::new(ServerApi::new_for_test()));
+    let request = FileArtifactUploadRequest {
+        path,
+        run_id: None,
+        conversation_id: Some(ServerConversationToken::new("conversation-123".to_string())),
+        title: None,
+        description: None,
+    };
+    let association = ResolvedUploadAssociation {
+        conversation_id: request.conversation_id.clone(),
+        run_id: None,
+        ambient_task_id: task_id,
+    };
+
+    let completed = tokio::runtime::Runtime::new()
+        .unwrap()
+        .block_on(uploader.upload_with_association(request, association))
+        .unwrap();
+
+    upload.assert();
+    assert_eq!(completed.artifact.artifact_uid, "artifact-123");
+    assert_eq!(completed.size_bytes, 17);
+}
 #[test]
 fn single_conversation_metadata_returns_the_only_metadata_record() {
     let metadata = single_conversation_metadata(

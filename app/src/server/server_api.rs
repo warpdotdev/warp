@@ -503,7 +503,7 @@ impl ServerApi {
     }
 
     #[cfg(any(test, all(feature = "tui", feature = "test-util")))]
-    fn new_for_test() -> Self {
+    pub(crate) fn new_for_test() -> Self {
         let (tx, _) = async_channel::unbounded();
         let auth_state = Arc::new(AuthState::new_for_test());
         let client = Arc::new(http_client::Client::new_for_test());
@@ -562,6 +562,23 @@ impl ServerApi {
             &self.base_client,
             operation,
             timeout,
+        )
+    }
+
+    fn send_graphql_request_for_task<'a, QF, O: warp_graphql::client::Operation<QF> + Send + 'a>(
+        &'a self,
+        task_id: &AmbientAgentTaskId,
+        operation: O,
+        timeout: Option<Duration>,
+    ) -> BoxFuture<'a, Result<QF>>
+    where
+        QF: 'a,
+    {
+        warp_server_client::graphql_helpers::send_graphql_request_with_ambient_policy(
+            &self.base_client,
+            operation,
+            timeout,
+            AmbientHeaderPolicy::for_task(task_id.to_string()),
         )
     }
 

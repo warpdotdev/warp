@@ -107,13 +107,12 @@ impl ArtifactCommandRunner {
     ) {
         let server_api = ServerApiProvider::as_ref(ctx).get();
         let ai_client = ServerApiProvider::as_ref(ctx).get_ai_client();
-        let uploader = FileArtifactUploader::new(ai_client, server_api.clone());
+        let uploader = FileArtifactUploader::new(ai_client, server_api);
 
         ctx.spawn(
             async move {
                 let request = FileArtifactUploadRequest::try_from(args)?;
                 let association = uploader.resolve_upload_association(&request).await?;
-                server_api.set_ambient_agent_task_id(Some(association.ambient_task_id));
                 uploader.upload_with_association(request, association).await
             },
             move |_, result, ctx| match result {

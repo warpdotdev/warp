@@ -119,14 +119,18 @@ impl FileArtifactUploader {
 
         let artifact = self.prepare_upload_artifact(path).await?;
         let create_response = self
-            .create_upload_target(association, title, description, &artifact)
+            .create_upload_target(&association, title, description, &artifact)
             .await?;
 
         let checksum = self
             .upload_artifact_bytes(&create_response.upload_target, &artifact)
             .await?;
         let uploaded_artifact = self
-            .confirm_upload(create_response.artifact.artifact_uid, checksum)
+            .confirm_upload(
+                &association.ambient_task_id,
+                create_response.artifact.artifact_uid,
+                checksum,
+            )
             .await?;
         let size_bytes = i64::try_from(artifact.file_size)
             .context("Artifact file size exceeds supported range")?;
@@ -143,24 +147,27 @@ impl FileArtifactUploader {
 
     async fn create_upload_target(
         &self,
-        association: ResolvedUploadAssociation,
+        association: &ResolvedUploadAssociation,
         title: Option<String>,
         description: Option<String>,
         artifact: &PreparedUploadArtifact,
     ) -> Result<CreateFileArtifactUploadResponse> {
         self.ai_client
-            .create_file_artifact_upload_target(CreateFileArtifactUploadRequest {
-                conversation_id: association
-                    .conversation_id
-                    .as_ref()
-                    .map(|token| token.as_str().to_string()),
-                run_id: association.run_id.as_ref().map(ToString::to_string),
-                filepath: artifact.filepath.clone(),
-                title,
-                description,
-                mime_type: Some(artifact.mime_type.clone()),
-                size_bytes: artifact.graphql_size_bytes(),
-            })
+            .create_file_artifact_upload_target(
+                &association.ambient_task_id,
+                CreateFileArtifactUploadRequest {
+                    conversation_id: association
+                        .conversation_id
+                        .as_ref()
+                        .map(|token| token.as_str().to_string()),
+                    run_id: association.run_id.as_ref().map(ToString::to_string),
+                    filepath: artifact.filepath.clone(),
+                    title,
+                    description,
+                    mime_type: Some(artifact.mime_type.clone()),
+                    size_bytes: artifact.graphql_size_bytes(),
+                },
+            )
             .await
             .context("Failed to create file artifact upload target")
     }
@@ -180,11 +187,12 @@ impl FileArtifactUploader {
 
     async fn confirm_upload(
         &self,
+        task_id: &AmbientAgentTaskId,
         artifact_uid: String,
         checksum: String,
     ) -> Result<FileArtifactRecord> {
         self.ai_client
-            .confirm_file_artifact_upload(artifact_uid, checksum)
+            .confirm_file_artifact_upload(task_id, artifact_uid, checksum)
             .await
             .context("Failed to confirm file artifact upload")
     }
