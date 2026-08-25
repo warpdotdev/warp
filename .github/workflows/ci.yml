@@ -780,14 +780,15 @@ jobs:
         with:
           target_os: ${{ matrix.os }}
           is_self_hosted: ${{ matrix.is_self_hosted }}
+          ssh_key: ${{ secrets.WARP_CHANNEL_CONFIG_ACCESS_SSH_KEY }}
 
       - name: Verify compilation with release flags
         shell: bash
         run: |
           if ${{ matrix.os == 'wasm' }}; then
-            ./script/wasm/bundle --channel oss --nouniversal --check-only
+            ./script/wasm/bundle --channel local --nouniversal --check-only
           else
-            ./script/bundle --channel oss --nouniversal --check-only
+            ./script/bundle --channel local --nouniversal --check-only
           fi
         env:
           # Attach the GitHub auth token so that requests to the GitHub API
