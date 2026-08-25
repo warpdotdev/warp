@@ -1,0 +1,22 @@
+[package]
+name = "tree_sitter_pascal"
+version = "0.1.0"
+edition = "2024"
+authors = ["Warp Team <dev@warp.dev>"]
+publish.workspace = true
+license.workspace = true
+# The vendored parser under `grammar/` is upstream MIT code; `grammar/LICENSE` covers it.
+
+[dependencies]
+# The same crate arborium's grammar crates use, so `LANGUAGE.into()` produces an
+# `arborium::tree_sitter::Language`.
+tree-sitter-language = "0.1"
+
+[target.'cfg(target_family = "wasm")'.dependencies]
+# Supplies the freestanding libc headers that `grammar/src/tree_sitter/parser.h`
+# needs on wasm32-unknown-unknown. Depending on it here is what makes cargo hand
+# `DEP_ARBORIUM_SYSROOT_PATH` to our build script.
+arborium-sysroot = "2"
+
+[build-dependencies]
+cc = "1.0"

@@ -18,7 +18,7 @@ lazy_static! {
     static ref LANGUAGE_REGISTRY: LanguageRegistry = LanguageRegistry::new();
 }
 
-pub const SUPPORTED_LANGUAGES: [&str; 35] = [
+pub const SUPPORTED_LANGUAGES: [&str; 36] = [
     "rust",
     "golang",
     "yaml",
@@ -54,6 +54,7 @@ pub const SUPPORTED_LANGUAGES: [&str; 35] = [
     "dockerfile",
     "nix",
     "markdown",
+    "pascal",
 ];
 
 /// Registry that holds all of the supported languages.
@@ -118,6 +119,9 @@ fn normalize_language_name(name: &str) -> &str {
         "kt" => "kotlin",
         "docker" | "containerfile" => "dockerfile",
         "md" => "markdown",
+        "delphi" | "objectpascal" | "object-pascal" | "objpas" | "freepascal" | "fpc" | "pas" => {
+            "pascal"
+        }
         other => other,
     }
 }
@@ -196,6 +200,10 @@ fn language_by_filename_parts(
         "vue" => language_by_name("vue"),
         "dockerfile" => language_by_name("dockerfile"),
         "md" | "markdown" => language_by_name("markdown"),
+        // `.pas` and `.pp` are units, `.dpr`/`.lpr` programs, `.dpk`/`.lpk` packages.
+        // `.inc` is deliberately left out: it is a generic include extension that many
+        // other toolchains use too.
+        "pas" | "pp" | "dpr" | "dpk" | "lpr" | "lpk" => language_by_name("pascal"),
         _ => None,
     }
 }
@@ -241,6 +249,17 @@ struct LanguageConfig {
 struct BracketPair {
     start: String,
     end: String,
+}
+
+/// Load the parser grammar for a language.
+///
+/// Every language but Pascal gets its grammar from arborium. arborium ships no
+/// Pascal grammar, so that one is vendored in the `tree_sitter_pascal` crate.
+fn get_grammar(lang: &str) -> Option<ParserGrammar> {
+    match lang {
+        "pascal" => Some(tree_sitter_pascal::LANGUAGE.into()),
+        other => arborium::get_language(to_arborium_name(other)),
+    }
 }
 
 /// Map our internal language name to the canonical arborium language name.
@@ -299,8 +318,7 @@ fn get_arborium_highlight_query(lang: &str) -> Option<&str> {
 }
 
 fn load_language(lang: &str) -> Option<Language> {
-    let arborium_name = to_arborium_name(lang);
-    let grammar = arborium::get_language(arborium_name)?;
+    let grammar = get_grammar(lang)?;
 
     let config_path = [lang, "config.yaml"].join("\\");
     let config = load_yaml(&config_path);
@@ -316,9 +334,14 @@ fn load_language(lang: &str) -> Option<Language> {
         })
         .collect();
 
-    let highlight_query_str = get_arborium_highlight_query(lang)?;
-    let highlight_query = Query::new(&grammar, highlight_query_str)
-        .expect("arborium highlight query should be valid");
+    // Languages whose grammar arborium ships also use its bundled highlight query.
+    // The rest keep a `highlights.scm` alongside their other query files.
+    let highlight_query = match get_arborium_highlight_query(lang) {
+        Some(query) => {
+            Query::new(&grammar, query).expect("arborium highlight query should be valid")
+        }
+        None => load_query(&[lang, "highlights.scm"].join("\\"), &grammar)?,
+    };
 
     let indents_query_path = [lang, "indents.scm"].join("\\");
     let indents_query = load_query(&indents_query_path, &grammar);

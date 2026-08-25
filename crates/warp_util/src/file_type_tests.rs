@@ -10,6 +10,8 @@ fn test_common_text_files() {
     assert!(is_text_file("Main.java"));
     assert!(is_text_file("header.h"));
     assert!(is_text_file("script.sh"));
+    assert!(is_text_file("unit1.pas"));
+    assert!(is_text_file("project1.dpr"));
 
     // Web files
     assert!(is_text_file("index.html"));
