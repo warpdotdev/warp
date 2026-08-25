@@ -117,7 +117,7 @@ impl ResolvedTeamScope {
     /// A resolved-teamless scope, for callers with no window to resolve a live [`TeamScope`]
     /// from (e.g. the `agent_mode_evals` eager fetch, which always runs teamless).
     #[cfg(feature = "agent_mode_evals")]
-    pub fn teamless() -> Self {
+    pub(crate) fn teamless() -> Self {
         Self(None)
     }
 }
