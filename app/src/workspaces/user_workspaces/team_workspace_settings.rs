@@ -27,25 +27,34 @@ use crate::workspaces::workspace::{
     AdminEnablementSetting, AiAutonomySettings, TeamByoSettings, Workspace,
 };
 
+mod sealed {
+    pub trait Sealed {}
+}
 
 /// Reads a [`TeamContextForOperation`] or [`TeamContext`]'s team.
-/// 
+///
 /// Either of [`TeamContextForOperation`] or [`TeamContext`] is the "key" external
 /// modules use to obtain a team-level setting. The only external modules can obtain
-/// this "key" is by exchanging a ViewContext or a ViewHandle for one. Once minted, 
+/// this "key" is by exchanging a ViewContext or a ViewHandle for one. Once minted,
 /// both [`TeamContextForOperation`] or [`TeamContext`] cannot be copied, cloned, or
 /// moved. This ensures that the external operations which need TeamScopes (i.e. to
 /// exchange for a team setting) is scoped to the view (and therefore team-scoped
 /// window) that started the operation. External callers shouldn't copy a TeamContext
 /// to a Singleton model for example, risking leaking that TeamContext / team info to
 /// a different window with another team.
-pub trait TeamScope {
+///
+/// Sealed: only this module implements [`sealed::Sealed`], so a scope can never be minted
+/// outside [`UserWorkspaces`].
+#[allow(private_bounds)]
+pub trait TeamScope: sealed::Sealed {
     fn team_uid(&self) -> Option<ServerId>;
 }
 
 pub(crate) struct TeamContextForOperation {
     team_uid: Option<ServerId>,
 }
+
+impl sealed::Sealed for TeamContextForOperation {}
 
 impl TeamScope for TeamContextForOperation {
     fn team_uid(&self) -> Option<ServerId> {
@@ -69,6 +78,8 @@ pub struct TeamContext<'a> {
     team_uid: Option<&'a ServerId>,
 }
 
+impl sealed::Sealed for TeamContext<'_> {}
+
 impl TeamScope for TeamContext<'_> {
     fn team_uid(&self) -> Option<ServerId> {
         self.team_uid.copied()
@@ -79,9 +90,25 @@ impl TeamScope for TeamContext<'_> {
 /// from a window.
 pub struct TeamScopeForCli(ServerId);
 
+impl sealed::Sealed for TeamScopeForCli {}
+
 impl TeamScope for TeamScopeForCli {
     fn team_uid(&self) -> Option<ServerId> {
         Some(self.0)
+    }
+}
+
+/// A teamless [`TeamScope`] for tests that pass a scope without standing up a window.
+#[cfg(test)]
+pub(crate) struct TeamlessScopeForTest;
+
+#[cfg(test)]
+impl sealed::Sealed for TeamlessScopeForTest {}
+
+#[cfg(test)]
+impl TeamScope for TeamlessScopeForTest {
+    fn team_uid(&self) -> Option<ServerId> {
+        None
     }
 }
 
@@ -125,7 +152,10 @@ impl UserWorkspaces {
     /// Membership is checked here so a mistyped uid fails loudly, rather than resolving to a team
     /// whose policy [`Self::team_byo_for_scope`] cannot find and being denied everything for a
     /// reason the user cannot see.
-    pub fn cli_team_uid(&self, requested: Option<ServerId>) -> Result<ServerId, CliTeamError> {
+    pub(crate) fn cli_team_uid(
+        &self,
+        requested: Option<ServerId>,
+    ) -> Result<ServerId, CliTeamError> {
         match requested {
             Some(team_uid) => self
                 .team_from_uid(team_uid)
@@ -137,7 +167,7 @@ impl UserWorkspaces {
 
     /// [`Self::cli_team_uid`] as a scope, for the policy reads a CLI command makes. Both are fed
     /// the same requested uid so an object's owner and the credentials it may use cannot disagree.
-    pub fn team_scope_for_cli(
+    pub(crate) fn team_scope_for_cli(
         &self,
         requested: Option<ServerId>,
     ) -> Result<TeamScopeForCli, CliTeamError> {
