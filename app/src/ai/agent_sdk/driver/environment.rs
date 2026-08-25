@@ -32,6 +32,7 @@ use crate::terminal::model::session::command_executor::shell_escape_single_quote
 use crate::terminal::shell::ShellType;
 
 const CODEBASE_INDEX_SYNC_TIMEOUT: Duration = Duration::from_secs(60);
+const ENVIRONMENT_SNAPSHOT_CAPTURE_TIMEOUT: Duration = Duration::from_secs(2);
 
 #[derive(Debug, thiserror::Error)]
 pub enum PrepareEnvironmentError {
@@ -39,6 +40,11 @@ pub enum PrepareEnvironmentError {
     InvalidRuntimeState,
     #[error("Failed to clone {repo_name}")]
     CloneRepo { repo_name: String },
+    #[error("Failed to check out {checkout_ref} in {repo_name}")]
+    CheckoutFailed {
+        repo_name: String,
+        checkout_ref: String,
+    },
     #[error("Invalid repository HEAD overrides: {reason}")]
     InvalidRepositoryHeadOverrides { reason: String },
     #[error("Failed to remove origins from environment repositories")]
@@ -63,9 +69,40 @@ pub enum PrepareEnvironmentError {
     TerminalDriver { source: AgentDriverError },
 }
 
-fn parse_resolved_head_sha(stdout: &[u8]) -> Option<String> {
-    let sha = std::str::from_utf8(stdout).ok()?.lines().next()?.trim();
+fn parse_resolved_head_sha(line: &str) -> Option<String> {
+    let sha = line.trim();
     is_valid_git_object_id(sha).then(|| sha.to_string())
+}
+
+fn parse_resolved_head_shas(stdout: &[u8], repo_count: usize) -> Vec<Option<String>> {
+    let Ok(stdout) = std::str::from_utf8(stdout) else {
+        return vec![None; repo_count];
+    };
+    let mut resolved_heads = stdout
+        .lines()
+        .take(repo_count)
+        .map(parse_resolved_head_sha)
+        .collect::<Vec<_>>();
+    resolved_heads.resize(repo_count, None);
+    resolved_heads
+}
+
+fn build_resolved_head_command(repos: &[RepositoryCloneRequest], working_dir: &Path) -> String {
+    let mut script = String::from("set +e\n");
+    for request in repos {
+        let escaped = shell_escape_single_quotes(
+            &working_dir.join(&request.repo.repo).to_string_lossy(),
+            ShellType::Bash,
+        );
+        script.push_str(&format!(
+            "sha=\"$(git -C '{escaped}' rev-parse --verify HEAD 2>/dev/null)\"\n\
+             printf '%s\\n' \"$sha\"\n"
+        ));
+    }
+    format!(
+        "sh -c '{}'",
+        shell_escape_single_quotes(&script, ShellType::Bash)
+    )
 }
 
 fn checkout_path(working_dir: &Path, repo_name: &str) -> String {
@@ -658,7 +695,7 @@ clone_repo() {
   checkout_ref="$4"
   is_commit_sha="$5"
   if [ "$is_commit_sha" = "1" ]; then
-    if [ -d "$target" ]; then
+    if [ -e "$target" ]; then
       printf '%s\n' "Checking out $checkout_ref in existing repository $repo_name..."
     else
       printf '%s\n' "Initializing repository $repo_name at $checkout_ref..."
@@ -674,8 +711,11 @@ clone_repo() {
     printf '%s\n' "Cloning repository $repo_name..."
     git clone --filter=blob:none "$repo_url" "$target" || return 1
   fi
+  # Pin after clone or reuse: a reused directory may still be on an old ref.
   if [ -n "$checkout_ref" ]; then
     printf '%s\n' "Checking out $checkout_ref in $repo_name..."
+    # Fetch leaves the object in FETCH_HEAD; check that out detached so we
+    # never prefer a stale local branch with the same name.
     git -C "$target" fetch --filter=blob:none origin "$checkout_ref" && git -C "$target" checkout --detach FETCH_HEAD
   fi
 }
@@ -755,9 +795,58 @@ async fn clone_checkout_requests(
     working_dir: &Path,
     spawner: &ModelSpawner<TerminalDriver>,
 ) -> Result<EnvironmentSnapshot, PrepareEnvironmentError> {
-    if repos.is_empty() {
-        return Ok(EnvironmentSnapshot::empty());
+    match repos {
+        [] => return Ok(EnvironmentSnapshot::empty()),
+        [request] => clone_repo(request, working_dir, spawner).await?,
+        repos => {
+            let shell_type = spawner
+                .spawn(|driver, ctx| {
+                    driver
+                        .active_session_shell_type(ctx)
+                        .unwrap_or(ShellType::Bash)
+                })
+                .await
+                .unwrap_or(ShellType::Bash);
+
+            let repo_names = repos
+                .iter()
+                .map(|request| format!("{}/{}", request.repo.owner, request.repo.repo))
+                .collect::<Vec<_>>();
+            safe_info!(
+                safe: ("Cloning repositories via terminal"),
+                full: ("Cloning repositories via terminal: {}", repo_names.join(", "))
+            );
+
+            let command = build_parallel_clone_command(repos, shell_type);
+            let exit_code = execute_command(command, spawner).await?;
+            if exit_code != 0.into() {
+                return Err(PrepareEnvironmentError::CloneRepo {
+                    repo_name: repo_names.join(", "),
+                });
+            }
+
+            safe_info!(
+                safe: ("Successfully cloned repositories"),
+                full: ("Successfully cloned repositories: {}", repo_names.join(", "))
+            );
+        }
     }
+    Ok(capture_environment_snapshot(repos, working_dir, spawner).await)
+}
+
+/// Clone a source repository to `{working_dir}/{repo.repo}` if it does not already exist.
+/// This only performs the clone -- it does NOT register the repo with `DetectedRepositories`.
+#[tracing::instrument(skip_all, err, fields(tags.cloud_agent = true, repo = %request.repo))]
+async fn clone_repo(
+    request: &RepositoryCloneRequest,
+    working_dir: &Path,
+    spawner: &ModelSpawner<TerminalDriver>,
+) -> Result<(), PrepareEnvironmentError> {
+    let repo = &request.repo;
+    let repo_name = format!("{}/{}", repo.owner, repo.repo);
+    let repo_url = repo.https_clone_url();
+    // Get the session's shell type for proper escaping, falling back to Bash
+    // when the session is not yet bootstrapped or the spawn fails.
     let shell_type = spawner
         .spawn(|driver, ctx| {
             driver
@@ -766,28 +855,92 @@ async fn clone_checkout_requests(
         })
         .await
         .unwrap_or(ShellType::Bash);
-    let repo_names = repos
-        .iter()
-        .map(|request| format!("{}/{}", request.repo.owner, request.repo.repo))
-        .collect::<Vec<_>>();
-    safe_info!(
-        safe: ("Cloning repositories via terminal"),
-        full: ("Cloning repositories via terminal: {}", repo_names.join(", "))
-    );
+    let escaped_url = shell_escape_single_quotes(&repo_url, shell_type);
+    let repo_dir = working_dir.join(&repo.repo);
+    let commit_sha = match &request.checkout {
+        Some(RepositoryHeadRef::CommitSha(commit_sha)) => Some(commit_sha.as_str()),
+        Some(RepositoryHeadRef::Branch(_)) | None => None,
+    };
+    // Always ask the session whether the repo dir already exists, rather
+    // than stat'ing from the host. The session knows about sandbox-only
+    // paths, and this goes through the silent executor so `test -d` is
+    // not added to the user-visible blocklist. Pass the absolute path
+    // explicitly so the probe doesn't rely on the session's CWD.
+    let dir_exists = terminal_directory_exists(&repo_dir.to_string_lossy(), spawner).await?;
 
-    let command = build_parallel_clone_command(repos, shell_type);
-    let exit_code = execute_command(command, spawner).await?;
-    if exit_code != 0.into() {
-        return Err(PrepareEnvironmentError::CloneRepo {
-            repo_name: repo_names.join(", "),
-        });
+    if let Some(commit_sha) = commit_sha {
+        if !dir_exists {
+            safe_info!(
+                safe: ("Initializing repository at commit via terminal"),
+                full: ("Initializing repository via terminal: {repo_name} at {commit_sha}")
+            );
+            let escaped_dir = shell_escape_single_quotes(&repo_dir.to_string_lossy(), shell_type);
+            let init_command = format!(
+                "git init --quiet '{escaped_dir}' && git -C '{escaped_dir}' remote add origin '{escaped_url}'"
+            );
+            let exit_code = execute_command(init_command, spawner).await?;
+            if exit_code != 0.into() {
+                return Err(PrepareEnvironmentError::CloneRepo {
+                    repo_name: repo_name.clone(),
+                });
+            }
+        }
+    } else if dir_exists {
+        safe_warn!(
+            safe: ("We already have a directory with the same repository name in the terminal working directory, skipping clone..."),
+            full: (
+            "We already have a directory with the name {} in the terminal working directory, skipping clone...",
+            repo.repo)
+        );
+    } else {
+        safe_info!(
+            safe: ("Cloning repository via terminal"),
+            full: ("Cloning repository via terminal: {repo_name}")
+        );
+
+        // We do a blobless partial clone here to speed up environment setup
+        // time while still keeping trees local, so path-limited history and
+        // blame stay fully local instead of lazily refetching from the
+        // promisor remote.
+        let command = format!("git clone --filter=blob:none '{escaped_url}'");
+        let exit_code = execute_command(command, spawner).await?;
+        if exit_code != 0.into() {
+            return Err(PrepareEnvironmentError::CloneRepo {
+                repo_name: repo_name.clone(),
+            });
+        }
+
+        safe_info!(
+            safe: ("Successfully cloned repository"),
+            full: ("Successfully cloned: {repo_name}")
+        );
     }
 
-    safe_info!(
-        safe: ("Successfully cloned repositories"),
-        full: ("Successfully cloned repositories: {}", repo_names.join(", "))
-    );
-    Ok(capture_environment_snapshot(repos, working_dir, spawner).await)
+    // Pin after clone or reuse when a ref was requested. A reused directory may
+    // still be on an old default-branch tip, and a checkout_ref (SHA, branch,
+    // or tag) may not have existed yet, or may have moved, by the time the
+    // clone ran — fetch the ref, then detach to FETCH_HEAD.
+    // When checkout_ref is unset, leave an existing directory untouched.
+    if let Some(command) = checkout_command_for(request, working_dir, shell_type) {
+        let checkout_ref = request
+            .checkout
+            .as_ref()
+            .map(RepositoryHeadRef::value)
+            .unwrap_or_default();
+        safe_info!(
+            safe: ("Checking out pinned ref for repository"),
+            full: ("Checking out {checkout_ref} for {repo_name}")
+        );
+        let exit_code = execute_command(command, spawner).await?;
+        checkout_result(&repo_name, checkout_ref, exit_code)?;
+
+        safe_info!(
+            safe: ("Successfully checked out pinned ref"),
+            full: ("Successfully checked out {checkout_ref} for {repo_name}")
+        );
+    }
+
+    Ok(())
 }
 
 async fn capture_environment_snapshot(
@@ -795,29 +948,28 @@ async fn capture_environment_snapshot(
     working_dir: &Path,
     spawner: &ModelSpawner<TerminalDriver>,
 ) -> EnvironmentSnapshot {
-    let mut resolved_heads = Vec::with_capacity(repos.len());
-    for request in repos {
-        resolved_heads
-            .push(resolved_head_sha(&working_dir.join(&request.repo.repo), spawner).await);
+    if repos.is_empty() {
+        return EnvironmentSnapshot::empty();
     }
+    let command = build_resolved_head_command(repos, working_dir);
+    let resolved_heads = match execute_silent_command(command, spawner)
+        .with_timeout(ENVIRONMENT_SNAPSHOT_CAPTURE_TIMEOUT)
+        .await
+    {
+        Ok(Ok(output)) => parse_resolved_head_shas(&output.stdout, repos.len()),
+        Ok(Err(error)) => {
+            log::warn!("Could not capture resolved HEADs for structured repositories: {error}");
+            vec![None; repos.len()]
+        }
+        Err(_) => {
+            log::warn!(
+                "Timed out capturing resolved HEADs for structured repositories after {:?}",
+                ENVIRONMENT_SNAPSHOT_CAPTURE_TIMEOUT
+            );
+            vec![None; repos.len()]
+        }
+    };
     environment_snapshot(repos, working_dir, &resolved_heads)
-}
-
-async fn resolved_head_sha(
-    repo_dir: &Path,
-    spawner: &ModelSpawner<TerminalDriver>,
-) -> Option<String> {
-    let escaped = shell_escape_single_quotes(&repo_dir.to_string_lossy(), ShellType::Bash);
-    let output = execute_silent_command(
-        format!("git -C '{escaped}' rev-parse --verify HEAD"),
-        spawner,
-    )
-    .await
-    .ok()?;
-    if !output.success() {
-        return None;
-    }
-    parse_resolved_head_sha(&output.stdout)
 }
 
 /// Build the `git fetch` + `git checkout` command that pins `request`'s clone at
@@ -828,7 +980,6 @@ async fn resolved_head_sha(
 /// out the resulting `FETCH_HEAD` detached. Checking out the original ref
 /// name can prefer a stale local branch or fail when the object only landed
 /// in `FETCH_HEAD`. Detached HEAD is expected and fine — trials never merge.
-#[cfg(test)]
 fn checkout_command_for(
     request: &RepositoryCloneRequest,
     working_dir: &Path,
@@ -842,6 +993,24 @@ fn checkout_command_for(
         "git -C '{escaped_dir}' fetch --filter=blob:none origin '{escaped_ref}' && \
          git -C '{escaped_dir}' checkout --detach FETCH_HEAD"
     ))
+}
+
+/// Map a checkout command's exit code onto the environment-prep result,
+/// surfacing a non-zero exit (fetch or checkout failing) as `CheckoutFailed`
+/// rather than silently leaving the clone on the default branch.
+fn checkout_result(
+    repo_name: &str,
+    checkout_ref: &str,
+    exit_code: ExitCode,
+) -> Result<(), PrepareEnvironmentError> {
+    if exit_code == 0.into() {
+        Ok(())
+    } else {
+        Err(PrepareEnvironmentError::CheckoutFailed {
+            repo_name: repo_name.to_string(),
+            checkout_ref: checkout_ref.to_string(),
+        })
+    }
 }
 
 /// Register a cloned source repository with `DetectedRepositories` so that the
@@ -1090,6 +1259,33 @@ async fn cd_in_terminal_silent(
 ) -> Result<bool, PrepareEnvironmentError> {
     let output = spawner
         .spawn(move |driver, ctx| driver.cd_silent(&target, ctx))
+        .await
+        .map_err(|_| PrepareEnvironmentError::InvalidRuntimeState)?
+        .await
+        .map_err(|error| match error {
+            AgentDriverError::InvalidRuntimeState => PrepareEnvironmentError::InvalidRuntimeState,
+            source => PrepareEnvironmentError::TerminalDriver { source },
+        })?;
+    Ok(output.status == CommandExitStatus::Success)
+}
+
+async fn terminal_directory_exists(
+    path: &str,
+    spawner: &ModelSpawner<TerminalDriver>,
+) -> Result<bool, PrepareEnvironmentError> {
+    let path = path.to_owned();
+    let output = spawner
+        .spawn(move |driver, ctx| {
+            // Fall back to Bash if the session's shell type isn't known yet
+            // (e.g. pre-bootstrap). Bash-style escaping is a safe default for
+            // every POSIX shell we currently support.
+            let shell_type = driver
+                .active_session_shell_type(ctx)
+                .unwrap_or(ShellType::Bash);
+            let escaped = shell_escape_single_quotes(&path, shell_type);
+            let command = format!("test -d '{escaped}'");
+            driver.execute_silent_command(command, ctx)
+        })
         .await
         .map_err(|_| PrepareEnvironmentError::InvalidRuntimeState)?
         .await

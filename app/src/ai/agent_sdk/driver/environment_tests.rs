@@ -5,12 +5,14 @@ use cloud_object_models::CodeForge;
 use command::blocking::Command;
 use tempfile::TempDir;
 use warp_cli::agent::{RepositoryForge, RepositoryHeadOverride, RepositoryHeadRef};
+use warp_core::command::ExitCode;
 
 use super::{
     PrepareEnvironmentError, RepositoryCloneRequest, build_parallel_clone_command,
-    build_remove_repository_origins_command, checkout_command_for, environment_snapshot,
-    is_valid_git_object_id, merge_repos_deduped, parse_resolved_head_sha,
-    repository_clone_requests, single_repo_name, validate_repository_head_overrides,
+    build_remove_repository_origins_command, build_resolved_head_command, checkout_command_for,
+    checkout_result, environment_snapshot, is_valid_git_object_id, merge_repos_deduped,
+    parse_resolved_head_sha, parse_resolved_head_shas, repository_clone_requests, single_repo_name,
+    validate_repository_head_overrides,
 };
 use crate::ai::cloud_environments::{AmbientAgentEnvironment, SourceRepo};
 use crate::terminal::shell::ShellType;
@@ -49,22 +51,55 @@ fn git_object_id_validation_accepts_lowercase_sha1_and_sha256() {
 #[test]
 fn parse_resolved_head_sha_accepts_trimmed_valid_object_ids() {
     assert_eq!(
-        parse_resolved_head_sha(b"0123456789abcdef0123456789abcdef01234567\n").as_deref(),
+        parse_resolved_head_sha("0123456789abcdef0123456789abcdef01234567").as_deref(),
         Some("0123456789abcdef0123456789abcdef01234567")
     );
     assert_eq!(
         parse_resolved_head_sha(
-            b"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\n"
+            "  0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef  "
         )
         .as_deref(),
         Some("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
     );
     assert_eq!(
-        parse_resolved_head_sha(b"0123456789ABCDEF0123456789ABCDEF01234567\n"),
+        parse_resolved_head_sha("0123456789ABCDEF0123456789ABCDEF01234567"),
         None
     );
-    assert_eq!(parse_resolved_head_sha(b"not-a-sha\n"), None);
-    assert_eq!(parse_resolved_head_sha(b""), None);
+    assert_eq!(parse_resolved_head_sha("not-a-sha"), None);
+    assert_eq!(parse_resolved_head_sha(""), None);
+}
+
+#[test]
+fn parse_resolved_head_shas_keeps_one_line_per_repo_including_failures() {
+    let first = "0123456789abcdef0123456789abcdef01234567";
+    let second = "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789";
+    let stdout = format!("{first}\n\n{second}\n");
+
+    assert_eq!(
+        parse_resolved_head_shas(stdout.as_bytes(), 3),
+        vec![Some(first.to_string()), None, Some(second.to_string())]
+    );
+    assert_eq!(
+        parse_resolved_head_shas(first.as_bytes(), 2),
+        vec![Some(first.to_string()), None]
+    );
+    assert_eq!(parse_resolved_head_shas(b"\xff", 1), vec![None]);
+}
+
+#[test]
+fn resolved_head_command_prints_one_line_per_repo() {
+    let command = unwrap_sh_c_script(&build_resolved_head_command(
+        &[
+            clone_request(repo(CodeForge::GitHub, "warpdotdev", "warp"), None),
+            clone_request(repo(CodeForge::GitHub, "warpdotdev", "warp-server"), None),
+        ],
+        Path::new("/workspace"),
+    ));
+
+    assert!(command.starts_with("set +e\n"));
+    assert!(command.contains("git -C '/workspace/warp' rev-parse --verify HEAD"));
+    assert!(command.contains("git -C '/workspace/warp-server' rev-parse --verify HEAD"));
+    assert_eq!(command.matches("printf '%s\\n'").count(), 2);
 }
 
 #[test]
@@ -674,6 +709,17 @@ fn repository_origin_removal_targets_all_environment_repositories() {
     assert!(command.contains("remote remove origin"));
 }
 
+#[test]
+fn checkout_result_maps_nonzero_exit_to_checkout_failed() {
+    assert!(checkout_result("warpdotdev/warp", "abc123", ExitCode::from(0)).is_ok());
+    let err = checkout_result("warpdotdev/warp", "abc123", ExitCode::from(1)).unwrap_err();
+    assert!(matches!(
+        err,
+        PrepareEnvironmentError::CheckoutFailed { repo_name, checkout_ref }
+            if repo_name == "warpdotdev/warp" && checkout_ref == "abc123"
+    ));
+}
+
 // --- Real-git fixture tests -------------------------------------------------
 //
 // These exercise the actual fetch-then-checkout command produced by
@@ -1067,6 +1113,18 @@ fn checkout_command_fails_for_unknown_ref() {
 
     let status = run_command(&command);
     assert!(!status.success(), "unknown ref should fail");
+
+    // A non-zero exit is what the clone path maps to CheckoutFailed, rather than
+    // silently leaving the clone on the default branch.
+    let result = checkout_result(
+        "warpdotdev/fixture",
+        "deadbeef",
+        ExitCode::from(status.code().unwrap_or(1)),
+    );
+    assert!(matches!(
+        result,
+        Err(PrepareEnvironmentError::CheckoutFailed { .. })
+    ));
 
     // HEAD must remain on the default branch tip.
     assert_eq!(
