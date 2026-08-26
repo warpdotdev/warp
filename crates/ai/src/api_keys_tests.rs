@@ -460,6 +460,188 @@ fn endpoints_with_only_empty_models_are_skipped() {
     assert!(mgr.custom_model_providers_for_request(true).is_none());
 }
 
+// ── control-character normalization ────────────────────────────
+
+/// A model name copied on Windows arrives with the CRLF of the line it was copied
+/// from. The `\r` paints as nothing, so the settings form looks correct while the
+/// request goes out with `glm-5.2:cloud\r` and the provider answers "model not
+/// found" (warpdotdev/warp#14782).
+const MODEL_NAME_WITH_CARRIAGE_RETURN: &str = "glm-5.2:cloud\r";
+
+fn endpoint_params_with_control_characters() -> CustomEndpointParams {
+    CustomEndpointParams {
+        name: " Ollama\r".to_owned(),
+        url: "https://ollama.com/v1\r\n".to_owned(),
+        api_key: "ep-key\r".to_owned(),
+        models: vec![(
+            MODEL_NAME_WITH_CARRIAGE_RETURN.to_owned(),
+            Some("GLM 5.2\r".to_owned()),
+            Some("uuid-1".to_owned()),
+        )],
+        schema: CustomEndpointSchema::OpenaiChatCompletions,
+    }
+}
+
+fn assert_endpoint_is_normalized(manager: &ApiKeyManager) {
+    let endpoint = manager
+        .keys()
+        .custom_endpoints
+        .first()
+        .expect("endpoint should be stored");
+    assert_eq!(endpoint.name, "Ollama");
+    assert_eq!(endpoint.url, "https://ollama.com/v1");
+    assert_eq!(endpoint.api_key, "ep-key");
+    assert_eq!(endpoint.models[0].name, "glm-5.2:cloud");
+    assert_eq!(endpoint.models[0].alias.as_deref(), Some("GLM 5.2"));
+
+    let providers = manager
+        .custom_model_providers_for_request(true)
+        .expect("configured endpoint should be sent");
+    assert_eq!(
+        providers.providers[0].models[0].slug, "glm-5.2:cloud",
+        "the wire model slug must not carry the invisible carriage return"
+    );
+}
+
+#[test]
+fn added_custom_endpoint_is_normalized() {
+    warpui_core::App::test((), |mut app| async move {
+        app.update(|ctx| {
+            warpui_extras::secure_storage::register_noop("test", ctx);
+            warp_core::telemetry::testing::MockTelemetryContextProvider::register(ctx);
+        });
+        let manager = app.add_singleton_model(ApiKeyManager::new);
+
+        manager.update(&mut app, |manager, ctx| {
+            manager.add_custom_endpoint(endpoint_params_with_control_characters(), ctx);
+        });
+
+        manager.read(&app, |manager, _| assert_endpoint_is_normalized(manager));
+    });
+}
+
+#[test]
+fn saved_custom_endpoint_is_normalized() {
+    warpui_core::App::test((), |mut app| async move {
+        app.update(|ctx| {
+            warpui_extras::secure_storage::register_noop("test", ctx);
+            warp_core::telemetry::testing::MockTelemetryContextProvider::register(ctx);
+        });
+        let manager = app.add_singleton_model(ApiKeyManager::new);
+
+        manager.update(&mut app, |manager, ctx| {
+            manager.add_custom_endpoint(
+                CustomEndpointParams {
+                    name: "Ollama".to_owned(),
+                    url: "https://ollama.com/v1".to_owned(),
+                    api_key: "ep-key".to_owned(),
+                    models: vec![("glm-5.2:cloud".to_owned(), None, Some("uuid-1".to_owned()))],
+                    schema: CustomEndpointSchema::OpenaiChatCompletions,
+                },
+                ctx,
+            );
+            // Editing the endpoint to add an alias must not be able to smuggle a
+            // control character into the persisted model name either.
+            manager.save_custom_endpoint(0, endpoint_params_with_control_characters(), ctx);
+        });
+
+        manager.read(&app, |manager, _| assert_endpoint_is_normalized(manager));
+    });
+}
+
+#[test]
+fn saved_custom_endpoint_drops_alias_that_is_only_control_characters() {
+    warpui_core::App::test((), |mut app| async move {
+        app.update(|ctx| {
+            warpui_extras::secure_storage::register_noop("test", ctx);
+            warp_core::telemetry::testing::MockTelemetryContextProvider::register(ctx);
+        });
+        let manager = app.add_singleton_model(ApiKeyManager::new);
+
+        manager.update(&mut app, |manager, ctx| {
+            manager.add_custom_endpoint(
+                CustomEndpointParams {
+                    name: "Ollama".to_owned(),
+                    url: "https://ollama.com/v1".to_owned(),
+                    api_key: "ep-key".to_owned(),
+                    models: vec![(
+                        "glm-5.2:cloud".to_owned(),
+                        Some("\r".to_owned()),
+                        Some("uuid-1".to_owned()),
+                    )],
+                    schema: CustomEndpointSchema::OpenaiChatCompletions,
+                },
+                ctx,
+            );
+        });
+
+        manager.read(&app, |manager, _| {
+            let model = &manager.keys().custom_endpoints[0].models[0];
+            assert_eq!(model.alias, None);
+            assert_eq!(model.display_label(), "glm-5.2:cloud");
+        });
+    });
+}
+
+#[test]
+fn custom_endpoints_loaded_from_secure_storage_are_normalized() {
+    warpui_core::App::test((), |mut app| async move {
+        let stored = serde_json::to_string(&ApiKeys {
+            custom_endpoints: vec![endpoint_with_keys(
+                "Ollama",
+                "https://ollama.com/v1",
+                "ep-key",
+                &[(MODEL_NAME_WITH_CARRIAGE_RETURN, Some("GLM 5.2"), "uuid-1")],
+            )],
+            ..Default::default()
+        })
+        .expect("keys should serialize");
+        app.update(move |ctx| {
+            ctx.add_singleton_model(move |_| -> secure_storage::Model {
+                Box::new(StubSecureStorage { stored })
+            });
+            warp_core::telemetry::testing::MockTelemetryContextProvider::register(ctx);
+        });
+
+        let manager = app.add_singleton_model(ApiKeyManager::new);
+
+        // Endpoints persisted before the form normalized its inputs must heal on
+        // load, so the user doesn't have to re-save the endpoint to unbreak it.
+        manager.read(&app, |manager, _| {
+            let model = &manager.keys().custom_endpoints[0].models[0];
+            assert_eq!(model.name, "glm-5.2:cloud");
+            let providers = manager
+                .custom_model_providers_for_request(true)
+                .expect("configured endpoint should be sent");
+            assert_eq!(providers.providers[0].models[0].slug, "glm-5.2:cloud");
+        });
+    });
+}
+
+/// Secure storage stub that returns a fixed payload, so the load path can be
+/// exercised against values that were persisted by an older build.
+struct StubSecureStorage {
+    stored: String,
+}
+
+impl warpui_extras::secure_storage::SecureStorage for StubSecureStorage {
+    fn write_value(&self, _key: &str, _value: &str) -> Result<(), secure_storage::Error> {
+        Ok(())
+    }
+
+    fn read_value(&self, key: &str) -> Result<String, secure_storage::Error> {
+        if key == SECURE_STORAGE_KEY {
+            Ok(self.stored.clone())
+        } else {
+            Err(secure_storage::Error::NotFound)
+        }
+    }
+
+    fn remove_value(&self, _key: &str) -> Result<(), secure_storage::Error> {
+        Ok(())
+    }
+}
+
 // ── display_label fallback ─────────────────────────────────────
 
 #[test]

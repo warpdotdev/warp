@@ -4366,6 +4366,109 @@ fn test_paste_clipboard_with_text_only_should_paste_text_normally() {
 }
 
 #[test]
+fn test_single_line_editor_drops_pasted_line_breaks() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let (_, editor) = app.add_window(WindowStyle::NotStealFocus, |ctx| {
+            EditorView::single_line(
+                SingleLineEditorOptions {
+                    convert_newline_to_space: false,
+                    ..Default::default()
+                },
+                ctx,
+            )
+        });
+
+        app.update(|ctx| {
+            ctx.clipboard().write(warpui::clipboard::ClipboardContent {
+                plain_text: "glm-5.2:cloud\r\n".to_string(),
+                paths: None,
+                html: None,
+                images: None,
+            });
+        });
+
+        editor.update(&mut app, |editor, ctx| {
+            editor.paste(ctx);
+            // The CRLF that a clipboard payload copied on Windows carries must not
+            // survive into a single-line field: the `\r` paints as nothing, so it
+            // silently corrupts a value the user sees as correct.
+            assert_eq!(editor.buffer_text(ctx), "glm-5.2:cloud");
+        });
+    })
+}
+
+#[test]
+fn test_single_line_editor_converts_pasted_crlf_to_one_space() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let (_, editor) = app.add_window(WindowStyle::NotStealFocus, |ctx| {
+            EditorView::single_line(Default::default(), ctx)
+        });
+
+        app.update(|ctx| {
+            ctx.clipboard().write(warpui::clipboard::ClipboardContent {
+                plain_text: "first\r\nsecond".to_string(),
+                paths: None,
+                html: None,
+                images: None,
+            });
+        });
+
+        editor.update(&mut app, |editor, ctx| {
+            editor.paste(ctx);
+            // Single-line editors convert pasted newlines to spaces. A CRLF is one
+            // line break, so it must not leave a stray `\r` next to that space.
+            assert_eq!(editor.buffer_text(ctx), "first second");
+        });
+    })
+}
+
+#[test]
+fn test_single_line_editor_drops_typed_carriage_return() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        app.add_window(WindowStyle::NotStealFocus, |ctx| {
+            let mut editor = EditorView::single_line(Default::default(), ctx);
+            editor.user_insert("glm-5.2:cloud", ctx);
+            // A platform can report "\r" as the typed characters of an Enter press
+            // that no keybinding handled.
+            editor.user_insert("\r", ctx);
+            assert_eq!(editor.buffer_text(ctx), "glm-5.2:cloud");
+            editor
+        });
+    })
+}
+
+#[test]
+fn test_multi_line_editor_keeps_pasted_line_breaks() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let (_, editor) = app.add_window(WindowStyle::NotStealFocus, |ctx| {
+            EditorView::new(Default::default(), ctx)
+        });
+
+        app.update(|ctx| {
+            ctx.clipboard().write(warpui::clipboard::ClipboardContent {
+                plain_text: "first\nsecond".to_string(),
+                paths: None,
+                html: None,
+                images: None,
+            });
+        });
+
+        editor.update(&mut app, |editor, ctx| {
+            editor.paste(ctx);
+            assert_eq!(editor.buffer_text(ctx), "first\nsecond");
+        });
+    })
+}
+
+#[test]
 fn test_paste_clipboard_with_image_only_should_switch_to_agent_mode() {
     App::test((), |mut app| async move {
         initialize_app(&mut app);
