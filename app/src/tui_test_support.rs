@@ -276,6 +276,7 @@ pub fn set_tui_default_team_admin_for_test(ctx: &mut AppContext) {
         uid: user_uid,
         email: user_email,
         role: MembershipRole::Owner,
+        is_disabled: false,
     });
     let workspace = Workspace::from_local_cache(
         "workspace_uid123456789".to_owned().into(),

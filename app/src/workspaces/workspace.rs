@@ -209,6 +209,7 @@ pub struct WorkspaceMember {
     pub uid: UserUid,
     pub email: String,
     pub role: MembershipRole,
+    pub is_disabled: bool,
     pub usage_info: WorkspaceMemberUsageInfo,
 }
 

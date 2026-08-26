@@ -1961,6 +1961,7 @@ fn save_workspace(conn: &mut SqliteConnection, workspace: WorkspaceMetadata) -> 
                 user_uid: member.uid.as_string(),
                 email: member.email.clone(),
                 role: serde_json::to_string(&member.role).unwrap_or_default(),
+                is_disabled: member.is_disabled,
             };
             diesel::insert_into(schema::team_members::dsl::team_members)
                 .values(&new_member)
@@ -2105,6 +2106,7 @@ fn save_workspaces(
                         user_uid: member.uid.as_string(),
                         email: member.email,
                         role: serde_json::to_string(&member.role).unwrap_or_default(),
+                        is_disabled: member.is_disabled,
                     })
                 })
             })
@@ -2754,6 +2756,7 @@ fn read_sqlite_data(
                     email: row.email,
                     role: serde_json::from_str(&row.role)
                         .unwrap_or(crate::workspaces::team::MembershipRole::User),
+                    is_disabled: row.is_disabled,
                 };
                 acc.entry(row.team_id).or_default().push(member);
                 acc

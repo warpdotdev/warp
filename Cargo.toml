@@ -508,7 +508,10 @@ inherits = "release-lto-debug_assertions"
 [profile.release-cli]
 inherits = "release-lto"
 opt-level = "s"
-codegen-units = 1
+# 4 (not the default 16, and not 1) roughly halves build time versus codegen-units=1 for ~4%
+# larger stripped/gzipped binaries. This profile already uses thin LTO, which does most of the
+# cross-crate size optimization, so 1 was paying a lot of compile time for little extra size.
+codegen-units = 4
 
 # A custom CLI release-like profile that forces debug assertions on, used for
 # dev/local channel CLI bundles.

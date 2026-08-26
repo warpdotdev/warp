@@ -101,8 +101,8 @@ fn escape_powershell_single_quotes(path: &OsStr) -> OsString {
 }
 
 // SessionId is defined in warp_core and re-exported here for backward compatibility.
-pub use warp_core::SessionId;
 use warp_errors::report_error;
+pub use warp_terminal::model::session::{SessionId, get_local_hostname};
 
 /// Information about the sessions within a given terminal pane/top-level
 /// shell.
@@ -1478,7 +1478,7 @@ impl Session {
 
     #[cfg(windows)]
     async fn read_history_via_powershell(history_file_path: &OsStr) -> Result<Vec<u8>> {
-        let Some(powershell_command) = crate::util::windows::any_powershell_path() else {
+        let Some(powershell_command) = warp_util::path::windows::any_powershell_path() else {
             return Err(anyhow::anyhow!(
                 "Failed to find powershell executable to read history"
             ));
@@ -1706,23 +1706,6 @@ impl Display for Session {
             self.info.user,
             self.info.hostname,
         )
-    }
-}
-
-/// Returns the hostname for the local machine where Warp is running.
-pub fn get_local_hostname() -> Result<String> {
-    cfg_if::cfg_if! {
-        if #[cfg(not(target_family = "wasm"))] {
-            use gethostname::gethostname;
-
-            gethostname()
-                .into_string()
-                .map_err(|os_string| {
-                    anyhow::anyhow!("Failed to convert local hostname OsString {os_string:?} into String.")
-                })
-        } else {
-            anyhow::bail!("Cannot get machine hostname from wasm")
-        }
     }
 }
 

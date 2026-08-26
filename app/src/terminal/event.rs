@@ -1,12 +1,11 @@
 use std::fmt;
 use std::fmt::{Debug, Formatter};
-use std::num::ParseIntError;
-use std::string::FromUtf8Error;
 use std::sync::Arc;
 use std::time::Duration;
 
 use instant::Instant;
 pub use remote_server::setup::RemoteServerSetupState;
+pub use warp_terminal::event::{ExecutedExecutorCommandEvent, ParseGeneratorOutputError};
 use warp_util::lazy::Lazy;
 
 use super::history::HistoryEntry;
@@ -23,7 +22,6 @@ use crate::terminal::model::blocks::BlockList;
 use crate::terminal::model::completions::ShellCompletion;
 use crate::terminal::model::terminal_model::HandlerEvent;
 use crate::terminal::shell::ShellType;
-use crate::util::AsciiDebug;
 
 #[derive(Clone)]
 /// Events sent to the main thread by the terminal model & event loop.
@@ -149,6 +147,33 @@ pub enum Event {
         title: Option<String>,
         body: String,
     },
+}
+
+impl From<warp_terminal::event::Event> for Event {
+    fn from(event: warp_terminal::event::Event) -> Self {
+        match event {
+            warp_terminal::event::Event::MouseCursorDirty => Self::MouseCursorDirty,
+            warp_terminal::event::Event::ClipboardStore(clipboard, text) => {
+                Self::ClipboardStore(clipboard, text)
+            }
+            warp_terminal::event::Event::ClipboardLoad(clipboard, load) => {
+                Self::ClipboardLoad(clipboard, load)
+            }
+            warp_terminal::event::Event::CursorBlinkingChange(blinking) => {
+                Self::CursorBlinkingChange(blinking)
+            }
+            warp_terminal::event::Event::Bell => Self::Bell,
+            warp_terminal::event::Event::ImageReceived {
+                image_id,
+                image_data,
+                image_protocol,
+            } => Self::ImageReceived {
+                image_id,
+                image_data,
+                image_protocol,
+            },
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -382,87 +407,6 @@ impl UserBlockCompleted {
         )
     }
 }
-
-/// Emitted upon completion of an executor command that goes through the pty, such as the
-/// InBandCommandExecutor.
-#[derive(Clone)]
-pub struct ExecutedExecutorCommandEvent {
-    pub command_id: String,
-    pub exit_code: usize,
-    pub output: Vec<u8>,
-}
-
-impl ExecutedExecutorCommandEvent {
-    /// Parses the given `payload` (expected to be the payload of a generator output OSC) into a
-    /// `ExecutedGeneratorCommandValue`.
-    ///
-    /// The given `string` is expected to follow the following format:
-    ///     <commmand_id>;<output>;<exit_code>
-    ///
-    /// Returns a `ParseGeneratorCommandValueError` if payload cannot be successfully parsed.
-    ///
-    pub fn parse_generator_payload(payload: Vec<u8>) -> Result<Self, ParseGeneratorOutputError> {
-        // Break the payload apart at the first and last semicolons.
-        let mut payload_initial_split = payload.splitn(2, |&byte| byte == b';');
-
-        let Some(before_first_semicolon) = payload_initial_split.next() else {
-            return Err(ParseGeneratorOutputError::Corrupted);
-        };
-
-        let Some(after_first_semicolon) = payload_initial_split.next() else {
-            return Err(ParseGeneratorOutputError::Corrupted);
-        };
-
-        let mut payload_final_split = after_first_semicolon.rsplitn(2, |&byte| byte == b';');
-        let Some(after_final_semicolon) = payload_final_split.next() else {
-            return Err(ParseGeneratorOutputError::Corrupted);
-        };
-
-        let Some(payload_middle) = payload_final_split.next() else {
-            return Err(ParseGeneratorOutputError::Corrupted);
-        };
-
-        let command_id = String::from_utf8(before_first_semicolon.to_vec())
-            .map_err(ParseGeneratorOutputError::Utf8DecodingFailure)?;
-
-        let exit_code = String::from_utf8(after_final_semicolon.to_vec())
-            .map_err(ParseGeneratorOutputError::Utf8DecodingFailure)?
-            .parse::<usize>()
-            .map_err(ParseGeneratorOutputError::ExitCodeParseFailure)?;
-
-        // The output of the command remains as bytes. This is so we can operate on the bytes higher in
-        // the stack if we need to, such as in the case of parsing out the zsh history file where we want to
-        // transform the byte array before converting to a string.
-        let output = payload_middle.to_vec();
-
-        Ok(Self {
-            command_id,
-            exit_code,
-            output,
-        })
-    }
-}
-
-impl Debug for ExecutedExecutorCommandEvent {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        f.debug_struct("ExecutedExecutorCommandEvent")
-            .field("command_id", &self.command_id)
-            .field("exit_code", &self.exit_code)
-            .field("output", &AsciiDebug(&self.output))
-            .finish()
-    }
-}
-
-#[derive(thiserror::Error, Debug)]
-pub enum ParseGeneratorOutputError {
-    #[error("Failed to parse exit code: {0:?}")]
-    ExitCodeParseFailure(ParseIntError),
-    #[error("Corrupted DCS. Should be of the format <command_id>;<exit_code>;<output>. ")]
-    Corrupted,
-    #[error("Failed to convert to Utf8: {0:?}")]
-    Utf8DecodingFailure(FromUtf8Error),
-}
-
 impl Debug for Event {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {

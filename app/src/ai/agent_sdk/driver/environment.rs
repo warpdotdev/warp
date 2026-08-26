@@ -7,6 +7,7 @@ use std::time::Duration;
 use ai::index::full_source_code_embedding::manager::{
     CodebaseIndexManager, CodebaseIndexManagerEvent,
 };
+use chrono::Utc;
 use cloud_object_models::CodeForge;
 use futures::channel::oneshot;
 use futures::future::join_all;
@@ -22,12 +23,16 @@ use super::AgentDriverError;
 #[cfg(feature = "local_fs")]
 use super::cache_setup;
 use super::terminal::TerminalDriver;
+use crate::ai::agent_sdk::environment_snapshot::{
+    EnvironmentSnapshot, EnvironmentSnapshotReporter, RepositoryRevision,
+};
 use crate::ai::agent_sdk::setup_observability::{SetupClientEventReporter, SetupStep};
 use crate::ai::cloud_environments::SourceRepo;
 use crate::terminal::model::session::command_executor::shell_escape_single_quotes;
 use crate::terminal::shell::ShellType;
 
 const CODEBASE_INDEX_SYNC_TIMEOUT: Duration = Duration::from_secs(60);
+const ENVIRONMENT_SNAPSHOT_CAPTURE_TIMEOUT: Duration = Duration::from_secs(2);
 
 #[derive(Debug, thiserror::Error)]
 pub enum PrepareEnvironmentError {
@@ -62,6 +67,94 @@ pub enum PrepareEnvironmentError {
     UnsupportedRepositoryForge { repo_name: String },
     #[error("Terminal driver error while preparing environment: {source}")]
     TerminalDriver { source: AgentDriverError },
+}
+
+fn parse_resolved_head_sha(line: &str) -> Option<String> {
+    let sha = line.trim();
+    is_valid_git_object_id(sha).then(|| sha.to_string())
+}
+
+fn parse_resolved_head_shas(stdout: &[u8], repo_count: usize) -> Vec<Option<String>> {
+    let Ok(stdout) = std::str::from_utf8(stdout) else {
+        return vec![None; repo_count];
+    };
+    let mut resolved_heads = stdout
+        .lines()
+        .take(repo_count)
+        .map(parse_resolved_head_sha)
+        .collect::<Vec<_>>();
+    resolved_heads.resize(repo_count, None);
+    resolved_heads
+}
+
+fn build_resolved_head_command(repos: &[RepositoryCloneRequest], working_dir: &Path) -> String {
+    let mut script = String::from("set +e\n");
+    for request in repos {
+        let escaped = shell_escape_single_quotes(
+            &working_dir.join(&request.repo.repo).to_string_lossy(),
+            ShellType::Bash,
+        );
+        script.push_str(&format!(
+            "sha=\"$(git -C '{escaped}' rev-parse --verify HEAD 2>/dev/null)\"\n\
+             printf '%s\\n' \"$sha\"\n"
+        ));
+    }
+    format!(
+        "sh -c '{}'",
+        shell_escape_single_quotes(&script, ShellType::Bash)
+    )
+}
+
+fn checkout_path(working_dir: &Path, repo_name: &str) -> String {
+    working_dir
+        .join(repo_name)
+        .strip_prefix(working_dir)
+        .unwrap_or_else(|_| Path::new(repo_name))
+        .to_string_lossy()
+        .into_owned()
+}
+
+fn environment_snapshot(
+    repos: &[RepositoryCloneRequest],
+    working_dir: &Path,
+    resolved_heads: &[Option<String>],
+) -> EnvironmentSnapshot {
+    let repositories = repos
+        .iter()
+        .zip(resolved_heads)
+        .filter_map(|(request, resolved_head_sha)| {
+            Some(RepositoryRevision {
+                code_forge: request.repo.code_forge.unwrap_or_default(),
+                repo_owner: request.repo.owner.clone(),
+                repo_name: request.repo.repo.clone(),
+                checkout_path: checkout_path(working_dir, &request.repo.repo),
+                requested_checkout_ref: request
+                    .checkout
+                    .as_ref()
+                    .map(RepositoryHeadRef::value)
+                    .map(str::to_string),
+                resolved_head_sha: resolved_head_sha.clone()?,
+            })
+        })
+        .collect::<Vec<_>>();
+    if repositories.len() < repos.len() {
+        log::warn!(
+            "Could not capture resolved HEAD for {}/{} structured repositories",
+            repos.len() - repositories.len(),
+            repos.len()
+        );
+    }
+    EnvironmentSnapshot {
+        captured_at: Utc::now(),
+        repositories,
+    }
+}
+
+fn is_valid_git_object_id(value: &str) -> bool {
+    matches!(value.len(), 40 | 64)
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
 }
 
 /// Server-owned repository settings for environment preparation.
@@ -144,6 +237,7 @@ pub(crate) fn prepare_environment(
     harness: Harness,
     repository_options: RepositoryPreparationOptions,
     setup_events: SetupClientEventReporter,
+    environment_snapshot_reporter: EnvironmentSnapshotReporter,
     ctx: &mut ModelContext<TerminalDriver>,
 ) -> impl Future<Output = Result<(), PrepareEnvironmentError>> + use<> {
     let spawner = ctx.spawner();
@@ -176,6 +270,7 @@ pub(crate) fn prepare_environment(
             should_index_codebase,
             Arc::clone(&repo_channels),
             setup_events,
+            environment_snapshot_reporter,
         )
         .await;
 
@@ -284,6 +379,7 @@ async fn prepare_environment_impl(
     should_index_codebase: bool,
     repo_channels: Arc<Mutex<HashMap<PathBuf, oneshot::Sender<()>>>>,
     setup_events: SetupClientEventReporter,
+    environment_snapshot_reporter: EnvironmentSnapshotReporter,
 ) -> Result<(), PrepareEnvironmentError> {
     let working_dir_string = working_dir.to_string_lossy().to_string();
 
@@ -299,7 +395,9 @@ async fn prepare_environment_impl(
     }
     let mut codebase_context_receivers = Vec::new();
 
-    if !source_repos.is_empty() {
+    let environment_snapshot = if source_repos.is_empty() {
+        EnvironmentSnapshot::empty()
+    } else {
         setup_events
             .record_result(SetupStep::EnvironmentRepoClone, async {
                 clone_checkout_requests(
@@ -309,7 +407,11 @@ async fn prepare_environment_impl(
                 )
                 .await
             })
-            .await?;
+            .await?
+    };
+    environment_snapshot_reporter.report(environment_snapshot);
+
+    if !source_repos.is_empty() {
         for repo in source_repos {
             register_cloned_repo(repo, working_dir, is_sandbox, spawner).await?;
             if !is_sandbox && should_index_codebase {
@@ -685,16 +787,17 @@ pub(super) async fn clone_repos(
         spawner,
     )
     .await
+    .map(|_| ())
 }
 
 async fn clone_checkout_requests(
     repos: &[RepositoryCloneRequest],
     working_dir: &Path,
     spawner: &ModelSpawner<TerminalDriver>,
-) -> Result<(), PrepareEnvironmentError> {
+) -> Result<EnvironmentSnapshot, PrepareEnvironmentError> {
     match repos {
-        [] => Ok(()),
-        [request] => clone_repo(request, working_dir, spawner).await,
+        [] => return Ok(EnvironmentSnapshot::empty()),
+        [request] => clone_repo(request, working_dir, spawner).await?,
         repos => {
             let shell_type = spawner
                 .spawn(|driver, ctx| {
@@ -726,9 +829,9 @@ async fn clone_checkout_requests(
                 safe: ("Successfully cloned repositories"),
                 full: ("Successfully cloned repositories: {}", repo_names.join(", "))
             );
-            Ok(())
         }
     }
+    Ok(capture_environment_snapshot(repos, working_dir, spawner).await)
 }
 
 /// Clone a source repository to `{working_dir}/{repo.repo}` if it does not already exist.
@@ -840,6 +943,35 @@ async fn clone_repo(
     Ok(())
 }
 
+async fn capture_environment_snapshot(
+    repos: &[RepositoryCloneRequest],
+    working_dir: &Path,
+    spawner: &ModelSpawner<TerminalDriver>,
+) -> EnvironmentSnapshot {
+    if repos.is_empty() {
+        return EnvironmentSnapshot::empty();
+    }
+    let command = build_resolved_head_command(repos, working_dir);
+    let resolved_heads = match execute_silent_command(command, spawner)
+        .with_timeout(ENVIRONMENT_SNAPSHOT_CAPTURE_TIMEOUT)
+        .await
+    {
+        Ok(Ok(output)) => parse_resolved_head_shas(&output.stdout, repos.len()),
+        Ok(Err(error)) => {
+            log::warn!("Could not capture resolved HEADs for structured repositories: {error}");
+            vec![None; repos.len()]
+        }
+        Err(_) => {
+            log::warn!(
+                "Timed out capturing resolved HEADs for structured repositories after {:?}",
+                ENVIRONMENT_SNAPSHOT_CAPTURE_TIMEOUT
+            );
+            vec![None; repos.len()]
+        }
+    };
+    environment_snapshot(repos, working_dir, &resolved_heads)
+}
+
 /// Build the `git fetch` + `git checkout` command that pins `request`'s clone at
 /// its checkout, or `None` when the repo has no ref to pin.
 ///
@@ -880,6 +1012,7 @@ fn checkout_result(
         })
     }
 }
+
 /// Register a cloned source repository with `DetectedRepositories` so that the
 /// skill watcher and other repo-aware subsystems can discover it.
 #[tracing::instrument(skip_all, err, fields(tags.cloud_agent = true, repo = %repo, is_sandbox = is_sandbox))]
@@ -1136,24 +1269,6 @@ async fn cd_in_terminal_silent(
     Ok(output.status == CommandExitStatus::Success)
 }
 
-/// Returns whether the given path resolves to an existing directory from the
-/// perspective of the active terminal session.
-///
-/// Runs `test -d <path>` through the session's in-band command executor, so
-/// the check is invisible in the user-facing blocklist and works for paths
-/// that only exist inside a remote/sandbox filesystem. The path is escaped
-/// using the *session's* actual shell type (bash/zsh use the `'"'"'` trick,
-/// fish uses a backslash, PowerShell doubles the quote) rather than assuming
-/// bash.
-///
-/// Prefer passing an absolute path: relative paths resolve against the
-/// session's current working directory, which couples the caller to
-/// whatever `cd` state the session happens to be in.
-///
-/// TODO(advait): `test -d ...` itself is POSIX-only. When we support
-/// environment prep on Windows host shells (PowerShell / cmd.exe), also
-/// branch on `ShellType` to emit the appropriate probe (e.g.
-/// `Test-Path -PathType Container <path>` for PowerShell).
 async fn terminal_directory_exists(
     path: &str,
     spawner: &ModelSpawner<TerminalDriver>,

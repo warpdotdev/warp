@@ -4,7 +4,7 @@ use warpui::elements::Text;
 use warpui::fonts::FamilyId;
 
 use super::*;
-use crate::terminal::model::secrets::{self, SecretLevel};
+use crate::terminal::model::secrets::{self, SecretLevel, merge_sorted_ranges_with_levels};
 
 #[test]
 fn test_merge_no_ranges() {

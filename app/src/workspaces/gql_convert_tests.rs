@@ -13,6 +13,7 @@ fn team(name: &str, member_uids: &[&str]) -> Team {
                     uid: UserUid::new(uid),
                     email: format!("{uid}@example.com"),
                     role: MembershipRole::User,
+                    is_disabled: false,
                 })
                 .collect(),
         ),
@@ -73,6 +74,52 @@ fn drop_every_team_when_user_has_no_team_membership() {
     retain_authenticated_teams(&mut workspace, UserUid::new("current-user"));
 
     assert!(team_names(&workspace).is_empty());
+}
+
+#[test]
+fn team_member_conversion_preserves_is_disabled() {
+    let enabled_member = GqlTeamMember {
+        uid: "user-1".into(),
+        email: "user1@example.com".to_string(),
+        role: GqlMembershipRole::User,
+        is_disabled: false,
+    };
+    let disabled_member = GqlTeamMember {
+        uid: "user-2".into(),
+        email: "user2@example.com".to_string(),
+        role: GqlMembershipRole::User,
+        is_disabled: true,
+    };
+
+    assert!(!TeamMember::from(enabled_member).is_disabled);
+    assert!(TeamMember::from(disabled_member).is_disabled);
+}
+
+#[test]
+fn workspace_member_conversion_preserves_is_disabled() {
+    let usage_info = || GqlWorkspaceMemberUsageInfo {
+        is_unlimited: false,
+        request_limit: 0,
+        requests_used_since_last_refresh: 0,
+        is_request_limit_prorated: false,
+    };
+    let enabled_member = GqlWorkspaceMember {
+        uid: "user-1".into(),
+        email: "user1@example.com".to_string(),
+        role: GqlMembershipRole::User,
+        is_disabled: false,
+        usage_info: usage_info(),
+    };
+    let disabled_member = GqlWorkspaceMember {
+        uid: "user-2".into(),
+        email: "user2@example.com".to_string(),
+        role: GqlMembershipRole::User,
+        is_disabled: true,
+        usage_info: usage_info(),
+    };
+
+    assert!(!WorkspaceMember::from(enabled_member).is_disabled);
+    assert!(WorkspaceMember::from(disabled_member).is_disabled);
 }
 
 mod pending_email_invites_conversion {

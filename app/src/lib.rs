@@ -847,7 +847,7 @@ fn run_worker_command(worker: &warp_cli::WorkerCommand) -> Result<()> {
     match worker {
         #[cfg(all(feature = "local_tty", unix))]
         warp_cli::WorkerCommand::TerminalServer(args) => {
-            crate::terminal::local_tty::server::run_terminal_server(args);
+            crate::terminal::local_tty::run_terminal_server(args);
             Ok(())
         }
         #[cfg(feature = "plugin_host")]
