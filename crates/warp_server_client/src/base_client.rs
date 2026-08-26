@@ -22,6 +22,13 @@ pub const CLOUD_AGENT_ID_HEADER: &str = "X-Warp-Cloud-Agent-ID";
 /// Header used to communicate the source of an agent run.
 pub const AGENT_SOURCE_HEADER: &str = "X-Oz-Api-Source";
 
+/// Header carrying the request-local team scope for an operation whose team is inferred
+/// from the current window rather than named explicitly in the request body. See
+/// `specs/multi-team-api-context/TECH.md`. The server authenticates membership and rejects
+/// a header that disagrees with the request body or an existing resource; adding this header
+/// is not itself proof of membership.
+pub const TEAM_UID_HEADER: &str = "X-Warp-Team-Uid";
+
 /// IDs in the staging database that were created specifically for evals.
 ///
 /// Keep this list in sync with `script/populate_agent_mode_eval_user.sql` in warp-server.
@@ -185,6 +192,7 @@ impl BaseClient {
             AMBIENT_WORKLOAD_TOKEN_HEADER,
             CLOUD_AGENT_ID_HEADER,
             AGENT_SOURCE_HEADER,
+            TEAM_UID_HEADER,
         ]
         .iter()
         .any(|reserved| name.eq_ignore_ascii_case(reserved))
@@ -334,6 +342,21 @@ impl BaseClient {
             self.ambient_headers(AmbientHeaderPolicy::inherit_all())
                 .await?,
         );
+        Ok(options)
+    }
+
+    /// Returns GraphQL options for a session-authenticated operation scoped to a team.
+    pub async fn graphql_request_options_with_team(
+        &self,
+        timeout: Option<Duration>,
+        team_uid: Option<String>,
+    ) -> Result<RequestOptions> {
+        let mut options = self.graphql_request_options(timeout).await?;
+        if let Some(team_uid) = team_uid {
+            options
+                .headers
+                .insert(TEAM_UID_HEADER.to_string(), team_uid);
+        }
         Ok(options)
     }
 

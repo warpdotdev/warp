@@ -87,6 +87,7 @@ mod common;
 mod config_file;
 pub(crate) mod driver;
 mod environment;
+pub(crate) mod environment_snapshot;
 mod federate;
 mod harness_support;
 #[cfg(not(target_family = "wasm"))]
@@ -1059,6 +1060,8 @@ impl AgentDriverRunner {
                     cloud_providers: Vec::new(),
                     environment: None,
                     additional_source_repos: Vec::new(),
+                    repository_head_overrides: args.repository_head_overrides.clone(),
+                    remove_repository_origins: args.remove_repository_origins,
                     selected_harness: args.harness,
                     third_party_harness_model_config,
                     snapshot_disabled: args.snapshot.no_snapshot.then_some(true),
@@ -1128,6 +1131,17 @@ impl AgentDriverRunner {
                 Self::resolve_environment(foreground, environment_id, &mut driver_options),
             )
             .await?;
+        driver::environment::validate_repository_head_overrides(
+            &driver::environment::merge_repos_deduped(
+                driver_options
+                    .environment
+                    .as_ref()
+                    .map(crate::ai::cloud_environments::AmbientAgentEnvironment::effective_repos)
+                    .unwrap_or_default(),
+                driver_options.additional_source_repos.clone(),
+            )?,
+            &driver_options.repository_head_overrides,
+        )?;
 
         Ok((driver_options, task, task_conversation_id))
     }
@@ -1231,7 +1245,7 @@ impl AgentDriverRunner {
         };
 
         // Handoff snapshot attachments for follow-up executions are written to
-        // {attachments_dir}/handoff/{uuid} so the server-side rehydration prompt
+        // {attachments_dir}/handoff/{filename} so the server-side rehydration prompt
         // references resolve to real files.
         let handoff_snapshot_ai_client = ai_client.clone();
         let handoff_snapshot_server_api = server_api.clone();

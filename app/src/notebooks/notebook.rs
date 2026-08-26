@@ -1862,7 +1862,7 @@ impl NotebookView {
         let saved_position = self.view_position_id.clone();
 
         EventHandler::new(styles::wrap_body(ChildView::new(&self.input).finish()))
-            .on_right_mouse_down(move |ctx, _, position| {
+            .on_right_mouse_down(move |ctx, _, position, _| {
                 show_rich_editor_context_menu::<NotebookAction>(
                     ctx,
                     position,
@@ -1879,7 +1879,7 @@ impl NotebookView {
         let saved_position = self.view_position_id.clone();
         let appearance = Appearance::as_ref(app);
         let title = EventHandler::new(Clipped::new(ChildView::new(&self.title).finish()).finish())
-            .on_right_mouse_down(move |ctx, _, position| {
+            .on_right_mouse_down(move |ctx, _, position, _| {
                 show_text_editor_context_menu::<NotebookAction>(
                     ctx,
                     position,

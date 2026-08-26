@@ -137,3 +137,52 @@ fn retry_loop_fails_fast_on_permanent_error() {
     assert!(result.is_err());
     assert_eq!(attempts.get(), 1, "permanent errors should not retry");
 }
+
+#[test]
+fn with_bounded_retry_using_applies_custom_classifier() {
+    // An error with no typed HTTP/GraphQL cause is transient under the default
+    // `is_transient_http_error` classifier but permanent under
+    // `is_transient_graphql_or_http_error`. `with_bounded_retry_using` must apply the
+    // classifier it's given, not the default.
+    let attempts = Rc::new(Cell::new(0));
+    let attempts_clone = attempts.clone();
+    let result: Result<()> = block_on(with_bounded_retry_using(
+        "test retry",
+        MAX_ATTEMPTS,
+        is_transient_graphql_or_http_error,
+        || {
+            attempts_clone.set(attempts_clone.get() + 1);
+            async { Err(anyhow!("user-facing GraphQL error")) }
+        },
+    ));
+    assert!(result.is_err());
+    assert_eq!(
+        attempts.get(),
+        1,
+        "an untyped error should fail fast under is_transient_graphql_or_http_error"
+    );
+}
+
+#[test]
+fn with_bounded_retry_using_honors_custom_attempt_budget() {
+    // Deliberately different from the shared `MAX_ATTEMPTS` (3), and kept small so the
+    // test only pays for one backoff.
+    const CUSTOM_MAX_ATTEMPTS: usize = 2;
+    let attempts = Rc::new(Cell::new(0));
+    let attempts_clone = attempts.clone();
+    let result: Result<()> = block_on(with_bounded_retry_using(
+        "test retry",
+        CUSTOM_MAX_ATTEMPTS,
+        is_transient_graphql_or_http_error,
+        || {
+            attempts_clone.set(attempts_clone.get() + 1);
+            async { Err(graphql_http_err(StatusCode::SERVICE_UNAVAILABLE)) }
+        },
+    ));
+    assert!(result.is_err());
+    assert_eq!(
+        attempts.get(),
+        CUSTOM_MAX_ATTEMPTS,
+        "should retry up to the caller-supplied budget, not the shared MAX_ATTEMPTS"
+    );
+}

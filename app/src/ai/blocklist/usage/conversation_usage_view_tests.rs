@@ -44,6 +44,10 @@ fn placeholder_usage_info() -> ConversationUsageInfo {
         lines_added: 0,
         lines_removed: 0,
         commands_executed: 0,
+        total_tokens: None,
+        total_cost_in_cents: None,
+        tokens_for_last_block: None,
+        cost_in_cents_for_last_block: None,
     }
 }
 

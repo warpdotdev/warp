@@ -27,6 +27,7 @@ use warp_cli::agent::Harness;
 use warp_core::command::ExitCode;
 use warp_core::context_flag::ContextFlag;
 use warp_errors::report_if_error;
+use warp_terminal::focus_env::add_session_focus_env_vars;
 use warp_terminal::shell::{ShellName, ShellType};
 #[cfg(feature = "local_fs")]
 use warp_util::path::LineAndColumnArg;
@@ -122,7 +123,6 @@ use crate::shell_indicator::ShellIndicatorType;
 use crate::terminal::available_shells::{AvailableShell, AvailableShells};
 #[cfg(not(target_family = "wasm"))]
 use crate::terminal::cli_agent_sessions::plugin_manager::PluginModalKind;
-use crate::terminal::focus_env::add_session_focus_env_vars;
 use crate::terminal::general_settings::{GeneralSettings, GeneralSettingsChangedEvent};
 #[cfg(feature = "local_tty")]
 use crate::terminal::local_tty::TerminalManager as LocalTtyTerminalManager;
@@ -5094,6 +5094,7 @@ impl PaneGroup {
         file_pane_id: PaneId,
         path: LocalOrRemotePath,
         source: Option<crate::code::editor_management::CodeSource>,
+        scroll_fraction: Option<f32>,
         ctx: &mut ViewContext<Self>,
     ) {
         use crate::code::editor_management::CodeSource;
@@ -5103,6 +5104,14 @@ impl PaneGroup {
         let source = source.unwrap_or(CodeSource::FileTree { location: path });
 
         let code_pane = CodePane::new(source, None, ctx);
+        // Seed the restored scroll before the pane attaches and lays out. The fraction is consumed
+        // on a later async `ViewportUpdated` (never within this synchronous pass), so setting it
+        // here is strictly before any possible apply.
+        if let Some(fraction) = scroll_fraction {
+            code_pane.file_view(ctx).update(ctx, |code_view, ctx| {
+                code_view.set_pending_scroll_fraction(fraction, ctx);
+            });
+        }
         let success = self.replace_pane(file_pane_id, code_pane, false, ctx);
 
         if !success {
@@ -5119,6 +5128,7 @@ impl PaneGroup {
         code_pane_id: PaneId,
         path: LocalOrRemotePath,
         source: Option<crate::code::editor_management::CodeSource>,
+        scroll_fraction: Option<f32>,
         ctx: &mut ViewContext<Self>,
     ) {
         // Get the active session to pass to the FilePane, if any
@@ -5134,7 +5144,14 @@ impl PaneGroup {
             }
         });
 
-        let file_pane = FilePane::new(Some(path), session, source, ctx);
+        // Construct the pane empty, seed the restored scroll, THEN open the path — so the content
+        // load that triggers `set_content` -> scroll apply can never run before the pending
+        // fraction is set, even if a load were to deliver synchronously.
+        let file_pane = FilePane::new(None, None, source, ctx);
+        file_pane.file_view(ctx).update(ctx, |view, ctx| {
+            view.set_pending_scroll_fraction(scroll_fraction);
+            view.open(path, session, ctx);
+        });
         let success = self.replace_pane(code_pane_id, file_pane, false, ctx);
 
         if !success {
@@ -5189,12 +5206,32 @@ impl PaneGroup {
             }
             PaneEvent::ClearHoveredTabIndex => ctx.emit(Event::ClearHoveredTabIndex),
             #[cfg(feature = "local_fs")]
-            PaneEvent::ReplaceWithCodePane { path, source } => {
-                self.replace_file_pane_with_code_pane(pane_id, path.clone(), source.clone(), ctx);
+            PaneEvent::ReplaceWithCodePane {
+                path,
+                source,
+                scroll_fraction,
+            } => {
+                self.replace_file_pane_with_code_pane(
+                    pane_id,
+                    path.clone(),
+                    source.clone(),
+                    (*scroll_fraction).map(|f| f.into_inner()),
+                    ctx,
+                );
             }
             #[cfg(feature = "local_fs")]
-            PaneEvent::ReplaceWithFilePane { path, source } => {
-                self.replace_code_pane_with_file_pane(pane_id, path.clone(), source.clone(), ctx);
+            PaneEvent::ReplaceWithFilePane {
+                path,
+                source,
+                scroll_fraction,
+            } => {
+                self.replace_code_pane_with_file_pane(
+                    pane_id,
+                    path.clone(),
+                    source.clone(),
+                    (*scroll_fraction).map(|f| f.into_inner()),
+                    ctx,
+                );
             }
             PaneEvent::RepoChanged => {
                 ctx.emit(Event::RepoChanged);

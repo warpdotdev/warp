@@ -29,6 +29,26 @@ impl ExecutionMode {
             ExecutionMode::RemoteServerDaemon => "warp-remote-server-daemon",
         }
     }
+
+    /// Whether a CLI-based MCP server can fall back to inheriting this process's PATH when
+    /// no explicit `mcp_execution_path` setting is available.
+    ///
+    /// The desktop app keeps requiring a shell-derived path, so a failed MCP spawn surfaces
+    /// as an actionable toast instead of silently launching with the wrong PATH. The SDK CLI
+    /// and the TUI receive an authoritative PATH from their own launcher (an interactive shell
+    /// or a CLI invocation) before Warp starts, so inheriting it is safe and is the only PATH
+    /// available to a fresh SDK process before terminal bootstrap populates
+    /// `mcp_execution_path`. The remote server daemon is headless and long-lived with no user
+    /// present to open a terminal and populate that setting, and no window to show the
+    /// alternative's failure toast in, so it also inherits; since inheritance only ever fills
+    /// in a missing path rather than overriding a configured one, that's a better failure mode
+    /// than refusing to start the server.
+    pub fn can_inherit_process_path_for_mcp(&self) -> bool {
+        match self {
+            ExecutionMode::App => false,
+            ExecutionMode::Tui | ExecutionMode::Sdk | ExecutionMode::RemoteServerDaemon => true,
+        }
+    }
 }
 
 /// Model tracking the mode that Warp is running in.
@@ -121,6 +141,12 @@ impl AppExecutionMode {
     /// Returns the client ID to report to the server.
     pub fn client_id(&self) -> &'static str {
         self.mode.client_id()
+    }
+
+    /// Whether a CLI-based MCP server can fall back to inheriting this process's PATH when
+    /// no explicit `mcp_execution_path` setting is available.
+    pub fn can_inherit_process_path_for_mcp(&self) -> bool {
+        self.mode.can_inherit_process_path_for_mcp()
     }
 
     /// If true, Warp is running in a sandbox like a Docker container or VM, rather than directly

@@ -11,6 +11,7 @@ use warp_core::interval_timer::TimingDataPoint;
 use warp_core::telemetry::{
     EnablementState, TelemetryEvent as TelemetryEventTrait, TelemetryEventDesc,
 };
+pub use warp_terminal::ImageProtocol;
 use warpui::keymap::Keystroke;
 use warpui::notification::{NotificationSendError, RequestPermissionsOutcome};
 use warpui::rendering::ThinStrokes;
@@ -970,12 +971,6 @@ pub enum AgentModeCitation {
         memory_store_id: String,
         memory_id: String,
     },
-}
-
-#[derive(Clone, Copy, Debug, Serialize)]
-pub enum ImageProtocol {
-    Kitty,
-    ITerm,
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Default)]

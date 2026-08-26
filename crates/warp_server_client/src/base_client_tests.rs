@@ -7,7 +7,7 @@ use warp_server_auth::auth_state::AuthState;
 use super::{
     AGENT_SOURCE_HEADER, AMBIENT_WORKLOAD_TOKEN_HEADER, AmbientHeaderPolicy,
     AuthenticatedGraphqlConfig, BaseClient, CLOUD_AGENT_ID_HEADER, GraphqlRoutingConfig,
-    HeaderOverride,
+    HeaderOverride, TEAM_UID_HEADER,
 };
 
 struct StaticIapTokenProvider;
@@ -136,6 +136,29 @@ fn authenticated_graphql_options_include_configured_and_ambient_headers() {
         options.headers.get(AGENT_SOURCE_HEADER).map(String::as_str),
         Some("cloud_mode")
     );
+}
+
+#[test]
+fn team_scoped_graphql_options_attach_team_header_when_scope_is_supplied() {
+    let client = client();
+
+    let options =
+        block_on(client.graphql_request_options_with_team(None, Some("team-123".to_string())))
+            .unwrap();
+
+    assert_eq!(
+        options.headers.get(TEAM_UID_HEADER).map(String::as_str),
+        Some("team-123")
+    );
+}
+
+#[test]
+fn team_scoped_graphql_options_omit_team_header_when_scope_is_absent() {
+    let client = client();
+
+    let options = block_on(client.graphql_request_options_with_team(None, None)).unwrap();
+
+    assert!(!options.headers.contains_key(TEAM_UID_HEADER));
 }
 
 #[test]

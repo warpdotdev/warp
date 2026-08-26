@@ -25,14 +25,14 @@ use warp_core::features::FeatureFlag;
 use warp_errors::report_if_error;
 use warpui::platform::OperatingSystem;
 use warpui::platform::keyboard::KeyCode;
-use warpui::{AppContext, Entity, ModelContext, SingletonEntity, UpdateModel};
+use warpui::{AppContext, Entity, ModelContext, SingletonEntity, UpdateModel, WeakViewHandle};
 
 use crate::ai::execution_profiles::ExecutionProfilesConfig;
 use crate::ai::request_usage_model::RequestLimitInfo;
 use crate::auth::AuthStateProvider;
 use crate::settings::PrivacySettings;
-use crate::terminal::CLIAgent;
-use crate::workspaces::user_workspaces::UserWorkspaces;
+use crate::terminal::{CLIAgent, TerminalView};
+use crate::workspaces::user_workspaces::{TeamScope, UserWorkspaces};
 
 pub enum FocusedTerminalInfoEvent {
     TerminalInfoUpdated,
@@ -43,16 +43,18 @@ pub enum FocusedTerminalInfoEvent {
 /// remote sessions.
 #[derive(Default, Clone, Debug)]
 pub struct FocusedTerminalInfo {
+    terminal: Option<WeakViewHandle<TerminalView>>,
     contains_any_remote_blocks: bool,
     contains_any_restored_remote_blocks: bool,
 }
 
 impl FocusedTerminalInfo {
     pub fn new(_: &mut ModelContext<Self>) -> Self {
-        Self {
-            contains_any_remote_blocks: false,
-            contains_any_restored_remote_blocks: false,
-        }
+        Self::default()
+    }
+
+    pub fn terminal(&self) -> Option<&WeakViewHandle<TerminalView>> {
+        self.terminal.as_ref()
     }
 
     pub fn contains_any_remote_blocks(&self) -> bool {
@@ -63,27 +65,31 @@ impl FocusedTerminalInfo {
         self.contains_any_restored_remote_blocks
     }
 
-    /// Updates both remote blocks and restored blocks status in a single atomic operation.
-    /// Only emits a TerminalInfoUpdated event if either value changes.
+    /// Records what the focused `terminal` contains, in a single atomic operation.
+    /// Only emits a TerminalInfoUpdated event if anything changes.
     /// Returns true if the event was emitted.
+    ///
+    /// The surface is written together with its flags rather than tracked separately so a
+    /// reader cannot resolve one terminal's team for another terminal's content.
     pub fn update(
         &mut self,
+        terminal: WeakViewHandle<TerminalView>,
         contains_any_remote_blocks: bool,
         contains_any_restored_remote_blocks: bool,
         ctx: &mut ModelContext<Self>,
     ) -> bool {
-        let remote_changed = self.contains_any_remote_blocks != contains_any_remote_blocks;
-        let restored_changed =
-            self.contains_any_restored_remote_blocks != contains_any_restored_remote_blocks;
-
-        if remote_changed || restored_changed {
-            self.contains_any_remote_blocks = contains_any_remote_blocks;
-            self.contains_any_restored_remote_blocks = contains_any_restored_remote_blocks;
-            ctx.emit(FocusedTerminalInfoEvent::TerminalInfoUpdated);
-            return true;
+        let unchanged = self.terminal.as_ref().map(|held| held.id()) == Some(terminal.id())
+            && self.contains_any_remote_blocks == contains_any_remote_blocks
+            && self.contains_any_restored_remote_blocks == contains_any_restored_remote_blocks;
+        if unchanged {
+            return false;
         }
 
-        false
+        self.terminal = Some(terminal);
+        self.contains_any_remote_blocks = contains_any_remote_blocks;
+        self.contains_any_restored_remote_blocks = contains_any_restored_remote_blocks;
+        ctx.emit(FocusedTerminalInfoEvent::TerminalInfoUpdated);
+        true
     }
 }
 
@@ -689,6 +695,7 @@ pub enum TuiStatuslineItem {
     /// Vim mode indicator (NOR/INS/VIS/V-L/REP); hidden when vim mode is disabled.
     VimModeIndicator,
     Model,
+    Team,
     WorkingDirectory,
     GitBranch,
     GitBranchStatus,
@@ -706,10 +713,11 @@ pub enum TuiStatuslineItem {
 }
 
 impl TuiStatuslineItem {
-    pub const ALL: [Self; 15] = [
+    pub const ALL: [Self; 16] = [
         Self::AutoApprove,
         Self::VimModeIndicator,
         Self::Model,
+        Self::Team,
         Self::WorkingDirectory,
         Self::GitBranch,
         Self::GitBranchStatus,
@@ -729,6 +737,7 @@ impl TuiStatuslineItem {
             Self::AutoApprove => "Auto-approve indicator",
             Self::VimModeIndicator => "Vim mode indicator",
             Self::Model => "Model",
+            Self::Team => "Team",
             Self::WorkingDirectory => "Working directory",
             Self::GitBranch => "Git branch",
             Self::GitBranchStatus => "Git branch status",
@@ -2068,7 +2077,7 @@ define_settings_group!(AISettings, settings: [
     }
 
     // Whether Oz should add attribution (co-author line) to commit messages and PRs.
-    // This is the user-level preference; it may be overridden by the team-level
+    // This is the user-level preference; it may be overridden by the window's team's
     // `enable_warp_attribution` AdminEnablementSetting (see
     // `UserWorkspaces::get_agent_attribution_setting`).
     agent_attribution_enabled: AgentAttributionEnabled {
@@ -2164,19 +2173,19 @@ impl AISettings {
     }
 
     pub fn is_ai_disabled_due_to_remote_session_org_policy(&self, app: &AppContext) -> bool {
-        let contains_remote_blocks = FocusedTerminalInfo::as_ref(app).contains_any_remote_blocks();
-
-        let contains_restored_remote_blocks =
-            FocusedTerminalInfo::as_ref(app).contains_any_restored_remote_blocks();
-
-        let is_ai_allowed_in_remote_sessions =
-            UserWorkspaces::as_ref(app).is_ai_allowed_in_remote_sessions();
-
-        if is_ai_allowed_in_remote_sessions {
+        let focused_terminal = FocusedTerminalInfo::as_ref(app);
+        let Some(terminal) = focused_terminal.terminal() else {
+            return false;
+        };
+        if !focused_terminal.contains_any_remote_blocks()
+            && !focused_terminal.contains_any_restored_remote_blocks()
+        {
             return false;
         }
 
-        contains_remote_blocks || contains_restored_remote_blocks
+        let user_workspaces = UserWorkspaces::as_ref(app);
+        let scope = user_workspaces.team_context(terminal, app);
+        !user_workspaces.is_ai_allowed_in_remote_sessions(&scope)
     }
 
     pub fn is_any_ai_enabled(&self, app: &AppContext) -> bool {
@@ -2471,55 +2480,83 @@ impl AISettings {
         self.is_any_ai_enabled(app)
     }
 
-    pub fn is_command_allowlist_editable(&self, app: &AppContext) -> bool {
+    pub(crate) fn is_command_allowlist_editable(
+        &self,
+        scope: &impl TeamScope,
+        app: &AppContext,
+    ) -> bool {
         let set_by_workspace = UserWorkspaces::as_ref(app)
-            .ai_autonomy_settings()
+            .ai_autonomy_settings(scope)
             .has_override_for_execute_commands_allowlist();
 
         self.is_any_ai_enabled(app) && !set_by_workspace
     }
 
-    pub fn is_directory_allowlist_editable(&self, app: &AppContext) -> bool {
+    pub(crate) fn is_directory_allowlist_editable(
+        &self,
+        scope: &impl TeamScope,
+        app: &AppContext,
+    ) -> bool {
         let set_by_workspace = UserWorkspaces::as_ref(app)
-            .ai_autonomy_settings()
+            .ai_autonomy_settings(scope)
             .has_override_for_read_files_allowlist();
 
         self.is_any_ai_enabled(app) && !set_by_workspace
     }
 
-    pub fn is_execute_commands_permissions_editable(&self, app: &AppContext) -> bool {
+    pub(crate) fn is_execute_commands_permissions_editable(
+        &self,
+        scope: &impl TeamScope,
+        app: &AppContext,
+    ) -> bool {
         let set_by_workspace = UserWorkspaces::as_ref(app)
-            .ai_autonomy_settings()
+            .ai_autonomy_settings(scope)
             .has_override_for_execute_commands();
 
         self.is_any_ai_enabled(app) && !set_by_workspace
     }
 
-    pub fn is_write_to_pty_permissions_editable(&self, app: &AppContext) -> bool {
+    pub(crate) fn is_write_to_pty_permissions_editable(
+        &self,
+        scope: &impl TeamScope,
+        app: &AppContext,
+    ) -> bool {
         let set_by_workspace = UserWorkspaces::as_ref(app)
-            .ai_autonomy_settings()
+            .ai_autonomy_settings(scope)
             .has_override_for_write_to_pty();
         self.is_any_ai_enabled(app) && !set_by_workspace
     }
 
-    pub fn is_computer_use_permissions_editable(&self, app: &AppContext) -> bool {
+    pub(crate) fn is_computer_use_permissions_editable(
+        &self,
+        scope: &impl TeamScope,
+        app: &AppContext,
+    ) -> bool {
         let set_by_workspace = UserWorkspaces::as_ref(app)
-            .ai_autonomy_settings()
+            .ai_autonomy_settings(scope)
             .has_override_for_computer_use();
         self.is_any_ai_enabled(app) && !set_by_workspace
     }
 
-    pub fn is_read_files_permissions_editable(&self, app: &AppContext) -> bool {
+    pub(crate) fn is_read_files_permissions_editable(
+        &self,
+        scope: &impl TeamScope,
+        app: &AppContext,
+    ) -> bool {
         let set_by_workspace = UserWorkspaces::as_ref(app)
-            .ai_autonomy_settings()
+            .ai_autonomy_settings(scope)
             .has_override_for_read_files();
 
         self.is_any_ai_enabled(app) && !set_by_workspace
     }
 
-    pub fn is_code_diffs_permissions_editable(&self, app: &AppContext) -> bool {
+    pub(crate) fn is_code_diffs_permissions_editable(
+        &self,
+        scope: &impl TeamScope,
+        app: &AppContext,
+    ) -> bool {
         let set_by_workspace = UserWorkspaces::as_ref(app)
-            .ai_autonomy_settings()
+            .ai_autonomy_settings(scope)
             .has_override_for_code_diffs();
 
         self.is_any_ai_enabled(app) && !set_by_workspace

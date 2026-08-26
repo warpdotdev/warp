@@ -1,4 +1,3 @@
-use pathfinder_color::ColorU;
 use ui_components::{Component as _, Options as _, button};
 use warp_core::send_telemetry_from_ctx;
 use warp_core::ui::appearance::Appearance;
@@ -7,7 +6,7 @@ use warp_core::ui::theme::Fill;
 use warp_core::ui::theme::color::internal_colors;
 use warpui_core::elements::{
     Border, ClippedScrollStateHandle, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
-    Empty, Expanded, Flex, FormattedTextElement, Hoverable, MainAxisAlignment, MainAxisSize,
+    Empty, Flex, FormattedTextElement, Hoverable, MainAxisAlignment, MainAxisSize,
     MouseStateHandle, ParentElement, Radius, Stack,
 };
 use warpui_core::fonts::Weight;
@@ -23,18 +22,9 @@ use warpui_core::{
 
 use super::OnboardingSlide;
 use super::upgrade_auth_prompt::render_upgrade_auth_prompt_bar;
-use crate::model::{CreditPackOption, CreditPurchaseState, OnboardingStateModel};
+use crate::model::OnboardingStateModel;
 use crate::slides::{layout, slide_content};
 use crate::telemetry::OnboardingEvent;
-
-/// Upper bound on rendered credit packs. The server offers four today; the cap
-/// keeps a fixed pool of mouse states (hover tracking needs stable handles)
-/// without capping what the server may add later in any meaningful way.
-const MAX_CREDIT_PACKS: usize = 8;
-
-/// Gap between credit pack tiles, matching the Billing & Usage page's add-on
-/// credit denominations row.
-const CREDIT_PACK_TILE_SPACING: f32 = 8.;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OfferVariant {
@@ -72,30 +62,14 @@ impl OfferVariant {
     pub(crate) fn primary_label(self) -> &'static str {
         match self {
             OfferVariant::HeadStart => "Unlock the full AI experience",
-            // The plan and the one-time credit packs now share one card, so it
-            // is titled for their common outcome: using Warp with AI.
             OfferVariant::ChooseHowToStart => "Use Warp with AI",
         }
     }
 
-    /// Label for the full-width subscribe button inside the combined
-    /// "Use Warp with AI" card. Only rendered for
-    /// [`OfferVariant::ChooseHowToStart`].
-    pub(crate) fn subscribe_label(self) -> &'static str {
-        "Subscribe to Warp plan"
-    }
-
-    /// `shows_credit_packs` is the same condition that decides whether the
-    /// buy-credits card renders (see [`OfferSlide::shows_credit_packs`]) — the
-    /// add-on savings line only makes sense next to the packs it refers to, so
-    /// without them the card keeps its original copy.
-    pub(crate) fn primary_description(self, shows_credit_packs: bool) -> &'static str {
+    pub(crate) fn primary_description(self) -> &'static str {
         match self {
             OfferVariant::HeadStart => {
                 "Get more monthly usage, expanded cloud agent access, and collaboration features."
-            }
-            OfferVariant::ChooseHowToStart if shows_credit_packs => {
-                "Warp Agent works locally or in the cloud with frontier and OSS models. Get monthly credits at the best value, and save 20% on add-on credits with any Build plan."
             }
             OfferVariant::ChooseHowToStart => {
                 "Warp Agent works locally or in the cloud with frontier and OSS models. Proactively fix terminal errors, implement changes, and ship verified code."
@@ -121,15 +95,11 @@ impl OfferVariant {
         }
     }
 
-    /// Whether this offer includes the one-time credit-pack option. Only the
-    /// free-standard offer does: the head-start offer already ships with
-    /// included AI usage, so a pack purchase isn't the decision being made.
-    pub(crate) fn supports_credit_packs(self) -> bool {
+    /// Whether this offer exists to sell the user AI usage. Only the
+    /// free-standard offer does: the head-start offer already ships with AI
+    /// usage, so a purchase isn't the decision being made.
+    pub(crate) fn sells_ai_usage(self) -> bool {
         matches!(self, OfferVariant::ChooseHowToStart)
-    }
-
-    fn credits_action(self) -> &'static str {
-        "buy_ai_credits"
     }
 
     pub(crate) fn included_features(self) -> &'static [&'static str] {
@@ -170,9 +140,7 @@ impl OfferVariant {
 #[derive(Clone, Debug)]
 pub enum OfferSlideAction {
     SelectPrimary,
-    SelectBuyCredits,
     SelectSetUpLater,
-    SelectCreditPack(usize),
     Back,
     GetWarping,
     CopyUpgradeUrl,
@@ -183,8 +151,6 @@ pub enum OfferSlideAction {
 enum OfferChoice {
     #[default]
     Primary,
-    /// Buy a one-time credit pack instead of subscribing.
-    BuyCredits,
     SetUpLater,
 }
 
@@ -197,15 +163,8 @@ pub enum OfferSlideEvent {
 
 pub struct OfferSlide {
     onboarding_state: ModelHandle<OnboardingStateModel>,
-    /// Backs the "Subscribe to Warp plan" button, which only selects the plan.
     primary_mouse_state: MouseStateHandle,
-    /// Backs the click target covering the whole "Use Warp with AI" card, so a
-    /// click anywhere in it (not on a nested control) selects the card.
-    use_ai_card_mouse_state: MouseStateHandle,
     secondary_mouse_state: MouseStateHandle,
-    /// One hover handle per rendered credit pack row. Allocated up front so
-    /// each row keeps a stable handle across renders.
-    credit_pack_mouse_states: [MouseStateHandle; MAX_CREDIT_PACKS],
     back_button: button::Button,
     get_warping_button: button::Button,
     selected_choice: OfferChoice,
@@ -223,9 +182,7 @@ impl OfferSlide {
         Self {
             onboarding_state,
             primary_mouse_state: MouseStateHandle::default(),
-            use_ai_card_mouse_state: MouseStateHandle::default(),
             secondary_mouse_state: MouseStateHandle::default(),
-            credit_pack_mouse_states: std::array::from_fn(|_| MouseStateHandle::default()),
             back_button: button::Button::default(),
             get_warping_button: button::Button::default(),
             selected_choice: OfferChoice::default(),
@@ -240,34 +197,6 @@ impl OfferSlide {
         self.onboarding_state.as_ref(app).offer_variant()
     }
 
-    /// The credit packs to render, capped at [`MAX_CREDIT_PACKS`]. Empty when
-    /// the offer doesn't include the option, the user isn't in the experiment
-    /// arm that surfaces packs, or pricing hasn't arrived yet — in any of which
-    /// cases the buy-credits card is not shown at all.
-    ///
-    /// The pack list stays loaded in the model regardless of arm, so a hidden
-    /// list is never confused with unavailable pricing (REV-1939).
-    fn credit_packs<'a>(
-        &self,
-        variant: OfferVariant,
-        app: &'a AppContext,
-    ) -> &'a [CreditPackOption] {
-        let state = self.onboarding_state.as_ref(app);
-        if !variant.supports_credit_packs()
-            || !state
-                .choose_how_to_start_experiment_arm()
-                .shows_credit_packs()
-        {
-            return &[];
-        }
-        let packs = state.credit_pack_options();
-        &packs[..packs.len().min(MAX_CREDIT_PACKS)]
-    }
-
-    fn shows_credit_packs(&self, variant: OfferVariant, app: &AppContext) -> bool {
-        !self.credit_packs(variant, app).is_empty()
-    }
-
     fn primary_badge_label(&self, variant: OfferVariant, app: &AppContext) -> String {
         let state = self.onboarding_state.as_ref(app);
         variant
@@ -277,46 +206,8 @@ impl OfferSlide {
 
     /// The selectable options, top to bottom. Also the order the arrow keys
     /// move through.
-    fn choices(&self, variant: OfferVariant, app: &AppContext) -> Vec<OfferChoice> {
-        let mut choices = vec![OfferChoice::Primary];
-        if self.shows_credit_packs(variant, app) {
-            choices.push(OfferChoice::BuyCredits);
-        }
-        choices.push(OfferChoice::SetUpLater);
-        choices
-    }
-
-    /// The selected option, falling back to the subscribe option if the
-    /// buy-credits option was selected and has since disappeared (e.g. pricing
-    /// went away on a refresh).
-    fn effective_choice(&self, variant: OfferVariant, app: &AppContext) -> OfferChoice {
-        if self.selected_choice == OfferChoice::BuyCredits && !self.shows_credit_packs(variant, app)
-        {
-            return OfferChoice::Primary;
-        }
-        self.selected_choice
-    }
-
-    fn credit_purchase_state(&self, app: &AppContext) -> CreditPurchaseState {
-        self.onboarding_state.as_ref(app).credit_purchase_state()
-    }
-
-    /// Whether the pack at `index` renders as selected. Which pack is selected
-    /// is a choice made *inside* the buy-credits option, so it is only shown
-    /// while that option is the chosen one — otherwise the default pack index
-    /// would accent a tile inside a card the user hasn't picked.
-    fn credit_pack_is_selected(
-        &self,
-        variant: OfferVariant,
-        index: usize,
-        ctx: &AppContext,
-    ) -> bool {
-        self.effective_choice(variant, ctx) == OfferChoice::BuyCredits
-            && index
-                == self
-                    .onboarding_state
-                    .as_ref(ctx)
-                    .selected_credit_pack_index()
+    fn choices(&self) -> [OfferChoice; 2] {
+        [OfferChoice::Primary, OfferChoice::SetUpLater]
     }
 
     fn render_content(
@@ -332,7 +223,7 @@ impl OfferSlide {
                     .finish(),
                 self.render_options(appearance, variant, app),
             ],
-            self.render_bottom_nav(appearance, variant, app),
+            self.render_bottom_nav(appearance),
             self.scroll_state.clone(),
             appearance,
         )
@@ -413,464 +304,36 @@ impl OfferSlide {
         variant: OfferVariant,
         app: &AppContext,
     ) -> Box<dyn Element> {
-        let selected_choice = self.effective_choice(variant, app);
-        let shows_credit_packs = self.shows_credit_packs(variant, app);
-        // Only when the credit packs are actually shown (the experiment arm with
-        // available packs) does the offer fold the plan and the packs into a
-        // single "Use Warp with AI" card. Control, unassigned, and
-        // experiment-without-packs users get the plain historical primary card
-        // with no pack UI (REV-1939).
-        let primary = if shows_credit_packs {
-            self.render_use_ai_card(appearance, variant, selected_choice, app)
-        } else {
-            Self::render_option_card(
-                appearance,
-                variant.primary_label(),
-                variant.primary_description(shows_credit_packs),
-                selected_choice == OfferChoice::Primary,
-                Some(self.primary_badge_label(variant, app)),
-                self.primary_mouse_state.clone(),
-                OfferSlideAction::SelectPrimary,
-                None,
-            )
-        };
+        let primary = Self::render_option_card(
+            appearance,
+            variant.primary_label(),
+            variant.primary_description(),
+            self.selected_choice == OfferChoice::Primary,
+            Some(self.primary_badge_label(variant, app)),
+            self.primary_mouse_state.clone(),
+            OfferSlideAction::SelectPrimary,
+        );
         let secondary = Self::render_option_card(
             appearance,
             variant.secondary_label(),
             variant.secondary_description(),
-            selected_choice == OfferChoice::SetUpLater,
+            self.selected_choice == OfferChoice::SetUpLater,
             None,
             self.secondary_mouse_state.clone(),
             OfferSlideAction::SelectSetUpLater,
-            None,
         );
 
-        let mut options = Flex::column()
+        let options = Flex::column()
             .with_main_axis_size(MainAxisSize::Min)
             .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
             .with_child(Container::new(primary).with_margin_bottom(12.).finish())
-            .with_child(secondary);
+            .with_child(secondary)
+            .finish();
 
-        if let Some(status) = self.render_purchase_status(appearance, app) {
-            options = options.with_child(Container::new(status).with_margin_top(12.).finish());
-        }
-
-        Container::new(options.finish())
-            .with_margin_top(38.)
-            .finish()
+        Container::new(options).with_margin_top(38.).finish()
     }
 
-    /// The combined "Use Warp with AI" card for the free-standard offer: the
-    /// subscribe-plan button and the one-time credit packs, separated by a
-    /// labelled divider, inside one bordered card. The card reads as active
-    /// whenever either of its options — the plan or a credit pack — is the
-    /// current choice.
-    fn render_use_ai_card(
-        &self,
-        appearance: &Appearance,
-        variant: OfferVariant,
-        selected_choice: OfferChoice,
-        app: &AppContext,
-    ) -> Box<dyn Element> {
-        let theme = appearance.theme();
-        let shows_credit_packs = self.shows_credit_packs(variant, app);
-        let active = matches!(
-            selected_choice,
-            OfferChoice::Primary | OfferChoice::BuyCredits
-        );
-        let border = if active {
-            theme.accent()
-        } else {
-            Fill::Solid(internal_colors::neutral_4(theme))
-        };
-
-        let title = appearance
-            .ui_builder()
-            .paragraph(variant.primary_label())
-            .with_style(UiComponentStyles {
-                font_size: Some(16.),
-                font_weight: Some(Weight::Semibold),
-                ..Default::default()
-            })
-            .build()
-            .finish();
-        let badge_label = self.primary_badge_label(variant, app);
-        let green = theme.ansi_fg_green();
-        let badge = Container::new(
-            appearance
-                .ui_builder()
-                .paragraph(badge_label)
-                .with_style(UiComponentStyles {
-                    font_size: Some(12.),
-                    font_color: Some(green),
-                    ..Default::default()
-                })
-                .build()
-                .finish(),
-        )
-        .with_horizontal_padding(8.)
-        .with_vertical_padding(3.)
-        .with_corner_radius(CornerRadius::with_all(Radius::Pixels(11.)))
-        .with_background(Fill::Solid(green).with_opacity(10))
-        .finish();
-        let header = Flex::row()
-            .with_main_axis_size(MainAxisSize::Max)
-            .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
-            .with_cross_axis_alignment(CrossAxisAlignment::Center)
-            .with_child(title)
-            .with_child(badge)
-            .finish();
-
-        let description = appearance
-            .ui_builder()
-            .paragraph(variant.primary_description(shows_credit_packs))
-            .with_style(UiComponentStyles {
-                font_size: Some(14.),
-                font_color: Some(internal_colors::text_sub(
-                    theme,
-                    theme.background().into_solid(),
-                )),
-                ..Default::default()
-            })
-            .build()
-            .finish();
-
-        let mut column = Flex::column()
-            .with_main_axis_size(MainAxisSize::Min)
-            .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
-            .with_child(header)
-            .with_child(Container::new(description).with_margin_top(8.).finish())
-            .with_child(
-                Container::new(self.render_subscribe_button(
-                    appearance,
-                    variant,
-                    selected_choice == OfferChoice::Primary,
-                ))
-                .with_margin_top(16.)
-                .finish(),
-            );
-
-        // Packs (and the divider that introduces them) only appear once server
-        // pricing has arrived, so before that the card is just the plan.
-        if shows_credit_packs {
-            column = column
-                .with_child(
-                    Container::new(Self::render_credit_divider(appearance))
-                        .with_margin_top(16.)
-                        .finish(),
-                )
-                .with_child(
-                    Container::new(self.render_credit_packs(appearance, variant, app))
-                        .with_margin_top(16.)
-                        .finish(),
-                );
-        }
-
-        let card = Container::new(column.finish())
-            .with_uniform_padding(24.)
-            .with_corner_radius(CornerRadius::with_all(Radius::Pixels(8.)))
-            .with_border(Border::all(1.).with_border_fill(border))
-            .finish();
-
-        // The whole card is one click target: a click anywhere in it selects
-        // the plan (the card's default in-card choice). The plan button and the
-        // pack tiles are nested click targets, so `defer_events_to_children`
-        // lets their more specific selection win while a click on any other
-        // part of the card still selects the card.
-        Hoverable::new(self.use_ai_card_mouse_state.clone(), move |_| card)
-            .with_defer_events_to_children()
-            .with_cursor(Cursor::PointingHand)
-            .on_click(move |ctx, _, _| {
-                ctx.dispatch_typed_action(OfferSlideAction::SelectPrimary);
-            })
-            .finish()
-    }
-
-    /// The full-width "Subscribe to Warp plan" button inside the combined card.
-    /// It only *selects* the plan — the upgrade flow is started by "Get
-    /// Warping" — and paints as selected exactly when the plan is the current
-    /// choice, so it can never look selected at the same time as a pack tile.
-    fn render_subscribe_button(
-        &self,
-        appearance: &Appearance,
-        variant: OfferVariant,
-        selected: bool,
-    ) -> Box<dyn Element> {
-        let theme = appearance.theme();
-        let label = appearance
-            .ui_builder()
-            .paragraph(variant.subscribe_label())
-            .with_style(UiComponentStyles {
-                font_size: Some(14.),
-                font_weight: Some(Weight::Semibold),
-                font_color: Some(internal_colors::text_main(
-                    theme,
-                    theme.background().into_solid(),
-                )),
-                ..Default::default()
-            })
-            .build()
-            .finish();
-        let content = Flex::row()
-            .with_main_axis_size(MainAxisSize::Max)
-            .with_main_axis_alignment(MainAxisAlignment::Center)
-            .with_cross_axis_alignment(CrossAxisAlignment::Center)
-            .with_child(label)
-            .finish();
-        // Filled/accent only while the plan is the selection; otherwise a plain
-        // outline, so the button never reads as selected next to a chosen pack.
-        let background = selected.then(|| internal_colors::accent_overlay_1(theme));
-        let border = if selected {
-            theme.accent()
-        } else {
-            Fill::Solid(internal_colors::neutral_4(theme))
-        };
-
-        Hoverable::new(self.primary_mouse_state.clone(), move |_| {
-            let mut button = Container::new(content)
-                .with_horizontal_padding(12.)
-                .with_vertical_padding(10.)
-                .with_corner_radius(CornerRadius::with_all(Radius::Pixels(6.)))
-                .with_border(Border::all(1.).with_border_fill(border));
-            if let Some(background) = background {
-                button = button.with_background(background);
-            }
-            button.finish()
-        })
-        .with_cursor(Cursor::PointingHand)
-        .on_click(move |ctx, _, _| {
-            ctx.dispatch_typed_action(OfferSlideAction::SelectPrimary);
-        })
-        .finish()
-    }
-
-    /// A thin rule with a centered "Or buy AI credits without a subscription"
-    /// label, separating the subscribe button from the credit packs.
-    fn render_credit_divider(appearance: &Appearance) -> Box<dyn Element> {
-        let theme = appearance.theme();
-        let line = || {
-            Expanded::new(
-                1.,
-                ConstrainedBox::new(
-                    Container::new(Empty::new().finish())
-                        .with_background(Fill::Solid(internal_colors::neutral_4(theme)))
-                        .finish(),
-                )
-                .with_height(1.)
-                .finish(),
-            )
-            .finish()
-        };
-        let label = appearance
-            .ui_builder()
-            .paragraph("Or buy AI credits without a subscription")
-            .with_style(UiComponentStyles {
-                font_size: Some(13.),
-                font_color: Some(internal_colors::text_sub(
-                    theme,
-                    theme.background().into_solid(),
-                )),
-                ..Default::default()
-            })
-            .build()
-            .finish();
-        Flex::row()
-            .with_main_axis_size(MainAxisSize::Max)
-            .with_cross_axis_alignment(CrossAxisAlignment::Center)
-            .with_child(line())
-            .with_child(Container::new(label).with_horizontal_padding(12.).finish())
-            .with_child(line())
-            .finish()
-    }
-
-    /// The selectable credit packs, laid out as a single horizontal row of
-    /// equal-width tiles so the whole slide fits without the onboarding
-    /// container scrolling. Mirrors the Billing & Usage page's add-on credit
-    /// denominations row (`Wrap::row` of compact credit chips, 8px apart);
-    /// tiles are `Expanded` here so the packs always stay on one line rather
-    /// than wrapping onto a second.
-    fn render_credit_packs(
-        &self,
-        appearance: &Appearance,
-        variant: OfferVariant,
-        app: &AppContext,
-    ) -> Box<dyn Element> {
-        let packs = self.credit_packs(variant, app);
-        let mut row = Flex::row()
-            .with_main_axis_size(MainAxisSize::Max)
-            .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
-            .with_spacing(CREDIT_PACK_TILE_SPACING);
-        for (index, pack) in packs.iter().enumerate() {
-            row.add_child(
-                Expanded::new(
-                    1.,
-                    Self::render_credit_pack_tile(
-                        appearance,
-                        *pack,
-                        self.credit_pack_is_selected(variant, index, app),
-                        self.credit_pack_mouse_states[index].clone(),
-                        index,
-                    ),
-                )
-                .finish(),
-            );
-        }
-        row.finish()
-    }
-
-    /// One pack tile: the credit count (with the same credits icon the Billing
-    /// & Usage denominations use), the premium-adjusted price, and the volume
-    /// savings badge. Stacked vertically so four tiles fit across the card.
-    fn render_credit_pack_tile(
-        appearance: &Appearance,
-        pack: CreditPackOption,
-        selected: bool,
-        mouse_state: MouseStateHandle,
-        index: usize,
-    ) -> Box<dyn Element> {
-        let theme = appearance.theme();
-        let bg_solid = theme.background().into_solid();
-        let border = if selected {
-            theme.accent()
-        } else {
-            Fill::Solid(internal_colors::neutral_4(theme))
-        };
-        let text_main = internal_colors::text_main(theme, bg_solid);
-        let text_sub = internal_colors::text_sub(theme, bg_solid);
-
-        let credits_icon = ConstrainedBox::new(Box::new(
-            Icon::Credits.to_warpui_icon(Fill::Solid(text_main)),
-        ))
-        .with_width(13.)
-        .with_height(13.)
-        .finish();
-        let credits = appearance
-            .ui_builder()
-            .paragraph(pack.credits_label())
-            .with_style(UiComponentStyles {
-                font_size: Some(15.),
-                font_weight: Some(Weight::Semibold),
-                font_color: Some(text_main),
-                ..Default::default()
-            })
-            .build()
-            .finish();
-        let credits_row = Flex::row()
-            .with_main_axis_size(MainAxisSize::Min)
-            .with_main_axis_alignment(MainAxisAlignment::Center)
-            .with_cross_axis_alignment(CrossAxisAlignment::Center)
-            .with_child(credits_icon)
-            .with_child(Container::new(credits).with_margin_left(5.).finish())
-            .finish();
-
-        let price = appearance
-            .ui_builder()
-            .paragraph(pack.price_label())
-            .with_style(UiComponentStyles {
-                font_size: Some(13.),
-                font_color: Some(text_sub),
-                ..Default::default()
-            })
-            .build()
-            .finish();
-
-        // Every tile renders a badge slot so all four are the same height. The
-        // smallest pack has no volume discount, so its slot lays out the same
-        // text fully transparent: that reserves exactly the right line box
-        // without a fixed-height constant and without drawing a "Save 0%" that
-        // would read as a real discount.
-        let green = theme.ansi_fg_green();
-        let has_savings = pack.savings_percent > 0;
-        let badge_percent = if has_savings { pack.savings_percent } else { 0 };
-        let mut badge = Container::new(
-            appearance
-                .ui_builder()
-                .paragraph(format!("Save {badge_percent}%"))
-                .with_style(UiComponentStyles {
-                    font_size: Some(11.),
-                    font_color: Some(if has_savings {
-                        green
-                    } else {
-                        ColorU::transparent_black()
-                    }),
-                    ..Default::default()
-                })
-                .build()
-                .finish(),
-        )
-        .with_horizontal_padding(6.)
-        .with_vertical_padding(1.)
-        .with_corner_radius(CornerRadius::with_all(Radius::Pixels(9.)));
-        if has_savings {
-            badge = badge.with_background(Fill::Solid(green).with_opacity(10));
-        }
-
-        let tile = Flex::column()
-            .with_main_axis_size(MainAxisSize::Min)
-            .with_cross_axis_alignment(CrossAxisAlignment::Center)
-            .with_child(credits_row)
-            .with_child(Container::new(price).with_margin_top(4.).finish())
-            .with_child(Container::new(badge.finish()).with_margin_top(6.).finish())
-            .finish();
-        let background = selected.then(|| internal_colors::accent_overlay_1(theme));
-
-        Hoverable::new(mouse_state, move |_| {
-            let mut container = Container::new(tile)
-                .with_horizontal_padding(8.)
-                .with_vertical_padding(10.)
-                .with_corner_radius(CornerRadius::with_all(Radius::Pixels(6.)))
-                .with_border(Border::all(1.).with_border_fill(border));
-            if let Some(background) = background {
-                container = container.with_background(background);
-            }
-            container.finish()
-        })
-        .with_cursor(Cursor::PointingHand)
-        .on_click(move |ctx, _, _| {
-            ctx.dispatch_typed_action(OfferSlideAction::SelectCreditPack(index));
-        })
-        .finish()
-    }
-
-    /// Inline status for a *failed* credit purchase only. The in-flight states
-    /// deliberately render nothing: the "Waiting for checkout\u{2026}" button label
-    /// already says everything the user needs, so a second running commentary
-    /// under the cards would be noise. A rejection is not transient — without
-    /// this line the purchase would fail silently.
-    fn render_purchase_status(
-        &self,
-        appearance: &Appearance,
-        app: &AppContext,
-    ) -> Option<Box<dyn Element>> {
-        let theme = appearance.theme();
-        match self.credit_purchase_state(app) {
-            CreditPurchaseState::Idle
-            | CreditPurchaseState::Purchasing
-            | CreditPurchaseState::AwaitingCheckout => return None,
-            CreditPurchaseState::Failed => {}
-        }
-        Some(
-            appearance
-                .ui_builder()
-                .paragraph(
-                    "We couldn't start that purchase. Try again, or choose \"Set up AI later\" to continue.",
-                )
-                .with_style(UiComponentStyles {
-                    font_size: Some(13.),
-                    font_color: Some(theme.ansi_fg_red()),
-                    ..Default::default()
-                })
-                .build()
-                .finish(),
-        )
-    }
-
-    fn render_bottom_nav(
-        &self,
-        appearance: &Appearance,
-        variant: OfferVariant,
-        app: &AppContext,
-    ) -> Box<dyn Element> {
+    fn render_bottom_nav(&self, appearance: &Appearance) -> Box<dyn Element> {
         let back = self.back_button.render(
             appearance,
             button::Params {
@@ -885,21 +348,12 @@ impl OfferSlide {
             },
         );
         let enter = Keystroke::parse("enter").unwrap_or_default();
-        // A purchase in flight owns the primary action until it resolves; the
-        // user can still pick "Set up AI later" to leave without buying.
-        let purchase_in_flight = self.effective_choice(variant, app) == OfferChoice::BuyCredits
-            && self.credit_purchase_state(app).is_in_flight();
         let get_warping = self.get_warping_button.render(
             appearance,
             button::Params {
-                content: button::Content::Label(if purchase_in_flight {
-                    "Waiting for checkout\u{2026}".into()
-                } else {
-                    "Get Warping".into()
-                }),
+                content: button::Content::Label("Get Warping".into()),
                 theme: &button::themes::Primary,
                 options: button::Options {
-                    disabled: purchase_in_flight,
                     keystroke: Some(enter),
                     on_click: Some(Box::new(|ctx, _app, _pos| {
                         ctx.dispatch_typed_action(OfferSlideAction::GetWarping);
@@ -918,7 +372,6 @@ impl OfferSlide {
             .finish()
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn render_option_card(
         appearance: &Appearance,
         label: &'static str,
@@ -927,7 +380,6 @@ impl OfferSlide {
         badge_label: Option<String>,
         mouse_state: MouseStateHandle,
         action: OfferSlideAction,
-        extra_content: Option<Box<dyn Element>>,
     ) -> Box<dyn Element> {
         let theme = appearance.theme();
         let background = selected.then(|| internal_colors::accent_overlay_1(theme));
@@ -985,15 +437,12 @@ impl OfferSlide {
             })
             .build()
             .finish();
-        let mut column = Flex::column()
+        let content = Flex::column()
             .with_main_axis_size(MainAxisSize::Min)
             .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
             .with_child(header.finish())
-            .with_child(Container::new(description).with_margin_top(8.).finish());
-        if let Some(extra_content) = extra_content {
-            column = column.with_child(Container::new(extra_content).with_margin_top(16.).finish());
-        }
-        let content = column.finish();
+            .with_child(Container::new(description).with_margin_top(8.).finish())
+            .finish();
 
         Hoverable::new(mouse_state, move |_| {
             let mut card = Container::new(content)
@@ -1020,17 +469,11 @@ impl OfferSlide {
     }
 
     fn send_action(&self, variant: OfferVariant, action: &str, ctx: &mut ViewContext<Self>) {
-        let experiment_arm = self
-            .onboarding_state
-            .as_ref(ctx)
-            .offer_experiment_arm()
-            .map(str::to_string);
         send_telemetry_from_ctx!(
             OnboardingEvent::OnboardingAction {
                 slide_name: variant.slide_name().to_string(),
                 action: action.to_string(),
                 account_class: Some(variant.account_class().to_string()),
-                experiment_arm,
             },
             ctx
         );
@@ -1056,81 +499,29 @@ impl OfferSlide {
         ctx.emit(OfferSlideEvent::SetUpLaterSelected { variant });
     }
 
-    /// Starts a one-time credit-pack purchase. The app crate performs the
-    /// purchase and reports back; onboarding stays on this slide until the
-    /// credits actually land, so abandoning checkout doesn't advance anyone.
-    fn buy_credits(&mut self, ctx: &mut ViewContext<Self>) {
-        let Some(variant) = self.variant(ctx) else {
-            return;
-        };
-        if self.credit_purchase_state(ctx).is_in_flight() {
-            return;
-        }
-        self.send_action(variant, variant.credits_action(), ctx);
-        self.onboarding_state.update(ctx, |model, ctx| {
-            model.request_credit_purchase(ctx);
-        });
-        ctx.notify();
-    }
-
     fn select_choice(&mut self, choice: OfferChoice, ctx: &mut ViewContext<Self>) {
         if self.selected_choice == choice {
             return;
         }
         self.selected_choice = choice;
-        // Changing the selection abandons a checkout that is only waiting for the
-        // browser, so the footer returns to "Get Warping" and a new link can be
-        // opened.
-        self.onboarding_state.update(ctx, |model, ctx| {
-            model.reset_pending_checkout(ctx);
-        });
         ctx.notify();
     }
 
-    /// Moves the selection `delta` positions through the options that are
-    /// actually on screen, clamped at both ends.
+    /// Moves the selection `delta` positions through the options, clamped at
+    /// both ends.
     fn move_selection(&mut self, delta: isize, ctx: &mut ViewContext<Self>) {
-        let Some(variant) = self.variant(ctx) else {
-            return;
-        };
-        let choices = self.choices(variant, ctx);
-        let current = self.effective_choice(variant, ctx);
+        let choices = self.choices();
         let current_index = choices
             .iter()
-            .position(|choice| *choice == current)
+            .position(|choice| *choice == self.selected_choice)
             .unwrap_or(0) as isize;
         let next_index = (current_index + delta).clamp(0, choices.len() as isize - 1) as usize;
         self.select_choice(choices[next_index], ctx);
     }
 
-    fn select_credit_pack(&mut self, index: usize, ctx: &mut ViewContext<Self>) {
-        // Switching *into* the credit option is handled by `select_choice`;
-        // switching to a different denomination while already on it must also
-        // reset a pending checkout so a link can be opened for the new pack.
-        let denomination_changed = self
-            .onboarding_state
-            .as_ref(ctx)
-            .selected_credit_pack_index()
-            != index;
-        if self.selected_choice == OfferChoice::BuyCredits && denomination_changed {
-            self.onboarding_state.update(ctx, |model, ctx| {
-                model.reset_pending_checkout(ctx);
-            });
-        }
-        self.select_choice(OfferChoice::BuyCredits, ctx);
-        self.onboarding_state.update(ctx, |model, ctx| {
-            model.select_credit_pack(index, ctx);
-        });
-        ctx.notify();
-    }
-
     fn get_warping(&mut self, ctx: &mut ViewContext<Self>) {
-        let Some(variant) = self.variant(ctx) else {
-            return;
-        };
-        match self.effective_choice(variant, ctx) {
+        match self.selected_choice {
             OfferChoice::Primary => self.request_upgrade(ctx),
-            OfferChoice::BuyCredits => self.buy_credits(ctx),
             OfferChoice::SetUpLater => self.set_up_later(ctx),
         }
     }
@@ -1202,13 +593,9 @@ impl TypedActionView for OfferSlide {
     fn handle_action(&mut self, action: &Self::Action, ctx: &mut ViewContext<Self>) {
         match action {
             OfferSlideAction::SelectPrimary => self.select_choice(OfferChoice::Primary, ctx),
-            OfferSlideAction::SelectBuyCredits => {
-                self.select_choice(OfferChoice::BuyCredits, ctx);
-            }
             OfferSlideAction::SelectSetUpLater => {
                 self.select_choice(OfferChoice::SetUpLater, ctx);
             }
-            OfferSlideAction::SelectCreditPack(index) => self.select_credit_pack(*index, ctx),
             OfferSlideAction::Back => self.back(ctx),
             OfferSlideAction::GetWarping => self.get_warping(ctx),
             OfferSlideAction::CopyUpgradeUrl => {

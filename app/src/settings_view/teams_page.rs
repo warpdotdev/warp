@@ -131,6 +131,8 @@ const INVALID_EMAILS_INSTRUCTIONS: &str =
 
 const OFFLINE_TEXT: &str = "You are offline.";
 
+const DISABLED_MEMBER_TOOLTIP_TEXT: &str = "This user's account is disabled";
+
 const MAX_CHIP_WIDTH: f32 = 280.;
 
 lazy_static! {
@@ -148,6 +150,22 @@ fn owner_state_chip_text_color(theme: &themes::theme::WarpTheme) -> ColorU {
         .background()
         .blend(&theme.accent().with_opacity(OWNER_STATE_CHIP_ACCENT_OPACITY));
     theme.main_text_color(chip_background).into_solid()
+}
+
+fn dim_color(color: ColorU) -> ColorU {
+    ColorU::new(color.r, color.g, color.b, color.a / 2)
+}
+
+fn item_row_text_color(appearance: &Appearance, is_disabled: bool) -> themes::theme::Fill {
+    if is_disabled {
+        appearance.theme().disabled_ui_text_color()
+    } else {
+        appearance.theme().active_ui_text_color()
+    }
+}
+
+fn disabled_member_tooltip_text(is_disabled: bool) -> Option<&'static str> {
+    is_disabled.then_some(DISABLED_MEMBER_TOOLTIP_TEXT)
 }
 
 #[derive(Debug, Clone)]
@@ -415,12 +433,19 @@ struct ItemAction {
     action: TeamsPageAction,
 }
 
+#[derive(Clone, Default)]
+struct ItemMouseStates {
+    action: MouseStateHandle,
+    disabled_tooltip: MouseStateHandle,
+}
+
 /// An item (team member, pending email invite, or domain) consists of its text, and actions associated with it.
 #[derive(Clone)]
 pub struct Item {
     text: String,
     actions: Vec<ItemAction>,
     state: ItemState,
+    is_disabled: bool,
 }
 
 impl PartialEq for Item {
@@ -497,8 +522,8 @@ pub struct TeamsPageView {
     pricing_info_model: ModelHandle<PricingInfoModel>,
     cloud_model: ModelHandle<CloudModel>,
     invite_view: TeamsInviteOption,
-    team_members_mouse_state_handles: Vec<MouseStateHandle>,
-    team_approved_domains_mouse_state_handles: Vec<MouseStateHandle>,
+    team_members_mouse_states: Vec<ItemMouseStates>,
+    team_approved_domains_mouse_states: Vec<ItemMouseStates>,
     team_action_confirmation_dialog: ViewHandle<CloudActionConfirmationDialog>,
     show_team_action_confirmation_dialog: bool,
     pending_team_action_confirmation: Option<TeamActionConfirmationTarget>,
@@ -789,21 +814,21 @@ impl TeamsPageView {
 
         let current_user_team = user_workspaces.as_ref(ctx).team_for_view(ctx);
 
-        let team_members_mouse_state_handles =
-            current_user_team.map_or_else(Vec::new, |user_team| {
-                user_team
-                    .members
-                    .iter()
-                    .map(|_| Default::default())
-                    .collect()
-            });
+        // Sized from pending invites + members, matching
+        // `update_team_member_mouse_state_handles` below.
+        let team_members_mouse_states = current_user_team.map_or_else(Vec::new, |user_team| {
+            let total_length = user_team.pending_email_invites.len() + user_team.members.len();
+            (0..total_length)
+                .map(|_| ItemMouseStates::default())
+                .collect()
+        });
 
-        let team_approved_domains_mouse_state_handles =
+        let team_approved_domains_mouse_states =
             current_user_team.map_or_else(Vec::new, |user_team| {
                 user_team
                     .invite_link_domain_restrictions
                     .iter()
-                    .map(|_| Default::default())
+                    .map(|_| ItemMouseStates::default())
                     .collect()
             });
 
@@ -889,8 +914,8 @@ impl TeamsPageView {
             pricing_info_model,
             cloud_model,
             invite_view: TeamsInviteOption::default(),
-            team_members_mouse_state_handles,
-            team_approved_domains_mouse_state_handles,
+            team_members_mouse_states,
+            team_approved_domains_mouse_states,
             clipped_scroll_state: Default::default(),
             team_action_confirmation_dialog,
             show_team_action_confirmation_dialog: false,
@@ -1342,10 +1367,10 @@ impl TeamsPageView {
 
     fn update_approved_domains_mouse_state_handles(&mut self, ctx: &mut ViewContext<Self>) {
         if let Some(team) = self.user_workspaces.as_ref(ctx).team_for_view(ctx) {
-            self.team_approved_domains_mouse_state_handles = team
+            self.team_approved_domains_mouse_states = team
                 .invite_link_domain_restrictions
                 .iter()
-                .map(|_| Default::default())
+                .map(|_| ItemMouseStates::default())
                 .collect();
         }
         ctx.notify();
@@ -1410,8 +1435,9 @@ impl TeamsPageView {
     fn update_team_member_mouse_state_handles(&mut self, ctx: &mut ViewContext<Self>) {
         if let Some(team) = self.user_workspaces.as_ref(ctx).team_for_view(ctx) {
             let total_length = team.pending_email_invites.len() + team.members.len();
-            self.team_members_mouse_state_handles =
-                (0..total_length).map(|_| Default::default()).collect();
+            self.team_members_mouse_states = (0..total_length)
+                .map(|_| ItemMouseStates::default())
+                .collect();
         }
         ctx.notify();
     }
@@ -1817,6 +1843,7 @@ impl TeamsPageView {
                 text: email_invite.invitee_email.clone(),
                 actions,
                 state,
+                is_disabled: false,
             });
         });
 
@@ -1903,6 +1930,7 @@ impl TeamsPageView {
                 text: member.email.clone(),
                 actions,
                 state,
+                is_disabled: member.is_disabled,
             });
         });
 
@@ -3099,7 +3127,7 @@ impl TeamsWidget {
         // 2) List of team members
         section.add_child(self.render_item_list(
             TeamsPageView::team_to_item_list(team, user_email, workspace),
-            view.team_members_mouse_state_handles.clone(),
+            view.team_members_mouse_states.clone(),
             view,
             appearance,
         ));
@@ -3318,6 +3346,7 @@ impl TeamsWidget {
                     text: domain_restriction.domain.clone(),
                     actions,
                     state: ItemState::Valid,
+                    is_disabled: false,
                 }
             })
             .collect();
@@ -3326,7 +3355,7 @@ impl TeamsWidget {
             section.add_child(
                 Container::new(self.render_item_list(
                     domains_as_items,
-                    view.team_approved_domains_mouse_state_handles.clone(),
+                    view.team_approved_domains_mouse_states.clone(),
                     view,
                     appearance,
                 ))
@@ -3596,6 +3625,7 @@ impl TeamsWidget {
         .finish()
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn render_state_chip(
         &self,
         appearance: &Appearance,
@@ -3604,7 +3634,13 @@ impl TeamsWidget {
         chip_color: ColorU,
         font_size: f32,
         font_weight: Weight,
+        dim: bool,
     ) -> Box<dyn Element> {
+        let (text_color, chip_color) = if dim {
+            (dim_color(text_color), dim_color(chip_color))
+        } else {
+            (text_color, chip_color)
+        };
         Container::new(
             Text::new_inline(text, appearance.ui_font_family(), font_size)
                 .with_color(text_color)
@@ -3621,33 +3657,38 @@ impl TeamsWidget {
     fn render_item_list(
         &self,
         items: Vec<Item>,
-        mouse_state_handles: Vec<MouseStateHandle>,
+        mouse_states: Vec<ItemMouseStates>,
         view: &TeamsPageView,
         appearance: &Appearance,
     ) -> Box<dyn Element> {
+        debug_assert_eq!(
+            items.len(),
+            mouse_states.len(),
+            "item list ({}) and mouse-state vector ({}) diverged",
+            items.len(),
+            mouse_states.len()
+        );
         let all_items = items
             .iter()
             .sorted()
-            .zip(mouse_state_handles.iter())
             .enumerate()
-            .map(|(idx, (item, handle))| {
+            .map(|(idx, item)| {
+                let handles = mouse_states[idx].clone();
+
+                let text_color = item_row_text_color(appearance, item.is_disabled);
+                let text_element = Text::new_inline(
+                    item.text.clone(),
+                    appearance.ui_font_family(),
+                    appearance.ui_font_size() - 1.,
+                )
+                .with_color(text_color.into_solid())
+                .finish();
+
                 let mut row = Flex::row()
                     .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
                     .with_cross_axis_alignment(CrossAxisAlignment::Center)
                     .with_main_axis_size(MainAxisSize::Max)
-                    .with_child(
-                        Shrinkable::new(
-                            1.,
-                            Text::new_inline(
-                                item.text.clone(),
-                                appearance.ui_font_family(),
-                                appearance.ui_font_size() - 1.,
-                            )
-                            .with_color(appearance.theme().active_ui_text_color().into())
-                            .finish(),
-                        )
-                        .finish(),
-                    );
+                    .with_child(Shrinkable::new(1., text_element).finish());
 
                 let mut pending_and_close_row = Flex::row()
                     .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
@@ -3666,6 +3707,7 @@ impl TeamsWidget {
                                     .into(),
                                 appearance.ui_font_size() - 1.,
                                 Weight::Normal,
+                                item.is_disabled,
                             ),
                         );
                     }
@@ -3680,6 +3722,7 @@ impl TeamsWidget {
                                     .into(),
                                 appearance.ui_font_size() - 1.,
                                 Weight::Normal,
+                                item.is_disabled,
                             ),
                         );
                     }
@@ -3696,6 +3739,7 @@ impl TeamsWidget {
                                     .into(),
                                 appearance.ui_font_size() - 1.,
                                 Weight::Normal,
+                                item.is_disabled,
                             ),
                         );
                     }
@@ -3716,6 +3760,7 @@ impl TeamsWidget {
                                     .into(),
                                 appearance.ui_font_size() - 1.,
                                 Weight::Normal,
+                                item.is_disabled,
                             ),
                         );
                     }
@@ -3732,6 +3777,7 @@ impl TeamsWidget {
                                     .into(),
                                 appearance.ui_font_size() - 1.,
                                 Weight::Normal,
+                                item.is_disabled,
                             ),
                         );
                     }
@@ -3752,6 +3798,7 @@ impl TeamsWidget {
                                     .into(),
                                 appearance.ui_font_size() - 1.,
                                 Weight::Normal,
+                                item.is_disabled,
                             ),
                         );
                     }
@@ -3769,7 +3816,7 @@ impl TeamsWidget {
                         let icon = item_action.icon;
                         pending_and_close_row.add_child(
                             Container::new(
-                                Hoverable::new(handle.clone(), move |_mouse_state| {
+                                Hoverable::new(handles.action.clone(), move |_mouse_state| {
                                     Container::new(
                                         ConstrainedBox::new(
                                             icon.to_warpui_icon(
@@ -3801,7 +3848,7 @@ impl TeamsWidget {
                         // Multiple actions - show dots menu
                         let menu_is_open = view.open_member_actions_menu_index == Some(idx);
                         let mut stack = Stack::new();
-                        let dots_button = Hoverable::new(handle.clone(), |_mouse_state| {
+                        let dots_button = Hoverable::new(handles.action.clone(), |_mouse_state| {
                             Container::new(
                                 ConstrainedBox::new(
                                     Icon::DotsVertical
@@ -3856,8 +3903,22 @@ impl TeamsWidget {
 
                 row.add_child(pending_and_close_row.finish());
 
+                // Overlay variant: the page renders inside a `Clipped` scroll viewport.
+                let row_content = row.finish();
+                let row_content = match disabled_member_tooltip_text(item.is_disabled) {
+                    Some(tooltip_text) => appearance.ui_builder().overlay_tool_tip_on_element(
+                        tooltip_text.to_string(),
+                        handles.disabled_tooltip.clone(),
+                        row_content,
+                        ParentAnchor::TopLeft,
+                        ChildAnchor::BottomLeft,
+                        vec2f(0., -5.),
+                    ),
+                    None => row_content,
+                };
+
                 let list_element =
-                    Container::new(row.finish()).with_uniform_padding(SCROLLABLE_LIST_ITEM_PADDING);
+                    Container::new(row_content).with_uniform_padding(SCROLLABLE_LIST_ITEM_PADDING);
 
                 if idx % 2 == 0 {
                     list_element

@@ -6,7 +6,7 @@
 # destination directory. It is used by macOS and Linux build scripts.
 #
 # Usage:
-#   prepare_bundled_resources <destination_directory> [channel] [cargo_profile]
+#   prepare_bundled_resources <destination_directory> [channel]
 #
 # Arguments:
 #   destination_directory:  The directory where resources should be installed.
@@ -14,32 +14,28 @@
 #                           this path (e.g., $DEST_DIR/skills).
 #   channel:                (Optional) Release channel (local, dev, preview,
 #                           stable). Used to include channel-gated skills.
-#   cargo_profile:          (Optional) Cargo build profile to use when
-#                           generating the settings schema. Reusing the same
-#                           profile as the main build avoids recompiling deps.
 #
 # Environment variables:
 #   SKIP_SETTINGS_SCHEMA: Set to "1" to skip generating the JSON settings
 #                         schema. By default the schema is always generated
 #                         so that production bundles never accidentally omit it.
-#   SETTINGS_SCHEMA_CACHE: Path to a cache file for the generated schema.
-#                          When set, the first invocation generates the schema
-#                          and saves a copy to this path; subsequent invocations
-#                          copy from the cache instead of regenerating. This
-#                          avoids redundant compilations when bundling multiple
-#                          package formats for the same channel.
+#   SETTINGS_SCHEMA_EXECUTABLE: Path to a runnable compiled Warp executable.
+#                               The script invokes its dump-settings-schema
+#                               subcommand to generate the schema.
+#   SETTINGS_SCHEMA_SOURCE: Path to an existing settings schema to copy.
+#                           This is required when the compiled executable cannot
+#                           run on the current host.
 
 set -e
 
-if [ $# -lt 1 ] || [ $# -gt 3 ]; then
-  echo "Error: Expected 1-3 arguments but received $#" >&2
-  echo "Usage: $0 <destination_directory> [channel] [cargo_profile]" >&2
+if [ $# -lt 1 ] || [ $# -gt 2 ]; then
+  echo "Error: Expected 1-2 arguments but received $#" >&2
+  echo "Usage: $0 <destination_directory> [channel]" >&2
   exit 1
 fi
 
 DEST_DIR="$1"
 CHANNEL="${2:-}"
-CARGO_PROFILE="${3:-}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 RESOURCES_SRC="$REPO_ROOT/resources"
@@ -130,29 +126,31 @@ fi
 # Generate settings JSON schema unless explicitly skipped.
 if [ "${SKIP_SETTINGS_SCHEMA:-}" != "1" ]; then
   SCHEMA_OUTPUT="$DEST_DIR/settings_schema.json"
-
-  if [ -n "${SETTINGS_SCHEMA_CACHE:-}" ] && [ -f "$SETTINGS_SCHEMA_CACHE" ]; then
-    echo "Copying cached settings schema to $SCHEMA_OUTPUT"
-    cp "$SETTINGS_SCHEMA_CACHE" "$SCHEMA_OUTPUT"
-  else
+  if [ -n "${SETTINGS_SCHEMA_EXECUTABLE:-}" ] && [ -n "${SETTINGS_SCHEMA_SOURCE:-}" ]; then
+    echo "Error: SETTINGS_SCHEMA_EXECUTABLE and SETTINGS_SCHEMA_SOURCE are mutually exclusive." >&2
+    exit 1
+  elif [ -n "${SETTINGS_SCHEMA_EXECUTABLE:-}" ]; then
+    if [ ! -x "$SETTINGS_SCHEMA_EXECUTABLE" ]; then
+      echo "Error: Settings schema executable is not runnable: $SETTINGS_SCHEMA_EXECUTABLE" >&2
+      exit 1
+    fi
     echo "Generating settings schema at $SCHEMA_OUTPUT"
-
-    SCHEMA_CMD=(cargo run)
-    if [ -n "$CARGO_PROFILE" ]; then
-      SCHEMA_CMD+=(--profile "$CARGO_PROFILE")
+    "$SETTINGS_SCHEMA_EXECUTABLE" dump-settings-schema "$SCHEMA_OUTPUT"
+  elif [ -n "${SETTINGS_SCHEMA_SOURCE:-}" ]; then
+    if [ ! -f "$SETTINGS_SCHEMA_SOURCE" ]; then
+      echo "Error: Settings schema source does not exist: $SETTINGS_SCHEMA_SOURCE" >&2
+      exit 1
     fi
-    SCHEMA_CMD+=(--manifest-path "$REPO_ROOT/Cargo.toml" --bin generate_settings_schema --)
-    if [ -n "$CHANNEL" ]; then
-      SCHEMA_CMD+=(--channel "$CHANNEL")
-    fi
-    SCHEMA_CMD+=("$SCHEMA_OUTPUT")
+    echo "Copying settings schema to $SCHEMA_OUTPUT"
+    cp "$SETTINGS_SCHEMA_SOURCE" "$SCHEMA_OUTPUT"
+  else
+    echo "Error: Set SETTINGS_SCHEMA_EXECUTABLE or SETTINGS_SCHEMA_SOURCE when preparing a settings schema." >&2
+    exit 1
+  fi
 
-    "${SCHEMA_CMD[@]}"
-
-    if [ -n "${SETTINGS_SCHEMA_CACHE:-}" ]; then
-      echo "Caching settings schema at $SETTINGS_SCHEMA_CACHE"
-      cp "$SCHEMA_OUTPUT" "$SETTINGS_SCHEMA_CACHE"
-    fi
+  if [ ! -s "$SCHEMA_OUTPUT" ]; then
+    echo "Error: Settings schema was not written to $SCHEMA_OUTPUT" >&2
+    exit 1
   fi
 fi
 

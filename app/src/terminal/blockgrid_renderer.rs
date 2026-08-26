@@ -44,10 +44,52 @@ pub struct BlockGridParams {
     pub override_colors: color::OverrideList,
     pub bounds: RectF,
 }
-
-impl BlockGrid {
+pub trait BlockGridRenderer {
     #[allow(clippy::too_many_arguments)]
-    pub fn draw<'a>(
+    fn draw<'a>(
+        &self,
+        grid_origin: Vector2F,
+        origin: Vector2F,
+        glyphs: &mut CellGlyphCache,
+        alpha: u8,
+        highlighted_url: Option<&Link>,
+        link_tool_tip: Option<&Link>,
+        hovered_secret: Option<SecretHandle>,
+        ordered_matches: Option<impl Iterator<Item = &'a RangeInclusive<Point>>>,
+        focused_match_range: Option<&RangeInclusive<Point>>,
+        properties: Properties,
+        block_grid_params: &BlockGridParams,
+        visible_cursor_shape: Option<CursorShape>,
+        image_metadata: &HashMap<u32, StoredImageMetadata>,
+        ctx: &mut PaintContext,
+        app: &AppContext,
+    );
+
+    fn draw_with_default_params(
+        &self,
+        grid_origin: Vector2F,
+        origin: Vector2F,
+        block_grid_params: &BlockGridParams,
+        ctx: &mut PaintContext,
+        app: &AppContext,
+    );
+
+    #[allow(clippy::too_many_arguments)]
+    fn draw_cursor(
+        &self,
+        grid_origin: Vector2F,
+        grid_render_params: &GridRenderParams,
+        ctx: &mut PaintContext,
+        terminal_view_id: EntityId,
+        cursor_hint_text: Option<&mut Box<dyn Element>>,
+        color: ColorU,
+        app: &AppContext,
+    );
+}
+
+impl BlockGridRenderer for BlockGrid {
+    #[allow(clippy::too_many_arguments)]
+    fn draw<'a>(
         &self,
         grid_origin: Vector2F,
         origin: Vector2F,
@@ -124,7 +166,7 @@ impl BlockGrid {
         );
     }
 
-    pub fn draw_with_default_params(
+    fn draw_with_default_params(
         &self,
         grid_origin: Vector2F,
         origin: Vector2F,
@@ -153,7 +195,7 @@ impl BlockGrid {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub fn draw_cursor(
+    fn draw_cursor(
         &self,
         grid_origin: Vector2F,
         grid_render_params: &GridRenderParams,

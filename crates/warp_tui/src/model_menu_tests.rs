@@ -1,6 +1,6 @@
 use ai::LLMProvider;
 use ai::api_keys::ApiKeyManager;
-use warp::tui_export::register_tui_session_view_test_singletons;
+use warp::tui_export::{UserWorkspaces, register_tui_session_view_test_singletons};
 use warp_core::features::FeatureFlag;
 use warpui::SingletonEntity as _;
 use warpui_core::App;
@@ -83,6 +83,7 @@ fn provider_key_controls_key_connected_callout() {
     App::test((), |mut app| async move {
         let _byok = FeatureFlag::SoloUserByok.override_enabled(true);
         register_tui_session_view_test_singletons(&mut app);
+        let scope = UserWorkspaces::teamless_context_resolver_for_test();
         let mut llm = app.read(|ctx| {
             LLMPreferences::as_ref(ctx)
                 .get_active_base_model(ctx, None)
@@ -96,9 +97,11 @@ fn provider_key_controls_key_connected_callout() {
             })
             .unwrap();
         let connected_row = app.read(|ctx| {
+            let scope = (scope)(ctx);
             let choice =
-                query_model_picker_choices(LLMPreferences::as_ref(ctx), [&llm], "", ctx).remove(0);
-            model_menu_row(choice, &LLMId::from("profile-default"), ctx)
+                query_model_picker_choices(LLMPreferences::as_ref(ctx), [&llm], "", &scope, ctx)
+                    .remove(0);
+            model_menu_row(choice, &LLMId::from("profile-default"), &scope, ctx)
         });
         assert_eq!(
             snapshot_row(&connected_row).state_suffix.as_deref(),
@@ -111,9 +114,11 @@ fn provider_key_controls_key_connected_callout() {
             })
             .unwrap();
         let disconnected_row = app.read(|ctx| {
+            let scope = (scope)(ctx);
             let choice =
-                query_model_picker_choices(LLMPreferences::as_ref(ctx), [&llm], "", ctx).remove(0);
-            model_menu_row(choice, &LLMId::from("profile-default"), ctx)
+                query_model_picker_choices(LLMPreferences::as_ref(ctx), [&llm], "", &scope, ctx)
+                    .remove(0);
+            model_menu_row(choice, &LLMId::from("profile-default"), &scope, ctx)
         });
         assert_eq!(snapshot_row(&disconnected_row).state_suffix, None);
     });

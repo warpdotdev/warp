@@ -81,7 +81,6 @@ jobs:
         with:
           config_file: ${{ env.CONFIG_FILE }}
           channel: ${{ inputs.channel }}
-
       - name: Set publish flag based on the workflow trigger
         id: set_publish
         run: |
@@ -167,11 +166,12 @@ jobs:
         run: rustup target add ${{ matrix.arch }}-apple-darwin
         shell: bash
 
-      # Install go toolchain, as it may be needed for some build steps.
+      # Install go toolchain, which is needed for bundling a pprof binary.
       - name: Setup Go
         uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version: stable
+          cache: false
 
       - name: Get channel configuration
         id: get-config
@@ -200,6 +200,13 @@ jobs:
           WARP_NOTARIZATION_APPLE_ID: ${{ secrets.WARP_NOTARIZATION_APPLE_ID }}
           WARP_NOTARIZATION_PASSWORD: ${{ secrets.WARP_NOTARIZATION_PASSWORD }}
 
+      - name: Archive ${{ matrix.arch }} macOS settings schema
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: settings-schema-macos-${{ matrix.arch }}-${{ steps.get-config.outputs.channel }}
+          retention-days: 1
+          path: ${{ steps.bundle_app.outputs.settings_schema_path }}
+
       - name: Add DMG to GitHub release assets
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
         uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
@@ -215,10 +222,11 @@ jobs:
 
       - name: Upload DMG to Google Cloud Storage
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
-        uses: google-github-actions/upload-cloud-storage@e95a15f226403ed658d3e65f40205649f342ba2c # v1
+        uses: google-github-actions/upload-cloud-storage@6397bd7208e18d13ba2619ee21b9873edc94427a # v3.0.0
         with:
           path: ${{ steps.bundle_app.outputs.dmg_path }}
           destination: warp-releases/${{ steps.get-config.outputs.channel }}/${{ needs.prepare_release.outputs.release_tag }}
+          process_gcloudignore: false
           headers: |-
             cache-control: ${{ steps.get-config.outputs.gcs_cache_control_value }}
 
@@ -231,7 +239,7 @@ jobs:
 
       - name: Set up Sentry CLI
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
-        uses: matbour/setup-sentry-cli@3e938c54b3018bdd019973689ef984e033b0454b # v2.0.0
+        uses: warpdotdev/setup-sentry-cli@8ae49c71bd731e547de697f75770727f86c95ecd # v2.0.0
         with:
           token: ${{ secrets.SENTRY_RELEASE_TOKEN }}
           organization: warpdotdev
@@ -283,11 +291,12 @@ jobs:
           install_release_deps: true
           ssh_key: ${{ secrets.WARP_CHANNEL_CONFIG_ACCESS_SSH_KEY }}
 
-      # Install go toolchain, as it may be needed for some build steps.
+      # Install go toolchain, which is needed for bundling a pprof binary.
       - name: Setup Go
         uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version: stable
+          cache: false
 
       - name: Get channel configuration
         id: get-config
@@ -314,6 +323,25 @@ jobs:
         run: tar xvfz build-artifacts.tar.gz
         shell: bash
 
+      - name: Download canonical aarch64 macOS settings schema
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: settings-schema-macos-aarch64-${{ steps.get-config.outputs.channel }}
+          path: .release-artifacts/settings-schema-macos
+
+      - name: Download x86_64 macOS settings schema
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: settings-schema-macos-x86_64-${{ steps.get-config.outputs.channel }}
+          path: .release-artifacts/settings-schema-macos-x86_64
+
+      # These two schemas are expected to be byte-identical: no setting is currently scoped to
+      # a specific macOS architecture. A mismatch here means that assumption no longer holds,
+      # and this step needs to become architecture-aware rather than simply failing the release.
+      - name: Verify macOS settings schemas match
+        run: cmp .release-artifacts/settings-schema-macos/settings_schema.json .release-artifacts/settings-schema-macos-x86_64/settings_schema.json
+        shell: bash
+
       - name: Install cargo-bundle
         run: script/install_cargo_bundle
 
@@ -333,10 +361,11 @@ jobs:
           WARP_CODESIGN_KEYCHAIN_PASSWORD: ${{ secrets.WARP_CODESIGN_KEYCHAIN_PASSWORD }}
           WARP_NOTARIZATION_APPLE_ID: ${{ secrets.WARP_NOTARIZATION_APPLE_ID }}
           WARP_NOTARIZATION_PASSWORD: ${{ secrets.WARP_NOTARIZATION_PASSWORD }}
+          SETTINGS_SCHEMA_SOURCE: ${{ github.workspace }}/.release-artifacts/settings-schema-macos/settings_schema.json
 
       - name: Set up Sentry CLI
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
-        uses: matbour/setup-sentry-cli@3e938c54b3018bdd019973689ef984e033b0454b # v2.0.0
+        uses: warpdotdev/setup-sentry-cli@8ae49c71bd731e547de697f75770727f86c95ecd # v2.0.0
         with:
           token: ${{ secrets.SENTRY_RELEASE_TOKEN }}
           organization: warpdotdev
@@ -390,10 +419,11 @@ jobs:
 
       - name: Upload DMG to Google Cloud Storage
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
-        uses: google-github-actions/upload-cloud-storage@e95a15f226403ed658d3e65f40205649f342ba2c # v1
+        uses: google-github-actions/upload-cloud-storage@6397bd7208e18d13ba2619ee21b9873edc94427a # v3.0.0
         with:
           path: ${{ steps.bundle_app.outputs.dmg_path }}
           destination: warp-releases/${{ steps.get-config.outputs.channel }}/${{ needs.prepare_release.outputs.release_tag }}
+          process_gcloudignore: false
           # IMPORTANT: both the key and value of the cache-control header must be all lowercase;
           # uppercase values will not be respected by Cloud CDN and using "Cache-Control" will be
           # ignored by the upload-cloud-storage action.
@@ -407,8 +437,8 @@ jobs:
           name: release-macos-universal-${{ steps.get-config.outputs.channel }}
           path: ${{ steps.bundle_app.outputs.dmg_path }}
 
-  release_macos_cli:
-    name: Build Release (macOS CLI ${{ matrix.arch }})
+  build_macos_cli_binaries:
+    name: Build Release Binary (macOS CLI ${{ matrix.arch }})
     runs-on: macos-26-xlarge
     needs: prepare_release
     if: ${{ inputs.build_macos != false }}
@@ -434,11 +464,84 @@ jobs:
         run: rustup target add ${{ matrix.arch }}-apple-darwin
         shell: bash
 
-      # Install go toolchain, as it may be needed for some build steps.
-      - name: Setup Go
-        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+      - name: Get channel configuration
+        id: get-config
+        uses: ./.github/actions/get_channel_config/
         with:
-          go-version: stable
+          config_file: ${{ env.CONFIG_FILE }}
+          channel: ${{ inputs.channel }}
+
+      # Only the binary matters here; this job's own bundled resources are
+      # discarded, so skip signing/notarization and the (otherwise mandatory)
+      # schema, both of which belong to the packaging step below.
+      - name: Build ${{ matrix.arch }} binary
+        id: build_cli
+        run: |
+          script/bundle --channel $CHANNEL --arch ${{ matrix.arch }} --artifact cli --nosign
+        shell: bash
+        env:
+          CHANNEL: ${{ steps.get-config.outputs.channel }}
+          GIT_RELEASE_TAG: ${{ needs.prepare_release.outputs.release_tag }}
+          NO_LICENSES: "1"
+          SKIP_SETTINGS_SCHEMA: "1"
+
+      # binary_path is already copied out of the per-target-triple Cargo output
+      # directory; --skip-build (used by release_macos_cli below) re-derives
+      # that copy from the triple directory, so preserve it here instead. The
+      # dSYM Cargo produces there is itself a symlink into target/.../deps, so
+      # (as with the app archive above) also include its resolved target;
+      # otherwise the link dangles once extracted into a fresh job.
+      - name: Create tar archive with build artifacts
+        run: |
+          BINARY_PATH="${{ steps.build_cli.outputs.binary_path }}"
+          PROFILE_DIR="${BINARY_PATH#target/}"
+          PROFILE_DIR="${PROFILE_DIR%/bundle/osx/*}"
+          RAW_BINARY_PATH="target/${{ steps.build_cli.outputs.rust_target }}/$PROFILE_DIR/$(basename "$BINARY_PATH")"
+          RAW_DSYM_PATH="$RAW_BINARY_PATH.dSYM"
+          TAR_PATHS=("$RAW_BINARY_PATH")
+          if [[ -e "$RAW_DSYM_PATH" ]]; then
+            TAR_PATHS+=("$RAW_DSYM_PATH")
+            if [[ -L "$RAW_DSYM_PATH" ]]; then
+              REAL_DSYM_PATH="$(python3 -c 'import os,sys; print(os.path.relpath(sys.argv[1]))' "$(realpath "$RAW_DSYM_PATH")")"
+              TAR_PATHS+=("$REAL_DSYM_PATH")
+            fi
+          fi
+          tar czfv build-artifacts.tar.gz "${TAR_PATHS[@]}"
+        shell: bash
+
+      - name: Archive ${{ matrix.arch }} CLI build artifacts
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: macos-cli-${{ matrix.arch }}-${{ steps.get-config.outputs.channel }}
+          retention-days: 1
+          # We compress the tar archive, so no need to re-compress.
+          compression-level: 0
+          path: build-artifacts.tar.gz
+
+  # Packages the CLI binary build_macos_cli_binaries built separately (in
+  # parallel), then adds the canonical schema and signs/notarizes.
+  release_macos_cli:
+    name: Build Release (macOS CLI ${{ matrix.arch }})
+    runs-on: macos-26-xlarge
+    needs: [prepare_release, release_macos_single_arch, build_macos_cli_binaries]
+    if: ${{ inputs.build_macos != false }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: aarch64
+          - arch: x86_64
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+
+      - uses: ./.github/actions/prepare_environment
+        with:
+          target_os: macos
+          is_self_hosted: false
+          ref: ${{ needs.prepare_release.outputs.release_branch }}
+          install_release_deps: true
+          ssh_key: ${{ secrets.WARP_CHANNEL_CONFIG_ACCESS_SSH_KEY }}
 
       - name: Get channel configuration
         id: get-config
@@ -447,10 +550,25 @@ jobs:
           config_file: ${{ env.CONFIG_FILE }}
           channel: ${{ inputs.channel }}
 
-      - name: Build ${{ matrix.arch }} binary
+      - name: Download ${{ matrix.arch }} CLI build artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: macos-cli-${{ matrix.arch }}-${{ steps.get-config.outputs.channel }}
+
+      - name: Extract CLI build artifacts
+        run: tar xvfz build-artifacts.tar.gz
+        shell: bash
+
+      - name: Download canonical macOS settings schema
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: settings-schema-macos-aarch64-${{ steps.get-config.outputs.channel }}
+          path: .release-artifacts/settings-schema-macos
+
+      - name: Bundle ${{ matrix.arch }} binary
         id: bundle_cli
         run: |
-          script/bundle --read-passwords-from-env --channel $CHANNEL --arch ${{ matrix.arch }} --artifact cli
+          script/bundle --skip-build --read-passwords-from-env --channel $CHANNEL --arch ${{ matrix.arch }} --artifact cli
         shell: bash
         env:
           CHANNEL: ${{ steps.get-config.outputs.channel }}
@@ -460,6 +578,7 @@ jobs:
           WARP_CODESIGN_KEYCHAIN_PASSWORD: ${{ secrets.WARP_CODESIGN_KEYCHAIN_PASSWORD }}
           WARP_NOTARIZATION_APPLE_ID: ${{ secrets.WARP_NOTARIZATION_APPLE_ID }}
           WARP_NOTARIZATION_PASSWORD: ${{ secrets.WARP_NOTARIZATION_PASSWORD }}
+          SETTINGS_SCHEMA_SOURCE: ${{ github.workspace }}/.release-artifacts/settings-schema-macos/settings_schema.json
 
       - name: Package CLI binary
         run: |
@@ -481,10 +600,11 @@ jobs:
 
       - name: Upload CLI to Google Cloud Storage
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
-        uses: google-github-actions/upload-cloud-storage@e95a15f226403ed658d3e65f40205649f342ba2c # v1
+        uses: google-github-actions/upload-cloud-storage@6397bd7208e18d13ba2619ee21b9873edc94427a # v3.0.0
         with:
           path: oz-${{ steps.get-config.outputs.channel }}-macos-${{ matrix.arch }}.tar.gz
           destination: warp-releases/${{ steps.get-config.outputs.channel }}/${{ needs.prepare_release.outputs.release_tag }}/cli/macos/${{ matrix.arch }}
+          process_gcloudignore: false
           headers: |-
             cache-control: ${{ steps.get-config.outputs.gcs_cache_control_value }}
 
@@ -497,7 +617,7 @@ jobs:
 
       - name: Set up Sentry CLI
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
-        uses: matbour/setup-sentry-cli@3e938c54b3018bdd019973689ef984e033b0454b # v2.0.0
+        uses: warpdotdev/setup-sentry-cli@8ae49c71bd731e547de697f75770727f86c95ecd # v2.0.0
         with:
           token: ${{ secrets.SENTRY_RELEASE_TOKEN }}
           organization: warpdotdev
@@ -511,8 +631,8 @@ jobs:
         env:
           DEBUG_FILE_OR_FOLDER_PATH: ${{ steps.bundle_cli.outputs.dsym_path }}
 
-  release_macos_tui:
-    name: Build Release (macOS TUI ${{ matrix.arch }})
+  build_macos_tui_binaries:
+    name: Build Release Binary (macOS TUI ${{ matrix.arch }})
     runs-on: macos-26-xlarge
     needs: prepare_release
     if: ${{ inputs.build_macos != false }}
@@ -538,11 +658,84 @@ jobs:
         run: rustup target add ${{ matrix.arch }}-apple-darwin
         shell: bash
 
-      # Install go toolchain, as it may be needed for some build steps.
-      - name: Setup Go
-        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+      - name: Get channel configuration
+        id: get-config
+        uses: ./.github/actions/get_channel_config/
         with:
-          go-version: stable
+          config_file: ${{ env.CONFIG_FILE }}
+          channel: ${{ inputs.channel }}
+
+      # Only the binary matters here; this job's own bundled resources are
+      # discarded, so skip signing/notarization and the (otherwise mandatory)
+      # schema, both of which belong to the packaging step below.
+      - name: Build ${{ matrix.arch }} binary
+        id: build_tui
+        run: |
+          script/bundle --channel $CHANNEL --arch ${{ matrix.arch }} --artifact tui --nosign
+        shell: bash
+        env:
+          CHANNEL: ${{ steps.get-config.outputs.channel }}
+          GIT_RELEASE_TAG: ${{ needs.prepare_release.outputs.release_tag }}
+          NO_LICENSES: "1"
+          SKIP_SETTINGS_SCHEMA: "1"
+
+      # binary_path is already copied out of the per-target-triple Cargo output
+      # directory; --skip-build (used by release_macos_tui below) re-derives
+      # that copy from the triple directory, so preserve it here instead. The
+      # dSYM Cargo produces there is itself a symlink into target/.../deps, so
+      # (as with the app archive above) also include its resolved target;
+      # otherwise the link dangles once extracted into a fresh job.
+      - name: Create tar archive with build artifacts
+        run: |
+          BINARY_PATH="${{ steps.build_tui.outputs.binary_path }}"
+          PROFILE_DIR="${BINARY_PATH#target/}"
+          PROFILE_DIR="${PROFILE_DIR%/bundle/osx/*}"
+          RAW_BINARY_PATH="target/${{ steps.build_tui.outputs.rust_target }}/$PROFILE_DIR/$(basename "$BINARY_PATH")"
+          RAW_DSYM_PATH="$RAW_BINARY_PATH.dSYM"
+          TAR_PATHS=("$RAW_BINARY_PATH")
+          if [[ -e "$RAW_DSYM_PATH" ]]; then
+            TAR_PATHS+=("$RAW_DSYM_PATH")
+            if [[ -L "$RAW_DSYM_PATH" ]]; then
+              REAL_DSYM_PATH="$(python3 -c 'import os,sys; print(os.path.relpath(sys.argv[1]))' "$(realpath "$RAW_DSYM_PATH")")"
+              TAR_PATHS+=("$REAL_DSYM_PATH")
+            fi
+          fi
+          tar czfv build-artifacts.tar.gz "${TAR_PATHS[@]}"
+        shell: bash
+
+      - name: Archive ${{ matrix.arch }} TUI build artifacts
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: macos-tui-${{ matrix.arch }}-${{ steps.get-config.outputs.channel }}
+          retention-days: 1
+          # We compress the tar archive, so no need to re-compress.
+          compression-level: 0
+          path: build-artifacts.tar.gz
+
+  # Packages the TUI binary build_macos_tui_binaries built separately (in
+  # parallel), then adds the canonical schema and signs/notarizes.
+  release_macos_tui:
+    name: Build Release (macOS TUI ${{ matrix.arch }})
+    runs-on: macos-26-xlarge
+    needs: [prepare_release, release_macos_single_arch, build_macos_tui_binaries]
+    if: ${{ inputs.build_macos != false }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: aarch64
+          - arch: x86_64
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+
+      - uses: ./.github/actions/prepare_environment
+        with:
+          target_os: macos
+          is_self_hosted: false
+          ref: ${{ needs.prepare_release.outputs.release_branch }}
+          install_release_deps: true
+          ssh_key: ${{ secrets.WARP_CHANNEL_CONFIG_ACCESS_SSH_KEY }}
 
       - name: Get channel configuration
         id: get-config
@@ -551,10 +744,25 @@ jobs:
           config_file: ${{ env.CONFIG_FILE }}
           channel: ${{ inputs.channel }}
 
-      - name: Build ${{ matrix.arch }} binary
+      - name: Download ${{ matrix.arch }} TUI build artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: macos-tui-${{ matrix.arch }}-${{ steps.get-config.outputs.channel }}
+
+      - name: Extract TUI build artifacts
+        run: tar xvfz build-artifacts.tar.gz
+        shell: bash
+
+      - name: Download canonical macOS settings schema
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: settings-schema-macos-aarch64-${{ steps.get-config.outputs.channel }}
+          path: .release-artifacts/settings-schema-macos
+
+      - name: Bundle ${{ matrix.arch }} binary
         id: bundle_tui
         run: |
-          script/bundle --read-passwords-from-env --channel $CHANNEL --arch ${{ matrix.arch }} --artifact tui
+          script/bundle --skip-build --read-passwords-from-env --channel $CHANNEL --arch ${{ matrix.arch }} --artifact tui
         shell: bash
         env:
           CHANNEL: ${{ steps.get-config.outputs.channel }}
@@ -564,10 +772,11 @@ jobs:
           WARP_CODESIGN_KEYCHAIN_PASSWORD: ${{ secrets.WARP_CODESIGN_KEYCHAIN_PASSWORD }}
           WARP_NOTARIZATION_APPLE_ID: ${{ secrets.WARP_NOTARIZATION_APPLE_ID }}
           WARP_NOTARIZATION_PASSWORD: ${{ secrets.WARP_NOTARIZATION_PASSWORD }}
+          SETTINGS_SCHEMA_SOURCE: ${{ github.workspace }}/.release-artifacts/settings-schema-macos/settings_schema.json
 
       - name: Set up Sentry CLI
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
-        uses: matbour/setup-sentry-cli@3e938c54b3018bdd019973689ef984e033b0454b # v2.0.0
+        uses: warpdotdev/setup-sentry-cli@8ae49c71bd731e547de697f75770727f86c95ecd # v2.0.0
         with:
           token: ${{ secrets.SENTRY_RELEASE_TOKEN }}
           organization: warpdotdev
@@ -612,10 +821,11 @@ jobs:
 
       - name: Upload TUI to Google Cloud Storage
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
-        uses: google-github-actions/upload-cloud-storage@e95a15f226403ed658d3e65f40205649f342ba2c # v1
+        uses: google-github-actions/upload-cloud-storage@6397bd7208e18d13ba2619ee21b9873edc94427a # v3.0.0
         with:
           path: warp-tui-${{ steps.get-config.outputs.channel }}-macos-${{ matrix.arch }}.tar.gz
           destination: warp-releases/${{ steps.get-config.outputs.channel }}/${{ needs.prepare_release.outputs.release_tag }}/tui/macos/${{ matrix.arch }}
+          process_gcloudignore: false
           headers: |-
             cache-control: ${{ steps.get-config.outputs.gcs_cache_control_value }}
 
@@ -626,8 +836,8 @@ jobs:
           name: release-macos-tui-${{ matrix.arch }}-${{ steps.get-config.outputs.channel }}
           path: warp-tui-${{ steps.get-config.outputs.channel }}-macos-${{ matrix.arch }}.tar.gz
 
-  release_linux_tui:
-    name: Build Release (Linux TUI ${{ matrix.arch }})
+  build_linux_tui_binaries:
+    name: Build Release Binary (Linux TUI ${{ matrix.arch }})
     runs-on: ${{ matrix.runner }}
     needs: prepare_release
     if: ${{ inputs.build_linux != false }}
@@ -668,7 +878,110 @@ jobs:
           config_file: ${{ env.CONFIG_FILE }}
           channel: ${{ inputs.channel }}
 
-      # Namespace's User Bundled Cache persists target/ between jobs on the same profile.
+      # Remove cached _bundle_ output that can be shared across different _jobs_.  This won't
+      # remove any incremental build artifacts, only the final bundled output.
+      - name: Clean stale bundle output
+        run: |
+          if [[ -d target ]]; then
+            find target -path '*/bundle/linux' -type d -prune -exec rm -rf {} +
+          fi
+        shell: bash
+
+      # Only the binary matters here; this job's own bundled resources are
+      # discarded, so skip the (otherwise mandatory) schema and third-party
+      # license generation, both of which belong to the packaging step below.
+      - name: Build TUI binary
+        id: build_tui
+        run: script/bundle --channel "$CHANNEL" --artifact tui --arch "${{ matrix.arch }}"
+        shell: bash
+        env:
+          CHANNEL: ${{ steps.get-config.outputs.channel }}
+          GIT_RELEASE_TAG: ${{ needs.prepare_release.outputs.release_tag }}
+          NO_LICENSES: "1"
+          SKIP_SETTINGS_SCHEMA: "1"
+
+      # executable_path is the copy already staged into bundle/linux;
+      # --skip-build (used by release_linux_tui below) instead re-copies from
+      # the raw target/<profile>/<bin> Cargo output, which debug_executable_path
+      # (that raw path plus ".debug") lets us recover without duplicating the
+      # channel/profile-naming logic that lives in script/linux/bundle.
+      - name: Create tar archive with build artifacts
+        run: |
+          DEBUG_EXECUTABLE_PATH="$(realpath --relative-to=$(pwd) "$DEBUG_EXECUTABLE_PATH")"
+          RAW_EXECUTABLE_PATH="${DEBUG_EXECUTABLE_PATH%.debug}"
+          tar czvf build-artifacts.tar.gz "$RAW_EXECUTABLE_PATH"
+        shell: bash
+        env:
+          DEBUG_EXECUTABLE_PATH: ${{ steps.build_tui.outputs.debug_executable_path }}
+
+      - name: Archive ${{ matrix.arch }} TUI build artifacts
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: linux-tui-${{ matrix.arch }}-${{ steps.get-config.outputs.channel }}
+          retention-days: 1
+          path: build-artifacts.tar.gz
+
+  # Packages the TUI binary build_linux_tui_binaries built separately (in
+  # parallel), then adds the canonical schema.
+  release_linux_tui:
+    name: Build Release (Linux TUI ${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    needs: [prepare_release, release_linux_x86, build_linux_tui_binaries]
+    if: ${{ inputs.build_linux != false }}
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: namespace-profile-ubuntu-20-04
+          - arch: aarch64
+            runner: namespace-profile-ubuntu-20-04-arm
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+
+      - uses: ./.github/actions/prepare_environment
+        with:
+          target_os: linux
+          is_self_hosted: false
+          ref: ${{ needs.prepare_release.outputs.release_branch }}
+          install_release_deps: true
+          ssh_key: ${{ secrets.WARP_CHANNEL_CONFIG_ACCESS_SSH_KEY }}
+
+      # Install gcc 10, as gcc 9.5 has a bug with memcmp that is incompatible
+      # with aws-lc-rs (see https://gcc.gnu.org/bugzilla/show_bug.cgi?id=95189).
+      - name: Install and configure gcc-10
+        run: |
+          sudo apt update
+          sudo apt install -y gcc-10 g++-10
+          sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-10 60 --slave /usr/bin/g++ g++ /usr/bin/g++-10
+          gcc --version
+          g++ --version
+
+      - name: Get channel configuration
+        id: get-config
+        uses: ./.github/actions/get_channel_config/
+        with:
+          config_file: ${{ env.CONFIG_FILE }}
+          channel: ${{ inputs.channel }}
+
+      - name: Download ${{ matrix.arch }} TUI build artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: linux-tui-${{ matrix.arch }}-${{ steps.get-config.outputs.channel }}
+
+      - name: Extract TUI build artifacts
+        run: tar xzvf build-artifacts.tar.gz
+        shell: bash
+
+      - name: Download canonical Linux settings schema
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: settings-schema-linux-${{ steps.get-config.outputs.channel }}
+          path: .release-artifacts/settings-schema-linux
+
+      # Remove cached _bundle_ output that can be shared across different _jobs_.  This won't
+      # remove any incremental build artifacts, only the final bundled output.
       - name: Clean stale bundle output
         run: |
           if [[ -d target ]]; then
@@ -678,11 +991,12 @@ jobs:
 
       - name: Bundle TUI
         id: bundle_tui
-        run: script/bundle --channel "$CHANNEL" --artifact tui --arch "${{ matrix.arch }}"
+        run: script/bundle --channel "$CHANNEL" --artifact tui --arch "${{ matrix.arch }}" --skip-build
         shell: bash
         env:
           CHANNEL: ${{ steps.get-config.outputs.channel }}
           GIT_RELEASE_TAG: ${{ needs.prepare_release.outputs.release_tag }}
+          SETTINGS_SCHEMA_SOURCE: ${{ github.workspace }}/.release-artifacts/settings-schema-linux/settings_schema.json
 
       - name: Package and validate TUI tarball
         run: |
@@ -721,10 +1035,11 @@ jobs:
 
       - name: Upload TUI to Google Cloud Storage
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
-        uses: google-github-actions/upload-cloud-storage@e95a15f226403ed658d3e65f40205649f342ba2c # v1
+        uses: google-github-actions/upload-cloud-storage@6397bd7208e18d13ba2619ee21b9873edc94427a # v3.0.0
         with:
           path: warp-tui-${{ steps.get-config.outputs.channel }}-linux-${{ matrix.arch }}.tar.gz
           destination: warp-releases/${{ steps.get-config.outputs.channel }}/${{ needs.prepare_release.outputs.release_tag }}/tui/linux/${{ matrix.arch }}
+          process_gcloudignore: false
           headers: |-
             cache-control: ${{ steps.get-config.outputs.gcs_cache_control_value }}
 
@@ -746,9 +1061,6 @@ jobs:
       # them with FUSE, which isn't available on GitHub runners (and this is
       # easier and less error-prone than trying to install it).
       APPIMAGE_EXTRACT_AND_RUN: "1"
-      # Cache the generated settings schema so prepare_bundled_resources only
-      # compiles and runs the generator once per job instead of per-package.
-      SETTINGS_SCHEMA_CACHE: ${{ github.workspace }}/.settings_schema_cache.json
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
 
@@ -835,12 +1147,20 @@ jobs:
           CHANNEL: ${{ steps.get-config.outputs.channel }}
           GIT_RELEASE_TAG: ${{ needs.prepare_release.outputs.release_tag }}
 
+      - name: Archive canonical Linux settings schema
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: settings-schema-linux-${{ steps.get-config.outputs.channel }}
+          retention-days: 1
+          path: ${{ steps.bundle_app.outputs.settings_schema_path }}
+
       - name: Bundle Arch Linux package
         uses: ./.github/actions/bundle_arch_package
         with:
           channel: ${{ steps.get-config.outputs.channel }}
           release-tag: ${{ needs.prepare_release.outputs.release_tag }}
           arch: x86_64
+          settings-schema-source: ${{ steps.bundle_app.outputs.settings_schema_path }}
 
       - name: Sign Arch Linux packages
         run: |
@@ -851,7 +1171,7 @@ jobs:
 
       - name: Set up Sentry CLI
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
-        uses: matbour/setup-sentry-cli@3e938c54b3018bdd019973689ef984e033b0454b # v2.0.0
+        uses: warpdotdev/setup-sentry-cli@8ae49c71bd731e547de697f75770727f86c95ecd # v2.0.0
         with:
           token: ${{ secrets.SENTRY_RELEASE_TOKEN }}
           organization: warpdotdev
@@ -876,13 +1196,14 @@ jobs:
 
       - name: Upload packages to Google Cloud Storage
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
-        uses: google-github-actions/upload-cloud-storage@e95a15f226403ed658d3e65f40205649f342ba2c # v1
+        uses: google-github-actions/upload-cloud-storage@6397bd7208e18d13ba2619ee21b9873edc94427a # v3.0.0
         with:
           path: ${{ steps.bundle_app.outputs.packages_dir }}
           # Only upload the files from within `packages_dir`, don't include the
           # (parent) folder itself.
           parent: false
           destination: warp-releases/${{ steps.get-config.outputs.channel }}/${{ needs.prepare_release.outputs.release_tag }}
+          process_gcloudignore: false
           # IMPORTANT: both the key and value of the cache-control header must be all lowercase;
           # uppercase values will not be respected by Cloud CDN and using "Cache-Control" will be
           # ignored by the upload-cloud-storage action.
@@ -896,16 +1217,93 @@ jobs:
           name: release-linux-x86_64-${{ steps.get-config.outputs.channel }}
           path: ${{ steps.bundle_app.outputs.packages_dir }}
 
-  release_linux_cli_x86:
-    name: Build Release (Linux CLI x86_64)
+  build_linux_cli_x86_binaries:
+    name: Build Release Binary (Linux CLI x86_64)
     runs-on: namespace-profile-ubuntu-22-04
     needs: prepare_release
     if: ${{ inputs.build_linux != false }}
     timeout-minutes: 90
-    env:
-      # Cache the generated settings schema so prepare_bundled_resources only
-      # compiles and runs the generator once per job instead of per-package.
-      SETTINGS_SCHEMA_CACHE: ${{ github.workspace }}/.settings_schema_cache.json
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+
+      - uses: ./.github/actions/prepare_environment
+        with:
+          target_os: linux
+          is_self_hosted: false
+          ref: ${{ needs.prepare_release.outputs.release_branch }}
+          install_release_deps: true
+          ssh_key: ${{ secrets.WARP_CHANNEL_CONFIG_ACCESS_SSH_KEY }}
+
+      # Install gcc 10, as gcc 9.5 has a bug with memcmp that is incompatible
+      # with aws-lc-rs (see https://gcc.gnu.org/bugzilla/show_bug.cgi?id=95189).
+      - name: Install and configure gcc-10
+        run: |
+          sudo apt update
+          sudo apt install -y gcc-10 g++-10
+          sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-10 60 --slave /usr/bin/g++ g++ /usr/bin/g++-10
+          gcc --version
+          g++ --version
+
+      - name: Get channel configuration
+        id: get-config
+        uses: ./.github/actions/get_channel_config/
+        with:
+          config_file: ${{ env.CONFIG_FILE }}
+          channel: ${{ inputs.channel }}
+
+      # Remove cached _bundle_ output that can be shared across different _jobs_.  This won't
+      # remove any incremental build artifacts, only the final bundled output.
+      - name: Clean stale bundle output
+        run: |
+          if [[ -d target ]]; then
+            find target -path '*/bundle/linux' -type d -prune -exec rm -rf {} +
+          fi
+        shell: bash
+
+      # Only the binary matters here; this job's own bundled resources are
+      # discarded, so skip the (otherwise mandatory) schema and third-party
+      # license generation, both of which belong to the packaging step below.
+      # --packages none avoids building the (app-only) AppImage that
+      # --packages otherwise defaults to.
+      - name: Build CLI binary
+        id: build_cli
+        run: script/bundle --channel "$CHANNEL" --artifact cli --packages none
+        shell: bash
+        env:
+          CHANNEL: ${{ steps.get-config.outputs.channel }}
+          GIT_RELEASE_TAG: ${{ needs.prepare_release.outputs.release_tag }}
+          NO_LICENSES: "1"
+          SKIP_SETTINGS_SCHEMA: "1"
+
+      # Unlike the TUI job above, the cli artifact doesn't stage a copy into
+      # bundle/linux, so executable_path and debug_executable_path are
+      # already the raw target/<profile>/<bin>[.debug] Cargo output paths;
+      # no derivation is needed to satisfy --skip-build below.
+      - name: Create tar archive with build artifacts
+        run: |
+          EXECUTABLE_PATH="$(realpath --relative-to=$(pwd) "$EXECUTABLE_PATH")"
+          DEBUG_EXECUTABLE_PATH="$(realpath --relative-to=$(pwd) "$DEBUG_EXECUTABLE_PATH")"
+          tar czvf build-artifacts.tar.gz "$EXECUTABLE_PATH" "$DEBUG_EXECUTABLE_PATH"
+        shell: bash
+        env:
+          EXECUTABLE_PATH: ${{ steps.build_cli.outputs.executable_path }}
+          DEBUG_EXECUTABLE_PATH: ${{ steps.build_cli.outputs.debug_executable_path }}
+
+      - name: Archive Linux CLI build artifacts
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: linux-cli-x86_64-${{ steps.get-config.outputs.channel }}
+          retention-days: 1
+          path: build-artifacts.tar.gz
+
+  # Packages the CLI binary build_linux_cli_x86_binaries built separately (in
+  # parallel), then adds the canonical schema.
+  release_linux_cli_x86:
+    name: Build Release (Linux CLI x86_64)
+    runs-on: namespace-profile-ubuntu-22-04
+    needs: [prepare_release, release_linux_x86, build_linux_cli_x86_binaries]
+    if: ${{ inputs.build_linux != false }}
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
 
@@ -978,15 +1376,31 @@ jobs:
           fi
         shell: bash
 
+      - name: Download Linux CLI build artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: linux-cli-x86_64-${{ steps.get-config.outputs.channel }}
+
+      - name: Extract Linux CLI build artifacts
+        run: tar xzvf build-artifacts.tar.gz
+        shell: bash
+
+      - name: Download canonical Linux settings schema
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: settings-schema-linux-${{ steps.get-config.outputs.channel }}
+          path: .release-artifacts/settings-schema-linux
+
       - name: Bundle CLI
         id: bundle_cli
         run: |
-          # Build CLI only
-          script/bundle --channel $CHANNEL --artifact cli --packages deb,rpm
+          # Package the already-built CLI binary
+          script/bundle --channel $CHANNEL --skip-build --artifact cli --packages deb,rpm
         shell: bash
         env:
           CHANNEL: ${{ steps.get-config.outputs.channel }}
           GIT_RELEASE_TAG: ${{ needs.prepare_release.outputs.release_tag }}
+          SETTINGS_SCHEMA_SOURCE: ${{ github.workspace }}/.release-artifacts/settings-schema-linux/settings_schema.json
 
       - name: Package CLI tar.gz
         run: |
@@ -1000,6 +1414,7 @@ jobs:
           release-tag: ${{ needs.prepare_release.outputs.release_tag }}
           arch: x86_64
           artifact: cli
+          settings-schema-source: .release-artifacts/settings-schema-linux/settings_schema.json
 
       - name: Sign Arch Linux packages
         run: |
@@ -1010,7 +1425,7 @@ jobs:
 
       - name: Set up Sentry CLI
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
-        uses: matbour/setup-sentry-cli@3e938c54b3018bdd019973689ef984e033b0454b # v2.0.0
+        uses: warpdotdev/setup-sentry-cli@8ae49c71bd731e547de697f75770727f86c95ecd # v2.0.0
         with:
           token: ${{ secrets.SENTRY_RELEASE_TOKEN }}
           organization: warpdotdev
@@ -1035,13 +1450,14 @@ jobs:
 
       - name: Upload CLI packages to Google Cloud Storage
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
-        uses: google-github-actions/upload-cloud-storage@e95a15f226403ed658d3e65f40205649f342ba2c # v1
+        uses: google-github-actions/upload-cloud-storage@6397bd7208e18d13ba2619ee21b9873edc94427a # v3.0.0
         with:
           path: ${{ steps.bundle_cli.outputs.packages_dir }}
           # Only upload the files from within `packages_dir`, don't include the
           # (parent) folder itself.
           parent: false
           destination: warp-releases/${{ steps.get-config.outputs.channel }}/${{ needs.prepare_release.outputs.release_tag }}
+          process_gcloudignore: false
           # IMPORTANT: both the key and value of the cache-control header must be all lowercase;
           # uppercase values will not be respected by Cloud CDN and using "Cache-Control" will be
           # ignored by the upload-cloud-storage action.
@@ -1058,10 +1474,11 @@ jobs:
 
       - name: Upload CLI tar.gz to Google Cloud Storage
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
-        uses: google-github-actions/upload-cloud-storage@e95a15f226403ed658d3e65f40205649f342ba2c # v1
+        uses: google-github-actions/upload-cloud-storage@6397bd7208e18d13ba2619ee21b9873edc94427a # v3.0.0
         with:
           path: oz-${{ steps.get-config.outputs.channel }}-linux-x86_64.tar.gz
           destination: warp-releases/${{ steps.get-config.outputs.channel }}/${{ needs.prepare_release.outputs.release_tag }}/cli/linux/x86_64
+          process_gcloudignore: false
           headers: |-
             cache-control: ${{ steps.get-config.outputs.gcs_cache_control_value }}
 
@@ -1085,9 +1502,6 @@ jobs:
       # them with FUSE, which isn't available on GitHub runners (and this is
       # easier and less error-prone than trying to install it).
       APPIMAGE_EXTRACT_AND_RUN: "1"
-      # Cache the generated settings schema so prepare_bundled_resources only
-      # compiles and runs the generator once per job instead of per-package.
-      SETTINGS_SCHEMA_CACHE: ${{ github.workspace }}/.settings_schema_cache.json
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
 
@@ -1157,12 +1571,14 @@ jobs:
           EXECUTABLE_PATH="$(realpath --relative-to=$(pwd) $EXECUTABLE_PATH)"
           DEBUG_EXECUTABLE_PATH="$(realpath --relative-to=$(pwd) $DEBUG_EXECUTABLE_PATH)"
           PACKAGES_DIR="$(realpath --relative-to=$(pwd) $PACKAGES_DIR)"
-          tar czvf binaries.tar.gz $EXECUTABLE_PATH $DEBUG_EXECUTABLE_PATH $PACKAGES_DIR
+          cp "$SETTINGS_SCHEMA_PATH" settings_schema.json
+          tar czvf binaries.tar.gz $EXECUTABLE_PATH $DEBUG_EXECUTABLE_PATH $PACKAGES_DIR settings_schema.json
         shell: bash
         env:
           EXECUTABLE_PATH: ${{ steps.build_app.outputs.executable_path }}
           DEBUG_EXECUTABLE_PATH: ${{ steps.build_app.outputs.debug_executable_path }}
           PACKAGES_DIR: ${{steps.build_app.outputs.packages_dir}}
+          SETTINGS_SCHEMA_PATH: ${{ steps.build_app.outputs.settings_schema_path }}
 
       - name: Archive build files
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -1215,6 +1631,10 @@ jobs:
         run: rm -rf target/*/bundle/linux
         shell: bash
 
+      # This cross-compiles aarch64 on an x86_64 host, so the just-built binary
+      # cannot be executed here to generate a schema. release_linux_arm, which
+      # packages this binary, supplies the canonical SETTINGS_SCHEMA_SOURCE
+      # itself, so this job never needs one.
       - name: Build CLI
         id: build_cli
         run: |
@@ -1224,6 +1644,7 @@ jobs:
         env:
           CHANNEL: ${{ steps.get-config.outputs.channel }}
           GIT_RELEASE_TAG: ${{ needs.prepare_release.outputs.release_tag }}
+          SKIP_SETTINGS_SCHEMA: "1"
 
       - name: Package binaries
         id: package_binaries
@@ -1251,13 +1672,9 @@ jobs:
   release_linux_arm:
     name: Bundle Release (Linux ARM)
     runs-on: namespace-profile-ubuntu-20-04
-    needs: [ prepare_release, build_linux_arm_binaries, build_linux_cli_arm_binaries ]
+    needs: [ prepare_release, release_linux_x86, build_linux_arm_binaries, build_linux_cli_arm_binaries ]
     if: ${{ inputs.build_linux != false }}
     timeout-minutes: 60
-    env:
-      # Cache the generated settings schema so prepare_bundled_resources only
-      # compiles and runs the generator once per job instead of per-package.
-      SETTINGS_SCHEMA_CACHE: ${{ github.workspace }}/.settings_schema_cache.json
     steps:
       - name: Checkout sources
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
@@ -1271,13 +1688,19 @@ jobs:
           config_file: ${{ env.CONFIG_FILE }}
           channel: ${{ inputs.channel }}
 
+      - name: Download canonical Linux settings schema
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: settings-schema-linux-${{ steps.get-config.outputs.channel }}
+          path: .release-artifacts/settings-schema-linux
+
       - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
         with:
           credentials_json: ${{ secrets.GOOGLE_APPLICATION_CREDENTIALS }}
       
       - name: Set up Sentry CLI
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
-        uses: matbour/setup-sentry-cli@3e938c54b3018bdd019973689ef984e033b0454b # v2.0.0
+        uses: warpdotdev/setup-sentry-cli@8ae49c71bd731e547de697f75770727f86c95ecd # v2.0.0
         with:
           token: ${{ secrets.SENTRY_RELEASE_TOKEN }}
           organization: warpdotdev
@@ -1293,12 +1716,8 @@ jobs:
           gcc --version
           g++ --version
 
-      # Install Linux build dependencies (protoc, libssl-dev, etc.). Although this job
-      # runs with --skip-build, script/prepare_bundled_resources still invokes
-      # `cargo run --bin generate_settings_schema` and `cargo about generate`, which
-      # compile workspace crates whose build scripts depend on protoc and other
-      # system libraries. The four sibling Linux jobs get these via prepare_environment;
-      # this job doesn't use prepare_environment, so install them explicitly here.
+      # Install Linux build dependencies required by cargo-about while preparing
+      # the bundled third-party license resources.
       - name: Install Linux build dependencies
         shell: bash
         run: ./script/linux/install_build_deps
@@ -1359,6 +1778,10 @@ jobs:
           tar xzvf binaries.tar.gz
         shell: bash
 
+      - name: Verify Linux settings schemas match
+        run: cmp .release-artifacts/settings-schema-linux/settings_schema.json settings_schema.json
+        shell: bash
+
       - name: Bundle deb/rpm app packages
         id: bundle_app
         run: |
@@ -1369,6 +1792,7 @@ jobs:
         env:
           CHANNEL: ${{ steps.get-config.outputs.channel }}
           GIT_RELEASE_TAG: ${{ needs.prepare_release.outputs.release_tag }}
+          SETTINGS_SCHEMA_SOURCE: ${{ github.workspace }}/.release-artifacts/settings-schema-linux/settings_schema.json
 
       - name: Bundle Arch Linux app package
         uses: ./.github/actions/bundle_arch_package
@@ -1376,6 +1800,7 @@ jobs:
           channel: ${{ steps.get-config.outputs.channel }}
           release-tag: ${{ needs.prepare_release.outputs.release_tag }}
           arch: aarch64
+          settings-schema-source: .release-artifacts/settings-schema-linux/settings_schema.json
           
       - name: Upload app debugging symbols to Sentry
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
@@ -1407,6 +1832,7 @@ jobs:
         env:
           CHANNEL: ${{ steps.get-config.outputs.channel }}
           GIT_RELEASE_TAG: ${{ needs.prepare_release.outputs.release_tag }}
+          SETTINGS_SCHEMA_SOURCE: ${{ github.workspace }}/.release-artifacts/settings-schema-linux/settings_schema.json
 
       - name: Package CLI tar.gz
         run: |
@@ -1420,6 +1846,7 @@ jobs:
           release-tag: ${{ needs.prepare_release.outputs.release_tag }}
           arch: aarch64
           artifact: cli
+          settings-schema-source: .release-artifacts/settings-schema-linux/settings_schema.json
 
       - name: Upload CLI debugging symbols to Sentry
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
@@ -1467,11 +1894,12 @@ jobs:
 
       - name: Upload app packages to Google Cloud Storage
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
-        uses: google-github-actions/upload-cloud-storage@e95a15f226403ed658d3e65f40205649f342ba2c # v1
+        uses: google-github-actions/upload-cloud-storage@6397bd7208e18d13ba2619ee21b9873edc94427a # v3.0.0
         with:
           path: ${{ steps.bundle_app.outputs.packages_dir }}
           parent: false
           destination: warp-releases/${{ steps.get-config.outputs.channel }}/${{ needs.prepare_release.outputs.release_tag }}
+          process_gcloudignore: false
           # IMPORTANT: both the key and value of the cache-control header must be all lowercase;
           # uppercase values will not be respected by Cloud CDN and using "Cache-Control" will be
           # ignored by the upload-cloud-storage action.
@@ -1479,12 +1907,13 @@ jobs:
             cache-control: ${{ steps.get-config.outputs.gcs_cache_control_value }}
 
       - name: Upload CLI packages to Google Cloud Storage
-        uses: google-github-actions/upload-cloud-storage@e95a15f226403ed658d3e65f40205649f342ba2c # v1
+        uses: google-github-actions/upload-cloud-storage@6397bd7208e18d13ba2619ee21b9873edc94427a # v3.0.0
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' && steps.bundle_cli.outputs.packages_dir != steps.bundle_app.outputs.packages_dir }}
         with:
           path: ${{ steps.bundle_cli.outputs.packages_dir }}
           parent: false
           destination: warp-releases/${{ steps.get-config.outputs.channel }}/${{ needs.prepare_release.outputs.release_tag }}
+          process_gcloudignore: false
           # IMPORTANT: both the key and value of the cache-control header must be all lowercase;
           # uppercase values will not be respected by Cloud CDN and using "Cache-Control" will be
           # ignored by the upload-cloud-storage action.
@@ -1493,10 +1922,11 @@ jobs:
 
       - name: Upload CLI tar.gz to Google Cloud Storage
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
-        uses: google-github-actions/upload-cloud-storage@e95a15f226403ed658d3e65f40205649f342ba2c # v1
+        uses: google-github-actions/upload-cloud-storage@6397bd7208e18d13ba2619ee21b9873edc94427a # v3.0.0
         with:
           path: oz-${{ steps.get-config.outputs.channel }}-linux-aarch64.tar.gz
           destination: warp-releases/${{ steps.get-config.outputs.channel }}/${{ needs.prepare_release.outputs.release_tag }}/cli/linux/aarch64
+          process_gcloudignore: false
           headers: |-
             cache-control: ${{ steps.get-config.outputs.gcs_cache_control_value }}
 
@@ -1553,7 +1983,7 @@ jobs:
 
       - name: Set up Sentry CLI
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
-        uses: matbour/setup-sentry-cli@3e938c54b3018bdd019973689ef984e033b0454b # v2.0.0
+        uses: warpdotdev/setup-sentry-cli@8ae49c71bd731e547de697f75770727f86c95ecd # v2.0.0
         with:
           token: ${{ secrets.SENTRY_RELEASE_TOKEN }}
           organization: warpdotdev
@@ -1583,7 +2013,7 @@ jobs:
 
       - name: Upload packages to Google Cloud Storage
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
-        uses: google-github-actions/upload-cloud-storage@e95a15f226403ed658d3e65f40205649f342ba2c # v1
+        uses: google-github-actions/upload-cloud-storage@6397bd7208e18d13ba2619ee21b9873edc94427a # v3.0.0
         with:
           path: ${{ steps.bundle_app.outputs.packages_dir }}
           # Only upload the files from within `packages_dir`, don't include the
@@ -1591,6 +2021,7 @@ jobs:
           gzip: false
           parent: false
           destination: ${{ steps.get-config.outputs.web_gcs_bucket_prefix }}-releases/${{ steps.get-config.outputs.channel }}/${{ needs.prepare_release.outputs.release_tag }}
+          process_gcloudignore: false
           # IMPORTANT: both the key and value of the cache-control header must be all lowercase;
           # uppercase values will not be respected by Cloud CDN and using "Cache-Control" will be
           # ignored by the upload-cloud-storage action.
@@ -1600,13 +2031,14 @@ jobs:
 
       - name: Upload assets to Google Cloud Storage
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
-        uses: google-github-actions/upload-cloud-storage@e95a15f226403ed658d3e65f40205649f342ba2c # v1
+        uses: google-github-actions/upload-cloud-storage@6397bd7208e18d13ba2619ee21b9873edc94427a # v3.0.0
         with:
           path: ${{ steps.bundle_app.outputs.assets_dir }}
           parent: false
           # All asset filenames contain the file hash for cashing purposes, so we store them all in
           # one directory so they can be cached across releases.
           destination: ${{ steps.get-config.outputs.web_gcs_bucket_prefix }}-static-assets/
+          process_gcloudignore: false
           # IMPORTANT: both the key and value of the cache-control header must be all lowercase;
           # uppercase values will not be respected by Cloud CDN and using "Cache-Control" will be
           # ignored by the upload-cloud-storage action.
@@ -1623,9 +2055,9 @@ jobs:
           name: release-web-${{ steps.get-config.outputs.channel }}
           path: ${{ steps.bundle_app.outputs.packages_dir }}
 
-  release_windows_tui:
-    name: Build Release (Windows TUI ${{ matrix.arch }})
-    runs-on: windows-latest-large
+  build_windows_tui_binaries:
+    name: Build Release Binary (Windows TUI ${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
     needs: prepare_release
     if: ${{ inputs.build_windows != false }}
     timeout-minutes: 150
@@ -1634,9 +2066,81 @@ jobs:
       matrix:
         include:
           - arch: x64
+            runner: windows-latest-large
+          - arch: arm64
+            runner: windows-arm-latest-large
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+
+      - uses: ./.github/actions/prepare_environment
+        with:
+          target_os: windows
+          cache_key: tui-${{ matrix.arch }}
+          is_self_hosted: false
+          ref: ${{ needs.prepare_release.outputs.release_branch }}
+          install_release_deps: true
+          ssh_key: ${{ secrets.WARP_CHANNEL_CONFIG_ACCESS_SSH_KEY }}
+
+      - name: Get channel configuration
+        id: get-config
+        uses: ./.github/actions/get_channel_config/
+        with:
+          config_file: ${{ env.CONFIG_FILE }}
+          channel: ${{ inputs.channel }}
+
+      - name: Build Warp Agent CLI
+        id: build_tui
+        run: script/bundle --artifact tui --channel "$CHANNEL" --skip_build_installer --arch ${{ matrix.arch }}
+        shell: bash
+        env:
+          CHANNEL: ${{ steps.get-config.outputs.channel }}
+          GIT_RELEASE_TAG: ${{ needs.prepare_release.outputs.release_tag }}
+
+      # actions/upload-artifact stores paths relative to the least common
+      # ancestor of everything it's given; binary_path and pdb_file_path live
+      # in the same directory, so uploading them directly would collapse the
+      # LCA to that directory and strip the target/<triple>/<profile> prefix
+      # that release_windows_tui's own script/bundle invocation expects to
+      # find them at. Tar with explicit relative paths instead, so the
+      # structure is guaranteed rather than an emergent property of which
+      # paths happen to be listed.
+      - name: Create tar archive with build artifacts
+        run: |
+          BINARY_PATH="$(realpath --relative-to="$(pwd)" "$(cygpath -u "$BINARY_PATH")")"
+          PDB_FILE_PATH="$(realpath --relative-to="$(pwd)" "$(cygpath -u "$PDB_FILE_PATH")")"
+          tar czfv build-artifacts.tar.gz "$BINARY_PATH" "$PDB_FILE_PATH"
+        shell: bash
+        env:
+          BINARY_PATH: ${{ steps.build_tui.outputs.binary_path }}
+          PDB_FILE_PATH: ${{ steps.build_tui.outputs.pdb_file_path }}
+
+      - name: Archive Windows TUI binary build
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: windows-tui-binary-${{ matrix.arch }}-${{ steps.get-config.outputs.channel }}
+          retention-days: 1
+          # We compress the tar archive, so no need to re-compress.
+          compression-level: 0
+          path: build-artifacts.tar.gz
+
+  # Packages the TUI binary build_windows_tui_binaries built separately (in
+  # parallel), then adds the canonical schema and signs it.
+  release_windows_tui:
+    name: Build Release (Windows TUI ${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    needs: [prepare_release, build_windows_binaries, build_windows_tui_binaries]
+    if: ${{ inputs.build_windows != false }}
+    timeout-minutes: 150
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
             release_arch: x86_64
+            runner: windows-latest-large
           - arch: arm64
             release_arch: aarch64
+            runner: windows-arm-latest-large
     env:
       TRUSTED_SIGNING_ENDPOINT: https://eus.codesigning.azure.net/
       TRUSTED_SIGNING_ACCOUNT: warpdotdev
@@ -1652,10 +2156,6 @@ jobs:
           ref: ${{ needs.prepare_release.outputs.release_branch }}
           install_release_deps: true
           ssh_key: ${{ secrets.WARP_CHANNEL_CONFIG_ACCESS_SSH_KEY }}
-      - name: Add arm64 target
-        if: ${{ matrix.arch == 'arm64' }}
-        run: rustup target add aarch64-pc-windows-msvc
-        shell: bash
 
       - name: Get channel configuration
         id: get-config
@@ -1664,14 +2164,29 @@ jobs:
           config_file: ${{ env.CONFIG_FILE }}
           channel: ${{ inputs.channel }}
 
+      - name: Download Windows TUI binary build
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: windows-tui-binary-${{ matrix.arch }}-${{ steps.get-config.outputs.channel }}
+
+      - name: Extract Windows TUI binary build
+        run: tar xzvf build-artifacts.tar.gz
+        shell: bash
+
+      - name: Download canonical Windows settings schema
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: settings-schema-windows-${{ steps.get-config.outputs.channel }}
+          path: .release-artifacts/settings-schema-windows
+
       - name: Test Windows TUI installer
         if: ${{ matrix.arch == 'x64' }}
         run: ./script/windows/test_tui_installer.ps1
         shell: pwsh
 
-      - name: Build Warp Agent CLI
+      - name: Locate TUI binary build outputs
         id: build_tui
-        run: script/bundle --artifact tui --channel "$CHANNEL" --skip_build_installer --arch ${{ matrix.arch }}
+        run: script/bundle --artifact tui --channel "$CHANNEL" --skip_build_binary --skip_build_installer --arch ${{ matrix.arch }}
         shell: bash
         env:
           CHANNEL: ${{ steps.get-config.outputs.channel }}
@@ -1694,6 +2209,10 @@ jobs:
           file-digest: SHA256
           timestamp-rfc3161: http://timestamp.acs.microsoft.com
           timestamp-digest: SHA256
+          # The action's dependency cache is not keyed by runner architecture, so x64 and arm64
+          # legs of this matrix can clobber each other's cached tools when they run concurrently
+          # (Azure/artifact-signing-action#146).
+          cache-dependencies: false
       - name: Build sign-tool command for Inno Setup
         id: setup_signing
         shell: pwsh
@@ -1710,6 +2229,8 @@ jobs:
           AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
           AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
           SIGN_TOOL_CMD: ${{ steps.setup_signing.outputs.sign_tool_cmd }}
+          SETTINGS_SCHEMA_SOURCE: ${{ github.workspace }}/.release-artifacts/settings-schema-windows/settings_schema.json
+
       - name: Add TUI installer to GitHub release assets
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
         uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
@@ -1725,10 +2246,11 @@ jobs:
 
       - name: Upload TUI installer to Google Cloud Storage
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
-        uses: google-github-actions/upload-cloud-storage@e95a15f226403ed658d3e65f40205649f342ba2c # v1
+        uses: google-github-actions/upload-cloud-storage@6397bd7208e18d13ba2619ee21b9873edc94427a # v3.0.0
         with:
           path: ${{ steps.bundle_tui.outputs.installer_path }}
           destination: warp-releases/${{ steps.get-config.outputs.channel }}/${{ needs.prepare_release.outputs.release_tag }}/tui/windows/${{ matrix.release_arch }}
+          process_gcloudignore: false
           headers: |-
             cache-control: ${{ steps.get-config.outputs.gcs_cache_control_value }}
 
@@ -1754,8 +2276,8 @@ jobs:
             ${{ steps.bundle_tui.outputs.pdb_file_path }}
           if-no-files-found: error
 
-  release_windows:
-    name: Build Release (Windows ${{ matrix.arch }})
+  build_windows_binaries:
+    name: Build Release Binary (Windows ${{ matrix.arch }})
     runs-on: ${{ matrix.runner }}
     needs: prepare_release
     if: ${{ inputs.build_windows != false }}
@@ -1766,11 +2288,7 @@ jobs:
           - arch: x64
             runner: windows-latest-large
           - arch: arm64
-            runner: windows-latest-large
-    env:
-      TRUSTED_SIGNING_ENDPOINT: https://eus.codesigning.azure.net/
-      TRUSTED_SIGNING_ACCOUNT: warpdotdev
-      TRUSTED_SIGNING_CERT_PROFILE: warpterminal
+            runner: windows-arm-latest-large
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
 
@@ -1782,11 +2300,6 @@ jobs:
           ref: ${{ needs.prepare_release.outputs.release_branch }}
           install_release_deps: true
           ssh_key: ${{ secrets.WARP_CHANNEL_CONFIG_ACCESS_SSH_KEY }}
-
-      - name: Add arm64 target
-        if: ${{ matrix.arch == 'arm64' }}
-        run: rustup target add aarch64-pc-windows-msvc
-        shell: bash
 
       - name: Get channel configuration
         id: get-config
@@ -1803,6 +2316,92 @@ jobs:
           CHANNEL: ${{ steps.get-config.outputs.channel }}
           GIT_RELEASE_TAG: ${{ needs.prepare_release.outputs.release_tag }}
 
+      - name: Generate canonical Windows settings schema
+        if: ${{ matrix.arch == 'x64' }}
+        shell: pwsh
+        run: |
+          $Process = Start-Process `
+            -FilePath "${{ steps.build_binary.outputs.binary_path }}" `
+            -ArgumentList @('dump-settings-schema', "${{ runner.temp }}\settings_schema.json") `
+            -NoNewWindow `
+            -PassThru `
+            -Wait
+          if ($Process.ExitCode -ne 0) { throw "Failed to generate the Windows settings schema: exit code $($Process.ExitCode)." }
+
+      - name: Archive canonical Windows settings schema
+        if: ${{ matrix.arch == 'x64' }}
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: settings-schema-windows-${{ steps.get-config.outputs.channel }}
+          retention-days: 1
+          path: ${{ runner.temp }}\settings_schema.json
+
+      - name: Archive Windows binary build
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: windows-binary-${{ matrix.arch }}-${{ steps.get-config.outputs.channel }}
+          retention-days: 1
+          path: |
+            ${{ steps.build_binary.outputs.binary_path }}
+            ${{ steps.build_binary.outputs.pdb_file_path }}
+            app/assets/windows/${{ matrix.arch }}
+
+  release_windows:
+    name: Bundle Release (Windows ${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    needs: [prepare_release, build_windows_binaries]
+    if: ${{ inputs.build_windows != false }}
+    timeout-minutes: 150
+    strategy:
+      matrix:
+        include:
+          - arch: x64
+            runner: windows-latest-large
+          - arch: arm64
+            runner: windows-arm-latest-large
+    env:
+      TRUSTED_SIGNING_ENDPOINT: https://eus.codesigning.azure.net/
+      TRUSTED_SIGNING_ACCOUNT: warpdotdev
+      TRUSTED_SIGNING_CERT_PROFILE: warpterminal
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+
+      - uses: ./.github/actions/prepare_environment
+        with:
+          target_os: windows
+          cache_key: ${{ matrix.arch }}
+          is_self_hosted: false
+          ref: ${{ needs.prepare_release.outputs.release_branch }}
+          install_release_deps: true
+          ssh_key: ${{ secrets.WARP_CHANNEL_CONFIG_ACCESS_SSH_KEY }}
+
+      - name: Get channel configuration
+        id: get-config
+        uses: ./.github/actions/get_channel_config/
+        with:
+          config_file: ${{ env.CONFIG_FILE }}
+          channel: ${{ inputs.channel }}
+
+      - name: Download Windows binary build
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: windows-binary-${{ matrix.arch }}-${{ steps.get-config.outputs.channel }}
+          path: .
+
+      - name: Download canonical Windows settings schema
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: settings-schema-windows-${{ steps.get-config.outputs.channel }}
+          path: .release-artifacts/settings-schema-windows
+
+      - name: Locate binary build outputs
+        id: binary_paths
+        run: script/bundle -Channel $CHANNEL -skip_build_binary -skip_build_installer --arch ${{ matrix.arch }}
+        shell: bash
+        env:
+          CHANNEL: ${{ steps.get-config.outputs.channel }}
+          GIT_RELEASE_TAG: ${{ needs.prepare_release.outputs.release_tag }}
+
       - name: Sign the executables with Azure Trusted Signing
         uses: azure/artifact-signing-action@b443cf8ea4124818d2ea9f043cba29fc3ec47b16 # v1.2.0
         with:
@@ -1813,7 +2412,7 @@ jobs:
           trusted-signing-account-name: ${{ env.TRUSTED_SIGNING_ACCOUNT }}
           certificate-profile-name: ${{ env.TRUSTED_SIGNING_CERT_PROFILE }}
           files: |
-            ${{ steps.build_binary.outputs.binary_path }}
+            ${{ steps.binary_paths.outputs.binary_path }}
             ${{ github.workspace }}\app\assets\bundled\bootstrap\pwsh.ps1
           files-folder: ${{ github.workspace }}\app\assets\windows\${{ matrix.arch }}
           files-folder-filter: dll,exe
@@ -1822,6 +2421,10 @@ jobs:
           file-digest: SHA256
           timestamp-rfc3161: http://timestamp.acs.microsoft.com
           timestamp-digest: SHA256
+          # The action's dependency cache is not keyed by runner architecture, so x64 and arm64
+          # legs of this matrix can clobber each other's cached tools when they run concurrently
+          # (Azure/artifact-signing-action#146).
+          cache-dependencies: false
 
       # The azure/artifact-signing-action above downloads signtool.exe and the Trusted Signing dlib.
       # We locate them so ISCC can call signtool during compilation to sign the inner setup engine
@@ -1844,10 +2447,15 @@ jobs:
           AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
           AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
           SIGN_TOOL_CMD: ${{ steps.setup_signing.outputs.sign_tool_cmd }}
+          SETTINGS_SCHEMA_SOURCE: ${{ github.workspace }}/.release-artifacts/settings-schema-windows/settings_schema.json
 
+      # This runner has no upstream match: matbour/setup-sentry-cli has no win32/arm64 entry
+      # in its platform table, so it fails with "Unsupported platform: win32/arm64" here. The
+      # fork adds that entry (submitted upstream as matbour/setup-sentry-cli#24, not yet in a
+      # release).
       - name: Set up Sentry CLI
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
-        uses: matbour/setup-sentry-cli@3e938c54b3018bdd019973689ef984e033b0454b # v2.0.0
+        uses: warpdotdev/setup-sentry-cli@8ae49c71bd731e547de697f75770727f86c95ecd # v2.0.0
         with:
           token: ${{ secrets.SENTRY_RELEASE_TOKEN }}
           organization: warpdotdev
@@ -1859,7 +2467,7 @@ jobs:
           script/sentry_upload_dif.sh
         shell: bash
         env:
-          DEBUG_FILE_OR_FOLDER_PATH: ${{ steps.build_binary.outputs.binary_path }}
+          DEBUG_FILE_OR_FOLDER_PATH: ${{ steps.binary_paths.outputs.binary_path }}
 
       - name: Upload debugging symbols to Sentry
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
@@ -1885,10 +2493,11 @@ jobs:
 
       - name: Upload installer to Google Cloud Storage
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
-        uses: google-github-actions/upload-cloud-storage@e95a15f226403ed658d3e65f40205649f342ba2c # v1
+        uses: google-github-actions/upload-cloud-storage@6397bd7208e18d13ba2619ee21b9873edc94427a # v3.0.0
         with:
           path: ${{ steps.bundle_app.outputs.installer_path }}
           destination: warp-releases/${{ steps.get-config.outputs.channel }}/${{ needs.prepare_release.outputs.release_tag }}
+          process_gcloudignore: false
           # IMPORTANT: both the key and value of the cache-control header must be all lowercase;
           # uppercase values will not be respected by Cloud CDN and using "Cache-Control" will be
           # ignored by the upload-cloud-storage action.
@@ -1902,8 +2511,19 @@ jobs:
           name: release-windows-${{ matrix.arch }}-${{ steps.get-config.outputs.channel }}
           path: ${{ steps.bundle_app.outputs.installer_path }}
 
-  send_slack_notif_if_unsuccessful:
-    name: Send Slack notification if any release jobs were unsuccessful
+  # Aggregates the result of every build/release job into a single place, so
+  # downstream jobs don't each need their own copy of the same "which
+  # platforms actually matter, and did they succeed" logic. A platform whose
+  # build was deliberately disabled via a workflow input (build_macos,
+  # build_linux, build_windows, build_web, or web-on-preview) is excluded
+  # entirely, rather than being treated as a failure. Anything else that
+  # isn't a plain `success` -- a genuine failure, a cancellation, or a job
+  # skipped because one of ITS OWN dependencies failed (e.g. a build-only
+  # job) -- counts as a failure. `if: always()` is required so this job
+  # still runs, and still reports failures, even when one of the jobs it
+  # depends on did not succeed.
+  collect_results:
+    name: Collect release job results
     runs-on: ubuntu-latest
     needs:
       - prepare_release
@@ -1918,55 +2538,95 @@ jobs:
       - release_web
       - release_windows_tui
       - release_windows
-    if: ${{ always() && needs.prepare_release.outputs.should_publish == 'true' }}
+    if: always()
+    outputs:
+      failed: ${{ steps.collect.outputs.failed }}
     steps:
-      - name: Figure out which releases failed, if any
-        id: failed_releases
+      # This job intentionally fails (after recording `failed` as an output)
+      # when any non-disabled platform did not succeed. That failure is the
+      # publish gate: generate_changelogs needs this job with default
+      # (success-required) semantics, so it is skipped whenever this step
+      # fails, exactly like any other failed dependency. Jobs that only need
+      # to observe the failure list regardless of outcome (e.g. the Slack
+      # notification below) declare `if: always()` on themselves instead.
+      - name: Determine which release jobs genuinely failed
+        id: collect
         shell: bash
+        env:
+          BUILD_MACOS: ${{ inputs.build_macos }}
+          BUILD_LINUX: ${{ inputs.build_linux }}
+          BUILD_WINDOWS: ${{ inputs.build_windows }}
+          BUILD_WEB: ${{ inputs.build_web }}
+          CHANNEL: ${{ inputs.channel }}
+          MACOS_SINGLE_ARCH_RESULT: ${{ needs.release_macos_single_arch.result }}
+          MACOS_UNIVERSAL_RESULT: ${{ needs.release_macos_universal.result }}
+          MACOS_CLI_RESULT: ${{ needs.release_macos_cli.result }}
+          MACOS_TUI_RESULT: ${{ needs.release_macos_tui.result }}
+          LINUX_TUI_RESULT: ${{ needs.release_linux_tui.result }}
+          LINUX_X86_RESULT: ${{ needs.release_linux_x86.result }}
+          LINUX_ARM_RESULT: ${{ needs.release_linux_arm.result }}
+          LINUX_CLI_X86_RESULT: ${{ needs.release_linux_cli_x86.result }}
+          WEB_RESULT: ${{ needs.release_web.result }}
+          WINDOWS_TUI_RESULT: ${{ needs.release_windows_tui.result }}
+          WINDOWS_RESULT: ${{ needs.release_windows.result }}
         run: |
           FAILED=()
-          if [[ ${{ needs.release_macos_single_arch.result }} != 'success' ]]; then
-              FAILED+=("MacOS Single Arch")
-          fi
-          if [[ ${{ needs.release_macos_universal.result }} != 'success' ]]; then
-              FAILED+=("MacOS Universal")
-          fi
-          if [[ ${{ needs.release_macos_cli.result }} != 'success' ]]; then
-            FAILED+=('MacOS CLI')
-          fi
-          if [[ ${{ needs.release_macos_tui.result }} != 'success' ]]; then
-            FAILED+=('MacOS TUI')
-          fi
-          if [[ ${{ needs.release_linux_tui.result }} != 'success' ]]; then
-            FAILED+=('Linux TUI')
-          fi
-          if [[ ${{ needs.release_linux_x86.result }} != 'success' ]]; then
-              FAILED+=("Linux x86_64")
-          fi
-          if [[ ${{ needs.release_linux_arm.result }} != 'success' ]]; then
-              FAILED+=("Linux ARM64")
-          fi
-          if [[ ${{ needs.release_linux_cli_x86.result }} != 'success' ]]; then
-              FAILED+=("Linux CLI x86_64")
-          fi
-          if [[ ${{ needs.release_web.result }} != 'success' && ${{ inputs.channel }} != 'preview' ]]; then
-              FAILED+=("WASM")
-          fi
-          if [[ ${{ needs.release_windows.result }} != 'success' ]]; then
-              FAILED+=("Windows")
-          fi
-          if [[ ${{ needs.release_windows_tui.result }} != 'success' ]]; then
-              FAILED+=("Windows TUI")
-          fi
+
+          # A disabled platform is excluded outright, regardless of its
+          # result (which will be "skipped" anyway, since that's what a
+          # false job-level `if:` produces). Otherwise, anything other than
+          # "success" -- including "skipped", which for a non-disabled
+          # platform only happens because one of its own dependencies
+          # failed -- is a genuine failure.
+          check() {
+            local name="$1" result="$2" disabled="$3"
+            if [[ "$disabled" == "true" ]]; then
+              return
+            fi
+            if [[ "$result" != "success" ]]; then
+              FAILED+=("$name")
+            fi
+          }
+
+          MACOS_DISABLED=false
+          [[ "$BUILD_MACOS" == "false" ]] && MACOS_DISABLED=true
+          LINUX_DISABLED=false
+          [[ "$BUILD_LINUX" == "false" ]] && LINUX_DISABLED=true
+          WINDOWS_DISABLED=false
+          [[ "$BUILD_WINDOWS" == "false" ]] && WINDOWS_DISABLED=true
+          WEB_DISABLED=false
+          [[ "$BUILD_WEB" == "false" || "$CHANNEL" == "preview" ]] && WEB_DISABLED=true
+
+          check "MacOS Single Arch" "$MACOS_SINGLE_ARCH_RESULT" "$MACOS_DISABLED"
+          check "MacOS Universal" "$MACOS_UNIVERSAL_RESULT" "$MACOS_DISABLED"
+          check "MacOS CLI" "$MACOS_CLI_RESULT" "$MACOS_DISABLED"
+          check "MacOS TUI" "$MACOS_TUI_RESULT" "$MACOS_DISABLED"
+          check "Linux TUI" "$LINUX_TUI_RESULT" "$LINUX_DISABLED"
+          check "Linux x86_64" "$LINUX_X86_RESULT" "$LINUX_DISABLED"
+          check "Linux ARM64" "$LINUX_ARM_RESULT" "$LINUX_DISABLED"
+          check "Linux CLI x86_64" "$LINUX_CLI_X86_RESULT" "$LINUX_DISABLED"
+          check "WASM" "$WEB_RESULT" "$WEB_DISABLED"
+          check "Windows TUI" "$WINDOWS_TUI_RESULT" "$WINDOWS_DISABLED"
+          check "Windows" "$WINDOWS_RESULT" "$WINDOWS_DISABLED"
 
           if (( ${#FAILED[@]} )); then
             printf -v FORMATTED "%s, " "${FAILED[@]}"
-            echo "failed=$(echo "{${FORMATTED%, }}")" >> $GITHUB_OUTPUT
+            echo "failed=$(echo "{${FORMATTED%, }}")" >> "$GITHUB_OUTPUT"
+            echo "::error::The following release jobs did not succeed: ${FAILED[*]}"
+            exit 1
           fi
 
+  send_slack_notif_if_unsuccessful:
+    name: Send Slack notification if any release jobs were unsuccessful
+    runs-on: ubuntu-latest
+    needs:
+      - prepare_release
+      - collect_results
+    if: ${{ always() && needs.prepare_release.outputs.should_publish == 'true' }}
+    steps:
       - name: Send Slack notification if unsuccessful
         uses: slackapi/slack-github-action@0d95c9a7becc1e6e297d76df9bc735c44f4cbcbc # v3.0.5
-        if: ${{ steps.failed_releases.outputs.failed != '' }}
+        if: ${{ needs.collect_results.outputs.failed != '' }}
         with:
           # Fail the step when Slack rejects the message.
           errors: true
@@ -1976,35 +2636,7 @@ jobs:
             channel: "#oncall-client"
             # Follows https://api.slack.com/reference/surfaces/formatting#mentioning-users.
             # S06N82RS7FA is the user group ID for @oncall-client-eng.
-            text: "Failed to create ${{ steps.failed_releases.outputs.failed }} release artifacts for ${{ inputs.channel }}. See https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}. cc: <!subteam^S06N82RS7FA>"
-
-  gate_tui_release_artifacts:
-    name: Gate changelog publication on TUI release artifacts
-    runs-on: ubuntu-latest
-    needs:
-      - prepare_release
-      - release_macos_tui
-      - release_linux_tui
-      - release_windows_tui
-    if: ${{ always() }}
-    steps:
-      - name: Verify TUI release artifacts
-        shell: bash
-        env:
-          SHOULD_PUBLISH: ${{ needs.prepare_release.outputs.should_publish }}
-          MACOS_TUI_RESULT: ${{ needs.release_macos_tui.result }}
-          LINUX_TUI_RESULT: ${{ needs.release_linux_tui.result }}
-          WINDOWS_TUI_RESULT: ${{ needs.release_windows_tui.result }}
-        run: |
-          if [[ "$SHOULD_PUBLISH" != "true" ]]; then
-            exit 0
-          fi
-          if [[ "$MACOS_TUI_RESULT" != "success" ||
-                "$LINUX_TUI_RESULT" != "success" ||
-                "$WINDOWS_TUI_RESULT" != "success" ]]; then
-            echo "::error::TUI release artifacts were not published successfully (macOS: $MACOS_TUI_RESULT, Linux: $LINUX_TUI_RESULT, Windows: $WINDOWS_TUI_RESULT)"
-            exit 1
-          fi
+            text: "Failed to create ${{ needs.collect_results.outputs.failed }} release artifacts for ${{ inputs.channel }}. See https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}. cc: <!subteam^S06N82RS7FA>"
 
   generate_changelogs:
     name: Generate Changelogs
@@ -2012,15 +2644,7 @@ jobs:
     runs-on: ubuntu-latest
     needs:
       - prepare_release
-      - release_macos_single_arch
-      - release_macos_universal
-      - release_macos_cli
-      - release_linux_x86
-      - release_linux_arm
-      - release_linux_cli_x86
-      - release_web
-      - release_windows
-      - gate_tui_release_artifacts
+      - collect_results
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         name: Checkout sources
@@ -2205,7 +2829,8 @@ jobs:
           credentials_json: ${{ secrets.GOOGLE_APPLICATION_CREDENTIALS }}
 
       - name: Upload changelog.json to Google Cloud Storage
-        uses: google-github-actions/upload-cloud-storage@e95a15f226403ed658d3e65f40205649f342ba2c # v1
+        uses: google-github-actions/upload-cloud-storage@6397bd7208e18d13ba2619ee21b9873edc94427a # v3.0.0
         with:
           path: changelog.json
           destination: warp-releases/${{ steps.get-config.outputs.channel }}/${{ needs.prepare_release.outputs.release_tag }}
+          process_gcloudignore: false

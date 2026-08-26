@@ -6,8 +6,8 @@ use ai::LLMId;
 use anyhow::Result;
 use onboarding::slides::OnboardingModelInfo;
 use onboarding::{
-    AgentOnboardingEvent, AgentOnboardingView, CreditPackOption, MockTelemetryContextProvider,
-    OfferVariant, SelectedSettings,
+    AgentOnboardingEvent, AgentOnboardingView, MockTelemetryContextProvider, OfferVariant,
+    SelectedSettings,
 };
 use pathfinder_color::ColorU;
 use rust_embed::RustEmbed;
@@ -56,27 +56,6 @@ fn demo_offer_variant() -> Option<OfferVariant> {
             None
         }
     }
-}
-
-/// Stand-in for the server's add-on credit packs, priced with the free plan's
-/// +20% premium. The real client sources these from `pricingInfo`; the demo
-/// binary has no server, so it ships a representative sample.
-fn demo_credit_packs() -> Vec<CreditPackOption> {
-    [
-        (400, 1_200, 0),
-        (1_000, 2_400, 20),
-        (3_000, 6_000, 33),
-        (6_500, 12_000, 38),
-    ]
-    .into_iter()
-    .map(
-        |(credits, price_usd_cents, savings_percent)| CreditPackOption {
-            credits,
-            price_usd_cents,
-            savings_percent,
-        },
-    )
-    .collect()
 }
 
 fn main() -> Result<()> {
@@ -154,13 +133,11 @@ impl OnboardingMainView {
             },
         ];
         let onboarding_view = ctx.add_typed_action_view(move |ctx| {
-            // agent_modality_enabled is false for demo purposes
             AgentOnboardingView::new(
                 themes.clone(),
                 true,
                 models.clone(),
                 default_model_id.clone(),
-                false,
                 false,
                 onboarding::OnboardingAuthState::LoggedOut,
                 ctx,
@@ -169,7 +146,6 @@ impl OnboardingMainView {
         onboarding_view.update(ctx, |view, ctx| {
             view.start_onboarding(ctx);
             if let Some(variant) = demo_offer_variant() {
-                view.set_credit_pack_options(demo_credit_packs(), ctx);
                 view.show_post_auth_offer(variant, ctx);
             }
         });
@@ -214,18 +190,7 @@ impl OnboardingMainView {
                 self.state = OnboardingMainState::Finished(finished_view);
                 ctx.notify();
             }
-            // Without a server the demo can't actually charge anything, so it
-            // simulates the checkout hand-off: the slide stays put until the
-            // "credits" arrive, exactly as it does in the app.
-            AgentOnboardingEvent::PurchaseCreditsRequested { credits } => {
-                log::info!("demo: purchase of {credits} credits requested");
-                if let OnboardingMainState::Onboarding(view) = &self.state {
-                    view.update(ctx, |view, ctx| {
-                        view.on_credit_purchase_checkout_opened(ctx);
-                    });
-                }
-            }
-            AgentOnboardingEvent::OfferCreditsPurchased { .. }
+            AgentOnboardingEvent::OfferAiSellSatisfied { .. }
             | AgentOnboardingEvent::OfferSetUpLaterSelected { .. } => {
                 let finished_view =
                     ctx.add_typed_action_view(|_| FinishedOnboardingView::new(None));

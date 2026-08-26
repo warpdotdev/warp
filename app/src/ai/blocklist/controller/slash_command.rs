@@ -4,6 +4,7 @@ use warp_core::features::FeatureFlag;
 use warp_errors::report_error;
 use warpui::{AppContext, ModelContext, SingletonEntity};
 
+use super::response_stream::RecoveryBudget;
 use super::{
     BlocklistAIController, BlocklistAIControllerEvent, RequestInput, add_pending_file_attachments,
     input_context_for_request, parse_context_attachments,
@@ -187,7 +188,7 @@ impl SlashCommandRequest {
                 entrypoint,
                 is_auto_resume_after_error: false,
             }),
-            /*can_attempt_resume_on_error*/ true,
+            RecoveryBudget::fresh(),
             is_queued_prompt,
             ctx,
         ) {

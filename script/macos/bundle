@@ -467,6 +467,31 @@ else
     fi
 fi
 
+# Apple Silicon hosts transparently execute Intel binaries via Rosetta 2, but
+# Intel hosts cannot execute Apple Silicon binaries, so only that direction is
+# unsafe. Resolve this once, ahead of the artifact-specific configuration
+# below (which determines UNIVERSAL_BINARY's final value), so the
+# settings-schema defaults further down can fail clearly instead of hitting
+# an exec format error.
+#
+# `uname -m` reports the architecture of the running process, not the
+# hardware: inside a Rosetta-translated x86_64 shell on Apple Silicon it
+# reports x86_64 even though the hardware can execute arm64 binaries
+# directly. `hw.optional.arm64` reflects the actual hardware instead, so
+# check it first.
+if [[ "$(sysctl -n hw.optional.arm64 2>/dev/null)" == "1" ]]; then
+  HOST_ARCH="aarch64"
+else
+  case "$(uname -m)" in
+    arm64|aarch64) HOST_ARCH="aarch64" ;;
+    x86_64) HOST_ARCH="x86_64" ;;
+    *)
+      echo "Error: Unsupported host architecture: $(uname -m)" >&2
+      exit 1
+      ;;
+  esac
+fi
+
 # Set artifact-specific configuration.
 if [[ "$ARTIFACT" == cli || "$ARTIFACT" == warpctrl ]]; then
   UNIVERSAL_BINARY=false
@@ -493,6 +518,15 @@ elif [[ "$ARTIFACT" == tui ]]; then
 elif [[ "$ARTIFACT" == app ]]; then
   # All channels ship the v3 classifier and v2 heuristic.
   FEATURES="$FEATURES,gui,nld_classifier_v3,nld_heuristic_v2"
+fi
+
+# A universal binary always has a native slice, so it is unaffected by the
+# host/target mismatch below. This must run after the artifact-specific
+# configuration above, since that's what gives UNIVERSAL_BINARY its final
+# value (e.g. cli/warpctrl/tui always force it to false).
+CAN_EXECUTE_DEFAULT_TARGET=true
+if [[ "$UNIVERSAL_BINARY" != true && "$HOST_ARCH" == "x86_64" && "$DEFAULT_TARGET" == "$ARM_TARGET" ]]; then
+  CAN_EXECUTE_DEFAULT_TARGET=false
 fi
 
 # If we're building a universal bundle for the app artifact, make sure the additional target is available.
@@ -662,7 +696,18 @@ if [[ "$ARTIFACT" == "app" ]]; then
 
   BUNDLED_RESOURCES_DIR="$BUNDLE_DIR/$WARP_APP_NAME.app/Contents/Resources"
   echo "Preparing bundled resources..."
-  "$WORKSPACE_ROOT_DIR/script/prepare_bundled_resources" "$BUNDLED_RESOURCES_DIR" "$RELEASE_CHANNEL" "$CARGO_PROFILE"
+  if [[ "${SKIP_SETTINGS_SCHEMA:-}" != "1" && -z "${SETTINGS_SCHEMA_EXECUTABLE:-}" && -z "${SETTINGS_SCHEMA_SOURCE:-}" ]]; then
+    if [[ $BUILD_BINARY != true ]]; then
+      echo "Error: --skip-build requires SETTINGS_SCHEMA_SOURCE or SETTINGS_SCHEMA_EXECUTABLE." >&2
+      exit 1
+    elif [[ "$CAN_EXECUTE_DEFAULT_TARGET" != true ]]; then
+      echo "Error: Cannot execute the just-built $DEFAULT_TARGET binary on this $HOST_ARCH host to generate a settings schema; pass SETTINGS_SCHEMA_SOURCE or SETTINGS_SCHEMA_EXECUTABLE." >&2
+      exit 1
+    else
+      export SETTINGS_SCHEMA_EXECUTABLE="$BUNDLE_DIR/$WARP_APP_NAME.app/Contents/MacOS/$WARP_BIN"
+    fi
+  fi
+  "$WORKSPACE_ROOT_DIR/script/prepare_bundled_resources" "$BUNDLED_RESOURCES_DIR" "$RELEASE_CHANNEL"
 
   "$WORKSPACE_ROOT_DIR/script/compile_icon" "$RELEASE_CHANNEL" "$BUNDLE_DIR/$WARP_APP_NAME.app"
 
@@ -762,7 +807,18 @@ elif [[ "$ARTIFACT" == "cli" || "$ARTIFACT" == "warpctrl" ]]; then
 
   echo "Preparing CLI resources directory"
   BUNDLED_RESOURCES_DIR="$OUT_DIR/resources"
-  "$WORKSPACE_ROOT_DIR/script/prepare_bundled_resources" "$BUNDLED_RESOURCES_DIR" "$RELEASE_CHANNEL" "$CARGO_PROFILE"
+  if [[ "${SKIP_SETTINGS_SCHEMA:-}" != "1" && -z "${SETTINGS_SCHEMA_EXECUTABLE:-}" && -z "${SETTINGS_SCHEMA_SOURCE:-}" ]]; then
+    if [[ $BUILD_BINARY != true ]]; then
+      echo "Error: --skip-build requires SETTINGS_SCHEMA_SOURCE or SETTINGS_SCHEMA_EXECUTABLE." >&2
+      exit 1
+    elif [[ "$CAN_EXECUTE_DEFAULT_TARGET" != true ]]; then
+      echo "Error: Cannot execute the just-built $DEFAULT_TARGET binary on this $HOST_ARCH host to generate a settings schema; pass SETTINGS_SCHEMA_SOURCE or SETTINGS_SCHEMA_EXECUTABLE." >&2
+      exit 1
+    else
+      export SETTINGS_SCHEMA_EXECUTABLE="$OUT_DIR/$WARP_BIN"
+    fi
+  fi
+  "$WORKSPACE_ROOT_DIR/script/prepare_bundled_resources" "$BUNDLED_RESOURCES_DIR" "$RELEASE_CHANNEL"
 
 
   # Set the primary binary path to output.
@@ -792,7 +848,11 @@ elif [[ "$ARTIFACT" == "tui" ]]; then
   # Fonts are compiled into the binary, so they are intentionally absent here.
   echo "Preparing TUI resources directory"
   BUNDLED_RESOURCES_DIR="$OUT_DIR/resources"
-  "$WORKSPACE_ROOT_DIR/script/prepare_bundled_resources" "$BUNDLED_RESOURCES_DIR" "$RELEASE_CHANNEL" "$CARGO_PROFILE"
+  if [[ "${SKIP_SETTINGS_SCHEMA:-}" != "1" && -z "${SETTINGS_SCHEMA_EXECUTABLE:-}" && -z "${SETTINGS_SCHEMA_SOURCE:-}" ]]; then
+    echo "Error: TUI bundles require SETTINGS_SCHEMA_SOURCE or SETTINGS_SCHEMA_EXECUTABLE." >&2
+    exit 1
+  fi
+  "$WORKSPACE_ROOT_DIR/script/prepare_bundled_resources" "$BUNDLED_RESOURCES_DIR" "$RELEASE_CHANNEL"
 
   BINARY_PATH="$OUT_DIR/$WARP_BIN"
 else
@@ -1029,6 +1089,9 @@ if [ "${GITHUB_ACTIONS}" == "true" ]; then
 
   if [[ -n "$BUNDLED_RESOURCES_DIR" ]]; then
     echo "bundled_resources_dir=$BUNDLED_RESOURCES_DIR" >> "$GITHUB_OUTPUT"
+  fi
+  if [[ -f "$BUNDLED_RESOURCES_DIR/settings_schema.json" ]]; then
+    echo "settings_schema_path=$BUNDLED_RESOURCES_DIR/settings_schema.json" >> "$GITHUB_OUTPUT"
   fi
   
   echo "::echo::off"

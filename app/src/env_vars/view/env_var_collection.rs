@@ -1468,7 +1468,7 @@ impl View for EnvVarCollectionView {
                 .top_center()
                 .finish(),
         )
-        .on_right_mouse_down(|ctx, _, position| {
+        .on_right_mouse_down(|ctx, _, position, _| {
             ctx.dispatch_typed_action(EnvVarCollectionAction::DisplayPaneMenu(position));
             DispatchEventResult::StopPropagation
         })

@@ -3,9 +3,9 @@
 use warp::tui_export::{
     AIActionStatus, AIAgentActionId, BlocklistAIActionModel, OptionSnapshot,
     OrchestrationConfigState, OrchestrationEditState, RunAgentsExecutionMode, RunAgentsRequest,
-    accept_disabled_reason_with_auth, api_key_snapshot, environment_snapshot, harness_snapshot,
-    host_snapshot, location_snapshot, model_snapshot, persist_environment_selection,
-    persist_host_selection,
+    TeamContext, accept_disabled_reason_with_auth, api_key_snapshot, environment_snapshot,
+    harness_snapshot, host_snapshot, location_snapshot, model_snapshot,
+    persist_environment_selection, persist_host_selection,
 };
 use warpui_core::{AppContext, ModelHandle};
 
@@ -87,6 +87,7 @@ pub(super) trait OrchestrationBlockController {
         &self,
         page: ConfigPage,
         state: &OrchestrationConfigState,
+        scope: &TeamContext,
         ctx: &AppContext,
     ) -> OptionSnapshot;
 
@@ -129,13 +130,14 @@ impl OrchestrationBlockController for ModelOrchestrationBlockController {
         &self,
         page: ConfigPage,
         state: &OrchestrationConfigState,
+        scope: &TeamContext,
         ctx: &AppContext,
     ) -> OptionSnapshot {
         match page {
             ConfigPage::Location => location_snapshot(state, ctx),
             ConfigPage::Harness => harness_snapshot(state, ctx),
             ConfigPage::ApiKey => api_key_snapshot(state, ctx),
-            ConfigPage::Host => host_snapshot(state, ctx),
+            ConfigPage::Host => host_snapshot(state, scope, ctx),
             ConfigPage::Environment => environment_snapshot(state, ctx),
             ConfigPage::Model => model_snapshot(state, ctx),
         }

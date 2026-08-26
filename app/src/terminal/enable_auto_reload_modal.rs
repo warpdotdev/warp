@@ -153,7 +153,7 @@ impl EnableAutoReloadModalBody {
 
         let workspaces = UserWorkspaces::as_ref(ctx);
         let premium_bps = workspaces
-            .purchase_policy_for_team(workspaces.team_for_view(ctx))
+            .purchase_policy()
             .map_or(0, |policy| policy.effective_premium_bps());
         let base_rate = self
             .addon_credits_options

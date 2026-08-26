@@ -235,6 +235,7 @@ $null = New-Module -Name Warp-Module -ScriptBlock {
                 rcfiles_start_time = "$rcStartTime"
                 rcfiles_end_time = "$rcEndTime"
                 shell_plugins = ''
+                vi_mode_enabled = $(if ($script:viEditModeOverridden) { '1' } else { '' })
                 os_category = $osCategory
                 linux_distribution = "$linuxDistribution"
                 shell_path = (Get-Process -Id $PID).Path
@@ -350,7 +351,14 @@ $null = New-Module -Name Warp-Module -ScriptBlock {
     # it is set to $false.
     $script:commandNotFound = $false
 
+    $script:viEditModeOverridden = $false
+
     function Warp-Configure-PSReadLine {
+        if ((Get-PSReadLineOption).EditMode -eq 'Vi') {
+            $script:viEditModeOverridden = $true
+            Set-PSReadLineOption -EditMode Emacs
+        }
+
         # Set-PSReadLineKeyHandler is the PowerShell equivalent of zsh's bindkey.
         Set-PSReadLineKeyHandler -Chord 'Alt+2' -Function BackwardDeleteLine
 
@@ -448,7 +456,7 @@ $null = New-Module -Name Warp-Module -ScriptBlock {
             $code
         }
 
-        $newTitle = (Get-Location).Path
+        $newTitle = $PWD.Path
         # Replace the literal home dir with a tilde.
         if ($newTitle.StartsWith($HOME)) {
             $newTitle = '~' + $newTitle.Substring($HOME.length)
@@ -528,12 +536,12 @@ $null = New-Module -Name Warp-Module -ScriptBlock {
                 $hasNodeCommand = if ($nodeChipEnabled) { Get-Command -CommandType Application node 2>$null } else { $null }
                 if ($hasNodeCommand) {
                     try {
-                        $nodeCacheKey = "$((Get-Location).Path)|$env:PATH"
+                        $nodeCacheKey = "$($PWD.Path)|$env:PATH"
                         if ($nodeCacheKey -eq $script:warpNodeVersionCacheKey) {
                             $nodeVersion = $script:warpNodeVersionCacheValue
                         } else {
                             # Walk up from the current directory to find a package.json
-                            $dir = Get-Item -LiteralPath (Get-Location).Path
+                            $dir = Get-Item -LiteralPath $PWD.Path
                             $foundPackageJson = $false
                             $packageJsonDir = $null
                             while ($null -ne $dir) {
@@ -599,7 +607,7 @@ $null = New-Module -Name Warp-Module -ScriptBlock {
                 value = @{
                     exit_code = $exitCode
                     next_block_id = $nextBlockId
-                    pwd = (Get-Location).Path
+                    pwd = $PWD.Path
                     # TODO(PLAT-687) - honor the PS1
                     ps1 = ''
                     honor_ps1 = $honor_ps1
@@ -956,6 +964,8 @@ $null = New-Module -Name Warp-Module -ScriptBlock {
 
     function Warp-Finish-Bootstrap {
         param([decimal]$rcStartTime, [decimal]$rcEndTime)
+        Warp-Configure-PSReadLine
+
         # This is the closest we can get in PowerShell to a proper preexec hook. We wrap the
         # invocation of PSConsoleHostReadline, and call our preexec hook before returning the
         # returned value. This allows us to preserve the any custom implementations of

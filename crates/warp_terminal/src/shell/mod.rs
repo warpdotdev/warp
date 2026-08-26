@@ -164,6 +164,8 @@ impl Shell {
     /// shell's input buffer, wrapped within the 'InputBuffer' DCS hook when triggered. PowerShell
     /// cannot use a binding that contains the letter "i"  because it does virtual key code
     /// translation based on the current layout, and not all layouts have the letter "i".
+    ///
+    /// https://github.com/microsoft/terminal/blob/20588130d8ef2ba40eb56bdae88e04cce7fc5b5d/src/terminal/parser/InputStateMachineEngine.cpp#L1074-L1100
     pub fn input_reporting_sequence(&self) -> Option<[u8; 2]> {
         match self.shell_type {
             ShellType::PowerShell => Some([escape_sequences::C0::ESC, b'1']),
@@ -564,6 +566,8 @@ impl ShellType {
     /// that clears the command line. PowerShell cannot use a binding that contains the letter "p"
     /// (DLE maps to ctrl-p) because it does virtual key code translation based on the current
     /// layout, and not all layouts have the letter "p".
+    ///
+    /// https://github.com/microsoft/terminal/blob/20588130d8ef2ba40eb56bdae88e04cce7fc5b5d/src/terminal/parser/InputStateMachineEngine.cpp#L1074-L1100
     pub fn kill_buffer_bytes(self) -> &'static [u8] {
         const POWERSHELL_BINDING: [u8; 2] = [escape_sequences::C0::ESC, b'2'];
         const OTHER_BINDING: [u8; 1] = [escape_sequences::C0::DLE];
@@ -1007,3 +1011,35 @@ fn zsh_unmetafy(content: &[u8]) -> String {
 #[cfg(test)]
 #[path = "mod_tests.rs"]
 mod tests;
+
+pub fn shell_escape_single_quotes(command: &str, shell_type: ShellType) -> String {
+    match shell_type {
+        ShellType::Fish => {
+            // Backslash-escape single quotes for Fish.
+            command.replace('\'', r"\'")
+        }
+        ShellType::PowerShell => {
+            // In powershell we escape single quotes using two single quotes ''
+            command.replace('\'', "''")
+        }
+        _ => {
+            // For Bash and Zsh, replace each single quote with a '"'"' sequence.
+            // The first single quote completes the single quoted string to the left,
+            // the next three characters: "'" evaluate to a literal single quote in
+            // bash/zsh, and then the final single quote starts a new single-quoted
+            // string to the right. Effectively, this concatenates the left
+            // single-quoted string, a literal single quote char, and the right
+            // single-quoted string.
+            command.replace('\'', r#"'"'"'"#)
+        }
+    }
+}
+
+/// Quotes a single shell argument so it is passed as data instead of being
+/// interpreted as shell syntax.
+///
+/// Use this for complete interpolated arguments in generated command strings,
+/// not for fragments that intentionally contain operators, pipes, or flags.
+pub fn shell_quote_arg(value: &str, shell_type: ShellType) -> String {
+    format!("'{}'", shell_escape_single_quotes(value, shell_type))
+}
