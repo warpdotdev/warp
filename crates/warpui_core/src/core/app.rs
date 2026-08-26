@@ -4984,3 +4984,20 @@ impl AppContext {
         }
     }
 }
+
+/// Yields until `condition` holds, returning whether it did before the attempt budget ran out. The
+/// bound is an attempt count rather than a wall-clock deadline, so the wait cannot hang and does not
+/// depend on the test clock advancing with `Instant::now()`.
+#[cfg(any(test, feature = "test-util"))]
+pub async fn poll_until(app: &mut App, mut condition: impl FnMut(&mut App) -> bool) -> bool {
+    const POLL_ATTEMPTS: usize = 1000;
+    const POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(5);
+
+    for _ in 0..POLL_ATTEMPTS {
+        if condition(app) {
+            return true;
+        }
+        Timer::after(POLL_INTERVAL).await;
+    }
+    false
+}
