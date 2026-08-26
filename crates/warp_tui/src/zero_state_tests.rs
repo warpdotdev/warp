@@ -26,7 +26,7 @@ use super::{
     ANIMATION_PANEL_COLS, LEFT_COLUMN_COLS, ZeroStateSectionVisibility, autoupdate_status_label,
     build_zero_state_layout, build_zero_state_overlay, build_zero_state_stack_layout,
     changelog_bullets_from_changelog, custom_endpoint_status_label, mcp_status_label,
-    render_first_run_top_section,
+    render_bottom_section, render_first_run_top_section,
 };
 use crate::autoupdate::TuiAutoupdateStatus;
 use crate::tui_builder::TuiUiBuilder;
@@ -241,7 +241,7 @@ fn custom_endpoint_summary_tracks_configuration_and_local_keys() {
         app.read(|ctx| {
             assert_eq!(
                 custom_endpoint_status_label(ApiKeyManager::as_ref(ctx)),
-                ("Not configured · /modify-settings".to_owned(), false)
+                None
             );
         });
 
@@ -254,7 +254,7 @@ fn custom_endpoint_summary_tracks_configuration_and_local_keys() {
         app.read(|ctx| {
             assert_eq!(
                 custom_endpoint_status_label(ApiKeyManager::as_ref(ctx)),
-                ("2 need API keys · /api-keys".to_owned(), false)
+                Some(("2 need API keys · /api-keys".to_owned(), false))
             );
         });
 
@@ -266,10 +266,10 @@ fn custom_endpoint_summary_tracks_configuration_and_local_keys() {
         app.read(|ctx| {
             assert_eq!(
                 custom_endpoint_status_label(ApiKeyManager::as_ref(ctx)),
-                (
+                Some((
                     "1 connected · 1 need API keys · /api-keys".to_owned(),
                     false
-                )
+                ))
             );
         });
 
@@ -281,7 +281,7 @@ fn custom_endpoint_summary_tracks_configuration_and_local_keys() {
         app.read(|ctx| {
             assert_eq!(
                 custom_endpoint_status_label(ApiKeyManager::as_ref(ctx)),
-                ("2 connected · /api-keys".to_owned(), false)
+                Some(("2 connected · /api-keys".to_owned(), false))
             );
         });
 
@@ -291,11 +291,59 @@ fn custom_endpoint_summary_tracks_configuration_and_local_keys() {
         app.read(|ctx| {
             assert_eq!(
                 custom_endpoint_status_label(ApiKeyManager::as_ref(ctx)),
-                (
+                Some((
                     "Configuration error · fix agents.custom_endpoints".to_owned(),
                     true
-                )
+                ))
             );
+        });
+    });
+}
+
+#[test]
+fn custom_endpoint_section_is_hidden_until_an_endpoint_is_configured() {
+    App::test((), |mut app| async move {
+        register_tui_session_view_test_singletons(&mut app);
+        app.read(|ctx| {
+            let builder = TuiUiBuilder::from_app(ctx);
+            let rendered = render_element_lines(
+                render_bottom_section(
+                    None,
+                    None,
+                    ZeroStateSectionVisibility::default(),
+                    &builder,
+                    ctx,
+                )
+                .finish(),
+                ctx,
+                LEFT_COLUMN_COLS,
+                20,
+            )
+            .join("\n");
+            assert!(!rendered.contains("Custom endpoints"));
+        });
+
+        ApiKeyManager::handle(&app).update(&mut app, |manager, ctx| {
+            manager.set_custom_endpoint_definitions(endpoint_definitions(), ctx);
+        });
+        app.read(|ctx| {
+            let builder = TuiUiBuilder::from_app(ctx);
+            let rendered = render_element_lines(
+                render_bottom_section(
+                    None,
+                    None,
+                    ZeroStateSectionVisibility::default(),
+                    &builder,
+                    ctx,
+                )
+                .finish(),
+                ctx,
+                LEFT_COLUMN_COLS,
+                20,
+            )
+            .join("\n");
+            assert!(rendered.contains("Custom endpoints"));
+            assert!(rendered.contains("2 need API keys · /api-keys"));
         });
     });
 }

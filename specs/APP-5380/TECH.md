@@ -37,17 +37,17 @@ Only synthesize picker entries from valid definitions with non-empty local keys.
 
 Subscribe to settings-file error state. If `agents.custom_endpoints` is invalid, publish an empty effective registry immediately and retain credentials. On error clearance, rebuild even if the typed setting value equals the value held before the parse failure.
 ### TUI surfaces
-Extend `/api-keys` row identity with stable custom endpoint IDs. Build rows dynamically from the coordinator snapshot, sort by display name, and reuse the current masked editor, error header, and clear action. Add aggregate not-configured and invalid-setting rows.
+Extend `/api-keys` row identity with stable custom endpoint IDs. Build rows dynamically from the coordinator snapshot, sort by display name, and reuse the current masked editor, error header, and clear action. Omit custom-endpoint rows when the definition collection is absent or empty, and add an aggregate invalid-setting row.
 
-Add a zero-state Custom endpoints section next to the existing MCP status section. Subscribe to coordinator changes and render compact status copy through semantic TUI styles. The text remains informational; it does not introduce click or focus behavior.
+Add a zero-state Custom endpoints section next to the existing MCP status section only when definitions exist or the explicit setting is invalid. Subscribe to coordinator changes and render compact status copy through semantic TUI styles. The text remains informational; it does not introduce click or focus behavior.
 ## Testing and validation
 - Shared-domain tests cover secret-free serialization, URL and collection validation, duplicate config-key rejection, deterministic legacy IDs, config-key preservation, keyed-secret joins, invalidation, recovery, and credential clearing.
 - Existing app model tests cover picker synthesis, key requirements, config-key resolution, removal, and cloud-agent exclusion. Request policy remains covered by the existing scoped BYOK/BYOE workspace-policy tests.
-- `/api-keys` tests cover the unconfigured and invalid aggregate rows plus dynamic user-named rows, sorting, key replacement, and key clearing.
-- Zero-state tests cover unconfigured, missing-key, mixed, connected, and invalid-setting status.
+- `/api-keys` tests cover omission when unconfigured, the invalid aggregate row, dynamic user-named rows, sorting, key replacement, and key clearing.
+- Zero-state tests cover omission when unconfigured plus missing-key, mixed, connected, and invalid-setting status.
 - A generic OpenAI-compatible fixture named OpenRouter verifies that no provider-specific code path is required.
 
-Run focused `cargo nextest` suites for `ai`, `warp`, and `warp_tui`; `./script/format`; targeted clippy for changed crates and targets; and a live `./script/run-tui` verification of not-configured, needs-key, connected, and invalid-setting states.
+Run focused `cargo nextest` suites for `ai`, `warp`, and `warp_tui`; `./script/format`; targeted clippy for changed crates and targets; and a live `./script/run-tui` verification that unconfigured endpoints are omitted while needs-key, connected, and invalid-setting states update without a restart.
 ## Risks and mitigations
 - Settings and secure-storage writes are not transactional. Write secrets first, make definitions authoritative second, retain legacy data during rollout, and make every step retryable.
 - Stale valid settings may remain in the generic settings model after parse errors. The coordinator independently tracks settings-file errors and empties the effective registry.

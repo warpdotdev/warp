@@ -769,8 +769,10 @@ fn render_custom_endpoints_section(
     builder: &TuiUiBuilder,
     app: &AppContext,
 ) -> TuiFlex {
+    let Some((label, is_error)) = custom_endpoint_status_label(ApiKeyManager::as_ref(app)) else {
+        return column;
+    };
     let header_style = builder.primary_text_style().add_modifier(Modifier::BOLD);
-    let (label, is_error) = custom_endpoint_status_label(ApiKeyManager::as_ref(app));
     let style = if is_error {
         builder.error_text_style()
     } else {
@@ -787,18 +789,16 @@ fn render_custom_endpoints_section(
         .child(TuiText::new(label).with_style(style).truncate().finish())
 }
 
-fn custom_endpoint_status_label(manager: &ApiKeyManager) -> (String, bool) {
+fn custom_endpoint_status_label(manager: &ApiKeyManager) -> Option<(String, bool)> {
     if !manager.custom_endpoint_settings_valid() {
-        return (
+        return Some((
             "Configuration error · fix agents.custom_endpoints".to_owned(),
             true,
-        );
+        ));
     }
-    let Some(definitions) = manager.custom_endpoint_definitions() else {
-        return ("Not configured · /modify-settings".to_owned(), false);
-    };
+    let definitions = manager.custom_endpoint_definitions()?;
     if definitions.is_empty() {
-        return ("Not configured · /modify-settings".to_owned(), false);
+        return None;
     }
     let connected = definitions
         .definitions()
@@ -812,7 +812,7 @@ fn custom_endpoint_status_label(manager: &ApiKeyManager) -> (String, bool) {
             format!("{connected} connected · {missing} need API keys · /api-keys")
         }
     };
-    (label, false)
+    Some((label, false))
 }
 #[derive(Default)]
 struct McpStatusCounts {

@@ -40,9 +40,9 @@ Figma: none provided. The GUI retains its existing custom-endpoint editor, while
 
 13. Endpoint definitions blocked by plan entitlement or workspace policy remain visible for status and credential cleanup but are unavailable for model selection and requests.
 
-14. When no definitions exist, `/api-keys` shows a non-selectable custom-endpoint status row that directs users to settings. When the endpoint setting is invalid, it shows a non-selectable error state instead of individual endpoint rows.
+14. When no definitions exist, `/api-keys` does not show a custom-endpoint row. When the endpoint setting is invalid, it shows a non-selectable error state instead of individual endpoint rows.
 
-15. The TUI zero state includes a compact Custom endpoints section when custom inference is available or endpoint configuration exists. It reports not configured, needs keys, connected, unavailable, or configuration-error status and directs users to `/modify-settings` or `/api-keys` as appropriate.
+15. The TUI zero state includes a compact Custom endpoints section only when at least one endpoint is configured or the explicit endpoint setting is invalid. It reports needs keys, connected, unavailable, or configuration-error status and directs users to `/api-keys` or the invalid setting as appropriate.
 
 16. Only definitions that are valid, locally keyed, entitled, and permitted by workspace policy contribute models to model pickers or custom-provider request data.
 

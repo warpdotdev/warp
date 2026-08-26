@@ -196,7 +196,7 @@ fn invalid_custom_endpoint_settings_render_a_non_selectable_error_row() {
 }
 
 #[test]
-fn browsing_rows_are_alphabetical_with_fallback_last() {
+fn unconfigured_custom_endpoints_are_hidden_and_fallback_stays_last() {
     App::test((), |mut app| async move {
         let (_, mode, menu) = add_menu(&mut app);
         app.read(|ctx| {
@@ -217,7 +217,6 @@ fn browsing_rows_are_alphabetical_with_fallback_last() {
                     "Google API key",
                     "OpenAI API key",
                     "X premium or SuperGrok subscription",
-                    "Custom endpoints",
                     "Warp credit fallback",
                 ]
             );
@@ -388,7 +387,14 @@ fn clear_selected_provider_and_toggle_fallback_keep_menu_open() {
         });
 
         menu.update(&mut app, |menu, ctx| {
-            menu.select_at_snapshot_index(5, ctx);
+            let fallback_index = menu
+                .snapshot(ctx)
+                .unwrap()
+                .rows
+                .iter()
+                .position(|row| row.title == "Warp credit fallback")
+                .unwrap();
+            assert!(menu.select_at_snapshot_index(fallback_index, ctx));
             menu.accept_selected(ctx);
         });
         app.read(|ctx| {

@@ -31,7 +31,7 @@ credits. Warp will prioritize using your API keys over Warp credits.";
 enum TuiApiKeysRowKind {
     Provider(LLMProvider),
     CustomEndpoint(CustomEndpointId),
-    CustomEndpointConfiguration,
+    CustomEndpointConfigurationError,
     WarpCreditFallbackSetting,
 }
 #[derive(Debug, Clone)]
@@ -269,7 +269,7 @@ impl TuiApiKeysMenuModel {
                     Some(TuiApiKeysRowKind::CustomEndpoint(id)) => TuiApiKeysFooter::ProviderList {
                         can_clear: custom_endpoint_connected(&id, ctx),
                     },
-                    Some(TuiApiKeysRowKind::CustomEndpointConfiguration) => {
+                    Some(TuiApiKeysRowKind::CustomEndpointConfigurationError) => {
                         TuiApiKeysFooter::ProviderList { can_clear: false }
                     }
                     None => TuiApiKeysFooter::ProviderList { can_clear: false },
@@ -295,7 +295,7 @@ impl TuiApiKeysMenuModel {
                     Some(TuiApiKeysRowKind::CustomEndpoint(id)) => {
                         custom_endpoint_connected(&id, ctx)
                     }
-                    Some(TuiApiKeysRowKind::CustomEndpointConfiguration) => false,
+                    Some(TuiApiKeysRowKind::CustomEndpointConfigurationError) => false,
                     Some(TuiApiKeysRowKind::WarpCreditFallbackSetting) | None => false,
                 }
             }
@@ -313,7 +313,7 @@ impl TuiApiKeysMenuModel {
                     Some(kind @ TuiApiKeysRowKind::Provider(_))
                     | Some(kind @ TuiApiKeysRowKind::CustomEndpoint(_)) => kind,
                     Some(
-                        TuiApiKeysRowKind::CustomEndpointConfiguration
+                        TuiApiKeysRowKind::CustomEndpointConfigurationError
                         | TuiApiKeysRowKind::WarpCreditFallbackSetting,
                     )
                     | None => return,
@@ -339,7 +339,7 @@ impl TuiApiKeysMenuModel {
                 .update(ctx, |manager, ctx| {
                     manager.persist_custom_endpoint_key(id, None, ctx)
                 }),
-            TuiApiKeysRowKind::CustomEndpointConfiguration
+            TuiApiKeysRowKind::CustomEndpointConfigurationError
             | TuiApiKeysRowKind::WarpCreditFallbackSetting => return,
         };
         match result {
@@ -398,7 +398,7 @@ impl TuiApiKeysMenuModel {
                 match kind {
                     TuiApiKeysRowKind::Provider(provider) => self.edit_provider(provider, ctx),
                     TuiApiKeysRowKind::CustomEndpoint(id) => self.edit_custom_endpoint(id, ctx),
-                    TuiApiKeysRowKind::CustomEndpointConfiguration => {}
+                    TuiApiKeysRowKind::CustomEndpointConfigurationError => {}
                     TuiApiKeysRowKind::WarpCreditFallbackSetting => self.toggle_fallback(ctx),
                 }
             }
@@ -516,22 +516,11 @@ impl TuiApiKeysMenuModel {
                     !connecting_grok,
                 )
             }
-            TuiApiKeysRowKind::CustomEndpointConfiguration => {
-                let manager = ApiKeyManager::as_ref(ctx);
-                if manager.custom_endpoint_settings_valid() {
-                    (
-                        Some("Define endpoints in /modify-settings".to_owned()),
-                        Some("(Not configured)".to_owned()),
-                        false,
-                    )
-                } else {
-                    (
-                        Some("Fix agents.custom_endpoints in settings".to_owned()),
-                        Some("(Configuration error)".to_owned()),
-                        false,
-                    )
-                }
-            }
+            TuiApiKeysRowKind::CustomEndpointConfigurationError => (
+                Some("Fix agents.custom_endpoints in settings".to_owned()),
+                Some("(Configuration error)".to_owned()),
+                false,
+            ),
             TuiApiKeysRowKind::CustomEndpoint(id) => {
                 let suffix = if custom_endpoint_connected(id, ctx) {
                     "(Connected)"
@@ -783,9 +772,14 @@ fn all_rows(ctx: &AppContext) -> Vec<TuiApiKeysRow> {
         },
     ];
     let manager = ApiKeyManager::as_ref(ctx);
-    if let Some(definitions) = manager.custom_endpoint_definitions()
+    if !manager.custom_endpoint_settings_valid() {
+        rows.push(TuiApiKeysRow {
+            kind: TuiApiKeysRowKind::CustomEndpointConfigurationError,
+            title: "Custom endpoints".to_owned(),
+            is_selectable: false,
+        });
+    } else if let Some(definitions) = manager.custom_endpoint_definitions()
         && !definitions.is_empty()
-        && manager.custom_endpoint_settings_valid()
     {
         let mut endpoint_rows = definitions
             .definitions()
@@ -797,12 +791,6 @@ fn all_rows(ctx: &AppContext) -> Vec<TuiApiKeysRow> {
             .collect::<Vec<_>>();
         endpoint_rows.sort_by_key(|row| row.title.to_ascii_lowercase());
         rows.extend(endpoint_rows);
-    } else {
-        rows.push(TuiApiKeysRow {
-            kind: TuiApiKeysRowKind::CustomEndpointConfiguration,
-            title: "Custom endpoints".to_owned(),
-            is_selectable: false,
-        });
     }
     rows.push(TuiApiKeysRow {
         kind: TuiApiKeysRowKind::WarpCreditFallbackSetting,
