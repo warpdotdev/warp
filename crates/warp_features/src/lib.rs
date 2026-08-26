@@ -88,9 +88,6 @@ pub enum FeatureFlag {
     /// Also collects block data for Next Command, if enabled.
     AgentModeAnalytics,
 
-    /// A setting to enable a traditional completions experience.
-    ClassicCompletions,
-
     /// Force enable classic completions.
     ForceClassicCompletions,
 
