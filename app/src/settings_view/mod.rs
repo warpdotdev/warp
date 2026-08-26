@@ -1295,6 +1295,8 @@ impl SettingsView {
                     flavor: *flavor,
                 })
             }
+            // Modal rendering is handled in get_modal_content_for_page
+            TeamsPageViewEvent::ModalVisibilityChanged => ctx.notify(),
         });
 
         let warpify_page_handle = ctx.add_typed_action_view(WarpifyPageView::new);

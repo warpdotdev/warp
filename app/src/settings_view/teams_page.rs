@@ -320,6 +320,9 @@ pub enum TeamsPageViewEvent {
         message: String,
         flavor: ToastFlavor,
     },
+    /// One of this page's modals opened or closed. [`SettingsView`] owns the
+    /// slot they render in, so it has to re-render to pick the change up.
+    ModalVisibilityChanged,
 }
 
 #[derive(Default)]
@@ -1165,12 +1168,14 @@ impl TeamsPageView {
                 ctx.notify();
             });
         self.show_team_action_confirmation_dialog = true;
+        ctx.emit(TeamsPageViewEvent::ModalVisibilityChanged);
         ctx.notify();
     }
 
     fn hide_team_action_confirmation(&mut self, ctx: &mut ViewContext<Self>) {
         self.pending_team_action_confirmation = None;
         self.show_team_action_confirmation_dialog = false;
+        ctx.emit(TeamsPageViewEvent::ModalVisibilityChanged);
         ctx.notify();
     }
 
@@ -1180,6 +1185,7 @@ impl TeamsPageView {
             return;
         };
         self.show_team_action_confirmation_dialog = false;
+        ctx.emit(TeamsPageViewEvent::ModalVisibilityChanged);
         match target {
             TeamActionConfirmationTarget::Leave | TeamActionConfirmationTarget::Delete => {
                 self.leave_team(ctx);
@@ -1273,12 +1279,10 @@ impl TeamsPageView {
                 team_uid,
             } => {
                 self.set_team_member_role(*new_owner_uid, *team_uid, MembershipRole::Owner, ctx);
-                self.transfer_ownership_modal_state.close();
-                ctx.notify();
+                self.close_transfer_ownership_modal(ctx);
             }
             TransferOwnershipConfirmationEvent::Cancel => {
-                self.transfer_ownership_modal_state.close();
-                ctx.notify();
+                self.close_transfer_ownership_modal(ctx);
             }
         }
     }
@@ -1289,11 +1293,14 @@ impl TeamsPageView {
         ctx: &mut ViewContext<Self>,
     ) {
         match event {
-            ModalEvent::Close => {
-                self.transfer_ownership_modal_state.close();
-                ctx.notify();
-            }
+            ModalEvent::Close => self.close_transfer_ownership_modal(ctx),
         }
+    }
+
+    fn close_transfer_ownership_modal(&mut self, ctx: &mut ViewContext<Self>) {
+        self.transfer_ownership_modal_state.close();
+        ctx.emit(TeamsPageViewEvent::ModalVisibilityChanged);
+        ctx.notify();
     }
 
     fn show_transfer_ownership_modal(
@@ -1312,6 +1319,7 @@ impl TeamsPageView {
                 });
             });
         self.transfer_ownership_modal_state.open();
+        ctx.emit(TeamsPageViewEvent::ModalVisibilityChanged);
         ctx.notify();
     }
 
