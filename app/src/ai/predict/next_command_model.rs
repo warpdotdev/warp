@@ -377,8 +377,6 @@ impl NextCommandModel {
         let server_api = self.server_api.clone();
         let terminal_model = self.model.clone();
         let cached_next_command_context = self.cached_zerostate_next_command_context.clone();
-        // Resolved before spawning, so the request is scoped to the team the window was on
-        // when the suggestion was requested, not whichever team it switches to meanwhile.
         let team_scope =
             RequestTeamScope::from_scope(&self.ai_controller.as_ref(ctx).team_context(ctx));
 
