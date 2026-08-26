@@ -12,6 +12,7 @@ use itertools::Itertools;
 use parking_lot::FairMutex;
 use warp_core::command::ExitCode;
 use warp_core::execution_mode::AppExecutionMode;
+use warp_core::features::FeatureFlag;
 use warp_util::path::ShellFamily;
 use warpui::r#async::{Spawnable, Timer};
 use warpui::{Entity, EntityId, ModelContext, ModelHandle, SingletonEntity};
@@ -95,7 +96,8 @@ impl ShellCommandExecutor {
             self.active_session.as_ref(ctx).session_type(ctx),
             Some(SessionType::Local)
         );
-        self.activity_monitor.set_monitoring_enabled(is_local);
+        self.activity_monitor
+            .set_monitoring_enabled(is_local && FeatureFlag::LrcActivitySignal.is_enabled());
 
         let guard = LrcMonitoringGuard {
             monitor: self.activity_monitor.clone(),
