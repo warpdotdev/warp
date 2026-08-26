@@ -16,8 +16,8 @@ use warpui_core::{App, SingletonEntity};
 
 use super::{
     BlockLocation, LayOutArgs, LayoutTask, MAX_LAYOUT_CONTENT_CHARS_PER_PARALLEL_CHUNK,
-    chunk_layout_tasks, layout_mermaid_diagram_block, layout_table_block, layout_temporary_blocks,
-    layout_text_block, measure_table_cells,
+    MAX_LAYOUT_TASKS_PER_PARALLEL_CHUNK, chunk_layout_tasks, layout_mermaid_diagram_block,
+    layout_table_block, layout_temporary_blocks, layout_text_block, measure_table_cells,
 };
 use crate::content::buffer::{StyledBufferBlock, StyledBufferRun, StyledTextBlock};
 use crate::content::edit::{
