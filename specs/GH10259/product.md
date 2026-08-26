@@ -45,7 +45,7 @@ Render `<details>`/`<summary>` HTML blocks in Warp-rendered markdown as collapsi
 
 8. A drag that begins on the summary row selects text and does not toggle. Toggling happens on release, and only when the pointer stayed within the row and did not move past the surface's drag threshold. Summary text is selectable, which behavior 10 requires of it, so a press on the row cannot commit to toggling before the drag is resolved.
 
-9. Toggling a section changes only what is displayed. It never modifies document content, never marks a buffer dirty, and never adds an undo entry.
+9. Toggling a section changes only what is displayed. It never modifies document content — the `open` attribute in the source is untouched by toggling — never marks a buffer dirty, and never adds an undo entry. Collapse state lives only in the open view: closing and reopening a document renders every section at its default state (behavior 4).
 
 10. Copying a selection that spans a details section yields the summary text and the full body text, including the body of a section that is currently collapsed. Collapse is a view state, so it never removes content from a copy, a save, or a serialization.
 

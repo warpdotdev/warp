@@ -159,7 +159,7 @@ Each of the three markers is zero-width in the char stream, like `LinkMarker`: a
 
 Converting a block range to or from a details region goes through the existing `BufferEditAction` path (`set_block_style` at `crates/editor/src/model.rs:1167`, `convert_block` at `:1200`), extended to insert and remove the marker triple.
 
-**Collapse.** Collapsed state reuses `HiddenLinesModel` (`hidden_lines_model.rs:20`): the body range is an anchor-pair hidden region, per editor and outside buffer content, initialized from `default_open`. Hiding is consulted only at render and navigation time (`render/model/mod.rs:861-869`/`:3332-3347`, `selection.rs:414-459`), never by copy or serialization, so toggling cannot dirty deltas or undo history (product behavior 9). Each region owns its own anchor pair, so a nested region's state is independent of its ancestors' and an ancestor's toggle hides it without touching it (product behavior 12).
+**Collapse.** Collapsed state reuses `HiddenLinesModel` (`hidden_lines_model.rs:20`): the body range is an anchor-pair hidden region, per editor and outside buffer content, initialized from `default_open`. Hiding is consulted only at render and navigation time (`render/model/mod.rs:861-869`/`:3332-3347`, `selection.rs:414-459`), never by copy or serialization, so toggling cannot dirty deltas or undo history (product behavior 9). Each region owns its own anchor pair, so a nested region's state is independent of its ancestors' and an ancestor's toggle hides it without touching it (product behavior 12). The model is created with the editor view and never persisted, so a closed-and-reopened document starts every region at its `default_open` state (product behavior 9).
 
 **Collapse state across edits and streaming** (product behaviors 20 and 21). The anchor pairs are the mechanism for both rules, and neither needs new state. Anchors move with edits, so an edit inside a collapsed body leaves that body's pair spanning the edited text and the section stays collapsed; an edit to a boundary marker moves the pair with the region the rebalancing rules then define, and a pair whose region no longer exists is dropped when the pairing scan finds no region for it. Across streaming updates the model is keyed per editor and independent of buffer content, so re-parsing a growing document does not reconstruct it: the anchor pair placed when the region first appeared survives each snapshot, which is what keeps a user's toggle from reverting to `default_open` as content arrives. `default_open` is read only when a region's pair is first created, never on a later snapshot of the same region.
 
@@ -270,7 +270,7 @@ Per CONTRIBUTING, the implementation PR attaches a screen recording of toggling 
 
 ### Collapse state is per view, and the buffer is shared
 
-`HiddenLinesModel` is per editor, so the same document open in two panes can show different collapse states. This matches existing hidden-section behavior for code folding and is consistent with collapse being view state (product behavior 9). No persistence is specified.
+`HiddenLinesModel` is per editor, so the same document open in two panes can show different collapse states. This matches existing hidden-section behavior for code folding and is consistent with collapse being view state (product behavior 9): reopening a document restores every section to its default state.
 
 ### Fence tracking is duplicated between the block chain and the details delimiter
 
