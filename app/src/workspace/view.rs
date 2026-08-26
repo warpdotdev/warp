@@ -22992,6 +22992,16 @@ impl Workspace {
                 .insert(flags::COMPLETIONS_OPEN_WHILE_TYPING_CONTEXT_FLAG);
         }
 
+        if *input_settings.warp_completions_enabled.value() {
+            context.set.insert(flags::WARP_COMPLETIONS_CONTEXT_FLAG);
+        }
+
+        if *input_settings.native_shell_completions_enabled.value() {
+            context
+                .set
+                .insert(flags::NATIVE_SHELL_COMPLETIONS_CONTEXT_FLAG);
+        }
+
         if *input_settings.command_corrections.value() {
             context.set.insert(flags::COMMAND_CORRECTIONS_CONTEXT_FLAG);
         }
