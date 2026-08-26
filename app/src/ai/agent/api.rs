@@ -31,6 +31,7 @@ use crate::ai::execution_profiles::AIExecutionProfileAppExt;
 use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
 use crate::ai::llms::{LLMId, LLMPreferences};
 use crate::ai::mcp::TemplatableMCPServerManager;
+use crate::server::ids::ServerId;
 use crate::server::server_api::AIApiError;
 use crate::settings::AISettings;
 use crate::terminal::safe_mode_settings::get_secret_obfuscation_mode;
@@ -128,6 +129,10 @@ pub struct RequestParams {
     pub existing_suggestions: Option<Suggestions>,
     pub metadata: Option<RequestMetadata>,
     pub session_context: SessionContext,
+    /// The team this request was built for, so a later scoped catalog lookup (e.g. resolving
+    /// [`Self::model`]'s provider/host routing at send time) reads the same team's policy this
+    /// request was otherwise built against, rather than an arbitrary team's.
+    pub team_uid: Option<ServerId>,
     pub model: LLMId,
     #[allow(unused)]
     pub coding_model: LLMId,
@@ -202,6 +207,7 @@ impl RequestParams {
             existing_suggestions: None,
             metadata: None,
             session_context: SessionContext::new_for_test(),
+            team_uid: None,
             model: LLMId::from("test-model"),
             coding_model: LLMId::from("test-model"),
             cli_agent_model: LLMId::from("test-model"),
@@ -393,7 +399,7 @@ impl RequestParams {
         let context_window_limit = AIExecutionProfilesModel::as_ref(app)
             .active_profile(terminal_view_id, app)
             .data()
-            .context_window_limit_for_request(app);
+            .context_window_limit_for_request(scope, app);
 
         Self {
             input: request_input.all_inputs().cloned().collect(),
@@ -405,6 +411,7 @@ impl RequestParams {
             context_window_limit,
             metadata,
             session_context,
+            team_uid: scope.team_uid(),
             model: request_input.model_id.clone(),
             coding_model: request_input.coding_model_id.clone(),
             cli_agent_model: request_input.cli_agent_model_id.clone(),

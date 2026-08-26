@@ -109,7 +109,7 @@ impl View for ExecutionProfileView {
         let base_model = profile
             .base_model
             .as_ref()
-            .and_then(|id| llm_preferences.get_llm_info(id, app))
+            .and_then(|id| llm_preferences.get_llm_info_for_scope(&scope, id, app))
             .map(|info| info.display_name.clone())
             .unwrap_or_else(|| {
                 llm_preferences
@@ -121,7 +121,7 @@ impl View for ExecutionProfileView {
         let cli_agent_model = profile
             .cli_agent_model
             .as_ref()
-            .and_then(|id| llm_preferences.get_llm_info(id, app))
+            .and_then(|id| llm_preferences.get_llm_info_for_scope(&scope, id, app))
             .map(|info| info.display_name.clone())
             .unwrap_or_else(|| {
                 llm_preferences
@@ -133,7 +133,7 @@ impl View for ExecutionProfileView {
         let computer_use_model = profile
             .computer_use_model
             .as_ref()
-            .and_then(|id| llm_preferences.get_llm_info(id, app))
+            .and_then(|id| llm_preferences.get_llm_info_for_scope(&scope, id, app))
             .map(|info| info.display_name.clone())
             .unwrap_or_else(|| {
                 llm_preferences

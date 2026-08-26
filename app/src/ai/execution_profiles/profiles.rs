@@ -1367,7 +1367,7 @@ impl AIExecutionProfilesModel {
                 .data()
                 .base_model
                 .as_ref()
-                .and_then(|id| llm_preferences.get_llm_info(id, ctx))
+                .and_then(|id| llm_preferences.get_llm_info_for_team_uid(team_uid, id, ctx))
                 .unwrap_or_else(|| {
                     llm_preferences.get_default_base_model_for_team_uid(team_uid, ctx)
                 });

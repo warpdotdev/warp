@@ -546,7 +546,9 @@ impl ExecutionProfileEditorView {
         // persisted limit (or the active model's max as a sensible default).
         // The slider's current position is derived from the profile on each
         // render, so no local Cell is needed.
-        let initial_context_window_value = initial_context_window_display_value(&profile_data, ctx);
+        let scope = UserWorkspaces::as_ref(ctx).team_context_for_view(ctx);
+        let initial_context_window_value =
+            initial_context_window_display_value(&profile_data, &scope, ctx);
         let context_window_slider_state = SliderStateHandle::default();
         let context_window_editor = ctx.add_typed_action_view(|ctx| {
             let options = SingleLineEditorOptions {
@@ -1447,7 +1449,7 @@ impl ExecutionProfileEditorView {
             &scope,
             app,
         );
-        profile.configurable_context_window(app)
+        profile.configurable_context_window(&scope, app)
     }
 
     fn current_context_window_display_value(&self, app: &AppContext) -> Option<u32> {
@@ -1457,7 +1459,7 @@ impl ExecutionProfileEditorView {
             &scope,
             app,
         );
-        profile.context_window_display_value(app)
+        profile.context_window_display_value(&scope, app)
     }
 
     fn handle_context_window_editor_event(
@@ -1535,14 +1537,14 @@ impl ExecutionProfileEditorView {
 
 fn initial_context_window_display_value(
     profile_data: &AIExecutionProfile,
+    scope: &impl TeamScope,
     app: &AppContext,
 ) -> u32 {
     profile_data
-        .context_window_display_value(app)
+        .context_window_display_value(scope, app)
         .unwrap_or_else(|| {
-            let team_uid = UserWorkspaces::as_ref(app).inherited_or_default_team_uid(None);
             LLMPreferences::as_ref(app)
-                .get_default_base_model_for_team_uid(team_uid, app)
+                .get_default_base_model(scope, app)
                 .context_window
                 .default_max
         })

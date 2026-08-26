@@ -543,7 +543,7 @@ use crate::workspace::{
     CommandSearchOptions, ForkAIConversationParams, ForkFromExchange,
     ForkedConversationDestination, OneTimeModalModel, ToastStack, WorkspaceAction,
 };
-use crate::workspaces::user_workspaces::{UserWorkspaces, UserWorkspacesEvent};
+use crate::workspaces::user_workspaces::{ResolvedTeamScope, UserWorkspaces, UserWorkspacesEvent};
 use crate::workspaces::workspace::CustomerType;
 use crate::{
     AIAgentActionResultType, AIRequestUsageModel, ActiveSession as WindowActiveSession, safe_error,
@@ -10800,9 +10800,14 @@ impl TerminalView {
             return;
         }
 
-        // Check if the model supports AWS Bedrock routing
+        // Check if the model supports AWS Bedrock routing. Scoped to this terminal's own team:
+        // `host_configs` (whether Bedrock is enabled for this model) can differ per team, and an
+        // arbitrary team's answer could show the banner when this team disables Bedrock, or hide
+        // it when this team enables it.
+        let scope =
+            ResolvedTeamScope::from_scope(&UserWorkspaces::as_ref(ctx).team_context_for_view(ctx));
         let llm_prefs = LLMPreferences::as_ref(ctx);
-        let Some(llm_info) = llm_prefs.get_llm_info(model_id, ctx) else {
+        let Some(llm_info) = llm_prefs.get_llm_info_for_scope(&scope, model_id, ctx) else {
             return;
         };
 

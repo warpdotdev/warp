@@ -1009,7 +1009,7 @@ impl ProfileModelSelector {
             .clone()
             .and_then(|id| {
                 llm_preferences
-                    .get_llm_info(&id, ctx)
+                    .get_llm_info_for_scope(&scope, &id, ctx)
                     .map(|info| info.id.clone())
             })
             .unwrap_or_else(|| {
@@ -1381,7 +1381,7 @@ impl ProfileModelSelector {
                     match action {
                         ProfileModelSelectorAction::SelectModel(llm_id) => {
                             LLMPreferences::as_ref(ctx)
-                                .get_llm_info(llm_id, ctx)
+                                .get_llm_info_for_scope(&scope, llm_id, ctx)
                                 .cloned()
                         }
                         ProfileModelSelectorAction::SelectAutoModel => {
