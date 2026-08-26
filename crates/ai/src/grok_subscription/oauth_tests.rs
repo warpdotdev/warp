@@ -100,7 +100,13 @@ fn bind_test_listener() -> (TcpListener, std::net::SocketAddr) {
 /// The rebind is asserted over many cancel cycles — with no sleeps or retries —
 /// so a reintroduced teardown race is caught here instead of showing up as an
 /// intermittent CI failure.
+///
+/// Serialized with the other tests in this file that call
+/// [`bind_test_listener`]: they all scan the same PID-derived port range, so
+/// running them in parallel lets one test's just-dropped port be claimed by
+/// another before its own exact-port rebind assertion runs.
 #[test]
+#[serial_test::serial(grok_oauth_loopback_port)]
 fn cancelling_loopback_wait_releases_listener() {
     const CANCEL_CYCLES: usize = 100;
 
@@ -139,6 +145,7 @@ fn cancelling_loopback_wait_releases_listener() {
 /// on the listener already being dropped, which release guarantees
 /// regardless of how far the other thread has gotten.
 #[test]
+#[serial_test::serial(grok_oauth_loopback_port)]
 fn release_signal_lets_a_caller_rebind_without_joining_the_result() {
     let (listener, address) = bind_test_listener();
     let cancellation = OauthCancellationHandle {
@@ -188,6 +195,7 @@ fn release_signal_lets_a_caller_rebind_without_joining_the_result() {
 /// CSRF state stops the flow before the network token exchange, so the CSRF
 /// error is proof the callback made the trip.
 #[test]
+#[serial_test::serial(grok_oauth_loopback_port)]
 fn loopback_callback_is_delivered_after_the_listener_closes() {
     let (listener, address) = bind_test_listener();
     let cancellation = OauthCancellationHandle {
