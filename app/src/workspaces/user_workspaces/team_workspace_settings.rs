@@ -136,10 +136,11 @@ pub struct NotATeamMemberError {
 pub(crate) enum GeminiEnterpriseBackgroundHost<'a> {
     /// No team of the user's enables Gemini Enterprise, so there is nothing to mint.
     NoneEnabled,
-    /// Teams enable it against different Google Cloud projects. Nothing is minted -- there is
-    /// one credential store and no window to choose with -- but unlike [`Self::NoneEnabled`]
-    /// this is a misconfiguration an admin can fix, and the user should be told so.
-    Conflicting,
+    /// Teams enable it against different Google Cloud projects, named here so the caller can
+    /// tell the user which teams disagree. Nothing is minted -- there is one credential store
+    /// and no window to choose with -- but unlike [`Self::NoneEnabled`] this is a
+    /// misconfiguration an admin can fix, and the user should be told so.
+    Conflicting(Vec<&'a str>),
     Enabled(&'a LlmHostSettings),
 }
 
@@ -574,21 +575,34 @@ impl UserWorkspaces {
         }
     }
 
-    /// Every LLM settings object that could apply to the user: one per team, or the current
-    /// workspace's own when they belong to no team. The basis of the windowless aggregates
-    /// below, guarded the way [`Self::any_team_allows_member_byo_endpoints`] guards its own
-    /// fallback: several teams is not ambiguous here (any one enabling is enough), so this
-    /// never needs to fall back to an arbitrarily-elected team the way a scoped read would.
-    fn every_applicable_llm_settings(&self) -> Box<dyn Iterator<Item = &LlmSettings> + '_> {
+    /// Every (team, LLM settings) pair that could apply to the user: one per team, or the
+    /// current workspace's own with no attributable team when they belong to none. The basis
+    /// of the windowless aggregates below, guarded the way
+    /// [`Self::any_team_allows_member_byo_endpoints`] guards its own fallback: several teams
+    /// is not ambiguous here (any one enabling is enough), so this never needs to fall back to
+    /// an arbitrarily-elected team the way a scoped read would. The team is carried alongside
+    /// its settings so a caller that needs to name a disagreeing team (e.g.
+    /// [`GeminiEnterpriseBackgroundHost::Conflicting`]) has one source of truth for it, rather
+    /// than re-deriving it from a separate lookup.
+    fn every_applicable_team_and_llm_settings(
+        &self,
+    ) -> Box<dyn Iterator<Item = (Option<&Team>, &LlmSettings)> + '_> {
         let mut teams = self.all_teams().peekable();
         if teams.peek().is_none() {
             return Box::new(
                 self.current_workspace()
                     .into_iter()
-                    .map(|workspace| &workspace.settings.llm_settings),
+                    .map(|workspace| (None, &workspace.settings.llm_settings)),
             );
         }
-        Box::new(teams.map(|team| &team.settings.llm_settings))
+        Box::new(teams.map(|team| (Some(team), &team.settings.llm_settings)))
+    }
+
+    /// [`Self::every_applicable_team_and_llm_settings`] for callers that only need the
+    /// settings.
+    fn every_applicable_llm_settings(&self) -> impl Iterator<Item = &LlmSettings> + '_ {
+        self.every_applicable_team_and_llm_settings()
+            .map(|(_, settings)| settings)
     }
 
     /// Did the admin turn `host` on, with its credentials resolved against `user_setting_enabled`?
@@ -621,10 +635,10 @@ impl UserWorkspaces {
     ///
     /// Unlike a boolean aggregate this yields a *value* -- a Google Cloud project to federate
     /// against -- and there is no defensible ordering over projects. Enabling teams that
-    /// disagree on one therefore report [`GeminiEnterpriseBackgroundHost::Conflicting`] rather
-    /// than an arbitrary pick, which the caller must surface as a misconfiguration and not as
-    /// an absence of the feature: nothing is minted either way, but only one of those two is
-    /// something an admin can act on.
+    /// disagree on one therefore report [`GeminiEnterpriseBackgroundHost::Conflicting`], named
+    /// by every disagreeing team, rather than an arbitrary pick, which the caller must surface
+    /// as a misconfiguration and not as an absence of the feature: nothing is minted either
+    /// way, but only one of those two is something an admin can act on.
     #[cfg(not(target_family = "wasm"))]
     pub(crate) fn gemini_enterprise_host_for_any_enabling_team(
         &self,
@@ -637,9 +651,9 @@ impl UserWorkspaces {
         {
             return GeminiEnterpriseBackgroundHost::NoneEnabled;
         }
-        let mut enabling = self
-            .every_applicable_llm_settings()
-            .filter(|llm_settings| {
+        let enabling: Vec<(Option<&Team>, &LlmHostSettings)> = self
+            .every_applicable_team_and_llm_settings()
+            .filter(|(_, llm_settings)| {
                 Self::host_credentials_enabled(
                     llm_settings,
                     &LLMModelHost::GeminiEnterprise,
@@ -650,22 +664,30 @@ impl UserWorkspaces {
                     },
                 )
             })
-            .filter_map(|llm_settings| {
+            .filter_map(|(team, llm_settings)| {
                 llm_settings
                     .host_configs
                     .get(&LLMModelHost::GeminiEnterprise)
-            });
+                    .map(|settings| (team, settings))
+            })
+            .collect();
 
-        let Some(first) = enabling.next() else {
+        let Some((_, first)) = enabling.first().copied() else {
             return GeminiEnterpriseBackgroundHost::NoneEnabled;
         };
-        let agree = enabling.all(|other| {
-            other.gcp_audience == first.gcp_audience && other.gcp_sa_email == first.gcp_sa_email
+        let agree = enabling.iter().all(|(_, settings)| {
+            settings.gcp_audience == first.gcp_audience
+                && settings.gcp_sa_email == first.gcp_sa_email
         });
         if agree {
             GeminiEnterpriseBackgroundHost::Enabled(first)
         } else {
-            GeminiEnterpriseBackgroundHost::Conflicting
+            GeminiEnterpriseBackgroundHost::Conflicting(
+                enabling
+                    .iter()
+                    .filter_map(|(team, _)| team.map(|team| team.name.as_str()))
+                    .collect(),
+            )
         }
     }
 

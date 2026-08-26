@@ -39,6 +39,9 @@ const GEAP_MINT_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 pub(crate) enum GeapPolicy {
     Disabled,
     Unconfigured,
+    /// Two or more of the user's teams enable Gemini Enterprise against different Google
+    /// Cloud projects, named here.
+    Conflicting(Vec<String>),
     Mintable(GeapMintBinding),
 }
 
@@ -46,7 +49,7 @@ impl GeapPolicy {
     pub(crate) fn mint_binding(self) -> Option<GeapMintBinding> {
         match self {
             GeapPolicy::Mintable(binding) => Some(binding),
-            GeapPolicy::Disabled | GeapPolicy::Unconfigured => None,
+            GeapPolicy::Disabled | GeapPolicy::Unconfigured | GeapPolicy::Conflicting(_) => None,
         }
     }
 }
@@ -119,15 +122,17 @@ pub(crate) fn current_geap_policy<S: TeamScope + ?Sized>(
 pub(crate) fn current_geap_policy_for_any_team(app: &AppContext) -> GeapPolicy {
     match UserWorkspaces::as_ref(app).gemini_enterprise_host_for_any_enabling_team(app) {
         GeminiEnterpriseBackgroundHost::NoneEnabled => GeapPolicy::Disabled,
-        // Nothing can be minted, but the user's org does use GEAP and an admin has to pick one
-        // project. `Unconfigured` is the state that says so and offers them the admin recovery
-        // action; `Disabled` would tell them the feature is simply not theirs.
-        GeminiEnterpriseBackgroundHost::Conflicting => {
+        // Nothing can be minted, but the user's org does use GEAP and an admin has to align
+        // the disagreeing teams on one project. `Conflicting` is the state that says so, named
+        // by the teams involved, and offers the same admin recovery action `Unconfigured`
+        // does; `Disabled` would tell them the feature is simply not theirs.
+        GeminiEnterpriseBackgroundHost::Conflicting(team_names) => {
             log::warn!(
-                "GEAP: the user's teams enable Gemini Enterprise against different Google Cloud \
-                 projects; background minting has no window to choose between them"
+                "GEAP: teams ({}) enable Gemini Enterprise against different Google Cloud \
+                 projects; background minting has no window to choose between them",
+                team_names.join(", ")
             );
-            GeapPolicy::Unconfigured
+            GeapPolicy::Conflicting(team_names.into_iter().map(str::to_string).collect())
         }
         GeminiEnterpriseBackgroundHost::Enabled(settings) => {
             geap_policy_from_host_settings(Some(settings), app)
@@ -196,7 +201,7 @@ pub(crate) fn refresh_geap_credentials_if_needed(
     ctx: &mut ModelContext<ApiKeyManager>,
 ) {
     let binding = match current_geap_policy_for_any_team(ctx) {
-        GeapPolicy::Disabled | GeapPolicy::Unconfigured => return,
+        GeapPolicy::Disabled | GeapPolicy::Unconfigured | GeapPolicy::Conflicting(_) => return,
         GeapPolicy::Mintable(binding) => binding,
     };
     let needs_mint = match manager.geap_credentials_state() {
@@ -208,6 +213,7 @@ pub(crate) fn refresh_geap_credentials_if_needed(
         } => *minted_for != binding || credentials.needs_refresh(),
         GeapCredentialsState::Missing
         | GeapCredentialsState::Unconfigured
+        | GeapCredentialsState::ConflictingAcrossTeams { .. }
         | GeapCredentialsState::Disabled
         | GeapCredentialsState::Failed { .. } => true,
     };
@@ -231,6 +237,13 @@ fn refresh_geap_credentials_with_options(
         }
         GeapPolicy::Unconfigured => {
             manager.set_geap_credentials_state(GeapCredentialsState::Unconfigured, ctx);
+            return;
+        }
+        GeapPolicy::Conflicting(team_names) => {
+            manager.set_geap_credentials_state(
+                GeapCredentialsState::ConflictingAcrossTeams { team_names },
+                ctx,
+            );
             return;
         }
         GeapPolicy::Mintable(binding) => binding,
@@ -322,6 +335,16 @@ fn apply_geap_mint_result_inner(
         GeapPolicy::Unconfigured => {
             log::info!("GEAP: gate unconfigured mid-mint; discarding the mint result");
             manager.set_geap_credentials_state(GeapCredentialsState::Unconfigured, ctx);
+            return GeapRefreshOutcome::Failed;
+        }
+        GeapPolicy::Conflicting(team_names) => {
+            log::info!(
+                "GEAP: teams began disagreeing on the project mid-mint; discarding the mint result"
+            );
+            manager.set_geap_credentials_state(
+                GeapCredentialsState::ConflictingAcrossTeams { team_names },
+                ctx,
+            );
             return GeapRefreshOutcome::Failed;
         }
         GeapPolicy::Mintable(binding) => binding,

@@ -317,6 +317,68 @@ fn refresh_rests_at_unconfigured_when_enabled_but_unconfigured() {
     })
 }
 
+/// Two teams enabling GEAP against different Google Cloud projects, named here so a fixture
+/// used by more than one test doesn't have to repeat the setup.
+fn team_with_geap_host(name: &str, uid: i64, audience: &str) -> Team {
+    let mut team = team_for_test();
+    team.uid = uid.into();
+    team.name = name.to_string();
+    team.settings.llm_settings.enabled = true;
+    team.settings.llm_settings.host_configs.insert(
+        crate::ai::llms::LLMModelHost::GeminiEnterprise,
+        LlmHostSettings {
+            enabled: true,
+            enablement_setting: HostEnablementSetting::Enforce,
+            gcp_audience: Some(audience.to_string()),
+            gcp_sa_email: Some(TEST_SA_EMAIL.to_string()),
+        },
+    );
+    team
+}
+
+fn workspace_with_teams(teams: Vec<Team>) -> Workspace {
+    Workspace {
+        uid: "workspace_uid123456789".to_string().into(),
+        name: "test".to_string(),
+        stripe_customer_id: None,
+        teams,
+        billing_metadata: Default::default(),
+        bonus_grants_purchased_this_month: Default::default(),
+        billing_cycle_usage: None,
+        has_billing_history: false,
+        settings: Default::default(),
+        invite_link_domain_restrictions: vec![],
+        pending_email_invites: vec![],
+        is_eligible_for_discovery: false,
+        members: vec![],
+        total_requests_used_since_last_refresh: 0,
+    }
+}
+
+#[test]
+fn refresh_rests_at_conflicting_across_teams_when_projects_disagree() {
+    const OTHER_AUDIENCE: &str = "//iam.googleapis.com/projects/999999/locations/global/workloadIdentityPools/other-pool/providers/other-provider";
+    let team_a = team_with_geap_host("Acme Corp", 1, TEST_AUDIENCE);
+    let team_b = team_with_geap_host("Acme Labs", 2, OTHER_AUDIENCE);
+    let workspace = workspace_with_teams(vec![team_a, team_b]);
+    App::test((), |mut app| async move {
+        let _geap_flag = FeatureFlag::GeminiEnterprise.override_enabled(true);
+        initialize_app(&mut app, vec![workspace]);
+        ApiKeyManager::handle(&app).update(&mut app, |manager, ctx| {
+            refresh_geap_credentials(manager, ctx);
+            match manager.geap_credentials_state() {
+                GeapCredentialsState::ConflictingAcrossTeams { team_names } => {
+                    assert_eq!(
+                        team_names,
+                        &vec!["Acme Corp".to_string(), "Acme Labs".to_string()]
+                    );
+                }
+                other => panic!("expected ConflictingAcrossTeams, got {other:?}"),
+            }
+        });
+    })
+}
+
 #[test]
 fn refresh_skips_when_token_is_fresh_and_binding_matches() {
     let workspace = workspace_with_geap_host(true);

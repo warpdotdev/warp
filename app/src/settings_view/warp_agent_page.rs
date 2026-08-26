@@ -103,7 +103,7 @@ use crate::view_components::action_button::{
     ActionButton, ButtonSize, DangerSecondaryTheme, SecondaryTheme,
 };
 use crate::view_components::{Dropdown, DropdownItem, FilterableDropdown};
-use crate::workspaces::user_workspaces::{TeamContext, TeamScope, UserWorkspacesEvent};
+use crate::workspaces::user_workspaces::{TeamContext, UserWorkspacesEvent};
 use crate::workspaces::workspace::{AdminEnablementSetting, CustomerType};
 use crate::{TelemetryEvent, UserWorkspaces, send_telemetry_from_ctx};
 
@@ -5979,7 +5979,7 @@ impl GeminiEnterpriseWidget {
         let user_workspaces = UserWorkspaces::as_ref(ctx);
         let scope = user_workspaces.team_context_for_view(ctx);
         AISettings::as_ref(ctx).is_any_ai_enabled(ctx)
-            && UserWorkspaces::as_ref(ctx).is_gemini_enterprise_credentials_enabled(scope, ctx)
+            && UserWorkspaces::as_ref(ctx).is_gemini_enterprise_credentials_enabled(&scope, ctx)
             && !ApiKeyManager::as_ref(ctx)
                 .geap_credentials_state()
                 .requires_admin_action()
