@@ -2974,10 +2974,9 @@ fn native_completions_after_empty_specs_bails_when_stale() {
     });
 }
 
-/// Yields until `condition` holds, then returns; panics if it never holds. A bound is unavoidable
-/// here, so it is an attempt count rather than a wall-clock deadline: the wait is deterministic and
-/// cannot hang. Unlike a flat sleep the budget is only spent by a run that is already failing, so a
-/// passing run costs whatever the work actually takes and does not get slower on a loaded machine.
+/// Yields until `condition` holds, then returns; panics if it never holds. The bound is an attempt
+/// count rather than a wall-clock deadline, so the wait cannot hang and does not depend on the test
+/// clock advancing with `Instant::now()`.
 async fn poll_until(app: &mut App, awaited: &str, mut condition: impl FnMut(&mut App) -> bool) {
     const POLL_ATTEMPTS: usize = 600;
     const POLL_INTERVAL: Duration = Duration::from_millis(5);
@@ -3031,9 +3030,6 @@ fn input_tab_does_not_ask_the_shell_when_bundled_specs_are_non_empty() {
             input.input_tab(ctx);
         });
 
-        // A negative assertion can't be synchronized on the counter it expects to stay at zero, so
-        // wait on what the specs path must do instead: once the bundled spec has opened the menu,
-        // the decision not to ask the shell has provably already been taken.
         poll_until(
             &mut app,
             "the bundled-spec completions menu to open",
