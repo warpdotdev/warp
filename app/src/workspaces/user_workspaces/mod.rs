@@ -125,12 +125,6 @@ pub struct UserWorkspaces {
     /// filtered out of `workspaces` — this is the only place their purchase
     /// policy survives.
     user_purchase_policy: Option<PurchaseAddOnCreditsPolicy>,
-    /// The model catalog for a caller with no team and no workspace: currently only ever
-    /// written by the one-release legacy-cache migration in [`Self::new`]. Nothing reads
-    /// this yet -- `LLMPreferences` still resolves its catalog from its own flat
-    /// `models_by_feature`/`MODELS_BY_FEATURE_CACHE_KEY` cache.
-    #[allow(dead_code)]
-    pre_login_models_by_feature: Option<ModelsByFeature>,
     team_client: Arc<dyn TeamClient>,
     workspace_client: Arc<dyn WorkspaceClient>,
 }
@@ -195,7 +189,6 @@ impl UserWorkspaces {
             window_team_uids: Default::default(),
             joinable_teams: Default::default(),
             user_purchase_policy: None,
-            pre_login_models_by_feature: None,
             team_client,
             workspace_client,
         }
@@ -246,17 +239,14 @@ impl UserWorkspaces {
             window_team_uids: Default::default(),
             joinable_teams: Default::default(),
             user_purchase_policy: None,
-            pre_login_models_by_feature: None,
             team_client,
             workspace_client,
         };
 
-        // One-release migration: a `Workspace` restored from the SQLite cache predates the
-        // `feature_model_choice` column (or the app hasn't fetched since upgrading), so its
-        // catalog is still the bare default. Seed it from the legacy, pre-team-keyed cache so
-        // an offline launch right after upgrading shows the user's last-known model list for
-        // the rest of the offline session instead of only the `auto` default. Nothing reads
-        // `feature_model_choice` yet -- this seeds the field for when something does.
+        // One-release migration: moving feature_model_choices off of `LLMPreferences` to `Workspace`.
+        // This means that on the first time the user opens a version of warp without a
+        // Workspace.feature_model_choice saved in their sqlite db, we can fall back to reading feature
+        // model choices from the old LLMPreferences cache.
         // TODO: delete once it's safe to assume every client has fetched at least once since
         // this migration shipped.
         if me
