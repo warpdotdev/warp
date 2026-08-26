@@ -12,6 +12,12 @@ use crate::server::server_api::{AIApiError, ServerApi};
 use crate::server::team_scope::RequestTeamScope;
 use crate::terminal::model::session::SessionType;
 
+/// Sends one `/ai/multi-agent` (or `/ai/passive-suggestions`) request.
+///
+/// `team_scope` is deliberately a separate argument rather than a field on `RequestParams`:
+/// `RequestParams` is cloned for retries, but the team scope must stay the one captured when
+/// the request was first built. Its uid is read here only to attach `X-Warp-Team-Uid`; see
+/// `specs/multi-team-api-context/TECH.md`.
 pub async fn generate_multi_agent_output(
     server_api: Arc<ServerApi>,
     mut params: RequestParams,

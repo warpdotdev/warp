@@ -81,8 +81,17 @@ impl ConnectedSelfHostedWorkersModel {
         }
 
         let ai_client = ServerApiProvider::as_ref(ctx).get_ai_client();
+        // This model is a process-global singleton with no specific window to capture a real
+        // `TeamContext` from, so it can't use the window-scoped capture path other bucket-2
+        // call sites use. It still must not send no team scope at all: once the server starts
+        // enforcing scope on this endpoint, an absent header would fail the request and the
+        // worker list would silently go stale with no error surfaced. Resolve the account's
+        // default team the same way other window-less call sites do (see
+        // `UserWorkspaces::admin_billing_link_for_default_team`) rather than genuinely
+        // per-team caching, which is Group-3-scale work (see specs/multi-team-context/TECH.md).
+        let team_uid = UserWorkspaces::as_ref(ctx).inherited_or_default_team_uid(None);
         ctx.spawn(
-            async move { ai_client.list_connected_self_hosted_workers().await },
+            async move { ai_client.list_connected_self_hosted_workers(team_uid).await },
             |me, result, ctx| match result {
                 Ok(response) => {
                     let mut workers = response.workers;

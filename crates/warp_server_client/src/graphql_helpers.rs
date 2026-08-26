@@ -22,8 +22,23 @@ pub fn send_graphql_request<'a, QF: 'a, O>(
 where
     O: Operation<QF> + Send + 'a,
 {
+    send_graphql_request_with_headers(base_client, operation, timeout, Vec::new())
+}
+
+/// Same as [`send_graphql_request`], with additional caller-supplied headers (e.g.
+/// `X-Warp-Team-Uid`) layered on top of the base client's authenticated options.
+pub fn send_graphql_request_with_headers<'a, QF: 'a, O>(
+    base_client: &'a BaseClient,
+    operation: O,
+    timeout: Option<Duration>,
+    extra_headers: Vec<(String, String)>,
+) -> BoxFuture<'a, Result<QF>>
+where
+    O: Operation<QF> + Send + 'a,
+{
     Box::pin(async move {
-        let options = base_client.graphql_request_options(timeout).await?;
+        let mut options = base_client.graphql_request_options(timeout).await?;
+        options.headers.extend(extra_headers);
         send_graphql_request_with_options(base_client, operation, options).await
     })
 }

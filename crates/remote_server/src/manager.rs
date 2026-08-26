@@ -1041,16 +1041,18 @@ impl HostRequestHandle {
     }
 
     /// Asks the remote daemon to gather and upload a handoff snapshot for the
-    /// given paths.
+    /// given paths, scoped to `team_uid` when the client's window had one selected.
     pub async fn upload_handoff_snapshot(
         &self,
         paths: Vec<StandardizedPath>,
+        team_uid: Option<String>,
     ) -> Result<crate::proto::UploadHandoffSnapshotResponse, HostRequestError> {
         let msg = self
             .send(
                 crate::proto::host_scoped_request::Message::UploadHandoffSnapshot(
                     crate::proto::UploadHandoffSnapshot {
                         paths: paths.into_iter().map(|p| p.to_string()).collect(),
+                        team_uid,
                     },
                 ),
             )

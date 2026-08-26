@@ -40,13 +40,13 @@ use crate::cloud_object::model::persistence::CloudModel;
 use crate::server::ids::{ServerId, SyncId};
 use crate::server::server_api::ServerApi;
 use crate::server::server_api::ai::{
-    AIClient, AgentMessageHeader, AgentRunEvent, AgentSource, ArtifactType, ExecutionLocation,
-    ListAgentMessagesRequest, ReadAgentMessageResponse, RunSortBy, RunSortOrder,
+    AIClient, AgentMessageHeader, AgentRunEvent, AgentRunScope, AgentSource, ArtifactType,
+    ExecutionLocation, ListAgentMessagesRequest, ReadAgentMessageResponse, RunSortBy, RunSortOrder,
     SendAgentMessageRequest, SendAgentMessageResponse, SpawnAgentRequest, TaskListFilter,
 };
 use crate::terminal::shared_session;
 use crate::util::time_format::format_approx_duration_from_now_utc;
-use crate::workspaces::user_workspaces::UserWorkspaces;
+use crate::workspaces::user_workspaces::{TeamScope as _, UserWorkspaces};
 
 const MAX_LINE_WIDTH: usize = 90;
 const STREAM_RETRY_BACKOFF_STEPS: &[u64] = &[1, 2, 5, 10];
@@ -519,16 +519,33 @@ impl AmbientAgentRunner {
                 }
                 None => (None, UserQueryMode::Normal),
             };
+            // Resolved the same way as other object-owning CLI commands (`--team[=<uid>]`
+            // picks a specific team on a multi-team account; bare `--team` requires a sole
+            // team). `--personal` and the no-flag default both mean "not team-owned", but are
+            // not the same wire value (see `AgentRunScope`): a bare invocation leaves the scope
+            // unspecified so the server applies its own default, while `--personal` explicitly
+            // asks for personal ownership.
+            let scope = if args.scope.is_team() {
+                match super::common::resolve_team_scope(&args.scope, ctx) {
+                    Ok(team_scope) => {
+                        AgentRunScope::Team(team_scope.team_uid().expect("a CLI scope names a team"))
+                    }
+                    Err(err) => {
+                        super::report_fatal_error(err, ctx);
+                        return;
+                    }
+                }
+            } else if args.scope.personal {
+                AgentRunScope::Personal
+            } else {
+                AgentRunScope::Unspecified
+            };
             let request = SpawnAgentRequest {
                 prompt,
                 mode,
                 config,
                 title: args.title,
-                team: match (args.scope.is_team(), args.scope.personal) {
-                    (true, _) => Some(true),
-                    (_, true) => Some(false),
-                    _ => None,
-                },
+                scope,
                 agent_identity_uid: args.agent_uid,
                 skill,
                 attachments,

@@ -28,7 +28,7 @@ use crate::modal::{Modal, ModalViewState};
 use crate::util::truncation::truncate_from_end;
 use crate::view_components::dropdown::{DROPDOWN_PADDING, TOP_MENU_BAR_HEIGHT};
 use crate::view_components::{Dropdown as DropdownView, DropdownItem, FilterableDropdown};
-use crate::workspaces::user_workspaces::UserWorkspaces;
+use crate::workspaces::user_workspaces::{TeamScope as _, UserWorkspaces};
 
 const OZ_AGENTS_URL: &str = "https://oz.warp.dev/agents?new=true";
 const API_KEY_DOCS_URL: &str =
@@ -285,8 +285,14 @@ impl CreateApiKeyModal {
 
         let auth_client =
             crate::server::server_api::ServerApiProvider::as_ref(ctx).get_auth_client();
+        // Named agent identities belong to this window's current team; capture it now so a
+        // later team switch on the window can't retarget an in-flight fetch.
+        let team_uid = UserWorkspaces::as_ref(ctx)
+            .team_context_for_view(ctx)
+            .team_uid()
+            .map(|uid| uid.uid());
         ctx.spawn(
-            async move { auth_client.list_agent_identities().await },
+            async move { auth_client.list_agent_identities(team_uid).await },
             |me, res, ctx| {
                 me.is_loading_agents = false;
                 match res {

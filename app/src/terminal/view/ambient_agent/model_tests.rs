@@ -343,7 +343,7 @@ fn retry_request(prompt: impl Into<String>) -> SpawnAgentRequest {
             ..Default::default()
         }),
         title: Some("Retry title".to_string()),
-        team: Some(true),
+        scope: AgentRunScope::Team(ServerId::from(456)),
         agent_identity_uid: Some("agent-123".to_string()),
         skill: None,
         attachments: vec![attachment()],
@@ -430,7 +430,7 @@ fn github_auth_completed_retries_stored_initial_run_request() {
             assert_eq!(request.prompt.as_deref(), Some("retry this"));
             assert_eq!(request.attachments.len(), 1);
             assert_eq!(request.interactive, Some(true));
-            assert_eq!(request.team, Some(true));
+            assert_eq!(request.scope, AgentRunScope::Team(ServerId::from(456)));
             assert_eq!(request.parent_run_id.as_deref(), Some("parent-run-123"));
             assert_eq!(request.title.as_deref(), Some("Retry title"));
             assert_eq!(request.agent_identity_uid.as_deref(), Some("agent-123"));

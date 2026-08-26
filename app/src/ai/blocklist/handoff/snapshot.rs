@@ -10,10 +10,12 @@ use warpui::{SingletonEntity, ViewContext};
 use crate::ai::agent_sdk::driver::upload_snapshot_for_handoff;
 use crate::ai::blocklist::handoff::touched_repos::{TouchedWorkspace, derive_touched_workspace};
 use crate::remote_server::manager::RemoteServerManager;
+use crate::server::ids::ServerId;
 use crate::server::server_api::ServerApiProvider;
 use crate::server::server_api::ai::{AIClient, InitialSnapshotToken};
 use crate::terminal::model::session::SessionId;
 use crate::workspace::Workspace;
+use crate::workspaces::user_workspaces::{TeamScope as _, UserWorkspaces};
 
 // ---------------------------------------------------------------------------
 // Types
@@ -41,10 +43,16 @@ pub enum SnapshotUploadTarget {
     Local {
         ai_client: Arc<dyn AIClient>,
         http: Arc<http_client::Client>,
+        /// Captured from the source view's window when the handoff started; not the source
+        /// conversation's resource team, since none has been established yet at this point.
+        team_uid: Option<ServerId>,
     },
     /// Delegate to the remote server daemon via `UploadHandoffSnapshot` RPC.
     Remote {
         handle: remote_server::manager::HostRequestHandle,
+        /// Captured from the source view's window when the handoff started; forwarded to the
+        /// daemon so it can pass the same scope through to the upload-target allocation.
+        team_uid: Option<ServerId>,
     },
 }
 
@@ -116,14 +124,21 @@ pub(super) async fn upload_handoff_snapshot(
     target: SnapshotUploadTarget,
 ) -> (TouchedWorkspace, Result<HandoffUploadResult, anyhow::Error>) {
     match target {
-        SnapshotUploadTarget::Remote { handle } => {
-            let result = match handle.upload_handoff_snapshot(paths).await {
+        SnapshotUploadTarget::Remote { handle, team_uid } => {
+            let result = match handle
+                .upload_handoff_snapshot(paths, team_uid.map(|uid| uid.uid()))
+                .await
+            {
                 Ok(resp) => try_upload_result_from_proto(resp),
                 Err(err) => Err(anyhow::anyhow!(err).context("Remote handoff snapshot RPC failed")),
             };
             (TouchedWorkspace::default(), result)
         }
-        SnapshotUploadTarget::Local { ai_client, http } => {
+        SnapshotUploadTarget::Local {
+            ai_client,
+            http,
+            team_uid,
+        } => {
             let local_paths: Vec<PathBuf> =
                 paths.iter().map(|sp| sp.to_local_path_lossy()).collect();
             let workspace = derive_touched_workspace(local_paths).await;
@@ -133,6 +148,7 @@ pub(super) async fn upload_handoff_snapshot(
                 workspace.orphan_files.clone(),
                 ai_client,
                 http.as_ref(),
+                team_uid,
             )
             .await;
             let result = match upload_result {
@@ -154,15 +170,22 @@ pub(crate) fn resolve_upload_target(
     let host_id = RemoteServerManager::as_ref(ctx)
         .host_id_for_session(session_id)
         .cloned();
+    // Captured once for either branch: the window's selected team at the moment the handoff
+    // started, not re-resolved after any await.
+    let team_uid = UserWorkspaces::as_ref(ctx)
+        .team_context_for_view(ctx)
+        .team_uid();
     match host_id {
         Some(host_id) => SnapshotUploadTarget::Remote {
             handle: RemoteServerManager::as_ref(ctx).host_request_handle(&host_id),
+            team_uid,
         },
         None => {
             let server_api_provider = ServerApiProvider::as_ref(ctx);
             SnapshotUploadTarget::Local {
                 ai_client: server_api_provider.get_ai_client(),
                 http: server_api_provider.get_http_client(),
+                team_uid,
             }
         }
     }

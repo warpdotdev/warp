@@ -1655,8 +1655,13 @@ impl LLMPreferences {
         }
 
         let ai_api_client = ServerApiProvider::as_ref(ctx).get_ai_client();
+        // TODO(multi-team): `LLMPreferences` is a process-global singleton with no per-team
+        // storage yet (that's PR 3A's scope, see specs/multi-team-context/TECH.md), so this
+        // refresh has no team to scope to and keeps passing `None`. Supplying one later would
+        // need `X-Warp-Team-Uid` to actually scope the server's active team; the response
+        // array itself does not vary per team today (see `select_feature_model_choice_workspace_index`).
         ctx.spawn(
-            async move { ai_api_client.get_feature_model_choices().await },
+            async move { ai_api_client.get_feature_model_choices(None).await },
             |me, result, ctx| match result {
                 Ok(update) => {
                     if update != me.models_by_feature {

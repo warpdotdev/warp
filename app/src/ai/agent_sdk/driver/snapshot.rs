@@ -44,6 +44,7 @@ use warpui::r#async::executor::Background;
 
 use crate::ai::agent_sdk::retry::with_bounded_retry;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
+use crate::server::ids::ServerId;
 use crate::server::server_api::ai::{
     AIClient, InitialSnapshotToken, SnapshotUploadFileInfo as AiSnapshotUploadFileInfo,
     UploadLocalHandoffSnapshotRequest,
@@ -828,6 +829,7 @@ pub(crate) async fn upload_snapshot_for_handoff(
     orphan_file_paths: Vec<PathBuf>,
     client: Arc<dyn AIClient>,
     http: &http_client::Client,
+    team_uid: Option<ServerId>,
 ) -> Result<Option<InitialSnapshotToken>> {
     if repo_paths.is_empty() && orphan_file_paths.is_empty() {
         log::info!("Handoff snapshot has no declarations; skipping upload");
@@ -883,7 +885,7 @@ pub(crate) async fn upload_snapshot_for_handoff(
             .collect(),
     };
     let response = client
-        .upload_local_handoff_snapshot(upload_request)
+        .upload_local_handoff_snapshot(upload_request, team_uid)
         .await
         .context("failed to allocate initial snapshot token")?;
     log::info!(

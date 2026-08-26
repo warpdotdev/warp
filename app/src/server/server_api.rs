@@ -66,6 +66,7 @@ use crate::ai::predict::{generate_ai_input_suggestions, generate_am_query_sugges
 use crate::ai::voice::transcribe::{TranscribeRequest, TranscribeResponse};
 use crate::auth::auth_manager::AuthManager;
 use crate::auth::auth_state::AuthState;
+use crate::server::ids::ServerId;
 use crate::server::team_scope::RequestTeamScope;
 use crate::server::telemetry::TelemetryApi;
 use crate::settings::PrivacySettingsSnapshot;
@@ -567,6 +568,29 @@ impl ServerApi {
         )
     }
 
+    /// Same as [`Self::send_graphql_request`], with additional caller-supplied headers (e.g.
+    /// `X-Warp-Team-Uid`, built via [`Self::team_uid_header`]) attached to the request.
+    pub(crate) fn send_graphql_request_with_headers<
+        'a,
+        QF,
+        O: warp_graphql::client::Operation<QF> + Send + 'a,
+    >(
+        &'a self,
+        operation: O,
+        timeout: Option<Duration>,
+        extra_headers: Vec<(String, String)>,
+    ) -> BoxFuture<'a, Result<QF>>
+    where
+        QF: 'a,
+    {
+        warp_server_client::graphql_helpers::send_graphql_request_with_headers(
+            &self.base_client,
+            operation,
+            timeout,
+            extra_headers,
+        )
+    }
+
     /// Opens an SSE stream to the agent event-push endpoint.
     ///
     /// The returned `EventSourceStream` yields `reqwest_eventsource::Event`
@@ -691,6 +715,21 @@ impl ServerApi {
     where
         B: Serialize,
     {
+        self.post_public_api_response_with_headers(path, body, &[])
+            .await
+    }
+
+    /// Same as [`Self::post_public_api_response`], with additional caller-supplied headers
+    /// (e.g. `X-Warp-Team-Uid`) attached alongside the ambient headers.
+    async fn post_public_api_response_with_headers<B>(
+        &self,
+        path: &str,
+        body: &B,
+        extra_headers: &[(String, String)],
+    ) -> Result<http_client::Response>
+    where
+        B: Serialize,
+    {
         let auth_token = self
             .get_or_refresh_access_token()
             .await
@@ -704,6 +743,9 @@ impl ServerApi {
         }
 
         for (name, value) in self.ambient_agent_headers().await? {
+            request = request.header(name, value);
+        }
+        for (name, value) in extra_headers {
             request = request.header(name, value);
         }
 
@@ -779,12 +821,39 @@ impl ServerApi {
         B: Serialize,
         R: serde::de::DeserializeOwned,
     {
-        let response = self.post_public_api_response(path, body).await?;
+        self.post_public_api_with_headers(path, body, &[]).await
+    }
+
+    /// Same as [`Self::post_public_api`], with additional caller-supplied headers attached.
+    async fn post_public_api_with_headers<B, R>(
+        &self,
+        path: &str,
+        body: &B,
+        extra_headers: &[(String, String)],
+    ) -> Result<R>
+    where
+        B: Serialize,
+        R: serde::de::DeserializeOwned,
+    {
+        let response = self
+            .post_public_api_response_with_headers(path, body, extra_headers)
+            .await?;
         let url = response.url().clone();
         response
             .json::<R>()
             .await
             .with_context(|| format!("Failed to deserialize response from {url}"))
+    }
+
+    /// Builds the `X-Warp-Team-Uid` header pair for a request scoped to `team_uid`, or no
+    /// headers when the operation is not team-scoped. Shared by every bucket-2 transport path
+    /// (REST and GraphQL) that needs to send the same team into a request; see
+    /// `specs/multi-team-api-context/TECH.md`.
+    pub(crate) fn team_uid_header(team_uid: Option<ServerId>) -> Vec<(String, String)> {
+        team_uid
+            .map(|uid| (TEAM_UID_HEADER.to_string(), uid.uid()))
+            .into_iter()
+            .collect()
     }
 
     /// Sends a PUT request to a public API endpoint and returns the raw response on success.

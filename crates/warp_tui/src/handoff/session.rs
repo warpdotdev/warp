@@ -5,8 +5,8 @@
 //! session-specific outcomes such as restoring input or persisting the
 //! completed card into the transcript.
 
-use warp::tui_export::{HandoffRestoration, record_static_slash_command_accepted};
-use warpui_core::{AppContext, ViewContext, ViewHandle};
+use warp::tui_export::{HandoffRestoration, UserWorkspaces, record_static_slash_command_accepted};
+use warpui_core::{AppContext, SingletonEntity, ViewContext, ViewHandle};
 
 use super::TuiTerminalSessionView;
 use crate::handoff::{
@@ -27,6 +27,9 @@ impl TuiTerminalSessionView {
             return;
         }
         let current_working_directory = self.current_working_directory(ctx);
+        // Captured from the source view's window when the handoff started, matching the
+        // GUI's `resolve_upload_target`: the window's live team, not an account default.
+        let team_uid = UserWorkspaces::as_ref(ctx).team_uid_for_window(ctx.window_id());
         let model = match TuiHandoffModel::new(
             self.terminal_surface_id,
             self.terminal_model.clone(),
@@ -34,6 +37,7 @@ impl TuiTerminalSessionView {
             self.ai_context_model.clone(),
             current_working_directory,
             argument.cloned(),
+            team_uid,
             ctx,
         ) {
             Ok(model) => model,
