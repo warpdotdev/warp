@@ -154,12 +154,10 @@ use crate::ai_assistant::{AIGeneratedCommand, GenerateCommandsFromNaturalLanguag
 use crate::drive::workflows::ai_assist::{GeneratedCommandMetadata, GeneratedCommandMetadataError};
 use crate::persistence::model::ConversationUsageMetadata;
 use crate::server::graphql::{get_request_context, get_user_facing_error_message};
+use crate::server::ids::ServerId;
 use crate::terminal::model::block::SerializedBlock;
 #[cfg(not(feature = "agent_mode_evals"))]
-use crate::{
-    server::ids::ServerId,
-    workspaces::{gql_convert::PLACEHOLDER_WORKSPACE_UID, workspace::WorkspaceUid},
-};
+use crate::workspaces::{gql_convert::PLACEHOLDER_WORKSPACE_UID, workspace::WorkspaceUid};
 
 const AI_ASSISTANT_REQUEST_TIMEOUT_SECONDS: u64 = 30;
 
@@ -204,6 +202,51 @@ impl TaskStatusUpdate {
     }
 }
 
+/// The execution scope for a new agent run. Replaces the ambiguous `team: Option<bool>`
+/// boolean previously constructed directly at call sites, while preserving all three wire
+/// states it could take on `POST /agent/run`'s `team` field — they are not equivalent, since
+/// the server treats an omitted value as its own default (team ownership for a single-team
+/// account) rather than as personal:
+/// - `Unspecified` omits `team` entirely: the caller expressed no preference (e.g. no
+///   `--team`/`--personal` flag), so the server applies its own default.
+/// - `Personal` sends `team: false`: the caller explicitly asked for personal ownership.
+/// - `Team(uid)` sends `team: true` plus `uid` in the `X-Warp-Team-Uid` header.
+///
+/// See `specs/multi-team-api-context/TECH.md`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AgentRunScope {
+    Unspecified,
+    Personal,
+    Team(ServerId),
+}
+
+impl AgentRunScope {
+    fn is_unspecified(&self) -> bool {
+        matches!(self, Self::Unspecified)
+    }
+
+    fn team_uid(self) -> Option<ServerId> {
+        match self {
+            Self::Unspecified | Self::Personal => None,
+            Self::Team(team_uid) => Some(team_uid),
+        }
+    }
+}
+
+impl serde::Serialize for AgentRunScope {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        match self {
+            // `skip_serializing_if` omits this variant before the serializer is ever reached.
+            Self::Unspecified => serializer.serialize_bool(false),
+            Self::Personal => serializer.serialize_bool(false),
+            Self::Team(_) => serializer.serialize_bool(true),
+        }
+    }
+}
+
 /// JSON payload sent to the public `POST /agent/run` API.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct SpawnAgentRequest {
@@ -217,8 +260,8 @@ pub struct SpawnAgentRequest {
     pub config: Option<AgentConfigSnapshot>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub team: Option<bool>,
+    #[serde(rename = "team", skip_serializing_if = "AgentRunScope::is_unspecified")]
+    pub scope: AgentRunScope,
     /// Agent identity UID to use as the execution principal for the run.
     #[serde(rename = "agent_identity_uid", skip_serializing_if = "Option::is_none")]
     pub agent_identity_uid: Option<String>,
@@ -2202,7 +2245,10 @@ impl AIClient for ServerApi {
         &self,
         request: SpawnAgentRequest,
     ) -> anyhow::Result<SpawnAgentResponse, anyhow::Error> {
-        let response: SpawnAgentResponse = self.post_public_api("agent/run", &request).await?;
+        let extra_headers = Self::team_uid_header(request.scope.team_uid());
+        let response: SpawnAgentResponse = self
+            .post_public_api_with_headers("agent/run", &request, &extra_headers)
+            .await?;
         Ok(response)
     }
 

@@ -178,7 +178,10 @@ fn resolve_team_uid(scope: &ObjectScope, ctx: &AppContext) -> anyhow::Result<Ser
 
 /// The team a CLI command's policy reads are scoped to, resolved from the same `--team` the
 /// object's owner is resolved from so the two cannot disagree.
-fn resolve_team_scope(scope: &ObjectScope, ctx: &AppContext) -> anyhow::Result<TeamScopeForCli> {
+pub(super) fn resolve_team_scope(
+    scope: &ObjectScope,
+    ctx: &AppContext,
+) -> anyhow::Result<TeamScopeForCli> {
     let team_uid = resolve_team_uid(scope, ctx)?;
     UserWorkspaces::as_ref(ctx)
         .team_scope_for_cli(team_uid)

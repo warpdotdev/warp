@@ -101,6 +101,15 @@ impl TeamScope for TeamScopeForCli {
     }
 }
 
+#[cfg(not(target_family = "wasm"))]
+impl TeamScopeForCli {
+    /// The team the command line named. Definite, unlike [`TeamScope::team_uid`], which is
+    /// optional only because a window may have no team selected.
+    pub(crate) fn uid(&self) -> ServerId {
+        self.0
+    }
+}
+
 /// A teamless [`TeamScope`] for tests that pass a scope without standing up a window.
 #[cfg(test)]
 pub(crate) struct TeamlessScopeForTest;

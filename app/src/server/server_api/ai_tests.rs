@@ -2,12 +2,13 @@ use chrono::{TimeZone, Utc};
 use futures::executor::block_on;
 use itertools::Itertools;
 use mockito::{Matcher, Server};
-use warp_server_client::base_client::CLOUD_AGENT_ID_HEADER;
+use warp_core::channel::ChannelState;
+use warp_server_client::base_client::{CLOUD_AGENT_ID_HEADER, TEAM_UID_HEADER};
 
 use super::super::ServerApi;
 use super::{
-    AgentMessageHeader, AgentRunEvent, AgentSource, AmbientAgentTaskState, Artifact,
-    ArtifactDownloadResponse, ArtifactType, CONNECTED_SELF_HOSTED_WORKERS_PATH,
+    AIClient, AgentMessageHeader, AgentRunEvent, AgentRunScope, AgentSource, AmbientAgentTaskState,
+    Artifact, ArtifactDownloadResponse, ArtifactType, CONNECTED_SELF_HOSTED_WORKERS_PATH,
     ConnectedSelfHostedWorker, ExecutionLocation, ForkConversationResponse,
     ListConnectedSelfHostedWorkersResponse, ListRunsResponse, PrepareAttachmentUploadsResponse,
     ReadAgentMessageResponse, RunFollowupRequest, RunSortBy, RunSortOrder, SpawnAgentRequest,
@@ -15,7 +16,63 @@ use super::{
     build_list_agent_runs_url, build_run_followup_url,
 };
 use crate::notebooks::NotebookId;
+use crate::server::ids::ServerId;
 use crate::server::server_api::presigned_upload::upload_to_target;
+
+fn spawn_request_with_scope(scope: AgentRunScope) -> SpawnAgentRequest {
+    SpawnAgentRequest {
+        prompt: Some("hello".to_string()),
+        mode: UserQueryMode::Normal,
+        config: None,
+        title: None,
+        scope,
+        agent_identity_uid: None,
+        skill: None,
+        attachments: vec![],
+        interactive: None,
+        parent_run_id: None,
+        runtime_skills: vec![],
+        referenced_attachments: vec![],
+        conversation_id: None,
+        initial_snapshot_token: None,
+        snapshot_disabled: None,
+        orchestration_handoff: None,
+    }
+}
+
+/// Regression coverage for the trap this PR calls out explicitly: nothing else would catch a
+/// dropped or wrong `X-Warp-Team-Uid` header, or the header leaking onto a non-team request,
+/// since the wire body alone (`team: true`) does not carry the UID.
+#[test]
+fn spawn_agent_sends_matching_team_uid_header_and_body_flag_only_when_team_scoped() {
+    let team_uid = ServerId::from(42);
+    let _team_request = {
+        let mut server = ChannelState::mock_server();
+        server
+            .mock("POST", "/api/v1/agent/run")
+            .match_header(TEAM_UID_HEADER, team_uid.uid().as_str())
+            .match_body(Matcher::PartialJson(serde_json::json!({ "team": true })))
+            .with_status(200)
+            .with_body(r#"{"task_id":"550e8400-e29b-41d4-a716-446655440000","run_id":"run-1"}"#)
+            .create()
+    };
+    let server_api = ServerApi::new_for_test();
+    block_on(server_api.spawn_agent(spawn_request_with_scope(AgentRunScope::Team(team_uid))))
+        .expect("team-scoped spawn should succeed against the matching mock");
+
+    let _personal_request = {
+        let mut server = ChannelState::mock_server();
+        server
+            .mock("POST", "/api/v1/agent/run")
+            .match_header(TEAM_UID_HEADER, Matcher::Missing)
+            .match_body(Matcher::PartialJson(serde_json::json!({ "team": false })))
+            .with_status(200)
+            .with_body(r#"{"task_id":"550e8400-e29b-41d4-a716-446655440001","run_id":"run-2"}"#)
+            .create()
+    };
+    block_on(server_api.spawn_agent(spawn_request_with_scope(AgentRunScope::Personal)))
+        .expect("personal spawn should succeed against the matching mock");
+}
 
 #[test]
 fn ambient_agent_headers_for_task_overrides_existing_cloud_agent_header() {
@@ -48,7 +105,7 @@ fn spawn_agent_request_serializes_agent_uid_as_agent_identity_uid() {
         mode: UserQueryMode::Normal,
         config: None,
         title: None,
-        team: None,
+        scope: AgentRunScope::Personal,
         agent_identity_uid: Some("agent_123".to_string()),
         skill: None,
         attachments: vec![],
@@ -69,6 +126,51 @@ fn spawn_agent_request_serializes_agent_uid_as_agent_identity_uid() {
         Some("agent_123")
     );
     assert!(value.get("agent_uid").is_none());
+}
+
+#[test]
+fn spawn_agent_request_serializes_all_three_scope_wire_states() {
+    fn request(scope: AgentRunScope) -> SpawnAgentRequest {
+        SpawnAgentRequest {
+            prompt: None,
+            mode: UserQueryMode::Normal,
+            config: None,
+            title: None,
+            scope,
+            agent_identity_uid: None,
+            skill: None,
+            attachments: vec![],
+            interactive: None,
+            parent_run_id: None,
+            runtime_skills: vec![],
+            referenced_attachments: vec![],
+            conversation_id: None,
+            initial_snapshot_token: None,
+            snapshot_disabled: None,
+            orchestration_handoff: None,
+        }
+    }
+
+    // `Unspecified` matches the old omitted-`team`-field wire shape (`team: None`); the server
+    // applies its own default for this case rather than treating it as personal.
+    let unspecified_value = serde_json::to_value(request(AgentRunScope::Unspecified)).unwrap();
+    assert!(unspecified_value.get("team").is_none());
+
+    // `Personal` matches the old explicit `team: Some(false)` wire shape. This is NOT the same
+    // as omitting the field: an omitted value resolves to team ownership by default for a
+    // single-team account, so collapsing `Personal` into an omission would silently start
+    // producing team-owned runs for `--personal`.
+    let personal_value = serde_json::to_value(request(AgentRunScope::Personal)).unwrap();
+    assert_eq!(
+        personal_value.get("team").and_then(|v| v.as_bool()),
+        Some(false)
+    );
+
+    // `Team` matches the old `team: Some(true)` wire shape; the raw UID never appears on the
+    // wire itself (it goes into the `X-Warp-Team-Uid` header, built separately by
+    // `ServerApi::team_uid_header`).
+    let team_value = serde_json::to_value(request(AgentRunScope::Team(ServerId::from(1)))).unwrap();
+    assert_eq!(team_value.get("team").and_then(|v| v.as_bool()), Some(true));
 }
 
 #[test]
@@ -126,7 +228,7 @@ fn spawn_agent_request_omits_prompt_when_none() {
         mode: UserQueryMode::Normal,
         config: None,
         title: None,
-        team: None,
+        scope: AgentRunScope::Personal,
         agent_identity_uid: None,
         skill: None,
         attachments: vec![],

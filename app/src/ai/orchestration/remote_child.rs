@@ -29,7 +29,7 @@ use crate::ai::blocklist::StartAgentRequest;
 #[cfg(not(target_family = "wasm"))]
 use crate::ai::skills::resolve_skill_spec;
 use crate::ai::skills::{SkillManager, SkillReference};
-use crate::server::server_api::ai::{AgentConfigSnapshot, SpawnAgentRequest};
+use crate::server::server_api::ai::{AgentConfigSnapshot, AgentRunScope, SpawnAgentRequest};
 use crate::server::server_api::{AIApiError, ClientError, CloudAgentCapacityError};
 use crate::settings::PrivacySettings;
 use crate::workspaces::user_workspaces::UserWorkspaces;
@@ -293,7 +293,9 @@ pub fn prepare_remote_child_launch(
             ..Default::default()
         }),
         title: (!title.is_empty()).then_some(title),
-        team: None,
+        // A remote child inherits scope from `parent_run_id` server-side; preserves the
+        // pre-existing omitted-scope wire behavior rather than forcing personal ownership.
+        scope: AgentRunScope::Unspecified,
         skill: None,
         attachments: Vec::new(),
         interactive: Some(true),

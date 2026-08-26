@@ -33,7 +33,7 @@ use crate::editor::InteractionState;
 use crate::pane_group::{BackingView, PaneConfigurationEvent};
 use crate::server::ids::ServerId;
 #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
-use crate::server::server_api::ai::SpawnAgentRequest;
+use crate::server::server_api::ai::{AgentRunScope, SpawnAgentRequest};
 use crate::terminal::TerminalView;
 use crate::terminal::model::blocks::{INLINE_BANNER_HEIGHT, ToTotalIndex as _};
 use crate::terminal::model::terminal_model::ConversationTranscriptViewerStatus;
@@ -939,7 +939,7 @@ fn handoff_request_for_test() -> SpawnAgentRequest {
         mode: UserQueryMode::Normal,
         config: None,
         title: None,
-        team: None,
+        scope: AgentRunScope::Personal,
         agent_identity_uid: None,
         skill: None,
         attachments: Vec::new(),

@@ -32,6 +32,16 @@ impl BaseClient {
     /// Unlike [`get_public_api`], this does not attempt JSON deserialization on the
     /// response body, allowing the caller to decode it however they need.
     pub async fn get_public_api_response(&self, path: &str) -> Result<http_client::Response> {
+        self.get_public_api_response_with_headers(path, &[]).await
+    }
+
+    /// Same as [`get_public_api_response`], with additional caller-supplied headers (e.g.
+    /// `X-Warp-Team-Uid`) attached alongside the ambient headers.
+    pub async fn get_public_api_response_with_headers(
+        &self,
+        path: &str,
+        extra_headers: &[(String, String)],
+    ) -> Result<http_client::Response> {
         let auth_token = self
             .get_or_refresh_access_token()
             .await
@@ -45,6 +55,9 @@ impl BaseClient {
             .ambient_headers(AmbientHeaderPolicy::inherit_all())
             .await?
         {
+            request = request.header(name, value);
+        }
+        for (name, value) in extra_headers {
             request = request.header(name, value);
         }
 
@@ -81,7 +94,21 @@ impl BaseClient {
     where
         R: DeserializeOwned,
     {
-        let response = self.get_public_api_response(path).await?;
+        self.get_public_api_with_headers(path, &[]).await
+    }
+
+    /// Same as [`get_public_api`], with additional caller-supplied headers attached.
+    pub async fn get_public_api_with_headers<R>(
+        &self,
+        path: &str,
+        extra_headers: &[(String, String)],
+    ) -> Result<R>
+    where
+        R: DeserializeOwned,
+    {
+        let response = self
+            .get_public_api_response_with_headers(path, extra_headers)
+            .await?;
         let response_url = response.url().clone();
         response
             .json::<R>()

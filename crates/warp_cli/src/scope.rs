@@ -1,6 +1,6 @@
 use clap::Args;
 
-/// Common args for scoping objects to team or personal drives.
+/// Common args for choosing whether a command scoped to a team or as the caller's own account.
 ///
 /// `--team` is optional-valued so it answers both "team or personal?" and "which team?":
 /// absent, bare `--team` (your sole team), or `--team=<UID>` when you are on several.
