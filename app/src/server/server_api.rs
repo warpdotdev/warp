@@ -48,6 +48,7 @@ use warp_server_client::HttpStatusError;
 use warp_server_client::auth::{AuthClientImpl, AuthEvent, EXPERIMENT_ID_HEADER};
 use warp_server_client::base_client::{
     AmbientHeaderPolicy, AuthenticatedGraphqlConfig, BaseClient, GraphqlRoutingConfig,
+    TEAM_UID_HEADER,
 };
 use warp_server_client::iap::{IapManager, IapState};
 use warp_server_client::network_logging::NetworkLogModel;
@@ -65,6 +66,7 @@ use crate::ai::predict::{generate_ai_input_suggestions, generate_am_query_sugges
 use crate::ai::voice::transcribe::{TranscribeRequest, TranscribeResponse};
 use crate::auth::auth_manager::AuthManager;
 use crate::auth::auth_state::AuthState;
+use crate::server::team_scope::RequestTeamScope;
 use crate::server::telemetry::TelemetryApi;
 use crate::settings::PrivacySettingsSnapshot;
 use crate::{ChannelState, settings_view};
@@ -1087,6 +1089,7 @@ impl ServerApi {
     pub async fn generate_am_query_suggestions(
         &self,
         request: &GenerateAMQuerySuggestionsRequest,
+        team_scope: RequestTeamScope,
     ) -> Result<generate_am_query_suggestions::GenerateAMQuerySuggestionsResponse, AIApiError> {
         let auth_token = self.get_or_refresh_access_token().await?;
 
@@ -1104,19 +1107,21 @@ impl ServerApi {
             }
         }
 
-        let request_builder = self.base_client.http_client().post(url);
-        let response = if let Some(token) = auth_token.as_bearer_token() {
-            request_builder.bearer_auth(token)
-        } else {
-            request_builder
+        let mut request_builder = self.base_client.http_client().post(url);
+        if let Some(token) = auth_token.as_bearer_token() {
+            request_builder = request_builder.bearer_auth(token);
         }
-        .json(request)
-        .send()
-        .await?
-        .error_for_status_with_body()
-        .await?
-        .json()
-        .await?;
+        if let Some(team_uid) = team_scope.team_uid() {
+            request_builder = request_builder.header(TEAM_UID_HEADER, team_uid.uid());
+        }
+        let response = request_builder
+            .json(request)
+            .send()
+            .await?
+            .error_for_status_with_body()
+            .await?
+            .json()
+            .await?;
         Ok(response)
     }
 
