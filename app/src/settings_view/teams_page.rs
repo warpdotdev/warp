@@ -1159,10 +1159,9 @@ impl TeamsPageView {
         target: TeamActionConfirmationTarget,
         ctx: &mut ViewContext<Self>,
     ) {
-        // The transfer-ownership modal does not block the member list behind it, so an owner can
-        // reach a member action while it is up. Only one modal renders, so close it rather than
-        // leaving a confirmation queued behind it for a target the user has moved on from.
-        self.transfer_ownership_modal_state.close();
+        // Only one modal renders (see `get_modal_content`), so opening one must clear the other
+        // rather than leave it queued behind for a target the user has moved on from.
+        self.clear_transfer_ownership_modal(ctx);
         self.pending_team_action_confirmation = Some(target);
         self.open_member_actions_menu_index = None;
         self.team_action_confirmation_dialog
@@ -1190,6 +1189,7 @@ impl TeamsPageView {
     }
 
     fn confirm_pending_team_action(&mut self, ctx: &mut ViewContext<Self>) {
+        // Take the target first: hiding clears it.
         let target = self.pending_team_action_confirmation.take();
         self.hide_team_action_confirmation(ctx);
         let Some(target) = target else {
@@ -1306,8 +1306,16 @@ impl TeamsPageView {
         }
     }
 
-    fn close_transfer_ownership_modal(&mut self, ctx: &mut ViewContext<Self>) {
+    /// Closes the transfer-ownership modal and takes back the focus it was given on open, so
+    /// Escape stops dispatching into a view that is no longer rendered. Announcing the change is
+    /// the caller's job, as it is for [`Self::clear_team_action_confirmation`].
+    fn clear_transfer_ownership_modal(&mut self, ctx: &mut ViewContext<Self>) {
         self.transfer_ownership_modal_state.close();
+        ctx.focus_self();
+    }
+
+    fn close_transfer_ownership_modal(&mut self, ctx: &mut ViewContext<Self>) {
+        self.clear_transfer_ownership_modal(ctx);
         ctx.emit(TeamsPageViewEvent::ModalVisibilityChanged);
         ctx.notify();
     }
