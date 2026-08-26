@@ -574,6 +574,38 @@ fn root_view_for_join_test(app: &mut App) -> ViewHandle<RootView> {
     root_view
 }
 
+/// Drives `join_shared_session_in_existing_window` and asserts the link was reported as
+/// handled. Shared by every test below so each keeps its own `#[test]` function - and
+/// therefore names the specific state that broke - without repeating this boilerplate.
+fn act_join_shared_session(
+    app: &mut App,
+    root_view: &ViewHandle<RootView>,
+    session_id: SessionId,
+    case: &str,
+) {
+    let handled = root_view.update(app, |root_view, ctx| {
+        root_view.join_shared_session_in_existing_window(&session_id, ctx)
+    });
+    assert!(handled, "{case}: expected the link to be handled");
+}
+
+/// For the pre-`Terminal` states that own a *pending* (not yet created) workspace: asserts
+/// the link retargeted that pending workspace and left the enclosing state pre-`Terminal`.
+fn assert_join_shared_session_retargets_pending(
+    app: &mut App,
+    root_view: &ViewHandle<RootView>,
+    session_id: SessionId,
+    case: &str,
+) {
+    act_join_shared_session(app, root_view, session_id, case);
+    app.read(|ctx| {
+        let state = &root_view.as_ref(ctx).auth_onboarding_state;
+        let target = pending_target(state)
+            .unwrap_or_else(|| panic!("{case}: expected to remain pre-terminal"));
+        assert_pending_workspace_retargeted(target, session_id, case);
+    });
+}
+
 /// Regression test: `RootView::join_shared_session_in_existing_window` used to silently
 /// drop a shared-session deep link while auth had not yet completed ("Auth not complete
 /// before trying to join shared session"). `Auth` owns its pending workspace directly, so
@@ -589,11 +621,7 @@ fn join_shared_session_in_existing_window_retargets_pending_auth_workspace() {
             root_view.auth_onboarding_state = AuthOnboardingState::Auth(args);
         });
 
-        let handled = root_view.update(&mut app, |root_view, ctx| {
-            root_view.join_shared_session_in_existing_window(&session_id, ctx)
-        });
-
-        assert!(handled, "expected the link to be handled");
+        act_join_shared_session(&mut app, &root_view, session_id, "Auth");
         app.read(|ctx| {
             let AuthOnboardingState::Auth(args) = &root_view.as_ref(ctx).auth_onboarding_state
             else {
@@ -625,21 +653,12 @@ fn join_shared_session_in_existing_window_retargets_pending_onboarding_workspace
             };
         });
 
-        let handled = root_view.update(&mut app, |root_view, ctx| {
-            root_view.join_shared_session_in_existing_window(&session_id, ctx)
-        });
-
-        assert!(handled, "expected the link to be handled");
-        app.read(|ctx| {
-            let state = &root_view.as_ref(ctx).auth_onboarding_state;
-            assert!(
-                matches!(state, AuthOnboardingState::Onboarding { .. }),
-                "expected to remain in Onboarding"
-            );
-            let target =
-                pending_target(state).unwrap_or_else(|| panic!("expected a pending target"));
-            assert_pending_workspace_retargeted(target, session_id, "Onboarding");
-        });
+        assert_join_shared_session_retargets_pending(
+            &mut app,
+            &root_view,
+            session_id,
+            "Onboarding",
+        );
     });
 }
 
@@ -671,21 +690,12 @@ fn join_shared_session_in_existing_window_retargets_pending_login_slide_workspac
             };
         });
 
-        let handled = root_view.update(&mut app, |root_view, ctx| {
-            root_view.join_shared_session_in_existing_window(&session_id, ctx)
-        });
-
-        assert!(handled, "expected the link to be handled");
-        app.read(|ctx| {
-            let state = &root_view.as_ref(ctx).auth_onboarding_state;
-            assert!(
-                matches!(state, AuthOnboardingState::LoginSlide { .. }),
-                "expected to remain in LoginSlide"
-            );
-            let target =
-                pending_target(state).unwrap_or_else(|| panic!("expected a pending target"));
-            assert_pending_workspace_retargeted(target, session_id, "LoginSlide");
-        });
+        assert_join_shared_session_retargets_pending(
+            &mut app,
+            &root_view,
+            session_id,
+            "LoginSlide",
+        );
     });
 }
 
@@ -707,21 +717,12 @@ fn join_shared_session_in_existing_window_retargets_pending_post_auth_onboarding
             };
         });
 
-        let handled = root_view.update(&mut app, |root_view, ctx| {
-            root_view.join_shared_session_in_existing_window(&session_id, ctx)
-        });
-
-        assert!(handled, "expected the link to be handled");
-        app.read(|ctx| {
-            let state = &root_view.as_ref(ctx).auth_onboarding_state;
-            assert!(
-                matches!(state, AuthOnboardingState::PostAuthOnboarding { .. }),
-                "expected to remain in PostAuthOnboarding"
-            );
-            let target =
-                pending_target(state).unwrap_or_else(|| panic!("expected a pending target"));
-            assert_pending_workspace_retargeted(target, session_id, "PostAuthOnboarding");
-        });
+        assert_join_shared_session_retargets_pending(
+            &mut app,
+            &root_view,
+            session_id,
+            "PostAuthOnboarding",
+        );
     });
 }
 
@@ -737,21 +738,12 @@ fn join_shared_session_in_existing_window_retargets_pending_needs_sso_link_works
             root_view.auth_onboarding_state = AuthOnboardingState::NeedsSsoLink(target);
         });
 
-        let handled = root_view.update(&mut app, |root_view, ctx| {
-            root_view.join_shared_session_in_existing_window(&session_id, ctx)
-        });
-
-        assert!(handled, "expected the link to be handled");
-        app.read(|ctx| {
-            let state = &root_view.as_ref(ctx).auth_onboarding_state;
-            assert!(
-                matches!(state, AuthOnboardingState::NeedsSsoLink(_)),
-                "expected to remain in NeedsSsoLink"
-            );
-            let target =
-                pending_target(state).unwrap_or_else(|| panic!("expected a pending target"));
-            assert_pending_workspace_retargeted(target, session_id, "NeedsSsoLink");
-        });
+        assert_join_shared_session_retargets_pending(
+            &mut app,
+            &root_view,
+            session_id,
+            "NeedsSsoLink",
+        );
     });
 }
 
@@ -777,11 +769,7 @@ fn join_shared_session_in_existing_window_promotes_nested_terminal_onboarding_to
             };
         });
 
-        let handled = root_view.update(&mut app, |root_view, ctx| {
-            root_view.join_shared_session_in_existing_window(&session_id, ctx)
-        });
-
-        assert!(handled, "expected the link to be handled");
+        act_join_shared_session(&mut app, &root_view, session_id, "Onboarding (nested)");
         app.read(|ctx| {
             let AuthOnboardingState::Terminal(workspace) =
                 &root_view.as_ref(ctx).auth_onboarding_state
@@ -821,11 +809,7 @@ fn join_shared_session_in_existing_window_joins_directly_when_already_terminal()
                 AuthOnboardingState::Terminal(terminal_workspace.clone());
         });
 
-        let handled = root_view.update(&mut app, |root_view, ctx| {
-            root_view.join_shared_session_in_existing_window(&session_id, ctx)
-        });
-
-        assert!(handled, "expected the link to be handled");
+        act_join_shared_session(&mut app, &root_view, session_id, "Terminal");
         terminal_workspace.read(&app, |workspace, _| {
             assert_eq!(workspace.tab_count(), tab_count_before + 1);
         });
@@ -851,11 +835,7 @@ fn join_shared_session_in_existing_window_keeps_needs_sso_link_blocking_with_liv
             );
         });
 
-        let handled = root_view.update(&mut app, |root_view, ctx| {
-            root_view.join_shared_session_in_existing_window(&session_id, ctx)
-        });
-
-        assert!(handled, "expected the link to be handled");
+        act_join_shared_session(&mut app, &root_view, session_id, "NeedsSsoLink (nested)");
         app.read(|ctx| {
             assert!(
                 matches!(
