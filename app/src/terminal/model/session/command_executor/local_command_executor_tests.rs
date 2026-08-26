@@ -5,18 +5,14 @@ mod unix {
     use std::io::Write as _;
     use std::os::unix::fs::OpenOptionsExt as _;
     use std::path::Path;
-    use std::time::Duration;
 
-    use async_io::Timer;
     use futures_util::future::{AbortHandle, Abortable, Aborted};
-    use instant::Instant;
     use nix::sys::signal::kill;
     use nix::sys::stat::Mode;
     use nix::unistd::{Pid, mkfifo};
+    use warpui::{poll_until, poll_until_true};
 
     use super::super::*;
-
-    const TIMEOUT: Duration = Duration::from_secs(5);
 
     fn executor() -> LocalCommandExecutor {
         LocalCommandExecutor::new(Some("/bin/bash".into()), ShellType::Bash)
@@ -65,47 +61,33 @@ mod unix {
     }
 
     async fn wait_for_file(path: &Path) {
-        let deadline = Instant::now() + TIMEOUT;
-        while !path.exists() {
-            assert!(
-                Instant::now() < deadline,
-                "timed out waiting for {}",
-                path.display()
-            );
-            Timer::after(Duration::from_millis(10)).await;
-        }
+        assert!(
+            poll_until_true(&mut (), |_| path.exists()).await,
+            "timed out waiting for {}",
+            path.display()
+        );
     }
     async fn wait_for_process_exit(pid: Pid) {
-        let deadline = Instant::now() + TIMEOUT;
-        loop {
-            match kill(pid, None) {
-                Err(nix::errno::Errno::ESRCH) => return,
-                Ok(()) | Err(nix::errno::Errno::EPERM) => {}
+        assert!(
+            poll_until_true(&mut (), |_| match kill(pid, None) {
+                Err(nix::errno::Errno::ESRCH) => true,
+                Ok(()) | Err(nix::errno::Errno::EPERM) => false,
                 Err(error) => panic!("failed to inspect descendant {pid}: {error}"),
-            }
-            assert!(
-                Instant::now() < deadline,
-                "timed out waiting for descendant {pid} to exit"
-            );
-            Timer::after(Duration::from_millis(10)).await;
-        }
+            })
+            .await,
+            "timed out waiting for descendant {pid} to exit"
+        );
     }
 
     async fn wait_for_descendant_pid(path: &Path) -> Pid {
-        let deadline = Instant::now() + TIMEOUT;
-        loop {
-            if let Ok(contents) = fs::read_to_string(path)
-                && let Ok(pid) = contents.parse()
-            {
-                return Pid::from_raw(pid);
-            }
-            assert!(
-                Instant::now() < deadline,
-                "timed out waiting for descendant PID in {}",
-                path.display()
-            );
-            Timer::after(Duration::from_millis(10)).await;
-        }
+        poll_until(&mut (), |_| {
+            fs::read_to_string(path)
+                .ok()
+                .and_then(|contents| contents.parse().ok())
+                .map(Pid::from_raw)
+        })
+        .await
+        .unwrap_or_else(|| panic!("timed out waiting for descendant PID in {}", path.display()))
     }
 
     #[test]

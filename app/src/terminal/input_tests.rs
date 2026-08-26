@@ -24,7 +24,7 @@ use warp_util::standardized_path::StandardizedPath;
 use warp_util::user_input::UserInput;
 use warpui::platform::WindowStyle;
 use warpui::text::SelectionType;
-use warpui::{App, ReadModel, UpdateView, WindowId, poll_until};
+use warpui::{App, ReadModel, UpdateView, WindowId, poll_until_true};
 use watcher::HomeDirectoryWatcher;
 use workflows::workflow::{Argument, ArgumentType, Workflow};
 
@@ -3015,7 +3015,7 @@ fn input_tab_does_not_ask_the_shell_when_bundled_specs_are_non_empty() {
         });
 
         assert!(
-            poll_until(&mut app, |app| {
+            poll_until_true(&mut app, |app| {
                 input.read(app, |input, ctx| {
                     input.suggestions_mode_model.as_ref(ctx).is_visible()
                 })
@@ -3058,7 +3058,7 @@ fn input_tab_asks_the_shell_once_when_bundled_specs_are_empty() {
 
         let dispatched = dispatch_count.clone();
         assert!(
-            poll_until(&mut app, move |_| *dispatched.borrow() == 1).await,
+            poll_until_true(&mut app, move |_| *dispatched.borrow() == 1).await,
             "the shell was never asked"
         );
 
