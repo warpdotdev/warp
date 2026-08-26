@@ -532,7 +532,7 @@ impl ResponseStream {
             // xAI auth (there's no BYO xAI key), so a base model whose provider
             // is xAI is exactly a subscription request.
             let uses_grok_subscription = LLMPreferences::as_ref(ctx)
-                .get_llm_info_for_team_uid(params.team_uid, &params.model)
+                .get_llm_info(&params.model)
                 .is_some_and(|info| info.provider == LLMProvider::Xai);
             if uses_grok_subscription {
                 // Both halves, because this branch writes a member credential into `api_keys`,
@@ -587,7 +587,7 @@ impl ResponseStream {
             }
 
             let uses_geap = LLMPreferences::as_ref(ctx)
-                .get_llm_info_for_team_uid(params.team_uid, &params.model)
+                .get_llm_info(&params.model)
                 .is_some_and(|info| {
                     info.host_configs
                         .get(&LLMModelHost::GeminiEnterprise)

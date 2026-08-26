@@ -83,9 +83,7 @@ use crate::view_components::{
     Dropdown, DropdownItem, FilterableDropdown, SubmittableTextInput, SubmittableTextInputEvent,
     WarningBoxConfig, render_warning_box,
 };
-use crate::workspaces::user_workspaces::{
-    ResolvedTeamScope, TeamContext, TeamScope, UserWorkspacesEvent,
-};
+use crate::workspaces::user_workspaces::{ResolvedTeamScope, TeamContext, UserWorkspacesEvent};
 use crate::{TelemetryEvent, UserWorkspaces, send_telemetry_from_ctx};
 
 const AI_SETTINGS_DROPDOWN_WIDTH: f32 = 250.;
@@ -207,8 +205,7 @@ impl AgentProfilesPageView {
         Self::refresh_base_model_menu(&base_model_dropdown, ctx);
 
         let initial_context_window_value = Self::initial_context_window_value(ctx);
-        let scope = UserWorkspaces::as_ref(ctx).team_context(&self_handle, ctx);
-        let clamped_initial = Self::configurable_context_window(&scope, ctx)
+        let clamped_initial = Self::configurable_context_window(ctx)
             .map(|cw| initial_context_window_value.clamp(cw.min, cw.max))
             .unwrap_or(initial_context_window_value);
         let context_window_slider_state = SliderStateHandle::default();
@@ -953,8 +950,7 @@ impl AgentProfilesPageView {
                     self.sync_context_window_editor(ctx, true);
                     return;
                 }
-                let scope = self.team_context(ctx);
-                if let Some(cw) = Self::configurable_context_window(&scope, ctx) {
+                if let Some(cw) = Self::configurable_context_window(ctx) {
                     let buffer_text = self.context_window_editor.as_ref(ctx).buffer_text(ctx);
                     let cleaned: String = buffer_text
                         .chars()
@@ -962,8 +958,7 @@ impl AgentProfilesPageView {
                         .collect();
                     if let Ok(parsed) = cleaned.parse::<u32>() {
                         let clamped = parsed.clamp(cw.min, cw.max);
-                        if Some(clamped) != Self::current_context_window_display_value(&scope, ctx)
-                        {
+                        if Some(clamped) != Self::current_context_window_display_value(ctx) {
                             AIExecutionProfilesModel::handle(ctx).update(
                                 ctx,
                                 |profiles_model, ctx| {
@@ -997,26 +992,19 @@ impl AgentProfilesPageView {
             .clone()
     }
 
-    fn configurable_context_window(
-        scope: &(impl TeamScope + ?Sized),
-        app: &AppContext,
-    ) -> Option<LLMContextWindow> {
-        Self::active_profile_data(app).configurable_context_window(scope, app)
+    fn configurable_context_window(app: &AppContext) -> Option<LLMContextWindow> {
+        Self::active_profile_data(app).configurable_context_window(app)
     }
 
-    fn current_context_window_display_value(
-        scope: &(impl TeamScope + ?Sized),
-        app: &AppContext,
-    ) -> Option<u32> {
-        Self::active_profile_data(app).context_window_display_value(scope, app)
+    fn current_context_window_display_value(app: &AppContext) -> Option<u32> {
+        Self::active_profile_data(app).context_window_display_value(app)
     }
 
-    fn initial_context_window_value(ctx: &ViewContext<Self>) -> u32 {
-        let scope =
-            ResolvedTeamScope::from_scope(&UserWorkspaces::as_ref(ctx).team_context_for_view(ctx));
-        Self::current_context_window_display_value(&scope, ctx).unwrap_or_else(|| {
-            LLMPreferences::as_ref(ctx)
-                .get_active_base_model(&scope, ctx, None)
+    fn initial_context_window_value(app: &AppContext) -> u32 {
+        Self::current_context_window_display_value(app).unwrap_or_else(|| {
+            let team_uid = UserWorkspaces::as_ref(app).inherited_or_default_team_uid(None);
+            LLMPreferences::as_ref(app)
+                .get_active_base_model_for_team_uid(team_uid, app, None)
                 .context_window
                 .default_max
         })
@@ -1024,8 +1012,7 @@ impl AgentProfilesPageView {
 
     fn sync_context_window_editor(&mut self, ctx: &mut ViewContext<Self>, force: bool) {
         self.dragged_context_window_value = None;
-        let scope = self.team_context(ctx);
-        let Some(value) = Self::current_context_window_display_value(&scope, ctx) else {
+        let Some(value) = Self::current_context_window_display_value(ctx) else {
             self.last_synced_context_window_editor_value = None;
             self.context_window_slider_state.reset_offset();
             ctx.notify();
@@ -1617,8 +1604,7 @@ impl TypedActionView for AgentProfilesPageView {
                     self.sync_context_window_editor(ctx, true);
                     return;
                 }
-                let scope = self.team_context(ctx);
-                if Self::configurable_context_window(&scope, ctx).is_some() {
+                if Self::configurable_context_window(ctx).is_some() {
                     self.dragged_context_window_value = Some(*value);
                     let formatted = value.to_string();
                     self.context_window_editor.update(ctx, |editor, ctx| {
@@ -1633,8 +1619,7 @@ impl TypedActionView for AgentProfilesPageView {
                     self.sync_context_window_editor(ctx, true);
                     return;
                 }
-                let scope = self.team_context(ctx);
-                let Some(cw) = Self::configurable_context_window(&scope, ctx) else {
+                let Some(cw) = Self::configurable_context_window(ctx) else {
                     return;
                 };
                 let clamped = (*value).clamp(cw.min, cw.max);
@@ -2392,8 +2377,7 @@ impl AgentsWidget {
         if !ai_settings.is_any_ai_enabled(app) {
             return None;
         }
-        let scope = view.team_context(app);
-        let cw = AgentProfilesPageView::configurable_context_window(&scope, app)?;
+        let cw = AgentProfilesPageView::configurable_context_window(app)?;
         let min = cw.min;
         let max = cw.max;
 
@@ -2428,10 +2412,9 @@ impl AgentsWidget {
             .build()
             .finish();
 
-        let current_value =
-            AgentProfilesPageView::current_context_window_display_value(&scope, app)
-                .unwrap_or(cw.default_max)
-                .clamp(min, max);
+        let current_value = AgentProfilesPageView::current_context_window_display_value(app)
+            .unwrap_or(cw.default_max)
+            .clamp(min, max);
         let slider = appearance
             .ui_builder()
             .slider(view.context_window_slider_state.clone())
@@ -2496,11 +2479,9 @@ impl AgentsWidget {
             .finish();
 
         let mut column = Flex::column().with_child(label).with_child(row);
-        if AgentProfilesPageView::active_profile_data(app).should_show_long_context_pricing_warning(
-            view.dragged_context_window_value,
-            &scope,
-            app,
-        ) {
+        if AgentProfilesPageView::active_profile_data(app)
+            .should_show_long_context_pricing_warning(view.dragged_context_window_value, app)
+        {
             column.add_child(render_warning_box(
                 WarningBoxConfig::formatted_title(long_context_pricing_warning_title()),
                 appearance,

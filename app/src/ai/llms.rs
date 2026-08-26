@@ -1241,42 +1241,12 @@ impl LLMPreferences {
     /// an id (from a profile, a request, a picker selection) usually doesn't have a specific
     /// team in mind either. Falls back to the user's custom-endpoint LLMs when the id isn't a
     /// server-known model id (e.g. when it's a `config_key` UUID).
-    ///
-    /// Prefer [`Self::get_llm_info_for_scope`]/[`Self::get_llm_info_for_team_uid`] instead when
-    /// a scope is already in hand and the result feeds a policy decision rather than display:
-    /// the arbitrary-team match this returns can otherwise show or act on another team's
-    /// `disable_reason`/`host_configs`.
     pub fn get_llm_info(&self, id: &LLMId) -> Option<&LLMInfo> {
         self.models_by_team
             .values()
             .find_map(|state| state.models_by_feature.info_for_id(id))
             .or_else(|| self.custom_llm_info_for_id(id))
             .or_else(|| self.custom_router_llm_info_for_id(id))
-    }
-
-    /// [`Self::get_llm_info`], but resolved against `team_uid`'s own catalog rather than
-    /// searching every team. Use this (or [`Self::get_llm_info_for_scope`]) whenever a caller
-    /// already has a scope in hand and the returned metadata feeds a policy decision --
-    /// `disable_reason`, `host_configs` -- that can genuinely differ per team, so a match in
-    /// some other team's bucket isn't a safe stand-in for this one's.
-    pub fn get_llm_info_for_team_uid(
-        &self,
-        team_uid: Option<ServerId>,
-        id: &LLMId,
-    ) -> Option<&LLMInfo> {
-        self.models_by_feature_for_team_uid(team_uid)
-            .info_for_id(id)
-            .or_else(|| self.custom_llm_info_for_id(id))
-            .or_else(|| self.custom_router_llm_info_for_id(id))
-    }
-
-    /// [`Self::get_llm_info_for_team_uid`] for a caller with a live [`TeamScope`].
-    pub fn get_llm_info_for_scope(
-        &self,
-        scope: &(impl TeamScope + ?Sized),
-        id: &LLMId,
-    ) -> Option<&LLMInfo> {
-        self.get_llm_info_for_team_uid(scope.team_uid(), id)
     }
 
     /// Resolves an `LLMId` against the user's custom-endpoint LLMs.
