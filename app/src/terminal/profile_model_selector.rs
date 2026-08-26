@@ -1009,7 +1009,7 @@ impl ProfileModelSelector {
             .clone()
             .and_then(|id| {
                 llm_preferences
-                    .get_llm_info(&id)
+                    .get_llm_info_for_scope(&scope, &id)
                     .map(|info| info.id.clone())
             })
             .unwrap_or_else(|| {
@@ -1380,7 +1380,9 @@ impl ProfileModelSelector {
                 .and_then(|action| {
                     match action {
                         ProfileModelSelectorAction::SelectModel(llm_id) => {
-                            LLMPreferences::as_ref(ctx).get_llm_info(llm_id).cloned()
+                            LLMPreferences::as_ref(ctx)
+                                .get_llm_info_for_scope(&scope, llm_id)
+                                .cloned()
                         }
                         ProfileModelSelectorAction::SelectAutoModel => {
                             // Get the first "auto" variant as the generic auto model
