@@ -2965,7 +2965,12 @@ impl Input {
         );
 
         let next_command_model = ctx.add_model(|_| {
-            NextCommandModel::new(sessions.clone(), model.clone(), server_api.clone())
+            NextCommandModel::new(
+                sessions.clone(),
+                model.clone(),
+                server_api.clone(),
+                ai_controller.clone(),
+            )
         });
         ctx.subscribe_to_model(&next_command_model, |me, _, event, ctx| {
             me.handle_next_command_model_event(event, ctx);
