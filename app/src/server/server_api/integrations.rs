@@ -37,6 +37,11 @@ use super::ServerApi;
 use crate::channel::ChannelState;
 use crate::features::FeatureFlag;
 use crate::server::graphql::{get_request_context, get_user_facing_error_message};
+use crate::server::ids::ServerId;
+
+/// Header carrying the caller's selected team for requests scoped to exactly one of the
+/// caller's several team memberships, such as Slack/Linear simple integrations.
+const TEAM_UID_HEADER: &str = "X-Warp-Team-Uid";
 
 #[cfg(not(target_family = "wasm"))]
 pub trait IntegrationsClientBounds: Send + Sync {}
@@ -64,9 +69,11 @@ pub trait IntegrationsClient: 'static + IntegrationsClientBounds {
         repos: Vec<(String, String)>,
     ) -> Result<UserRepoAuthStatusOutput>;
 
-    /// Creates or updates a simple integration on the server.
+    /// Creates or updates a simple integration on the server, scoped to `team_uid`.
     ///
     /// # Arguments
+    /// * `team_uid` - The team that owns this integration; sent in `X-Warp-Team-Uid` and
+    ///   authorized against the caller's memberships by the server
     /// * `integration_type` - The type of integration (e.g. "github", "linear", "slack")
     /// * `is_update` - Whether this is an update to an existing integration
     /// * `environment_uid` - The UID of the environment to associate with this integration
@@ -79,6 +86,7 @@ pub trait IntegrationsClient: 'static + IntegrationsClientBounds {
     #[allow(clippy::too_many_arguments)]
     async fn create_or_update_simple_integration(
         &self,
+        team_uid: ServerId,
         integration_type: String,
         is_update: bool,
         environment_uid: Option<String>,
@@ -90,12 +98,13 @@ pub trait IntegrationsClient: 'static + IntegrationsClientBounds {
         enabled: bool,
     ) -> Result<CreateSimpleIntegrationOutput>;
 
-    /// Lists simple integrations for a fixed set of provider slugs.
+    /// Lists simple integrations for a fixed set of provider slugs, scoped to `team_uid`.
     ///
     /// The server will return one SimpleIntegration entry per requested provider,
     /// regardless of whether the connection or integration currently exists.
     async fn list_simple_integrations(
         &self,
+        team_uid: ServerId,
         providers: Vec<String>,
     ) -> Result<SimpleIntegrationsOutput>;
 
@@ -167,6 +176,7 @@ impl IntegrationsClient for ServerApi {
     #[allow(clippy::too_many_arguments)]
     async fn create_or_update_simple_integration(
         &self,
+        team_uid: ServerId,
         integration_type: String,
         is_update: bool,
         environment_uid: Option<String>,
@@ -193,7 +203,13 @@ impl IntegrationsClient for ServerApi {
         };
 
         let operation = CreateSimpleIntegration::build(variables);
-        let response = self.send_graphql_request(operation, None).await?;
+        let response = self
+            .send_graphql_request_with_headers(
+                operation,
+                None,
+                vec![(TEAM_UID_HEADER.to_string(), team_uid.to_string())],
+            )
+            .await?;
         match response.create_simple_integration {
             CreateSimpleIntegrationResult::CreateSimpleIntegrationOutput(output) => Ok(output),
             CreateSimpleIntegrationResult::UserFacingError(error) => {
@@ -232,6 +248,7 @@ impl IntegrationsClient for ServerApi {
 
     async fn list_simple_integrations(
         &self,
+        team_uid: ServerId,
         providers: Vec<String>,
     ) -> Result<SimpleIntegrationsOutput> {
         let variables = SimpleIntegrationsVariables {
@@ -240,7 +257,13 @@ impl IntegrationsClient for ServerApi {
         };
 
         let operation = SimpleIntegrations::build(variables);
-        let response = self.send_graphql_request(operation, None).await?;
+        let response = self
+            .send_graphql_request_with_headers(
+                operation,
+                None,
+                vec![(TEAM_UID_HEADER.to_string(), team_uid.to_string())],
+            )
+            .await?;
 
         match response.simple_integrations {
             SimpleIntegrationsResult::SimpleIntegrationsOutput(output) => Ok(output),

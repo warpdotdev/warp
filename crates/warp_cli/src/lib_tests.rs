@@ -1962,6 +1962,57 @@ fn integration_update_accepts_mcp_json_and_remove_mcp() {
 }
 
 #[test]
+fn integration_create_accepts_team() {
+    let args = Args::try_parse_from([
+        "warp",
+        "integration",
+        "create",
+        "slack",
+        "--team",
+        "team-uid-123",
+    ])
+    .unwrap();
+
+    let Some(Command::CommandLine(boxed_cmd)) = args.command else {
+        panic!("Expected `warp integration create` command");
+    };
+    let CliCommand::Integration(IntegrationCommand::Create(args)) = boxed_cmd.as_ref() else {
+        panic!("Expected `warp integration create` command");
+    };
+
+    assert_eq!(args.team.team.as_deref(), Some("team-uid-123"));
+}
+
+#[test]
+fn integration_create_defaults_to_no_team() {
+    let args = Args::try_parse_from(["warp", "integration", "create", "slack"]).unwrap();
+
+    let Some(Command::CommandLine(boxed_cmd)) = args.command else {
+        panic!("Expected `warp integration create` command");
+    };
+    let CliCommand::Integration(IntegrationCommand::Create(args)) = boxed_cmd.as_ref() else {
+        panic!("Expected `warp integration create` command");
+    };
+
+    assert!(args.team.team.is_none());
+}
+
+#[test]
+fn integration_list_accepts_team() {
+    let args =
+        Args::try_parse_from(["warp", "integration", "list", "--team", "team-uid-123"]).unwrap();
+
+    let Some(Command::CommandLine(boxed_cmd)) = args.command else {
+        panic!("Expected `warp integration list` command");
+    };
+    let CliCommand::Integration(IntegrationCommand::List(args)) = boxed_cmd.as_ref() else {
+        panic!("Expected `warp integration list` command");
+    };
+
+    assert_eq!(args.team.team.as_deref(), Some("team-uid-123"));
+}
+
+#[test]
 fn schedule_create_accepts_mcp_json() {
     let json = r#"{"my-server":{"command":"echo"}}"#;
 

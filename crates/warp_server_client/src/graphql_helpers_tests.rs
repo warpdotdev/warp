@@ -1,8 +1,9 @@
 use std::borrow::Cow;
+use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 
 use cynic::{GraphQlError, GraphQlResponse};
 use futures::executor::block_on;
@@ -10,7 +11,7 @@ use http::StatusCode;
 use warp_graphql::client::{GraphQLError, RequestOptions};
 use warp_server_auth::auth_state::AuthState;
 
-use super::send_graphql_request;
+use super::{send_graphql_request, send_graphql_request_with_headers};
 use crate::auth::AuthEvent;
 use crate::base_client::{AuthenticatedGraphqlConfig, BaseClient, GraphqlRoutingConfig};
 
@@ -82,6 +83,7 @@ struct FakeGraphqlOperation {
     expected_auth_token: Option<String>,
     send_count: Arc<AtomicUsize>,
     result: FakeGraphqlResult,
+    captured_headers: Option<Arc<Mutex<HashMap<String, String>>>>,
 }
 
 enum FakeGraphqlResult {
@@ -96,6 +98,22 @@ impl FakeGraphqlOperation {
             expected_auth_token: expected_auth_token.map(ToOwned::to_owned),
             send_count,
             result: FakeGraphqlResult::Success,
+            captured_headers: None,
+        }
+    }
+
+    /// [`Self::successful`], additionally recording every header on the request options into
+    /// `captured_headers` so a test can assert on them after the request completes.
+    fn successful_capturing_headers(
+        expected_auth_token: Option<&str>,
+        send_count: Arc<AtomicUsize>,
+        captured_headers: Arc<Mutex<HashMap<String, String>>>,
+    ) -> Self {
+        Self {
+            expected_auth_token: expected_auth_token.map(ToOwned::to_owned),
+            send_count,
+            result: FakeGraphqlResult::Success,
+            captured_headers: Some(captured_headers),
         }
     }
 
@@ -108,6 +126,7 @@ impl FakeGraphqlOperation {
             expected_auth_token: expected_auth_token.map(ToOwned::to_owned),
             send_count,
             result: FakeGraphqlResult::Rejected(status),
+            captured_headers: None,
         }
     }
 
@@ -120,6 +139,7 @@ impl FakeGraphqlOperation {
             expected_auth_token: expected_auth_token.map(ToOwned::to_owned),
             send_count,
             result: FakeGraphqlResult::ResponseErrors(messages),
+            captured_headers: None,
         }
     }
 }
@@ -145,6 +165,9 @@ impl warp_graphql::client::Operation<()> for FakeGraphqlOperation {
     {
         Box::pin(async move {
             assert_eq!(options.auth_token, self.expected_auth_token);
+            if let Some(captured_headers) = &self.captured_headers {
+                *captured_headers.lock().unwrap() = options.headers.clone();
+            }
             self.send_count.fetch_add(1, Ordering::SeqCst);
             match self.result {
                 FakeGraphqlResult::Success => Ok(GraphQlResponse {
@@ -273,4 +296,58 @@ fn external_user_not_in_context_returns_credentials_rejected_without_account_eve
     ));
     assert_eq!(send_count.load(Ordering::SeqCst), 1);
     assert_no_events(&event_receiver);
+}
+
+#[test]
+fn extra_headers_are_merged_without_dropping_the_auth_token() {
+    let (base_client, _event_receiver) = refreshable_base_client();
+    let send_count = Arc::new(AtomicUsize::new(0));
+    let captured_headers = Arc::new(Mutex::new(HashMap::new()));
+
+    block_on(send_graphql_request_with_headers(
+        &base_client,
+        FakeGraphqlOperation::successful_capturing_headers(
+            None,
+            send_count.clone(),
+            captured_headers.clone(),
+        ),
+        None,
+        vec![("X-Warp-Team-Uid".to_string(), "team-uid-123".to_string())],
+    ))
+    .unwrap();
+
+    // FakeGraphqlOperation's own `assert_eq!(options.auth_token, self.expected_auth_token)`
+    // already proves the auth token survived (it runs before this assertion and would have
+    // panicked otherwise); this proves the extra header actually reached the wire options
+    // alongside it, not in place of it.
+    let headers = captured_headers.lock().unwrap();
+    assert_eq!(
+        headers.get("X-Warp-Team-Uid").map(String::as_str),
+        Some("team-uid-123")
+    );
+    assert_eq!(send_count.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn no_extra_headers_behaves_identically_to_send_graphql_request() {
+    let (base_client, _event_receiver) = refreshable_base_client();
+    let send_count = Arc::new(AtomicUsize::new(0));
+    let captured_headers = Arc::new(Mutex::new(HashMap::new()));
+
+    block_on(send_graphql_request_with_headers(
+        &base_client,
+        FakeGraphqlOperation::successful_capturing_headers(
+            None,
+            send_count.clone(),
+            captured_headers.clone(),
+        ),
+        None,
+        Vec::new(),
+    ))
+    .unwrap();
+
+    assert!(
+        captured_headers.lock().unwrap().is_empty(),
+        "send_graphql_request delegates here with an empty header list; it must not invent one"
+    );
 }

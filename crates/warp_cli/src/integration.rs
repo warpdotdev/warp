@@ -15,7 +15,7 @@ pub enum IntegrationCommand {
     /// Update an integration.
     Update(UpdateIntegrationArgs),
     /// List simple integrations and their connection status.
-    List,
+    List(ListIntegrationArgs),
 }
 
 impl IntegrationCommand {
@@ -23,9 +23,26 @@ impl IntegrationCommand {
         match self {
             IntegrationCommand::Create(_) => "integration create",
             IntegrationCommand::Update(_) => "integration update",
-            IntegrationCommand::List => "integration list",
+            IntegrationCommand::List(_) => "integration list",
         }
     }
+}
+
+/// Selects which of the caller's teams owns a Slack/Linear simple integration. Integrations are
+/// always team-owned, so this has no `--personal` counterpart: with one team it is optional,
+/// with several it is required, and with none the command is unavailable.
+#[derive(Debug, Clone, Args)]
+pub struct IntegrationTeamArgs {
+    /// The team UID that owns this integration. Required when the caller belongs to more than
+    /// one team; otherwise resolved automatically from the caller's sole team.
+    #[arg(long = "team", value_name = "TEAM_UID")]
+    pub team: Option<String>,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct ListIntegrationArgs {
+    #[command(flatten)]
+    pub team: IntegrationTeamArgs,
 }
 
 #[derive(Debug, Clone, Args)]
@@ -33,6 +50,9 @@ pub struct CreateIntegrationArgs {
     /// Provider to create the integration for.
     #[arg(value_enum)]
     pub provider: ProviderType,
+
+    #[command(flatten)]
+    pub team: IntegrationTeamArgs,
 
     #[command(flatten)]
     pub model: ModelArgs,
@@ -68,6 +88,9 @@ pub struct UpdateIntegrationArgs {
     /// Provider to update the integration for.
     #[arg(value_enum)]
     pub provider: ProviderType,
+
+    #[command(flatten)]
+    pub team: IntegrationTeamArgs,
 
     #[command(flatten)]
     pub model: ModelArgs,
