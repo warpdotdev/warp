@@ -29,13 +29,6 @@ where
 }
 
 /// Sends a GraphQL operation scoped to a team via `X-Warp-Team-Uid`.
-///
-/// `team_uid` is the raw wire value already resolved by the caller from a `RequestTeamScope`
-/// (`app/src/server/team_scope.rs`); this crate has no visibility into that type, only the
-/// wire value. Passing `None` sends no team header and behaves exactly like
-/// [`send_graphql_request`]. No current caller passes a team scope here; an operation that
-/// already names its team explicitly in its GraphQL variables should keep passing `None`
-/// rather than also attaching a header that could disagree with those variables.
 pub fn send_team_scoped_graphql_request<'a, QF: 'a, O>(
     base_client: &'a BaseClient,
     operation: O,
