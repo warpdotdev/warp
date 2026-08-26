@@ -504,13 +504,17 @@ pub enum AwsCredentialsRefreshStrategy {
     },
 }
 
+struct CustomEndpointState {
+    definitions: Option<CustomEndpointDefinitions>,
+    settings_valid: bool,
+    keys: HashMap<CustomEndpointId, String>,
+    resolved: Vec<CustomEndpoint>,
+}
+
 /// A structure that manages API keys for AI providers.
 pub struct ApiKeyManager {
     keys: ApiKeys,
-    custom_endpoint_definitions: Option<CustomEndpointDefinitions>,
-    custom_endpoint_settings_valid: bool,
-    custom_endpoint_keys: HashMap<CustomEndpointId, String>,
-    custom_endpoints: Vec<CustomEndpoint>,
+    custom_endpoints: CustomEndpointState,
     /// OAuth tokens for a connected xAI/Grok subscription, if any. Persisted
     /// separately from `keys` under [`GROK_SECURE_STORAGE_KEY`];
     /// `crate::grok_subscription` keeps these fresh.
@@ -599,14 +603,16 @@ impl ApiKeyManager {
     pub fn new(ctx: &mut ModelContext<Self>) -> Self {
         let keys = Self::load_keys_from_secure_storage(ctx);
         let custom_endpoint_keys = Self::load_custom_endpoint_keys_from_secure_storage(ctx);
-        let custom_endpoints = keys.custom_endpoints.clone();
+        let resolved_custom_endpoints = keys.custom_endpoints.clone();
         let grok_tokens = Self::load_grok_tokens_from_secure_storage(ctx);
         Self {
             keys,
-            custom_endpoint_definitions: None,
-            custom_endpoint_settings_valid: true,
-            custom_endpoint_keys,
-            custom_endpoints,
+            custom_endpoints: CustomEndpointState {
+                definitions: None,
+                settings_valid: true,
+                keys: custom_endpoint_keys,
+                resolved: resolved_custom_endpoints,
+            },
             grok_tokens,
             #[cfg(not(target_family = "wasm"))]
             grok_refresh_allowed: false,
@@ -629,19 +635,20 @@ impl ApiKeyManager {
     }
 
     pub fn custom_endpoints(&self) -> &[CustomEndpoint] {
-        &self.custom_endpoints
+        &self.custom_endpoints.resolved
     }
 
     pub fn custom_endpoint_definitions(&self) -> Option<&CustomEndpointDefinitions> {
-        self.custom_endpoint_definitions.as_ref()
+        self.custom_endpoints.definitions.as_ref()
     }
 
     pub fn custom_endpoint_settings_valid(&self) -> bool {
-        self.custom_endpoint_settings_valid
+        self.custom_endpoints.settings_valid
     }
 
     pub fn custom_endpoint_key(&self, id: &CustomEndpointId) -> Option<&str> {
-        self.custom_endpoint_keys
+        self.custom_endpoints
+            .keys
             .get(id)
             .map(String::as_str)
             .filter(|key| !key.trim().is_empty())
@@ -652,24 +659,24 @@ impl ApiKeyManager {
         definitions: CustomEndpointDefinitions,
         ctx: &mut ModelContext<Self>,
     ) {
-        if self.custom_endpoint_settings_valid
-            && self.custom_endpoint_definitions.as_ref() == Some(&definitions)
+        if self.custom_endpoints.settings_valid
+            && self.custom_endpoints.definitions.as_ref() == Some(&definitions)
         {
             return;
         }
-        self.custom_endpoint_settings_valid = true;
-        self.custom_endpoint_definitions = Some(definitions);
+        self.custom_endpoints.settings_valid = true;
+        self.custom_endpoints.definitions = Some(definitions);
         self.rebuild_custom_endpoints();
         ctx.emit(ApiKeyManagerEvent::KeysUpdated);
     }
 
     pub fn invalidate_custom_endpoint_definitions(&mut self, ctx: &mut ModelContext<Self>) {
-        if !self.custom_endpoint_settings_valid {
+        if !self.custom_endpoints.settings_valid {
             return;
         }
-        self.custom_endpoint_settings_valid = false;
-        self.custom_endpoint_definitions = Some(CustomEndpointDefinitions::default());
-        self.custom_endpoints.clear();
+        self.custom_endpoints.settings_valid = false;
+        self.custom_endpoints.definitions = Some(CustomEndpointDefinitions::default());
+        self.custom_endpoints.resolved.clear();
         ctx.emit(ApiKeyManagerEvent::KeysUpdated);
     }
 
@@ -679,7 +686,7 @@ impl ApiKeyManager {
         key: Option<String>,
         ctx: &mut ModelContext<Self>,
     ) -> anyhow::Result<()> {
-        let mut keys = self.custom_endpoint_keys.clone();
+        let mut keys = self.custom_endpoints.keys.clone();
         match key.filter(|key| !key.trim().is_empty()) {
             Some(key) => {
                 keys.insert(id, key);
@@ -705,8 +712,8 @@ impl ApiKeyManager {
                 anyhow::Error::new(error)
                     .context("Failed to write custom endpoint keys to secure storage")
             })?;
-        if self.custom_endpoint_keys != keys {
-            self.custom_endpoint_keys = keys;
+        if self.custom_endpoints.keys != keys {
+            self.custom_endpoints.keys = keys;
             self.rebuild_custom_endpoints();
             ctx.emit(ApiKeyManagerEvent::KeysUpdated);
         }
@@ -721,11 +728,11 @@ impl ApiKeyManager {
     pub fn reload_keys_from_secure_storage(&mut self, ctx: &mut ModelContext<Self>) {
         let keys = Self::load_keys_from_secure_storage(ctx);
         let custom_endpoint_keys = Self::load_custom_endpoint_keys_from_secure_storage(ctx);
-        if self.keys == keys && self.custom_endpoint_keys == custom_endpoint_keys {
+        if self.keys == keys && self.custom_endpoints.keys == custom_endpoint_keys {
             return;
         }
         self.keys = keys;
-        self.custom_endpoint_keys = custom_endpoint_keys;
+        self.custom_endpoints.keys = custom_endpoint_keys;
         self.rebuild_custom_endpoints();
         ctx.emit(ApiKeyManagerEvent::KeysUpdated);
     }
@@ -789,6 +796,7 @@ impl ApiKeyManager {
         self.keys.provider_key_count() > 0
             || self
                 .custom_endpoints
+                .resolved
                 .iter()
                 .any(|endpoint| !endpoint.api_key.trim().is_empty())
             || self.has_grok_subscription()
@@ -867,8 +875,8 @@ impl ApiKeyManager {
                 })
                 .collect(),
         });
-        if self.custom_endpoint_definitions.is_none() {
-            self.custom_endpoints = self.keys.custom_endpoints.clone();
+        if self.custom_endpoints.definitions.is_none() {
+            self.custom_endpoints.resolved = self.keys.custom_endpoints.clone();
         }
         ctx.emit(ApiKeyManagerEvent::KeysUpdated);
         self.write_keys_to_secure_storage(ctx);
@@ -906,8 +914,8 @@ impl ApiKeyManager {
                 })
                 .collect(),
         };
-        if self.custom_endpoint_definitions.is_none() {
-            self.custom_endpoints = self.keys.custom_endpoints.clone();
+        if self.custom_endpoints.definitions.is_none() {
+            self.custom_endpoints.resolved = self.keys.custom_endpoints.clone();
         }
         ctx.emit(ApiKeyManagerEvent::KeysUpdated);
         self.write_keys_to_secure_storage(ctx);
@@ -918,8 +926,8 @@ impl ApiKeyManager {
             return;
         }
         self.keys.custom_endpoints.remove(index);
-        if self.custom_endpoint_definitions.is_none() {
-            self.custom_endpoints = self.keys.custom_endpoints.clone();
+        if self.custom_endpoints.definitions.is_none() {
+            self.custom_endpoints.resolved = self.keys.custom_endpoints.clone();
         }
         ctx.emit(ApiKeyManagerEvent::KeysUpdated);
         self.write_keys_to_secure_storage(ctx);
@@ -930,8 +938,8 @@ impl ApiKeyManager {
             return;
         }
         self.keys.custom_endpoints.clear();
-        if self.custom_endpoint_definitions.is_none() {
-            self.custom_endpoints.clear();
+        if self.custom_endpoints.definitions.is_none() {
+            self.custom_endpoints.resolved.clear();
         }
         ctx.emit(ApiKeyManagerEvent::KeysUpdated);
         self.write_keys_to_secure_storage(ctx);
@@ -980,6 +988,7 @@ impl ApiKeyManager {
 
         let providers: Vec<_> = self
             .custom_endpoints
+            .resolved
             .iter()
             .filter(|endpoint| !endpoint.url.trim().is_empty() && !endpoint.api_key.is_empty())
             .map(
@@ -1149,15 +1158,16 @@ impl ApiKeyManager {
     }
 
     fn rebuild_custom_endpoints(&mut self) {
-        let Some(definitions) = &self.custom_endpoint_definitions else {
-            self.custom_endpoints = self.keys.custom_endpoints.clone();
+        let Some(definitions) = &self.custom_endpoints.definitions else {
+            self.custom_endpoints.resolved = self.keys.custom_endpoints.clone();
             return;
         };
-        self.custom_endpoints = definitions
+        self.custom_endpoints.resolved = definitions
             .definitions()
             .map(|(id, definition)| {
                 definition.clone().into_endpoint(
-                    self.custom_endpoint_keys
+                    self.custom_endpoints
+                        .keys
                         .get(id)
                         .cloned()
                         .unwrap_or_default(),

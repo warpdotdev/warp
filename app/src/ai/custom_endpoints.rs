@@ -95,6 +95,7 @@ impl CustomEndpointSettingsModel {
         }
         let Ok((definitions, keys)) = CustomEndpointDefinitions::from_legacy(&legacy) else {
             log::warn!("Could not migrate invalid legacy custom endpoint definitions");
+            set_active_definitions(CustomEndpointDefinitions::default(), ctx);
             return;
         };
         let keys_result = ApiKeyManager::handle(ctx).update(ctx, |manager, ctx| {
@@ -176,9 +177,10 @@ pub(crate) fn remove(index: usize, ctx: &mut AppContext) -> anyhow::Result<()> {
     definitions.remove(&id);
     write_definitions(definitions.clone(), ctx)?;
     set_active_definitions(definitions, ctx);
-    ApiKeyManager::handle(ctx).update(ctx, |manager, ctx| {
+    let _ = ApiKeyManager::handle(ctx).update(ctx, |manager, ctx| {
         manager.persist_custom_endpoint_key(id, None, ctx)
-    })
+    });
+    Ok(())
 }
 
 fn definition_from_params(params: CustomEndpointParams) -> CustomEndpointDefinition {
@@ -223,3 +225,7 @@ fn settings_error_affects_custom_endpoints(error: &SettingsFileError) -> bool {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "custom_endpoints_tests.rs"]
+mod tests;
