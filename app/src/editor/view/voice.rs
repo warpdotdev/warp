@@ -460,8 +460,6 @@ impl EditorView {
                     let language = AISettings::as_ref(ctx)
                         .voice_input_language_code()
                         .map(str::to_owned);
-                    // Captured now, since the window is no longer reachable once this is
-                    // spawned off the main thread.
                     let team_scope = RequestTeamScope::from_scope(
                         &UserWorkspaces::as_ref(ctx).team_context_for_view(ctx),
                     );

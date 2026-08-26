@@ -14,8 +14,6 @@ pub trait Transcriber: Send + Sync {
     ///
     /// `language` is an optional ISO-639-1 code (e.g. `"en"`). When `None`, the
     /// transcription provider auto-detects the spoken language.
-    /// `team_scope` is the window's team, captured before this future is spawned off the
-    /// main thread, since no live window is reachable once it's running.
     /// This is expected to be async and called off the main thread.
     async fn transcribe(
         &self,
