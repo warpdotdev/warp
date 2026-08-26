@@ -1202,18 +1202,30 @@ where
                         return;
                     };
                     let Some((start_str, length_str)) = data_str.split_once(',') else {
-                        log::warn!(
-                            "Warp completions replacement span OSC marker payload was not a \
-                             comma-separated pair: {data_str:?}"
+                        safe_warn!(
+                            safe: (
+                                "Warp completions replacement span OSC marker payload was not a \
+                                 comma-separated pair"
+                            ),
+                            full: (
+                                "Warp completions replacement span OSC marker payload was not a \
+                                 comma-separated pair: {data_str:?}"
+                            )
                         );
                         return;
                     };
                     let (Ok(start), Ok(length)) =
                         (start_str.parse::<usize>(), length_str.parse::<usize>())
                     else {
-                        log::warn!(
-                            "Warp completions replacement span OSC marker payload was not a \
-                             pair of non-negative integers: {data_str:?}"
+                        safe_warn!(
+                            safe: (
+                                "Warp completions replacement span OSC marker payload was not a \
+                                 pair of non-negative integers"
+                            ),
+                            full: (
+                                "Warp completions replacement span OSC marker payload was not a \
+                                 pair of non-negative integers: {data_str:?}"
+                            )
                         );
                         return;
                     };
@@ -1238,8 +1250,15 @@ where
                             );
                         }
                         _ => {
-                            log::warn!(
-                                "Invalid Warp OSC marker parameter for completions match metadata: {parameter}"
+                            safe_warn!(
+                                safe: (
+                                    "Invalid Warp OSC marker parameter for completions match \
+                                     metadata"
+                                ),
+                                full: (
+                                    "Invalid Warp OSC marker parameter for completions match \
+                                     metadata: {parameter}"
+                                )
                             );
                         }
                     }
