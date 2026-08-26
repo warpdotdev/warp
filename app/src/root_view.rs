@@ -4292,13 +4292,25 @@ impl AuthOnboardingState {
     /// and/or onboarding complete, or joins it immediately if the state already wraps a live
     /// workspace (e.g. onboarding shown over an existing session), instead of dropping a
     /// shared-session deep link that arrives while either is in progress. Returns whether the
-    /// link was handled; a bare `Terminal` state already has a live workspace and is left to
-    /// the caller.
+    /// link was handled; a bare `Terminal` state already has a live, visible workspace and is
+    /// left to the caller.
     ///
-    /// Joining an already-live (nested `Terminal`) workspace also promotes `self` straight to
-    /// `AuthOnboardingState::Terminal`: the enclosing onboarding/login-slide/sso-link state
-    /// renders its own view rather than the workspace it wraps, so leaving it in place would
-    /// join the session invisibly, behind that overlay.
+    /// Joining an already-live (nested `Terminal`) workspace promotes `self` straight to
+    /// `AuthOnboardingState::Terminal` for `Onboarding` and `WebImport`: both render their own
+    /// view rather than the workspace they wrap, so leaving either in place would join the
+    /// session invisibly, behind that overlay. `NeedsSsoLink` is handled separately below and
+    /// is never promoted this way: unlike the onboarding-family states above, it exists to
+    /// deny app access until SSO linking completes, not to get out of the way once its content
+    /// is ready.
+    ///
+    /// `LoginSlide` and `PostAuthOnboarding` are omitted from the promotable states for a
+    /// different reason: both carry onboarding selections (`pending_tutorial`,
+    /// `pending_post_auth_onboarding_settings`, the account-first login context) that only
+    /// their own completion handlers apply, and neither is ever constructed with a nested
+    /// `Terminal` target in practice — both inherit their target from onboarding paths that
+    /// require login, whereas `Onboarding`'s nested-`Terminal` case is reached post-auth. If a
+    /// future change makes that target reachable, decide deliberately whether to consume or
+    /// preserve that pending state before promoting out of either.
     fn retarget_pending_workspace_for_shared_session(
         &mut self,
         session_id: SessionId,
@@ -4312,7 +4324,17 @@ impl AuthOnboardingState {
             AuthOnboardingState::Onboarding { target, .. }
             | AuthOnboardingState::LoginSlide { target, .. }
             | AuthOnboardingState::PostAuthOnboarding { target, .. } => target,
-            AuthOnboardingState::NeedsSsoLink(target) => target,
+            // The user is already authenticated by the time this state is reached (it exists
+            // to gate the rest of the app behind SSO linking, not to gate authentication
+            // itself), and the server independently enforces access to the session's content.
+            // So the join itself is safe to perform now, ready for when the gate lifts; what
+            // must not happen is dismissing the gate. Join beneath it without promoting: the
+            // workspace stays unrendered behind `needs_sso_link_view` until `complete_sso_link`
+            // legitimately reaches `Terminal`.
+            AuthOnboardingState::NeedsSsoLink(target) => {
+                target.retarget_pending_workspace_or_join(session_id, ctx);
+                return true;
+            }
             #[cfg(target_family = "wasm")]
             AuthOnboardingState::WebImport(target) => target,
             AuthOnboardingState::Terminal(_) => return false,

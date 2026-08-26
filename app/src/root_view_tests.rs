@@ -755,14 +755,11 @@ fn join_shared_session_in_existing_window_retargets_pending_needs_sso_link_works
     });
 }
 
-/// Regression test for finding #1 of the second review round: a pre-`Terminal` state that
-/// wraps an *existing* workspace (e.g. onboarding shown over an already-live session, with
-/// no pending `workspace_setting` left to retarget) used to join the new session into that
-/// workspace but leave the enclosing `Onboarding` state in place. `RootView::render` renders
-/// `Onboarding`'s own view rather than the workspace it wraps, so the session joined
-/// invisibly, behind the onboarding screen this issue exists to get out of the way. Joining
-/// a nested `Terminal` target must promote the root state to `Terminal` so the workspace -
-/// and the newly joined session - actually becomes visible.
+/// A pre-`Terminal` state that wraps an *existing* workspace (e.g. onboarding shown over an
+/// already-live session, with no pending `workspace_setting` left to retarget) must promote
+/// the root state to `Terminal` when it joins a new session into that workspace, so the
+/// workspace - and the newly joined session - actually becomes visible instead of staying
+/// hidden behind `Onboarding`'s own view.
 #[test]
 fn join_shared_session_in_existing_window_promotes_nested_terminal_onboarding_to_visible_terminal()
 {
@@ -831,6 +828,50 @@ fn join_shared_session_in_existing_window_joins_directly_when_already_terminal()
         assert!(handled, "expected the link to be handled");
         terminal_workspace.read(&app, |workspace, _| {
             assert_eq!(workspace.tab_count(), tab_count_before + 1);
+        });
+    });
+}
+
+/// `NeedsSsoLink` blocks access to the rest of the app until SSO linking completes, even when
+/// it wraps an already-live workspace (e.g. the user tried an action that surfaced the SSO
+/// requirement while already in a session). A shared-session link arriving in that state must
+/// join the session into the wrapped workspace - so it is ready once the gate lifts - without
+/// dismissing the gate itself; only `complete_sso_link` may reveal that workspace.
+#[test]
+fn join_shared_session_in_existing_window_keeps_needs_sso_link_blocking_with_live_workspace() {
+    App::test((), |mut app| async move {
+        let root_view = root_view_for_join_test(&mut app);
+        let session_id = SessionId::new();
+
+        let nested_workspace = crate::workspace::view::tests::mock_workspace(&mut app);
+        let tab_count_before = nested_workspace.read(&app, |workspace, _| workspace.tab_count());
+        root_view.update(&mut app, |root_view, _| {
+            root_view.auth_onboarding_state = AuthOnboardingState::NeedsSsoLink(
+                AuthOnboardingTarget::Terminal(nested_workspace.clone()),
+            );
+        });
+
+        let handled = root_view.update(&mut app, |root_view, ctx| {
+            root_view.join_shared_session_in_existing_window(&session_id, ctx)
+        });
+
+        assert!(handled, "expected the link to be handled");
+        app.read(|ctx| {
+            assert!(
+                matches!(
+                    root_view.as_ref(ctx).auth_onboarding_state,
+                    AuthOnboardingState::NeedsSsoLink(_)
+                ),
+                "the SSO gate must not be dismissed by a session link"
+            );
+        });
+        nested_workspace.read(&app, |workspace, _| {
+            assert_eq!(
+                workspace.tab_count(),
+                tab_count_before + 1,
+                "the session should still be joined in the wrapped workspace, ready for when \
+                 the gate lifts"
+            );
         });
     });
 }
