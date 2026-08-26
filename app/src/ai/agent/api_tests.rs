@@ -2,6 +2,9 @@ use warp_core::channel::{Channel, ChannelState};
 
 use super::{RequestParams, ServerConversationToken};
 use crate::ai::agent::ServerOutputId;
+use crate::server::ids::ServerId;
+use crate::server::team_scope::RequestTeamScope;
+use crate::workspaces::user_workspaces::{TeamContextForOperation, TeamlessScopeForTest};
 
 #[test]
 fn debugging_payload_is_link_on_dogfood_channels() {
@@ -56,4 +59,21 @@ fn debugging_payload_is_id_on_non_dogfood_channels() {
 #[test]
 fn request_params_do_not_allow_member_credentials_until_the_policy_has_been_applied() {
     assert!(!RequestParams::new_for_test().member_byo_credentials_allowed);
+}
+
+/// The team header a request sends is whatever its scope named, including when that is no team
+/// at all -- a scope resolving to `None` must send no team rather than fall back to one.
+#[test]
+fn request_team_scope_sends_the_team_its_scope_named() {
+    let team_uid = ServerId::from(7);
+    let scope = TeamContextForOperation::new_for_test(team_uid);
+
+    assert_eq!(
+        RequestTeamScope::from_scope(&scope).team_uid(),
+        Some(team_uid)
+    );
+    assert_eq!(
+        RequestTeamScope::from_scope(&TeamlessScopeForTest).team_uid(),
+        None
+    );
 }
