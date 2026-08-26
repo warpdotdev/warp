@@ -52,6 +52,11 @@ pub struct AgentConfigSnapshot {
     /// If None, the default behavior is used.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub computer_use_enabled: Option<bool>,
+    /// Warp model id for the computer use subagent. Only applies to the built-in
+    /// Oz harness, and only when computer use is enabled; the server ignores it
+    /// otherwise. If None, the run's default computer use model is used.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub computer_use_model_id: Option<String>,
     /// Execution harness for the agent run.
     /// If None, we use Warp's default ("oz").
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -147,6 +152,7 @@ impl AgentConfigSnapshot {
             worker_host,
             skill_spec,
             computer_use_enabled,
+            computer_use_model_id,
             harness,
             harness_auth_secrets,
             additional_source_repos,
@@ -162,6 +168,7 @@ impl AgentConfigSnapshot {
             && worker_host.is_none()
             && skill_spec.is_none()
             && computer_use_enabled.is_none()
+            && computer_use_model_id.is_none()
             && harness.is_none()
             && harness_auth_secrets.is_none()
             && additional_source_repos.is_none()

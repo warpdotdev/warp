@@ -174,6 +174,7 @@ pub fn merge_with_precedence(
     let mcp_servers = merge_mcp_servers(file.mcp_servers.clone(), cli.mcp_servers);
     let worker_host = cli.worker_host.or_else(|| file.host.clone());
     let computer_use_enabled = cli.computer_use_enabled.or(file.computer_use_enabled);
+    let computer_use_model_id = cli.computer_use_model_id;
 
     AgentConfigSnapshot {
         name,
@@ -186,6 +187,7 @@ pub fn merge_with_precedence(
         worker_host,
         skill_spec: cli.skill_spec,
         computer_use_enabled,
+        computer_use_model_id,
         harness: cli.harness,
         harness_auth_secrets: cli.harness_auth_secrets,
         additional_source_repos: None,

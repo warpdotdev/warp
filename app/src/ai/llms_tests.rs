@@ -394,6 +394,7 @@ fn custom_endpoint_usage_display_label_resolves_alias_name_and_generic_fallback(
         agent_mode_models_unavailable: false,
         last_update: None,
         base_llm_for_terminal_view: HashMap::new(),
+        computer_use_llm_for_terminal_view: HashMap::new(),
         custom_llms: build_custom_llm_infos(&keys),
         custom_model_routers: Vec::new(),
     };
@@ -537,6 +538,7 @@ fn is_cloud_runnable_oz_model_id_classifies_ids() {
         agent_mode_models_unavailable: false,
         last_update: None,
         base_llm_for_terminal_view: HashMap::new(),
+        computer_use_llm_for_terminal_view: HashMap::new(),
         custom_llms: build_custom_llm_infos(&keys),
         custom_model_routers: Vec::new(),
     };
@@ -728,6 +730,7 @@ fn with_model_picker_query_test_context(
                 agent_mode_models_unavailable: false,
                 last_update: None,
                 base_llm_for_terminal_view: HashMap::new(),
+                computer_use_llm_for_terminal_view: HashMap::new(),
                 custom_llms: Vec::new(),
                 custom_model_routers: Vec::new(),
             };
@@ -1059,6 +1062,7 @@ fn preferences_for_profile_model_tests() -> LLMPreferences {
         agent_mode_models_unavailable: false,
         last_update: None,
         base_llm_for_terminal_view: HashMap::new(),
+        computer_use_llm_for_terminal_view: HashMap::new(),
         custom_llms: Vec::new(),
         custom_model_routers: Vec::new(),
     }
@@ -1158,6 +1162,78 @@ fn updating_active_profile_base_model_persists_and_updates_resolution() {
                     .id
                     .as_str(),
                 "claude-opus"
+            );
+        });
+    });
+}
+
+#[test]
+fn agent_run_computer_use_model_override_wins_over_the_profile_selection() {
+    App::test((), |mut app| async move {
+        initialize_settings_for_tests(&mut app);
+        app.add_singleton_model(|_| ServerApiProvider::new_for_test());
+        app.add_singleton_model(|_| AuthStateProvider::new_for_test());
+        app.add_singleton_model(AuthManager::new_for_test);
+        app.add_singleton_model(|_| NetworkStatus::new());
+        app.add_singleton_model(UserWorkspaces::default_mock);
+        app.add_singleton_model(CloudModel::mock);
+        app.add_singleton_model(TeamTesterStatus::mock);
+        app.add_singleton_model(SyncQueue::mock);
+        app.add_singleton_model(UpdateManager::mock);
+        app.add_singleton_model(|_| TemplatableMCPServerManager::default());
+        let profiles = app.add_singleton_model(|ctx| {
+            AIExecutionProfilesModel::new(&LaunchMode::new_for_unit_test(), ctx)
+        });
+        let preferences = app.add_singleton_model(|_| preferences_for_profile_model_tests());
+        let surface_id = EntityId::new();
+        let profile_id = profiles.read(&app, |profiles, ctx| {
+            profiles.active_profile(Some(surface_id), ctx).id().clone()
+        });
+        profiles.update(&mut app, |profiles, ctx| {
+            profiles.set_computer_use_model(
+                &profile_id,
+                Some(LLMId::from("computer-use-agent-auto")),
+                ctx,
+            );
+        });
+
+        // Without a run override, the request carries the profile's selection.
+        preferences.read(&app, |preferences, ctx| {
+            assert_eq!(
+                preferences
+                    .computer_use_model_id_for_request(ctx, Some(surface_id))
+                    .as_str(),
+                "computer-use-agent-auto"
+            );
+        });
+
+        preferences.update(&mut app, |preferences, _| {
+            preferences.set_computer_use_llm_override(LLMId::from("claude-4-5-sonnet"), surface_id);
+        });
+
+        preferences.read(&app, |preferences, ctx| {
+            // The override wins, and is forwarded verbatim even though it isn't one
+            // of the locally cached computer use choices.
+            assert_eq!(
+                preferences
+                    .computer_use_model_id_for_request(ctx, Some(surface_id))
+                    .as_str(),
+                "claude-4-5-sonnet"
+            );
+            // The profile's own selection is untouched, so unrelated surfaces and the
+            // model displayed in the UI keep resolving through the profile.
+            assert_eq!(
+                preferences
+                    .computer_use_model_id_for_request(ctx, Some(EntityId::new()))
+                    .as_str(),
+                "computer-use-agent-auto"
+            );
+            assert_eq!(
+                preferences
+                    .get_active_computer_use_model(ctx, Some(surface_id))
+                    .id
+                    .as_str(),
+                "computer-use-agent-auto"
             );
         });
     });

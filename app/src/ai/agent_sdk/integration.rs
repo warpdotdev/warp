@@ -111,8 +111,9 @@ impl IntegrationCommandRunner {
                     profile_id: None,
                     worker_host: args.worker_host.clone(),
                     skill_spec: None,
-                    // TODO(QUALITY-295): Support computer use flag in integrations.
+                    // TODO(QUALITY-295): Support computer use flags in integrations.
                     computer_use_enabled: None,
+                    computer_use_model_id: None,
                     // TODO(REMOTE-1134): Support harness selection for integrations.
                     harness: None,
                     harness_auth_secrets: None,
@@ -426,8 +427,9 @@ impl IntegrationCommandRunner {
                     profile_id: None,
                     worker_host: args.worker_host.clone(),
                     skill_spec: None,
-                    // TODO(QUALITY-295): Support computer use flag in integrations.
+                    // TODO(QUALITY-295): Support computer use flags in integrations.
                     computer_use_enabled: None,
+                    computer_use_model_id: None,
                     // TODO(REMOTE-1134): Support harness selection for integrations.
                     harness: None,
                     harness_auth_secrets: None,
