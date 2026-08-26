@@ -1,4 +1,5 @@
 use std::collections::HashSet;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -29,7 +30,6 @@ use super::view_impl::common::{
     MaybeShimmeringText, WAITING_FOR_USER_INPUT_MESSAGE, WarpingIndicatorProps, WarpingProps,
     render_switch_control_to_user_button, render_warping_indicator, render_warping_indicator_base,
 };
-use crate::ai::AgentTip;
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent::{
     AIAgentExchangeId, AIAgentOutput, AIAgentOutputMessageType, CancellationReason,
@@ -49,7 +49,8 @@ use crate::ai::blocklist::{
     BlocklistAIContextModel, BlocklistAIController, BlocklistAIHistoryEvent, BlocklistAIInputEvent,
     BlocklistAIInputModel, QueuedQueryEvent, QueuedQueryModel, ResponseStreamId, ai_brand_color,
 };
-use crate::ai::llms::LLMPreferences;
+use crate::ai::llms::{LLMInfo, LLMPreferences};
+use crate::ai::{AgentTip, custom_model_routers};
 use crate::server::server_api::ServerApiProvider;
 use crate::server::telemetry::TelemetryEvent;
 use crate::settings::{InputModeSettings, InputSettings, PrivacySettings};
@@ -830,15 +831,25 @@ impl BlocklistAIStatusBar {
             model.as_ref(),
             app,
         );
-        let default_warping_text = fallback_warping_text
-            .as_deref()
-            .unwrap_or(LOAD_OUTPUT_MESSAGE)
-            .to_owned();
+        let router_warping = resolve_router_warping_for_exchange(model.as_ref(), app);
+        // The router label takes precedence for the primary text when a router
+        // turn has a resolved model; otherwise the existing fallback messaging
+        // (or the default `Warping...`) is used, unchanged. Fallback
+        // explanations still win over tips as secondary content when they do
+        // today, independently of the router flag.
+        let default_warping_text = router_warping
+            .as_ref()
+            .map(|r| r.label.clone())
+            .or(fallback_warping_text.clone())
+            .unwrap_or_else(|| LOAD_OUTPUT_MESSAGE.to_owned());
         let secondary_element = if fallback_warping_text.is_some() {
             Some(render_fallback_explanation(model.as_ref(), app))
         } else {
             self.render_tip(app)
         };
+        let router_config_link = router_warping
+            .as_ref()
+            .and_then(|r| render_router_config_link(r.link.clone(), app));
 
         Some(render_warping_indicator(
             WarpingProps {
@@ -890,6 +901,7 @@ impl BlocklistAIStatusBar {
                 force_refresh_button,
                 default_warping_text,
                 secondary_element,
+                router_config_link,
                 last_snapshot_at,
             },
             app,
@@ -928,6 +940,7 @@ impl BlocklistAIStatusBar {
                 buttons: None,
                 is_passive_code_diff: false,
                 secondary_element: self.render_tip(app),
+                router_config_link: None,
             },
             app,
         ))
@@ -1160,6 +1173,280 @@ fn resolve_fallback_warping_message<V: View>(
     })
 }
 
+// ── Router warping indicator (APP-4978) ───────────────────────────────────────
+
+/// A snapshot of the per-exchange model info used to label the router warping
+/// indicator. Mirrors the fields of [`OutputModelInfo`] the resolver consumes
+/// so the pure resolver can be tested without an `AppContext`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ModelInfoSnapshot {
+    display_name: String,
+    model_id: String,
+}
+
+impl ModelInfoSnapshot {
+    /// The user-visible name: the display name when non-empty, else the model
+    /// id. Returns `None` when both are empty so the caller keeps the default
+    /// `Warping...` text.
+    fn display_label(&self) -> Option<&str> {
+        if !self.display_name.is_empty() {
+            Some(&self.display_name)
+        } else if !self.model_id.is_empty() {
+            Some(&self.model_id)
+        } else {
+            None
+        }
+    }
+}
+
+/// How the selected base model is treated by the router warping indicator.
+/// `None` (from [`classify_router`]) means the turn is not router-selected.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RouterKind {
+    /// A built-in auto router (`auto`, `auto-*`, `cli-agent-auto`,
+    /// `computer-use-agent-auto`). Shows the resolved model, no config link.
+    BuiltInAuto,
+    /// A local (YAML-authored) custom router. Shows the resolved model and,
+    /// when a `source_path` is available, a link that opens the YAML in Warp.
+    CustomLocal,
+    /// A cloud/team (server-synced) custom router. Shows the resolved model and
+    /// a link to the Warp Agent settings surface.
+    CustomCloud,
+}
+
+/// Classifies the selected base model id for the router warping indicator.
+/// Returns `None` for a direct (non-router) model id. Custom routers are
+/// checked before [`custom_model_routers::is_auto_target`] because that helper
+/// also matches custom-router ids.
+fn classify_router(base_model_id: Option<&str>) -> Option<RouterKind> {
+    let id = base_model_id?.trim();
+    if custom_model_routers::is_custom_router_id(id) {
+        if custom_model_routers::is_local_custom_router_id(id) {
+            Some(RouterKind::CustomLocal)
+        } else {
+            Some(RouterKind::CustomCloud)
+        }
+    } else if custom_model_routers::is_auto_target(id) {
+        Some(RouterKind::BuiltInAuto)
+    } else {
+        None
+    }
+}
+
+/// The inline configuration affordance rendered next to the router warping
+/// label.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum RouterConfigLink {
+    /// No link (built-in auto router, or a local router without a `source_path`).
+    None,
+    /// Open a local router's YAML in Warp's editor.
+    OpenLocalFile(PathBuf),
+    /// Navigate to the Warp Agent settings surface, pre-filling a search query.
+    OpenCloudSettings { search_query: String },
+}
+
+/// The resolved router warping indicator content: the primary label and an
+/// optional inline configuration link.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct RouterWarpingResolution {
+    label: String,
+    link: RouterConfigLink,
+}
+
+/// Pure resolver for the router warping indicator. Takes already-gathered
+/// inputs so it can be unit-tested with synthetic model ids and output
+/// metadata, without a live server or `AppContext`.
+///
+/// Returns `Some` only when the flag is enabled, the selected base model is a
+/// router (custom or built-in auto), and a resolved model name is available
+/// (from the current exchange, or the immediately previous exchange for an
+/// agent-initiated follow-up). A fresh user query never consults the previous
+/// exchange, so a stale router label can never bleed into a new turn.
+fn resolve_router_warping(
+    flag_enabled: bool,
+    base_model_id: Option<&str>,
+    current: Option<ModelInfoSnapshot>,
+    previous: Option<ModelInfoSnapshot>,
+    is_new_user_query: bool,
+    local_source_path: Option<&Path>,
+    cloud_search_query: Option<&str>,
+) -> Option<RouterWarpingResolution> {
+    if !flag_enabled {
+        return None;
+    }
+    let id = base_model_id?.trim();
+    let kind = classify_router(Some(id))?;
+    // Prefer the current exchange's model info. Only fall back to the
+    // immediately previous exchange for agent-initiated follow-ups (action
+    // results, etc.); a fresh user query must never reuse a prior model.
+    let info = current.or_else(|| previous.filter(|_| !is_new_user_query))?;
+    let name = info.display_label()?;
+    let label = format!("Warping with {name}.");
+    let link = match kind {
+        RouterKind::BuiltInAuto => RouterConfigLink::None,
+        RouterKind::CustomLocal => match local_source_path {
+            Some(path) => RouterConfigLink::OpenLocalFile(path.to_path_buf()),
+            None => RouterConfigLink::None,
+        },
+        RouterKind::CustomCloud => RouterConfigLink::OpenCloudSettings {
+            search_query: cloud_search_query.unwrap_or(id).to_string(),
+        },
+    };
+    Some(RouterWarpingResolution { label, link })
+}
+
+/// Derives the Warp Agent settings search query for a cloud/team custom router
+/// from its resolved [`LLMInfo`] display name. Returns `None` when the info is
+/// missing or the display name is empty/whitespace, so the pure resolver falls
+/// back to the raw config-key id (spec invariant 3: the router name/ID is
+/// supplied as the settings search query where supported).
+///
+/// Cloud/team routers arrive as server-synced `LLMInfo` entries surfaced by
+/// [`LLMPreferences::get_llm_info`] (they live in `models_by_feature`, not the
+/// local custom-router registry), so this must use `get_llm_info` rather than
+/// `custom_model_router_for_id` — the latter only knows local YAML routers and
+/// returns `None` for every cloud router, which previously made the `Configure
+/// router` link search for the raw `custom-router:cloud:<id>` key instead of
+/// the visible router name.
+fn cloud_router_search_query(info: Option<&LLMInfo>) -> Option<String> {
+    info.map(|i| i.display_name.as_str())
+        .filter(|name| !name.trim().is_empty())
+        .map(str::to_string)
+}
+
+/// Gathers live exchange/app state and delegates to [`resolve_router_warping`].
+/// Returns `None` unless the new flag is enabled and the active turn is
+/// router-selected with a resolved model.
+fn resolve_router_warping_for_exchange<V: View>(
+    model: &dyn AIBlockModel<View = V>,
+    app: &AppContext,
+) -> Option<RouterWarpingResolution> {
+    if !FeatureFlag::RouterWarpingIndicator.is_enabled() {
+        return None;
+    }
+    let base_id = model.base_model(app)?;
+    let kind = classify_router(Some(base_id.as_str()))?;
+    let (local_source_path, cloud_search_query) = match kind {
+        RouterKind::BuiltInAuto => (None, None),
+        RouterKind::CustomLocal => (
+            LLMPreferences::as_ref(app)
+                .custom_model_router_for_id(base_id)
+                .and_then(|router| router.source_path.clone()),
+            None,
+        ),
+        RouterKind::CustomCloud => (
+            None,
+            cloud_router_search_query(LLMPreferences::as_ref(app).get_llm_info(base_id)),
+        ),
+    };
+    let new_query = is_new_user_query(model, app);
+    let current = current_model_info_snapshot(model, app);
+    let previous = if new_query {
+        None
+    } else {
+        previous_model_info_snapshot(model, app)
+    };
+    resolve_router_warping(
+        true,
+        Some(base_id.as_str()),
+        current,
+        previous,
+        new_query,
+        local_source_path.as_deref(),
+        cloud_search_query.as_deref(),
+    )
+}
+
+fn current_model_info_snapshot<V: View>(
+    model: &dyn AIBlockModel<View = V>,
+    app: &AppContext,
+) -> Option<ModelInfoSnapshot> {
+    let output = model.status(app).output_to_render()?;
+    let output = output.get();
+    let info = output.model_info.as_ref()?;
+    Some(ModelInfoSnapshot {
+        display_name: info.display_name.clone(),
+        model_id: info.model_id.as_str().to_string(),
+    })
+}
+
+fn previous_model_info_snapshot<V: View>(
+    model: &dyn AIBlockModel<View = V>,
+    app: &AppContext,
+) -> Option<ModelInfoSnapshot> {
+    let prev = latest_model_used_before_exchange(model, app)?;
+    Some(ModelInfoSnapshot {
+        display_name: prev.model_display_name,
+        model_id: prev.model_id,
+    })
+}
+
+fn is_new_user_query<V: View>(model: &dyn AIBlockModel<View = V>, app: &AppContext) -> bool {
+    model
+        .conversation(app)
+        .and_then(|conv| {
+            let exchange_id = model.exchange_id(app)?;
+            conv.exchange_with_id(exchange_id)
+        })
+        .is_some_and(|exchange| exchange.has_user_query())
+}
+
+/// Renders the inline "Configure router" affordance for a router warping turn.
+/// Returns `None` for [`RouterConfigLink::None`] (built-in auto, or a local
+/// router without a `source_path`). The link dispatches a [`WorkspaceAction`]
+/// via the same formatted-text action path used by agent tips.
+fn render_router_config_link(link: RouterConfigLink, app: &AppContext) -> Option<Box<dyn Element>> {
+    use markdown_parser::{FormattedText, FormattedTextLine};
+    use warpui::elements::HyperlinkLens;
+    use warpui::text_layout::ClipConfig;
+
+    use crate::settings_view::SettingsSection;
+    use crate::workspace::WorkspaceAction;
+
+    let action = match link {
+        RouterConfigLink::None => return None,
+        RouterConfigLink::OpenLocalFile(path) => WorkspaceAction::OpenCustomRouterFile(path),
+        RouterConfigLink::OpenCloudSettings { search_query } => {
+            WorkspaceAction::ShowSettingsPageWithSearch {
+                search_query,
+                section: Some(SettingsSection::WarpAgent),
+            }
+        }
+    };
+    let appearance = Appearance::as_ref(app);
+    let theme = appearance.theme();
+    let formatted_text = FormattedText::new(vec![FormattedTextLine::Line(vec![
+        FormattedTextFragment::hyperlink_action("Configure router", action),
+    ])]);
+    Some(
+        warpui::elements::FormattedTextElement::new(
+            formatted_text,
+            appearance.monospace_font_size() - 2.,
+            appearance.ui_font_family(),
+            appearance.monospace_font_family(),
+            theme.disabled_ui_text_color().into_solid(),
+            Default::default(),
+        )
+        .with_hyperlink_font_color(theme.accent().into())
+        .set_selectable(true)
+        .with_clip(ClipConfig::ellipsis())
+        .register_default_click_handlers_with_action_support(move |hyperlink, evt, _app| {
+            match hyperlink {
+                HyperlinkLens::Action(action_ref) => {
+                    if let Some(action) = action_ref
+                        .as_any()
+                        .downcast_ref::<crate::workspace::WorkspaceAction>()
+                    {
+                        evt.dispatch_typed_action(action.clone());
+                    }
+                }
+                HyperlinkLens::Url(_) => {}
+            }
+        })
+        .finish(),
+    )
+}
+
 fn should_send_agent_tip_shown_analytics_event(app: &AppContext) -> bool {
     let privacy_settings_snapshot = PrivacySettings::handle(app).as_ref(app).get_snapshot(app);
     if privacy_settings_snapshot.should_disable_telemetry() {
@@ -1235,6 +1522,7 @@ impl View for BlocklistAIStatusBar {
                             buttons: None,
                             is_passive_code_diff: false,
                             secondary_element: self.render_tip(app),
+                            router_config_link: None,
                         },
                         app,
                     )
@@ -1270,6 +1558,7 @@ impl View for BlocklistAIStatusBar {
                             )),
                             is_passive_code_diff: false,
                             secondary_element: self.render_tip(app),
+                            router_config_link: None,
                         },
                         app,
                     )
@@ -1419,3 +1708,7 @@ impl TypedActionView for BlocklistAIStatusBar {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "status_bar_tests.rs"]
+mod tests;

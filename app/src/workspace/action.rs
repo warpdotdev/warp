@@ -499,6 +499,11 @@ pub enum WorkspaceAction {
     OpenFilePath {
         path: PathBuf,
     },
+    /// Open a custom model router's YAML config in Warp's own code editor,
+    /// reusing the settings view's "Open file" behavior (`open_custom_router_file`).
+    /// Dispatched by the warping indicator's "Configure router" link for local
+    /// custom routers. No-op on builds without `local_fs`.
+    OpenCustomRouterFile(PathBuf),
     TerminateApp,
     CloseWindow,
     /// Help the user call the Warp executable with the [`crate::args::DEBUG_DUMP_FLAG`].
@@ -1159,6 +1164,7 @@ impl WorkspaceAction {
             | AttemptLoginGatedAIUpgrade
             | UndoTrash(_)
             | OpenFilePath { .. }
+            | OpenCustomRouterFile(_)
             | ViewObjectInWarpDrive(_)
             | OpenObjectSharingSettings { .. }
             | TerminateApp
