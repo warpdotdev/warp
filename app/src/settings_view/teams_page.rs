@@ -1159,6 +1159,10 @@ impl TeamsPageView {
         target: TeamActionConfirmationTarget,
         ctx: &mut ViewContext<Self>,
     ) {
+        // The transfer-ownership modal does not block the member list behind it, so an owner can
+        // reach a member action while it is up. Only one modal renders, so close it rather than
+        // leaving a confirmation queued behind it for a target the user has moved on from.
+        self.transfer_ownership_modal_state.close();
         self.pending_team_action_confirmation = Some(target);
         self.open_member_actions_menu_index = None;
         self.team_action_confirmation_dialog
@@ -1172,20 +1176,25 @@ impl TeamsPageView {
         ctx.notify();
     }
 
-    fn hide_team_action_confirmation(&mut self, ctx: &mut ViewContext<Self>) {
+    /// Drops the confirmation dialog's state without announcing it. Callers that change what is on
+    /// screen emit [`TeamsPageViewEvent::ModalVisibilityChanged`] once for the whole transition.
+    fn clear_team_action_confirmation(&mut self) {
         self.pending_team_action_confirmation = None;
         self.show_team_action_confirmation_dialog = false;
+    }
+
+    fn hide_team_action_confirmation(&mut self, ctx: &mut ViewContext<Self>) {
+        self.clear_team_action_confirmation();
         ctx.emit(TeamsPageViewEvent::ModalVisibilityChanged);
         ctx.notify();
     }
 
     fn confirm_pending_team_action(&mut self, ctx: &mut ViewContext<Self>) {
-        let Some(target) = self.pending_team_action_confirmation.take() else {
-            self.hide_team_action_confirmation(ctx);
+        let target = self.pending_team_action_confirmation.take();
+        self.hide_team_action_confirmation(ctx);
+        let Some(target) = target else {
             return;
         };
-        self.show_team_action_confirmation_dialog = false;
-        ctx.emit(TeamsPageViewEvent::ModalVisibilityChanged);
         match target {
             TeamActionConfirmationTarget::Leave | TeamActionConfirmationTarget::Delete => {
                 self.leave_team(ctx);
@@ -1310,6 +1319,7 @@ impl TeamsPageView {
         team_uid: ServerId,
         ctx: &mut ViewContext<Self>,
     ) {
+        self.clear_team_action_confirmation();
         self.transfer_ownership_modal_state
             .view
             .update(ctx, |modal, ctx| {
@@ -1319,6 +1329,9 @@ impl TeamsPageView {
                 });
             });
         self.transfer_ownership_modal_state.open();
+        // Focus the modal so Escape closes it (the modal's escape binding only
+        // fires while something inside the modal holds focus).
+        ctx.focus(&self.transfer_ownership_modal_state.view);
         ctx.emit(TeamsPageViewEvent::ModalVisibilityChanged);
         ctx.notify();
     }
