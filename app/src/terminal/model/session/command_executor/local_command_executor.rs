@@ -231,8 +231,10 @@ impl LocalCommandExecutor {
     ) -> Result<CommandOutput> {
         let shell_config_flag = match self.shell_type {
             ShellType::Bash | ShellType::Zsh | ShellType::Fish => Some("-l"),
-            // Windows PowerShell 5.1 does not support `-Login` and loads the
-            // user's profile by default.
+            #[cfg(not(windows))]
+            ShellType::PowerShell => Some("-Login"),
+            // Windows PowerShell 5.1 does not support `-Login` and loads the user's profile by default.
+            #[cfg(windows)]
             ShellType::PowerShell => None,
         };
 
