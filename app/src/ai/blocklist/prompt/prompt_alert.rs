@@ -95,11 +95,6 @@ impl PromptAlertView {
                 Self::determine_state(&UserWorkspaces::as_ref(ctx).team_context_for_view(ctx), ctx);
             ctx.notify();
         });
-        let state = {
-            let user_workspaces = UserWorkspaces::as_ref(ctx);
-            let scope = user_workspaces.team_context_for_view(ctx);
-            Self::determine_state(&scope, ctx)
-        };
 
         ctx.subscribe_to_model(&user_workspaces, |me, _, _, ctx| {
             me.state =
@@ -118,6 +113,12 @@ impl PromptAlertView {
                 Self::determine_state(&UserWorkspaces::as_ref(ctx).team_context_for_view(ctx), ctx);
             ctx.notify();
         });
+
+        let state = {
+            let user_workspaces = UserWorkspaces::as_ref(ctx);
+            let scope = user_workspaces.team_context_for_view(ctx);
+            Self::determine_state(&scope, ctx)
+        };
 
         Self {
             view_handle: ctx.handle(),
