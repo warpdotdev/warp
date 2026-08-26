@@ -4296,21 +4296,21 @@ impl AuthOnboardingState {
     /// left to the caller.
     ///
     /// Joining an already-live (nested `Terminal`) workspace promotes `self` straight to
-    /// `AuthOnboardingState::Terminal` for `Onboarding` and `WebImport`: both render their own
-    /// view rather than the workspace they wrap, so leaving either in place would join the
-    /// session invisibly, behind that overlay. `NeedsSsoLink` is handled separately below and
-    /// is never promoted this way: unlike the onboarding-family states above, it exists to
-    /// deny app access until SSO linking completes, not to get out of the way once its content
-    /// is ready.
+    /// `AuthOnboardingState::Terminal` for `Onboarding`, `LoginSlide`, `PostAuthOnboarding`,
+    /// and `WebImport`: all render their own view rather than the workspace they wrap, so
+    /// leaving any of them in place would join the session invisibly, behind that overlay.
+    /// `LoginSlide` and `PostAuthOnboarding` also carry onboarding selections
+    /// (`pending_tutorial`, `pending_post_auth_onboarding_settings`, the account-first login
+    /// context) that only their own completion handlers apply, but that is not at risk here:
+    /// neither is ever constructed with a nested `Terminal` target in practice — both inherit
+    /// their target from onboarding paths that require login, whereas `Onboarding`'s
+    /// nested-`Terminal` case is reached post-auth. If a future change makes that target
+    /// reachable for either, decide deliberately whether to consume or preserve that pending
+    /// state before letting the promotion below apply to it.
     ///
-    /// `LoginSlide` and `PostAuthOnboarding` are omitted from the promotable states for a
-    /// different reason: both carry onboarding selections (`pending_tutorial`,
-    /// `pending_post_auth_onboarding_settings`, the account-first login context) that only
-    /// their own completion handlers apply, and neither is ever constructed with a nested
-    /// `Terminal` target in practice — both inherit their target from onboarding paths that
-    /// require login, whereas `Onboarding`'s nested-`Terminal` case is reached post-auth. If a
-    /// future change makes that target reachable, decide deliberately whether to consume or
-    /// preserve that pending state before promoting out of either.
+    /// `NeedsSsoLink` is handled in its own arm below and is never promoted this way: unlike
+    /// the onboarding-family states above, it exists to deny app access until SSO linking
+    /// completes, not to get out of the way once its content is ready.
     fn retarget_pending_workspace_for_shared_session(
         &mut self,
         session_id: SessionId,
