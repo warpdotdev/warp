@@ -65,7 +65,7 @@ use crate::view_components::ToastFlavor;
 use crate::workspace::sync_inputs::SyncedInputState;
 use crate::workspace::{PaneViewLocator, WorkspaceRegistry};
 #[cfg(not(target_family = "wasm"))]
-use crate::workspaces::user_workspaces::UserWorkspaces;
+use crate::workspaces::user_workspaces::{ResolvedTeamScope, UserWorkspaces};
 #[cfg(not(target_family = "wasm"))]
 use crate::{
     pane_group::child_agent::{
@@ -1670,7 +1670,7 @@ fn launch_local_no_harness_child(
                     conversation_id,
                     ..
                 }) => {
-                    let scope = crate::workspaces::user_workspaces::ResolvedTeamScope::from_scope(
+                    let scope = ResolvedTeamScope::from_scope(
                         &UserWorkspaces::as_ref(ctx).team_context_for_view(ctx),
                     );
                     apply_child_agent_model_override(
@@ -1829,10 +1829,9 @@ fn launch_local_harness_child(
                         conversation_id,
                         ..
                     }) => {
-                        let scope =
-                            crate::workspaces::user_workspaces::ResolvedTeamScope::from_scope(
-                                &UserWorkspaces::as_ref(ctx).team_context_for_view(ctx),
-                            );
+                        let scope = ResolvedTeamScope::from_scope(
+                            &UserWorkspaces::as_ref(ctx).team_context_for_view(ctx),
+                        );
                         apply_child_agent_model_override(
                             &scope,
                             terminal_view_id,

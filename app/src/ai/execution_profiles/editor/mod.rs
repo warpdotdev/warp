@@ -48,7 +48,9 @@ use crate::view_components::{
     Dropdown, DropdownItem, FilterableDropdown, SubmittableTextInput, SubmittableTextInputEvent,
 };
 use crate::workspace::WorkspaceAction;
-use crate::workspaces::user_workspaces::{TeamContext, TeamScope, UserWorkspacesEvent};
+use crate::workspaces::user_workspaces::{
+    ResolvedTeamScope, TeamContext, TeamScope, UserWorkspacesEvent,
+};
 use crate::{Appearance, TemplatableMCPServerManager, UserWorkspaces};
 
 const MODEL_MENU_WIDTH: f32 = 250.;
@@ -1220,7 +1222,7 @@ impl ExecutionProfileEditorView {
                 dropdown.set_enabled(ctx);
             }
 
-            let scope = crate::workspaces::user_workspaces::ResolvedTeamScope::from_scope(
+            let scope = ResolvedTeamScope::from_scope(
                 &UserWorkspaces::as_ref(ctx).team_context_for_view(ctx),
             );
             let llm_prefs = LLMPreferences::handle(ctx);
@@ -1276,7 +1278,7 @@ impl ExecutionProfileEditorView {
                 dropdown.set_enabled(ctx);
             }
 
-            let scope = crate::workspaces::user_workspaces::ResolvedTeamScope::from_scope(
+            let scope = ResolvedTeamScope::from_scope(
                 &UserWorkspaces::as_ref(ctx).team_context_for_view(ctx),
             );
             let choices = LLMPreferences::as_ref(ctx)

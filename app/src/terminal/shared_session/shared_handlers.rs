@@ -17,7 +17,7 @@ use crate::terminal::cli_agent_sessions::{
     CLIAgentSessionContext, CLIAgentSessionStatus, CLIAgentSessionsModel,
 };
 use crate::terminal::{CLIAgent, TerminalView};
-use crate::workspaces::user_workspaces::ResolvedTeamScope;
+use crate::workspaces::user_workspaces::{ResolvedTeamScope, UserWorkspaces};
 
 /// Handles updating the local LLM preferences when a selected agent model update is received.
 /// This function is shared between the viewer and sharer to ensure consistent behavior.
@@ -34,8 +34,7 @@ pub(crate) fn apply_selected_agent_model_update(
         return;
     };
     let scope = ResolvedTeamScope::from_scope(
-        &crate::workspaces::user_workspaces::UserWorkspaces::as_ref(ctx)
-            .team_context_for_window(view.window_id(ctx)),
+        &UserWorkspaces::as_ref(ctx).team_context_for_window(view.window_id(ctx)),
     );
 
     // Check if this is already our current model - if so, skip the update to avoid loops
