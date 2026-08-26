@@ -49,27 +49,27 @@ Render `<details>`/`<summary>` HTML blocks in Warp-rendered markdown as collapsi
 
 ### Nesting guard
 
-10. Nesting is supported to a depth of 64. A `<details>` opening tag at depth 65 or deeper renders as literal text, and its content renders as ordinary markdown. The now-unmatched `</details>` renders as literal text under behavior 11(b). The depth is a fixed constant, so the same input always produces the same rendering. This bound is a stack-safety guard on the recursive body parse, not a product limit: it sits far above any realistic content — content in the wild rarely nests past 3 — and far below the depth at which the recursion could exhaust a stack. The tech spec derives the number.
+10. Nesting is supported to a depth of 64. A `<details>` opening tag at depth 65 or deeper renders as literal text, and its content renders as ordinary markdown. The now-unmatched `</details>` renders as literal text under behavior 11(b). An over-depth region's rendered text therefore contains the characters `<details>` and `</details>` themselves, where a within-depth region's rendered text contains only its summary and body; serialization writes those same literal characters back, so the round trip is stable. The depth is a fixed constant, so the same input always produces the same rendering. This bound is a stack-safety guard on the recursive body parse, not a product limit: it sits far above any realistic content — content in the wild rarely nests past 3 — and far below the depth at which the recursion could exhaust a stack. The tech spec derives the number.
 
 ### Malformed and unsupported input
 
-11. Malformed and unsupported input degrades deterministically, and markup the parser does not consume renders as visible literal text rather than being silently dropped:
+11. Malformed and unsupported input degrades deterministically, and markup the parser does not consume renders as visible literal text rather than being silently dropped. Each rule below states what a reader sees and what a save writes back: an unconsumed tag survives a round trip as the literal characters of that tag, so no edit or serialization can delete a details tag the user typed.
 
-    a. A `<details>` with no matching `</details>` takes the rest of the enclosing content as its body. A nested unclosed `<details>` ends where its parent ends.
+    a. A `<details>` with no matching `</details>` takes the rest of the enclosing content as its body. A nested unclosed `<details>` ends where its parent ends. Serialization writes the opening `<details>` and no closing tag, so the round trip reproduces the same unclosed region.
 
-    b. A `</details>` with no open `<details>` renders as literal text.
+    b. A `</details>` with no open `<details>` renders as literal text, and serialization writes the literal characters `</details>`.
 
     c. A `<details>` or `</details>` tag that does not start a line renders as literal text and does not open or close a section. Leading whitespace is permitted before an opening tag; any other preceding character on the line, including a backtick, disqualifies it.
 
     d. A self-closing `<details/>` opens a section with no distinct closing tag, so it degrades under 11(a).
 
-    e. A `<details>` with no `<summary>` renders with the literal summary label `Details`.
+    e. A `<details>` with no `<summary>` renders with the literal summary label `Details`. The label is a rendering substitute, not content: serialization writes no `<summary>` element, so the round trip reproduces a summary-less region rather than materializing the word `Details` into the document.
 
     f. Only a `<summary>` that opens the details body is the summary. A `<summary>` appearing after body content renders as literal text, as does each `<summary>` after the first.
 
-    g. A `<summary>` with no matching `</summary>` takes the rest of the details body as its summary, leaving the body empty. When the enclosing `<details>` is itself unclosed under 11(a), the summary ends at the end of the enclosing content, so a single unclosed `<summary>` can consume the remainder of the document into one summary row.
+    g. A `<summary>` with no matching `</summary>` takes the rest of the details body as its summary, leaving the body empty. When the enclosing `<details>` is itself unclosed under 11(a), the summary ends at the end of the enclosing content, so a single unclosed `<summary>` can consume the remainder of the document into one summary row. Serialization writes the opening `<summary>` and no closing tag, so the round trip reproduces the same unclosed summary and the body stays empty.
 
-    h. A `</summary>` with no open `<summary>` renders as literal text.
+    h. A `</summary>` with no open `<summary>` renders as literal text, and serialization writes the literal characters `</summary>`.
 
     i. Markdown block structure inside `<summary>` is not honored: a code fence, a nested `<details>`, or a nested `<summary>` inside a summary renders as literal inline text, and a multi-line summary renders as one line. GitHub renders block content inside a summary as real blocks; Warp models a summary as a single inline run, so this diverges — see "Divergences from GitHub rendering".
 
