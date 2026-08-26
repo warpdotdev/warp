@@ -91,9 +91,8 @@ impl PromptAlertView {
         let api_key_manager = ApiKeyManager::handle(ctx);
 
         ctx.subscribe_to_model(&request_usage_model, |me, _, _, ctx| {
-            let user_workspaces = UserWorkspaces::as_ref(ctx);
-            let scope = user_workspaces.team_context_for_view(ctx);
-            me.state = Self::determine_state(&scope, ctx);
+            me.state =
+                Self::determine_state(&UserWorkspaces::as_ref(ctx).team_context_for_view(ctx), ctx);
             ctx.notify();
         });
         let state = {
@@ -103,23 +102,20 @@ impl PromptAlertView {
         };
 
         ctx.subscribe_to_model(&user_workspaces, |me, _, _, ctx| {
-            let user_workspaces = UserWorkspaces::as_ref(ctx);
-            let scope = user_workspaces.team_context_for_view(ctx);
-            me.state = Self::determine_state(&scope, ctx);
+            me.state =
+                Self::determine_state(&UserWorkspaces::as_ref(ctx).team_context_for_view(ctx), ctx);
             ctx.notify();
         });
 
         ctx.subscribe_to_model(&network_status, |me, _, _, ctx| {
-            let user_workspaces = UserWorkspaces::as_ref(ctx);
-            let scope = user_workspaces.team_context_for_view(ctx);
-            me.state = Self::determine_state(&scope, ctx);
+            me.state =
+                Self::determine_state(&UserWorkspaces::as_ref(ctx).team_context_for_view(ctx), ctx);
             ctx.notify();
         });
 
         ctx.subscribe_to_model(&api_key_manager, |me, _, _, ctx| {
-            let user_workspaces = UserWorkspaces::as_ref(ctx);
-            let scope = user_workspaces.team_context_for_view(ctx);
-            me.state = Self::determine_state(&scope, ctx);
+            me.state =
+                Self::determine_state(&UserWorkspaces::as_ref(ctx).team_context_for_view(ctx), ctx);
             ctx.notify();
         });
 

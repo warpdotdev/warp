@@ -5975,26 +5975,19 @@ struct GeminiEnterpriseWidget {
 }
 
 impl GeminiEnterpriseWidget {
-    fn is_refresh_enabled<S: TeamScope + ?Sized>(scope: &S, app: &AppContext) -> bool {
-        AISettings::as_ref(app).is_any_ai_enabled(app)
-            && UserWorkspaces::as_ref(app).is_gemini_enterprise_credentials_enabled(scope, app)
-            && !ApiKeyManager::as_ref(app)
+    fn is_refresh_enabled<T: Entity>(ctx: &ViewContext<T>) -> bool {
+        let user_workspaces = UserWorkspaces::as_ref(ctx);
+        let scope = user_workspaces.team_context_for_view(ctx);
+        AISettings::as_ref(ctx).is_any_ai_enabled(ctx)
+            && UserWorkspaces::as_ref(ctx).is_gemini_enterprise_credentials_enabled(scope, ctx)
+            && !ApiKeyManager::as_ref(ctx)
                 .geap_credentials_state()
                 .requires_admin_action()
     }
 
-    /// Resolves the window's team scope and evaluates [`Self::is_refresh_enabled`] against it,
-    /// scoped to a block so the borrow of `ctx` the scope carries ends before the caller makes
-    /// any further mutable use of `ctx`.
-    fn is_refresh_enabled_for_view<T: Entity>(ctx: &ViewContext<T>) -> bool {
-        let user_workspaces = UserWorkspaces::as_ref(ctx);
-        let scope = user_workspaces.team_context_for_view(ctx);
-        Self::is_refresh_enabled(&scope, ctx)
-    }
-
     fn new(ctx: &mut ViewContext<<Self as SettingsWidget>::View>) -> Self {
         let self_handle = ctx.handle();
-        let is_refresh_enabled = Self::is_refresh_enabled_for_view(ctx);
+        let is_refresh_enabled = Self::is_refresh_enabled(ctx);
         let refresh_credentials_button = ctx.add_typed_action_view(|_| {
             ActionButton::new("Refresh", SecondaryTheme)
                 .with_icon(Icon::RefreshCw04)
@@ -6016,7 +6009,7 @@ impl GeminiEnterpriseWidget {
                 UserWorkspacesEvent::TeamsChanged
                     | UserWorkspacesEvent::UpdateWorkspaceSettingsSuccess
             ) {
-                let is_refresh_enabled = Self::is_refresh_enabled_for_view(ctx);
+                let is_refresh_enabled = Self::is_refresh_enabled(ctx);
                 refresh_credentials_button_clone.update(ctx, |button, ctx| {
                     button.set_disabled(!is_refresh_enabled, ctx);
                 });
@@ -6031,7 +6024,7 @@ impl GeminiEnterpriseWidget {
                 AISettingsChangedEvent::GeminiEnterpriseCredentialsEnabled { .. }
                     | AISettingsChangedEvent::IsAnyAIEnabled { .. }
             ) {
-                let is_refresh_enabled = Self::is_refresh_enabled_for_view(ctx);
+                let is_refresh_enabled = Self::is_refresh_enabled(ctx);
                 refresh_credentials_button_clone.update(ctx, |button, ctx| {
                     button.set_disabled(!is_refresh_enabled, ctx);
                 });
@@ -6042,7 +6035,7 @@ impl GeminiEnterpriseWidget {
         let refresh_credentials_button_clone = refresh_credentials_button.clone();
         ctx.subscribe_to_model(&ApiKeyManager::handle(ctx), move |_, _, event, ctx| {
             if matches!(event, ApiKeyManagerEvent::KeysUpdated) {
-                let is_refresh_enabled = Self::is_refresh_enabled_for_view(ctx);
+                let is_refresh_enabled = Self::is_refresh_enabled(ctx);
                 refresh_credentials_button_clone.update(ctx, |button, ctx| {
                     button.set_disabled(!is_refresh_enabled, ctx);
                 });

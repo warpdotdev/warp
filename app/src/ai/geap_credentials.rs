@@ -76,10 +76,6 @@ fn geap_mint_binding_from_parts(
     })
 }
 
-/// Resolves the mint binding for `settings`, once a host configuration is known to exist.
-/// Shared by [`current_geap_policy`] and [`current_geap_policy_for_any_team`], which differ
-/// only in how they find that configuration -- scoped to one team or aggregated across all of
-/// them.
 fn geap_policy_from_host_settings(
     settings: Option<&crate::workspaces::workspace::LlmHostSettings>,
     app: &AppContext,
@@ -101,8 +97,7 @@ fn geap_policy_from_host_settings(
 }
 
 /// The GEAP policy for a request made under `scope`. Use this whenever a scope is available --
-/// i.e. whenever the work is rooted in a window. See [`current_geap_policy_for_any_team`] for
-/// the windowless alternative.
+/// i.e. whenever the work is rooted in a window.
 pub(crate) fn current_geap_policy<S: TeamScope + ?Sized>(
     scope: &S,
     app: &AppContext,
