@@ -298,7 +298,6 @@ impl PassiveSuggestionsModel {
         };
 
         let server_api = ServerApiProvider::handle(ctx).as_ref(ctx).get();
-        // Resolved before spawning, so a mid-flight team switch cannot re-attribute the request.
         let team_scope =
             RequestTeamScope::from_scope(&self.ai_controller.as_ref(ctx).team_context(ctx));
         let request_future = async move {
