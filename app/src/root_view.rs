@@ -2239,7 +2239,11 @@ impl RootView {
                 if !matches!(event, AIRequestUsageModelEvent::CreditAvailabilityUpdated) {
                     return;
                 }
-                let available = AIRequestUsageModel::as_ref(ctx).has_any_ai_remaining(ctx);
+                let available = {
+                    let user_workspaces = UserWorkspaces::as_ref(ctx);
+                    let scope = user_workspaces.team_context_for_view(ctx);
+                    AIRequestUsageModel::as_ref(ctx).has_any_ai_remaining(&scope, ctx)
+                };
                 onboarding_view_for_usage.update(ctx, |onboarding_view, ctx| {
                     onboarding_view.on_ai_credit_availability_observed(available, ctx);
                 });
