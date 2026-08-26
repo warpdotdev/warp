@@ -345,6 +345,29 @@ impl BaseClient {
         Ok(options)
     }
 
+    /// Returns GraphQL options for a session-authenticated operation scoped to a team.
+    ///
+    /// `team_uid` is the raw wire value already resolved by the caller from a
+    /// `RequestTeamScope` (`app/src/server/team_scope.rs`); this crate has no visibility
+    /// into that type, only the wire value, following the same pattern as
+    /// `generate_multi_agent_output`'s `team_uid` parameter. `None` sends no team header and
+    /// this behaves exactly like [`Self::graphql_request_options`], so an operation that
+    /// already names its team explicitly in its GraphQL variables can pass `None` here
+    /// instead of also attaching a header that could disagree with those variables.
+    pub async fn graphql_request_options_with_team(
+        &self,
+        timeout: Option<Duration>,
+        team_uid: Option<String>,
+    ) -> Result<RequestOptions> {
+        let mut options = self.graphql_request_options(timeout).await?;
+        if let Some(team_uid) = team_uid {
+            options
+                .headers
+                .insert(TEAM_UID_HEADER.to_string(), team_uid);
+        }
+        Ok(options)
+    }
+
     /// Notifies the application when an enabled IAP-backed request receives an IAP challenge.
     pub fn observe_iap_challenge(&self, response: &http_client::Response) -> bool {
         if self.iap_token_provider.is_none()
