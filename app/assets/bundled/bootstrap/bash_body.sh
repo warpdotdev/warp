@@ -1388,9 +1388,6 @@ esac
           shell_plugins+=("starship")
         fi
 
-        # Join into a newline-separated list (one tag per line, matching zsh's `print -l --`)
-        # before escaping -- "$shell_plugins" alone would only expand to the array's first
-        # element.
         local shell_plugins_list="$(printf '%s\n' "${shell_plugins[@]}")"
 
         if [ "$WARP_IN_MSYS2" = false ]; then
