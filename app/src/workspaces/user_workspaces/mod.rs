@@ -22,7 +22,7 @@ use super::workspace::{
     WorkspaceUid,
 };
 use crate::ai::credit_availability::AICreditAvailability;
-use crate::ai::llms::{AvailableLLMs, LLMModelHost, MODELS_BY_FEATURE_CACHE_KEY, ModelsByFeature};
+use crate::ai::llms::{AvailableLLMs, MODELS_BY_FEATURE_CACHE_KEY, ModelsByFeature};
 use crate::ai::request_usage_model::AIRequestUsageModel;
 use crate::auth::{AuthStateProvider, UserUid};
 use crate::channel::ChannelState;
