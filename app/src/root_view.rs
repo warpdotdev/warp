@@ -630,6 +630,10 @@ fn requires_post_onboarding_login(
 /// should see pre-login onboarding. Deep links to specific content skip it outright: the
 /// content is the reason the window was opened, so reaching it takes priority over
 /// first-run product setup.
+///
+/// Only used on the native cold-start path: wasm always goes through
+/// [`AuthOnboardingState::WebImport`] instead.
+#[cfg(not(target_family = "wasm"))]
 fn should_show_pre_login_onboarding_for(
     workspace_setting: &NewWorkspaceSource,
     ctx: &AppContext,
@@ -3201,7 +3205,7 @@ impl RootView {
             });
         } else if !self
             .auth_onboarding_state
-            .retarget_pending_workspace_for_shared_session(*session_id)
+            .retarget_pending_workspace_for_shared_session(*session_id, ctx)
         {
             log::warn!("Auth not complete before trying to join shared session");
             return false;
@@ -4285,25 +4289,33 @@ impl AuthOnboardingState {
     }
 
     /// Redirects a pending (not yet created) workspace to join `session_id` once auth
-    /// and/or onboarding complete, instead of dropping a shared-session deep link that
-    /// arrives while either is still in progress. Returns whether a pending workspace was
-    /// found to redirect; a `Terminal` state already has a live workspace and is left to the
-    /// caller.
-    fn retarget_pending_workspace_for_shared_session(&mut self, session_id: SessionId) -> bool {
-        let setting = NewWorkspaceSource::SharedSessionAsViewer { session_id };
+    /// and/or onboarding complete, or joins it immediately if the state already wraps a live
+    /// workspace (e.g. onboarding shown over an existing session), instead of dropping a
+    /// shared-session deep link that arrives while either is in progress. Returns whether the
+    /// link was handled; a bare `Terminal` state already has a live workspace and is left to
+    /// the caller.
+    fn retarget_pending_workspace_for_shared_session(
+        &mut self,
+        session_id: SessionId,
+        ctx: &mut ViewContext<RootView>,
+    ) -> bool {
         match self {
             AuthOnboardingState::Auth(args) | AuthOnboardingState::ConfirmIncomingAuth(args) => {
-                args.workspace_setting = setting;
+                args.workspace_setting = NewWorkspaceSource::SharedSessionAsViewer { session_id };
                 true
             }
             AuthOnboardingState::Onboarding { target, .. }
             | AuthOnboardingState::LoginSlide { target, .. }
             | AuthOnboardingState::PostAuthOnboarding { target, .. } => {
-                target.retarget_pending_workspace(setting)
+                target.retarget_pending_workspace_or_join(session_id, ctx)
             }
-            AuthOnboardingState::NeedsSsoLink(target) => target.retarget_pending_workspace(setting),
+            AuthOnboardingState::NeedsSsoLink(target) => {
+                target.retarget_pending_workspace_or_join(session_id, ctx)
+            }
             #[cfg(target_family = "wasm")]
-            AuthOnboardingState::WebImport(target) => target.retarget_pending_workspace(setting),
+            AuthOnboardingState::WebImport(target) => {
+                target.retarget_pending_workspace_or_join(session_id, ctx)
+            }
             AuthOnboardingState::Terminal(_) => false,
         }
     }
@@ -4317,17 +4329,25 @@ impl AuthOnboardingTarget {
         }
     }
 
-    /// Redirects a not-yet-created workspace to `setting` instead of its original
-    /// destination. Returns whether there was a pending workspace to redirect; a `Terminal`
-    /// target already has a live workspace and is left untouched.
-    fn retarget_pending_workspace(&mut self, setting: NewWorkspaceSource) -> bool {
+    /// Redirects a not-yet-created workspace to join `session_id` instead of its original
+    /// destination, or joins it immediately if this target already has a live workspace.
+    /// Always returns true: either form of target can honor the deep link.
+    fn retarget_pending_workspace_or_join(
+        &mut self,
+        session_id: SessionId,
+        ctx: &mut ViewContext<RootView>,
+    ) -> bool {
         match self {
             AuthOnboardingTarget::Workspace(args) => {
-                args.workspace_setting = setting;
-                true
+                args.workspace_setting = NewWorkspaceSource::SharedSessionAsViewer { session_id };
             }
-            AuthOnboardingTarget::Terminal(_) => false,
+            AuthOnboardingTarget::Terminal(workspace) => {
+                workspace.update(ctx, |workspace, ctx| {
+                    workspace.add_tab_for_joining_shared_session(session_id, false, ctx);
+                });
+            }
         }
+        true
     }
 }
 
