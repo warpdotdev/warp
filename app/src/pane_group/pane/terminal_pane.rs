@@ -1649,10 +1649,6 @@ fn launch_local_no_harness_child(
             let is_shared_session_creator =
                 inherit_share_for_local_child(host_source.as_ref(), child_task_id);
 
-            BlocklistAIHistoryModel::handle(ctx).update(ctx, |model, ctx| {
-                model.remove_existing_conversation_for_run_id(&child_task_id.to_string(), ctx);
-            });
-
             match create_hidden_child_agent_conversation(
                 group,
                 HiddenChildAgentConversationRequest {
@@ -1797,10 +1793,6 @@ fn launch_local_harness_child(
                 } = launch;
                 let is_shared_session_creator =
                     inherit_share_for_local_child(host_source.as_ref(), task_id);
-
-                BlocklistAIHistoryModel::handle(ctx).update(ctx, |model, ctx| {
-                    model.remove_existing_conversation_for_run_id(&run_id, ctx);
-                });
 
                 match create_hidden_child_agent_conversation(
                     group,

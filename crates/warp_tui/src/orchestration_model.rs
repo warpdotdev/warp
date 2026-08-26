@@ -25,9 +25,9 @@ use warp::tui_export::{
     StartAgentRequest, aggregated_orchestrator_status, apply_child_agent_model_override,
     child_conversations_in_pill_order, classify_cloud_agent_startup_error,
     descendant_conversation_ids_in_spawn_order, descendant_conversations_in_pill_order,
-    inherit_child_agent_settings, loaded_subtree_rollup, orchestration_root_conversation_id,
-    oz_run_url, prepare_local_oz_child_launch, prepare_remote_child_launch,
-    register_agent_event_consumer, unregister_agent_event_consumer,
+    finish_local_oz_child_conversation, inherit_child_agent_settings, loaded_subtree_rollup,
+    orchestration_root_conversation_id, oz_run_url, prepare_local_oz_child_launch,
+    prepare_remote_child_launch, register_agent_event_consumer, unregister_agent_event_consumer,
 };
 use warp_core::features::FeatureFlag;
 use warpui::SingletonEntity;
@@ -820,15 +820,16 @@ impl TuiOrchestrationModel {
                 false,
                 ctx,
             );
-            // Stamp the task id before completing the request so the
-            // executor and the local task-status sync see it immediately.
-            if let Some(conversation) = history.conversation_mut(&conversation_id) {
-                conversation.set_task_id(task_id);
-            }
             history.set_active_conversation_id(conversation_id, child_surface_id, ctx);
-            history.record_new_conversation_request_complete(request.id, conversation_id, ctx);
             conversation_id
         });
+        finish_local_oz_child_conversation(
+            conversation_id,
+            child_surface_id,
+            task_id,
+            request.id,
+            ctx,
+        );
 
         self.register_event_consumer(parent_session_id, request.parent_conversation_id, ctx);
         self.register_event_consumer(session_id, conversation_id, ctx);

@@ -1,8 +1,10 @@
 use warp::tui_export::{
-    AIConversationId, BlocklistAIHistoryModel, CloudAgentStartupBlocker, CloudAgentStartupFailure,
-    CloudAgentStartupIssue, ConversationStatus, Harness, OrchestrationEventStreamerEvent,
-    RenderableAIError, StartAgentExecutionMode, StartAgentExecutor, StartAgentExecutorEvent,
-    StartAgentOutcome, StartAgentRequest, register_tui_session_view_test_singletons,
+    AIConversationId, AmbientAgentTaskId, BlocklistAIHistoryModel, CloudAgentStartupBlocker,
+    CloudAgentStartupFailure, CloudAgentStartupIssue, ConversationStatus, Harness,
+    OrchestrationEventStreamerEvent, RenderableAIError, StartAgentExecutionMode,
+    StartAgentExecutor, StartAgentExecutorEvent, StartAgentOutcome, StartAgentRequest,
+    StartAgentRequestId, finish_local_oz_child_conversation,
+    register_tui_session_view_test_singletons,
 };
 use warp_core::features::FeatureFlag;
 use warpui::platform::WindowStyle;
@@ -263,6 +265,43 @@ fn assert_failed_launch_cleaned_up(
         app.read_model(&fixture.sessions, |sessions, _| sessions.len()),
         expected_session_count,
     );
+}
+
+/// Regression for QUALITY-1902 (the TUI counterpart of QUALITY-1897):
+/// `register_local_oz_child_session` must index the run id through
+/// `assign_run_id_for_conversation`, not a bare `set_task_id`, so the SSE
+/// remote-child placeholder path's idempotency check
+/// (`conversation_id_for_agent_id`) can see it immediately.
+#[test]
+fn local_oz_child_session_indexes_run_id_immediately() {
+    App::test((), |mut app| async move {
+        let fixture = orchestration_fixture(&mut app);
+        let parent_session_id = add_dispatching_session(&mut app, &fixture, true);
+        let parent_conversation_id = read_active_conversation_id(&app, parent_session_id);
+
+        let (child_session_id, conversation_id) =
+            add_child_session(&mut app, &fixture, parent_conversation_id, "verify-child");
+
+        let task_id: AmbientAgentTaskId = "44444444-4444-4444-4444-444444444444".parse().unwrap();
+        app.update(|ctx| {
+            finish_local_oz_child_conversation(
+                conversation_id,
+                child_session_id.surface_id(),
+                task_id,
+                StartAgentRequestId::default(),
+                ctx,
+            );
+        });
+
+        app.read(|ctx| {
+            assert_eq!(
+                BlocklistAIHistoryModel::as_ref(ctx)
+                    .conversation_id_for_agent_id(&task_id.to_string()),
+                Some(conversation_id),
+                "run id must resolve immediately after the local Oz launch"
+            );
+        });
+    });
 }
 
 #[test]

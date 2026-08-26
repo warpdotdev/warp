@@ -354,9 +354,10 @@ fn sse_placeholder_then_local_launch_converges_on_one_conversation() {
                 .expect("the SSE placeholder must materialize before the local launch completes")
         });
 
-        history_model.update(&mut app, |history, ctx| {
-            history.remove_existing_conversation_for_run_id(&child_task_id.to_string(), ctx);
-        });
+        // The local Oz launch completes afterwards: its own conversation is
+        // created first, then `finish_local_oz_child_conversation` claims
+        // the run id, which discards the stale placeholder through the
+        // centralized guard in `assign_run_id_for_conversation`.
         let local_child_id = history_model.update(&mut app, |history, ctx| {
             history.start_new_child_conversation(
                 terminal_view_id,
