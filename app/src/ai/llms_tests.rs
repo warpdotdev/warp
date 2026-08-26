@@ -715,7 +715,7 @@ fn with_model_picker_query_test_context(
         )
         .expect("choices are non-empty");
         UserWorkspaces::handle(&app).update(&mut app, |workspaces, _| {
-            workspaces.set_pre_login_models_by_feature(ModelsByFeature {
+            workspaces.set_workspaceless_models_by_feature(ModelsByFeature {
                 agent_mode,
                 ..Default::default()
             });
@@ -1047,7 +1047,7 @@ fn preferences_for_profile_model_tests(ctx: &mut ModelContext<LLMPreferences>) -
     )
     .expect("choices are non-empty");
     UserWorkspaces::handle(ctx).update(ctx, |workspaces, _| {
-        workspaces.set_pre_login_models_by_feature(ModelsByFeature {
+        workspaces.set_workspaceless_models_by_feature(ModelsByFeature {
             agent_mode,
             ..Default::default()
         });

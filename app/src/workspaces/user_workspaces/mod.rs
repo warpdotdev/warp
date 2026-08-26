@@ -124,7 +124,10 @@ pub struct UserWorkspaces {
     /// filtered out of `workspaces` — this is the only place their purchase
     /// policy survives.
     user_purchase_policy: Option<PurchaseAddOnCreditsPolicy>,
-    pre_login_models_by_feature: Option<ModelsByFeature>,
+    /// The model catalog to fall back to when no current workspace exists: before login, or
+    /// for a logged-in user whose only workspace is the server's placeholder, which is
+    /// filtered out of `workspaces`.
+    workspaceless_models_by_feature: Option<ModelsByFeature>,
     team_client: Arc<dyn TeamClient>,
     workspace_client: Arc<dyn WorkspaceClient>,
 }
@@ -184,7 +187,7 @@ impl UserWorkspaces {
             window_team_uids: Default::default(),
             joinable_teams: Default::default(),
             user_purchase_policy: None,
-            pre_login_models_by_feature: None,
+            workspaceless_models_by_feature: None,
             team_client,
             workspace_client,
         }
@@ -235,7 +238,7 @@ impl UserWorkspaces {
             window_team_uids: Default::default(),
             joinable_teams: Default::default(),
             user_purchase_policy: None,
-            pre_login_models_by_feature: None,
+            workspaceless_models_by_feature: None,
             team_client,
             workspace_client,
         };
@@ -258,8 +261,8 @@ impl UserWorkspaces {
         me
     }
 
-    pub(crate) fn set_pre_login_models_by_feature(&mut self, models: ModelsByFeature) {
-        self.pre_login_models_by_feature = Some(models);
+    pub(crate) fn set_workspaceless_models_by_feature(&mut self, models: ModelsByFeature) {
+        self.workspaceless_models_by_feature = Some(models);
     }
 
     pub fn upgrade_link(user_id: UserUid) -> String {

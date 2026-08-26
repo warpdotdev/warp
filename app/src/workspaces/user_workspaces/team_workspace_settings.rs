@@ -439,7 +439,7 @@ impl UserWorkspaces {
             scope,
             |team| &team.feature_model_choice,
             |workspace| &workspace.feature_model_choice,
-            self.pre_login_models_by_feature
+            self.workspaceless_models_by_feature
                 .as_ref()
                 .unwrap_or_else(|| DEFAULT.get_or_init(ModelsByFeature::default)),
         )
@@ -467,7 +467,7 @@ impl UserWorkspaces {
             }
             None => match self.current_workspace_mut() {
                 Some(workspace) => workspace.feature_model_choice = models,
-                None => self.set_pre_login_models_by_feature(models),
+                None => self.set_workspaceless_models_by_feature(models),
             },
         }
     }
@@ -494,7 +494,7 @@ impl UserWorkspaces {
                     .agent_mode
                     .push_choice_for_test(llm),
                 None => self
-                    .pre_login_models_by_feature
+                    .workspaceless_models_by_feature
                     .get_or_insert_with(ModelsByFeature::default)
                     .agent_mode
                     .push_choice_for_test(llm),
