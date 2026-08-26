@@ -7,7 +7,7 @@ use cloud_object_client::MockObjectClient;
 use warp_core::settings::macros::define_settings_group;
 use warp_core::settings::{RespectUserSyncSetting, Setting, SupportedPlatforms, SyncToCloud};
 use warp_core::user_preferences::GetUserPreferences;
-use warpui::{App, SingletonEntity, poll_until_true};
+use warpui::{App, SingletonEntity};
 
 use super::{
     ClientIdProvider, CloudPreferencesSyncer, ForceCloudToMatchLocal,
@@ -205,11 +205,14 @@ async fn spawned_sync_queue_future_at_index(app: &mut App, index: usize) {
         .await
 }
 async fn wait_for_num_spawned_futures(app: &mut App, expected_num: usize, message: &str) {
-    let _ = poll_until_true(app, |app| {
-        SyncQueue::handle(app).read(app, |sync_queue, _ctx| sync_queue.spawned_futures().len())
-            == expected_num
-    })
-    .await;
+    for _ in 0..50 {
+        let num_spawned_futures =
+            SyncQueue::handle(app).read(app, |sync_queue, _ctx| sync_queue.spawned_futures().len());
+        if num_spawned_futures == expected_num {
+            return;
+        }
+        warpui::r#async::Timer::after(Duration::from_millis(100)).await;
+    }
 
     assert_num_spawned_futures(app, expected_num, message);
 }

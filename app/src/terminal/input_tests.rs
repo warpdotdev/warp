@@ -24,7 +24,7 @@ use warp_util::standardized_path::StandardizedPath;
 use warp_util::user_input::UserInput;
 use warpui::platform::WindowStyle;
 use warpui::text::SelectionType;
-use warpui::{App, ReadModel, UpdateView, WindowId, poll_until_true};
+use warpui::{App, ReadModel, UpdateView, WindowId};
 use watcher::HomeDirectoryWatcher;
 use workflows::workflow::{Argument, ArgumentType, Workflow};
 
@@ -3014,13 +3014,18 @@ fn input_tab_does_not_ask_the_shell_when_bundled_specs_are_non_empty() {
             input.input_tab(ctx);
         });
 
+        let mut menu_opened = false;
+        for _ in 0..1000 {
+            if input.read(&app, |input, ctx| {
+                input.suggestions_mode_model.as_ref(ctx).is_visible()
+            }) {
+                menu_opened = true;
+                break;
+            }
+            warpui::r#async::Timer::after(Duration::from_millis(5)).await;
+        }
         assert!(
-            poll_until_true(&mut app, |app| {
-                input.read(app, |input, ctx| {
-                    input.suggestions_mode_model.as_ref(ctx).is_visible()
-                })
-            })
-            .await,
+            menu_opened,
             "the bundled-spec completions menu never opened, so nothing was proven"
         );
 
@@ -3056,11 +3061,15 @@ fn input_tab_asks_the_shell_once_when_bundled_specs_are_empty() {
             input.input_tab(ctx);
         });
 
-        let dispatched = dispatch_count.clone();
-        assert!(
-            poll_until_true(&mut app, move |_| *dispatched.borrow() == 1).await,
-            "the shell was never asked"
-        );
+        let mut shell_asked = false;
+        for _ in 0..1000 {
+            if *dispatch_count.borrow() == 1 {
+                shell_asked = true;
+                break;
+            }
+            warpui::r#async::Timer::after(Duration::from_millis(5)).await;
+        }
+        assert!(shell_asked, "the shell was never asked");
 
         assert_eq!(
             *dispatch_count.borrow(),

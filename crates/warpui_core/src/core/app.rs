@@ -4984,32 +4984,3 @@ impl AppContext {
         }
     }
 }
-
-/// Yields until `poll` produces a value and returns it, or returns `None` once the attempt budget
-/// runs out. The bound is an attempt count rather than a wall-clock deadline, so the wait cannot
-/// hang and does not depend on the test clock advancing with `Instant::now()`. `state` is passed
-/// through to `poll` untouched; pass `&mut ()` when the poll needs nothing.
-#[cfg(any(test, feature = "test-util"))]
-pub async fn poll_until<S, T>(
-    state: &mut S,
-    mut poll: impl FnMut(&mut S) -> Option<T>,
-) -> Option<T> {
-    const POLL_ATTEMPTS: usize = 1000;
-    const POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(5);
-
-    for _ in 0..POLL_ATTEMPTS {
-        if let Some(value) = poll(state) {
-            return Some(value);
-        }
-        Timer::after(POLL_INTERVAL).await;
-    }
-    None
-}
-
-/// [`poll_until`] for a condition that carries no value out, returning whether it held.
-#[cfg(any(test, feature = "test-util"))]
-pub async fn poll_until_true<S>(state: &mut S, mut condition: impl FnMut(&mut S) -> bool) -> bool {
-    poll_until(state, |state| condition(state).then_some(()))
-        .await
-        .is_some()
-}
