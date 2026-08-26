@@ -38,8 +38,6 @@ pub fn validate_agent_mode_base_model_id(
     model_id: &str,
     ctx: &AppContext,
 ) -> anyhow::Result<LLMId> {
-    // CLI command with no window; reads the account's default team as a raw uid, never as a
-    // `TeamScope` -- there is no window here for one to have come from.
     let team_uid = UserWorkspaces::as_ref(ctx).inherited_or_default_team_uid(None);
     let llm_prefs = LLMPreferences::as_ref(ctx);
     let valid_ids = llm_prefs

@@ -315,8 +315,6 @@ fn test_poll_path_apply_refreshes_user_purchase_policy() {
     });
 }
 
-/// A `ModelsByFeature` whose every feature offers exactly one model, `model_id`, so a
-/// test can tell two teams' catalogs apart by that single id.
 fn models_by_feature_with_model(model_id: &str) -> ModelsByFeature {
     let available =
         AvailableLLMs::new(model_id.into(), vec![LLMInfo::new_for_test(model_id)], None)
@@ -329,9 +327,6 @@ fn models_by_feature_with_model(model_id: &str) -> ModelsByFeature {
     }
 }
 
-/// Registers the minimal settings/preferences singletons `LLMPreferences::new` needs, on top
-/// of this module's own `initialize_app`. Kept separate (rather than folded into
-/// `initialize_app`) because most tests in this file never touch the model catalog.
 fn initialize_llm_preferences_dependencies(app: &mut App) {
     app.add_singleton_model(|_| {
         PublicPreferences::new(Box::<user_preferences::in_memory::InMemoryPreferences>::default())
@@ -354,13 +349,6 @@ fn initialize_llm_preferences_dependencies(app: &mut App) {
     });
 }
 
-/// Each team's catalog stays independently correct, and a team's catalog is evicted once a
-/// later response stops naming it. Now that the catalog rides along on `Team`/
-/// `Workspace.feature_model_choice` rather than a separate keyed cache, eviction falls out of
-/// the ordinary wholesale replacement of `workspaces` on every authoritative response -- there
-/// is no separate catalog-pruning step to exercise, so this asserts the same external
-/// guarantee (a team dropping out of a response leaves its catalog unreadable) through that
-/// mechanism.
 #[test]
 fn on_workspaces_updated_keeps_teams_distinct_and_prunes_a_team_the_response_omits() {
     App::test((), |mut app| async move {
@@ -445,7 +433,6 @@ fn on_workspaces_updated_keeps_teams_distinct_and_prunes_a_team_the_response_omi
             );
         });
 
-        // Team A left the account; the next authoritative response names only team B.
         team_update_manager.update(&mut app, |manager, ctx| {
             manager.on_workspaces_updated(
                 Ok(WorkspacesMetadataResponse {
@@ -477,9 +464,6 @@ fn on_workspaces_updated_keeps_teams_distinct_and_prunes_a_team_the_response_omi
             );
         });
 
-        // The user then leaves team B too: the next authoritative response names no teams at
-        // all. An authoritative response must prune every remaining bucket even when it names
-        // no teams, rather than being skipped as a no-op.
         team_update_manager.update(&mut app, |manager, ctx| {
             manager.on_workspaces_updated(
                 Ok(WorkspacesMetadataResponse {
@@ -500,8 +484,6 @@ fn on_workspaces_updated_keeps_teams_distinct_and_prunes_a_team_the_response_omi
                 "an authoritative empty catalog must prune every remaining bucket, not be \
                  skipped as a no-op"
             );
-            // The resolved-teamless fallback must still resolve to the built-in default rather
-            // than panicking or resolving through a leftover team bucket.
             LLMPreferences::as_ref(ctx).get_default_base_model_for_team_uid(None, ctx);
         });
     });

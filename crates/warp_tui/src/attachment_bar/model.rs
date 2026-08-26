@@ -53,10 +53,6 @@ enum AttachmentModeTransition {
     RestoreAgent { request_detection: bool },
 }
 
-/// Resolves the terminal surface's current window for the vision-support catalog read in
-/// [`TuiAttachmentModel::validate_new_images`]. Boxed to type-erase the concrete view type the
-/// handle was captured from, so [`TuiAttachmentModel`] does not need a generic parameter
-/// purely to remember which view its window came from.
 type WindowIdResolver = Box<dyn Fn(&AppContext) -> Option<WindowId>>;
 
 fn window_id_resolver<T: Entity>(view: WeakViewHandle<T>) -> WindowIdResolver {
@@ -69,8 +65,6 @@ pub(crate) struct TuiAttachmentModel {
     input_editor: ModelHandle<CodeEditorModel>,
     active_session: ModelHandle<ActiveSession>,
     terminal_surface_id: EntityId,
-    /// Resolves the terminal surface's window for the catalog read in
-    /// [`Self::validate_new_images`], per [`window_id_resolver`].
     window_id: WindowIdResolver,
     selected_index: Option<usize>,
     /// Last observed shared-context count. Growth selects the newest item;

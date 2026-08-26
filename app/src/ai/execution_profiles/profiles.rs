@@ -1359,9 +1359,6 @@ impl AIExecutionProfilesModel {
                 return;
             };
             let llm_preferences = LLMPreferences::as_ref(ctx);
-            // No window is available for a model edit's telemetry, so this reads the
-            // account's inherited/default team uid directly rather than minting a
-            // `TeamScope` for it.
             let team_uid = UserWorkspaces::as_ref(ctx).inherited_or_default_team_uid(None);
             let model_info = profile
                 .data()

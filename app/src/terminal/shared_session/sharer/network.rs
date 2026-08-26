@@ -384,8 +384,6 @@ impl Network {
         selection: Selection,
         input_replica_id: ReplicaId,
         terminal_view_id: warpui::EntityId,
-        // The sharing window's team, resolved by the caller (which already has the window id)
-        // rather than minted here from an ambient default.
         team_uid: Option<crate::server::ids::ServerId>,
         universal_developer_input_context: UniversalDeveloperInputContext,
         lifetime: Lifetime,

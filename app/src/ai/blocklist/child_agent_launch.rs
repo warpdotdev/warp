@@ -57,9 +57,7 @@ pub fn prepare_local_oz_child_launch(
 }
 
 /// Copies the parent's execution profile and effective base model to a child
-/// surface before its first request is sent. `scope` is the launching window's
-/// team, resolved by the caller from its own `ViewContext`/`WeakViewHandle` -- both the
-/// parent and child surfaces live in that same window.
+/// surface before its first request is sent.
 pub fn inherit_child_agent_settings(
     scope: &impl TeamScope,
     parent_surface_id: EntityId,
@@ -89,8 +87,7 @@ pub fn inherit_child_agent_settings(
 }
 
 /// Applies a non-empty run-wide model override after parent settings have
-/// been inherited. `scope` is the launching window's team; see
-/// [`inherit_child_agent_settings`].
+/// been inherited.
 #[cfg(not(target_family = "wasm"))]
 pub fn apply_child_agent_model_override(
     scope: &impl TeamScope,

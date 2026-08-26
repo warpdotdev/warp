@@ -124,11 +124,6 @@ pub struct UserWorkspaces {
     /// filtered out of `workspaces` — this is the only place their purchase
     /// policy survives.
     user_purchase_policy: Option<PurchaseAddOnCreditsPolicy>,
-    /// The model catalog for a caller with no team and no workspace: the pre-login (public)
-    /// catalog, or the one-off seed from a login response received before the first
-    /// workspaces-metadata poll response lands. Never written to once a real `Workspace`
-    /// exists for the resolved-teamless scope to read instead -- see
-    /// [`Self::feature_model_choice_for_scope`]'s `absent` fallback.
     pre_login_models_by_feature: Option<ModelsByFeature>,
     team_client: Arc<dyn TeamClient>,
     workspace_client: Arc<dyn WorkspaceClient>,
@@ -263,8 +258,6 @@ impl UserWorkspaces {
         me
     }
 
-    /// Sets the model catalog for a caller with no team and no workspace: see
-    /// [`Self::pre_login_models_by_feature`].
     pub(crate) fn set_pre_login_models_by_feature(&mut self, models: ModelsByFeature) {
         self.pre_login_models_by_feature = Some(models);
     }

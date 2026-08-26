@@ -26,10 +26,6 @@ pub const ORCHESTRATION_ENV_NONE_LABEL: &str = "Empty environment";
 pub const ORCHESTRATION_RUNNER_NONE_LABEL: &str = "Use default";
 
 /// Returns Warp base-model choices for orchestration.
-///
-/// Reads the account's inherited/default team uid directly rather than a window's
-/// selection: this module is deliberately `AppContext`-backed with no GUI types (see the
-/// module doc), so it has no view/window to mint a real per-window `TeamScope` from.
 pub(crate) fn get_base_model_choices<'a>(
     llm_prefs: &'a LLMPreferences,
     app: &'a AppContext,

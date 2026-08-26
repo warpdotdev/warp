@@ -82,11 +82,6 @@ impl PendingAttachment {
     }
 }
 
-/// Resolves the terminal surface's current window, scoped to the `WeakViewHandle` captured
-/// when this model was constructed (see [`BlocklistAIContextModel::new`]). Boxed to
-/// type-erase the concrete view type -- the GUI's `TerminalView` and the TUI's terminal
-/// session view both construct this model -- so the model itself doesn't need a generic
-/// parameter purely to remember which view its window came from.
 type WindowIdResolver = Box<dyn Fn(&AppContext) -> Option<WindowId>>;
 
 fn window_id_resolver<T: Entity>(view: WeakViewHandle<T>) -> WindowIdResolver {
@@ -116,10 +111,6 @@ pub struct BlocklistAIContextModel {
     /// The ID of the terminal surface this model is associated with.
     terminal_surface_id: EntityId,
 
-    /// Resolves the terminal view's window, so catalog reads can scope to its current window
-    /// instead of an ambient default. `None` only for test/mock constructors that have no
-    /// real view to back this model; those callers exercise unrelated logic and reading as
-    /// teamless for them is correct, not merely convenient.
     terminal_view: Option<WindowIdResolver>,
 
     /// AI document ID to be included as context with the next AI query.

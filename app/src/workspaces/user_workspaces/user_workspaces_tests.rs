@@ -4048,10 +4048,7 @@ fn gql_feature_model_choice(model_id: &str) -> GqlFeatureModelChoice {
 
 #[test]
 fn team_feature_model_choices_conversion_keeps_each_teams_choice_distinct() {
-    // Each team's uid must map to its own model choice, never a shared or swapped one. The
-    // catalog now lives directly on `Team.feature_model_choice` (folded in as part of the
-    // ordinary `Team` conversion) rather than a separate per-team map, so this reads that
-    // field instead of the old `WorkspacesMetadataResponse.team_feature_model_choices`.
+    // Each team's uid must map to its own model choice, never a shared or swapped one.
     let mut team_a = gql_team("team-a", "Team A", &["test-user"]);
     team_a.feature_model_choice = gql_feature_model_choice("team-a-only");
     let mut team_b = gql_team("team-b", "Team B", &["test-user"]);

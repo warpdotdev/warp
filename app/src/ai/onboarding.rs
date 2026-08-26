@@ -26,9 +26,6 @@ pub fn build_onboarding_models(
     prefs: &LLMPreferences,
     app: &AppContext,
 ) -> (Vec<OnboardingModelInfo>, LLMId) {
-    // Onboarding runs before login, so there is no team to resolve yet -- teamless is the
-    // correct answer here, not merely a fallback, so this passes `None` explicitly rather
-    // than resolving an inherited/default team uid.
     let team_uid = None;
     let default_id = prefs
         .get_default_base_model_for_team_uid(team_uid, app)

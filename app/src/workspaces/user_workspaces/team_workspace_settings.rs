@@ -104,12 +104,6 @@ impl TeamScope for TeamScopeForCli {
     }
 }
 
-/// A team scope already resolved from a real [`TeamScope`], carried as a plain value instead
-/// of a live borrow. [`TeamContext<'_>`] borrows the singleton that resolved it, which can't
-/// coexist with a later mutable borrow of that same context in the same scope (e.g. resolving
-/// a scope from `ctx` and then passing `ctx` mutably to `self.update(...)`); this detaches the
-/// answer from that borrow so both can happen in sequence. Never construct one from a raw id
-/// supplied by anything other than an already-resolved [`TeamScope`].
 pub struct ResolvedTeamScope(Option<ServerId>);
 
 impl ResolvedTeamScope {
@@ -117,8 +111,6 @@ impl ResolvedTeamScope {
         Self(scope.team_uid())
     }
 
-    /// A resolved-teamless scope, for callers with no window to resolve a live [`TeamScope`]
-    /// from (e.g. the `agent_mode_evals` eager fetch, which always runs teamless).
     #[cfg(feature = "agent_mode_evals")]
     pub(crate) fn teamless() -> Self {
         Self(None)
@@ -222,9 +214,6 @@ impl UserWorkspaces {
         }
     }
 
-    /// [`Self::team_context`] for callers that already have a [`WindowId`] (e.g. a non-view
-    /// data source keyed by window) rather than a [`WeakViewHandle`], so they don't need to
-    /// mint or thread one just to resolve a scope.
     pub fn team_context_for_window(&self, window_id: WindowId) -> TeamContext<'_> {
         self.team_context_for_window_id(window_id)
     }
@@ -441,13 +430,6 @@ impl UserWorkspaces {
         )
     }
 
-    /// The model catalog effective for `scope`: the scope's own team's when it names one,
-    /// otherwise `current_workspace()`'s (the resolved-teamless catalog). See
-    /// [`Self::scoped_or_workspace_setting`] for the no-team fallback, except that here the
-    /// `absent` case (no workspace at all -- pre-login, or before the first metadata response)
-    /// falls back further to [`UserWorkspaces::pre_login_models_by_feature`] rather than
-    /// straight to the bare default, so a pre-login catalog fetch or a login-response seed
-    /// still has somewhere to land.
     pub(crate) fn feature_model_choice_for_scope<S: TeamScope + ?Sized>(
         &self,
         scope: &S,
@@ -463,8 +445,6 @@ impl UserWorkspaces {
         )
     }
 
-    /// [`Self::feature_model_choice_for_scope`] for a caller with a raw team uid already in
-    /// hand rather than a live [`TeamScope`].
     pub(crate) fn feature_model_choice_for_team_uid(
         &self,
         team_uid: Option<ServerId>,
@@ -472,18 +452,6 @@ impl UserWorkspaces {
         self.feature_model_choice_for_scope(&TeamContextForOperation { team_uid })
     }
 
-    /// Overwrites the model catalog for `team_uid`'s scope (or the resolved-teamless workspace
-    /// when `team_uid` is `None`), for [`crate::ai::llms::LLMPreferences`]'s narrow one-off
-    /// authed refresh. Every other update instead flows in through the ordinary `Team`/
-    /// `Workspace` conversion the polled workspaces-metadata query already performs (see
-    /// [`Self::feature_model_choice_for_scope`]'s doc), so this exists only for that one
-    /// caller, which cannot wait for the next poll.
-    ///
-    /// A `team_uid` naming a team not in the current workspace has nowhere durable to write and
-    /// is silently dropped: the account's team membership resolves through the polled query, not
-    /// this one-off fetch, so there is nothing more useful to do with a stale/unknown team here.
-    /// The no-team case still lands somewhere: `current_workspace()`'s catalog when a workspace
-    /// exists, otherwise [`Self::pre_login_models_by_feature`], mirroring the read-side fallback.
     pub(crate) fn set_feature_model_choice_for_team_uid(
         &mut self,
         team_uid: Option<ServerId>,
@@ -504,10 +472,6 @@ impl UserWorkspaces {
         }
     }
 
-    /// Test-only: pushes an extra Agent Mode choice into `team_uid`'s scope's catalog (or the
-    /// resolved-teamless scope's when `team_uid` is `None`), mirroring
-    /// [`Self::set_feature_model_choice_for_team_uid`]'s scope resolution, so tests can exercise
-    /// a "new model available" transition without a real fetch.
     #[cfg(any(test, feature = "test-util"))]
     pub(crate) fn add_agent_mode_model_for_test_for_team_uid(
         &mut self,

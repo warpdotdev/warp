@@ -135,8 +135,6 @@ pub struct AmbientAgentViewModel {
     /// The terminal view this model is part of.
     terminal_view_id: EntityId,
 
-    /// Weak handle to the terminal view, so catalog reads can scope to its current window
-    /// (see [`Self::team_uid`]) instead of an ambient default.
     terminal_view: WeakViewHandle<TerminalView>,
 
     /// Selected cloud environment to launch the ambient agent with.
@@ -275,9 +273,6 @@ impl AmbientAgentViewModel {
         self.request.as_ref()
     }
 
-    /// Resolves the terminal view's current window's team, or `None` when the view isn't
-    /// attached to one (e.g. torn down) or that window has no team. Feeds the raw-uid catalog
-    /// accessors directly rather than minting a `TeamScope` for this pane.
     fn team_uid(&self, app: &AppContext) -> Option<ServerId> {
         self.terminal_view.window_id(app).and_then(|window_id| {
             UserWorkspaces::as_ref(app)

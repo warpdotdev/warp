@@ -293,8 +293,6 @@ impl CachedUIState {
 
 pub struct UniversalDeveloperInputButtonBar {
     terminal_view_id: EntityId,
-    /// Resolves this window's team for the catalog read in [`View::render`], which only has
-    /// an [`AppContext`] to work with.
     view_handle: WeakViewHandle<Self>,
     mic_button: ViewHandle<ActionButton>,
     at_button: ViewHandle<ActionButton>,
@@ -785,9 +783,6 @@ impl UniversalDeveloperInputButtonBar {
             || self.profile_model_selector_compact.as_ref(ctx).is_open()
     }
 
-    /// Resolves this view's current window's team, or `None` when it isn't attached to one
-    /// or that window has no team. Feeds [`calculate_profile_model_selector_threshold`]'s
-    /// raw-uid catalog read rather than minting a `TeamScope` for this render.
     fn team_uid(&self, app: &AppContext) -> Option<ServerId> {
         self.view_handle.window_id(app).and_then(|window_id| {
             UserWorkspaces::as_ref(app)

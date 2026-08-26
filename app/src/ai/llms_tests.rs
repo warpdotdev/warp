@@ -695,9 +695,7 @@ fn active_models_fall_back_to_usable_choice_or_custom_endpoint_when_default_disa
 
 /// Runs picker-query assertions with searchable, selectable, and disabled model fixtures plus
 /// the app singletons consulted by model eligibility logic. The scope is teamless: these
-/// fixtures exercise ordering and filtering, not team credential policy. The catalog is seeded
-/// on `UserWorkspaces` (the resolved-teamless, no-workspace fallback -- see
-/// `UserWorkspaces::pre_login_models_by_feature`) since `LLMPreferences` no longer holds it.
+/// fixtures exercise ordering and filtering, not team credential policy.
 fn with_model_picker_query_test_context(
     f: impl FnOnce(&LLMPreferences, &dyn TeamScope, &AppContext) + 'static,
 ) {
@@ -1037,9 +1035,7 @@ fn agent_llm(id: &str, display_name: &str) -> LLMInfo {
 }
 
 /// Preferences whose agent-mode models are a server-style list with an
-/// `"auto"` default plus one concrete model. Seeds the catalog on the already-registered
-/// `UserWorkspaces` singleton (see `with_model_picker_query_test_context`'s doc) rather than on
-/// the returned `LLMPreferences`, so `ctx` must resolve `UserWorkspaces::default_mock`.
+/// `"auto"` default plus one concrete model.
 fn preferences_for_profile_model_tests(ctx: &mut ModelContext<LLMPreferences>) -> LLMPreferences {
     let agent_mode = AvailableLLMs::new(
         "auto".into(),
