@@ -407,6 +407,7 @@ impl UserWorkspaces {
     }
 
     /// Every team the user belongs to, across all of their workspaces.
+    #[cfg(not(target_family = "wasm"))]
     fn all_teams(&self) -> impl Iterator<Item = &Team> {
         self.workspaces
             .iter()
@@ -490,6 +491,7 @@ impl UserWorkspaces {
     /// user have any usable BYO path" check. A caller with a window must use
     /// [`Self::is_aws_bedrock_credentials_enabled`] instead -- this deliberately answers for
     /// the union of the user's teams, not for the team a window points at.
+    #[cfg(not(target_family = "wasm"))]
     pub(crate) fn is_aws_bedrock_credentials_enabled_for_any_team(&self, app: &AppContext) -> bool {
         self.every_applicable_team_and_llm_settings()
             .map(|(_, settings)| settings)
@@ -561,6 +563,7 @@ impl UserWorkspaces {
         }
     }
 
+    #[cfg(not(target_family = "wasm"))]
     fn every_applicable_team_and_llm_settings(
         &self,
     ) -> Box<dyn Iterator<Item = (Option<&Team>, &LlmSettings)> + '_> {
@@ -576,6 +579,7 @@ impl UserWorkspaces {
     }
 
     /// Did the admin turn `host` on, with its credentials resolved against `user_setting_enabled`?
+    #[cfg(not(target_family = "wasm"))]
     fn host_credentials_enabled(
         llm_settings: &LlmSettings,
         host: &LLMModelHost,
