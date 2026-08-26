@@ -129,16 +129,17 @@ fn cancelling_loopback_wait_releases_listener() {
     }
 }
 
-/// [`OauthAttempt::finish`]'s release signal must fire before its result
-/// future does any work beyond receiving the callback -- in particular,
-/// before the token exchange a real (matching-state) callback would trigger.
-/// The CSRF check and any exchange both happen strictly after the callback
-/// thread's `tx.send`, which itself happens strictly after `release_tx.send`,
-/// so this holds regardless of whether the state matches; a mismatched state
-/// keeps the test deterministic and network-free by failing fast instead of
-/// attempting a real token exchange.
+/// A caller only needs [`OauthAttempt::finish`]'s release signal, not the
+/// full result, to know the loopback port is free again: this drives
+/// `run_oauth_flow` to completion on another thread while only awaiting the
+/// release signal here, then rebinds the port without ever joining that
+/// thread or inspecting its result. That the result thread may, in this
+/// mismatched-state case, already be finished by the time release is
+/// observed does not weaken the assertion -- the rebind below only depends
+/// on the listener already being dropped, which release guarantees
+/// regardless of how far the other thread has gotten.
 #[test]
-fn release_signal_resolves_before_the_result_future_progresses() {
+fn release_signal_lets_a_caller_rebind_without_joining_the_result() {
     let (listener, address) = bind_test_listener();
     let cancellation = OauthCancellationHandle {
         cancelled: Arc::new(AtomicBool::new(false)),

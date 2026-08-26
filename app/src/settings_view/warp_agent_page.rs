@@ -14,7 +14,9 @@ use std::sync::LazyLock;
 
 use ::ai::api_keys::{ApiKeyManager, ApiKeyManagerEvent, ApiKeys, CustomEndpointParams};
 #[cfg(not(target_family = "wasm"))]
-use ::ai::grok_subscription::oauth::{self, ManualCodeExchange, OauthCancellationHandle};
+use ::ai::grok_subscription::oauth::{
+    self, ManualCodeExchange, OauthCancellationHandle, TokenResponse,
+};
 use chrono::{DateTime, Local};
 use markdown_parser::{FormattedText, FormattedTextFragment, FormattedTextLine};
 use pathfinder_geometry::vector::vec2f;
@@ -607,6 +609,18 @@ fn member_byo_keys_allowed_for_view(ctx: &ViewContext<WarpAgentPageView>) -> boo
 #[cfg(not(target_family = "wasm"))]
 const GROK_OAUTH_CONNECT_TOAST_OBJECT_ID: &str = "grok_oauth_connect_toast";
 
+/// What should happen to a SuperGrok connect attempt once its loopback
+/// listener is confirmed released. Both variants need that confirmation
+/// before touching UI-visible state: releasing the port is what makes a
+/// subsequent Connect safe to retry, whether this attempt is being torn
+/// down as cancelled or has already succeeded via the manual-code path
+/// while this loopback wait was still racing.
+#[cfg(not(target_family = "wasm"))]
+enum GrokOauthAttemptOutcome {
+    Cancelled,
+    Connected(TokenResponse),
+}
+
 /// State for the SuperGrok connect attempt this page is currently tracking.
 ///
 /// `id` distinguishes this attempt from any that came before it, so a
@@ -618,17 +632,18 @@ struct GrokOauthAttempt {
     id: Uuid,
     manual_exchange: ManualCodeExchange,
     cancellation: OauthCancellationHandle,
-    /// Set once Cancel is clicked. The loopback listener's release alone
-    /// (see `released`) isn't enough to finalize -- Cancel also needs to
-    /// have actually been requested -- so the row shows a disabled
+    /// Set once this attempt is done trying -- Cancel was requested, or the
+    /// manual-code path already exchanged its code for tokens. The
+    /// loopback listener's release alone (see `released`) isn't enough to
+    /// finalize; this also needs to be set, so the row shows a disabled
     /// "Cancelling" state until both are true, rather than exposing a
     /// Connect that could race a still-bound port.
-    cancelling: bool,
+    outcome: Option<GrokOauthAttemptOutcome>,
     /// Set once the loopback listener is confirmed released (the attempt's
-    /// `OauthReleaseSignal` fired), independent of whether the overall
-    /// attempt has finished -- a raced-in callback's token exchange can
-    /// still be in flight. A Cancel arriving after this is already true can
-    /// finalize immediately instead of waiting on that exchange.
+    /// `OauthReleaseSignal` fired), independent of whether `outcome` is set
+    /// -- a raced-in callback's token exchange can still be in flight. An
+    /// `outcome` arriving after this is already true can finalize
+    /// immediately instead of waiting on that exchange.
     released: bool,
 }
 
@@ -1801,7 +1816,7 @@ impl WarpAgentPageView {
             id: attempt_id,
             manual_exchange: attempt.manual_code_exchange(),
             cancellation: attempt.cancellation_handle(),
-            cancelling: false,
+            outcome: None,
             released: false,
         });
         self.grok_code_editor.update(ctx, |editor, ctx| {
@@ -1842,45 +1857,56 @@ impl WarpAgentPageView {
             if active.id != attempt_id {
                 return;
             }
-            if active.cancelling {
-                me.finalize_cancelled_grok_attempt(ctx);
-            } else {
-                active.released = true;
+            let outcome = active.outcome.take();
+            match outcome {
+                Some(GrokOauthAttemptOutcome::Cancelled) => me.finalize_cancelled_grok_attempt(ctx),
+                Some(GrokOauthAttemptOutcome::Connected(tokens)) => {
+                    me.finalize_connected_grok_attempt(tokens, ctx)
+                }
+                None => {
+                    if let Some(attempt) = me.grok_oauth_attempt.as_mut() {
+                        attempt.released = true;
+                    }
+                }
             }
         });
 
         ctx.spawn(result_future, move |me, result, ctx| {
             // Ignore a completion for an attempt this page is no longer
-            // tracking: a successful pasted code already resolved it, it
-            // was superseded by Cancel followed by a new Connect, or the
-            // release-signal task above already finalized it as
-            // cancelled (which always runs first -- release precedes the
-            // full result on every path).
+            // tracking: a successful pasted code already resolved it, or it
+            // was superseded by Cancel followed by a new Connect.
             let Some(active) = me.grok_oauth_attempt.as_ref() else {
                 return;
             };
             if active.id != attempt_id {
                 return;
             }
-            let window_id = ctx.window_id();
-            let toast = match result {
-                Ok(tokens) => {
-                    me.grok_oauth_attempt = None;
-                    me.grok_code_editor.update(ctx, |editor, ctx| {
-                        editor.clear_buffer(ctx);
-                    });
-                    send_telemetry_from_ctx!(
-                        TelemetryEvent::SuperGrokSubscriptionConnectFinished { error: None },
-                        ctx
-                    );
-                    // Persist the tokens to secure storage and kick off the
-                    // proactive refresh loop so subsequent requests can
-                    // authenticate with the connected subscription.
-                    ApiKeyManager::handle(ctx).update(ctx, move |manager, ctx| {
-                        manager.store_grok_tokens(tokens, ctx);
-                    });
-                    DismissibleToast::success("SuperGrok subscription connected".to_string())
+            if active.outcome.is_some() {
+                // Cancel was requested, or the manual-code path already
+                // resolved this attempt, before this result arrived --
+                // that ordering isn't guaranteed relative to the
+                // release-signal task above, so this checks directly
+                // rather than assuming that task ran first. This result's
+                // own arrival proves the listener was released (it can't
+                // resolve before that), so finalize now via the same path,
+                // discarding this result regardless of its own outcome.
+                let outcome = me
+                    .grok_oauth_attempt
+                    .as_mut()
+                    .and_then(|active| active.outcome.take());
+                match outcome {
+                    Some(GrokOauthAttemptOutcome::Cancelled) => {
+                        me.finalize_cancelled_grok_attempt(ctx)
+                    }
+                    Some(GrokOauthAttemptOutcome::Connected(tokens)) => {
+                        me.finalize_connected_grok_attempt(tokens, ctx)
+                    }
+                    None => {}
                 }
+                return;
+            }
+            match result {
+                Ok(tokens) => me.finalize_connected_grok_attempt(tokens, ctx),
                 Err(err) => {
                     me.grok_oauth_attempt = None;
                     me.grok_code_editor.update(ctx, |editor, ctx| {
@@ -1896,25 +1922,27 @@ impl WarpAgentPageView {
                         },
                         ctx
                     );
-                    DismissibleToast::error(format!("Couldn't connect SuperGrok: {err}"))
+                    let window_id = ctx.window_id();
+                    ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
+                        toast_stack.add_ephemeral_toast(
+                            DismissibleToast::error(format!("Couldn't connect SuperGrok: {err}"))
+                                .with_object_id(GROK_OAUTH_CONNECT_TOAST_OBJECT_ID.to_string()),
+                            window_id,
+                            ctx,
+                        );
+                    });
+                    ctx.notify();
                 }
-            };
-            ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
-                toast_stack.add_ephemeral_toast(
-                    toast.with_object_id(GROK_OAUTH_CONNECT_TOAST_OBJECT_ID.to_string()),
-                    window_id,
-                    ctx,
-                );
-            });
-            ctx.notify();
+            }
         });
     }
 
     /// Tears down a cancelled SuperGrok connect attempt: clears the attempt
     /// and the manual-code editor, records the terminal `cancelled` outcome,
-    /// and dismisses the connect toast. Called once per attempt, either from
-    /// the release-signal task once a pending Cancel is confirmed, or
-    /// directly when Cancel arrives after release was already confirmed.
+    /// and dismisses the connect toast. Called exactly once per attempt, by
+    /// whichever of the release-signal or result task observes the pending
+    /// `Cancelled` outcome first, or directly when Cancel arrives after
+    /// release was already confirmed.
     #[cfg(not(target_family = "wasm"))]
     fn finalize_cancelled_grok_attempt(&mut self, ctx: &mut ViewContext<Self>) {
         use crate::ToastStack;
@@ -1940,27 +1968,68 @@ impl WarpAgentPageView {
         ctx.notify();
     }
 
+    /// Publishes a successful SuperGrok connection: clears the attempt and
+    /// the manual-code editor, persists `tokens` (kicking off the proactive
+    /// refresh loop), and shows the connected toast. Called exactly once
+    /// per attempt, either directly by the loopback result when nothing
+    /// else resolved it first, or by whichever of the release-signal or
+    /// result task observes a pending `Connected` outcome first (a
+    /// successful pasted code, deferred until the loopback listener's port
+    /// is confirmed released).
+    #[cfg(not(target_family = "wasm"))]
+    fn finalize_connected_grok_attempt(
+        &mut self,
+        tokens: TokenResponse,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        use crate::ToastStack;
+        use crate::view_components::DismissibleToast;
+
+        self.grok_oauth_attempt = None;
+        self.grok_code_editor.update(ctx, |editor, ctx| {
+            editor.clear_buffer(ctx);
+        });
+        send_telemetry_from_ctx!(
+            TelemetryEvent::SuperGrokSubscriptionConnectFinished { error: None },
+            ctx
+        );
+        ApiKeyManager::handle(ctx).update(ctx, move |manager, ctx| {
+            manager.store_grok_tokens(tokens, ctx);
+        });
+        let window_id = ctx.window_id();
+        ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
+            toast_stack.add_ephemeral_toast(
+                DismissibleToast::success("SuperGrok subscription connected".to_string())
+                    .with_object_id(GROK_OAUTH_CONNECT_TOAST_OBJECT_ID.to_string()),
+                window_id,
+                ctx,
+            );
+        });
+        ctx.notify();
+    }
+
     /// Requests cancellation of the in-flight SuperGrok connect attempt, if
     /// any. If the loopback listener is already confirmed released --
     /// e.g. a raced-in callback's token exchange is still running, which
     /// doesn't hold the port -- finalizes immediately. Otherwise stops the
-    /// loopback wait and leaves finalizing to the release-signal task, since
-    /// that is the only point that confirms the port is actually free; the
-    /// row shows a disabled "Cancelling" state until then. A duplicate
-    /// Cancel while already cancelling is a no-op.
+    /// loopback wait and leaves finalizing to whichever task observes
+    /// release first, since that is the only point that confirms the port
+    /// is actually free; the row shows a disabled "Cancelling" state until
+    /// then. A duplicate Cancel while an outcome is already pending is a
+    /// no-op.
     #[cfg(not(target_family = "wasm"))]
     fn cancel_grok_oauth(&mut self, ctx: &mut ViewContext<Self>) {
         let Some(attempt) = &mut self.grok_oauth_attempt else {
             return;
         };
-        if attempt.cancelling {
+        if attempt.outcome.is_some() {
             return;
         }
         if attempt.released {
             self.finalize_cancelled_grok_attempt(ctx);
             return;
         }
-        attempt.cancelling = true;
+        attempt.outcome = Some(GrokOauthAttemptOutcome::Cancelled);
         attempt.cancellation.cancel();
         self.grok_code_editor.update(ctx, |editor, ctx| {
             editor.clear_buffer(ctx);
@@ -1980,7 +2049,7 @@ impl WarpAgentPageView {
         let Some(active) = &self.grok_oauth_attempt else {
             return;
         };
-        if active.cancelling || code.trim().is_empty() {
+        if active.outcome.is_some() || code.trim().is_empty() {
             return;
         }
         let attempt_id = active.id;
@@ -1989,35 +2058,31 @@ impl WarpAgentPageView {
         ctx.spawn(
             async move { exchange.exchange(&code).await },
             move |me, result, ctx| {
-                // Only the loopback attempt's `finish()` completion finalizes
-                // a cancelled attempt, so a superseded or since-cancelled
-                // manual completion is dropped here rather than acted on.
                 let Some(active) = me.grok_oauth_attempt.as_ref() else {
                     return;
                 };
-                if active.id != attempt_id || active.cancelling {
+                if active.id != attempt_id || active.outcome.is_some() {
                     return;
                 }
-                let window_id = ctx.window_id();
-                let toast = match result {
+                match result {
                     Ok(tokens) => {
                         // The loopback attempt may still be racing in the
                         // background; cancel it so it releases the port
                         // instead of holding it until `CALLBACK_TIMEOUT`.
-                        if let Some(attempt) = me.grok_oauth_attempt.take() {
-                            attempt.cancellation.cancel();
+                        active.cancellation.cancel();
+                        let already_released = active.released;
+                        if already_released {
+                            // Already confirmed free: nothing left to wait for.
+                            me.finalize_connected_grok_attempt(tokens, ctx);
+                        } else if let Some(attempt) = me.grok_oauth_attempt.as_mut() {
+                            // Defer publishing success (storing tokens,
+                            // enabling Disconnect) until the loopback
+                            // listener's release is confirmed, so
+                            // Disconnect followed by an immediate Connect
+                            // can't race a still-bound port.
+                            attempt.outcome = Some(GrokOauthAttemptOutcome::Connected(tokens));
+                            ctx.notify();
                         }
-                        me.grok_code_editor.update(ctx, |editor, ctx| {
-                            editor.clear_buffer(ctx);
-                        });
-                        send_telemetry_from_ctx!(
-                            TelemetryEvent::SuperGrokSubscriptionConnectFinished { error: None },
-                            ctx
-                        );
-                        ApiKeyManager::handle(ctx).update(ctx, move |manager, ctx| {
-                            manager.store_grok_tokens(tokens, ctx);
-                        });
-                        DismissibleToast::success("SuperGrok subscription connected".to_string())
                     }
                     Err(err) => {
                         // Keep the row open so the user can correct the code.
@@ -2031,17 +2096,20 @@ impl WarpAgentPageView {
                             },
                             ctx
                         );
-                        DismissibleToast::error(format!("Couldn't connect SuperGrok: {err}"))
+                        let window_id = ctx.window_id();
+                        ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
+                            toast_stack.add_ephemeral_toast(
+                                DismissibleToast::error(format!(
+                                    "Couldn't connect SuperGrok: {err}"
+                                ))
+                                .with_object_id(GROK_OAUTH_CONNECT_TOAST_OBJECT_ID.to_string()),
+                                window_id,
+                                ctx,
+                            );
+                        });
+                        ctx.notify();
                     }
-                };
-                ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
-                    toast_stack.add_ephemeral_toast(
-                        toast.with_object_id(GROK_OAUTH_CONNECT_TOAST_OBJECT_ID.to_string()),
-                        window_id,
-                        ctx,
-                    );
-                });
-                ctx.notify();
+                }
             },
         );
     }
@@ -5607,7 +5675,7 @@ impl SettingsWidget for ApiKeysWidget {
             let grok_oauth_phase = view
                 .grok_oauth_attempt
                 .as_ref()
-                .map(|attempt| attempt.cancelling);
+                .map(|attempt| attempt.outcome.is_some());
             #[cfg(target_family = "wasm")]
             let grok_oauth_phase: Option<bool> = None;
             column.add_child(
