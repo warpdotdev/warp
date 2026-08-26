@@ -4,6 +4,7 @@ use async_trait::async_trait;
 use warpui::{Entity, SingletonEntity};
 
 use crate::server::server_api::TranscribeError;
+use crate::server::team_scope::RequestTeamScope;
 
 /// Interface for transcribing voice input.
 #[cfg_attr(not(target_family = "wasm"), async_trait)]
@@ -13,11 +14,14 @@ pub trait Transcriber: Send + Sync {
     ///
     /// `language` is an optional ISO-639-1 code (e.g. `"en"`). When `None`, the
     /// transcription provider auto-detects the spoken language.
+    /// `team_scope` is the window's team, captured before this future is spawned off the
+    /// main thread, since no live window is reachable once it's running.
     /// This is expected to be async and called off the main thread.
     async fn transcribe(
         &self,
         wav_base64: String,
         language: Option<String>,
+        team_scope: RequestTeamScope,
     ) -> Result<String, TranscribeError>;
 }
 
