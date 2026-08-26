@@ -1505,9 +1505,7 @@ impl AppearanceSettingsPageView {
         {
             tab_settings_widgets.push(Box::new(ZenModeWidget::default()));
         }
-        if FeatureFlag::TabCloseButtonOnLeft.is_enabled() {
-            tab_settings_widgets.push(Box::new(TabCloseButtonPositionWidget::default()));
-        }
+        tab_settings_widgets.push(Box::new(TabCloseButtonPositionWidget::default()));
         tab_settings_widgets.push(Box::new(PreserveActiveTabColorWidget::default()));
 
         if FeatureFlag::VerticalTabs.is_enabled() {
