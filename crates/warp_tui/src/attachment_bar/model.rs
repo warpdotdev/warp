@@ -4,7 +4,7 @@ use warp::editor::CodeEditorModel;
 use warp::tui_export::{
     ActiveSession, BlocklistAIContextEvent, BlocklistAIContextModel, BlocklistAIInputModel,
     InputType, InputTypeAutoDetectionSource, LLMPreferences, MAX_IMAGE_COUNT_FOR_QUERY,
-    PendingAttachmentSummary, TeamScope, UserWorkspaces,
+    PendingAttachmentSummary, TeamContextResolver, UserWorkspaces,
 };
 use warp_core::features::FeatureFlag;
 use warp_editor::model::CoreEditorModel;
@@ -12,7 +12,6 @@ use warpui_core::r#async::SpawnedFutureHandle;
 use warpui_core::clipboard::ClipboardContent;
 use warpui_core::{
     AppContext, Entity, EntityId, ModelContext, ModelHandle, SingletonEntity as _, WeakViewHandle,
-    WindowId,
 };
 
 use super::image_processing::{
@@ -53,19 +52,13 @@ enum AttachmentModeTransition {
     RestoreAgent { request_detection: bool },
 }
 
-type WindowIdResolver = Box<dyn Fn(&AppContext) -> Option<WindowId>>;
-
-fn window_id_resolver<T: Entity>(view: WeakViewHandle<T>) -> WindowIdResolver {
-    Box::new(move |app| view.window_id(app))
-}
-
 pub(crate) struct TuiAttachmentModel {
     context_model: ModelHandle<BlocklistAIContextModel>,
     input_mode: ModelHandle<BlocklistAIInputModel>,
     input_editor: ModelHandle<CodeEditorModel>,
     active_session: ModelHandle<ActiveSession>,
     terminal_surface_id: EntityId,
-    window_id: WindowIdResolver,
+    team_context_resolver: TeamContextResolver,
     selected_index: Option<usize>,
     /// Last observed shared-context count. Growth selects the newest item;
     /// shrinkage preserves and clamps the current selection.
@@ -99,7 +92,7 @@ impl TuiAttachmentModel {
             input_editor,
             active_session,
             terminal_surface_id,
-            window_id: window_id_resolver(terminal_surface),
+            team_context_resolver: UserWorkspaces::team_context_resolver(terminal_surface),
             selected_index: initial_attachment_count.checked_sub(1),
             last_attachment_count: initial_attachment_count,
             had_locking_attachment,
@@ -343,13 +336,8 @@ impl TuiAttachmentModel {
                 "Image attachment limit is {MAX_IMAGE_COUNT_FOR_QUERY} per query."
             ));
         }
-        let team_uid = (self.window_id)(ctx).and_then(|window_id| {
-            UserWorkspaces::as_ref(ctx)
-                .team_context_for_window(window_id)
-                .team_uid()
-        });
-        if !LLMPreferences::as_ref(ctx).vision_supported_for_team_uid(
-            team_uid,
+        if !LLMPreferences::as_ref(ctx).vision_supported(
+            &(self.team_context_resolver)(ctx),
             ctx,
             Some(self.terminal_surface_id),
         ) {

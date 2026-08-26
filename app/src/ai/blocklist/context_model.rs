@@ -11,7 +11,7 @@ use warp_core::features::FeatureFlag;
 use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warpui::{
     AppContext, Entity, EntityId, ModelContext, ModelHandle, SingletonEntity, WeakModelHandle,
-    WeakViewHandle, WindowId,
+    WeakViewHandle,
 };
 
 use super::agent_view::{AgentViewEntryOrigin, EnterAgentViewError};
@@ -35,7 +35,7 @@ use crate::terminal::model::block::{BlockId, BlockMetadata};
 use crate::terminal::model::session::Sessions;
 use crate::terminal::model_events::{ModelEvent, ModelEventDispatcher};
 use crate::util::git::{PrInfo, RepositoryInfo};
-use crate::workspaces::user_workspaces::{TeamScope, UserWorkspaces};
+use crate::workspaces::user_workspaces::{TeamContextResolver, UserWorkspaces};
 
 /// A non-image file picked via the "attach file" button, stored until query submission.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -82,12 +82,6 @@ impl PendingAttachment {
     }
 }
 
-type WindowIdResolver = Box<dyn Fn(&AppContext) -> Option<WindowId>>;
-
-fn window_id_resolver<T: Entity>(view: WeakViewHandle<T>) -> WindowIdResolver {
-    Box::new(move |app| view.window_id(app))
-}
-
 /// Model responsible for keeping track of session context to be attached to the next AI query.
 pub struct BlocklistAIContextModel {
     terminal_model: Arc<FairMutex<TerminalModel>>,
@@ -111,7 +105,7 @@ pub struct BlocklistAIContextModel {
     /// The ID of the terminal surface this model is associated with.
     terminal_surface_id: EntityId,
 
-    terminal_view: Option<WindowIdResolver>,
+    team_context_resolver: TeamContextResolver,
 
     /// AI document ID to be included as context with the next AI query.
     /// When set, the document content will be attached as plain text context.
@@ -167,7 +161,7 @@ impl BlocklistAIContextModel {
         conversation_selection: ConversationSelectionHandle,
         ctx: &mut ModelContext<Self>,
     ) -> Self {
-        let terminal_view = Some(window_id_resolver(terminal_view));
+        let team_context_resolver = UserWorkspaces::team_context_resolver(terminal_view);
         ctx.subscribe_to_model(
             model_event_dispatcher,
             move |me, _, event, ctx| match event {
@@ -209,18 +203,8 @@ impl BlocklistAIContextModel {
 
         ctx.subscribe_to_model(&LLMPreferences::handle(ctx), |me, _, event, ctx| {
             if let LLMPreferencesEvent::UpdatedActiveAgentModeLLM = event {
-                let llm_prefs = LLMPreferences::as_ref(ctx);
-                let team_uid = me
-                    .terminal_view
-                    .as_ref()
-                    .and_then(|resolve_window_id| resolve_window_id(ctx))
-                    .and_then(|window_id| {
-                        UserWorkspaces::as_ref(ctx)
-                            .team_context_for_window(window_id)
-                            .team_uid()
-                    });
-                let vision_supported = llm_prefs.vision_supported_for_team_uid(
-                    team_uid,
+                let vision_supported = LLMPreferences::as_ref(ctx).vision_supported(
+                    &(me.team_context_resolver)(ctx),
                     ctx,
                     Some(me.terminal_surface_id),
                 );
@@ -249,7 +233,7 @@ impl BlocklistAIContextModel {
             pending_attachments: Default::default(),
             conversation_selection,
             terminal_surface_id,
-            terminal_view,
+            team_context_resolver,
             pending_inline_diff_hunk_attachments: Default::default(),
             pending_document_id: None,
             auto_attached_agent_view_user_block_ids: Vec::new(),
@@ -272,7 +256,7 @@ impl BlocklistAIContextModel {
             pending_attachments: Default::default(),
             conversation_selection,
             terminal_surface_id,
-            terminal_view: None,
+            team_context_resolver: UserWorkspaces::teamless_context_resolver_for_test(),
             pending_inline_diff_hunk_attachments: Default::default(),
             pending_document_id: None,
             auto_attached_agent_view_user_block_ids: Vec::new(),
