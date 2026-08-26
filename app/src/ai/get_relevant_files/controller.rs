@@ -203,10 +203,6 @@ impl GetRelevantFilesController {
     }
 
     /// Start a new search query based on the repo outline.
-    ///
-    /// `team_scope` is only sent on the local, outline-based request path (the one that hits
-    /// `/ai/relevant_files`); the remote path resolves relevant files through the remote host's
-    /// own indexing service instead.
     pub fn send_request(
         &mut self,
         target: GetRelevantFilesRequestTarget,
