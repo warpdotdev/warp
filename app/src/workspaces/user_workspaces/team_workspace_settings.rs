@@ -352,50 +352,40 @@ impl UserWorkspaces {
         )
     }
 
-    /// Whether `scope` may share an object with anyone who holds its link.
-    ///
-    /// With no workspace at all there is no team policy to enforce, so this permits sharing --
-    /// the behaviour this getter had before it took a scope. That answer is deliberately
-    /// resolved before delegating to [`Self::scoped_or_workspace_setting`]: its single `absent`
-    /// value also covers a scope naming an unresolvable team, which must deny rather than
-    /// permit, so the same constant cannot serve both branches.
     pub(crate) fn is_anyone_with_link_sharing_enabled<S: TeamScope + ?Sized>(
         &self,
         scope: &S,
     ) -> bool {
-        self.current_workspace().is_none()
-            || self.scoped_or_workspace_setting(
-                scope,
-                |team| {
-                    team.settings
-                        .link_sharing
-                        .anyone_with_link_sharing_enabled
-                        .value
-                },
-                |workspace| {
-                    workspace
-                        .settings
-                        .link_sharing_settings
-                        .anyone_with_link_sharing_enabled
-                },
-                false,
-            )
+        self.scoped_or_workspace_setting(
+            scope,
+            |team| {
+                team.settings
+                    .link_sharing
+                    .anyone_with_link_sharing_enabled
+                    .value
+            },
+            |workspace| {
+                workspace
+                    .settings
+                    .link_sharing_settings
+                    .anyone_with_link_sharing_enabled
+            },
+            true,
+        )
     }
 
-    /// [`Self::is_anyone_with_link_sharing_enabled`] for sharing directly with named people.
     pub(crate) fn is_direct_link_sharing_enabled<S: TeamScope + ?Sized>(&self, scope: &S) -> bool {
-        self.current_workspace().is_none()
-            || self.scoped_or_workspace_setting(
-                scope,
-                |team| team.settings.link_sharing.direct_link_sharing_enabled.value,
-                |workspace| {
-                    workspace
-                        .settings
-                        .link_sharing_settings
-                        .direct_link_sharing_enabled
-                },
-                false,
-            )
+        self.scoped_or_workspace_setting(
+            scope,
+            |team| team.settings.link_sharing.direct_link_sharing_enabled.value,
+            |workspace| {
+                workspace
+                    .settings
+                    .link_sharing_settings
+                    .direct_link_sharing_enabled
+            },
+            true,
+        )
     }
 
     /// The AI autonomy policy that applies to `scope`'s team. See

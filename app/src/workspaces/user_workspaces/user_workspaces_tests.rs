@@ -2371,8 +2371,6 @@ fn test_sandboxed_agent_denylist_falls_back_to_the_workspace_for_a_user_with_no_
     })
 }
 
-/// Two teams whose admins take opposite positions on link sharing: `team_a` permits both
-/// channels, `team_b` forbids both.
 fn two_teams_with_opposing_link_sharing_policy() -> (Team, Team) {
     fn link_sharing_settings(permitted: bool) -> TeamLinkSharingSettings {
         let setting = EnforceableSetting {
@@ -2384,6 +2382,7 @@ fn two_teams_with_opposing_link_sharing_policy() -> (Team, Team) {
             direct_link_sharing_enabled: setting,
         }
     }
+
     let (mut team_a, mut team_b) = two_teams();
     team_a.settings.link_sharing = link_sharing_settings(true);
     team_b.settings.link_sharing = link_sharing_settings(false);
@@ -2391,7 +2390,7 @@ fn two_teams_with_opposing_link_sharing_policy() -> (Team, Team) {
 }
 
 #[test]
-fn link_sharing_follows_each_windows_own_team() {
+fn link_sharing_follows_each_scopes_team() {
     let (team_a, team_b) = two_teams_with_opposing_link_sharing_policy();
     let mut workspace = workspace_for_test(&team_a);
     workspace.teams.push(team_b.clone());
@@ -2399,40 +2398,22 @@ fn link_sharing_follows_each_windows_own_team() {
     App::test((), |mut app| async move {
         initialize_window_team_test_app(&mut app, vec![workspace]);
 
-        let (window_a, _view_a) = create_test_window(&mut app);
-        let (window_b, _view_b) = create_test_window(&mut app);
-        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
-            user_workspaces.set_team_for_window(window_a, team_a.uid, ctx);
-            user_workspaces.set_team_for_window(window_b, team_b.uid, ctx);
-        });
-
         app.read(|ctx| {
             let user_workspaces = UserWorkspaces::as_ref(ctx);
-            let scope_a = user_workspaces.team_context_for_window_for_test(window_a);
-            let scope_b = user_workspaces.team_context_for_window_for_test(window_b);
+            let scope_a = TeamContextForOperation::new_for_test(team_a.uid);
+            let scope_b = TeamContextForOperation::new_for_test(team_b.uid);
 
             assert!(user_workspaces.is_anyone_with_link_sharing_enabled(&scope_a));
             assert!(user_workspaces.is_direct_link_sharing_enabled(&scope_a));
-            assert!(
-                !user_workspaces.is_anyone_with_link_sharing_enabled(&scope_b),
-                "the window on the forbidding team should not allow anyone-with-link sharing"
-            );
-            assert!(
-                !user_workspaces.is_direct_link_sharing_enabled(&scope_b),
-                "the window on the forbidding team should not allow direct link sharing"
-            );
+            assert!(!user_workspaces.is_anyone_with_link_sharing_enabled(&scope_b));
+            assert!(!user_workspaces.is_direct_link_sharing_enabled(&scope_b));
         });
     })
 }
 
-/// A scope with no team reads the workspace's `link_sharing_settings`, which is the intended
-/// answer for a teamless user and for a window with no team selected. It must be a real read,
-/// not a permissive constant: a workspace policy that forbids sharing has to bind.
-fn assert_teamless_window_reads_workspace_link_sharing_policy(permitted: bool) {
+fn assert_teamless_scope_reads_workspace_link_sharing_policy(permitted: bool) {
     let (_team_a, team_b) = two_teams_with_opposing_link_sharing_policy();
     let mut workspace = workspace_for_test(&team_b);
-    // Reconciliation assigns a teamless window to the workspace's first team, so the window
-    // can only stay teamless while the workspace itself has no teams to fall back to.
     workspace.teams.clear();
     workspace.settings.link_sharing_settings = LinkSharingSettings {
         anyone_with_link_sharing_enabled: permitted,
@@ -2442,125 +2423,60 @@ fn assert_teamless_window_reads_workspace_link_sharing_policy(permitted: bool) {
     App::test((), |mut app| async move {
         initialize_window_team_test_app(&mut app, vec![workspace]);
 
-        let (window_id, _view) = create_test_window(&mut app);
-        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
-            user_workspaces.register_window(window_id, None, ctx);
-        });
-
         app.read(|ctx| {
             let user_workspaces = UserWorkspaces::as_ref(ctx);
-            let scope = user_workspaces.team_context_for_window_for_test(window_id);
-            assert_eq!(scope.team_uid(), None);
+            let scope = TeamlessScopeForTest;
             assert_eq!(
                 user_workspaces.is_anyone_with_link_sharing_enabled(&scope),
-                permitted,
-                "a teamless window must read the workspace's link-sharing policy"
+                permitted
             );
             assert_eq!(
                 user_workspaces.is_direct_link_sharing_enabled(&scope),
-                permitted,
-                "a teamless window must read the workspace's link-sharing policy"
+                permitted
             );
         });
     })
 }
 
 #[test]
-fn link_sharing_for_a_window_with_no_team_follows_a_permissive_workspace() {
-    assert_teamless_window_reads_workspace_link_sharing_policy(true);
+fn link_sharing_for_a_teamless_scope_follows_a_permissive_workspace() {
+    assert_teamless_scope_reads_workspace_link_sharing_policy(true);
 }
 
-/// The half that a hardcoded permissive answer would have got wrong.
 #[test]
-fn link_sharing_for_a_window_with_no_team_follows_a_restrictive_workspace() {
-    assert_teamless_window_reads_workspace_link_sharing_policy(false);
+fn link_sharing_for_a_teamless_scope_follows_a_restrictive_workspace() {
+    assert_teamless_scope_reads_workspace_link_sharing_policy(false);
 }
 
-/// A user on several teams still reads `current_workspace().settings` unconditionally for a
-/// teamless scope -- there is no single team to elect as a substitute, so
-/// `scoped_or_workspace_setting` pins the workspace's own policy rather than denying.
 #[test]
-fn link_sharing_for_a_multi_team_users_teamless_window_pins_the_workspace_fallback() {
-    let (team_a, team_b) = two_teams_with_opposing_link_sharing_policy();
+fn link_sharing_fails_open_for_an_unresolvable_team() {
+    let (_team_a, team_b) = two_teams_with_opposing_link_sharing_policy();
     let mut workspace = workspace_for_test(&team_b);
-    workspace.teams.push(team_a.clone());
-    // Distinct from either team's policy, so the assertions below only pass if the workspace's
-    // own setting was read rather than one of the teams'.
     workspace.settings.link_sharing_settings = LinkSharingSettings {
-        anyone_with_link_sharing_enabled: true,
-        direct_link_sharing_enabled: true,
+        anyone_with_link_sharing_enabled: false,
+        direct_link_sharing_enabled: false,
     };
 
     App::test((), |mut app| async move {
         initialize_window_team_test_app(&mut app, vec![workspace]);
 
-        let (window_id, _view) = create_test_window(&mut app);
-        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
-            user_workspaces.register_window(window_id, None, ctx);
-        });
-
+        let scope = TeamContextForOperation::new_for_test(9999.into());
         app.read(|ctx| {
             let user_workspaces = UserWorkspaces::as_ref(ctx);
-            assert!(user_workspaces.can_switch_teams());
-            let scope = user_workspaces.team_context_for_window_for_test(window_id);
-            assert_eq!(scope.team_uid(), None);
-            assert!(
-                user_workspaces.is_anyone_with_link_sharing_enabled(&scope),
-                "a multi-team user's teamless window reads the workspace's own policy"
-            );
-            assert!(
-                user_workspaces.is_direct_link_sharing_enabled(&scope),
-                "a multi-team user's teamless window reads the workspace's own policy"
-            );
+            assert!(user_workspaces.is_anyone_with_link_sharing_enabled(&scope));
+            assert!(user_workspaces.is_direct_link_sharing_enabled(&scope));
         });
     })
 }
 
-/// Guards the shape of the getters rather than a reachable user scenario: a scope that names
-/// an unresolvable team must deny, not fall through to the no-team branch, and not read some
-/// other team's policy either. Uses the permitting team so a leak in either direction would be
-/// visible.
 #[test]
-fn link_sharing_denies_a_scope_naming_an_unresolvable_team() {
-    let (team_a, _team_b) = two_teams_with_opposing_link_sharing_policy();
-    let workspace = workspace_for_test(&team_a);
-
-    App::test((), |mut app| async move {
-        initialize_window_team_test_app(&mut app, vec![workspace]);
-
-        let unresolvable_team_scope = TeamContextForOperation::new_for_test(9999.into());
-        app.read(|ctx| {
-            let user_workspaces = UserWorkspaces::as_ref(ctx);
-            assert!(
-                !user_workspaces.is_anyone_with_link_sharing_enabled(&unresolvable_team_scope),
-                "a team whose policy cannot be read must not inherit another team's"
-            );
-            assert!(
-                !user_workspaces.is_direct_link_sharing_enabled(&unresolvable_team_scope),
-                "a team whose policy cannot be read must not inherit another team's"
-            );
-        });
-    })
-}
-
-/// With no workspace at all there is no team policy to enforce, so both channels stay open --
-/// the behaviour these getters had before they took a scope. This is deliberately distinct
-/// from the unresolvable-team case above, which denies: `scoped_or_workspace_setting` alone
-/// cannot express both, since a single `absent` value serves both branches.
-#[test]
-fn link_sharing_permits_everything_with_no_workspace_at_all() {
+fn link_sharing_fails_open_without_a_workspace() {
     App::test((), |mut app| async move {
         initialize_window_team_test_app(&mut app, vec![]);
 
-        let (window_id, _view) = create_test_window(&mut app);
-        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
-            user_workspaces.register_window(window_id, None, ctx);
-        });
-
         app.read(|ctx| {
             let user_workspaces = UserWorkspaces::as_ref(ctx);
-            let scope = user_workspaces.team_context_for_window_for_test(window_id);
-            assert_eq!(scope.team_uid(), None);
+            let scope = TeamlessScopeForTest;
             assert!(user_workspaces.is_anyone_with_link_sharing_enabled(&scope));
             assert!(user_workspaces.is_direct_link_sharing_enabled(&scope));
         });

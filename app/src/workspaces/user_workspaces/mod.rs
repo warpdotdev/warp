@@ -1575,7 +1575,6 @@ impl UserWorkspaces {
             .unwrap_or_default()
     }
 
-
     /// Whether invite links are enabled for the current workspace. This is a
     /// workspace-level setting; the teams-settings page reads it from here rather
     /// than from the `Team` struct.
