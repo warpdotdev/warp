@@ -13951,7 +13951,6 @@ impl Input {
         };
 
         let server_api = self.server_api.clone();
-        // Pinned at send, so the request keeps the team the window was on when it fired.
         let team_scope = RequestTeamScope::from_scope(
             &UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx),
         );
