@@ -1,4 +1,7 @@
-use super::{AgentAttributionToggleState, derive_agent_attribution_toggle_state};
+use super::{
+    AgentAttributionToggleState, GrokSubscriptionButtonAction,
+    derive_agent_attribution_toggle_state, grok_subscription_button_action,
+};
 use crate::workspaces::workspace::AdminEnablementSetting;
 
 #[test]
@@ -89,5 +92,35 @@ fn team_force_takes_precedence_over_global_ai_disabled() {
             is_forced_by_org: true,
             is_disabled: true,
         }
+    );
+}
+
+#[test]
+fn grok_connect_flow_transitions_through_cancel_back_to_connect() {
+    // Idle: no tokens, no in-flight attempt.
+    assert_eq!(
+        grok_subscription_button_action(false, false),
+        GrokSubscriptionButtonAction::Connect
+    );
+    // Connect was clicked: an attempt is now in flight, offering Cancel
+    // instead of the disabled "Connecting" indicator this replaces.
+    assert_eq!(
+        grok_subscription_button_action(false, true),
+        GrokSubscriptionButtonAction::Cancel
+    );
+    // Cancel was clicked: the attempt is cleared without ever storing
+    // tokens, so the row is connectable again.
+    assert_eq!(
+        grok_subscription_button_action(false, false),
+        GrokSubscriptionButtonAction::Connect
+    );
+}
+
+#[test]
+fn grok_stored_tokens_show_disconnect_even_mid_attempt() {
+    // Stored tokens take precedence over a lingering in-flight attempt.
+    assert_eq!(
+        grok_subscription_button_action(true, true),
+        GrokSubscriptionButtonAction::Disconnect
     );
 }
