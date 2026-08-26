@@ -1939,10 +1939,7 @@ impl WarpAgentPageView {
 
     /// Tears down a cancelled SuperGrok connect attempt: clears the attempt
     /// and the manual-code editor, records the terminal `cancelled` outcome,
-    /// and dismisses the connect toast. Called exactly once per attempt, by
-    /// whichever of the release-signal or result task observes the pending
-    /// `Cancelled` outcome first, or directly when Cancel arrives after
-    /// release was already confirmed.
+    /// and dismisses the connect toast.
     #[cfg(not(target_family = "wasm"))]
     fn finalize_cancelled_grok_attempt(&mut self, ctx: &mut ViewContext<Self>) {
         use crate::ToastStack;
@@ -1970,12 +1967,7 @@ impl WarpAgentPageView {
 
     /// Publishes a successful SuperGrok connection: clears the attempt and
     /// the manual-code editor, persists `tokens` (kicking off the proactive
-    /// refresh loop), and shows the connected toast. Called exactly once
-    /// per attempt, either directly by the loopback result when nothing
-    /// else resolved it first, or by whichever of the release-signal or
-    /// result task observes a pending `Connected` outcome first (a
-    /// successful pasted code, deferred until the loopback listener's port
-    /// is confirmed released).
+    /// refresh loop), and shows the connected toast.
     #[cfg(not(target_family = "wasm"))]
     fn finalize_connected_grok_attempt(
         &mut self,
