@@ -4,15 +4,13 @@ use warp::editor::CodeEditorModel;
 use warp::tui_export::{
     ActiveSession, BlocklistAIContextEvent, BlocklistAIContextModel, BlocklistAIInputModel,
     InputType, InputTypeAutoDetectionSource, LLMPreferences, MAX_IMAGE_COUNT_FOR_QUERY,
-    PendingAttachmentSummary, TeamContextResolver, UserWorkspaces,
+    PendingAttachmentSummary, TeamContextResolver,
 };
 use warp_core::features::FeatureFlag;
 use warp_editor::model::CoreEditorModel;
 use warpui_core::r#async::SpawnedFutureHandle;
 use warpui_core::clipboard::ClipboardContent;
-use warpui_core::{
-    AppContext, Entity, EntityId, ModelContext, ModelHandle, SingletonEntity as _, WeakViewHandle,
-};
+use warpui_core::{AppContext, Entity, EntityId, ModelContext, ModelHandle, SingletonEntity as _};
 
 use super::image_processing::{
     ClipboardPasteContent, classify_clipboard_content, parse_image_paths,
@@ -70,13 +68,13 @@ pub(crate) struct TuiAttachmentModel {
 }
 
 impl TuiAttachmentModel {
-    pub(crate) fn new<T: Entity>(
+    pub(crate) fn new(
         context_model: ModelHandle<BlocklistAIContextModel>,
         input_mode: ModelHandle<BlocklistAIInputModel>,
         input_editor: ModelHandle<CodeEditorModel>,
         active_session: ModelHandle<ActiveSession>,
         terminal_surface_id: EntityId,
-        terminal_surface: WeakViewHandle<T>,
+        team_context_resolver: TeamContextResolver,
         ctx: &mut ModelContext<Self>,
     ) -> Self {
         let initial_attachment_count = context_model.as_ref(ctx).pending_attachments().len();
@@ -92,7 +90,7 @@ impl TuiAttachmentModel {
             input_editor,
             active_session,
             terminal_surface_id,
-            team_context_resolver: UserWorkspaces::team_context_resolver(terminal_surface),
+            team_context_resolver,
             selected_index: initial_attachment_count.checked_sub(1),
             last_attachment_count: initial_attachment_count,
             had_locking_attachment,

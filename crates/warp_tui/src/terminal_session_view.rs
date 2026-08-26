@@ -1538,7 +1538,7 @@ impl TuiTerminalSessionView {
                 &model_events,
                 model.clone(),
                 terminal_surface_id,
-                terminal_surface.clone(),
+                UserWorkspaces::team_context_resolver(terminal_surface.clone()),
                 conversation_selection.clone(),
                 ctx,
             )
@@ -1916,7 +1916,7 @@ impl TuiTerminalSessionView {
                 input_editor_model,
                 active_session.clone(),
                 terminal_surface_id,
-                terminal_surface,
+                UserWorkspaces::team_context_resolver(terminal_surface),
                 ctx,
             )
         });

@@ -11,7 +11,6 @@ use warp_core::features::FeatureFlag;
 use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warpui::{
     AppContext, Entity, EntityId, ModelContext, ModelHandle, SingletonEntity, WeakModelHandle,
-    WeakViewHandle,
 };
 
 use super::agent_view::{AgentViewEntryOrigin, EnterAgentViewError};
@@ -152,16 +151,15 @@ pub fn block_context_from_terminal_model(
 
 impl BlocklistAIContextModel {
     /// Creates pending context state for a terminal surface.
-    pub fn new<T: Entity>(
+    pub fn new(
         sessions: ModelHandle<Sessions>,
         model_event_dispatcher: &ModelHandle<ModelEventDispatcher>,
         terminal_model: Arc<FairMutex<TerminalModel>>,
         terminal_surface_id: EntityId,
-        terminal_view: WeakViewHandle<T>,
+        team_context_resolver: TeamContextResolver,
         conversation_selection: ConversationSelectionHandle,
         ctx: &mut ModelContext<Self>,
     ) -> Self {
-        let team_context_resolver = UserWorkspaces::team_context_resolver(terminal_view);
         ctx.subscribe_to_model(
             model_event_dispatcher,
             move |me, _, event, ctx| match event {

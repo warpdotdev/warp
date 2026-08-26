@@ -3506,7 +3506,7 @@ impl TerminalView {
                 &model_events_handle,
                 model.clone(),
                 terminal_view_id,
-                terminal_view.clone(),
+                UserWorkspaces::team_context_resolver(terminal_view.clone()),
                 conversation_selection.clone(),
                 ctx,
             )
