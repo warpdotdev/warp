@@ -9,8 +9,9 @@ use warp_core::command::ExitCode;
 
 use super::{
     PrepareEnvironmentError, RepositoryCloneRequest, build_parallel_clone_command,
-    build_remove_repository_origins_command, checkout_command_for, checkout_result,
-    merge_repos_deduped, repository_clone_requests, single_repo_name,
+    build_remove_repository_origins_command, build_resolved_head_command, checkout_command_for,
+    checkout_result, environment_snapshot, is_valid_git_object_id, merge_repos_deduped,
+    parse_resolved_head_sha, parse_resolved_head_shas, repository_clone_requests, single_repo_name,
     validate_repository_head_overrides,
 };
 use crate::ai::cloud_environments::{AmbientAgentEnvironment, SourceRepo};
@@ -28,6 +29,141 @@ fn commit_head_override(
         repo_name: repo.to_string(),
         head: RepositoryHeadRef::CommitSha(sha.to_string()),
     }
+}
+
+#[test]
+fn git_object_id_validation_accepts_lowercase_sha1_and_sha256() {
+    assert!(is_valid_git_object_id(
+        "0123456789abcdef0123456789abcdef01234567"
+    ));
+    assert!(is_valid_git_object_id(
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+    ));
+    assert!(!is_valid_git_object_id(
+        "0123456789ABCDEF0123456789ABCDEF01234567"
+    ));
+    assert!(!is_valid_git_object_id("0123456789abcdef"));
+    assert!(!is_valid_git_object_id(
+        "g123456789abcdef0123456789abcdef01234567"
+    ));
+}
+
+#[test]
+fn parse_resolved_head_sha_accepts_trimmed_valid_object_ids() {
+    assert_eq!(
+        parse_resolved_head_sha("0123456789abcdef0123456789abcdef01234567").as_deref(),
+        Some("0123456789abcdef0123456789abcdef01234567")
+    );
+    assert_eq!(
+        parse_resolved_head_sha(
+            "  0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef  "
+        )
+        .as_deref(),
+        Some("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
+    );
+    assert_eq!(
+        parse_resolved_head_sha("0123456789ABCDEF0123456789ABCDEF01234567"),
+        None
+    );
+    assert_eq!(parse_resolved_head_sha("not-a-sha"), None);
+    assert_eq!(parse_resolved_head_sha(""), None);
+}
+
+#[test]
+fn parse_resolved_head_shas_keeps_one_line_per_repo_including_failures() {
+    let first = "0123456789abcdef0123456789abcdef01234567";
+    let second = "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789";
+    let stdout = format!("{first}\n\n{second}\n");
+
+    assert_eq!(
+        parse_resolved_head_shas(stdout.as_bytes(), 3),
+        vec![Some(first.to_string()), None, Some(second.to_string())]
+    );
+    assert_eq!(
+        parse_resolved_head_shas(first.as_bytes(), 2),
+        vec![Some(first.to_string()), None]
+    );
+    assert_eq!(parse_resolved_head_shas(b"\xff", 1), vec![None]);
+}
+
+#[test]
+fn resolved_head_command_prints_one_line_per_repo() {
+    let workspace = Path::new("/workspace");
+    let command = unwrap_sh_c_script(&build_resolved_head_command(
+        &[
+            clone_request(repo(CodeForge::GitHub, "warpdotdev", "warp"), None),
+            clone_request(repo(CodeForge::GitHub, "warpdotdev", "warp-server"), None),
+        ],
+        workspace,
+    ));
+    let warp_dir = workspace.join("warp");
+    let warp_server_dir = workspace.join("warp-server");
+
+    assert!(command.starts_with("set +e\n"));
+    assert!(command.contains(&format!(
+        "git -C '{}' rev-parse --verify HEAD",
+        warp_dir.to_string_lossy()
+    )));
+    assert!(command.contains(&format!(
+        "git -C '{}' rev-parse --verify HEAD",
+        warp_server_dir.to_string_lossy()
+    )));
+    assert_eq!(command.matches("printf '%s\\n'").count(), 2);
+}
+
+#[test]
+fn environment_snapshot_keeps_resolved_heads_in_request_order() {
+    let requests = vec![
+        clone_request(
+            repo(CodeForge::GitHub, "warpdotdev", "warp"),
+            Some(RepositoryHeadRef::Branch("main".to_string())),
+        ),
+        clone_request(
+            repo(CodeForge::GitLab, "platform/backend", "api"),
+            Some(RepositoryHeadRef::CommitSha(
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
+            )),
+        ),
+    ];
+    let first_sha = "0123456789abcdef0123456789abcdef01234567";
+    let second_sha = "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789";
+
+    let snapshot = environment_snapshot(
+        &requests,
+        Path::new("/workspace"),
+        &[Some(first_sha.to_string()), Some(second_sha.to_string())],
+    );
+
+    assert_eq!(snapshot.repositories.len(), 2);
+    assert_eq!(snapshot.repositories[0].repo_owner, "warpdotdev");
+    assert_eq!(snapshot.repositories[0].checkout_path, "warp");
+    assert_eq!(
+        snapshot.repositories[0].requested_checkout_ref.as_deref(),
+        Some("main")
+    );
+    assert_eq!(snapshot.repositories[0].resolved_head_sha, first_sha);
+    assert_eq!(snapshot.repositories[1].code_forge, CodeForge::GitLab);
+    assert_eq!(snapshot.repositories[1].resolved_head_sha, second_sha);
+}
+
+#[test]
+fn environment_snapshot_omits_unresolved_heads() {
+    let requests = vec![
+        clone_request(repo(CodeForge::GitHub, "one", "first"), None),
+        clone_request(repo(CodeForge::GitHub, "two", "second"), None),
+    ];
+
+    let snapshot = environment_snapshot(
+        &requests,
+        Path::new("/workspace"),
+        &[
+            None,
+            Some("0123456789abcdef0123456789abcdef01234567".to_string()),
+        ],
+    );
+
+    assert_eq!(snapshot.repositories.len(), 1);
+    assert_eq!(snapshot.repositories[0].repo_name, "second");
 }
 fn branch_head_override(
     code_forge: RepositoryForge,
@@ -198,7 +334,7 @@ fn parallel_clone_command_runs_repos_in_background_and_waits() {
     assert!(command.contains("===== warpdotdev/warp ====="));
     assert!(command.contains("cat \"$log_file_0\""));
     assert!(command.contains("===== platform/backend/api ====="));
-    assert!(command.contains("cat \"$log_file_1\""));
+    assert!(!command.contains("repository revision results"));
     assert!(command.contains("exit \"$failed\""));
 }
 
@@ -235,9 +371,10 @@ fn parallel_clone_command_threads_checkout_ref_and_pins_after_clone() {
     assert!(command.contains("'feature'"));
     assert!(command.contains("if [ -n \"$checkout_ref\" ]; then"));
     assert!(command.contains(
-        "git -C \"$target\" fetch --filter=tree:0 origin \"$checkout_ref\" && git -C \"$target\" checkout --detach FETCH_HEAD"
+        "git -C \"$target\" fetch --filter=blob:none origin \"$checkout_ref\" && git -C \"$target\" checkout --detach FETCH_HEAD"
     ));
-    assert!(command.contains("git clone --filter=tree:0 \"$repo_url\" \"$target\""));
+    assert!(command.contains("git clone --filter=blob:none \"$repo_url\" \"$target\""));
+    assert!(!command.contains("rev-parse --verify HEAD"));
 }
 
 #[test]
@@ -271,7 +408,7 @@ fn parallel_clone_command_fetches_commit_shas_without_cloning_later_history() {
     assert!(command.contains("'0'"));
     assert!(command.contains("git init --quiet \"$target\""));
     assert!(command.contains("git -C \"$target\" remote add origin \"$repo_url\""));
-    assert_eq!(command.matches("git clone --filter=tree:0").count(), 1);
+    assert_eq!(command.matches("git clone --filter=blob:none").count(), 1);
     assert!(!command.contains("--depth=1"));
 }
 
@@ -294,7 +431,7 @@ fn checkout_command_checks_out_fetch_head_not_ref_name() {
 
     let warp_dir = workspace.join("warp");
     assert!(command.contains(&format!(
-        "git -C '{}' fetch --filter=tree:0 origin 'feature'",
+        "git -C '{}' fetch --filter=blob:none origin 'feature'",
         warp_dir.to_string_lossy()
     )));
     assert!(command.contains("checkout --detach FETCH_HEAD"));
@@ -344,7 +481,7 @@ fn head_overrides_replace_checkout_ref_only_for_matching_repos() {
         branch_head_override(RepositoryForge::GitHub, "warpdotdev", "unused", "develop"),
     ];
 
-    let prepared = repository_clone_requests(&repos, &overrides);
+    let prepared = repository_clone_requests(&repos, &overrides).unwrap();
 
     assert_eq!(
         prepared[0].checkout,
@@ -356,6 +493,84 @@ fn head_overrides_replace_checkout_ref_only_for_matching_repos() {
         prepared[1].checkout,
         Some(RepositoryHeadRef::Branch("old-pin".to_string()))
     );
+}
+
+#[test]
+fn clone_requests_reject_a_repository_with_an_unrecognized_forge() {
+    // An environment forge value newer than this client build (see
+    // CodeForge::Unknown) can still be assigned to a real repository by a
+    // newer server. Building clone requests for it must fail clearly rather
+    // than panic or silently attempt a clone with no host.
+    let repos = vec![SourceRepo::new(
+        CodeForge::Unknown,
+        "warpdotdev".to_string(),
+        "warp".to_string(),
+    )];
+
+    let error = repository_clone_requests(&repos, &[]).unwrap_err();
+
+    assert!(matches!(
+        error,
+        PrepareEnvironmentError::UnsupportedRepositoryForge { repo_name }
+            if repo_name == "warpdotdev/warp"
+    ));
+}
+
+#[test]
+fn clone_requests_reject_an_unrecognized_forge_repository_even_with_unrelated_overrides() {
+    // A head override targeting a different, supported-forge repository must
+    // not mask the unsupported repository elsewhere in the same environment:
+    // every repository is checked, not just the ones an override names.
+    let repos = vec![
+        SourceRepo::new(
+            CodeForge::GitHub,
+            "warpdotdev".to_string(),
+            "warp".to_string(),
+        ),
+        SourceRepo::new(
+            CodeForge::Unknown,
+            "warpdotdev".to_string(),
+            "warp-server".to_string(),
+        ),
+    ];
+    let overrides = vec![commit_head_override(
+        RepositoryForge::GitHub,
+        "warpdotdev",
+        "warp",
+        "0123456789abcdef0123456789abcdef01234567",
+    )];
+
+    let error = repository_clone_requests(&repos, &overrides).unwrap_err();
+
+    assert!(matches!(
+        error,
+        PrepareEnvironmentError::UnsupportedRepositoryForge { repo_name }
+            if repo_name == "warpdotdev/warp-server"
+    ));
+}
+
+#[test]
+fn head_override_validation_treats_an_unrecognized_forge_repository_as_never_matching() {
+    // No head override can target a repository whose forge this client can't
+    // represent; validation must reject it as "not declared" (an override
+    // that names a repository the environment doesn't have) rather than
+    // panicking while checking whether it matches.
+    let environment = environment_with_repos(vec![SourceRepo::new(
+        CodeForge::Unknown,
+        "warpdotdev".to_string(),
+        "warp".to_string(),
+    )]);
+    let override_for_it = commit_head_override(
+        RepositoryForge::GitHub,
+        "warpdotdev",
+        "warp",
+        "0123456789abcdef0123456789abcdef01234567",
+    );
+
+    let error =
+        validate_repository_head_overrides(&environment.effective_repos(), &[override_for_it])
+            .expect_err("an unrecognized-forge repository can never match an override");
+    assert!(error.to_string().contains("not declared"));
 }
 
 #[test]
@@ -439,7 +654,7 @@ fn applied_head_overrides_are_threaded_through_the_existing_clone_command() {
         "develop",
     )];
     let command = build_parallel_clone_command(
-        &repository_clone_requests(&repos, &overrides),
+        &repository_clone_requests(&repos, &overrides).unwrap(),
         ShellType::Bash,
     );
 
@@ -447,11 +662,10 @@ fn applied_head_overrides_are_threaded_through_the_existing_clone_command() {
     assert!(!command.contains("'abc123'"));
     assert!(command.contains("'old-pin'"));
     assert!(command.contains(
-        "git -C \"$target\" fetch --filter=tree:0 origin \"$checkout_ref\" && git -C \"$target\" checkout --detach FETCH_HEAD"
+        "git -C \"$target\" fetch --filter=blob:none origin \"$checkout_ref\" && git -C \"$target\" checkout --detach FETCH_HEAD"
     ));
     assert!(!command.contains("checkout_commit"));
     assert!(!command.contains("checkout_branch"));
-    assert_eq!(command.matches("'1'").count(), 0);
 }
 
 #[test]
@@ -468,7 +682,7 @@ fn applied_commit_override_uses_sha_only_fetch() {
         "0123456789abcdef0123456789abcdef01234567",
     )];
     let command = build_parallel_clone_command(
-        &repository_clone_requests(&repos, &overrides),
+        &repository_clone_requests(&repos, &overrides).unwrap(),
         ShellType::Bash,
     );
 
@@ -625,7 +839,7 @@ fn partial_clone(fixture: &Fixture) -> PathBuf {
     git(
         &[
             "clone",
-            "--filter=tree:0",
+            "--filter=blob:none",
             &fixture.origin_url,
             repo_dir.to_str().unwrap(),
         ],
@@ -639,6 +853,13 @@ fn run_command(command: &str) -> std::process::ExitStatus {
         .arg("-c")
         .arg(command)
         .status()
+        .expect("sh should be runnable")
+}
+fn run_command_output(command: &str) -> std::process::Output {
+    Command::new("sh")
+        .arg("-c")
+        .arg(command)
+        .output()
         .expect("sh should be runnable")
 }
 
@@ -662,7 +883,7 @@ fn run_parallel_clone_repo_helper(
     fixture: &Fixture,
     target: &Path,
     checkout_ref: Option<&str>,
-) -> std::process::ExitStatus {
+) -> std::process::Output {
     // Two dummy repos so we hit the parallel path (and its shell helper).
     let repos = vec![
         named_checkout_request(
@@ -703,7 +924,7 @@ fn run_parallel_clone_repo_helper(
         checkout_ref = checkout_ref.unwrap_or(""),
         is_commit_sha = if checkout_ref.is_some() { "1" } else { "0" },
     );
-    run_command(&invoke)
+    run_command_output(&invoke)
 }
 
 #[test]
@@ -711,9 +932,10 @@ fn checkout_command_pins_head_to_commit_absent_from_default_branch() {
     let fixture = build_fixture();
     let repo_dir = partial_clone(&fixture);
 
-    // The partial clone (`--filter=tree:0`) only fetched `main`, so the pinned
-    // commit — which lives off the default branch — requires the fetch step
-    // baked into the command before it can be checked out.
+    // `git clone` only fetches `refs/heads/*` by default, and the pinned
+    // commit lives under a hidden non-heads ref (`refs/pinned/base`) instead
+    // of `main` — the fetch step baked into the command is what pulls it
+    // down before it can be checked out.
     let repo = SourceRepo::new(
         CodeForge::GitHub,
         "warpdotdev".to_string(),
@@ -793,7 +1015,9 @@ fn parallel_clone_shell_pins_existing_target_dir_when_checkout_ref_set() {
 
     // Drive the real shell helper extracted from build_parallel_clone_command.
     assert!(
-        run_parallel_clone_repo_helper(&fixture, &repo_dir, Some(&fixture.pinned_sha)).success()
+        run_parallel_clone_repo_helper(&fixture, &repo_dir, Some(&fixture.pinned_sha))
+            .status
+            .success()
     );
     assert_eq!(
         git_stdout(&["rev-parse", "HEAD"], &repo_dir),
@@ -807,7 +1031,11 @@ fn parallel_clone_shell_leaves_existing_target_dir_when_no_checkout_ref() {
     let fixture = build_fixture();
     let repo_dir = partial_clone(&fixture);
 
-    assert!(run_parallel_clone_repo_helper(&fixture, &repo_dir, None).success());
+    assert!(
+        run_parallel_clone_repo_helper(&fixture, &repo_dir, None)
+            .status
+            .success()
+    );
     assert_eq!(
         git_stdout(&["rev-parse", "HEAD"], &repo_dir),
         fixture.base_sha,
@@ -938,6 +1166,72 @@ fn no_checkout_ref_leaves_clone_on_default_branch() {
         git_stdout(&["rev-parse", "HEAD"], &repo_dir),
         fixture.base_sha
     );
+}
+
+/// Regression test for APP-5509: a `--filter=blob:none` clone must carry
+/// enough tree data that a path-limited `git log` never reaches the network.
+/// A regression to `--filter=tree:0` would instead try to lazily fetch a
+/// tree per commit walked, so repointing `origin` at an unreachable URL
+/// after the clone turns that regression into a fast failure here instead of
+/// the hang seen in production.
+#[test]
+fn blobless_clone_walks_path_limited_history_without_network() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+
+    let origin = root.join("origin.git");
+    fs::create_dir_all(&origin).unwrap();
+    git(&["init", "-b", "main", "--bare", "."], &origin);
+    git(&["config", "uploadpack.allowFilter", "true"], &origin);
+    let origin_url = format!("file://{}", origin.display());
+
+    let seed = root.join("seed");
+    fs::create_dir_all(&seed).unwrap();
+    git(&["init", "-b", "main", "."], &seed);
+    git(&["remote", "add", "origin", &origin_url], &seed);
+    for (contents, message) in [("one\n", "first"), ("one\ntwo\n", "second")] {
+        fs::write(seed.join("notes.md"), contents).unwrap();
+        git(&["add", "."], &seed);
+        git(&["commit", "-m", message], &seed);
+    }
+    git(&["push", "origin", "main"], &seed);
+
+    let repo_dir = root.join("clone");
+    git(
+        &[
+            "clone",
+            "--filter=blob:none",
+            &origin_url,
+            repo_dir.to_str().unwrap(),
+        ],
+        root,
+    );
+
+    // Simulate the origin becoming unreachable after the clone (e.g. the
+    // sandbox network being torn down), so a lazy tree fetch fails fast
+    // instead of hanging.
+    git(
+        &[
+            "remote",
+            "set-url",
+            "origin",
+            "https://127.0.0.1:1/unreachable.git",
+        ],
+        &repo_dir,
+    );
+
+    let output = Command::new("git")
+        .args(["--no-pager", "log", "--oneline", "--", "notes.md"])
+        .current_dir(&repo_dir)
+        .output()
+        .expect("git should be runnable");
+    assert!(
+        output.status.success(),
+        "path-limited git log must stay local on a blobless clone: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let commit_count = String::from_utf8(output.stdout).unwrap().lines().count();
+    assert_eq!(commit_count, 2, "expected both commits touching notes.md");
 }
 
 #[test]

@@ -104,7 +104,8 @@ use crate::ai::blocklist::keyboard_navigable_buttons::KeyboardNavigableButtons;
 use crate::ai::blocklist::secret_redaction::SecretRedactionState;
 use crate::ai::blocklist::usage::rollup::compute_orchestration_rollup;
 use crate::ai::blocklist::view_util::{
-    FAILED_OUTPUT_USAGE_NOTICE_TEXT, format_credits, should_show_failed_output_usage_notice,
+    FAILED_OUTPUT_USAGE_NOTICE_TEXT, format_credits_with_cost, format_usage_parenthetical,
+    should_show_failed_output_usage_notice,
 };
 use crate::ai::blocklist::{AIBlockResponseRating, BlocklistAIActionModel, SuggestionChipView};
 use crate::ai::paths::shell_native_absolute_path;
@@ -261,21 +262,15 @@ pub(super) fn render(props: Props, app: &AppContext) -> Box<dyn Element> {
         | AIBlockOutputStatus::Failed { .. } => {
             if let Some(output) = status.output_to_render() {
                 let output = output.get();
-                // TODO(vkodithala): Blocks with recording-related actions still
-                // recompute this conversation-wide map on every render. Cache
-                // spans on BlocklistAIActionModel keyed by conversation and
-                // refresh on action/result mutations instead.
                 let recording_spans_by_action_id = if props.has_recording_related_actions {
-                    props
-                        .model
-                        .conversation(app)
-                        .map(|conversation| {
-                            conversation
-                                .recording_spans_by_action_id(Some(props.action_model.as_ref(app)))
-                        })
-                        .unwrap_or_default()
+                    props.model.conversation(app).map(|conversation| {
+                        props
+                            .action_model
+                            .as_ref(app)
+                            .recording_spans_for_conversation(conversation)
+                    })
                 } else {
-                    HashMap::new()
+                    None
                 };
                 let is_complete = matches!(status, AIBlockOutputStatus::Complete { .. });
                 let is_output_for_static_prompt_suggestions =
@@ -781,7 +776,9 @@ pub(super) fn render(props: Props, app: &AppContext) -> Box<dyn Element> {
                                 props,
                                 id,
                                 request,
-                                recording_spans_by_action_id.get(id),
+                                recording_spans_by_action_id
+                                    .as_ref()
+                                    .and_then(|spans| spans.get(id)),
                                 app,
                             ));
                         }
@@ -3693,6 +3690,21 @@ fn render_usage_button(props: Props, app: &AppContext) -> Box<dyn Element> {
         .as_ref()
         .map(|r| r.total_credits)
         .unwrap_or_else(|| conversation.credits_spent());
+    // Only the rollup path (summed across sub-agents) has a matching
+    // aggregated cost figure; a non-orchestrator conversation's own dollar
+    // cost comes from its usage totals directly.
+    let headline_cost_in_cents = rollup
+        .as_ref()
+        .map(|r| r.total_cost_in_cents)
+        .unwrap_or_else(|| conversation.usage_totals().total_cost_in_cents());
+    // Same rollup-vs-own-totals split as `headline_cost_in_cents`, for the
+    // token count shown alongside it.
+    let headline_tokens = rollup.as_ref().map(|r| r.total_tokens).unwrap_or_else(|| {
+        conversation
+            .usage_totals()
+            .charged_usage
+            .map(|usage| usage.total_tokens())
+    });
     let has_any_usage = headline_credits > 0.0
         || conversation.credits_spent_for_last_block().is_some()
         || !conversation.token_usage().is_empty()
@@ -3711,7 +3723,8 @@ fn render_usage_button(props: Props, app: &AppContext) -> Box<dyn Element> {
     };
 
     let total_credits_spent = headline_credits;
-    let mut credit_usage_text = format_credits(total_credits_spent);
+    let mut credit_usage_text =
+        format_credits_with_cost(total_credits_spent, headline_tokens, headline_cost_in_cents);
     if let Some(credits_spent_for_last_block) = conversation.credits_spent_for_last_block() {
         // Only show the credits spent for the last block if it is different from the total credits spent
         // and we spent a non-zero amount of credits for the last block.
@@ -3722,15 +3735,25 @@ fn render_usage_button(props: Props, app: &AppContext) -> Box<dyn Element> {
             && props.model.status(app).error().is_none()
         {
             // If the first part of the decimal is 0, we just display the whole number.
-            if credits_spent_for_last_block.fract() < 0.1 {
-                credit_usage_text = format!(
-                    "{credit_usage_text} (+{})",
-                    credits_spent_for_last_block.trunc() as i32
-                );
+            let last_block_credits_text = if credits_spent_for_last_block.fract() < 0.1 {
+                format!("{}", credits_spent_for_last_block.trunc() as i32)
             } else {
-                credit_usage_text =
-                    format!("{credit_usage_text} (+{credits_spent_for_last_block:.1})");
-            }
+                format!("{credits_spent_for_last_block:.1}")
+            };
+            // The last-block figure has no rollup equivalent: it stays
+            // bound to the orchestrator's own last block, same as
+            // `credits_spent_for_last_block` above.
+            let last_block_charged_usage = conversation.charged_usage_for_last_block();
+            let last_block_detail = format_usage_parenthetical(
+                last_block_charged_usage.map(|usage| usage.total_tokens()),
+                last_block_charged_usage.map(|usage| usage.total_cost_in_cents()),
+            );
+            credit_usage_text = match last_block_detail {
+                Some(detail) => {
+                    format!("{credit_usage_text} (+{last_block_credits_text}, {detail})")
+                }
+                None => format!("{credit_usage_text} (+{last_block_credits_text})"),
+            };
         }
     }
 

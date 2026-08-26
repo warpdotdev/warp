@@ -384,6 +384,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "ai_types"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.17",
+ "uuid",
+]
+
+[[package]]
 name = "aliasable"
 version = "0.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -635,7 +646,7 @@ dependencies = [
  "objc2-foundation 0.3.2",
  "parking_lot",
  "percent-encoding",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
  "wl-clipboard-rs",
  "x11rb",
 ]
@@ -3171,7 +3182,7 @@ version = "3.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fde0e0ec90c9dfb3b4b1a0891a7dcd0e2bffde2f7efed5fe7c9bb00e5bfb915e"
 dependencies = [
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -4510,7 +4521,7 @@ checksum = "6738d2e996274e499bc7b0d693c858b7720b9cd2543a0643a3087e6cb0a4fa16"
 dependencies = [
  "cfg-if",
  "libc",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -4815,7 +4826,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "33d852cb9b869c2a9b3df2f71a3074817f01e1844f839a144f5fcef059a4eb5d"
 dependencies = [
  "libc",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -7141,7 +7152,7 @@ checksum = "3640c1c38b8e4e43584d8df18be5fc6b0aa314ce6ebf51b53313d4306cca8e46"
 dependencies = [
  "hermit-abi 0.5.2",
  "libc",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -7335,7 +7346,7 @@ dependencies = [
  "portable-atomic",
  "portable-atomic-util",
  "serde_core",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -9992,6 +10003,7 @@ dependencies = [
 name = "persistence"
 version = "0.0.0"
 dependencies = [
+ "ai_types",
  "chrono",
  "diesel",
  "diesel_migrations",
@@ -10578,8 +10590,8 @@ version = "0.14.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "343d3bd7056eda839b03204e68deff7d1b13aba7af2b2fd16890697274262ee7"
 dependencies = [
- "heck 0.5.0",
- "itertools 0.10.5",
+ "heck 0.4.1",
+ "itertools 0.11.0",
  "log",
  "multimap",
  "petgraph",
@@ -10598,7 +10610,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "27c6023962132f4b30eb4c172c91ce92d933da334c59c23cddee82358ddafb0b"
 dependencies = [
  "anyhow",
- "itertools 0.10.5",
+ "itertools 0.11.0",
  "proc-macro2",
  "quote",
  "syn 2.0.117",
@@ -10844,7 +10856,7 @@ dependencies = [
  "once_cell",
  "socket2 0.5.10",
  "tracing",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -11836,7 +11848,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.4.15",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -11849,7 +11861,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.11.0",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -11917,7 +11929,7 @@ dependencies = [
  "security-framework 3.5.1",
  "security-framework-sys",
  "webpki-root-certs 1.0.1",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -13613,7 +13625,7 @@ dependencies = [
  "getrandom 0.3.4",
  "once_cell",
  "rustix 1.1.2",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -15123,6 +15135,7 @@ dependencies = [
  "aha-reqwest-eventsource",
  "aho-corasick",
  "ai",
+ "ai_types",
  "alphanumeric-sort",
  "anyhow",
  "app-installation-detection",
@@ -15182,7 +15195,6 @@ dependencies = [
  "crc",
  "csv",
  "ctor",
- "cvt",
  "cynic",
  "dashmap",
  "deltae",
@@ -15203,7 +15215,6 @@ dependencies = [
  "event-listener",
  "field_mask",
  "firebase",
- "flate2",
  "float-cmp",
  "freedesktop-desktop-entry",
  "futures",
@@ -15211,12 +15222,12 @@ dependencies = [
  "futures-timer",
  "futures-util",
  "fuzzy_match",
- "gethostname",
  "getrandom 0.2.16",
  "getset",
  "git2",
  "gloo",
  "handlebars",
+ "hashbrown 0.17.1",
  "hex",
  "http 1.4.0",
  "http_client",
@@ -15305,6 +15316,7 @@ dependencies = [
  "rmcp",
  "rquickjs",
  "rust-embed 8.7.2",
+ "rustc-hash 2.1.1",
  "rustls",
  "schemars 1.0.4",
  "security-framework-sys",
@@ -15328,7 +15340,6 @@ dependencies = [
  "shellexpand",
  "shlex",
  "signal-hook",
- "signal-hook-mio",
  "similar",
  "simple_logger",
  "siphasher 0.3.11",
@@ -15418,7 +15429,7 @@ dependencies = [
 [[package]]
 name = "warp-command-signatures"
 version = "0.0.0"
-source = "git+https://github.com/warpdotdev/command-signatures.git?rev=ac69f9b00c48d6de229ba5905056d9302da1c5c4#ac69f9b00c48d6de229ba5905056d9302da1c5c4"
+source = "git+https://github.com/warpdotdev/command-signatures.git?rev=d3725aa42375cc229699c87be2b38f9d9f07080f#d3725aa42375cc229699c87be2b38f9d9f07080f"
 dependencies = [
  "cfg-if",
  "itertools 0.10.5",
@@ -15436,7 +15447,7 @@ dependencies = [
 [[package]]
 name = "warp-completion-metadata"
 version = "0.0.0"
-source = "git+https://github.com/warpdotdev/command-signatures.git?rev=ac69f9b00c48d6de229ba5905056d9302da1c5c4#ac69f9b00c48d6de229ba5905056d9302da1c5c4"
+source = "git+https://github.com/warpdotdev/command-signatures.git?rev=d3725aa42375cc229699c87be2b38f9d9f07080f#d3725aa42375cc229699c87be2b38f9d9f07080f"
 dependencies = [
  "html-escape",
  "itertools 0.10.5",
@@ -15818,7 +15829,7 @@ dependencies = [
 [[package]]
 name = "warp_multi_agent_api"
 version = "0.0.0"
-source = "git+https://github.com/warpdotdev/warp-proto-apis.git?rev=b40bca688c39c52c6fbc12bd6a6511a95d7b9f54#b40bca688c39c52c6fbc12bd6a6511a95d7b9f54"
+source = "git+https://github.com/warpdotdev/warp-proto-apis.git?rev=f0028fa6d05db1ba63726eaf6f8d33ab17abe37b#f0028fa6d05db1ba63726eaf6f8d33ab17abe37b"
 dependencies = [
  "prost",
  "prost-reflect",
@@ -15976,35 +15987,81 @@ name = "warp_terminal"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "async-broadcast",
+ "async-channel",
+ "async-io",
+ "base64 0.22.1",
+ "bimap",
+ "bincode",
  "bitflags 2.13.0",
  "bitflags-serde-legacy",
+ "bounded-vec-deque",
+ "byte-unit",
+ "bytemuck",
  "cfg-if",
  "channel_versions",
+ "command",
  "command-corrections",
+ "cvt",
  "enum-iterator",
+ "flate2",
+ "futures",
+ "futures-lite 1.13.0",
  "get-size",
+ "gethostname",
+ "hex",
+ "image",
+ "instant",
  "itertools 0.14.0",
  "lazy_static",
+ "libc",
  "log",
+ "memo-map",
+ "mio",
+ "nix 0.26.4",
+ "ordered-float 3.9.2",
+ "parking_lot",
  "pathfinder_color",
+ "pathfinder_geometry",
+ "rand 0.8.6",
+ "rangemap",
  "regex",
+ "regex-automata",
+ "sentry",
  "serde",
+ "serde_json",
+ "serial_test",
  "session-sharing-protocol",
+ "shellexpand",
+ "signal-hook",
+ "signal-hook-mio",
+ "smallvec 1.15.1",
  "smol_str",
  "static_assertions",
  "string-offset",
+ "tempfile",
  "thiserror 2.0.17",
  "typed-path 0.10.0",
+ "unicode-general-category",
  "unicode-segmentation",
  "unicode-width 0.1.14",
+ "urlocator",
  "uuid",
+ "vec1",
  "version-compare",
  "vte",
+ "warp_assets",
+ "warp_cli",
  "warp_completer",
  "warp_core",
  "warp_errors",
+ "warp_isolation_platform",
  "warp_util",
  "warpui_core",
+ "windows 0.62.2",
+ "windows-registry 0.2.0",
+ "windows-result 0.2.0",
+ "winreg",
 ]
 
 [[package]]
@@ -16075,6 +16132,7 @@ dependencies = [
  "anyhow",
  "command",
  "content_inspector",
+ "directories",
  "dirs 6.0.0",
  "dunce",
  "event-listener",
@@ -16082,15 +16140,20 @@ dependencies = [
  "futures-util",
  "gloo",
  "hex",
+ "is_executable",
+ "itertools 0.14.0",
  "lazy_static",
  "log",
  "mime_guess",
+ "parking_lot",
  "pathdiff",
  "pin-project",
  "rand 0.8.6",
  "regex",
  "serde",
  "serde_json",
+ "serial_test",
+ "tempfile",
  "thiserror 2.0.17",
  "typed-path 0.10.0",
  "warp_errors",
@@ -17010,7 +17073,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]

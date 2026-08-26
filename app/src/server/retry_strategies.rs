@@ -144,25 +144,46 @@ pub(crate) fn backoff_after_attempts(attempts_made: usize) -> Duration {
 /// `attempt_fn` is called repeatedly with a fresh `Future` per attempt, so callers that need
 /// per-attempt state (e.g. cloning a request body) own that inside their closure.
 ///
-/// Transient errors are retried up to [`MAX_ATTEMPTS`] total. Permanent errors return
-/// immediately. A warning is logged between attempts so retries are visible in logs.
-pub(crate) async fn with_bounded_retry<T, F, Fut>(operation: &str, mut attempt_fn: F) -> Result<T>
+/// Transient errors (per [`is_transient_http_error`]) are retried up to [`MAX_ATTEMPTS`]
+/// total. Permanent errors return immediately. A warning is logged between attempts so
+/// retries are visible in logs.
+pub(crate) async fn with_bounded_retry<T, F, Fut>(operation: &str, attempt_fn: F) -> Result<T>
 where
     F: FnMut() -> Fut,
     Fut: Future<Output = Result<T>>,
 {
-    for attempt in 1..=MAX_ATTEMPTS {
+    with_bounded_retry_using(operation, MAX_ATTEMPTS, is_transient_http_error, attempt_fn).await
+}
+
+/// General form of [`with_bounded_retry`] for callers that need a different transient-error
+/// classifier than [`is_transient_http_error`] (e.g. [`is_transient_graphql_or_http_error`] for
+/// GraphQL operations), a different attempt budget than [`MAX_ATTEMPTS`], or both.
+///
+/// Otherwise behaves identically: exponential backoff between attempts (see
+/// [`backoff_after_attempts`]), a warning logged before each retry, and the last error
+/// returned once `max_attempts` is reached.
+pub(crate) async fn with_bounded_retry_using<T, F, Fut>(
+    operation: &str,
+    max_attempts: usize,
+    is_transient: impl Fn(&anyhow::Error) -> bool,
+    mut attempt_fn: F,
+) -> Result<T>
+where
+    F: FnMut() -> Fut,
+    Fut: Future<Output = Result<T>>,
+{
+    for attempt in 1..=max_attempts {
         match attempt_fn().await {
             Ok(value) => return Ok(value),
-            Err(e) if attempt >= MAX_ATTEMPTS || !is_transient_http_error(&e) => return Err(e),
+            Err(e) if attempt >= max_attempts || !is_transient(&e) => return Err(e),
             Err(e) => {
-                log::warn!("{operation}: attempt {attempt}/{MAX_ATTEMPTS} failed, retrying: {e:#}");
+                log::warn!("{operation}: attempt {attempt}/{max_attempts} failed, retrying: {e:#}");
                 Timer::after(backoff_after_attempts(attempt)).await;
             }
         }
     }
-    // Unreachable when MAX_ATTEMPTS >= 1.
+    // Unreachable when max_attempts >= 1.
     Err(anyhow!(
-        "retry loop exhausted without attempting operation (MAX_ATTEMPTS={MAX_ATTEMPTS})"
+        "retry loop exhausted without attempting operation (max_attempts={max_attempts})"
     ))
 }

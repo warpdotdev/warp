@@ -24,13 +24,16 @@ use crate::terminal::TerminalModel;
 use crate::terminal::input::slash_commands::AcceptSlashCommandOrSavedPrompt;
 use crate::terminal::model::session::active_session::ActiveSession;
 use crate::terminal::view::resolve_ai_query_routing;
-use crate::workspaces::user_workspaces::UserWorkspaces;
+use crate::workspaces::user_workspaces::{TeamContextResolver, UserWorkspaces};
 
 pub struct TuiDataSourceArgs {
     pub active_session: ModelHandle<ActiveSession>,
     pub cli_subagent_controller: ModelHandle<CLISubagentController>,
     pub terminal_view_id: EntityId,
     pub terminal_model: Arc<FairMutex<TerminalModel>>,
+    /// Resolves this data source's terminal surface's window's team context. Minted by the
+    /// owning view at construction via `UserWorkspaces::team_context_resolver`.
+    pub team_context_resolver: TeamContextResolver,
 }
 
 pub struct TuiSlashCommandDataSource {
@@ -45,6 +48,7 @@ impl TuiSlashCommandDataSource {
             cli_subagent_controller,
             terminal_view_id,
             terminal_model,
+            team_context_resolver,
         } = args;
 
         subscribe_to_shared_dependencies(
@@ -74,6 +78,7 @@ impl TuiSlashCommandDataSource {
                 active_session,
                 cli_subagent_controller,
                 terminal_view_id,
+                team_context_resolver,
             ),
             terminal_model,
         };

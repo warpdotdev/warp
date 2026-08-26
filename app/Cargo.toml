@@ -48,14 +48,10 @@ path = "src/bin/preview.rs"
 required-features = ["preview_channel"]
 test = false
 
-[[bin]]
-name = "generate_settings_schema"
-path = "src/bin/generate_settings_schema.rs"
-test = false
-
 [dependencies]
 addr = "0.15.6"
 ai.workspace = true
+ai_types.workspace = true
 alphanumeric-sort = "1.5.7"
 anyhow.workspace = true
 arrayvec.workspace = true
@@ -109,7 +105,6 @@ enclose = "1.1.8"
 enum-iterator.workspace = true
 event-listener.workspace = true
 field_mask.workspace = true
-flate2 = "1.0.17"
 float-cmp.workspace = true
 futures-lite.workspace = true
 futures-util.workspace = true
@@ -273,6 +268,8 @@ warp_ripgrep.workspace = true
 warp_managed_secrets.workspace = true
 warp_multi_agent_client.workspace = true
 local_control.workspace = true
+hashbrown.workspace = true
+rustc-hash.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
 block.workspace = true
@@ -345,7 +342,6 @@ syntect = "5.0"
 sysinfo.workspace = true
 warp-command-signatures = { workspace = true, features = ["embed-signatures"] }
 is_executable = "1.0.1"
-gethostname = "1.1.0"
 watcher.workspace = true
 warp_files.workspace = true
 
@@ -374,9 +370,7 @@ web-sys.workspace = true
 warp_web_event_bus.workspace = true
 
 [target.'cfg(unix)'.dependencies]
-cvt = "0.1.1"
 signal-hook = "0.3.17"
-signal-hook-mio = { version = "0.2.4", features = ["support-v1_0"] }
 nix = { workspace = true, features = [
     "fs",
     "hostname",
@@ -467,7 +461,7 @@ embed-resource = "3.0"
 
 # Note that we support channel-specific enables for these features
 [features]
-tui = ["warpui_core/tui"]
+tui = ["warp_terminal/tui", "warpui_core/tui"]
 ai_resume_button = []
 autoupdate = []
 figma_detection = []
@@ -504,6 +498,7 @@ crash_reporting = [
     "dep:crash-handler",
     "warp_logging/crash_reporting",
     "warp_errors/crash_reporting",
+    "warp_terminal/crash_reporting",
     "ai/crash_reporting",
 ]
 creating_shared_sessions = []
@@ -684,7 +679,6 @@ default = [
     "codex_notifications",
     "codex_plugin",
     "trim_trailing_blank_lines",
-    "open_warp_new_settings_modes",
     "skip_firebase_anonymous_user",
     "settings_file",
     "directory_tab_colors",
@@ -713,6 +707,8 @@ default = [
     "factory_mcp",
     "wait_for_events_parent_registration",
     "orchestration_unified_stack",
+    "ime_marked_text",
+    "ctrl_c_cancels_third_party_harness",
 ]
 # Enable this feature to automatically perform heap profiling.  NOTE: This will
 # substantially slow down program execution.
@@ -795,7 +791,7 @@ list_skills = []
 # This feature is enabled in build.rs when compiling for platforms which
 # support having a local tty/shell session.  It can be used to conditionally
 # include dependencies that should only exist in such environments.
-local_tty = []
+local_tty = ["warp_terminal/local_tty"]
 local_computer_use = []
 local_claude_codex_child_harnesses = []
 # This feature is enabled in build.rs when compiling for platforms which
@@ -808,6 +804,7 @@ local_fs = [
     "persistence/local_fs",
     "repo_metadata/local_fs",
     "warp_core/local_fs",
+    "warp_terminal/local_fs",
 ]
 log_expensive_frames_in_sentry = []
 jupyter_notebook_rendering = []
@@ -820,7 +817,7 @@ notebook_parameter = []
 oz_changelog_updates = []
 personal_cloud_objects = []
 # Remote-backed tty that connects to a PTY-like interface via a server.
-remote_tty = []
+remote_tty = ["warp_terminal/remote_tty"]
 # Fix for cursor reflow bug during window resize, from Alacritty resizing logic.
 resize_fix = []
 pluggable_notifications = []
@@ -867,6 +864,7 @@ test-util = [
     "warp_server_auth/test-util",
     "http_client/test-util",
     "warp_core/test-util",
+    "warp_terminal/test-util",
     "ai/test-util",
     "warp_server_client/test-util",
 ]
@@ -879,6 +877,7 @@ integration_tests = [
     "warpui/integration_tests",
     "warpui/test-util",
     "warp_core/integration_tests",
+    "warp_terminal/integration_tests",
     "warp_server_client/integration_tests",
 ]
 traces = []
@@ -1019,7 +1018,6 @@ queue_slash_command = []
 queued_prompts_v2 = ["queue_slash_command"]
 inline_menu_headers = []
 directory_tab_colors = []
-open_warp_new_settings_modes = []
 hoa_code_review = []
 vertical_tabs = []
 vertical_tabs_summary_mode = []
@@ -1051,6 +1049,7 @@ handoff_cloud_cloud = ["cloud_mode_setup_v2"]
 git_credential_refresh = []
 prompt_cache_expiry_warning = []
 osc_hyperlinks = []
+ctrl_c_cancels_third_party_harness = []
 
 [package.metadata.bundle.bin.warp-oss]
 category = "public.app-category.developer-tools"

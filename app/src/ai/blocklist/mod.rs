@@ -121,6 +121,8 @@ pub(crate) use passive_suggestions::{
     LegacyPassiveSuggestionsEvent, LegacyPassiveSuggestionsModel, MaaPassiveSuggestionsEvent,
     MaaPassiveSuggestionsModel, PassiveSuggestionsModels,
 };
+#[cfg(test)]
+pub(crate) use permissions::is_agent_mode_autonomy_allowed;
 pub use permissions::{BlocklistAIPermissions, CommandExecutionPermissionAllowedReason};
 #[cfg_attr(target_family = "wasm", allow(unused))]
 pub(crate) use persistence::PersistedAIInputType;

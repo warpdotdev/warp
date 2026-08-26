@@ -38,6 +38,7 @@ use pathfinder_geometry::vector::vec2f;
 pub use pending_user_query_block::{PendingUserQueryBlock, PendingUserQueryBlockEvent};
 #[cfg(not(target_family = "wasm"))]
 use repo_metadata::repositories::DetectedRepositories;
+use rustc_hash::FxHashSet;
 use secret_redaction::*;
 use serde::Serialize;
 use settings::Setting as _;
@@ -944,7 +945,7 @@ pub struct AIBlock {
     context_model: ModelHandle<BlocklistAIContextModel>,
 
     /// The IDs of requested blocking actions rendered in this block.
-    requested_action_ids: HashSet<AIAgentActionId>,
+    requested_action_ids: FxHashSet<AIAgentActionId>,
 
     /// Map from a requested command action ID to its view handle and status.
     requested_commands: HashMap<AIAgentActionId, RequestedCommand>,
@@ -2001,7 +2002,7 @@ impl AIBlock {
             }
         }
 
-        self.has_recording_related_actions = output.actions().any(|action| {
+        let has_recording_related_actions = output.actions().any(|action| {
             matches!(
                 &action.action,
                 AIAgentActionType::StartRecording { .. }
@@ -2009,6 +2010,13 @@ impl AIBlock {
                     | AIAgentActionType::UseComputer(_)
             )
         });
+        if self.has_recording_related_actions || has_recording_related_actions {
+            let conversation_id = self.client_ids.conversation_id;
+            self.action_model.update(ctx, |action_model, _ctx| {
+                action_model.invalidate_recording_spans(conversation_id);
+            });
+        }
+        self.has_recording_related_actions = has_recording_related_actions;
 
         if FeatureFlag::WebSearchUI.is_enabled() {
             // Handle WebSearch messages
@@ -2022,10 +2030,10 @@ impl AIBlock {
 
         self.fetch_conversation_search_agent_run_titles(output, ctx);
 
+        let new_action_ids: FxHashSet<AIAgentActionId> =
+            output.actions().map(|action| action.id.clone()).collect();
         for action in output.actions() {
-            let new_action_ids: HashSet<AIAgentActionId> =
-                output.actions().map(|action| action.id.clone()).collect();
-
+            let new_action_ids = new_action_ids.clone();
             #[cfg(feature = "integration_tests")]
             {
                 // Log action IDs that were cached from a previous version of `output` that are not
@@ -2743,6 +2751,10 @@ impl AIBlock {
 
         let shell_type = self.active_session.as_ref(ctx).shell_type(ctx);
         let escape_char = shell_type.map(|s| ShellFamily::from(s).escape_char());
+        let autonomy_allowed = {
+            let scope = self.controller.as_ref(ctx).team_context(ctx);
+            is_agent_mode_autonomy_allowed(&scope, ctx)
+        };
 
         for (requested_command_action_id, command, is_read_only, is_risky) in
             output.actions().filter_map(|action| {
@@ -2768,8 +2780,9 @@ impl AIBlock {
                 }
             })
         {
-            if is_agent_mode_autonomy_allowed(ctx) {
+            if autonomy_allowed {
                 let autoexecute_decision = escape_char.map(|escape_char| {
+                    let scope = self.controller.as_ref(ctx).team_context(ctx);
                     BlocklistAIPermissions::as_ref(ctx).can_autoexecute_command(
                         &self.client_ids.conversation_id,
                         command,
@@ -2777,6 +2790,7 @@ impl AIBlock {
                         is_read_only,
                         is_risky,
                         Some(self.terminal_view_id),
+                        &scope,
                         ctx,
                     )
                 });
@@ -2855,7 +2869,7 @@ impl AIBlock {
             .actions()
             .filter_map(|action| (action.is_get_relevant_files()).then_some(&action.id))
         {
-            if is_agent_mode_autonomy_allowed(ctx)
+            if autonomy_allowed
                 && *AISettings::as_ref(ctx).should_show_agent_mode_autoread_files_speedbump
             {
                 // Try to show the speedbump for codebase search.
@@ -2888,7 +2902,7 @@ impl AIBlock {
             let is_file_access =
                 action.is_get_specific_files() || action.is_grep() || action.is_file_glob();
             if is_file_access {
-                if is_agent_mode_autonomy_allowed(ctx)
+                if autonomy_allowed
                     && *AISettings::as_ref(ctx).should_show_agent_mode_autoread_files_speedbump
                 {
                     // Try to show the speedbump for autoread files setting
@@ -2914,7 +2928,7 @@ impl AIBlock {
             } else if matches!(action.action, AIAgentActionType::AskUserQuestion { .. })
                 && !self.model.is_restored()
                 && FeatureFlag::AskUserQuestion.is_enabled()
-                && is_agent_mode_autonomy_allowed(ctx)
+                && autonomy_allowed
                 && *AISettings::as_ref(ctx).should_show_agent_mode_ask_user_question_speedbump
             {
                 self.autonomy_setting_speedbump =
@@ -5264,13 +5278,24 @@ impl AIBlock {
     }
 
     pub fn dismiss_ai_tooltips(&mut self, ctx: &mut ViewContext<Self>) {
-        self.detected_links_state.link_location_open_tooltip = None;
-        ctx.emit(AIBlockEvent::DismissLinkTooltip);
-        self.secret_redaction_state.dismiss_tooltip();
-        ctx.emit(AIBlockEvent::DismissSecretTooltip);
+        let dismissed_link_tooltip = self
+            .detected_links_state
+            .link_location_open_tooltip
+            .take()
+            .is_some();
+        if dismissed_link_tooltip {
+            ctx.emit(AIBlockEvent::DismissLinkTooltip);
+        }
+
+        let dismissed_secret_tooltip = self.secret_redaction_state.dismiss_tooltip();
+        if dismissed_secret_tooltip {
+            ctx.emit(AIBlockEvent::DismissSecretTooltip);
+        }
+
+        let mut dismissed_search_tooltip = false;
         for search_view in self.search_codebase_view.values() {
             search_view.update(ctx, |view, ctx| {
-                view.clear_link_tooltip(ctx);
+                dismissed_search_tooltip |= view.clear_link_tooltip(ctx);
             });
         }
 
@@ -5282,8 +5307,9 @@ impl AIBlock {
         {
             button_handles.reset_hover_state_on_focus_change();
         }
-
-        ctx.notify();
+        if dismissed_link_tooltip || dismissed_secret_tooltip || dismissed_search_tooltip {
+            ctx.notify();
+        }
     }
 
     fn open_link(

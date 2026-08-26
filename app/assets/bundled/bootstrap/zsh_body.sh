@@ -1378,9 +1378,22 @@ esac
     # do we have a description parameter?
     # note we don''t use zparseopts here because of combined option parameters
     # with arguments like -default- confuse it.
-    if (( $@[(I)-d] )); then # kind of a hack, $+@[(r)-d] doesn''t work because of line noise overload
-        # next param after -d
-        __tmp=${@[$[${@[(i)-d]}+1]]}
+    #
+    # -d can be passed on its own (e.g. from _arguments) or clustered with other short
+    # flags (e.g. -ld from _describe). Match any flag token consisting of a leading -,
+    # zero or more letters, and a trailing d, rather than requiring an exact "-d". Use
+    # (I), not (i): (i) returns one past the end (not 0) when nothing matches, which
+    # would make the presence test below true on every call. Restrict the search to the
+    # same leading flags-only prefix the -O/-A/-D check above uses (everything before the
+    # first bare "-"/"--"), so a completion candidate that happens to look like a flag
+    # (a literal "-d"/"-ld" match, e.g. for ls or find) is never mistaken for the flag.
+    setopt localoptions extendedglob
+    local -a __flags
+    __flags=(${@[1,(i)(-|--)]})
+    local __d_idx=${__flags[(I)-[a-zA-Z]#d]}
+    if (( __d_idx )); then
+        # next param after the flag containing -d
+        __tmp=${@[$[__d_idx+1]]}
         # description can be given as an array parameter name, or inline () array
         if [[ $__tmp == \(* ]]; then
             eval "__dscr=$__tmp"

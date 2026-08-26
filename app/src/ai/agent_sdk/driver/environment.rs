@@ -7,6 +7,7 @@ use std::time::Duration;
 use ai::index::full_source_code_embedding::manager::{
     CodebaseIndexManager, CodebaseIndexManagerEvent,
 };
+use chrono::Utc;
 use cloud_object_models::CodeForge;
 use futures::channel::oneshot;
 use futures::future::join_all;
@@ -22,12 +23,16 @@ use super::AgentDriverError;
 #[cfg(feature = "local_fs")]
 use super::cache_setup;
 use super::terminal::TerminalDriver;
+use crate::ai::agent_sdk::environment_snapshot::{
+    EnvironmentSnapshot, EnvironmentSnapshotReporter, RepositoryRevision,
+};
 use crate::ai::agent_sdk::setup_observability::{SetupClientEventReporter, SetupStep};
 use crate::ai::cloud_environments::SourceRepo;
 use crate::terminal::model::session::command_executor::shell_escape_single_quotes;
 use crate::terminal::shell::ShellType;
 
 const CODEBASE_INDEX_SYNC_TIMEOUT: Duration = Duration::from_secs(60);
+const ENVIRONMENT_SNAPSHOT_CAPTURE_TIMEOUT: Duration = Duration::from_secs(2);
 
 #[derive(Debug, thiserror::Error)]
 pub enum PrepareEnvironmentError {
@@ -56,8 +61,100 @@ pub enum PrepareEnvironmentError {
         first_owner: String,
         second_owner: String,
     },
+    #[error(
+        "Repository {repo_name} has a code forge this client build doesn't support; update Warp to a version that does"
+    )]
+    UnsupportedRepositoryForge { repo_name: String },
     #[error("Terminal driver error while preparing environment: {source}")]
     TerminalDriver { source: AgentDriverError },
+}
+
+fn parse_resolved_head_sha(line: &str) -> Option<String> {
+    let sha = line.trim();
+    is_valid_git_object_id(sha).then(|| sha.to_string())
+}
+
+fn parse_resolved_head_shas(stdout: &[u8], repo_count: usize) -> Vec<Option<String>> {
+    let Ok(stdout) = std::str::from_utf8(stdout) else {
+        return vec![None; repo_count];
+    };
+    let mut resolved_heads = stdout
+        .lines()
+        .take(repo_count)
+        .map(parse_resolved_head_sha)
+        .collect::<Vec<_>>();
+    resolved_heads.resize(repo_count, None);
+    resolved_heads
+}
+
+fn build_resolved_head_command(repos: &[RepositoryCloneRequest], working_dir: &Path) -> String {
+    let mut script = String::from("set +e\n");
+    for request in repos {
+        let escaped = shell_escape_single_quotes(
+            &working_dir.join(&request.repo.repo).to_string_lossy(),
+            ShellType::Bash,
+        );
+        script.push_str(&format!(
+            "sha=\"$(git -C '{escaped}' rev-parse --verify HEAD 2>/dev/null)\"\n\
+             printf '%s\\n' \"$sha\"\n"
+        ));
+    }
+    format!(
+        "sh -c '{}'",
+        shell_escape_single_quotes(&script, ShellType::Bash)
+    )
+}
+
+fn checkout_path(working_dir: &Path, repo_name: &str) -> String {
+    working_dir
+        .join(repo_name)
+        .strip_prefix(working_dir)
+        .unwrap_or_else(|_| Path::new(repo_name))
+        .to_string_lossy()
+        .into_owned()
+}
+
+fn environment_snapshot(
+    repos: &[RepositoryCloneRequest],
+    working_dir: &Path,
+    resolved_heads: &[Option<String>],
+) -> EnvironmentSnapshot {
+    let repositories = repos
+        .iter()
+        .zip(resolved_heads)
+        .filter_map(|(request, resolved_head_sha)| {
+            Some(RepositoryRevision {
+                code_forge: request.repo.code_forge.unwrap_or_default(),
+                repo_owner: request.repo.owner.clone(),
+                repo_name: request.repo.repo.clone(),
+                checkout_path: checkout_path(working_dir, &request.repo.repo),
+                requested_checkout_ref: request
+                    .checkout
+                    .as_ref()
+                    .map(RepositoryHeadRef::value)
+                    .map(str::to_string),
+                resolved_head_sha: resolved_head_sha.clone()?,
+            })
+        })
+        .collect::<Vec<_>>();
+    if repositories.len() < repos.len() {
+        log::warn!(
+            "Could not capture resolved HEAD for {}/{} structured repositories",
+            repos.len() - repositories.len(),
+            repos.len()
+        );
+    }
+    EnvironmentSnapshot {
+        captured_at: Utc::now(),
+        repositories,
+    }
+}
+
+fn is_valid_git_object_id(value: &str) -> bool {
+    matches!(value.len(), 40 | 64)
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
 }
 
 /// Server-owned repository settings for environment preparation.
@@ -140,6 +237,7 @@ pub(crate) fn prepare_environment(
     harness: Harness,
     repository_options: RepositoryPreparationOptions,
     setup_events: SetupClientEventReporter,
+    environment_snapshot_reporter: EnvironmentSnapshotReporter,
     ctx: &mut ModelContext<TerminalDriver>,
 ) -> impl Future<Output = Result<(), PrepareEnvironmentError>> + use<> {
     let spawner = ctx.spawner();
@@ -172,6 +270,7 @@ pub(crate) fn prepare_environment(
             should_index_codebase,
             Arc::clone(&repo_channels),
             setup_events,
+            environment_snapshot_reporter,
         )
         .await;
 
@@ -280,6 +379,7 @@ async fn prepare_environment_impl(
     should_index_codebase: bool,
     repo_channels: Arc<Mutex<HashMap<PathBuf, oneshot::Sender<()>>>>,
     setup_events: SetupClientEventReporter,
+    environment_snapshot_reporter: EnvironmentSnapshotReporter,
 ) -> Result<(), PrepareEnvironmentError> {
     let working_dir_string = working_dir.to_string_lossy().to_string();
 
@@ -295,17 +395,23 @@ async fn prepare_environment_impl(
     }
     let mut codebase_context_receivers = Vec::new();
 
-    if !source_repos.is_empty() {
+    let environment_snapshot = if source_repos.is_empty() {
+        EnvironmentSnapshot::empty()
+    } else {
         setup_events
             .record_result(SetupStep::EnvironmentRepoClone, async {
                 clone_checkout_requests(
-                    &repository_clone_requests(source_repos, repository_head_overrides),
+                    &repository_clone_requests(source_repos, repository_head_overrides)?,
                     working_dir,
                     spawner,
                 )
                 .await
             })
-            .await?;
+            .await?
+    };
+    environment_snapshot_reporter.report(environment_snapshot);
+
+    if !source_repos.is_empty() {
         for repo in source_repos {
             register_cloned_repo(repo, working_dir, is_sandbox, spawner).await?;
             if !is_sandbox && should_index_codebase {
@@ -465,14 +571,19 @@ fn record_codebase_indexing(
     });
 }
 
-fn repository_forge_for_repo(repo: &SourceRepo) -> RepositoryForge {
+// `None` covers both a repo-less container forge and one this client build
+// doesn't recognize. Unlike `None`, a future server can assign the latter to
+// a real repository before this client updates, so callers must treat it as
+// an ordinary "can't clone this" outcome rather than an invariant violation.
+fn repository_forge_for_repo(repo: &SourceRepo) -> Option<RepositoryForge> {
     match repo.code_forge.unwrap_or_default() {
-        CodeForge::GitHub => RepositoryForge::GitHub,
-        CodeForge::GitLab => RepositoryForge::GitLab,
+        CodeForge::GitHub => Some(RepositoryForge::GitHub),
+        CodeForge::GitLab => Some(RepositoryForge::GitLab),
+        CodeForge::None | CodeForge::Unknown => None,
     }
 }
 fn head_override_matches_repo(head_override: &RepositoryHeadOverride, repo: &SourceRepo) -> bool {
-    head_override.code_forge == repository_forge_for_repo(repo)
+    Some(head_override.code_forge) == repository_forge_for_repo(repo)
         && head_override.repo_owner == repo.owner
         && head_override.repo_name == repo.repo
 }
@@ -495,16 +606,25 @@ struct RepositoryCloneRequest {
 fn repository_clone_requests(
     repos: &[SourceRepo],
     overrides: &[RepositoryHeadOverride],
-) -> Vec<RepositoryCloneRequest> {
+) -> Result<Vec<RepositoryCloneRequest>, PrepareEnvironmentError> {
     repos
         .iter()
         .cloned()
         .map(|repo| {
+            // A repository this client can't identify a host for can never
+            // clone; fail clearly here rather than attempt one with an empty
+            // host, which would otherwise be the only signal something is
+            // wrong.
+            if repository_forge_for_repo(&repo).is_none() {
+                return Err(PrepareEnvironmentError::UnsupportedRepositoryForge {
+                    repo_name: format!("{}/{}", repo.owner, repo.repo),
+                });
+            }
             let checkout = match head_override_for_repo(overrides, &repo) {
                 Some(head_override) => Some(head_override.head.clone()),
                 None => repo.checkout_ref.clone().map(RepositoryHeadRef::Branch),
             };
-            RepositoryCloneRequest { repo, checkout }
+            Ok(RepositoryCloneRequest { repo, checkout })
         })
         .collect()
 }
@@ -582,21 +702,21 @@ clone_repo() {
       git init --quiet "$target" || return 1
       git -C "$target" remote add origin "$repo_url" || return 1
     fi
-    git -C "$target" fetch --filter=tree:0 origin "$checkout_ref" && git -C "$target" checkout --detach FETCH_HEAD
+    git -C "$target" fetch --filter=blob:none origin "$checkout_ref" && git -C "$target" checkout --detach FETCH_HEAD
     return
   fi
   if [ -d "$target" ]; then
     printf '%s\n' "Repository directory $target already exists, skipping clone..."
   else
     printf '%s\n' "Cloning repository $repo_name..."
-    git clone --filter=tree:0 "$repo_url" "$target" || return 1
+    git clone --filter=blob:none "$repo_url" "$target" || return 1
   fi
   # Pin after clone or reuse: a reused directory may still be on an old ref.
   if [ -n "$checkout_ref" ]; then
     printf '%s\n' "Checking out $checkout_ref in $repo_name..."
     # Fetch leaves the object in FETCH_HEAD; check that out detached so we
     # never prefer a stale local branch with the same name.
-    git -C "$target" fetch --filter=tree:0 origin "$checkout_ref" && git -C "$target" checkout --detach FETCH_HEAD
+    git -C "$target" fetch --filter=blob:none origin "$checkout_ref" && git -C "$target" checkout --detach FETCH_HEAD
   fi
 }
 "#,
@@ -661,17 +781,23 @@ pub(super) async fn clone_repos(
     working_dir: &Path,
     spawner: &ModelSpawner<TerminalDriver>,
 ) -> Result<(), PrepareEnvironmentError> {
-    clone_checkout_requests(&repository_clone_requests(repos, &[]), working_dir, spawner).await
+    clone_checkout_requests(
+        &repository_clone_requests(repos, &[])?,
+        working_dir,
+        spawner,
+    )
+    .await
+    .map(|_| ())
 }
 
 async fn clone_checkout_requests(
     repos: &[RepositoryCloneRequest],
     working_dir: &Path,
     spawner: &ModelSpawner<TerminalDriver>,
-) -> Result<(), PrepareEnvironmentError> {
+) -> Result<EnvironmentSnapshot, PrepareEnvironmentError> {
     match repos {
-        [] => Ok(()),
-        [request] => clone_repo(request, working_dir, spawner).await,
+        [] => return Ok(EnvironmentSnapshot::empty()),
+        [request] => clone_repo(request, working_dir, spawner).await?,
         repos => {
             let shell_type = spawner
                 .spawn(|driver, ctx| {
@@ -703,9 +829,9 @@ async fn clone_checkout_requests(
                 safe: ("Successfully cloned repositories"),
                 full: ("Successfully cloned repositories: {}", repo_names.join(", "))
             );
-            Ok(())
         }
     }
+    Ok(capture_environment_snapshot(repos, working_dir, spawner).await)
 }
 
 /// Clone a source repository to `{working_dir}/{repo.repo}` if it does not already exist.
@@ -772,8 +898,11 @@ async fn clone_repo(
             full: ("Cloning repository via terminal: {repo_name}")
         );
 
-        // We do a partial clone here to speed up environment setup time.
-        let command = format!("git clone --filter=tree:0 '{escaped_url}'");
+        // We do a blobless partial clone here to speed up environment setup
+        // time while still keeping trees local, so path-limited history and
+        // blame stay fully local instead of lazily refetching from the
+        // promisor remote.
+        let command = format!("git clone --filter=blob:none '{escaped_url}'");
         let exit_code = execute_command(command, spawner).await?;
         if exit_code != 0.into() {
             return Err(PrepareEnvironmentError::CloneRepo {
@@ -788,8 +917,9 @@ async fn clone_repo(
     }
 
     // Pin after clone or reuse when a ref was requested. A reused directory may
-    // still be on an old default-branch tip, and a fresh partial clone only
-    // fetched the default branch — fetch the ref, then detach to FETCH_HEAD.
+    // still be on an old default-branch tip, and a checkout_ref (SHA, branch,
+    // or tag) may not have existed yet, or may have moved, by the time the
+    // clone ran — fetch the ref, then detach to FETCH_HEAD.
     // When checkout_ref is unset, leave an existing directory untouched.
     if let Some(command) = checkout_command_for(request, working_dir, shell_type) {
         let checkout_ref = request
@@ -813,15 +943,43 @@ async fn clone_repo(
     Ok(())
 }
 
+async fn capture_environment_snapshot(
+    repos: &[RepositoryCloneRequest],
+    working_dir: &Path,
+    spawner: &ModelSpawner<TerminalDriver>,
+) -> EnvironmentSnapshot {
+    if repos.is_empty() {
+        return EnvironmentSnapshot::empty();
+    }
+    let command = build_resolved_head_command(repos, working_dir);
+    let resolved_heads = match execute_silent_command(command, spawner)
+        .with_timeout(ENVIRONMENT_SNAPSHOT_CAPTURE_TIMEOUT)
+        .await
+    {
+        Ok(Ok(output)) => parse_resolved_head_shas(&output.stdout, repos.len()),
+        Ok(Err(error)) => {
+            log::warn!("Could not capture resolved HEADs for structured repositories: {error}");
+            vec![None; repos.len()]
+        }
+        Err(_) => {
+            log::warn!(
+                "Timed out capturing resolved HEADs for structured repositories after {:?}",
+                ENVIRONMENT_SNAPSHOT_CAPTURE_TIMEOUT
+            );
+            vec![None; repos.len()]
+        }
+    };
+    environment_snapshot(repos, working_dir, &resolved_heads)
+}
+
 /// Build the `git fetch` + `git checkout` command that pins `request`'s clone at
 /// its checkout, or `None` when the repo has no ref to pin.
 ///
-/// A extra clone (`--filter=tree:0`) only fetches the default branch, so an
-/// arbitrary ref (commit SHA, branch, or tag) may not be present yet: fetch it
-/// first, then check out the resulting `FETCH_HEAD` detached. Checking out the
-/// original ref name can prefer a stale local branch or fail when the object
-/// only landed in `FETCH_HEAD`. Detached HEAD is expected and fine — trials
-/// never merge.
+/// The requested ref (commit SHA, branch, or tag) may not have existed yet,
+/// or may have moved, by the time the clone ran: fetch it first, then check
+/// out the resulting `FETCH_HEAD` detached. Checking out the original ref
+/// name can prefer a stale local branch or fail when the object only landed
+/// in `FETCH_HEAD`. Detached HEAD is expected and fine — trials never merge.
 fn checkout_command_for(
     request: &RepositoryCloneRequest,
     working_dir: &Path,
@@ -832,7 +990,7 @@ fn checkout_command_for(
     let escaped_dir = shell_escape_single_quotes(&repo_dir.to_string_lossy(), shell_type);
     let escaped_ref = shell_escape_single_quotes(checkout_ref, shell_type);
     Some(format!(
-        "git -C '{escaped_dir}' fetch --filter=tree:0 origin '{escaped_ref}' && \
+        "git -C '{escaped_dir}' fetch --filter=blob:none origin '{escaped_ref}' && \
          git -C '{escaped_dir}' checkout --detach FETCH_HEAD"
     ))
 }
@@ -854,6 +1012,7 @@ fn checkout_result(
         })
     }
 }
+
 /// Register a cloned source repository with `DetectedRepositories` so that the
 /// skill watcher and other repo-aware subsystems can discover it.
 #[tracing::instrument(skip_all, err, fields(tags.cloud_agent = true, repo = %repo, is_sandbox = is_sandbox))]
@@ -1110,24 +1269,6 @@ async fn cd_in_terminal_silent(
     Ok(output.status == CommandExitStatus::Success)
 }
 
-/// Returns whether the given path resolves to an existing directory from the
-/// perspective of the active terminal session.
-///
-/// Runs `test -d <path>` through the session's in-band command executor, so
-/// the check is invisible in the user-facing blocklist and works for paths
-/// that only exist inside a remote/sandbox filesystem. The path is escaped
-/// using the *session's* actual shell type (bash/zsh use the `'"'"'` trick,
-/// fish uses a backslash, PowerShell doubles the quote) rather than assuming
-/// bash.
-///
-/// Prefer passing an absolute path: relative paths resolve against the
-/// session's current working directory, which couples the caller to
-/// whatever `cd` state the session happens to be in.
-///
-/// TODO(advait): `test -d ...` itself is POSIX-only. When we support
-/// environment prep on Windows host shells (PowerShell / cmd.exe), also
-/// branch on `ShellType` to emit the appropriate probe (e.g.
-/// `Test-Path -PathType Container <path>` for PowerShell).
 async fn terminal_directory_exists(
     path: &str,
     spawner: &ModelSpawner<TerminalDriver>,

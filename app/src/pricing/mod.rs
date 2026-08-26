@@ -1,41 +1,7 @@
-use onboarding::CreditPackOption;
 use warp_graphql::billing::{
     AddonCreditsOption, OveragesPricing, PlanPricing, PricingInfo, StripeSubscriptionPlan,
 };
 use warpui::{Entity, ModelContext, SingletonEntity};
-
-/// Converts the server's add-on credit packs into the display options shown on
-/// the onboarding offer slide.
-///
-/// `premium_bps` is the viewer's `PurchaseAddOnCreditsPolicy` surcharge (see
-/// [`crate::workspaces::workspace::PurchaseAddOnCreditsPolicy::effective_premium_bps`]),
-/// applied with the same integer math the server charges with, so the price we
-/// show is the price billed. Savings are computed against the smallest pack's
-/// per-credit list rate — the premium scales every pack equally, so it doesn't
-/// change the relative volume discount.
-pub fn onboarding_credit_pack_options(
-    options: &[AddonCreditsOption],
-    premium_bps: i32,
-) -> Vec<CreditPackOption> {
-    let base_rate = options.first().map_or(0., |option| option.rate());
-    options
-        .iter()
-        .map(|option| {
-            let savings_percent = if base_rate > 0. {
-                (((base_rate - option.rate()) / base_rate) * 100.)
-                    .round()
-                    .max(0.) as u32
-            } else {
-                0
-            };
-            CreditPackOption {
-                credits: option.credits,
-                price_usd_cents: option.price_usd_cents_with_premium(premium_bps),
-                savings_percent,
-            }
-        })
-        .collect()
-}
 
 /// A global model for maintaining pricing information from the server.
 #[derive(Debug)]

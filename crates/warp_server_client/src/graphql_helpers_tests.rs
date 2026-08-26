@@ -10,9 +10,11 @@ use http::StatusCode;
 use warp_graphql::client::{GraphQLError, RequestOptions};
 use warp_server_auth::auth_state::AuthState;
 
-use super::send_graphql_request;
+use super::{send_graphql_request, send_team_scoped_graphql_request};
 use crate::auth::AuthEvent;
-use crate::base_client::{AuthenticatedGraphqlConfig, BaseClient, GraphqlRoutingConfig};
+use crate::base_client::{
+    AuthenticatedGraphqlConfig, BaseClient, GraphqlRoutingConfig, TEAM_UID_HEADER,
+};
 
 fn base_client(auth_state: AuthState) -> (BaseClient, async_channel::Receiver<AuthEvent>) {
     let (event_sender, event_receiver) = async_channel::unbounded();
@@ -80,6 +82,7 @@ fn assert_user_disabled_event(event_receiver: &async_channel::Receiver<AuthEvent
 
 struct FakeGraphqlOperation {
     expected_auth_token: Option<String>,
+    expected_team_uid: Option<String>,
     send_count: Arc<AtomicUsize>,
     result: FakeGraphqlResult,
 }
@@ -94,6 +97,7 @@ impl FakeGraphqlOperation {
     fn successful(expected_auth_token: Option<&str>, send_count: Arc<AtomicUsize>) -> Self {
         Self {
             expected_auth_token: expected_auth_token.map(ToOwned::to_owned),
+            expected_team_uid: None,
             send_count,
             result: FakeGraphqlResult::Success,
         }
@@ -106,6 +110,7 @@ impl FakeGraphqlOperation {
     ) -> Self {
         Self {
             expected_auth_token: expected_auth_token.map(ToOwned::to_owned),
+            expected_team_uid: None,
             send_count,
             result: FakeGraphqlResult::Rejected(status),
         }
@@ -118,9 +123,16 @@ impl FakeGraphqlOperation {
     ) -> Self {
         Self {
             expected_auth_token: expected_auth_token.map(ToOwned::to_owned),
+            expected_team_uid: None,
             send_count,
             result: FakeGraphqlResult::ResponseErrors(messages),
         }
+    }
+
+    /// Asserts that the resolved request options carry (or omit) this exact team header.
+    fn expect_team_uid(mut self, expected_team_uid: Option<&str>) -> Self {
+        self.expected_team_uid = expected_team_uid.map(ToOwned::to_owned);
+        self
     }
 }
 
@@ -145,6 +157,10 @@ impl warp_graphql::client::Operation<()> for FakeGraphqlOperation {
     {
         Box::pin(async move {
             assert_eq!(options.auth_token, self.expected_auth_token);
+            assert_eq!(
+                options.headers.get(TEAM_UID_HEADER).cloned(),
+                self.expected_team_uid
+            );
             self.send_count.fetch_add(1, Ordering::SeqCst);
             match self.result {
                 FakeGraphqlResult::Success => Ok(GraphQlResponse {
@@ -271,6 +287,42 @@ fn external_user_not_in_context_returns_credentials_rejected_without_account_eve
         &error,
         "server rejected authentication credentials"
     ));
+    assert_eq!(send_count.load(Ordering::SeqCst), 1);
+    assert_no_events(&event_receiver);
+}
+
+#[test]
+fn team_scoped_send_attaches_team_header_when_scope_is_supplied() {
+    let (base_client, event_receiver) = externally_authenticated_base_client("daemon-token");
+    let send_count = Arc::new(AtomicUsize::new(0));
+
+    block_on(send_team_scoped_graphql_request(
+        &base_client,
+        FakeGraphqlOperation::successful(Some("daemon-token"), send_count.clone())
+            .expect_team_uid(Some("team-123")),
+        None,
+        Some("team-123".to_string()),
+    ))
+    .unwrap();
+
+    assert_eq!(send_count.load(Ordering::SeqCst), 1);
+    assert_no_events(&event_receiver);
+}
+
+#[test]
+fn team_scoped_send_omits_team_header_when_scope_is_absent() {
+    let (base_client, event_receiver) = externally_authenticated_base_client("daemon-token");
+    let send_count = Arc::new(AtomicUsize::new(0));
+
+    block_on(send_team_scoped_graphql_request(
+        &base_client,
+        FakeGraphqlOperation::successful(Some("daemon-token"), send_count.clone())
+            .expect_team_uid(None),
+        None,
+        None,
+    ))
+    .unwrap();
+
     assert_eq!(send_count.load(Ordering::SeqCst), 1);
     assert_no_events(&event_receiver);
 }

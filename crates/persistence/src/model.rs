@@ -128,6 +128,7 @@ pub struct TeamMemberRow {
     pub user_uid: String,
     pub email: String,
     pub role: String,
+    pub is_disabled: bool,
 }
 
 #[derive(Insertable)]
@@ -137,6 +138,7 @@ pub struct NewTeamMember {
     pub user_uid: String,
     pub email: String,
     pub role: String,
+    pub is_disabled: bool,
 }
 
 #[derive(Identifiable, Insertable, Queryable)]
@@ -1226,6 +1228,18 @@ pub struct AgentConversationData {
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct AIAgentActionId(pub String);
 
+impl From<AIAgentActionId> for ai_types::AIAgentActionId {
+    fn from(value: AIAgentActionId) -> Self {
+        Self::from(value.0)
+    }
+}
+
+impl From<ai_types::AIAgentActionId> for AIAgentActionId {
+    fn from(value: ai_types::AIAgentActionId) -> Self {
+        AIAgentActionId(String::from(value))
+    }
+}
+
 pub type TokenUsageCategory = String;
 
 pub const PRIMARY_AGENT_CATEGORY: &str = "primary_agent";
@@ -1605,6 +1619,112 @@ impl From<&ContextWindowSegment> for stream_finished::ContextWindowSegment {
     }
 }
 
+/// A flat breakdown of charged usage — input/output/cache-read/cache-write
+/// inference cost (in US cents) plus platform cost, and the matching token
+/// counts — summed across every usage category and model. Mirrors the Go
+/// `SumChargedUsage` helper (`warp-server` `logic/ai/multi_agent/usage`);
+/// computed client-side from the wire's category/model-keyed
+/// `RequestCharges` map so downstream displays don't need to walk the map
+/// themselves.
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, Default, PartialEq)]
+pub struct ChargedUsageTotals {
+    pub input_cost_in_cents: f32,
+    pub output_cost_in_cents: f32,
+    pub input_cache_read_cost_in_cents: f32,
+    pub input_cache_write_cost_in_cents: f32,
+    pub platform_cost_in_cents: f32,
+    pub input_tokens: u32,
+    pub output_tokens: u32,
+    pub input_cache_read_tokens: u32,
+    pub input_cache_write_tokens: u32,
+    /// Number of web searches performed, summed across every usage category
+    /// and model. `#[serde(default)]` so blobs persisted before this field
+    /// existed still deserialize.
+    #[serde(default)]
+    pub web_search_count: u32,
+    /// Cumulative cost of web searches performed, in US cents. Included in
+    /// [`Self::total_cost_in_cents`] since it's part of the real, actually-
+    /// charged dollar total (see `warp-proto-apis` PR #363).
+    #[serde(default)]
+    pub web_search_cost_in_cents: f32,
+}
+
+impl ChargedUsageTotals {
+    /// Total inference + platform + web-search cost, in US cents.
+    pub fn total_cost_in_cents(&self) -> f32 {
+        self.input_cost_in_cents
+            + self.output_cost_in_cents
+            + self.input_cache_read_cost_in_cents
+            + self.input_cache_write_cost_in_cents
+            + self.platform_cost_in_cents
+            + self.web_search_cost_in_cents
+    }
+
+    /// Total tokens across every category (input + output + cache-read + cache-write).
+    pub fn total_tokens(&self) -> u32 {
+        self.input_tokens
+            + self.output_tokens
+            + self.input_cache_read_tokens
+            + self.input_cache_write_tokens
+    }
+
+    fn add_inference_usage(&mut self, usage: &stream_finished::InferenceUsage) {
+        if let Some(token_count) = usage.token_count.as_ref() {
+            self.input_tokens += token_count.input;
+            self.output_tokens += token_count.output;
+            self.input_cache_read_tokens += token_count.input_cache_read;
+            self.input_cache_write_tokens += token_count.input_cache_write;
+        }
+        if let Some(token_cost) = usage.token_cost.as_ref() {
+            self.input_cost_in_cents += token_cost.input_cost_in_cents;
+            self.output_cost_in_cents += token_cost.output_cost_in_cents;
+            self.input_cache_read_cost_in_cents += token_cost.input_cache_read_cost_in_cents;
+            self.input_cache_write_cost_in_cents += token_cost.input_cache_write_cost_in_cents;
+        }
+        self.web_search_count += usage.web_search_count;
+        self.web_search_cost_in_cents += usage.web_search_cost_in_cents;
+    }
+}
+
+impl std::ops::AddAssign for ChargedUsageTotals {
+    fn add_assign(&mut self, rhs: Self) {
+        self.input_cost_in_cents += rhs.input_cost_in_cents;
+        self.output_cost_in_cents += rhs.output_cost_in_cents;
+        self.input_cache_read_cost_in_cents += rhs.input_cache_read_cost_in_cents;
+        self.input_cache_write_cost_in_cents += rhs.input_cache_write_cost_in_cents;
+        self.platform_cost_in_cents += rhs.platform_cost_in_cents;
+        self.input_tokens += rhs.input_tokens;
+        self.output_tokens += rhs.output_tokens;
+        self.input_cache_read_tokens += rhs.input_cache_read_tokens;
+        self.input_cache_write_tokens += rhs.input_cache_write_tokens;
+        self.web_search_count += rhs.web_search_count;
+        self.web_search_cost_in_cents += rhs.web_search_cost_in_cents;
+    }
+}
+
+impl From<&stream_finished::RequestCharges> for ChargedUsageTotals {
+    /// Sums a category-keyed `RequestCharges` map (per-turn or cumulative)
+    /// into a single flat breakdown, mirroring the Go `SumChargedUsage`
+    /// helper. Categories and models are summed together; per-category/
+    /// per-model detail is discarded, matching the single
+    /// pricing-breakdown-section display convention (`warp` PR #15015).
+    fn from(charges: &stream_finished::RequestCharges) -> Self {
+        let mut totals = Self::default();
+        for usage in charges.usage_by_category.values() {
+            for inference_usage in usage
+                .direct_api_inference_usage
+                .values()
+                .chain(usage.byok_inference_usage.values())
+                .chain(usage.custom_endpoint_inference_usage.values())
+            {
+                totals.add_inference_usage(inference_usage);
+            }
+            totals.platform_cost_in_cents += usage.platform_usage_in_cents;
+        }
+        totals
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct ConversationUsageMetadata {
     pub was_summarized: bool,
@@ -1619,6 +1739,19 @@ pub struct ConversationUsageMetadata {
     pub total_provider_cost_in_cents: Option<f32>,
     #[serde(default)]
     pub credits_spent_for_last_block: Option<f32>,
+    /// Per-category charged-usage breakdown for the most recent block (all
+    /// agent outputs since the last user input), summed via
+    /// [`ChargedUsageTotals::from`] from `StreamFinished.request_charges`.
+    /// `None` when the server didn't provide charges (flag off) or before
+    /// any block has completed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub charged_usage_for_last_block: Option<ChargedUsageTotals>,
+    /// Cumulative per-category charged-usage breakdown summed across the
+    /// whole conversation so far, from
+    /// `ConversationUsageMetadata.total_charges`. `None` when the server
+    /// didn't provide it (flag off, or a legacy conversation).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub total_charged_usage: Option<ChargedUsageTotals>,
     #[serde(default)]
     pub token_usage: Vec<ModelTokenUsage>,
     #[serde(default)]

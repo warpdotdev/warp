@@ -46,6 +46,7 @@ use crate::server::server_api::ai::{
 };
 use crate::terminal::CLIAgent;
 use crate::terminal::view::ambient_agent::{SetupCommandGroupId, SetupCommandState};
+use crate::workspaces::user_workspaces::TeamScope;
 
 /// Tracks progress timestamps for each step during ambient agent spawning.
 #[derive(Debug, Clone)]
@@ -193,7 +194,7 @@ pub struct AmbientAgentViewModel {
 }
 
 impl AmbientAgentViewModel {
-    pub fn new(terminal_view_id: EntityId, ctx: &mut ModelContext<Self>) -> Self {
+    pub(crate) fn new(terminal_view_id: EntityId, ctx: &mut ModelContext<Self>) -> Self {
         ctx.subscribe_to_model(&CloudModel::handle(ctx), |me, _, event, ctx| {
             me.handle_cloud_model_event(event, ctx);
         });
@@ -1003,12 +1004,16 @@ impl AmbientAgentViewModel {
     /// host (`WARP_CLOUD_MODE_DEFAULT_HOST`), and the pane's currently-selected env
     /// and harness. Shared by `spawn_agent` and the local-to-cloud handoff path so
     /// both flows route to the same worker host and inherit the same defaults.
-    pub(crate) fn build_default_spawn_config(&self, ctx: &AppContext) -> AgentConfigSnapshot {
+    pub(crate) fn build_default_spawn_config(
+        &self,
+        scope: &impl TeamScope,
+        ctx: &AppContext,
+    ) -> AgentConfigSnapshot {
         let selected_harness = self.selected_harness();
         let computer_use_enabled = if selected_harness == Harness::Oz {
             // If the harness is Oz, determine computer use based on workspace AI autonomy settings.
             let CloudAgentComputerUseState { enabled, .. } =
-                resolve_cloud_agent_computer_use_state(ctx);
+                resolve_cloud_agent_computer_use_state(scope, ctx);
             Some(enabled)
         } else {
             None
@@ -1058,9 +1063,10 @@ impl AmbientAgentViewModel {
         &mut self,
         prompt: String,
         attachments: Vec<AttachmentInput>,
+        scope: &impl TeamScope,
         ctx: &mut ModelContext<Self>,
     ) {
-        let config = Some(self.build_default_spawn_config(ctx));
+        let config = Some(self.build_default_spawn_config(scope, ctx));
 
         let (prompt, mode) = extract_user_query_mode(prompt);
         let request = SpawnAgentRequest {

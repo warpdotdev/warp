@@ -11,6 +11,7 @@ use anyhow::anyhow;
 use async_trait::async_trait;
 use base64::Engine;
 use chrono::{DateTime, Utc};
+use cloud_object_models::CodeForge;
 use cynic::{MutationBuilder, QueryBuilder};
 use itertools::Itertools;
 #[cfg(test)]
@@ -409,6 +410,22 @@ pub struct AgentRunClientSetupMetricPayload {
     pub finish_ts: DateTime<Utc>,
     pub latency_ms: i64,
     pub is_error: bool,
+}
+#[derive(Debug, Clone, serde::Serialize, PartialEq, Eq)]
+pub struct AgentRunEnvironmentSnapshotRequest {
+    pub captured_at: DateTime<Utc>,
+    pub repositories: Vec<AgentRunRepositoryRevision>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, PartialEq, Eq)]
+pub struct AgentRunRepositoryRevision {
+    pub code_forge: CodeForge,
+    pub repo_owner: String,
+    pub repo_name: String,
+    pub checkout_path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub requested_checkout_ref: Option<String>,
+    pub resolved_head_sha: String,
 }
 
 impl AgentRunClientEventRequest {
@@ -1498,6 +1515,11 @@ pub trait AIClient: 'static + Send + Sync {
         run_id: &AmbientAgentTaskId,
         request: AgentRunClientEventRequest,
     ) -> anyhow::Result<(), anyhow::Error>;
+    async fn post_agent_run_environment_snapshot(
+        &self,
+        run_id: &AmbientAgentTaskId,
+        request: AgentRunEnvironmentSnapshotRequest,
+    ) -> anyhow::Result<(), anyhow::Error>;
 
     async fn mark_message_delivered(&self, message_id: &str) -> anyhow::Result<(), anyhow::Error>;
 
@@ -2151,7 +2173,7 @@ impl AIClient for ServerApi {
     ) -> anyhow::Result<(), anyhow::Error> {
         let variables = UpdateAgentTaskVariables {
             input: UpdateAgentTaskInput {
-                task_id: task_id.into(),
+                task_id: task_id.to_string().into(),
                 task_state,
                 session_id: session_id.map(|id| id.to_string().into()),
                 conversation_id: conversation_id.map(|id| id.into()),
@@ -2942,6 +2964,19 @@ impl AIClient for ServerApi {
         self.post_public_api_response_for_task(
             run_id,
             &format!("agent/runs/{run_id}/client-events"),
+            &request,
+        )
+        .await?;
+        Ok(())
+    }
+    async fn post_agent_run_environment_snapshot(
+        &self,
+        run_id: &AmbientAgentTaskId,
+        request: AgentRunEnvironmentSnapshotRequest,
+    ) -> anyhow::Result<(), anyhow::Error> {
+        self.post_public_api_response_for_task(
+            run_id,
+            &format!("agent/runs/{run_id}/environment-snapshot"),
             &request,
         )
         .await?;

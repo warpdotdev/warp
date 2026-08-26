@@ -1,6 +1,12 @@
 use std::collections::HashMap;
 
-use super::{SelectedTabColor, next_tab_color, tab_group_menu_entry_flags};
+use warpui::platform::keyboard::KeyCode;
+
+use super::{
+    SelectedTabColor, ShortcutModifierKind, TAB_ACTIVATE_BINDING_NAMES,
+    TAB_ACTIVATE_LAST_BINDING_NAME, TabShortcutModifierState, next_tab_color,
+    tab_activate_binding_name, tab_group_menu_entry_flags,
+};
 use crate::themes::theme::AnsiColorIdentifier;
 use crate::ui_components::color_dot::TAB_COLOR_OPTIONS;
 use crate::workspace::tab_group::{TabGroup, TabGroupId};
@@ -33,6 +39,68 @@ fn sole_member_of_group_hides_new_group_and_offers_remove() {
         show_remove_from_group,
         "a tab in a group should offer 'Remove from group'"
     );
+}
+
+#[test]
+fn tab_shortcut_modifier_state_clear_reports_whether_state_changed() {
+    let mut state = TabShortcutModifierState::new();
+
+    assert!(!state.clear_held_keys());
+
+    assert!(state.held_keys.insert(KeyCode::SuperLeft));
+    assert!(state.held_kinds().is_empty());
+    assert!(state.reveal_key_if_held(KeyCode::SuperLeft));
+    assert_eq!(
+        state.held_kinds(),
+        [ShortcutModifierKind::Super].into_iter().collect()
+    );
+
+    assert!(state.clear_held_keys());
+    assert!(state.held_kinds().is_empty());
+    assert!(!state.clear_held_keys());
+}
+
+#[test]
+fn tab_shortcut_modifier_state_only_reveals_keys_that_remain_held() {
+    let mut state = TabShortcutModifierState::new();
+
+    assert!(!state.reveal_key_if_held(KeyCode::SuperLeft));
+
+    assert!(state.held_keys.insert(KeyCode::SuperLeft));
+    assert!(state.held_keys.remove(&KeyCode::SuperLeft));
+    assert!(!state.reveal_key_if_held(KeyCode::SuperLeft));
+    assert!(state.held_kinds().is_empty());
+}
+
+#[test]
+fn tab_activate_binding_name_prefers_numbered_binding_for_final_tab() {
+    assert_eq!(
+        tab_activate_binding_name(2, 3),
+        Some(TAB_ACTIVATE_BINDING_NAMES[2])
+    );
+    assert_eq!(
+        tab_activate_binding_name(7, 8),
+        Some(TAB_ACTIVATE_BINDING_NAMES[7])
+    );
+}
+
+#[test]
+fn tab_activate_binding_name_uses_last_tab_binding_beyond_numbered_tabs() {
+    assert_eq!(
+        tab_activate_binding_name(8, 9),
+        Some(TAB_ACTIVATE_LAST_BINDING_NAME)
+    );
+    assert_eq!(
+        tab_activate_binding_name(9, 10),
+        Some(TAB_ACTIVATE_LAST_BINDING_NAME)
+    );
+}
+
+#[test]
+fn tab_activate_binding_name_omits_unbound_and_out_of_bounds_tabs() {
+    assert_eq!(tab_activate_binding_name(8, 10), None);
+    assert_eq!(tab_activate_binding_name(10, 10), None);
+    assert_eq!(tab_activate_binding_name(0, 0), None);
 }
 
 // GH-13073 follow-up: a tab that shares a group with siblings SHOULD still be

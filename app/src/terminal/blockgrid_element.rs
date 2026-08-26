@@ -6,7 +6,7 @@ use warpui::elements::{
 use warpui::event::DispatchedEvent;
 use warpui::geometry::rect::RectF;
 
-use super::blockgrid_renderer::GridRenderParams;
+use super::blockgrid_renderer::{BlockGridRenderer, GridRenderParams};
 use crate::appearance::Appearance;
 use crate::settings::EnforceMinimumContrast;
 use crate::terminal::blockgrid_renderer::BlockGridParams;

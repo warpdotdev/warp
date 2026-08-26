@@ -379,6 +379,11 @@ impl AmbientAgentRunner {
                 vec![]
             };
 
+            if let Err(err) = super::common::validate_team_scope(&args.scope, ctx) {
+                super::report_fatal_error(err, ctx);
+                return;
+            }
+
             let mut environment_args = args.environment;
             if environment_args.environment.is_none() && !environment_args.no_environment
                 && let Some(environment_id) = loaded_file
@@ -474,7 +479,11 @@ impl AmbientAgentRunner {
                     .model_id
                     .as_deref()
                     .map(|model_id| {
-                        super::common::validate_agent_mode_base_model_id(model_id, ctx)
+                        super::common::validate_agent_mode_base_model_id_for_scope(
+                            model_id,
+                            &args.scope,
+                            ctx,
+                        )
                     })
                     .transpose()
                 {
@@ -515,7 +524,7 @@ impl AmbientAgentRunner {
                 mode,
                 config,
                 title: args.title,
-                team: match (args.scope.team, args.scope.personal) {
+                team: match (args.scope.is_team(), args.scope.personal) {
                     (true, _) => Some(true),
                     (_, true) => Some(false),
                     _ => None,

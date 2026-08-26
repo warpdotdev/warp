@@ -111,6 +111,7 @@ pub struct WorkspaceMember {
     pub uid: cynic::Id,
     pub email: String,
     pub role: MembershipRole,
+    pub is_disabled: bool,
     pub usage_info: WorkspaceMemberUsageInfo,
 }
 
@@ -428,6 +429,7 @@ pub struct TeamMember {
     pub uid: cynic::Id,
     pub email: String,
     pub role: MembershipRole,
+    pub is_disabled: bool,
 }
 
 #[derive(cynic::Enum, Clone, Debug, PartialEq, Eq, Copy)]

@@ -87,6 +87,7 @@ mod common;
 mod config_file;
 pub(crate) mod driver;
 mod environment;
+pub(crate) mod environment_snapshot;
 mod federate;
 mod harness_support;
 #[cfg(not(target_family = "wasm"))]
@@ -1244,7 +1245,7 @@ impl AgentDriverRunner {
         };
 
         // Handoff snapshot attachments for follow-up executions are written to
-        // {attachments_dir}/handoff/{uuid} so the server-side rehydration prompt
+        // {attachments_dir}/handoff/{filename} so the server-side rehydration prompt
         // references resolve to real files.
         let handoff_snapshot_ai_client = ai_client.clone();
         let handoff_snapshot_server_api = server_api.clone();

@@ -13,6 +13,7 @@ license.workspace = true
 anyhow.workspace = true
 command.workspace = true
 content_inspector = "0.2.4"
+parking_lot.workspace = true
 pathdiff = "0.2.1"
 rand.workspace = true
 dirs.workspace = true
@@ -24,6 +25,7 @@ thiserror.workspace = true
 typed-path.workspace = true
 dunce.workspace = true
 event-listener.workspace = true
+itertools.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 pin-project.workspace = true
@@ -32,11 +34,17 @@ log.workspace = true
 warp_errors.workspace = true
 
 [target.'cfg(windows)'.dependencies]
+directories.workspace = true
 windows.workspace = true
 
 [target.'cfg(target_family = "wasm")'.dependencies]
 gloo.workspace = true
 
+[target.'cfg(not(target_family = "wasm"))'.dependencies]
+is_executable = "1.0.1"
+
 [dev-dependencies]
 futures-lite.workspace = true
+serial_test = "0.8.0"
+tempfile.workspace = true
 warpui_core.workspace = true

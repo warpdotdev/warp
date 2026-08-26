@@ -23,6 +23,7 @@ use warp_core::features::FeatureFlag;
 use warp_errors::report_error;
 use warp_terminal::model::grid::Dimensions as _;
 use warp_terminal::model::{KeyboardModes, KeyboardModesApplyBehavior};
+use warp_util::lazy::Lazy;
 use warp_util::path::user_friendly_path;
 use warpui::r#async::executor::Background;
 use warpui::record_trace_event;
@@ -56,6 +57,7 @@ use crate::terminal::model::ansi::{
     self, Handler, PrecmdValue, PreexecValue, Processor, PromptMetadata,
 };
 use crate::terminal::model::blockgrid::BlockGrid;
+use crate::terminal::model::blocks::BlockList;
 use crate::terminal::model::grid::grid_handler::TermMode;
 use crate::terminal::model::index::{Point, VisibleRow};
 use crate::terminal::model::iterm_image::ITermImage;
@@ -526,6 +528,32 @@ pub struct PromptInfo {
     pub prompt_snapshot: Option<String>,
 }
 
+/// Resolution is keyed on `BlockId`, not `BlockIndex`: block removal (e.g. clearing the screen)
+/// can reindex the remaining blocks, so a `BlockIndex` captured at construction time may no
+/// longer point at the same block (or may silently resolve to a different one entirely) by the
+/// time a deferred field is first read, possibly much later.
+macro_rules! lazy_block_field {
+    ($id:ident, $body:expr) => {{
+        let id = $id.clone();
+        Lazy::deferred(move |block_list: &BlockList| {
+            match block_list.block_with_id(&id) {
+                Some(block) => $body(block),
+                None => {
+                    report_error!(
+                        "Tried to lazily compute a UserBlockCompleted field for a block that no longer exists",
+                        extra: {
+                            "block_id" => ?id,
+                            "compute_call" => stringify!($body),
+                        }
+                    );
+                    debug_assert!(false, "The block should always exist for lazy computation");
+                    Default::default()
+                }
+            }
+        })
+    }};
+}
+
 impl From<&Block> for BlockType {
     fn from(block: &Block) -> Self {
         if block.is_for_in_band_command {
@@ -547,66 +575,30 @@ impl From<&Block> for BlockType {
                 }
             }
             BootstrapStage::PostBootstrapPrecmd => {
-                let serialized_block = block.into();
-
                 if block.is_background() {
-                    BlockType::Background(Arc::new(serialized_block))
+                    BlockType::Background(Arc::new(block.into()))
                 } else {
-                    let command = block.command_to_string();
-                    let mut command_with_obfuscated_secrets =
-                        block.command_with_secrets_obfuscated(false);
-
-                    let (output_truncated, mut output_truncated_with_obfuscated_secrets) =
-                        if block.is_ai_ugc_telemetry_enabled {
-                            // If telemetry is enabled, we collect the full output but are limiting it to
-                            // the first and last 2500 lines in case the block is very large.
-                            (
-                                block.output_grid().content_summary(2500, 2500, false),
-                                block.output_grid().content_summary(2500, 2500, true),
-                            )
-                        } else {
-                            (
-                                block
-                                    .output_grid()
-                                    .contents_to_string(false, Some(MAX_SERIALIZED_OUTPUT_LINES)),
-                                block
-                                    .output_grid()
-                                    .contents_to_string_force_secrets_obfuscated(
-                                        false,
-                                        Some(MAX_SERIALIZED_OUTPUT_LINES),
-                                    ),
-                            )
-                        };
-
-                    // If secret redaction is disabled, we manually scan for secrets and redact them.
-                    if matches!(
-                        block.prompt_and_command_grid().should_scan_for_secrets,
-                        ObfuscateSecrets::No
-                    ) {
-                        redact_secrets(&mut command_with_obfuscated_secrets);
-                    }
-                    if matches!(
-                        block.output_grid().should_scan_for_secrets,
-                        ObfuscateSecrets::No
-                    ) {
-                        redact_secrets(&mut output_truncated_with_obfuscated_secrets);
-                    }
-
-                    BlockType::User(UserBlockCompleted {
-                        index: block.block_index,
-                        serialized_block: Arc::new(serialized_block),
-                        command,
-                        command_with_obfuscated_secrets,
-                        output_truncated,
-                        output_truncated_with_obfuscated_secrets,
-                        was_part_of_agent_interaction: block.agent_interaction_metadata().is_some(),
-                        started_at: block.command_start_time(),
-                        num_output_lines: block.output_grid().len() as u64,
-                        num_output_lines_truncated: block
-                            .output_grid()
-                            .grid_handler()
-                            .num_lines_truncated(),
-                    })
+                    // Captured (by stable `BlockId`, not `BlockIndex` — see `resolve_and_compute`)
+                    // by the `Lazy::deferred` closures below so they can look up this block again
+                    // (via a `&BlockList` given later, at read time) without holding onto `block`
+                    // itself.
+                    let index = block.block_index;
+                    let id = block.id().clone();
+                    BlockType::User(UserBlockCompleted::new(
+                        index,
+                        lazy_block_field!(id, |block| Arc::new(SerializedBlock::from(block))),
+                        lazy_block_field!(id, Block::command_to_string),
+                        lazy_block_field!(id, Block::compute_command_with_obfuscated_secrets),
+                        lazy_block_field!(id, Block::compute_output_truncated),
+                        lazy_block_field!(
+                            id,
+                            Block::compute_output_truncated_with_obfuscated_secrets
+                        ),
+                        block.agent_interaction_metadata().is_some(),
+                        block.command_start_time(),
+                        block.output_grid().len() as u64,
+                        block.output_grid().grid_handler().num_lines_truncated(),
+                    ))
                 }
             }
         }
@@ -1595,7 +1587,7 @@ impl Block {
 
         let block_type: BlockType = self.into();
         self.event_proxy
-            .send_terminal_event(Event::BlockCompleted(BlockCompletedEvent {
+            .send_app_event(Event::BlockCompleted(BlockCompletedEvent {
                 block_type,
                 num_secrets_obfuscated: self.num_secrets_obfuscated(),
                 block_index: self.block_index,
@@ -1752,6 +1744,16 @@ impl Block {
         self.was_long_running = was_long_running;
     }
 
+    pub fn is_command_cursor_visible(&self) -> bool {
+        self.is_active_and_long_running()
+            && self.is_command_grid_active()
+            && self.is_mode_set(TermMode::SHOW_CURSOR)
+    }
+
+    pub fn is_output_cursor_visible(&self) -> bool {
+        self.is_active_and_long_running() && self.is_mode_set(TermMode::SHOW_CURSOR)
+    }
+
     pub fn command_with_secrets_obfuscated(&self, include_escape_sequences: bool) -> String {
         self.header_grid
             .command_with_secrets_obfuscated(include_escape_sequences)
@@ -1783,18 +1785,8 @@ impl Block {
         self.header_grid.is_command_finished()
     }
 
-    pub fn command_and_output_with_secret_obfuscated(
-        &self,
-        include_escape_sequences: bool,
-    ) -> (String, String) {
-        let mut command = self.command_with_secrets_obfuscated(include_escape_sequences);
-        let mut output = self
-            .output_grid()
-            .contents_to_string_force_secrets_obfuscated(
-                include_escape_sequences,
-                Some(MAX_SERIALIZED_STYLIZED_OUTPUT_LINES),
-            );
-
+    fn compute_command_with_obfuscated_secrets(&self) -> String {
+        let mut command = self.command_with_secrets_obfuscated(false);
         // If secret redaction is disabled, we manually scan for secrets and redact them.
         if matches!(
             self.prompt_and_command_grid().should_scan_for_secrets,
@@ -1802,14 +1794,40 @@ impl Block {
         ) {
             redact_secrets(&mut command);
         }
+        command
+    }
+
+    fn compute_output_truncated(&self) -> String {
+        if self.is_ai_ugc_telemetry_enabled {
+            // If telemetry is enabled, we collect the full output but are limiting it to
+            // the first and last 2500 lines in case the block is very large.
+            self.output_grid().content_summary(2500, 2500, false)
+        } else {
+            self.output_grid()
+                .contents_to_string(false, Some(MAX_SERIALIZED_OUTPUT_LINES))
+        }
+    }
+
+    /// Computes [`UserBlockCompleted::output_truncated_with_obfuscated_secrets`] lazily from the live
+    /// block.
+    fn compute_output_truncated_with_obfuscated_secrets(&self) -> String {
+        let mut output = if self.is_ai_ugc_telemetry_enabled {
+            self.output_grid().content_summary(2500, 2500, true)
+        } else {
+            self.output_grid()
+                .contents_to_string_force_secrets_obfuscated(
+                    false,
+                    Some(MAX_SERIALIZED_OUTPUT_LINES),
+                )
+        };
+        // If secret redaction is disabled, we manually scan for secrets and redact them.
         if matches!(
             self.output_grid().should_scan_for_secrets,
             ObfuscateSecrets::No
         ) {
             redact_secrets(&mut output);
         }
-
-        (command, output)
+        output
     }
 
     pub fn prompt_grid(&self) -> &BlockGrid {
@@ -2955,7 +2973,7 @@ impl Block {
 
         self.precmd_state = PrecmdState::AfterPrecmd;
         self.event_proxy
-            .send_terminal_event(Event::BlockMetadataReceived(BlockMetadataReceivedEvent {
+            .send_app_event(Event::BlockMetadataReceived(BlockMetadataReceivedEvent {
                 block_metadata: self.metadata(),
                 block_index: self.block_index,
                 is_after_in_band_command,
@@ -2974,12 +2992,11 @@ impl Block {
 
         let is_for_in_band_command = command_executor::is_in_band_command(data.command.as_str());
         if self.bootstrap_stage() == BootstrapStage::PostBootstrapPrecmd {
-            self.event_proxy
-                .send_terminal_event(Event::AfterBlockStarted {
-                    block_id: self.id.clone(),
-                    command: self.command_to_string(),
-                    is_for_in_band_command,
-                });
+            self.event_proxy.send_app_event(Event::AfterBlockStarted {
+                block_id: self.id.clone(),
+                command: self.command_to_string(),
+                is_for_in_band_command,
+            });
         }
 
         self.leading_linefeeds_ignored = 0;
@@ -3384,7 +3401,7 @@ impl ansi::Handler for Block {
                 }
                 // Reset the indicator for receiving prompt characters.
                 self.header_grid.receiving_chars_for_prompt = None;
-                self.event_proxy.send_terminal_event(Event::PromptUpdated);
+                self.event_proxy.send_app_event(Event::PromptUpdated);
             }
         }
     }
@@ -3410,7 +3427,7 @@ impl ansi::Handler for Block {
         // that genuinely care about CWD changes opt in by also listening to
         // `BlockWorkingDirectoryUpdated`.
         self.event_proxy
-            .send_terminal_event(Event::BlockWorkingDirectoryUpdated(
+            .send_app_event(Event::BlockWorkingDirectoryUpdated(
                 BlockWorkingDirectoryUpdatedEvent {
                     block_metadata: self.metadata(),
                     block_index: self.block_index,
