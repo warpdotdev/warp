@@ -1572,12 +1572,9 @@ impl BlocklistAIHistoryModel {
         });
     }
 
-    /// Removes any conversation already indexed under `run_id`, if one
-    /// exists. Used before creating the authoritative in-band conversation
-    /// for a local child launch, in case a `child_agent_started` SSE event
-    /// raced ahead of the launch and already created a remote-child
-    /// placeholder for the same run — without this, both would survive and
-    /// the pill bar would render the child twice.
+    /// Removes the conversation currently indexed under `run_id`, if any.
+    /// Reclaims a run id from a remote-child placeholder that raced ahead
+    /// of an in-band launch for the same run.
     pub fn remove_existing_conversation_for_run_id(
         &mut self,
         run_id: &str,

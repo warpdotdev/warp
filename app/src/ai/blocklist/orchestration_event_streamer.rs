@@ -27,7 +27,7 @@ use crate::ai::agent_events::{
     AgentEventConsumer, AgentEventConsumerControlFlow, AgentEventDriverConfig, AgentEventFilter,
     AgentMessageEventMetadata, MessageHydrator, ServerApiAgentEventSource, run_agent_event_driver,
 };
-use crate::ai::ambient_agents::{AmbientAgentTaskId, ExecutionLocation};
+use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::server::retry_strategies::is_transient_http_error;
 use crate::server::server_api::ai::{AIClient, AgentRunEvent, TaskListFilter};
 use crate::server::server_api::{ServerApi, ServerApiProvider};
@@ -736,7 +736,7 @@ impl OrchestrationEventStreamer {
         &mut self,
         parent_conversation_id: AIConversationId,
         child_run_id: String,
-        mode: FamilyDrainMode,
+        _mode: FamilyDrainMode,
         result: anyhow::Result<crate::ai::ambient_agents::task::AmbientAgentTask>,
         ctx: &mut ModelContext<Self>,
     ) {
@@ -756,19 +756,6 @@ impl OrchestrationEventStreamer {
         if BlocklistAIHistoryModel::as_ref(ctx)
             .conversation_id_for_agent_id(&child_run_id)
             .is_some()
-        {
-            return;
-        }
-        // A Primary consumer only ever discovers `child_agent_started` for
-        // its own children over this family stream, so a LOCAL child was (or
-        // is about to be) launched in-band by this same process via
-        // `launch_local_no_harness_child` / `launch_local_harness_child`.
-        // Skip so the two paths cannot both create a conversation for the
-        // same run regardless of which one wins the race. Observer
-        // placeholders (shared-session viewers) have no in-band counterpart
-        // and must still be created no matter where the child executes.
-        if mode == FamilyDrainMode::Primary
-            && task.execution_location == Some(ExecutionLocation::Local)
         {
             return;
         }

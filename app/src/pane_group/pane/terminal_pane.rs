@@ -34,7 +34,10 @@ use crate::ai::blocklist::agent_view::{AgentViewControllerEvent, AgentViewEntryO
 use crate::ai::blocklist::orchestration_event_streamer::OrchestrationEventStreamer;
 use crate::ai::blocklist::{BlocklistAIHistoryModel, StartAgentRequest};
 #[cfg(not(target_family = "wasm"))]
-use crate::ai::blocklist::{apply_child_agent_model_override, prepare_local_oz_child_launch};
+use crate::ai::blocklist::{
+    apply_child_agent_model_override, finish_local_oz_child_conversation,
+    prepare_local_oz_child_launch,
+};
 use crate::ai::conversation_utils;
 use crate::ai::llms::LLMPreferences;
 use crate::ai::orchestration::{RemoteChildLaunchConfig, prepare_remote_child_launch};
@@ -1646,10 +1649,6 @@ fn launch_local_no_harness_child(
             let is_shared_session_creator =
                 inherit_share_for_local_child(host_source.as_ref(), child_task_id);
 
-            // A `child_agent_started` SSE event may have raced ahead of this
-            // launch and already created a remote-child placeholder for this
-            // run id. Remove it so the local conversation created below is
-            // the sole representation.
             BlocklistAIHistoryModel::handle(ctx).update(ctx, |model, ctx| {
                 model.remove_existing_conversation_for_run_id(&child_task_id.to_string(), ctx);
             });
@@ -1677,26 +1676,13 @@ fn launch_local_no_harness_child(
                     ..
                 }) => {
                     apply_child_agent_model_override(terminal_view_id, model_id.as_deref(), ctx);
-
-                    // Index the run id immediately (mirrors
-                    // `launch_local_harness_child`) so a `child_agent_started`
-                    // SSE event racing this launch resolves
-                    // `conversation_id_for_agent_id` and skips creating a
-                    // duplicate remote-flagged placeholder for this run.
-                    BlocklistAIHistoryModel::handle(ctx).update(ctx, |model, ctx| {
-                        model.assign_run_id_for_conversation(
-                            conversation_id,
-                            child_task_id.to_string(),
-                            Some(child_task_id),
-                            terminal_view_id,
-                            ctx,
-                        );
-                        model.record_new_conversation_request_complete(
-                            request_id,
-                            conversation_id,
-                            ctx,
-                        );
-                    });
+                    finish_local_oz_child_conversation(
+                        conversation_id,
+                        terminal_view_id,
+                        child_task_id,
+                        request_id,
+                        ctx,
+                    );
 
                     new_terminal_view.update(ctx, |terminal_view, ctx| {
                         terminal_view
@@ -1812,9 +1798,6 @@ fn launch_local_harness_child(
                 let is_shared_session_creator =
                     inherit_share_for_local_child(host_source.as_ref(), task_id);
 
-                // See the equivalent guard in `launch_local_no_harness_child`:
-                // remove any remote-child placeholder that raced ahead of
-                // this launch for the same run id.
                 BlocklistAIHistoryModel::handle(ctx).update(ctx, |model, ctx| {
                     model.remove_existing_conversation_for_run_id(&run_id, ctx);
                 });

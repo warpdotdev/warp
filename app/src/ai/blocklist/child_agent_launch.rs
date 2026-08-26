@@ -5,8 +5,10 @@ use std::future::Future;
 use warpui::{AppContext, EntityId, SingletonEntity as _};
 #[cfg(not(target_family = "wasm"))]
 use {
+    crate::ai::agent::conversation::AIConversationId,
     crate::ai::ambient_agents::task::normalize_orchestrator_agent_name,
     crate::ai::ambient_agents::{AgentConfigSnapshot, AmbientAgentTaskId},
+    crate::ai::blocklist::{BlocklistAIHistoryModel, StartAgentRequestId},
     crate::server::server_api::ServerApiProvider,
 };
 
@@ -53,6 +55,33 @@ pub fn prepare_local_oz_child_launch(
             conversation_name,
         })
     }
+}
+
+/// Indexes a freshly created local Oz child conversation's run id in
+/// `BlocklistAIHistoryModel` and completes its pending `StartAgentRequest`.
+///
+/// The run-id index is also the SSE remote-child placeholder's idempotency
+/// key, so a launch that skipped this call would be indistinguishable from
+/// one that never happened, letting a racing `child_agent_started` event
+/// create a duplicate conversation for the same run.
+#[cfg(not(target_family = "wasm"))]
+pub fn finish_local_oz_child_conversation(
+    conversation_id: AIConversationId,
+    terminal_surface_id: EntityId,
+    task_id: AmbientAgentTaskId,
+    request_id: StartAgentRequestId,
+    ctx: &mut AppContext,
+) {
+    BlocklistAIHistoryModel::handle(ctx).update(ctx, |model, ctx| {
+        model.assign_run_id_for_conversation(
+            conversation_id,
+            task_id.to_string(),
+            Some(task_id),
+            terminal_surface_id,
+            ctx,
+        );
+        model.record_new_conversation_request_complete(request_id, conversation_id, ctx);
+    });
 }
 
 /// Copies the parent's execution profile and effective base model to a child

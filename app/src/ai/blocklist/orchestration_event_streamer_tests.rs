@@ -166,13 +166,13 @@ fn observer_placeholder_completion_creates_one_named_history_mapping() {
 }
 
 #[test]
-fn observer_placeholder_still_created_for_local_execution_children() {
-    // Observer (shared-session viewer) placeholders have no in-band
-    // counterpart on this client, so the Primary-only LOCAL-execution skip
-    // (see `local_oz_launch_indexes_run_id_before_child_agent_started_sse`
-    // and friends below) must not apply here: an Observer must still
-    // materialize a placeholder even when the child executed locally on the
-    // owning device.
+fn primary_placeholder_still_created_for_out_of_band_local_children() {
+    // A LOCAL child observed on this process's own (Primary) family stream
+    // was not necessarily launched by this process: it may have been
+    // created out-of-band (CLI/API) and executed on a different device,
+    // with no in-band conversation here.
+    use crate::ai::ambient_agents::ExecutionLocation;
+
     App::test((), |mut app| async move {
         initialize_settings_for_tests(&mut app);
         let (sender, _receiver) = std::sync::mpsc::sync_channel::<ModelEvent>(16);
@@ -182,9 +182,9 @@ fn observer_placeholder_still_created_for_local_execution_children() {
 
         let history_model =
             app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
-        let parent_task_id = make_parent_task_id_for_test(0x36);
-        let child_task_id = make_parent_task_id_for_test(0x37);
-        let mut parent = AIConversation::new(true, false);
+        let parent_task_id = make_parent_task_id_for_test(0x38);
+        let child_task_id = make_parent_task_id_for_test(0x39);
+        let mut parent = AIConversation::new(false, false);
         parent.set_task_id(parent_task_id);
         let parent_id = parent.id();
         let terminal_view_id = warpui::EntityId::new();
@@ -204,57 +204,6 @@ fn observer_placeholder_still_created_for_local_execution_children() {
             streamer.finish_remote_child_placeholder(
                 parent_id,
                 child_task_id.to_string(),
-                FamilyDrainMode::Observer,
-                Ok(child_task),
-                ctx,
-            );
-        });
-
-        history_model.read(&app, |history, _| {
-            let child_id = history
-                .conversation_id_for_agent_id(&child_task_id.to_string())
-                .expect("an Observer placeholder must still be created for a LOCAL child");
-            assert!(history.conversation(&child_id).unwrap().is_remote_child());
-        });
-    });
-}
-
-#[test]
-fn primary_placeholder_still_created_for_remote_execution_children() {
-    // The LOCAL-execution skip in `finish_remote_child_placeholder` must not
-    // suppress genuine remote (cloud) children discovered on a Primary
-    // family stream.
-    App::test((), |mut app| async move {
-        initialize_settings_for_tests(&mut app);
-        let (sender, _receiver) = std::sync::mpsc::sync_channel::<ModelEvent>(16);
-        let mut resources = GlobalResourceHandles::mock(&mut app);
-        resources.model_event_sender = Some(sender);
-        app.add_singleton_model(|_| GlobalResourceHandlesProvider::new(resources));
-
-        let history_model =
-            app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
-        let parent_task_id = make_parent_task_id_for_test(0x34);
-        let child_task_id = make_parent_task_id_for_test(0x35);
-        let mut parent = AIConversation::new(false, false);
-        parent.set_task_id(parent_task_id);
-        let parent_id = parent.id();
-        let terminal_view_id = warpui::EntityId::new();
-        history_model.update(&mut app, |history, ctx| {
-            history.restore_conversations(terminal_view_id, vec![parent], ctx);
-        });
-
-        let ai_client: Arc<dyn AIClient> = Arc::new(MockAIClient::new());
-        let server_api = ServerApiProvider::new_for_test().get();
-        let streamer = app.add_singleton_model(|ctx| {
-            OrchestrationEventStreamer::new_with_clients_for_test(ai_client, server_api, ctx)
-        });
-
-        let mut child_task = make_ambient_task_with_task_id(child_task_id, Some(1));
-        child_task.execution_location = Some(ExecutionLocation::Remote);
-        streamer.update(&mut app, |streamer, ctx| {
-            streamer.finish_remote_child_placeholder(
-                parent_id,
-                child_task_id.to_string(),
                 FamilyDrainMode::Primary,
                 Ok(child_task),
                 ctx,
@@ -264,7 +213,7 @@ fn primary_placeholder_still_created_for_remote_execution_children() {
         history_model.read(&app, |history, _| {
             let child_id = history
                 .conversation_id_for_agent_id(&child_task_id.to_string())
-                .expect("a genuinely remote child must still get a placeholder");
+                .expect("an out-of-band LOCAL child must still get a placeholder on Primary");
             assert!(history.conversation(&child_id).unwrap().is_remote_child());
         });
     });
@@ -272,12 +221,7 @@ fn primary_placeholder_still_created_for_remote_execution_children() {
 
 #[test]
 fn local_oz_launch_indexes_run_id_before_child_agent_started_sse() {
-    // Regression for QUALITY-1897: a `child_agent_started` SSE event racing
-    // in after a local Oz launch has already indexed the run id (the
-    // `assign_run_id_for_conversation` call `launch_local_no_harness_child`
-    // now makes at launch time) must not create a second, remote-flagged
-    // conversation for the same run.
-    use warp_cli::agent::Harness;
+    use crate::ai::blocklist::{StartAgentRequestId, finish_local_oz_child_conversation};
 
     App::test((), |mut app| async move {
         initialize_settings_for_tests(&mut app);
@@ -298,27 +242,26 @@ fn local_oz_launch_indexes_run_id_before_child_agent_started_sse() {
             history.restore_conversations(terminal_view_id, vec![parent], ctx);
         });
 
-        // Simulate `launch_local_no_harness_child`'s launch-time indexing:
-        // create the local child conversation and index its run id
-        // immediately, exactly as `assign_run_id_for_conversation` now does
-        // at launch time.
         let local_child_id = history_model.update(&mut app, |history, ctx| {
-            let child_id = history.start_new_child_conversation(
+            history.start_new_child_conversation(
                 terminal_view_id,
                 "local-child".to_string(),
                 parent_id,
                 Some(Harness::Oz),
                 false,
                 ctx,
-            );
-            history.assign_run_id_for_conversation(
-                child_id,
-                child_task_id.to_string(),
-                Some(child_task_id),
+            )
+        });
+        // Drives the same helper `launch_local_no_harness_child` calls in
+        // production, so a regression there fails this test.
+        app.update(|ctx| {
+            finish_local_oz_child_conversation(
+                local_child_id,
                 terminal_view_id,
+                child_task_id,
+                StartAgentRequestId::from_raw_for_test(0),
                 ctx,
             );
-            child_id
         });
 
         history_model.read(&app, |history, _| {
@@ -329,8 +272,6 @@ fn local_oz_launch_indexes_run_id_before_child_agent_started_sse() {
             );
         });
 
-        // A `child_agent_started` SSE event for the same run now arrives on
-        // the parent's family stream (Primary consumer).
         let ai_client: Arc<dyn AIClient> = Arc::new(MockAIClient::new());
         let server_api = ServerApiProvider::new_for_test().get();
         let streamer = app.add_singleton_model(|ctx| {
@@ -357,8 +298,7 @@ fn local_oz_launch_indexes_run_id_before_child_agent_started_sse() {
                 !history
                     .conversation(&local_child_id)
                     .unwrap()
-                    .is_remote_child(),
-                "the in-band local conversation must not be reclassified as remote"
+                    .is_remote_child()
             );
         });
     });
@@ -366,13 +306,10 @@ fn local_oz_launch_indexes_run_id_before_child_agent_started_sse() {
 
 #[test]
 fn sse_placeholder_then_local_launch_converges_on_one_conversation() {
-    // Regression for QUALITY-1897: the reverse race, where the SSE
-    // `child_agent_started` placeholder fetch resolves before the local Oz
-    // launch has created its own conversation. Because the fetched task
-    // reports `execution_location = LOCAL`, the Primary consumer must skip
-    // creating a remote-flagged placeholder so the subsequent local launch
-    // is the sole representation.
-    use warp_cli::agent::Harness;
+    // The reverse race: the SSE `child_agent_started` placeholder fetch
+    // resolves before the local Oz launch creates its own conversation.
+    use crate::ai::ambient_agents::ExecutionLocation;
+    use crate::ai::blocklist::{StartAgentRequestId, finish_local_oz_child_conversation};
 
     App::test((), |mut app| async move {
         initialize_settings_for_tests(&mut app);
@@ -411,49 +348,42 @@ fn sse_placeholder_then_local_launch_converges_on_one_conversation() {
             );
         });
 
-        history_model.read(&app, |history, _| {
-            assert_eq!(
-                history.conversation_id_for_agent_id(&child_task_id.to_string()),
-                None,
-                "a LOCAL child on the owning (Primary) client must not get a remote placeholder"
-            );
-            assert!(history.child_conversation_ids_of(&parent_id).is_empty());
+        let placeholder_id = history_model.read(&app, |history, _| {
+            history
+                .conversation_id_for_agent_id(&child_task_id.to_string())
+                .expect("the SSE placeholder must materialize before the local launch completes")
         });
 
-        // The local Oz launch now completes and creates the real conversation,
-        // mirroring `remove_existing_conversation_for_run_id` finding nothing
-        // to remove (since the placeholder was correctly never created) and
-        // `assign_run_id_for_conversation` indexing the run id.
-        let local_child_id = history_model.update(&mut app, |history, ctx| {
+        history_model.update(&mut app, |history, ctx| {
             history.remove_existing_conversation_for_run_id(&child_task_id.to_string(), ctx);
-            let child_id = history.start_new_child_conversation(
+        });
+        let local_child_id = history_model.update(&mut app, |history, ctx| {
+            history.start_new_child_conversation(
                 terminal_view_id,
                 "local-child".to_string(),
                 parent_id,
                 Some(Harness::Oz),
                 false,
                 ctx,
-            );
-            history.assign_run_id_for_conversation(
-                child_id,
-                child_task_id.to_string(),
-                Some(child_task_id),
+            )
+        });
+        app.update(|ctx| {
+            finish_local_oz_child_conversation(
+                local_child_id,
                 terminal_view_id,
+                child_task_id,
+                StartAgentRequestId::from_raw_for_test(1),
                 ctx,
             );
-            child_id
         });
 
         history_model.read(&app, |history, _| {
             assert_eq!(
                 history.child_conversation_ids_of(&parent_id),
                 &[local_child_id],
-                "exactly one child conversation must exist after the local launch completes"
+                "exactly one child conversation must remain after the local launch reclaims the run id"
             );
-            assert_eq!(
-                history.conversation_id_for_agent_id(&child_task_id.to_string()),
-                Some(local_child_id)
-            );
+            assert!(history.conversation(&placeholder_id).is_none());
         });
     });
 }
