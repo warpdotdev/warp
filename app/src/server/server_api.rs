@@ -48,6 +48,7 @@ use warp_server_client::HttpStatusError;
 use warp_server_client::auth::{AuthClientImpl, AuthEvent, EXPERIMENT_ID_HEADER};
 use warp_server_client::base_client::{
     AmbientHeaderPolicy, AuthenticatedGraphqlConfig, BaseClient, GraphqlRoutingConfig,
+    TEAM_UID_HEADER,
 };
 use warp_server_client::iap::{IapManager, IapState};
 use warp_server_client::network_logging::NetworkLogModel;
@@ -65,6 +66,7 @@ use crate::ai::predict::{generate_ai_input_suggestions, generate_am_query_sugges
 use crate::ai::voice::transcribe::{TranscribeRequest, TranscribeResponse};
 use crate::auth::auth_manager::AuthManager;
 use crate::auth::auth_state::AuthState;
+use crate::server::team_scope::RequestTeamScope;
 use crate::server::telemetry::TelemetryApi;
 use crate::settings::PrivacySettingsSnapshot;
 use crate::{ChannelState, settings_view};
@@ -1123,12 +1125,16 @@ impl ServerApi {
     pub async fn predict_am_queries(
         &self,
         request: &PredictAMQueriesRequest,
+        team_scope: RequestTeamScope,
     ) -> Result<PredictAMQueriesResponse, AIApiError> {
         let auth_token = self.get_or_refresh_access_token().await?;
-        let request_builder = self.base_client.http_client().post(format!(
+        let mut request_builder = self.base_client.http_client().post(format!(
             "{}/ai/predict_am_queries",
             ChannelState::server_root_url()
         ));
+        if let Some(team_uid) = team_scope.team_uid() {
+            request_builder = request_builder.header(TEAM_UID_HEADER, team_uid.uid());
+        }
         let response = if let Some(token) = auth_token.as_bearer_token() {
             request_builder.bearer_auth(token)
         } else {
