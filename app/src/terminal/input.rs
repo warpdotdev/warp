@@ -261,6 +261,7 @@ use crate::server::server_api::ServerApi;
 use crate::server::server_api::ai::AttachmentInput;
 use crate::server::server_api::ai::{AIClient, AttachmentFileInfo};
 use crate::server::server_api::presigned_upload::upload_to_target;
+use crate::server::team_scope::RequestTeamScope;
 use crate::server::telemetry::{
     AICommandSearchEntrypoint, AgentModeAutoDetectionFalsePositivePayload,
     AgentModeAutoDetectionSettingOrigin, AnonymousUserSignupEntrypoint, CommandXRayTrigger,
@@ -2965,7 +2966,12 @@ impl Input {
         );
 
         let next_command_model = ctx.add_model(|_| {
-            NextCommandModel::new(sessions.clone(), model.clone(), server_api.clone())
+            NextCommandModel::new(
+                sessions.clone(),
+                model.clone(),
+                server_api.clone(),
+                ai_controller.clone(),
+            )
         });
         ctx.subscribe_to_model(&next_command_model, |me, _, event, ctx| {
             me.handle_next_command_model_event(event, ctx);
@@ -13950,10 +13956,13 @@ impl Input {
         };
 
         let server_api = self.server_api.clone();
+        let team_scope = RequestTeamScope::from_scope(
+            &UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx),
+        );
 
         self.predict_am_queries_future_handle = Some(ctx.spawn(
             async move {
-                match server_api.predict_am_queries(&request).await {
+                match server_api.predict_am_queries(&request, team_scope).await {
                     Ok(resp) => Some(resp.suggestion),
                     Err(err) => {
                         log::warn!("Failed to fetch predicted queries: {err}");

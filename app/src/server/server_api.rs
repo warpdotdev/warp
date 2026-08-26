@@ -1036,14 +1036,18 @@ impl ServerApi {
     pub async fn generate_ai_input_suggestions(
         &self,
         request: &GenerateAIInputSuggestionsRequest,
+        team_scope: RequestTeamScope,
     ) -> Result<generate_ai_input_suggestions::GenerateAIInputSuggestionsResponseV2, AIApiError>
     {
         let auth_token = self.get_or_refresh_access_token().await?;
 
-        let request_builder = self.base_client.http_client().post(format!(
+        let mut request_builder = self.base_client.http_client().post(format!(
             "{}/ai/generate_input_suggestions",
             ChannelState::server_root_url()
         ));
+        if let Some(team_uid) = team_scope.team_uid() {
+            request_builder = request_builder.header(TEAM_UID_HEADER, team_uid.uid());
+        }
         let response = if let Some(token) = auth_token.as_bearer_token() {
             request_builder.bearer_auth(token)
         } else {
@@ -1092,6 +1096,7 @@ impl ServerApi {
     pub async fn generate_am_query_suggestions(
         &self,
         request: &GenerateAMQuerySuggestionsRequest,
+        team_scope: RequestTeamScope,
     ) -> Result<generate_am_query_suggestions::GenerateAMQuerySuggestionsResponse, AIApiError> {
         let auth_token = self.get_or_refresh_access_token().await?;
 
@@ -1109,31 +1114,37 @@ impl ServerApi {
             }
         }
 
-        let request_builder = self.base_client.http_client().post(url);
-        let response = if let Some(token) = auth_token.as_bearer_token() {
-            request_builder.bearer_auth(token)
-        } else {
-            request_builder
+        let mut request_builder = self.base_client.http_client().post(url);
+        if let Some(token) = auth_token.as_bearer_token() {
+            request_builder = request_builder.bearer_auth(token);
         }
-        .json(request)
-        .send()
-        .await?
-        .error_for_status_with_body()
-        .await?
-        .json()
-        .await?;
+        if let Some(team_uid) = team_scope.team_uid() {
+            request_builder = request_builder.header(TEAM_UID_HEADER, team_uid.uid());
+        }
+        let response = request_builder
+            .json(request)
+            .send()
+            .await?
+            .error_for_status_with_body()
+            .await?
+            .json()
+            .await?;
         Ok(response)
     }
 
     pub async fn predict_am_queries(
         &self,
         request: &PredictAMQueriesRequest,
+        team_scope: RequestTeamScope,
     ) -> Result<PredictAMQueriesResponse, AIApiError> {
         let auth_token = self.get_or_refresh_access_token().await?;
-        let request_builder = self.base_client.http_client().post(format!(
+        let mut request_builder = self.base_client.http_client().post(format!(
             "{}/ai/predict_am_queries",
             ChannelState::server_root_url()
         ));
+        if let Some(team_uid) = team_scope.team_uid() {
+            request_builder = request_builder.header(TEAM_UID_HEADER, team_uid.uid());
+        }
         let response = if let Some(token) = auth_token.as_bearer_token() {
             request_builder.bearer_auth(token)
         } else {
@@ -1153,13 +1164,17 @@ impl ServerApi {
     pub async fn transcribe(
         &self,
         request: &TranscribeRequest,
+        team_scope: RequestTeamScope,
     ) -> Result<TranscribeResponse, TranscribeError> {
         let auth_token = self.get_or_refresh_access_token().await?;
 
-        let request_builder = self
+        let mut request_builder = self
             .base_client
             .http_client()
             .post(format!("{}/ai/transcribe", ChannelState::server_root_url()));
+        if let Some(team_uid) = team_scope.team_uid() {
+            request_builder = request_builder.header(TEAM_UID_HEADER, team_uid.uid());
+        }
         let response = if let Some(token) = auth_token.as_bearer_token() {
             request_builder.bearer_auth(token)
         } else {
