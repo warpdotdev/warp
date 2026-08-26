@@ -2348,6 +2348,9 @@ impl SettingsView {
             SettingsPageViewHandle::WarpAgent(view) => {
                 view.read(app, |view, _| view.get_modal_content(app))
             }
+            SettingsPageViewHandle::Teams(view) => {
+                view.read(app, |view, _| view.get_modal_content())
+            }
             _ => None,
         }
     }

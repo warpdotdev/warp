@@ -1191,20 +1191,17 @@ impl TeamsPageView {
         ctx.notify();
     }
 
-    fn should_show_delete_or_leave_team_confirmation_dialog(&self) -> bool {
-        self.show_team_action_confirmation_dialog
-            && matches!(
-                &self.pending_team_action_confirmation,
-                Some(TeamActionConfirmationTarget::Leave | TeamActionConfirmationTarget::Delete)
-            )
-    }
-
-    fn should_show_remove_user_from_team_confirmation_dialog(&self) -> bool {
-        self.show_team_action_confirmation_dialog
-            && matches!(
-                &self.pending_team_action_confirmation,
-                Some(TeamActionConfirmationTarget::RemoveUser { .. })
-            )
+    /// This page's modal overlays, rendered by [`SettingsView`] in its top-level stack rather than
+    /// by the page itself. The page's own stack is the full-height scrolling content, so an overlay
+    /// centered on it lands wherever the scroll offset happens to put it.
+    pub fn get_modal_content(&self) -> Option<Box<dyn Element>> {
+        if self.transfer_ownership_modal_state.is_open() {
+            Some(self.transfer_ownership_modal_state.render())
+        } else if self.show_team_action_confirmation_dialog {
+            Some(ChildView::new(&self.team_action_confirmation_dialog).finish())
+        } else {
+            None
+        }
     }
 
     /// Scroll to the team membership settings. If an email is provided, it's prepopulated in the
@@ -2451,7 +2448,6 @@ impl TeamsWidget {
                 Container::new(self.render_leave_or_delete_team_button(
                     is_owner,
                     delete_disabled_reason.is_none(),
-                    view,
                     appearance,
                 ))
                 .with_padding_right(24.)
@@ -3499,11 +3495,8 @@ impl TeamsWidget {
         &self,
         is_team_owner: bool,
         can_team_be_deleted: bool,
-        view: &TeamsPageView,
         appearance: &Appearance,
     ) -> Box<dyn Element> {
-        let mut stack = Stack::new();
-
         let (label, action) = if is_team_owner {
             (
                 DELETE_TEAM_BUTTON_LABEL,
@@ -3550,26 +3543,10 @@ impl TeamsWidget {
                 .on_click(move |ctx, _, _| ctx.dispatch_typed_action(action.clone()))
         };
 
-        stack.add_child(
-            Container::new(hoverable.finish())
-                .with_padding_top(CONTENT_SEPARATION_PADDING)
-                .with_padding_bottom(CONTENT_SEPARATION_PADDING)
-                .finish(),
-        );
-
-        if view.should_show_delete_or_leave_team_confirmation_dialog() {
-            stack.add_positioned_overlay_child(
-                ChildView::new(&view.team_action_confirmation_dialog).finish(),
-                OffsetPositioning::offset_from_parent(
-                    vec2f(0., 0.),
-                    ParentOffsetBounds::Unbounded,
-                    ParentAnchor::Center,
-                    ChildAnchor::BottomMiddle,
-                ),
-            );
-        }
-
-        stack.finish()
+        Container::new(hoverable.finish())
+            .with_padding_top(CONTENT_SEPARATION_PADDING)
+            .with_padding_bottom(CONTENT_SEPARATION_PADDING)
+            .finish()
     }
 
     fn render_delete_disabled_help_text(
@@ -4734,33 +4711,9 @@ impl SettingsWidget for TeamsWidget {
                 .finish()
         };
 
-        let mut stack = Stack::new();
-        stack.add_child(Flex::column().with_child(content).finish());
-
-        if view.transfer_ownership_modal_state.is_open() {
-            stack.add_positioned_overlay_child(
-                view.transfer_ownership_modal_state.render(),
-                OffsetPositioning::offset_from_parent(
-                    vec2f(0., 0.),
-                    ParentOffsetBounds::WindowByPosition,
-                    ParentAnchor::Center,
-                    ChildAnchor::Center,
-                ),
-            );
-        }
-        if view.should_show_remove_user_from_team_confirmation_dialog() {
-            stack.add_positioned_overlay_child(
-                ChildView::new(&view.team_action_confirmation_dialog).finish(),
-                OffsetPositioning::offset_from_parent(
-                    vec2f(0., 0.),
-                    ParentOffsetBounds::WindowByPosition,
-                    ParentAnchor::Center,
-                    ChildAnchor::Center,
-                ),
-            );
-        }
-
-        stack.finish()
+        // The page's modals are rendered by `SettingsView`, not here; see
+        // `TeamsPageView::get_modal_content`.
+        Flex::column().with_child(content).finish()
     }
 }
 
