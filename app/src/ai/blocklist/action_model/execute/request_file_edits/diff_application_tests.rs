@@ -398,12 +398,12 @@ fn test_multiple_file_create_edits_for_same_path() {
         let create_edit1 = FileEdit::Create {
             file: Some(file_path.clone()),
             content: Some("First content".to_string()),
-            rewrite: false,
+            allow_overwrite: false,
         };
         let create_edit2 = FileEdit::Create {
             file: Some(file_path.clone()),
             content: Some("Second content".to_string()),
-            rewrite: false,
+            allow_overwrite: false,
         };
 
         let ai_identifiers = &AIIdentifiers::default();
@@ -442,7 +442,7 @@ fn test_mixed_create_and_edit_for_same_path() {
         let create_edit = FileEdit::Create {
             file: Some(file_path.clone()),
             content: Some("New file content".to_string()),
-            rewrite: false,
+            allow_overwrite: false,
         };
         let edit_diff = ParsedDiff::StrReplaceEdit {
             file: Some(file_path.clone()),
@@ -491,7 +491,7 @@ fn test_delete_and_create_same_path_replaces_existing_file() {
         let create_edit = FileEdit::Create {
             file: Some(file_path.clone()),
             content: Some("New file content".to_string()),
-            rewrite: false,
+            allow_overwrite: false,
         };
 
         let result = apply_edits(
@@ -528,7 +528,7 @@ fn test_create_then_delete_same_path_replaces_existing_file() {
         let create_edit = FileEdit::Create {
             file: Some(file_path.clone()),
             content: Some("New file content".to_string()),
-            rewrite: false,
+            allow_overwrite: false,
         };
         let delete_edit = FileEdit::Delete {
             file: Some(file_path.clone()),
@@ -570,7 +570,7 @@ fn test_delete_create_and_edit_same_path_still_fails() {
         let create_edit = FileEdit::Create {
             file: Some(file_path.clone()),
             content: Some("New file content".to_string()),
-            rewrite: false,
+            allow_overwrite: false,
         };
         let edit_diff = ParsedDiff::StrReplaceEdit {
             file: Some(file_path.clone()),
@@ -611,7 +611,7 @@ fn test_create_edit_for_existing_file() {
         let create_edit = FileEdit::Create {
             file: Some(file_path.clone()),
             content: Some("New content".to_string()),
-            rewrite: false,
+            allow_overwrite: false,
         };
 
         let ai_identifiers = &AIIdentifiers::default();
@@ -639,19 +639,19 @@ fn test_create_edit_for_existing_file() {
             other => panic!("Expected a single AlreadyExists error, got {other:?}"),
         }
 
-        // The message stays neutral (doesn't name `rewrite: true`): this client always
+        // The message stays neutral (doesn't name `allow_overwrite: true`): this client always
         // advertises the capability, but a server predating it ignores the flag and serves a
-        // create_file schema without `rewrite`, so naming it here could send the model into a
-        // retry the server can't honor. A model whose schema does include `rewrite` already
-        // knows about it independently of this message.
+        // create_file schema without `allow_overwrite`, so naming it here could send the model
+        // into a retry the server can't honor. A model whose schema does include
+        // `allow_overwrite` already knows about it independently of this message.
         let message = DiffApplicationError::error_for_conversation(&errors);
-        assert!(!message.contains("rewrite"));
+        assert!(!message.contains("allow_overwrite"));
         assert!(message.contains("already exists"));
     });
 }
 
 #[test]
-fn test_create_with_rewrite_replaces_existing_file() {
+fn test_create_with_overwrite_replaces_existing_file() {
     App::test((), |app| async move {
         let mut temp_file = NamedTempFile::new().expect("Failed to create temporary file");
         let file_path = temp_file.path().to_string_lossy().to_string();
@@ -660,7 +660,7 @@ fn test_create_with_rewrite_replaces_existing_file() {
         let create_edit = FileEdit::Create {
             file: Some(file_path.clone()),
             content: Some("New file content".to_string()),
-            rewrite: true,
+            allow_overwrite: true,
         };
 
         let result = apply_edits(
@@ -674,8 +674,8 @@ fn test_create_with_rewrite_replaces_existing_file() {
         )
         .await;
 
-        // rewrite: true on an existing file should succeed with a full replacement, not the
-        // AlreadyExists error a plain create_file call would raise.
+        // allow_overwrite: true on an existing file should succeed with a full replacement, not
+        // the AlreadyExists error a plain create_file call would raise.
         assert!(result.is_ok(), "Expected Ok result but got: {result:?}");
         let diffs = result.unwrap();
         assert_eq!(diffs.len(), 1);
@@ -690,14 +690,14 @@ fn test_create_with_rewrite_replaces_existing_file() {
 }
 
 #[test]
-fn test_create_with_rewrite_on_nonexistent_file_creates_normally() {
+fn test_create_with_overwrite_on_nonexistent_file_creates_normally() {
     App::test((), |app| async move {
-        let non_existent_file = "non_existent_rewrite_file.txt".to_string();
+        let non_existent_file = "non_existent_overwrite_file.txt".to_string();
 
         let create_edit = FileEdit::Create {
             file: Some(non_existent_file.clone()),
             content: Some("New file content".to_string()),
-            rewrite: true,
+            allow_overwrite: true,
         };
 
         let result = apply_edits(
@@ -711,7 +711,8 @@ fn test_create_with_rewrite_on_nonexistent_file_creates_normally() {
         )
         .await;
 
-        // rewrite is a no-op when the file doesn't already exist: it's just a normal creation.
+        // allow_overwrite is a no-op when the file doesn't already exist: it's just a normal
+        // creation.
         assert!(result.is_ok(), "Expected Ok result but got: {result:?}");
         let diffs = result.unwrap();
         assert_eq!(diffs.len(), 1);

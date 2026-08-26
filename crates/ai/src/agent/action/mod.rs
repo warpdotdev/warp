@@ -940,9 +940,7 @@ pub enum FileEdit {
     Create {
         file: Option<String>,
         content: Option<String>,
-        /// If `true` and `file` already exists, fully replace its contents with `content`
-        /// instead of failing with an already-exists error.
-        rewrite: bool,
+        allow_overwrite: bool,
     },
     /// Delete an existing file.
     Delete { file: Option<String> },

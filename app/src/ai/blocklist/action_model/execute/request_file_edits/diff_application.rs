@@ -288,11 +288,12 @@ struct DiffResult {
 }
 
 /// A pending file-creation request, keyed by file path in `apply_edits_internal`. A request with
-/// `rewrite` set replaces an existing file's contents rather than raising an already-exists error,
-/// so an intentional full rewrite need not be expressed as a delete followed by a create.
+/// `allow_overwrite` set replaces an existing file's contents rather than raising an
+/// already-exists error, so an intentional full rewrite need not be expressed as a delete
+/// followed by a create.
 struct NewFileRequest {
     content: String,
-    rewrite: bool,
+    allow_overwrite: bool,
 }
 
 /// You generally want to use `apply_edits`, however, if you don't want to report telemetry or be as
@@ -350,7 +351,7 @@ where
             FileEdit::Create {
                 file,
                 content,
-                rewrite,
+                allow_overwrite,
             } => {
                 let Some(file_path) = file else { continue };
 
@@ -367,7 +368,10 @@ where
                         let Some(content) = content else {
                             continue;
                         };
-                        entry.insert(NewFileRequest { content, rewrite });
+                        entry.insert(NewFileRequest {
+                            content,
+                            allow_overwrite,
+                        });
                     }
                 }
             }
@@ -436,7 +440,7 @@ where
             apply_create_file(
                 file,
                 request.content,
-                request.rewrite,
+                request.allow_overwrite,
                 session_context,
                 read_file,
                 &mut result,
@@ -533,12 +537,12 @@ async fn apply_replace_file<F, Fut>(
     }
 }
 
-/// Converts a file-creation request into a diff. If `rewrite` is `true` and the file already
-/// exists, its contents are fully replaced instead of raising an already-exists error.
+/// Converts a file-creation request into a diff. If `allow_overwrite` is `true` and the file
+/// already exists, its contents are fully replaced instead of raising an already-exists error.
 async fn apply_create_file<F, Fut>(
     file_path: String,
     content: String,
-    rewrite: bool,
+    allow_overwrite: bool,
     session_context: &SessionContext,
     read_file: &F,
     result: &mut DiffResult,
@@ -554,7 +558,7 @@ async fn apply_create_file<F, Fut>(
 
     match read_file(absolute_path.clone()).await {
         FileReadResult::Found(existing_content) => {
-            if rewrite {
+            if allow_overwrite {
                 push_full_replace_diff(result, file_path, existing_content, content);
             } else {
                 safe_warn!(

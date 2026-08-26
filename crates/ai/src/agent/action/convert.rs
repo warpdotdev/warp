@@ -114,7 +114,7 @@ impl From<api::message::tool_call::ApplyFileDiffs> for AIAgentActionType {
             .map(|new_file| FileEdit::Create {
                 file: new_file.file_path.none_if_default(),
                 content: new_file.content.none_if_default(),
-                rewrite: new_file.rewrite,
+                allow_overwrite: new_file.allow_overwrite,
             });
 
         AIAgentActionType::RequestFileEdits {
