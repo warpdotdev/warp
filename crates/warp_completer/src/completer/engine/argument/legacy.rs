@@ -27,7 +27,7 @@ use crate::meta::{Span, Spanned};
 use crate::parsers::ArgumentError::{
     MissingMandatoryPositional, MissingValueForName, UnexpectedArgument,
 };
-use crate::parsers::hir::{Command, ShellCommand};
+use crate::parsers::hir::{Command, FlagType, NamedArgument, ShellCommand};
 use crate::parsers::{
     ClassifiedCommand, ParseError, ParseErrorReason, ParsedToken, SignatureAtTokenIndex,
 };
@@ -355,6 +355,7 @@ async fn suggestions_for_last_argument(
                     command_env_vars,
                     session_env_vars,
                     last_named_arg.item.name,
+                    option_value_index(shell_command, &last_named_arg),
                     last_named_arg.item.parsed_token,
                     options,
                     ctx,
@@ -387,6 +388,7 @@ async fn suggestions_for_last_argument(
                 command_env_vars,
                 session_env_vars,
                 last_named_arg.item.name,
+                option_value_index(shell_command, &last_named_arg),
                 last_named_arg.item.parsed_token,
                 options,
                 ctx,
@@ -399,6 +401,30 @@ async fn suggestions_for_last_argument(
     (results, true)
 }
 
+/// The index, within its option's declared arguments, of the value currently being completed.
+///
+/// The parser emits one `Flag` per consumed option value, all sharing the flag token's
+/// `name_span`, so the position is the count of that option instance's values up to and including
+/// the one being completed. Keying on `name_span` (not just the flag name) keeps a repeated
+/// single-argument option like `-c a=b -c d=e` from being counted as one multi-valued option.
+fn option_value_index(shell_command: &ShellCommand, completed: &Spanned<NamedArgument>) -> usize {
+    let Some(flags) = shell_command.args.flags.as_ref() else {
+        return 0;
+    };
+    flags
+        .iter()
+        .filter(|flag| {
+            flag.name.as_str() == completed.item.name
+                && flag.name_span == completed.item.name_span
+                && match &flag.flag_type {
+                    FlagType::Argument { value } => value.span.end() <= completed.span.end(),
+                    FlagType::NoArgument => false,
+                }
+        })
+        .count()
+        .saturating_sub(1)
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn complete_option(
     signature: &Signature,
@@ -408,17 +434,28 @@ async fn complete_option(
     command_env_vars: &[String],
     session_env_vars: Option<&HashMap<String, String>>,
     option_name: &str,
+    value_index: usize,
     parsed_token: &ParsedToken,
     options: &CompleterOptions,
     ctx: &dyn CompletionContext,
 ) -> Vec<MatchedSuggestion> {
-    let last_argument = signature
+    let argument = signature
         .options()
         .iter()
         .find(|opt| opt.has_name(option_name))
-        .and_then(|opt| opt.arguments().last());
+        .and_then(|opt| {
+            let arguments = opt.arguments();
+            match arguments
+                .iter()
+                .enumerate()
+                .find(|(idx, arg)| *idx <= value_index && arg.is_variadic())
+            {
+                Some((_, arg)) => Some(arg),
+                None => arguments.get(value_index),
+            }
+        });
 
-    match last_argument {
+    match argument {
         None => Default::default(),
         Some(argument) => {
             generate_suggestions_for_argument(

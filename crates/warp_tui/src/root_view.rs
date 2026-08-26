@@ -3,7 +3,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
+use warp::tui_export::{ServerId, UserWorkspaces};
 use warp::{TuiLoginModel, TuiLoginPhase};
+use warp_core::user_preferences::GetUserPreferences as _;
 use warpui::SingletonEntity as _;
 use warpui_core::elements::MouseStateHandle;
 use warpui_core::elements::animation::AnimationClock;
@@ -12,7 +14,8 @@ use warpui_core::keymap::FixedBinding;
 use warpui_core::keymap::macros::*;
 use warpui_core::platform::TerminationMode;
 use warpui_core::{
-    AppContext, Entity, EntityId, FocusContext, TuiView, TypedActionView, ViewContext, keymap,
+    AppContext, Entity, EntityId, FocusContext, TuiView, TypedActionView, ViewContext, WindowId,
+    keymap,
 };
 
 use crate::clipboard::copy_to_clipboard;
@@ -24,6 +27,7 @@ use crate::ui::{
     login_failed, login_waiting, signed_out_welcome, terminal_starting,
 };
 use crate::zero_state_animation::ZeroStateAnimationConfig;
+const LAST_TEAM_STORAGE_KEY: &str = "TuiLastTeamUid";
 
 /// Typed actions handled by [`RootTuiView`].
 #[derive(Debug, Clone)]
@@ -73,7 +77,13 @@ pub fn init(app: &mut AppContext) {
 
 impl RootTuiView {
     /// Creates the login-gated root view.
-    pub(crate) fn new() -> Self {
+    pub(crate) fn new(ctx: &mut ViewContext<Self>) -> Self {
+        let window_id = ctx.window_id();
+        let team_uid = Self::restore_last_team_uid(ctx)
+            .or_else(|| UserWorkspaces::as_ref(ctx).inherited_or_default_team_uid(None));
+        UserWorkspaces::handle(ctx).update(ctx, |user_workspaces, ctx| {
+            user_workspaces.register_window(window_id, team_uid, ctx);
+        });
         Self {
             state: RootTuiState::Auth,
             auth_animation_clock: AnimationClock::starting_at(Duration::ZERO),
@@ -87,6 +97,34 @@ impl RootTuiView {
             copy_login_url_when_available: false,
             login_copy_hint: TransientHint::default(),
         }
+    }
+
+    pub(crate) fn switch_window_to_team(
+        window_id: WindowId,
+        team_uid: ServerId,
+        ctx: &mut AppContext,
+    ) {
+        UserWorkspaces::handle(ctx).update(ctx, |user_workspaces, ctx| {
+            user_workspaces.switch_window_to_team(window_id, team_uid, ctx);
+        });
+        Self::store_last_team_uid(team_uid, ctx);
+    }
+
+    fn restore_last_team_uid(ctx: &AppContext) -> Option<ServerId> {
+        ctx.private_user_preferences()
+            .read_value(LAST_TEAM_STORAGE_KEY)
+            .ok()
+            .flatten()
+            .and_then(|stored| serde_json::from_str::<ServerId>(&stored).ok())
+    }
+
+    fn store_last_team_uid(team_uid: ServerId, ctx: &AppContext) {
+        let Ok(serialized) = serde_json::to_string(&team_uid) else {
+            return;
+        };
+        let _ = ctx
+            .private_user_preferences()
+            .write_value(LAST_TEAM_STORAGE_KEY, serialized);
     }
 
     /// Transitions from the authentication gate to the live session container.

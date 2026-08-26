@@ -12,7 +12,8 @@ use tempfile::NamedTempFile;
 use warp_cli::agent::Harness;
 use warp_cli::{
     OZ_CLI_ENV, OZ_HARNESS_ENV, OZ_PARENT_RUN_ID_ENV, OZ_RUN_ID_ENV, SERVER_ROOT_URL_OVERRIDE_ENV,
-    SESSION_SHARING_SERVER_URL_OVERRIDE_ENV, WS_SERVER_URL_OVERRIDE_ENV,
+    SESSION_SHARING_SERVER_URL_OVERRIDE_ENV, WARP_CLI_ENV, WARP_HARNESS_ENV,
+    WARP_PARENT_RUN_ID_ENV, WARP_RUN_ID_ENV, WS_SERVER_URL_OVERRIDE_ENV,
 };
 use warp_core::channel::ChannelState;
 use warp_managed_secrets::ManagedSecretValue;
@@ -22,7 +23,8 @@ use super::terminal::{CommandHandle, TerminalDriver};
 use super::{
     AgentDriver, AgentDriverError, LEGACY_OZ_PARENT_LISTENER_MANAGED_EXTERNALLY_ENV,
     LEGACY_OZ_PARENT_STATE_ROOT_ENV, OZ_MESSAGE_LISTENER_MANAGED_EXTERNALLY_ENV,
-    OZ_MESSAGE_LISTENER_STATE_ROOT_ENV,
+    OZ_MESSAGE_LISTENER_STATE_ROOT_ENV, WARP_MESSAGE_LISTENER_MANAGED_EXTERNALLY_ENV,
+    WARP_MESSAGE_LISTENER_STATE_ROOT_ENV,
 };
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent_sdk::setup_observability::SetupClientEventReporter;
@@ -307,13 +309,23 @@ fn insert_non_empty_task_env_var(
     env_vars.insert(OsString::from(key), OsString::from(value));
 }
 
-fn insert_task_env_var_aliases(
+/// Writes `value` under every name in `keys`.
+///
+/// Gives a variable both its `OZ_` and its `WARP_` name from a single value, so the two cannot
+/// carry different ones. `task_env_vars_mirror_every_oz_var_to_a_warp_name` fails if a name is
+/// listed here under only one of the two spellings.
+///
+/// Takes `AsRef<OsStr>` rather than `&str` so a path-valued variable stays byte-exact: `OZ_CLI`
+/// holds an executable path that agents exec, and a lossy conversion would replace non-UTF-8
+/// bytes and leave them unable to launch it.
+fn insert_task_env_var_names(
     env_vars: &mut HashMap<OsString, OsString>,
     keys: &[&'static str],
-    value: &str,
+    value: impl AsRef<OsStr>,
 ) {
+    let value = value.as_ref();
     for key in keys {
-        env_vars.insert(OsString::from(key), OsString::from(value));
+        env_vars.insert(OsString::from(key), value.to_os_string());
     }
 }
 
@@ -331,49 +343,51 @@ fn task_env_vars_for_harness_name(
     parent_run_id: Option<&str>,
     selected_harness: Harness,
 ) -> HashMap<OsString, OsString> {
-    let mut env_vars = HashMap::with_capacity(7);
+    // Sized for the OZ_/WARP_ pairs written below.
+    let mut env_vars = HashMap::with_capacity(14);
 
     if let Some(id) = task_id {
-        env_vars.insert(
-            OsString::from(OZ_RUN_ID_ENV),
-            OsString::from(id.to_string()),
+        insert_task_env_var_names(
+            &mut env_vars,
+            &[OZ_RUN_ID_ENV, WARP_RUN_ID_ENV],
+            id.to_string(),
         );
     }
 
     if let Some(parent_run_id) = parent_run_id.filter(|id| !id.is_empty()) {
-        env_vars.insert(
-            OsString::from(OZ_PARENT_RUN_ID_ENV),
-            OsString::from(parent_run_id),
+        insert_task_env_var_names(
+            &mut env_vars,
+            &[OZ_PARENT_RUN_ID_ENV, WARP_PARENT_RUN_ID_ENV],
+            parent_run_id,
         );
     }
 
-    env_vars.insert(
-        OsString::from(OZ_CLI_ENV),
-        OsString::from(
-            std::env::current_exe()
-                .unwrap_or_else(|_| ChannelState::channel().cli_command_name().into()),
-        ),
-    );
-    // `OZ_HARNESS` is only consumed by child orchestration telemetry when the child
+    let cli_path = std::env::current_exe()
+        .unwrap_or_else(|_| ChannelState::channel().cli_command_name().into());
+    insert_task_env_var_names(&mut env_vars, &[OZ_CLI_ENV, WARP_CLI_ENV], &cli_path);
+    // The harness name is only consumed by child orchestration telemetry when the child
     // CLI emits `run message *` events.
-    env_vars.insert(
-        OsString::from(OZ_HARNESS_ENV),
-        OsString::from(selected_harness.to_string()),
+    insert_task_env_var_names(
+        &mut env_vars,
+        &[OZ_HARNESS_ENV, WARP_HARNESS_ENV],
+        selected_harness.to_string(),
     );
     if selected_harness == Harness::Claude && task_id.is_some() {
-        insert_task_env_var_aliases(
+        insert_task_env_var_names(
             &mut env_vars,
             &[
                 OZ_MESSAGE_LISTENER_MANAGED_EXTERNALLY_ENV,
+                WARP_MESSAGE_LISTENER_MANAGED_EXTERNALLY_ENV,
                 LEGACY_OZ_PARENT_LISTENER_MANAGED_EXTERNALLY_ENV,
             ],
             "1",
         );
         if let Some(state_root) = message_listener_state_root() {
-            insert_task_env_var_aliases(
+            insert_task_env_var_names(
                 &mut env_vars,
                 &[
                     OZ_MESSAGE_LISTENER_STATE_ROOT_ENV,
+                    WARP_MESSAGE_LISTENER_STATE_ROOT_ENV,
                     LEGACY_OZ_PARENT_STATE_ROOT_ENV,
                 ],
                 &state_root,
@@ -407,11 +421,18 @@ fn task_env_vars_for_harness_name(
     env_vars
 }
 
+/// Drops every name under which the externally-managed-listener signal is injected.
+///
+/// The list must stay in step with the one `task_env_vars_for_harness_name` writes: leaving
+/// one name behind would tell the Claude plugin that Warp owns the listener when it does not.
+/// `prepare_local_wake_command_rehydrates_transcript_with_self_managed_listener` asserts none
+/// of them survive.
 pub(crate) fn remove_claude_externally_managed_listener_env_vars(
     env_vars: &mut HashMap<OsString, OsString>,
 ) {
     for env_name in [
         OZ_MESSAGE_LISTENER_MANAGED_EXTERNALLY_ENV,
+        WARP_MESSAGE_LISTENER_MANAGED_EXTERNALLY_ENV,
         LEGACY_OZ_PARENT_LISTENER_MANAGED_EXTERNALLY_ENV,
     ] {
         env_vars.remove(OsStr::new(env_name));

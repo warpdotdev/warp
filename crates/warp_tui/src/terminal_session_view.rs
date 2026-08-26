@@ -35,19 +35,20 @@ use warp::tui_export::{
     ModelEvent, ParsedSlashCommandInput, PersistenceWriter, PillBarActionKind,
     PillBarInteractionEvent, PillBarPillKind, PillSwitchOutcome, PtyIntent, PtyIntentEvent,
     QueuedQueryEvent, QueuedQueryModel, RepoDetectionSessionType, RepoDetectionSource,
-    ServerConversationToken, SessionSettings, Sessions, SessionsEvent, ShellCommandExecutorEvent,
-    SizeInfo, SizeUpdate, SkillReference, SlashCommandDataSource as _, SlashCommandKind,
-    SlashCommandSelectionBehavior, StartAgentExecutorEvent, StartAgentRequest, StaticCommand,
-    TelemetryEvent, TerminalModel, TerminalSurface, TerminalSurfaceInit, TranscriptScope,
-    TuiMcpAction, TuiMcpManager, TuiMcpServerId, TuiMcpVariableValue, TuiOnboardingMarker,
-    TuiOnboardingMarkers, TuiOnboardingMarkersEvent, TuiSlashCommandDataSource,
-    TuiSlashCommandDataSourceArgs, TuiUpArrowHistoryItemKind, TuiUserInfoManager,
-    TuiUserInfoManagerEvent, TuiZeroStateDataSource, UserTakeOverReason, WAKEUP_THROTTLE_PERIOD,
-    WarpConfig, WarpConfigUpdateEvent, block_context_from_terminal_model,
-    build_slash_command_mixer, detect_possible_git_repo, export_conversation_markdown,
-    loaded_subtree_rollup, log_out_tui, maybe_build_ai_query_upsert_event,
-    prepare_conversation_block_restoration, record_autodetection_toggle_from_slash_command,
-    record_saved_prompt_accepted, record_static_slash_command_accepted, saved_prompt_text_for_id,
+    ServerConversationToken, ServerId, SessionSettings, Sessions, SessionsEvent,
+    ShellCommandExecutorEvent, SizeInfo, SizeUpdate, SkillReference, SlashCommandDataSource as _,
+    SlashCommandKind, SlashCommandSelectionBehavior, StartAgentExecutorEvent, StartAgentRequest,
+    StaticCommand, TelemetryEvent, TerminalModel, TerminalSurface, TerminalSurfaceInit,
+    TranscriptScope, TuiMcpAction, TuiMcpManager, TuiMcpServerId, TuiMcpVariableValue,
+    TuiOnboardingMarker, TuiOnboardingMarkers, TuiOnboardingMarkersEvent,
+    TuiSlashCommandDataSource, TuiSlashCommandDataSourceArgs, TuiUpArrowHistoryItemKind,
+    TuiUserInfoManager, TuiUserInfoManagerEvent, TuiZeroStateDataSource, UserTakeOverReason,
+    UserWorkspaces, UserWorkspacesEvent, WAKEUP_THROTTLE_PERIOD, WarpConfig, WarpConfigUpdateEvent,
+    block_context_from_terminal_model, build_slash_command_mixer, detect_possible_git_repo,
+    export_conversation_markdown, loaded_subtree_rollup, log_out_tui,
+    maybe_build_ai_query_upsert_event, prepare_conversation_block_restoration,
+    record_autodetection_toggle_from_slash_command, record_saved_prompt_accepted,
+    record_static_slash_command_accepted, saved_prompt_text_for_id,
     slash_command_selection_behavior, throttle,
 };
 use warp_core::channel::{Channel, ChannelState};
@@ -123,11 +124,13 @@ use crate::prompt_and_command_history_menu::{
 };
 use crate::read_only_menu::{TuiReadOnlyMenu, TuiReadOnlyMenuKind};
 use crate::resume::TuiExitSummaryHandle;
+use crate::root_view::RootTuiView;
 use crate::session_registry::TuiSessions;
 use crate::skills_menu::{TuiSkillMenuEvent, TuiSkillMenuModel};
 use crate::slash_commands::TuiSlashCommandModel;
 use crate::statusline_config_view::{TuiStatuslineConfigEvent, TuiStatuslineConfigView};
 use crate::tab_bar::{TuiTabBarConfig, TuiTabBarEvent, TuiTabBarView};
+use crate::team_menu::{TuiTeamMenuEvent, TuiTeamMenuModel};
 use crate::telemetry::{
     TuiConversationMenuTelemetryEvent, TuiConversationRestoreTelemetryEvent,
     TuiConversationRestoreTelemetryState, TuiConversationRestoreTelemetryTarget,
@@ -621,6 +624,9 @@ pub(crate) enum TuiTerminalSessionAction {
     /// Click on the footer's active-model label: toggles the inline model
     /// picker (the same menu `/model` surfaces).
     ToggleModelMenu,
+    /// Click on the footer's active-team label: toggles the team switcher (the
+    /// same menu `/team` surfaces).
+    ToggleTeamMenu,
     /// Toggle per-conversation auto approve.
     ToggleAutoApprove { show_feedback: bool },
     /// Open a URL from an interactive statusline item.
@@ -685,6 +691,7 @@ pub(crate) struct TuiTerminalSessionView {
     api_keys_menu: ModelHandle<TuiApiKeysMenuModel>,
     conversation_menu: ModelHandle<TuiConversationMenuModel>,
     model_menu: ModelHandle<TuiModelMenuModel>,
+    team_menu: ModelHandle<TuiTeamMenuModel>,
     skills_menu: ModelHandle<TuiSkillMenuModel>,
     mcp_menu: ModelHandle<TuiMcpMenuModel>,
     mcp_install_flow: ModelHandle<TuiMcpInstallFlowModel>,
@@ -721,6 +728,7 @@ pub(crate) struct TuiTerminalSessionView {
     /// (not created inline during render) so it survives element-tree rebuilds
     /// — the same `MouseStateHandle` pattern as [`UsageToggle`].
     model_label_hover: MouseStateHandle,
+    team_label_hover: MouseStateHandle,
     /// Hover and click state for the configured TODO statusline control.
     todo_list_mouse: MouseStateHandle,
     /// Hover and click state for the configured Voice statusline control.
@@ -1500,6 +1508,7 @@ impl TuiTerminalSessionView {
         });
 
         let terminal_surface_id: EntityId = ctx.view_id();
+        let terminal_surface = ctx.handle();
         let active_session =
             ctx.add_model(|ctx| ActiveSession::new(sessions.clone(), model_events.clone(), ctx));
         let zero_state_animation_config = ZeroStateAnimationConfig::handle(ctx);
@@ -1545,6 +1554,7 @@ impl TuiTerminalSessionView {
             )
         });
         let get_relevant_files_controller = ctx.add_model(GetRelevantFilesController::new);
+        let team_context_resolver = UserWorkspaces::team_context_resolver(ctx.handle());
         let action_model = ctx.add_model(|ctx| {
             BlocklistAIActionModel::new(
                 model.clone(),
@@ -1552,6 +1562,7 @@ impl TuiTerminalSessionView {
                 &model_events,
                 get_relevant_files_controller,
                 terminal_surface_id,
+                team_context_resolver,
                 ctx,
             )
         });
@@ -1579,6 +1590,7 @@ impl TuiTerminalSessionView {
                 active_session.clone(),
                 model.clone(),
                 terminal_surface_id,
+                terminal_surface,
                 ctx,
             )
         });
@@ -1631,6 +1643,7 @@ impl TuiTerminalSessionView {
         let read_only_menu_selection = TuiSelectionHandle::default();
         let read_only_menu_viewport = TuiViewportedListState::new_at_end();
         read_only_menu_viewport.scroll_to_rows_from_top(0);
+        let slash_commands_team_context = UserWorkspaces::team_context_resolver(ctx.handle());
         let slash_commands_source = ctx.add_model(|ctx| {
             TuiSlashCommandDataSource::new(
                 TuiSlashCommandDataSourceArgs {
@@ -1638,6 +1651,7 @@ impl TuiTerminalSessionView {
                     cli_subagent_controller: cli_subagent_controller.clone(),
                     terminal_view_id: terminal_surface_id,
                     terminal_model: model.clone(),
+                    team_context_resolver: slash_commands_team_context,
                 },
                 ctx,
             )
@@ -1658,8 +1672,14 @@ impl TuiTerminalSessionView {
         });
         ctx.subscribe_to_model(&slash_commands, |_, _, _, ctx| ctx.notify());
         let window_id = ctx.window_id();
+        let api_keys_team_context = UserWorkspaces::team_context_resolver(ctx.handle());
         let api_keys_menu = ctx.add_model(|ctx| {
-            TuiApiKeysMenuModel::new(input_editor_model.clone(), suggestions_mode.clone(), ctx)
+            TuiApiKeysMenuModel::new(
+                input_editor_model.clone(),
+                suggestions_mode.clone(),
+                api_keys_team_context,
+                ctx,
+            )
         });
         ctx.subscribe_to_model(&api_keys_menu, |_, _, _: &TuiApiKeysMenuEvent, ctx| {
             ctx.notify();
@@ -1683,15 +1703,28 @@ impl TuiTerminalSessionView {
                 );
             }
         });
+        let model_menu_team_context = UserWorkspaces::team_context_resolver(ctx.handle());
         let model_menu = ctx.add_model(|ctx| {
             TuiModelMenuModel::new(
                 input_editor_model.clone(),
                 suggestions_mode.clone(),
                 terminal_surface_id,
+                model_menu_team_context,
                 ctx,
             )
         });
         ctx.subscribe_to_model(&model_menu, |_, _, _: &TuiModelMenuEvent, ctx| {
+            ctx.notify();
+        });
+        let team_menu = ctx.add_model(|ctx| {
+            TuiTeamMenuModel::new(
+                input_editor_model.clone(),
+                suggestions_mode.clone(),
+                window_id,
+                ctx,
+            )
+        });
+        ctx.subscribe_to_model(&team_menu, |_, _, _: &TuiTeamMenuEvent, ctx| {
             ctx.notify();
         });
         let skills_menu = ctx.add_model(|ctx| {
@@ -1791,6 +1824,7 @@ impl TuiTerminalSessionView {
             TuiInlineMenu::new(api_keys_menu.clone()),
             TuiInlineMenu::new(conversation_menu.clone()),
             TuiInlineMenu::new(model_menu.clone()),
+            TuiInlineMenu::new(team_menu.clone()),
             TuiInlineMenu::new(skills_menu.clone()),
             TuiInlineMenu::new(mcp_menu.clone()),
             TuiInlineMenu::new(mcp_install_flow.clone()),
@@ -1937,6 +1971,9 @@ impl TuiTerminalSessionView {
             }
             TuiInputViewEvent::AcceptedModel(id) => {
                 view.handle_accepted_model(id, ctx);
+            }
+            TuiInputViewEvent::AcceptedTeam(team_uid) => {
+                view.handle_accepted_team(*team_uid, ctx);
             }
             TuiInputViewEvent::AcceptedMcp(action) => {
                 view.handle_accepted_mcp_action(*action, ctx);
@@ -2140,6 +2177,15 @@ impl TuiTerminalSessionView {
                 ctx.notify();
             }
         });
+        ctx.subscribe_to_model(&UserWorkspaces::handle(ctx), |_, _, event, ctx| {
+            if matches!(
+                event,
+                UserWorkspacesEvent::WindowTeamChanged { window_id }
+                    if *window_id == ctx.window_id()
+            ) {
+                ctx.notify();
+            }
+        });
         ctx.subscribe_to_model(&sessions, |view, _, event, ctx| match event {
             SessionsEvent::SessionBootstrapped(bootstrap_event)
                 if view.active_session.as_ref(ctx).session_id(ctx)
@@ -2261,6 +2307,7 @@ impl TuiTerminalSessionView {
             api_keys_menu,
             conversation_menu,
             model_menu,
+            team_menu,
             skills_menu,
             mcp_menu,
             mcp_install_flow,
@@ -2282,6 +2329,7 @@ impl TuiTerminalSessionView {
             usage_toggle: UsageToggle::default(),
             hidden_response_summary_exchange_ids: HashSet::new(),
             model_label_hover: MouseStateHandle::default(),
+            team_label_hover: MouseStateHandle::default(),
             todo_list_mouse: MouseStateHandle::default(),
             #[cfg(feature = "voice_input")]
             voice_input_mouse: MouseStateHandle::default(),
@@ -3849,6 +3897,16 @@ impl TuiTerminalSessionView {
         });
     }
 
+    fn toggle_team_menu(&mut self, ctx: &mut ViewContext<Self>) {
+        self.team_menu.update(ctx, |menu, ctx| {
+            if menu.is_open(ctx) {
+                menu.dismiss(ctx);
+            } else {
+                menu.open(ctx);
+            }
+        });
+    }
+
     /// The session's working directory. The cwd only arrives once shell
     /// metadata flows (warpified sessions); until then fall back to the
     /// process cwd the TUI's shell was spawned with.
@@ -4301,6 +4359,11 @@ impl TuiTerminalSessionView {
         });
         self.model_menu.update(ctx, |menu, ctx| menu.dismiss(ctx));
     }
+
+    fn handle_accepted_team(&mut self, team_uid: ServerId, ctx: &mut ViewContext<Self>) {
+        RootTuiView::switch_window_to_team(ctx.window_id(), team_uid, ctx);
+        self.team_menu.update(ctx, |menu, ctx| menu.dismiss(ctx));
+    }
     fn handle_accepted_mcp_action(&mut self, action: TuiMcpAction, ctx: &mut ViewContext<Self>) {
         match action {
             TuiMcpAction::Enable(id) => {
@@ -4614,6 +4677,10 @@ impl TuiTerminalSessionView {
             }
             SlashCommandKind::Model => {
                 self.model_menu.update(ctx, |menu, ctx| menu.open(ctx));
+                record_static_slash_command_accepted(command.name, true, ctx);
+            }
+            SlashCommandKind::Team => {
+                self.team_menu.update(ctx, |menu, ctx| menu.open(ctx));
                 record_static_slash_command_accepted(command.name, true, ctx);
             }
             SlashCommandKind::InvokeSkill => {
@@ -5606,6 +5673,7 @@ impl TypedActionView for TuiTerminalSessionView {
             }
             TuiTerminalSessionAction::ToggleTodoMenu => self.toggle_todo_menu(ctx),
             TuiTerminalSessionAction::ToggleModelMenu => self.toggle_model_menu(ctx),
+            TuiTerminalSessionAction::ToggleTeamMenu => self.toggle_team_menu(ctx),
             TuiTerminalSessionAction::ToggleAutoApprove { show_feedback } => {
                 self.toggle_auto_approve(*show_feedback, ctx)
             }

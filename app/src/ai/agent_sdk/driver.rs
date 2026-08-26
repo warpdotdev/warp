@@ -51,6 +51,10 @@ use crate::ai::agent_sdk::driver::harness::{
     HarnessCleanupDisposition, HarnessKind, HarnessRunner, ResumePayload, SavePoint,
     ThirdPartyHarness, ThirdPartyHarnessTelemetryEvent, harness_model_env_vars, task_env_vars,
 };
+use crate::ai::agent_sdk::environment_snapshot::{
+    EnvironmentSnapshot, EnvironmentSnapshotReporter,
+};
+use crate::ai::agent_sdk::retry::{is_transient_graphql_or_http_error, with_bounded_retry_using};
 use crate::ai::agent_sdk::setup_observability::{SetupClientEventReporter, SetupStep};
 use crate::ai::ambient_agents::task::HarnessModelConfig;
 use crate::ai::ambient_agents::{
@@ -62,6 +66,7 @@ use crate::ai::blocklist::local_agent_task_sync_model::LocalAgentTaskSyncModel;
 use crate::ai::blocklist::orchestration_event_streamer::{
     register_agent_event_consumer, unregister_agent_event_consumer,
 };
+use crate::ai::blocklist::orchestration_events::OrchestrationEventService;
 use crate::ai::blocklist::{
     BlocklistAIHistoryEvent, BlocklistAIHistoryModel, BlocklistAIPermissions, FinalizeReason,
     finalize_recording_for_conversation,
@@ -102,6 +107,8 @@ use crate::terminal::cli_agent_sessions::{
 };
 use crate::terminal::model::BlockId;
 use crate::terminal::view::ConversationRestorationInNewPaneType;
+use crate::workspaces::user_workspaces::UserWorkspaces;
+use crate::workspaces::workspace::BillingMetadata;
 
 pub(crate) mod attachments;
 #[cfg(feature = "local_fs")]
@@ -167,6 +174,23 @@ where
 
 const MCP_SERVER_STARTUP_TIMEOUT: Duration = Duration::from_secs(20);
 const HARNESS_SAVE_INTERVAL: Duration = Duration::from_secs(30);
+/// Bound on the end-of-run wait for `LocalAgentTaskSyncModel` to finish
+/// delivering queued task status updates before the process may exit.
+const TASK_STATUS_FLUSH_TIMEOUT: Duration = Duration::from_secs(5);
+/// Attempt budget for resolving one managed MCP server's client config
+/// (`ManagedMcpClient::create_managed_mcp_client_config`) in
+/// [`AgentDriver::resolve_mcp_specs_with_local_uuids`].
+///
+/// A transient warp-server 5xx during this call otherwise fails the whole run (see
+/// `AgentDriverError::ManagedMcpResolutionFailed`), so this needs a larger budget than the
+/// shared [`crate::server::retry_strategies::MAX_ATTEMPTS`] default (~2s), which is too short
+/// to ride out even a brief backend blip. Against the shared exponential backoff schedule
+/// (500ms, 1s, 2s, 4s, 8s), 6 attempts sum to ~15.5s nominal (~20s with jitter): more than
+/// double the shortest fully-failed window observed in a real incident (a 503 storm from
+/// dying Cloud Run instances, ~6s with zero successful responses inside a ~30s degraded-
+/// capacity period), while staying well under the ~35s a run had before it was marked
+/// FAILED in that incident.
+const MANAGED_MCP_RESOLVE_MAX_ATTEMPTS: usize = 6;
 /// Timeout for individual harness auth preflight commands.
 const PREFLIGHT_CHECK_TIMEOUT: Duration = Duration::from_secs(30);
 pub(crate) const WARP_DRIVE_SYNC_TIMEOUT: Duration = Duration::from_secs(60);
@@ -188,9 +212,14 @@ pub(crate) const AUTO_RESUME_TIMEOUT: Duration = Duration::from_secs(120);
 /// invocations keep working.
 pub(crate) const OZ_MESSAGE_LISTENER_MANAGED_EXTERNALLY_ENV: &str =
     "OZ_MESSAGE_LISTENER_MANAGED_EXTERNALLY";
+/// Warp-branded name for the same signal, injected alongside the `OZ_` one with the same value.
+pub(crate) const WARP_MESSAGE_LISTENER_MANAGED_EXTERNALLY_ENV: &str =
+    "WARP_MESSAGE_LISTENER_MANAGED_EXTERNALLY";
 /// Optional root directory for the per-session Claude message-listener state
 /// that Warp and the Claude hook scripts share.
 pub(crate) const OZ_MESSAGE_LISTENER_STATE_ROOT_ENV: &str = "OZ_MESSAGE_LISTENER_STATE_ROOT";
+/// Warp-branded name for the same state root, injected alongside the `OZ_` one.
+pub(crate) const WARP_MESSAGE_LISTENER_STATE_ROOT_ENV: &str = "WARP_MESSAGE_LISTENER_STATE_ROOT";
 // Keep exporting the legacy `OZ_PARENT_*` names to child hooks until the
 // external Claude plugin has fully migrated to the canonical
 // `OZ_MESSAGE_LISTENER_*` names.
@@ -229,6 +258,21 @@ fn ephemeral_mcp_installation_id(
     }
 }
 
+/// Abstraction over how [`IdleTimeoutSender::end_run_after`] waits out its deadline, so tests
+/// can substitute a controllable wait for a real, wall-clock-dependent `thread::sleep` and
+/// deterministically exercise the moment the timer commits to firing.
+trait IdleWait: Send + Sync {
+    fn wait(&self, duration: Duration);
+}
+
+struct RealIdleWait;
+
+impl IdleWait for RealIdleWait {
+    fn wait(&self, duration: Duration) {
+        thread::sleep(duration);
+    }
+}
+
 /// IdleTimeoutSender is wrapper around a sender that signals when a run is done after
 /// an idle timeout. Used for both Oz runs and third-party harnesses.
 ///
@@ -248,6 +292,14 @@ struct IdleTimeoutSender<T: Send + 'static> {
     /// Most recent [`Self::arm_refreshable`] call. Held here rather than by the caller so a
     /// long-lived refresher cannot re-arm with a superseded outcome.
     pending: Arc<Mutex<Option<(T, Duration)>>>,
+    wait: Arc<dyn IdleWait>,
+    /// Invoked synchronously, on whichever thread wins the race to complete the run,
+    /// immediately before the value is sent — including on `end_run_after`'s background
+    /// timer thread, before it ever touches the oneshot. Lets a caller commit
+    /// externally-observable state (e.g. "this conversation's ambient run is exiting") at the
+    /// exact moment of commitment, rather than only after the completion reaches the model
+    /// thread via the oneshot and any further async plumbing (QUALITY-1801).
+    on_commit: Arc<dyn Fn() + Send + Sync>,
 }
 
 // Hand-written so cloning does not require `T: Clone`. Every field is a shared handle, so
@@ -258,6 +310,8 @@ impl<T: Send + 'static> Clone for IdleTimeoutSender<T> {
             tx_cell: Arc::clone(&self.tx_cell),
             generation: Arc::clone(&self.generation),
             pending: Arc::clone(&self.pending),
+            wait: Arc::clone(&self.wait),
+            on_commit: Arc::clone(&self.on_commit),
         }
     }
 }
@@ -268,7 +322,16 @@ impl<T: Send + 'static> IdleTimeoutSender<T> {
             tx_cell: Arc::new(Mutex::new(Some(tx))),
             generation: Arc::new(AtomicUsize::new(0)),
             pending: Arc::new(Mutex::new(None)),
+            wait: Arc::new(RealIdleWait),
+            on_commit: Arc::new(|| {}),
         }
+    }
+
+    /// Registers `on_commit` to run synchronously, on whichever thread performs it, immediately
+    /// before every future completion send.
+    fn with_on_commit(mut self, on_commit: impl Fn() + Send + Sync + 'static) -> Self {
+        self.on_commit = Arc::new(on_commit);
+        self
     }
 
     /// End the run by sending `value` immediately.
@@ -276,6 +339,7 @@ impl<T: Send + 'static> IdleTimeoutSender<T> {
         if let Ok(mut guard) = self.tx_cell.lock()
             && let Some(sender) = guard.take()
         {
+            (self.on_commit)();
             let _ = sender.send(value);
         }
     }
@@ -287,11 +351,13 @@ impl<T: Send + 'static> IdleTimeoutSender<T> {
         let current_gen = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
         let tx_cell = Arc::clone(&self.tx_cell);
         let generation = Arc::clone(&self.generation);
+        let wait = Arc::clone(&self.wait);
+        let on_commit = Arc::clone(&self.on_commit);
 
         // Spawn a background thread that will complete the oneshot after the idle timeout,
         // unless a follow-up query resets the timer (by bumping the generation counter).
         thread::spawn(move || {
-            thread::sleep(timeout);
+            wait.wait(timeout);
 
             // Check if our timer generation is still current. If not, a follow-up
             // query or other activity has "cancelled" this timer by bumping the generation.
@@ -301,7 +367,10 @@ impl<T: Send + 'static> IdleTimeoutSender<T> {
             if let Ok(mut guard) = tx_cell.lock()
                 && let Some(sender) = guard.take()
             {
-                // Send the value after the idle timeout expires.
+                // Commit before sending: this is the only signal the model layer ever gets
+                // that a deferred window has elapsed, so it must land before the completion
+                // is observable at all (QUALITY-1801).
+                on_commit();
                 let _ = sender.send(value);
             }
         });
@@ -787,6 +856,39 @@ pub enum AgentDriverError {
         /// Matching row(s) from the harness block, trimmed and capped.
         excerpt: String,
     },
+    /// `WARP_SANDBOX_DEADLINE` expired before `run_internal` completed.
+    /// For free plans, this is a user-facing limit (upgrade to remove it).
+    /// For paid plans, it's a configurable limit the user or team set.
+    /// Either way, it's a task outcome — the user's requested work didn't fit
+    /// in the time they (or their plan) allow, so report as `FAILED`.
+    #[error("{}", sandbox_deadline_message(*on_free_plan))]
+    SandboxDeadlineReached {
+        /// Whether the run's workspace is on the free plan, which determines
+        /// whether the message points the user at upgrading.
+        on_free_plan: bool,
+    },
+    /// The process received SIGTERM while the run was still in progress.
+    /// SIGTERM is how instance teardown reaches the client — server-initiated
+    /// sandbox shutdown, container-runtime stops, and self-hosted worker
+    /// termination — and the client cannot distinguish which initiated it, so
+    /// it is reported as `FAILED` (externally-originating).
+    #[error(
+        "The agent process was terminated (SIGTERM) before the run completed, most likely \
+         because the instance or worker hosting the run was shut down."
+    )]
+    TerminatedBySignal,
+}
+
+/// User-facing message for [`AgentDriverError::SandboxDeadlineReached`].
+///
+/// The free plan's runtime cap is fixed, so those runs get an upgrade hint;
+/// paid plans can configure the limit and are only told it was hit.
+const fn sandbox_deadline_message(on_free_plan: bool) -> &'static str {
+    if on_free_plan {
+        "Sandbox maximum runtime reached. Upgrade to a paid plan to remove this limit."
+    } else {
+        "Sandbox maximum runtime reached."
+    }
 }
 
 impl ErrorExt for AgentDriverError {
@@ -1103,6 +1205,18 @@ impl AgentDriver {
         });
     }
 
+    /// Runs `task` to completion and reports its terminal state to the server.
+    ///
+    /// Exit guarantee: before the returned future resolves (after which the
+    /// caller may terminate the process), the driver waits for queued
+    /// `LocalAgentTaskSyncModel` status updates to finish delivering, reports
+    /// driver-level errors itself, and — for error-free runs where no terminal
+    /// state was confirmed delivered — reports `SUCCEEDED` directly (see
+    /// `flush_task_status_before_exit`), so a graceful exit never leaves the
+    /// server task `IN_PROGRESS`. Abrupt exits (SIGKILL, panics, Ctrl-C —
+    /// which terminates the app without resolving this future — and aborts
+    /// before the task id is known) are NOT covered and rely on server-side
+    /// stale-task cleanup.
     pub fn run(
         &mut self,
         task: Task,
@@ -1144,15 +1258,17 @@ impl AgentDriver {
                 // normal AgentDriver teardown path — recording upload, snapshot upload —
                 // time to complete while the agent is still running.
                 //
-                // Backup: SIGTERM detection (Unix only).
+                // Secondary: SIGTERM detection (Unix only).
                 //
-                // Both Docker Sandbox and Namespace send SIGTERM ~10-20 seconds before
-                // SIGKILL at the instance deadline. In practice this arm should never
-                // fire — the primary timer starts cleanup 5 minutes earlier and
-                // completes well before SIGTERM arrives. This is defense-in-depth for
-                // edge cases (e.g. WARP_SANDBOX_DEADLINE absent, or clock skew). The
-                // SIGTERM handler is unregistered after run_internal resolves to restore
-                // the default terminate disposition.
+                // SIGTERM is how external shutdowns reach the client: server-initiated
+                // sandbox/instance teardown (both Docker Sandbox and Namespace send
+                // SIGTERM ~10-20 seconds before SIGKILL), container-runtime stops, and
+                // self-hosted workers being terminated. When the deadline timer is
+                // active it fires 5 minutes earlier and wins this race, but SIGTERM is
+                // the primary signal whenever WARP_SANDBOX_DEADLINE is absent or the
+                // shutdown was not deadline-driven. The SIGTERM handler is unregistered
+                // after run_internal resolves to restore the default terminate
+                // disposition.
                 //
                 // When WARP_SANDBOX_DEADLINE is absent and no SIGTERM arrives, run_internal
                 // runs to completion as before (local and self-hosted runs are unaffected).
@@ -1177,6 +1293,27 @@ impl AgentDriver {
                             }
                         });
 
+                    // Resolved up front rather than inside the timer arm: `select!` arms
+                    // are synchronous (no `ctx` to read the model from), and everything
+                    // after the deadline fires competes with the shutdown window. Billing
+                    // metadata is already loaded by then — cloud runs block on
+                    // `SetupStep::TeamMetadataRefresh` before the driver starts — so this
+                    // read does not race the initial fetch. Defaults to the non-free
+                    // message if unavailable, so a paying customer is never told to
+                    // upgrade.
+                    let on_free_plan = if maybe_wait.is_some() {
+                        foreground
+                            .spawn(|_, ctx| {
+                                UserWorkspaces::as_ref(ctx)
+                                    .current_workspace_billing_metadata()
+                                    .is_some_and(BillingMetadata::is_free_plan)
+                            })
+                            .await
+                            .unwrap_or(false)
+                    } else {
+                        false
+                    };
+
                     // Timer future: fires at deadline minus warning window, mapped to
                     // () to avoid std::time::Instant which is disallowed on wasm targets.
                     // Pending forever (never fires) when no deadline is set.
@@ -1184,12 +1321,11 @@ impl AgentDriver {
                         .map(|w| Either::Left(Timer::after(w).map(|_| ())))
                         .unwrap_or_else(|| Either::Right(future::pending::<()>()));
 
-                    // SIGTERM backup: catches provider-sent SIGTERM before SIGKILL.
-                    // Uses signal_hook::flag polling (100ms async sleep, no CPU cost)
-                    // on Unix; pending forever on non-Unix platforms. In practice this
-                    // arm should never fire — the primary timer provides 5 minutes of
-                    // cleanup time before SIGTERM arrives. The sig_id is held to
-                    // restore the default SIGTERM disposition after select! resolves.
+                    // SIGTERM future: catches externally-initiated shutdowns (instance
+                    // teardown, container stops, self-hosted worker termination). Uses
+                    // signal_hook::flag polling (100ms async sleep, no CPU cost) on
+                    // Unix; pending forever on non-Unix platforms. The sig_id is held
+                    // to restore the default SIGTERM disposition after select! resolves.
                     #[cfg(unix)]
                     let (sigterm_fut, sigterm_sig_id) = {
                         use std::sync::atomic::{AtomicBool, Ordering};
@@ -1213,6 +1349,10 @@ impl AgentDriver {
                     #[cfg(not(unix))]
                     let sigterm_fut = future::pending::<()>();
 
+                    // `select!` resolves exactly one arm and drops the other future(s), so a
+                    // `run_internal` completion that lands first (reporting its own terminal
+                    // task state, e.g. SUCCEEDED) can never be overwritten by this branch: the
+                    // timer future is simply dropped without ever producing this error.
                     let result = futures::select! {
                         r = Self::run_internal(task, foreground.clone()).fuse() => r,
                         _ = timer_fut.fuse() => {
@@ -1220,17 +1360,14 @@ impl AgentDriver {
                                 "Sandbox deadline approaching (WARP_SANDBOX_DEADLINE); \
                                  aborting run_internal to allow recording finalization"
                             );
-                            Ok(())
+                            Err(AgentDriverError::SandboxDeadlineReached { on_free_plan })
                         }
                         _ = sigterm_fut.fuse() => {
-                            // Backup path — should not fire in normal operation.
-                            // The primary timer provides 5 minutes of cleanup time;
-                            // SIGTERM only arrives ~10-20s before SIGKILL.
                             log::warn!(
                                 "SIGTERM received; aborting run_internal to allow \
-                                 recording finalization (backup path, limited grace period)"
+                                 recording finalization (limited grace period before SIGKILL)"
                             );
-                            Ok(())
+                            Err(AgentDriverError::TerminatedBySignal)
                         }
                     };
                     // Restore the default SIGTERM disposition now that run_internal
@@ -1241,6 +1378,38 @@ impl AgentDriver {
                     }
                     result
                 };
+
+                // Report a SIGTERM abort immediately, before the teardown below:
+                // SIGKILL follows SIGTERM within ~10-20 seconds and recording
+                // finalization plus snapshot upload may not fit in that window.
+                // Skipped when a terminal state was already delivered (e.g. the
+                // conversation finished and SIGTERM arrived during an idle
+                // window), so this cannot overwrite a real outcome.
+                if let (Some(task_id), Err(AgentDriverError::TerminatedBySignal)) =
+                    (task_id, &result)
+                {
+                    let already_terminal = foreground
+                        .spawn(move |_, ctx| {
+                            LocalAgentTaskSyncModel::as_ref(ctx)
+                                .confirmed_terminal_state(&task_id)
+                                .is_some()
+                        })
+                        .await
+                        .unwrap_or(false);
+                    if already_terminal {
+                        log::info!(
+                            "Skipping SIGTERM failure report for task {task_id}: a terminal \
+                             state was already reported"
+                        );
+                    } else {
+                        report_driver_error(
+                            task_id,
+                            &AgentDriverError::TerminatedBySignal,
+                            &server_api,
+                        )
+                        .await;
+                    }
+                }
 
                 // Stop accepting CLI session status updates now that the run
                 // is done. Already accepted task updates remain queued until
@@ -1282,6 +1451,19 @@ impl AgentDriver {
                 }
                 Self::run_snapshot_upload(&foreground).await;
 
+                // Guarantee the server task row reaches a terminal state before
+                // the caller can terminate the process (see the doc comment on
+                // `run`). Must run before the send below.
+                if let Some(task_id) = task_id {
+                    Self::flush_task_status_before_exit(
+                        task_id,
+                        result.is_ok(),
+                        &server_api,
+                        &foreground,
+                    )
+                    .await;
+                }
+
                 if tx.send(result).is_err() {
                     report_error!("Caller did not wait for agent driver to finish");
                 }
@@ -1314,8 +1496,12 @@ impl AgentDriver {
             // occur before or outside a conversation (e.g. bootstrap, MCP startup,
             // environment setup) so LocalAgentTaskSyncModel never fires for them.
             // Success/blocked/cancelled are handled by LocalAgentTaskSyncModel.
+            // TerminatedBySignal is excluded: the run task reports it before its
+            // teardown, since SIGKILL follows shortly after SIGTERM.
             if let (Some(task_id), Err(err)) = (task_id, &result) {
-                report_driver_error(task_id, err, &server_api_for_error).await;
+                if !matches!(err, AgentDriverError::TerminatedBySignal) {
+                    report_driver_error(task_id, err, &server_api_for_error).await;
+                }
                 if matches!(
                     err,
                     AgentDriverError::EnvironmentSetupFailed(_)
@@ -1333,6 +1519,82 @@ impl AgentDriver {
             }
 
             result
+        }
+    }
+
+    /// Flushes task-status reporting before the process may exit: waits
+    /// (bounded by [`TASK_STATUS_FLUSH_TIMEOUT`]) for `LocalAgentTaskSyncModel`
+    /// to finish delivering queued `update_agent_task` calls, then — for
+    /// error-free runs where no terminal state was confirmed delivered (e.g. a
+    /// `--skip-initial-turn` run with no follow-up, or a third-party harness
+    /// whose plugin never reported a terminal status) — reports `SUCCEEDED`
+    /// directly so the task cannot be left `IN_PROGRESS`.
+    ///
+    /// Contract: an error-free driver exit is reported as `SUCCEEDED` whenever
+    /// nothing more specific was delivered. This mirrors exit-code semantics
+    /// (`run_harness` likewise maps a zero exit code to success); each shutdown
+    /// path chooses its own classification by resolving the run with `Ok` or a
+    /// specific `AgentDriverError`, and this fallback does not second-guess it.
+    ///
+    /// Failed runs only get the drain: the caller reports the error itself via
+    /// `report_driver_error` after receiving the result.
+    async fn flush_task_status_before_exit(
+        task_id: AmbientAgentTaskId,
+        run_succeeded: bool,
+        server_api: &Arc<dyn AIClient>,
+        foreground: &ModelSpawner<Self>,
+    ) {
+        match foreground
+            .spawn(move |_, ctx| {
+                LocalAgentTaskSyncModel::handle(ctx)
+                    .update(ctx, |model, _| model.wait_for_idle(task_id))
+            })
+            .await
+        {
+            Ok(wait) => {
+                if wait.with_timeout(TASK_STATUS_FLUSH_TIMEOUT).await.is_err() {
+                    log::warn!(
+                        "Timed out waiting for queued task status updates to flush for task {task_id}"
+                    );
+                }
+            }
+            Err(err) => log::warn!("Could not wait for the task status flush: {err}"),
+        }
+
+        if !run_succeeded {
+            return;
+        }
+
+        let confirmed_terminal_state = foreground
+            .spawn(move |_, ctx| {
+                LocalAgentTaskSyncModel::as_ref(ctx).confirmed_terminal_state(&task_id)
+            })
+            .await
+            .ok()
+            .flatten();
+        if let Some(state) = confirmed_terminal_state {
+            log::debug!("Task {task_id} already reported terminal state {state:?} before exit");
+            return;
+        }
+
+        log::warn!(
+            "No terminal task state was confirmed delivered for task {task_id}; \
+             reporting SUCCEEDED as a fallback before exit"
+        );
+        if let Err(err) = server_api
+            .update_agent_task(
+                task_id,
+                Some(AgentTaskState::Succeeded),
+                None,
+                None,
+                None,
+                None,
+            )
+            .await
+        {
+            report_error!(anyhow!(err).context(format!(
+                "Failed to report the fallback SUCCEEDED state for task {task_id}"
+            )));
         }
     }
 
@@ -1462,13 +1724,19 @@ impl AgentDriver {
                     resolved.local_uuids.push(*uuid);
                 }
                 MCPSpec::Uuid(uuid) => {
-                    let client_config = managed_mcp_client
-                        .create_managed_mcp_client_config(uuid.to_string())
-                        .await
-                        .map_err(|err| AgentDriverError::ManagedMcpResolutionFailed {
+                    let client_config = with_bounded_retry_using(
+                        &format!("resolve managed MCP server '{uuid}'"),
+                        MANAGED_MCP_RESOLVE_MAX_ATTEMPTS,
+                        is_transient_graphql_or_http_error,
+                        || managed_mcp_client.create_managed_mcp_client_config(uuid.to_string()),
+                    )
+                    .await
+                    .map_err(|err| {
+                        AgentDriverError::ManagedMcpResolutionFailed {
                             uid: *uuid,
                             message: format!("{err:#}"),
-                        })?;
+                        }
+                    })?;
                     let installations = Self::installations_from_managed_client_config_json(
                         &client_config.mcp_config_json,
                         task_id,
@@ -1495,10 +1763,17 @@ impl AgentDriver {
                     // the server owns the set of recognized ids, and the
                     // backing integration may be disconnected or the feature
                     // disabled between dispatch and run setup — so resolution
-                    // failures skip the server instead of failing the run.
-                    let client_config = match managed_mcp_client
-                        .create_managed_mcp_client_config(id.clone())
-                        .await
+                    // failures skip the server instead of failing the run. A
+                    // transient failure still gets the same retry budget as the
+                    // UUID case first, so a brief backend blip doesn't silently
+                    // drop the server from an otherwise-healthy run.
+                    let client_config = match with_bounded_retry_using(
+                        &format!("resolve well-known MCP server '{id}'"),
+                        MANAGED_MCP_RESOLVE_MAX_ATTEMPTS,
+                        is_transient_graphql_or_http_error,
+                        || managed_mcp_client.create_managed_mcp_client_config(id.clone()),
+                    )
+                    .await
                     {
                         Ok(client_config) => client_config,
                         Err(err) => {
@@ -2495,25 +2770,39 @@ impl AgentDriver {
             ai_client_for_refresh,
             oidc_strategy_for_refresh,
         ) = async {
-            let setup_events = foreground
-            .spawn(|me, ctx| {
-                let ai_client = ServerApiProvider::as_ref(ctx).get_ai_client().clone();
-                match me.task_id {
-                    Some(task_id) => {
-                        SetupClientEventReporter::new(task_id, ai_client, ctx.background_executor())
+            let (setup_events, environment_snapshot_reporter) = foreground
+                .spawn(|me, ctx| {
+                    let ai_client = ServerApiProvider::as_ref(ctx).get_ai_client().clone();
+                    let background = ctx.background_executor();
+                    match me.task_id {
+                        Some(task_id) => (
+                            SetupClientEventReporter::new(
+                                task_id,
+                                ai_client.clone(),
+                                background.clone(),
+                            ),
+                            EnvironmentSnapshotReporter::new(task_id, ai_client, background),
+                        ),
+                        None => {
+                            report_error!(
+                                "No task ID found for driver - cannot report client events"
+                            );
+                            (
+                                SetupClientEventReporter::noop(
+                                    ai_client.clone(),
+                                    background.clone(),
+                                ),
+                                EnvironmentSnapshotReporter::noop(ai_client, background),
+                            )
+                        }
                     }
-                    None => {
-                        report_error!("No task ID found for driver - cannot report client events");
-                        SetupClientEventReporter::noop(ai_client, ctx.background_executor())
-                    }
-                }
-            })
-            .await?;
+                })
+                .await?;
 
-        foreground
-            .spawn(|me, _| me.check_working_dir())
-            .await?
-            .await?;
+            foreground
+                .spawn(|me, _| me.check_working_dir())
+                .await?
+                .await?;
 
         // IMPORTANT: Wait for the terminal session to bootstrap before starting MCP servers.
         // Some of the initializations are necessary for the MCP servers to start correctly.
@@ -2782,6 +3071,7 @@ impl AgentDriver {
                                 remove_repository_origins,
                             ),
                             setup_events_for_environment,
+                            environment_snapshot_reporter.clone(),
                             ctx,
                         )
                     })
@@ -2841,6 +3131,8 @@ impl AgentDriver {
                         .await?;
                 }
             }
+        } else {
+            environment_snapshot_reporter.report(EnvironmentSnapshot::empty());
         }
 
         // Skill loading is Oz-only; third-party harnesses have their own skill systems.
@@ -3738,9 +4030,46 @@ impl AgentDriver {
         task_prompt: AgentRunPrompt,
         ctx: &mut ModelContext<Self>,
     ) -> Receiver<SDKConversationOutputStatus> {
-        // Create a oneshot channel to signal task completion.
-        let (tx, rx) = oneshot::channel();
-        let run_exit = IdleTimeoutSender::new(tx);
+        // Create a oneshot channel to signal task completion. This is `run_exit`'s
+        // internal signal, not the receiver returned to the caller: see the
+        // `internal_rx` wiring at the end of this function for why.
+        let (internal_tx, internal_rx) = oneshot::channel();
+        // Tracks this run's conversation id for `on_commit` below, which can run on a
+        // background timer thread with no model access of its own. Seeded from
+        // `self.run_conversation_id` so a resumed conversation — already known at
+        // construction time, per `AgentDriver::new` — is covered from the start; a fresh
+        // run instead learns it later, updated alongside `me.run_conversation_id` once
+        // `ConversationServerTokenAssigned` fires below.
+        let committed_conversation_id: Arc<Mutex<Option<AIConversationId>>> =
+            Arc::new(Mutex::new(self.run_conversation_id));
+        let exit_commit_handle = OrchestrationEventService::as_ref(ctx).exit_commit_handle();
+        #[cfg(test)]
+        let post_commit_gate = tests::test_post_commit_gate();
+        #[cfg_attr(not(test), allow(unused_mut))]
+        let mut run_exit = IdleTimeoutSender::new(internal_tx).with_on_commit({
+            let committed_conversation_id = Arc::clone(&committed_conversation_id);
+            move || {
+                if let Ok(guard) = committed_conversation_id.lock()
+                    && let Some(conversation_id) = *guard
+                {
+                    exit_commit_handle.commit(conversation_id);
+                }
+                // Test-only: lets a test pause deterministically right here — the commit has
+                // already landed, but the completion value has not been sent yet, so nothing
+                // (including the async forwarder that runs model-side cleanup) can have
+                // observed this run ending.
+                #[cfg(test)]
+                if let Some(gate) = &post_commit_gate {
+                    gate.wait(Duration::ZERO);
+                }
+            }
+        });
+        #[cfg(test)]
+        {
+            if let Some(wait) = tests::test_idle_wait_override() {
+                run_exit = run_exit.with_wait(wait);
+            }
+        }
         let restored_conversation_id = self.restored_conversation_id;
 
         // ServerSide prompts enter the agent view and emit
@@ -3797,6 +4126,9 @@ impl AgentDriver {
                 } = event
                 {
                     me.run_conversation_id = Some(*conversation_id);
+                    if let Ok(mut guard) = committed_conversation_id.lock() {
+                        *guard = Some(*conversation_id);
+                    }
                     stamp_parent_agent_id_if_some(
                         *conversation_id,
                         me.parent_run_id.as_deref(),
@@ -4002,7 +4334,18 @@ impl AgentDriver {
                             {
                                 me.arm_debug_window(run_exit.clone(), output_status, window, ctx);
                             }
-                            _ => run_exit.complete_with_optional_idle(idle_window, output_status),
+                            // Whether the run exits immediately (no idle window) or a deferred
+                            // window later elapses on its own, `run_exit`'s `on_commit` hook
+                            // (see `execute_run`) commits the conversation exiting
+                            // synchronously, on whichever thread completes the run, strictly
+                            // before the completion signal is observable. That covers both
+                            // cases uniformly, closing off any orchestration event still
+                            // buffered for this conversation before it could otherwise race the
+                            // teardown that follows and get cancelled, leaving the run stuck
+                            // `InProgress` (QUALITY-1801).
+                            None | Some(_) => {
+                                run_exit.complete_with_optional_idle(idle_window, output_status);
+                            }
                         }
                     }
                 }
@@ -4132,7 +4475,24 @@ impl AgentDriver {
             });
         }
 
-        rx
+        // Wrap `internal_rx` instead of returning it directly: once the run's `on_commit` has
+        // committed the exiting flag (synchronously, on whichever thread completed the run),
+        // this drops any orchestration events still queued for the conversation, for every exit
+        // path, immediate or deferred. That drop needs model access, which `on_commit` doesn't
+        // have on a background timer thread, so it happens here instead, once the completion
+        // value reaches this model's own executor.
+        let (external_tx, external_rx) = oneshot::channel();
+        ctx.spawn(internal_rx, move |me, result, ctx| {
+            if let Some(conversation_id) = me.run_conversation_id {
+                OrchestrationEventService::handle(ctx).update(ctx, |service, _| {
+                    service.drop_pending_events_for_exiting_conversation(conversation_id);
+                });
+            }
+            if let Ok(status) = result {
+                let _ = external_tx.send(status);
+            }
+        });
+        external_rx
     }
 
     /// Write the inputs to an exchange to stdout.

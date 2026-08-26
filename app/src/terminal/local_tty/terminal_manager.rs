@@ -23,6 +23,7 @@ use warpui::{AppContext, Entity, ModelContext, ModelHandle, SingletonEntity, Vie
 
 use super::event_loop::EventLoop;
 use super::shell::{ShellStarter, ShellStarterSource};
+use super::spawner::{PtySpawnHooks, PtySpawnMode};
 #[cfg(unix)]
 use super::terminal_attributes::TerminalAttributesPoller;
 use super::{mio_channel, recorder};
@@ -36,7 +37,7 @@ use crate::context_chips::prompt::Prompt;
 use crate::features::FeatureFlag;
 use crate::persistence::ModelEvent;
 use crate::send_telemetry_on_executor;
-use crate::server::telemetry::TelemetryEvent;
+use crate::server::telemetry::{PtySpawnMode as TelemetryPtySpawnMode, TelemetryEvent};
 use crate::settings::{DebugSettings, PrivacySettings, SshSettings};
 use crate::terminal::available_shells::{AvailableShell, AvailableShells};
 use crate::terminal::color::List as ColorList;
@@ -70,6 +71,33 @@ use crate::terminal::{
 type PtyController = writeable_pty::PtyController<mio_channel::Sender<Message>>;
 type RemoteServerController =
     writeable_pty::remote_server_controller::RemoteServerController<mio_channel::Sender<Message>>;
+
+struct AppPtySpawnHooks {
+    is_crash_reporting_enabled: bool,
+}
+
+impl PtySpawnHooks for AppPtySpawnHooks {
+    fn before_spawn(&self) {
+        #[cfg(feature = "crash_reporting")]
+        crate::crash_reporting::uninit_cocoa_sentry();
+    }
+
+    fn after_spawn(&self) {
+        if self.is_crash_reporting_enabled {
+            #[cfg(feature = "crash_reporting")]
+            crate::crash_reporting::init_cocoa_sentry();
+        }
+    }
+
+    fn spawned(&self, mode: PtySpawnMode, ctx: &mut AppContext) {
+        let mode = match mode {
+            PtySpawnMode::TerminalServer => TelemetryPtySpawnMode::TerminalServer,
+            PtySpawnMode::FallbackToDirect => TelemetryPtySpawnMode::FallbackToDirect,
+            PtySpawnMode::Direct => TelemetryPtySpawnMode::Direct,
+        };
+        crate::send_telemetry_from_app_ctx!(TelemetryEvent::PtySpawned { mode }, ctx);
+    }
+}
 
 /// Owns a local terminal session: the terminal model, PTY event loop, PTY
 /// controller, and a terminal surface.
@@ -366,11 +394,24 @@ impl<S> TerminalManager<S> {
 
         // This is purely for measuring throughput on WarpDev.
         if FeatureFlag::RecordPtyThroughput.is_enabled() {
-            let auth_state = AuthStateProvider::as_ref(ctx).get();
+            let auth_state = AuthStateProvider::as_ref(ctx).get().clone();
+            let telemetry_executor = Arc::clone(ctx.background_executor());
             recorder::record_pty_throughput(
                 inactive_pty_reads_rx.clone().activate(),
                 model.clone(),
-                auth_state.clone(),
+                |model| {
+                    !model.is_receiving_in_band_command_output()
+                        && model.is_active_block_bootstrapped()
+                },
+                move |max_bytes_per_second| {
+                    send_telemetry_on_executor!(
+                        auth_state,
+                        TelemetryEvent::PtyThroughput {
+                            max_bytes_per_second,
+                        },
+                        telemetry_executor
+                    );
+                },
                 ctx.background_executor().to_owned(),
             );
         }
@@ -823,9 +864,12 @@ impl<S> TerminalManager<S> {
             close_fds: true,
         };
 
+        let hooks = AppPtySpawnHooks {
+            is_crash_reporting_enabled,
+        };
         Pty::new(
             options,
-            is_crash_reporting_enabled,
+            &hooks,
             #[cfg(windows)]
             event_loop_tx,
             ctx,

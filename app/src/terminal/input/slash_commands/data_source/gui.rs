@@ -30,6 +30,7 @@ use crate::settings::{
 use crate::terminal::input::slash_commands::AcceptSlashCommandOrSavedPrompt;
 use crate::terminal::model::session::active_session::ActiveSession;
 use crate::terminal::view::ambient_agent::AmbientAgentViewModel;
+use crate::workspaces::user_workspaces::TeamContextResolver;
 
 pub struct GuiDataSourceArgs {
     pub active_session: ModelHandle<ActiveSession>,
@@ -37,6 +38,9 @@ pub struct GuiDataSourceArgs {
     pub cli_subagent_controller: ModelHandle<CLISubagentController>,
     pub terminal_view_id: EntityId,
     pub ambient_agent_view_model: Option<ModelHandle<AmbientAgentViewModel>>,
+    /// Resolves this data source's terminal surface's window's team context. Minted by the
+    /// owning view at construction via `UserWorkspaces::team_context_resolver`.
+    pub team_context_resolver: TeamContextResolver,
 }
 
 pub struct GuiSlashCommandDataSource {
@@ -66,6 +70,7 @@ impl GuiSlashCommandDataSource {
             cli_subagent_controller,
             terminal_view_id,
             ambient_agent_view_model,
+            team_context_resolver,
         } = args;
 
         subscribe_to_shared_dependencies(
@@ -105,6 +110,7 @@ impl GuiSlashCommandDataSource {
                 active_session,
                 cli_subagent_controller,
                 terminal_view_id,
+                team_context_resolver,
             ),
             agent_view_controller,
             ambient_agent_view_model: None,

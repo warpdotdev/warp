@@ -652,7 +652,7 @@ impl<T: EventLoopSender> PtyController<T> {
     /// If the write corresponds to a command, this also calls
     /// [`LineEditorStatus::did_execute_command()`].
     fn send_write_to_event_loop(&mut self, write: PtyWrite, ctx: &mut ModelContext<Self>) -> bool {
-        let (bytes_to_write, is_for_command, on_write_fn) = match write {
+        let (bytes_to_write, is_for_command, on_write_fn, shell_type_for_split) = match write {
             PtyWrite::Command {
                 command,
                 shell_type,
@@ -666,13 +666,14 @@ impl<T: EventLoopSender> PtyController<T> {
                 )),
                 true,
                 on_write_fn,
+                Some(shell_type),
             ),
             PtyWrite::AgentInput { bytes, mode } => {
                 let decorated_bytes =
                     mode.decorate_bytes(bytes.into_owned(), self.is_bracketed_paste_enabled);
-                (decorated_bytes.into(), false, None)
+                (decorated_bytes.into(), false, None, None)
             }
-            PtyWrite::Bytes { bytes } => (bytes, false, None),
+            PtyWrite::Bytes { bytes } => (bytes, false, None, None),
             PtyWrite::RunNativeShellCompletions(state) => {
                 self.in_flight_native_completions_state = Some(state);
 
@@ -680,7 +681,7 @@ impl<T: EventLoopSender> PtyController<T> {
                 // then wait for an OSC-based signal from the shell before we
                 // send the text that needs to be completed.
                 let bytes = vec![0x19_u8];
-                (bytes.into(), false, None)
+                (bytes.into(), false, None, None)
             }
         };
 
@@ -700,6 +701,14 @@ impl<T: EventLoopSender> PtyController<T> {
                 .update(ctx, |line_editor_status, ctx| {
                     line_editor_status.did_execute_command(ctx)
                 });
+        }
+
+        if let Some(shell_type) = shell_type_for_split
+            && let Some((kill_buffer, rest)) = split_kill_buffer_write(&bytes_to_write, shell_type)
+        {
+            self.send_message_to_event_loop(Message::Input(Cow::Owned(kill_buffer.to_vec())), ctx);
+            self.send_message_to_event_loop(Message::Input(Cow::Owned(rest.to_vec())), ctx);
+            return true;
         }
 
         self.send_message_to_event_loop(Message::Input(bytes_to_write), ctx);
@@ -749,6 +758,31 @@ pub enum PtyControllerEvent {
 
 impl<T: EventLoopSender> Entity for PtyController<T> {
     type Event = PtyControllerEvent;
+}
+
+/// Splits `shell_type`'s kill-buffer chord off the front of `bytes` (the output of
+/// `bytes_to_execute_command`, which prepends it), returning `Some((kill_buffer_bytes, rest))`, or
+/// `None` when there is nothing to split.
+///
+/// Only PowerShell needs this. Its kill-buffer chord is an ESC-prefixed sequence that PSReadLine
+/// can fail to disambiguate when it arrives in the same read as the command text, leaving the
+/// command typed on top of the buffer; writing the chord separately avoids it. The other three
+/// shells use a single unambiguous control byte. The prefix is validated rather than assumed: a
+/// non-matching prefix returns `None` (write whole) so a caller that passes something else is
+/// never mis-cut.
+fn split_kill_buffer_write(bytes: &[u8], shell_type: ShellType) -> Option<(&[u8], &[u8])> {
+    if shell_type != ShellType::PowerShell {
+        return None;
+    }
+    let kill_buffer = shell_type.kill_buffer_bytes();
+    if !bytes.starts_with(kill_buffer) {
+        return None;
+    }
+    let (kill_buffer_bytes, rest) = bytes.split_at(kill_buffer.len());
+    if rest.is_empty() {
+        return None;
+    }
+    Some((kill_buffer_bytes, rest))
 }
 
 /// Returns the shell-dependent array of bytes to be written to the PTY to execute `command`.

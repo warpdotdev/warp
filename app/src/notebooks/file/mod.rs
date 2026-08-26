@@ -1042,7 +1042,7 @@ impl View for FileNotebookView {
                     ctx.dispatch_typed_action(FileNotebookAction::Focus);
                     DispatchEventResult::StopPropagation
                 })
-                .on_right_mouse_down(move |ctx, _, position| {
+                .on_right_mouse_down(move |ctx, _, position, _| {
                     show_rich_editor_context_menu::<FileNotebookAction>(
                         ctx,
                         position,

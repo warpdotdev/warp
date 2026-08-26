@@ -18,12 +18,13 @@ use std::ops::{AddAssign, Deref, DerefMut, Range};
 use std::sync::Arc;
 use std::time::Duration;
 
-// Re-export types that were moved to the ai crate.
+// Re-export types that were moved to the ai and ai_types crates.
 pub use ai::agent::action::*;
 pub use ai::agent::action_result::*;
 use ai::agent::orchestration_config::{OrchestrationConfig, OrchestrationConfigStatus};
 pub use ai::agent::{AIAgentCitation, FileLocations};
 use ai::skills::ParsedSkill;
+pub use ai_types::{AIAgentActionId, EntrypointType, PassiveSuggestionTriggerType};
 use chrono::{DateTime, Local, TimeDelta};
 use comment::ReviewComment;
 use derivative::Derivative;
@@ -1034,43 +1035,6 @@ pub struct SuggestedAgentModeWorkflow {
     pub name: String,
     pub prompt: String,
     pub logging_id: SuggestedLoggingId,
-}
-
-/// A ID for an AI action generated as part of an [`AIAgentOutput`].
-///
-/// The internal ID itself should be opaque to all callers. This ID may be relayed back to the AI with
-/// the `AIAgentActionResult` from the action.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct AIAgentActionId(String);
-
-impl From<String> for AIAgentActionId {
-    fn from(value: String) -> Self {
-        AIAgentActionId(value)
-    }
-}
-
-impl From<AIAgentActionId> for String {
-    fn from(value: AIAgentActionId) -> Self {
-        value.0
-    }
-}
-
-impl Display for AIAgentActionId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.0.fmt(f)
-    }
-}
-
-impl From<crate::persistence::model::AIAgentActionId> for AIAgentActionId {
-    fn from(value: crate::persistence::model::AIAgentActionId) -> Self {
-        Self(value.0)
-    }
-}
-
-impl From<AIAgentActionId> for crate::persistence::model::AIAgentActionId {
-    fn from(value: AIAgentActionId) -> Self {
-        crate::persistence::model::AIAgentActionId(value.0)
-    }
 }
 
 /// An "action" included in an AI output.
@@ -2225,7 +2189,13 @@ pub struct MCPServer {
 }
 
 /// Contains context that may be attached to a user query.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+///
+/// Serialization derives the externally tagged form for the named variants,
+/// with `Block` serialized untagged as a bare [`BlockContext`] object.
+/// Deserialization is hand-written below and must accept exactly those
+/// forms; it avoids the generic buffering machinery that serde generates for
+/// enums that mix tagged and untagged variants.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub enum AIAgentContext {
     Directory {
         pwd: Option<String>,
@@ -2282,19 +2252,14 @@ pub enum AIAgentContext {
     /// Information about the GitHub pull request associated with the current branch.
     PullRequest {
         /// The pull request number.
-        #[serde(default, deserialize_with = "deserialize_pull_request_number")]
         number: i32,
         /// The pull request state (for example, `OPEN`, `MERGED`, or `CLOSED`).
-        #[serde(default)]
         state: String,
         /// Whether the pull request is marked as draft.
-        #[serde(default)]
         draft: bool,
         /// The pull request's base branch.
-        #[serde(default)]
         base_branch: String,
         /// The full URL of the pull request (e.g. "https://github.com/owner/repo/pull/123").
-        #[serde(default)]
         url: String,
     },
 
@@ -2306,6 +2271,131 @@ pub enum AIAgentContext {
 
     #[serde(untagged)]
     Block(Box<BlockContext>),
+}
+
+/// The tagged variants of [`AIAgentContext`], used by its hand-written
+/// `Deserialize` implementation. The variant and field shapes must stay
+/// identical to [`AIAgentContext`] so the serialized forms match.
+#[derive(Deserialize)]
+enum AIAgentContextTagged {
+    Directory {
+        pwd: Option<String>,
+        home_dir: Option<String>,
+        are_file_symbols_indexed: bool,
+    },
+    SelectedText(String),
+    ExecutionEnvironment(WarpAiExecutionContext),
+    CurrentTime {
+        current_time: DateTime<Local>,
+    },
+    Image(ImageContext),
+    Codebase {
+        path: String,
+        name: String,
+    },
+    ProjectRules {
+        root_path: String,
+        active_rules: Vec<FileContext>,
+        additional_rule_paths: Vec<String>,
+    },
+    File(FileContext),
+    Git {
+        head: String,
+        branch: Option<String>,
+    },
+    Repository {
+        name: String,
+        owner: Option<String>,
+        host: Option<String>,
+    },
+    PullRequest {
+        #[serde(default, deserialize_with = "deserialize_pull_request_number")]
+        number: i32,
+        #[serde(default)]
+        state: String,
+        #[serde(default)]
+        draft: bool,
+        #[serde(default)]
+        base_branch: String,
+        #[serde(default)]
+        url: String,
+    },
+    Skills {
+        skills: Vec<SkillDescriptor>,
+    },
+}
+
+impl From<AIAgentContextTagged> for AIAgentContext {
+    fn from(tagged: AIAgentContextTagged) -> Self {
+        match tagged {
+            AIAgentContextTagged::Directory {
+                pwd,
+                home_dir,
+                are_file_symbols_indexed,
+            } => AIAgentContext::Directory {
+                pwd,
+                home_dir,
+                are_file_symbols_indexed,
+            },
+            AIAgentContextTagged::SelectedText(text) => AIAgentContext::SelectedText(text),
+            AIAgentContextTagged::ExecutionEnvironment(context) => {
+                AIAgentContext::ExecutionEnvironment(context)
+            }
+            AIAgentContextTagged::CurrentTime { current_time } => {
+                AIAgentContext::CurrentTime { current_time }
+            }
+            AIAgentContextTagged::Image(image) => AIAgentContext::Image(image),
+            AIAgentContextTagged::Codebase { path, name } => {
+                AIAgentContext::Codebase { path, name }
+            }
+            AIAgentContextTagged::ProjectRules {
+                root_path,
+                active_rules,
+                additional_rule_paths,
+            } => AIAgentContext::ProjectRules {
+                root_path,
+                active_rules,
+                additional_rule_paths,
+            },
+            AIAgentContextTagged::File(file) => AIAgentContext::File(file),
+            AIAgentContextTagged::Git { head, branch } => AIAgentContext::Git { head, branch },
+            AIAgentContextTagged::Repository { name, owner, host } => {
+                AIAgentContext::Repository { name, owner, host }
+            }
+            AIAgentContextTagged::PullRequest {
+                number,
+                state,
+                draft,
+                base_branch,
+                url,
+            } => AIAgentContext::PullRequest {
+                number,
+                state,
+                draft,
+                base_branch,
+                url,
+            },
+            AIAgentContextTagged::Skills { skills } => AIAgentContext::Skills { skills },
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for AIAgentContext {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        // Buffer the input into one JSON value, then try the tagged variants
+        // and fall back to the untagged Block variant. This matches the
+        // behavior of serde's derive for mixed tagged and untagged enums.
+        let value = serde_json::Value::deserialize(deserializer)?;
+        match AIAgentContextTagged::deserialize(&value) {
+            Ok(tagged) => Ok(tagged.into()),
+            Err(tagged_error) => BlockContext::deserialize(&value)
+                .map(|block| AIAgentContext::Block(Box::new(block)))
+                .map_err(|_| serde::de::Error::custom(tagged_error)),
+        }
+    }
 }
 
 fn deserialize_pull_request_number<'de, D>(deserializer: D) -> Result<i32, D::Error>
@@ -2375,7 +2465,12 @@ pub enum DocumentContentAttachmentSource {
     PlanEdited,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+/// Serialization derives the externally tagged form for the named variants,
+/// with `Block` serialized untagged as a bare [`BlockContext`] object.
+/// Deserialization is hand-written below and must accept exactly those
+/// forms; it avoids the generic buffering machinery that serde generates for
+/// enums that mix tagged and untagged variants.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub enum AIAgentAttachment {
     PlainText(String),
     DocumentContent {
@@ -2418,6 +2513,118 @@ pub enum AIAgentAttachment {
     },
     #[serde(untagged)]
     Block(BlockContext),
+}
+
+/// The tagged variants of [`AIAgentAttachment`], used by its hand-written
+/// `Deserialize` implementation. The variant and field shapes must stay
+/// identical to [`AIAgentAttachment`] so the serialized forms match.
+#[derive(Deserialize)]
+enum AIAgentAttachmentTagged {
+    PlainText(String),
+    DocumentContent {
+        document_id: String,
+        content: String,
+        source: DocumentContentAttachmentSource,
+        line_range: Option<Range<LineCount>>,
+    },
+    DriveObject {
+        uid: String,
+        payload: Option<DriveObjectPayload>,
+    },
+    DiffHunk {
+        file_path: String,
+        line_range: Range<LineCount>,
+        diff_content: String,
+        lines_added: u32,
+        lines_removed: u32,
+        current: Option<CurrentHead>,
+        base: DiffBase,
+    },
+    DiffSet {
+        file_diffs: HashMap<String, Vec<DiffSetHunk>>,
+        current: Option<CurrentHead>,
+        base: DiffBase,
+    },
+    FilePathReference {
+        file_id: String,
+        file_name: String,
+        file_path: String,
+    },
+}
+
+impl From<AIAgentAttachmentTagged> for AIAgentAttachment {
+    fn from(tagged: AIAgentAttachmentTagged) -> Self {
+        match tagged {
+            AIAgentAttachmentTagged::PlainText(text) => AIAgentAttachment::PlainText(text),
+            AIAgentAttachmentTagged::DocumentContent {
+                document_id,
+                content,
+                source,
+                line_range,
+            } => AIAgentAttachment::DocumentContent {
+                document_id,
+                content,
+                source,
+                line_range,
+            },
+            AIAgentAttachmentTagged::DriveObject { uid, payload } => {
+                AIAgentAttachment::DriveObject { uid, payload }
+            }
+            AIAgentAttachmentTagged::DiffHunk {
+                file_path,
+                line_range,
+                diff_content,
+                lines_added,
+                lines_removed,
+                current,
+                base,
+            } => AIAgentAttachment::DiffHunk {
+                file_path,
+                line_range,
+                diff_content,
+                lines_added,
+                lines_removed,
+                current,
+                base,
+            },
+            AIAgentAttachmentTagged::DiffSet {
+                file_diffs,
+                current,
+                base,
+            } => AIAgentAttachment::DiffSet {
+                file_diffs,
+                current,
+                base,
+            },
+            AIAgentAttachmentTagged::FilePathReference {
+                file_id,
+                file_name,
+                file_path,
+            } => AIAgentAttachment::FilePathReference {
+                file_id,
+                file_name,
+                file_path,
+            },
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for AIAgentAttachment {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        // Buffer the input into one JSON value, then try the tagged variants
+        // and fall back to the untagged Block variant. This matches the
+        // behavior of serde's derive for mixed tagged and untagged enums.
+        let value = serde_json::Value::deserialize(deserializer)?;
+        match AIAgentAttachmentTagged::deserialize(&value) {
+            Ok(tagged) => Ok(tagged.into()),
+            Err(tagged_error) => BlockContext::deserialize(&value)
+                .map(AIAgentAttachment::Block)
+                .map_err(|_| serde::de::Error::custom(tagged_error)),
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -2549,37 +2756,6 @@ pub enum StaticQueryType {
     Deploy,
     SomethingElse,
     EvaluationSuite,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[allow(clippy::enum_variant_names)]
-pub enum EntrypointType {
-    PromptSuggestion {
-        is_static: bool,
-        is_coding: bool,
-    },
-    ZeroStateAgentModePromptSuggestion,
-    InitProjectRules,
-    TriggerPassiveSuggestion {
-        trigger: Option<PassiveSuggestionTriggerType>,
-    },
-    UserInitiated,
-    AgentInitiated,
-    SharedSession,
-    CloneRepository,
-    ResumeConversation,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[allow(clippy::enum_variant_names)]
-pub enum PassiveSuggestionTriggerType {
-    /// Used for unit test generation.
-    FilesChanged,
-    /// Used for unit test generation.
-    CommandRun,
-
-    ShellCommandCompleted,
-    AgentResponseCompleted,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]

@@ -24,6 +24,7 @@ use crate::ai::blocklist::{
 use crate::ai::paths::host_native_absolute_path;
 use crate::auth::auth_state::AuthStateProvider;
 use crate::server::server_api::ServerApiProvider;
+use crate::server::team_scope::RequestTeamScope;
 use crate::settings::AISettings;
 use crate::terminal::event::{BlockType, UserBlockCompleted};
 use crate::terminal::model::session::active_session::ActiveSession;
@@ -36,6 +37,7 @@ cfg_if::cfg_if! {
     if #[cfg(feature = "local_fs")] {
         use std::{path::PathBuf, time::Duration};
         use crate::ai::blocklist::{read_local_file_context, BlocklistAIPermissions};
+        use crate::workspaces::user_workspaces::TeamScope;
         use warp_terminal::shell::ShellLaunchData;
         use crate::util::link_detection::{detect_file_paths, DetectedLinkType};
         use crate::util::openable_file_type::is_binary_file;
@@ -196,10 +198,19 @@ impl PassiveSuggestionsModel {
         let server_api = ServerApiProvider::as_ref(ctx).get();
         let (cancellation_tx, cancellation_rx) = futures::channel::oneshot::channel();
 
+        // Resolved before spawning, so a mid-flight team switch cannot re-attribute the request.
+        let team_scope =
+            RequestTeamScope::from_scope(&self.ai_controller.as_ref(ctx).team_context(ctx));
+
         let stream_handle = ctx.spawn(
             async move {
-                let stream_result =
-                    generate_multi_agent_output(server_api, request_params, cancellation_rx).await;
+                let stream_result = generate_multi_agent_output(
+                    server_api,
+                    request_params,
+                    team_scope,
+                    cancellation_rx,
+                )
+                .await;
                 extract_suggestion_from_stream(stream_result).await
             },
             move |me, result, ctx| {
@@ -547,10 +558,12 @@ impl PassiveSuggestionsModel {
                     }
                 },
                 move |me, candidate_paths, ctx| {
+                    let scope = me.ai_controller.as_ref(ctx).team_context(ctx);
                     let Some(file_locations) = get_allowed_file_locations_for_paths(
                         candidate_paths,
                         conversation_id.as_ref(),
                         terminal_view_id,
+                        &scope,
                         ctx,
                     ) else {
                         me.pending_file_read_handle = None;
@@ -926,6 +939,7 @@ fn get_allowed_file_locations_for_paths(
     paths: Vec<PathBuf>,
     conversation_id: Option<&AIConversationId>,
     terminal_view_id: EntityId,
+    scope: &impl TeamScope,
     ctx: &AppContext,
 ) -> Option<Vec<FileLocations>> {
     if paths.is_empty() {
@@ -933,7 +947,13 @@ fn get_allowed_file_locations_for_paths(
     }
 
     if !BlocklistAIPermissions::as_ref(ctx)
-        .can_read_files(conversation_id, paths.clone(), Some(terminal_view_id), ctx)
+        .can_read_files(
+            conversation_id,
+            paths.clone(),
+            Some(terminal_view_id),
+            scope,
+            ctx,
+        )
         .is_allowed()
     {
         return None;

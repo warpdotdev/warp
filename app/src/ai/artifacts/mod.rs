@@ -71,39 +71,66 @@ pub enum Artifact {
     },
 }
 
+/// The tag names of [`Artifact`], used for unknown-variant errors.
+const ARTIFACT_TYPES: &[&str] = &[
+    "PLAN",
+    "PULL_REQUEST",
+    "EXTERNAL_REFERENCE",
+    "SCREENSHOT",
+    "FILE",
+];
+
+/// The adjacently tagged envelope shape of a serialized [`Artifact`]. The
+/// `data` payload is parsed once the tag is known.
 #[derive(serde::Deserialize)]
-#[serde(tag = "artifact_type", content = "data")]
-enum ArtifactHelper {
-    #[serde(rename = "PLAN")]
-    Plan {
-        document_uid: String,
-        notebook_uid: Option<NotebookId>,
-        title: Option<String>,
-    },
-    #[serde(rename = "PULL_REQUEST")]
-    PullRequest { url: String, branch: String },
-    #[serde(rename = "EXTERNAL_REFERENCE")]
-    ExternalReference {
-        reference_type: String,
-        url: String,
-        title: Option<String>,
-        metadata: Option<serde_json::Value>,
-    },
-    #[serde(rename = "SCREENSHOT")]
-    Screenshot {
-        artifact_uid: String,
-        mime_type: String,
-        description: Option<String>,
-    },
-    #[serde(rename = "FILE")]
-    File {
-        artifact_uid: String,
-        filepath: String,
-        filename: String,
-        mime_type: String,
-        description: Option<String>,
-        size_bytes: Option<i32>,
-    },
+struct ArtifactEnvelope {
+    artifact_type: String,
+    data: serde_json::Value,
+}
+
+#[derive(serde::Deserialize)]
+struct PlanData {
+    document_uid: String,
+    notebook_uid: Option<NotebookId>,
+    title: Option<String>,
+}
+
+#[derive(serde::Deserialize)]
+struct PullRequestData {
+    url: String,
+    branch: String,
+}
+
+#[derive(serde::Deserialize)]
+struct ExternalReferenceData {
+    reference_type: String,
+    url: String,
+    title: Option<String>,
+    metadata: Option<serde_json::Value>,
+}
+
+#[derive(serde::Deserialize)]
+struct ScreenshotData {
+    artifact_uid: String,
+    mime_type: String,
+    description: Option<String>,
+}
+
+#[derive(serde::Deserialize)]
+struct FileData {
+    artifact_uid: String,
+    filepath: String,
+    filename: String,
+    mime_type: String,
+    description: Option<String>,
+    size_bytes: Option<i32>,
+}
+
+/// Parses a buffered JSON value into an artifact payload type.
+fn parse_artifact_data<T: serde::de::DeserializeOwned, E: serde::de::Error>(
+    data: serde_json::Value,
+) -> Result<T, E> {
+    serde_json::from_value(data).map_err(E::custom)
 }
 
 impl<'de> serde::Deserialize<'de> for Artifact {
@@ -111,18 +138,23 @@ impl<'de> serde::Deserialize<'de> for Artifact {
     where
         D: serde::Deserializer<'de>,
     {
-        let helper = ArtifactHelper::deserialize(deserializer)?;
-        Ok(match helper {
-            ArtifactHelper::Plan {
-                document_uid,
-                notebook_uid,
-                title,
-            } => Artifact::Plan {
-                document_uid,
-                notebook_uid,
-                title,
-            },
-            ArtifactHelper::PullRequest { url, branch } => {
+        let envelope = ArtifactEnvelope::deserialize(deserializer)?;
+        Ok(match envelope.artifact_type.as_str() {
+            "PLAN" => {
+                let PlanData {
+                    document_uid,
+                    notebook_uid,
+                    title,
+                } = parse_artifact_data::<_, D::Error>(envelope.data)?;
+                Artifact::Plan {
+                    document_uid,
+                    notebook_uid,
+                    title,
+                }
+            }
+            "PULL_REQUEST" => {
+                let PullRequestData { url, branch } =
+                    parse_artifact_data::<_, D::Error>(envelope.data)?;
                 let (repo, number) = parse_github_pr_url(&url).unzip();
                 Artifact::PullRequest {
                     url,
@@ -131,41 +163,53 @@ impl<'de> serde::Deserialize<'de> for Artifact {
                     number,
                 }
             }
-            ArtifactHelper::ExternalReference {
-                reference_type,
-                url,
-                title,
-                metadata,
-            } => Artifact::ExternalReference {
-                reference_type,
-                url,
-                title,
-                metadata,
-            },
-            ArtifactHelper::Screenshot {
-                artifact_uid,
-                mime_type,
-                description,
-            } => Artifact::Screenshot {
-                artifact_uid,
-                mime_type,
-                description,
-            },
-            ArtifactHelper::File {
-                artifact_uid,
-                filepath,
-                filename,
-                mime_type,
-                description,
-                size_bytes,
-            } => Artifact::File {
-                artifact_uid,
-                filepath,
-                filename,
-                mime_type,
-                description,
-                size_bytes,
-            },
+            "EXTERNAL_REFERENCE" => {
+                let ExternalReferenceData {
+                    reference_type,
+                    url,
+                    title,
+                    metadata,
+                } = parse_artifact_data::<_, D::Error>(envelope.data)?;
+                Artifact::ExternalReference {
+                    reference_type,
+                    url,
+                    title,
+                    metadata,
+                }
+            }
+            "SCREENSHOT" => {
+                let ScreenshotData {
+                    artifact_uid,
+                    mime_type,
+                    description,
+                } = parse_artifact_data::<_, D::Error>(envelope.data)?;
+                Artifact::Screenshot {
+                    artifact_uid,
+                    mime_type,
+                    description,
+                }
+            }
+            "FILE" => {
+                let FileData {
+                    artifact_uid,
+                    filepath,
+                    filename,
+                    mime_type,
+                    description,
+                    size_bytes,
+                } = parse_artifact_data::<_, D::Error>(envelope.data)?;
+                Artifact::File {
+                    artifact_uid,
+                    filepath,
+                    filename,
+                    mime_type,
+                    description,
+                    size_bytes,
+                }
+            }
+            unknown => {
+                return Err(serde::de::Error::unknown_variant(unknown, ARTIFACT_TYPES));
+            }
         })
     }
 }

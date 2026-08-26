@@ -31,6 +31,7 @@ use crate::ai_assistant::execution_context::WarpAiExecutionContext;
 use crate::network::NetworkStatus;
 use crate::safe_warn;
 use crate::server::server_api::ServerApiProvider;
+use crate::server::team_scope::RequestTeamScope;
 use crate::server::telemetry::PromptSuggestionFallbackReason;
 use crate::settings::AISettings;
 use crate::terminal::event::{BlockType, UserBlockCompleted};
@@ -297,8 +298,14 @@ impl PassiveSuggestionsModel {
         };
 
         let server_api = ServerApiProvider::handle(ctx).as_ref(ctx).get();
-        let request_future =
-            async move { server_api.generate_am_query_suggestions(&request).await };
+        // Resolved before spawning, so a mid-flight team switch cannot re-attribute the request.
+        let team_scope =
+            RequestTeamScope::from_scope(&self.ai_controller.as_ref(ctx).team_context(ctx));
+        let request_future = async move {
+            server_api
+                .generate_am_query_suggestions(&request, team_scope)
+                .await
+        };
 
         self.prompt_suggestions_future_handle =
             Some(ctx.spawn(request_future, move |me, result, ctx| {
@@ -402,6 +409,7 @@ impl PassiveSuggestionsModel {
             .cloned();
         let shell = self.active_session.as_ref(ctx).shell_launch_data(ctx);
 
+        let scope = self.ai_controller.as_ref(ctx).team_context(ctx);
         let can_read_file = BlocklistAIPermissions::as_ref(ctx)
             .can_read_files(
                 None,
@@ -416,6 +424,7 @@ impl PassiveSuggestionsModel {
                     })
                     .collect(),
                 Some(self.terminal_view_id),
+                &scope,
                 ctx,
             )
             .is_allowed();

@@ -7,37 +7,122 @@ license.workspace = true
 
 [dependencies]
 anyhow.workspace = true
+async-broadcast.workspace = true
+async-channel.workspace = true
+base64.workspace = true
+bimap = "0.6.2"
+bincode.workspace = true
 bitflags.workspace = true
 bitflags-serde-legacy.workspace = true
+bounded-vec-deque.workspace = true
+byte-unit = "5.1.4"
 cfg-if.workspace = true
 channel_versions.workspace = true
+command.workspace = true
 command-corrections.workspace = true
 enum-iterator.workspace = true
+flate2 = "1.0.17"
+futures.workspace = true
+futures-lite.workspace = true
 get-size.workspace = true
+hex.workspace = true
+image.workspace = true
+instant.workspace = true
 itertools.workspace = true
 lazy_static.workspace = true
+libc.workspace = true
 log.workspace = true
+memo-map.workspace = true
+ordered-float.workspace = true
+parking_lot.workspace = true
 pathfinder_color.workspace = true
+pathfinder_geometry.workspace = true
+rand.workspace = true
+rangemap.workspace = true
 regex.workspace = true
+regex-automata = "0.4.6"
+sentry = { workspace = true, optional = true }
 serde.workspace = true
+serde_json.workspace = true
 session-sharing-protocol.workspace = true
+shellexpand.workspace = true
+smallvec.workspace = true
 smol_str.workspace = true
 string-offset.workspace = true
 static_assertions.workspace = true
 thiserror.workspace = true
 typed-path.workspace = true
+unicode-general-category.workspace = true
 unicode-width.workspace = true
+urlocator.workspace = true
 uuid.workspace = true
+vec1.workspace = true
 version-compare.workspace = true
 vte.workspace = true
+warp_cli.workspace = true
 warp_completer.workspace = true
+warp_assets.workspace = true
 warp_core.workspace = true
 warp_errors.workspace = true
+warp_isolation_platform.workspace = true
 warp_util.workspace = true
 warpui_core.workspace = true
 
+[target.'cfg(not(target_family = "wasm"))'.dependencies]
+async-io.workspace = true
+gethostname = "1.1.0"
+mio = { version = "1.1.1", features = ["os-poll", "os-ext"] }
+
+[target.'cfg(unix)'.dependencies]
+cvt = "0.1.1"
+nix = { workspace = true, features = [
+    "fs",
+    "hostname",
+    "resource",
+    "signal",
+    "socket",
+    "term",
+    "uio",
+    "user",
+    "mman",
+] }
+signal-hook = "0.3.17"
+signal-hook-mio = { version = "0.2.4", features = ["support-v1_0"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+bytemuck.workspace = true
+windows = { workspace = true, features = [
+    "Wdk_Foundation",
+    "Wdk_Storage_FileSystem",
+    "Win32_Security",
+    "Win32_Storage",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Console",
+    "Win32_System_Diagnostics_Debug",
+    "Win32_System_Environment",
+    "Win32_System_IO",
+    "Win32_System_ProcessStatus",
+    "Win32_System_SystemInformation",
+    "Win32_System_Threading",
+    "Win32_System_LibraryLoader",
+    "Win32_System_WindowsProgramming",
+    "Win32_UI_WindowsAndMessaging",
+] }
+windows-registry.workspace = true
+windows-result.workspace = true
+winreg.workspace = true
+
 [dev-dependencies]
+serial_test = "0.8.0"
+tempfile.workspace = true
 unicode-segmentation = "1.11.0"
+warp_core = { workspace = true, features = ["test-util"] }
 
 [features]
-test-util = []
+crash_reporting = ["dep:sentry", "warp_errors/crash_reporting"]
+integration_tests = ["warp_core/integration_tests", "warpui_core/integration_tests"]
+local_fs = ["warp_core/local_fs"]
+local_tty = []
+remote_tty = []
+test-util = ["warp_core/test-util", "warpui_core/test-util"]
+tui = ["warpui_core/tui"]

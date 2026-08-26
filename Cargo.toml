@@ -30,6 +30,7 @@ publish = false
 [workspace.dependencies]
 # Local workspace crates. This lets us reference them in other crates without specifying a path.
 ai = { path = "crates/ai" }
+ai_types = { path = "crates/ai_types" }
 app-installation-detection = { path = "crates/app-installation-detection" }
 asset_cache = { path = "crates/asset_cache" }
 asset_macro = { path = "crates/asset_macro" }
@@ -390,7 +391,7 @@ dirs = "6.0.0"
 rayon = "1.10.0"
 sha2 = "0.10"
 shellexpand = "3.1.1"
-warp-command-signatures = { git = "https://github.com/warpdotdev/command-signatures.git", rev = "ac69f9b00c48d6de229ba5905056d9302da1c5c4", default-features = false }
+warp-command-signatures = { git = "https://github.com/warpdotdev/command-signatures.git", rev = "d3725aa42375cc229699c87be2b38f9d9f07080f", default-features = false }
 winit = { git = "https://github.com/warpdotdev/winit.git", rev = "a4e0ecb5f9626ccac9445a73dc28354b52423abc" }
 x11rb = "0.13.0"
 mockito = "1.7.0"
@@ -507,7 +508,10 @@ inherits = "release-lto-debug_assertions"
 [profile.release-cli]
 inherits = "release-lto"
 opt-level = "s"
-codegen-units = 1
+# 4 (not the default 16, and not 1) roughly halves build time versus codegen-units=1 for ~4%
+# larger stripped/gzipped binaries. This profile already uses thin LTO, which does most of the
+# cross-crate size optimization, so 1 was paying a lot of compile time for little extra size.
+codegen-units = 4
 
 # A custom CLI release-like profile that forces debug assertions on, used for
 # dev/local channel CLI bundles.

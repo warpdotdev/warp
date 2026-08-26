@@ -27,6 +27,8 @@ use crate::ai::agent_sdk::driver::{
     terminal::TerminalDriver,
 };
 #[cfg(not(target_family = "wasm"))]
+use crate::ai::agent_sdk::environment_snapshot::EnvironmentSnapshotReporter;
+#[cfg(not(target_family = "wasm"))]
 use crate::ai::agent_sdk::setup_observability::SetupClientEventReporter;
 #[cfg(not(target_family = "wasm"))]
 use crate::ai::cloud_environments::CloudAmbientAgentEnvironment;
@@ -246,10 +248,11 @@ impl TerminalView {
         let terminal_driver = TerminalDriver::create_from_existing_view(terminal_view.clone(), ctx);
         // Local Docker sandbox tabs are not backed by an Oz run ID, so setup event reporting is
         // intentionally disabled for this environment preparation path.
-        let setup_events = SetupClientEventReporter::noop(
-            ServerApiProvider::as_ref(ctx).get_ai_client().clone(),
-            ctx.background_executor().clone(),
-        );
+        let ai_client = ServerApiProvider::as_ref(ctx).get_ai_client().clone();
+        let background = ctx.background_executor();
+        let setup_events = SetupClientEventReporter::noop(ai_client.clone(), background.clone());
+        let environment_snapshot_reporter =
+            EnvironmentSnapshotReporter::noop(ai_client, background.clone());
 
         let spawner = terminal_driver.update(ctx, |_, ctx| ctx.spawner());
         let sync_future = UpdateManager::as_ref(ctx).initial_load_complete();
@@ -306,6 +309,7 @@ impl TerminalView {
                                 false,
                             ),
                             setup_events,
+                            environment_snapshot_reporter,
                             ctx,
                         )
                     })

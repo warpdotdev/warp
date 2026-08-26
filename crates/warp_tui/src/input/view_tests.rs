@@ -2231,6 +2231,7 @@ fn multiline_paste_emits_once_and_fallback_inserts_without_submitting() {
                 TuiInputViewEvent::AcceptedSlashCommand(_)
                 | TuiInputViewEvent::AcceptedConversation(_)
                 | TuiInputViewEvent::AcceptedModel(_)
+                | TuiInputViewEvent::AcceptedTeam(_)
                 | TuiInputViewEvent::AcceptedMcp(_)
                 | TuiInputViewEvent::AcceptedMcpInstall(_)
                 | TuiInputViewEvent::AcceptedPromptAndCommandHistory { .. }

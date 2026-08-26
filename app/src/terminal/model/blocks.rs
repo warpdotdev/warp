@@ -996,7 +996,7 @@ impl BlockList {
                 .push(BlockHeightItem::Block(active_block_height));
         }
 
-        self.event_proxy.send_terminal_event(TerminalClear);
+        self.event_proxy.send_app_event(TerminalClear);
     }
 
     #[cfg(feature = "local_fs")]
@@ -1997,7 +1997,7 @@ impl BlockList {
                 block.mark_visible_bootstrap_block_event_sent();
             }
             self.event_proxy
-                .send_terminal_event(TerminalEvent::VisibleBootstrapBlock);
+                .send_app_event(TerminalEvent::VisibleBootstrapBlock);
         }
     }
 
@@ -3007,7 +3007,7 @@ impl BlockList {
         self.update_live_block_height(background_block_index);
 
         self.event_proxy
-            .send_terminal_event(TerminalEvent::BackgroundBlockStarted);
+            .send_app_event(TerminalEvent::BackgroundBlockStarted);
     }
 
     /// Initializes a [`BlockSize`] for a new block
@@ -3245,7 +3245,7 @@ impl BlockList {
         self.update_active_block_height();
 
         self.event_proxy
-            .send_terminal_event(AfterBlockCompleted(AfterBlockCompletedEvent {
+            .send_app_event(AfterBlockCompleted(AfterBlockCompletedEvent {
                 command_finished_to_precmd_delay: None,
                 block_type: BlockType::Restored,
                 num_secrets_obfuscated: self.active_block().num_secrets_obfuscated(),
@@ -3379,7 +3379,7 @@ impl BlockList {
             self.send_after_block_completed_event(previous_block, block_finished_to_precmd_delay);
         } else {
             self.event_proxy
-                .send_terminal_event(TerminalEvent::BootstrapPrecmdDone);
+                .send_app_event(TerminalEvent::BootstrapPrecmdDone);
         }
     }
 
@@ -3405,7 +3405,7 @@ impl BlockList {
     fn send_after_block_completed_event(&self, finished_block: &Block, delay: Option<Duration>) {
         let block_type = finished_block.into();
         self.event_proxy
-            .send_terminal_event(AfterBlockCompleted(AfterBlockCompletedEvent {
+            .send_app_event(AfterBlockCompleted(AfterBlockCompletedEvent {
                 command_finished_to_precmd_delay: delay,
                 block_type,
                 num_secrets_obfuscated: finished_block.num_secrets_obfuscated(),
@@ -3432,16 +3432,15 @@ impl BlockList {
                 // This is similar to send_after_block_completed_event, but we can't
                 // call it because background_block mutably borrows self.
                 let block_type = background_block.into();
-                self.event_proxy.send_terminal_event(AfterBlockCompleted(
-                    AfterBlockCompletedEvent {
+                self.event_proxy
+                    .send_app_event(AfterBlockCompleted(AfterBlockCompletedEvent {
                         command_finished_to_precmd_delay: None,
                         block_type,
                         num_secrets_obfuscated: num_secrets_obfuscated.unwrap_or_default(),
                         // Background blocks are not tracked as cloud workflow executions.
                         cloud_workflow_id: None,
                         cloud_env_var_collection_id: None,
-                    },
-                ));
+                    }));
             }
 
             // Now that the block is no longer active, its height may have changed.

@@ -34,7 +34,9 @@ use crate::terminal::input::slash_command_model::{
 use crate::terminal::input::slash_commands::AcceptSlashCommandOrSavedPrompt;
 use crate::terminal::model::session::SessionType;
 use crate::terminal::model::session::active_session::{ActiveSession, ActiveSessionEvent};
-use crate::workspaces::user_workspaces::{UserWorkspaces, UserWorkspacesEvent};
+use crate::workspaces::user_workspaces::{
+    TeamContext, TeamContextResolver, UserWorkspaces, UserWorkspacesEvent,
+};
 
 /// Event emitted when the set of active slash commands changes.
 #[derive(Debug, Clone, Copy)]
@@ -172,12 +174,16 @@ pub struct SlashCommandDataSourceState {
     terminal_view_id: EntityId,
     active_commands_by_id: HashMap<SlashCommandId, StaticCommand>,
     active_repo_root: Option<PathBuf>,
+    /// Resolves the team context of the window this data source's terminal surface belongs to,
+    /// minted by that surface at construction. See [`SlashCommandDataSource::team_context`].
+    team_context_resolver: TeamContextResolver,
 }
 impl SlashCommandDataSourceState {
     pub(super) fn new(
         active_session: ModelHandle<ActiveSession>,
         cli_subagent_controller: ModelHandle<CLISubagentController>,
         terminal_view_id: EntityId,
+        team_context_resolver: TeamContextResolver,
     ) -> Self {
         Self {
             active_session,
@@ -185,6 +191,7 @@ impl SlashCommandDataSourceState {
             terminal_view_id,
             active_commands_by_id: HashMap::new(),
             active_repo_root: None,
+            team_context_resolver,
         }
     }
 }
@@ -205,6 +212,12 @@ pub trait SlashCommandDataSource {
 
     fn terminal_view_id(&self) -> EntityId {
         self.state().terminal_view_id
+    }
+
+    /// The team context of the window this data source's terminal surface belongs to. Resolved
+    /// on demand so it follows the surface if it is ever moved between windows.
+    fn team_context<'a>(&self, app: &'a AppContext) -> TeamContext<'a> {
+        (self.state().team_context_resolver)(app)
     }
 
     fn active_commands(&self) -> impl Iterator<Item = (&SlashCommandId, &StaticCommand)> {
@@ -420,12 +433,15 @@ pub trait SlashCommandDataSource {
 
     fn common_command_gates(&self, ctx: &AppContext) -> CommonCommandGates {
         let ai_settings = AISettings::as_ref(ctx);
-        // Hide /host when no default host is configured (env var or workspace setting).
+        // Hide /host when no default host is configured (env var or the window's own team
+        // setting), matching the host the command itself resolves when it runs.
         let has_default_host = std::env::var("WARP_CLOUD_MODE_DEFAULT_HOST")
             .ok()
             .filter(|s| !s.is_empty())
             .is_some()
-            || UserWorkspaces::as_ref(ctx).default_host_slug().is_some();
+            || UserWorkspaces::as_ref(ctx)
+                .default_host_slug(&self.team_context(ctx))
+                .is_some();
         CommonCommandGates {
             is_orchestration_enabled: ai_settings.is_orchestration_enabled(ctx),
             is_cloud_handoff_enabled: ai_settings.is_cloud_handoff_enabled(ctx),

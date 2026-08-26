@@ -69,7 +69,7 @@ pub fn main() -> Result<()> {
                 // GUI application), do so.  This must occur before init_logging, as the
                 // terminal server sets up its own logger, and attempting to set a second
                 // logger leads to a panic.
-                warp::terminal::local_tty::server::run_terminal_server(args);
+                warp::terminal::local_tty::run_terminal_server(args);
                 return Ok(());
             }
             // This is a catch-all to handle the plugin host, which the integration test crate doesn't have a feature flag for.
@@ -259,6 +259,7 @@ fn register_tests() -> HashMap<&'static str, BoxedBuilderFn> {
     register_test!(test_bash_bootstraps_with_prompt_command_array_that_sets_ps1);
     register_test!(test_zsh_bootstraps_with_nounset_option);
     register_test!(test_zsh_cursor_mode_vi_bindings_do_not_corrupt_commands);
+    register_test!(test_pwsh_vi_edit_mode_does_not_corrupt_commands);
     register_test!(test_ssh_wrapper_into_bash);
     register_test!(test_ssh_wrapper_into_zsh);
     register_test!(test_ssh_into_fish);

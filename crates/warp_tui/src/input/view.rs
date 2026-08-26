@@ -165,6 +165,7 @@ pub enum TuiInputViewEvent {
     AcceptedConversation(warp::tui_export::AgentConversationEntryId),
     /// The user selected a model menu item.
     AcceptedModel(LLMId),
+    AcceptedTeam(warp::tui_export::ServerId),
     /// The user selected an action from the MCP menu.
     AcceptedMcp(TuiMcpAction),
     /// The user advanced the explicit MCP installation flow.
@@ -1365,6 +1366,9 @@ impl TuiInputView {
             }
             TuiInlineMenuAccepted::Model(id) => {
                 ctx.emit(TuiInputViewEvent::AcceptedModel(id));
+            }
+            TuiInlineMenuAccepted::Team(team_uid) => {
+                ctx.emit(TuiInputViewEvent::AcceptedTeam(team_uid));
             }
             TuiInlineMenuAccepted::Mcp(action) => {
                 ctx.emit(TuiInputViewEvent::AcceptedMcp(action));

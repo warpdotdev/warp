@@ -3923,6 +3923,12 @@ cannot query for certain fields, etc.
 type TeamMember {
   displayName: String
   email: String!
+
+  """
+  Whether the member's Warp account has been disabled. A disabled member keeps
+  their team membership but cannot sign in or use Warp.
+  """
+  isDisabled: Boolean!
   photoUrl: String
   role: MembershipRole!
   uid: ID!
@@ -4765,6 +4771,12 @@ type Workspace {
 
 type WorkspaceMember {
   email: String!
+
+  """
+  Whether the member's Warp account has been disabled. A disabled member keeps
+  their workspace membership but cannot sign in or use Warp.
+  """
+  isDisabled: Boolean!
   role: MembershipRole!
   uid: ID!
   usageInfo: WorkspaceMemberUsageInfo!
