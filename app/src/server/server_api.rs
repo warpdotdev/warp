@@ -567,6 +567,34 @@ impl ServerApi {
         )
     }
 
+    /// Like [`Self::send_graphql_request`], but scoped to `team_scope`'s team via
+    /// `X-Warp-Team-Uid`. `team_scope` is `None` when the caller has no team to scope the
+    /// request to; a resolved [`RequestTeamScope`] whose own team is `None` sends no header
+    /// either, matching [`Self::send_graphql_request`]'s behavior.
+    pub fn send_team_scoped_graphql_request<
+        'a,
+        QF,
+        O: warp_graphql::client::Operation<QF> + Send + 'a,
+    >(
+        &'a self,
+        operation: O,
+        timeout: Option<Duration>,
+        team_scope: Option<RequestTeamScope>,
+    ) -> BoxFuture<'a, Result<QF>>
+    where
+        QF: 'a,
+    {
+        let team_uid = team_scope
+            .and_then(RequestTeamScope::team_uid)
+            .map(|uid| uid.uid());
+        warp_server_client::graphql_helpers::send_team_scoped_graphql_request(
+            &self.base_client,
+            operation,
+            timeout,
+            team_uid,
+        )
+    }
+
     /// Opens an SSE stream to the agent event-push endpoint.
     ///
     /// The returned `EventSourceStream` yields `reqwest_eventsource::Event`

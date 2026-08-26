@@ -20,6 +20,7 @@ use crate::ai::ambient_agents::task::{
 use crate::ai::ambient_agents::{AgentConfigSnapshot, AmbientAgentTaskId};
 use crate::ai::local_harness_setup::local_harness_product_disabled_message;
 use crate::server::server_api::ai::AIClient;
+use crate::server::team_scope::RequestTeamScope;
 use crate::terminal::cli_agent_sessions::plugin_manager::{
     CliAgentPluginManager, plugin_manager_for,
 };
@@ -164,6 +165,7 @@ pub(super) async fn prepare_local_harness_child_launch(
     shell_type: Option<ShellType>,
     startup_directory: Option<PathBuf>,
     ai_client: Arc<dyn AIClient>,
+    team_scope: RequestTeamScope,
 ) -> Result<PreparedLocalHarnessLaunch, String> {
     let harness_model_config =
         model_id
@@ -246,6 +248,7 @@ pub(super) async fn prepare_local_harness_child_launch(
             None,
             parent_run_id.clone(),
             local_child_task_config(harness, agent_name),
+            Some(team_scope),
         )
         .await
         .map_err(|error| {

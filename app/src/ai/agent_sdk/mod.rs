@@ -1166,8 +1166,10 @@ impl AgentDriverRunner {
             Some(config)
         };
 
+        // Deliberately unscoped: this path runs headless from `warp agent run`, with no
+        // window and no `--team` flag to resolve a team from.
         let task_id = match server_api
-            .create_agent_task(prompt, environment, None, task_config)
+            .create_agent_task(prompt, environment, None, task_config, None)
             .await
             .context("Failed to create task")
         {

@@ -51,6 +51,8 @@ use crate::pane_group::{self, Direction, PaneGroup};
 use crate::persistence::{BlockCompleted, ModelEvent};
 #[cfg(not(target_family = "wasm"))]
 use crate::server::server_api::ServerApiProvider;
+#[cfg(not(target_family = "wasm"))]
+use crate::server::team_scope::RequestTeamScope;
 use crate::session_management::SessionNavigationData;
 use crate::terminal::cli_agent_sessions::CLIAgentSessionsModel;
 use crate::terminal::general_settings::GeneralSettings;
@@ -64,6 +66,8 @@ use crate::terminal::{TerminalManager, TerminalView};
 use crate::view_components::ToastFlavor;
 use crate::workspace::sync_inputs::SyncedInputState;
 use crate::workspace::{PaneViewLocator, WorkspaceRegistry};
+#[cfg(not(target_family = "wasm"))]
+use crate::workspaces::user_workspaces::UserWorkspaces;
 #[cfg(not(target_family = "wasm"))]
 use crate::{
     pane_group::child_agent::{
@@ -1634,10 +1638,13 @@ fn launch_local_no_harness_child(
         .terminal_view_from_pane_id(parent_pane_id, ctx)
         .and_then(|view| host_terminal_shared_session_source_type(&view, ctx));
 
+    let team_scope =
+        RequestTeamScope::from_scope(&UserWorkspaces::as_ref(ctx).team_context_for_view(ctx));
     let launch = prepare_local_oz_child_launch(
         &request.name,
         &request.prompt,
         request.parent_run_id.as_deref(),
+        Some(team_scope),
         ctx,
     );
     let _ = ctx.spawn(launch, move |group, result, ctx| match result {
@@ -1776,6 +1783,8 @@ fn launch_local_harness_child(
 
     let model_id_for_harness_env = model_id.clone();
     let agent_name_for_task = agent_name.clone();
+    let team_scope =
+        RequestTeamScope::from_scope(&UserWorkspaces::as_ref(ctx).team_context_for_view(ctx));
     let _ = ctx.spawn(
         async move {
             prepare_local_harness_child_launch(
@@ -1787,6 +1796,7 @@ fn launch_local_harness_child(
                 shell_type,
                 startup_directory,
                 ai_client,
+                team_scope,
             )
             .await
         },

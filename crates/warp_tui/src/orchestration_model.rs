@@ -766,10 +766,13 @@ impl TuiOrchestrationModel {
         working_directory: Option<PathBuf>,
         ctx: &mut ModelContext<Self>,
     ) {
+        // Deliberately unscoped: warp_tui has no crate-exposed way to resolve this
+        // session's window into a RequestTeamScope.
         let launch = prepare_local_oz_child_launch(
             &request.name,
             &request.prompt,
             request.parent_run_id.as_deref(),
+            None,
             ctx,
         );
         ctx.spawn(launch, move |me, result, ctx| match result {

@@ -16,7 +16,9 @@ use crate::ai::agent_sdk::driver::OZ_MESSAGE_LISTENER_MANAGED_EXTERNALLY_ENV;
 use crate::ai::ambient_agents::task::{HarnessConfig, normalize_orchestrator_agent_name};
 use crate::ai::local_harness_setup::LOCAL_CODEX_HARNESS_DISABLED_MESSAGE;
 use crate::server::server_api::ai::MockAIClient;
+use crate::server::team_scope::RequestTeamScope;
 use crate::terminal::shell::ShellType;
+use crate::workspaces::user_workspaces::TeamlessScopeForTest;
 
 struct EnvVarGuard {
     key: &'static str,
@@ -262,6 +264,7 @@ async fn prepare_local_codex_child_launch_rejects_without_rewriting_global_codex
         Some(ShellType::Zsh),
         Some(working_dir),
         Arc::new(ai_client),
+        RequestTeamScope::from_scope(&TeamlessScopeForTest),
     )
     .await;
 
@@ -289,7 +292,7 @@ async fn prepare_local_codex_child_launch_succeeds_when_testing_flag_is_enabled(
     ai_client
         .expect_create_agent_task()
         .times(1)
-        .returning(|_, _, _, _| Ok("550e8400-e29b-41d4-a716-446655440000".parse().unwrap()));
+        .returning(|_, _, _, _, _| Ok("550e8400-e29b-41d4-a716-446655440000".parse().unwrap()));
 
     let prepared = prepare_local_harness_child_launch(
         "hello world".to_string(),
@@ -300,6 +303,7 @@ async fn prepare_local_codex_child_launch_succeeds_when_testing_flag_is_enabled(
         Some(ShellType::Zsh),
         Some(working_dir),
         Arc::new(ai_client),
+        RequestTeamScope::from_scope(&TeamlessScopeForTest),
     )
     .await
     .unwrap();
@@ -337,7 +341,7 @@ async fn prepare_local_claude_child_merges_anthropic_model_env_var() {
     ai_client
         .expect_create_agent_task()
         .times(1)
-        .returning(|_, _, _, _| Ok("550e8400-e29b-41d4-a716-446655440000".parse().unwrap()));
+        .returning(|_, _, _, _, _| Ok("550e8400-e29b-41d4-a716-446655440000".parse().unwrap()));
 
     let prepared = prepare_local_harness_child_launch(
         "hello world".to_string(),
@@ -348,6 +352,7 @@ async fn prepare_local_claude_child_merges_anthropic_model_env_var() {
         Some(ShellType::Zsh),
         Some(working_dir),
         Arc::new(ai_client),
+        RequestTeamScope::from_scope(&TeamlessScopeForTest),
     )
     .await
     .unwrap();
@@ -394,7 +399,7 @@ async fn prepare_local_claude_child_no_anthropic_model_when_empty() {
     ai_client
         .expect_create_agent_task()
         .times(1)
-        .returning(|_, _, _, _| Ok("550e8400-e29b-41d4-a716-446655440000".parse().unwrap()));
+        .returning(|_, _, _, _, _| Ok("550e8400-e29b-41d4-a716-446655440000".parse().unwrap()));
 
     let prepared = prepare_local_harness_child_launch(
         "hello world".to_string(),
@@ -405,6 +410,7 @@ async fn prepare_local_claude_child_no_anthropic_model_when_empty() {
         Some(ShellType::Zsh),
         Some(working_dir),
         Arc::new(ai_client),
+        RequestTeamScope::from_scope(&TeamlessScopeForTest),
     )
     .await
     .unwrap();
@@ -428,6 +434,7 @@ async fn prepare_local_harness_child_launch_rejects_disabled_codex_before_shell_
         None,
         None,
         ai_client,
+        RequestTeamScope::from_scope(&TeamlessScopeForTest),
     )
     .await;
 

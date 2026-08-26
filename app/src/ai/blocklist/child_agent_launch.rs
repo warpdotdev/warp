@@ -8,6 +8,7 @@ use {
     crate::ai::ambient_agents::task::normalize_orchestrator_agent_name,
     crate::ai::ambient_agents::{AgentConfigSnapshot, AmbientAgentTaskId},
     crate::server::server_api::ServerApiProvider,
+    crate::server::team_scope::RequestTeamScope,
 };
 
 use crate::AIExecutionProfilesModel;
@@ -29,6 +30,7 @@ pub fn prepare_local_oz_child_launch(
     name: &str,
     prompt: &str,
     parent_run_id: Option<&str>,
+    team_scope: Option<RequestTeamScope>,
     ctx: &AppContext,
 ) -> impl Future<Output = anyhow::Result<PreparedLocalOzChildLaunch>> + 'static + use<> {
     let ai_client = ServerApiProvider::as_ref(ctx).get_ai_client();
@@ -46,6 +48,7 @@ pub fn prepare_local_oz_child_launch(
                     name: agent_name,
                     ..Default::default()
                 }),
+                team_scope,
             )
             .await?;
         Ok(PreparedLocalOzChildLaunch {
