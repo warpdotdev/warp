@@ -1572,6 +1572,27 @@ impl BlocklistAIHistoryModel {
         });
     }
 
+    /// Removes any conversation already indexed under `run_id`, if one
+    /// exists. Used before creating the authoritative in-band conversation
+    /// for a local child launch, in case a `child_agent_started` SSE event
+    /// raced ahead of the launch and already created a remote-child
+    /// placeholder for the same run — without this, both would survive and
+    /// the pill bar would render the child twice.
+    pub fn remove_existing_conversation_for_run_id(
+        &mut self,
+        run_id: &str,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let Some(existing_id) = self.conversation_id_for_agent_id(run_id) else {
+            return;
+        };
+        let Some(terminal_surface_id) = self.terminal_surface_id_for_conversation(&existing_id)
+        else {
+            return;
+        };
+        self.remove_conversation(existing_id, terminal_surface_id, ctx);
+    }
+
     /// Resolves a server-side agent identifier to a local conversation ID.
     /// The identifier may be a server conversation token (v1) or a run_id (v2).
     pub fn conversation_id_for_agent_id(&self, agent_id: &str) -> Option<AIConversationId> {
