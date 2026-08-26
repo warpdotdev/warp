@@ -1048,7 +1048,7 @@ impl WarpAgentPageView {
         );
 
         let custom_endpoint_edit_buttons = Self::create_custom_endpoint_edit_buttons(
-            ApiKeyManager::as_ref(ctx).keys().custom_endpoints.len(),
+            ApiKeyManager::as_ref(ctx).custom_endpoints().len(),
             custom_inference_controls_enabled,
             ctx,
         );
@@ -1365,8 +1365,7 @@ impl WarpAgentPageView {
             return;
         }
         let Some(endpoint) = ApiKeyManager::as_ref(ctx)
-            .keys()
-            .custom_endpoints
+            .custom_endpoints()
             .get(endpoint_index)
             .cloned()
         else {
@@ -1405,7 +1404,7 @@ impl WarpAgentPageView {
             button.set_disabled(!enabled, ctx);
         });
 
-        let endpoint_count = ApiKeyManager::as_ref(ctx).keys().custom_endpoints.len();
+        let endpoint_count = ApiKeyManager::as_ref(ctx).custom_endpoints().len();
         if self.custom_endpoint_edit_buttons.len() != endpoint_count {
             self.custom_endpoint_edit_buttons =
                 Self::create_custom_endpoint_edit_buttons(endpoint_count, enabled, ctx);
@@ -1480,8 +1479,7 @@ impl WarpAgentPageView {
             return;
         }
         let endpoint = ApiKeyManager::as_ref(ctx)
-            .keys()
-            .custom_endpoints
+            .custom_endpoints()
             .get(index)
             .cloned();
         if endpoint.is_none() {
@@ -1541,18 +1539,20 @@ impl WarpAgentPageView {
                     self.hide_custom_endpoint_modal(ctx);
                     return;
                 }
-                ApiKeyManager::handle(ctx).update(ctx, |manager, ctx| {
-                    manager.add_custom_endpoint(
-                        CustomEndpointParams {
-                            name: name.clone(),
-                            url: url.clone(),
-                            api_key: api_key.clone(),
-                            models: models.clone(),
-                            schema: *schema,
-                        },
-                        ctx,
-                    );
-                });
+                let result = crate::ai::custom_endpoints::add(
+                    CustomEndpointParams {
+                        name: name.clone(),
+                        url: url.clone(),
+                        api_key: api_key.clone(),
+                        models: models.clone(),
+                        schema: *schema,
+                    },
+                    ctx,
+                );
+                if let Err(error) = result {
+                    log::warn!("Could not add custom endpoint: {error:#}");
+                    return;
+                }
                 self.hide_custom_endpoint_modal(ctx);
 
                 let window_id = ctx.window_id();
@@ -1565,8 +1565,7 @@ impl WarpAgentPageView {
 
                 // The new endpoint is appended last.
                 let new_index = ApiKeyManager::as_ref(ctx)
-                    .keys()
-                    .custom_endpoints
+                    .custom_endpoints()
                     .len()
                     .saturating_sub(1);
                 self.maybe_prompt_set_default_model_for_custom_endpoint(new_index, ctx);
@@ -1584,19 +1583,21 @@ impl WarpAgentPageView {
                     self.hide_custom_endpoint_modal(ctx);
                     return;
                 }
-                ApiKeyManager::handle(ctx).update(ctx, |manager, ctx| {
-                    manager.save_custom_endpoint(
-                        *index,
-                        CustomEndpointParams {
-                            name: name.clone(),
-                            url: url.clone(),
-                            api_key: api_key.clone(),
-                            models: models.clone(),
-                            schema: *schema,
-                        },
-                        ctx,
-                    );
-                });
+                let result = crate::ai::custom_endpoints::save(
+                    *index,
+                    CustomEndpointParams {
+                        name: name.clone(),
+                        url: url.clone(),
+                        api_key: api_key.clone(),
+                        models: models.clone(),
+                        schema: *schema,
+                    },
+                    ctx,
+                );
+                if let Err(error) = result {
+                    log::warn!("Could not save custom endpoint: {error:#}");
+                    return;
+                }
                 self.hide_custom_endpoint_modal(ctx);
 
                 let window_id = ctx.window_id();
@@ -1676,9 +1677,10 @@ impl WarpAgentPageView {
                     ctx.notify();
                     return;
                 }
-                ApiKeyManager::handle(ctx).update(ctx, |manager, ctx| {
-                    manager.remove_custom_endpoint(*index, ctx);
-                });
+                if let Err(error) = crate::ai::custom_endpoints::remove(*index, ctx) {
+                    log::warn!("Could not remove custom endpoint: {error:#}");
+                    return;
+                }
                 self.pending_remove_custom_endpoint_index = None;
                 self.remove_custom_endpoint_confirmation_dialog
                     .update(ctx, |dialog, ctx| {
@@ -5036,7 +5038,7 @@ impl ApiKeysWidget {
     ) -> Box<dyn Element> {
         let theme = appearance.theme();
         let text_color = styles::header_font_color(is_enabled, app);
-        let endpoints = &ApiKeyManager::as_ref(app).keys().custom_endpoints;
+        let endpoints = ApiKeyManager::as_ref(app).custom_endpoints();
         let chip_border = internal_colors::fg_overlay_3(theme);
 
         let mut list = Flex::column().with_spacing(12.);
@@ -5373,7 +5375,7 @@ impl SettingsWidget for ApiKeysWidget {
 
         // Custom endpoints sub-label + list (only when flag on and endpoints non-empty)
         if show_custom_inference {
-            let endpoints = &ApiKeyManager::as_ref(app).keys().custom_endpoints;
+            let endpoints = ApiKeyManager::as_ref(app).custom_endpoints();
             if !endpoints.is_empty() {
                 column.add_child(
                     Container::new(

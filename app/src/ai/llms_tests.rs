@@ -332,7 +332,7 @@ fn custom_llm_infos_built_from_endpoints() {
         )],
         ..Default::default()
     };
-    let infos = build_custom_llm_infos(&keys);
+    let infos = build_custom_llm_infos(&keys.custom_endpoints);
     assert_eq!(infos.len(), 2);
     assert_eq!(infos[0].display_name, "fast");
     assert_eq!(infos[0].id.as_str(), "uuid-1");
@@ -355,7 +355,7 @@ fn custom_llm_display_name_uses_alias_when_present() {
         )],
         ..Default::default()
     };
-    let infos = build_custom_llm_infos(&keys);
+    let infos = build_custom_llm_infos(&keys.custom_endpoints);
     assert_eq!(infos[0].display_name, "My Alias");
 }
 
@@ -370,7 +370,7 @@ fn custom_llm_display_name_falls_back_to_name_when_alias_missing() {
         )],
         ..Default::default()
     };
-    let infos = build_custom_llm_infos(&keys);
+    let infos = build_custom_llm_infos(&keys.custom_endpoints);
     assert_eq!(infos[0].display_name, "raw-name");
 }
 
@@ -394,7 +394,7 @@ fn custom_endpoint_usage_display_label_resolves_alias_name_and_generic_fallback(
         agent_mode_models_unavailable: false,
         last_update: None,
         base_llm_for_terminal_view: HashMap::new(),
-        custom_llms: build_custom_llm_infos(&keys),
+        custom_llms: build_custom_llm_infos(&keys.custom_endpoints),
         custom_model_routers: Vec::new(),
     };
 
@@ -430,7 +430,7 @@ fn custom_llm_infos_skip_endpoints_with_empty_api_key() {
         ],
         ..Default::default()
     };
-    let infos = build_custom_llm_infos(&keys);
+    let infos = build_custom_llm_infos(&keys.custom_endpoints);
     assert_eq!(infos.len(), 1);
     assert_eq!(infos[0].id.as_str(), "uuid-y");
 }
@@ -449,7 +449,7 @@ fn custom_llm_infos_skip_models_without_config_key() {
         )],
         ..Default::default()
     };
-    let infos = build_custom_llm_infos(&keys);
+    let infos = build_custom_llm_infos(&keys.custom_endpoints);
     assert_eq!(infos.len(), 1);
     assert_eq!(infos[0].display_name, "ready");
 }
@@ -465,7 +465,7 @@ fn removing_model_row_purges_from_custom_llms() {
         )],
         ..Default::default()
     };
-    assert_eq!(build_custom_llm_infos(&before).len(), 2);
+    assert_eq!(build_custom_llm_infos(&before.custom_endpoints).len(), 2);
 
     let after = ai::api_keys::ApiKeys {
         custom_endpoints: vec![endpoint(
@@ -476,7 +476,7 @@ fn removing_model_row_purges_from_custom_llms() {
         )],
         ..Default::default()
     };
-    let infos = build_custom_llm_infos(&after);
+    let infos = build_custom_llm_infos(&after.custom_endpoints);
     assert_eq!(infos.len(), 1);
     assert_eq!(infos[0].id.as_str(), "uuid-b");
     assert!(infos.iter().all(|i| i.id.as_str() != "uuid-a"));
@@ -501,7 +501,7 @@ fn removing_endpoint_purges_all_its_models_from_custom_llms() {
         ],
         ..Default::default()
     };
-    assert_eq!(build_custom_llm_infos(&before).len(), 3);
+    assert_eq!(build_custom_llm_infos(&before.custom_endpoints).len(), 3);
 
     let after = ai::api_keys::ApiKeys {
         custom_endpoints: vec![endpoint(
@@ -512,7 +512,7 @@ fn removing_endpoint_purges_all_its_models_from_custom_llms() {
         )],
         ..Default::default()
     };
-    let infos = build_custom_llm_infos(&after);
+    let infos = build_custom_llm_infos(&after.custom_endpoints);
     assert_eq!(infos.len(), 1);
     assert_eq!(infos[0].id.as_str(), "uuid-k1");
 }
@@ -537,7 +537,7 @@ fn is_cloud_runnable_oz_model_id_classifies_ids() {
         agent_mode_models_unavailable: false,
         last_update: None,
         base_llm_for_terminal_view: HashMap::new(),
-        custom_llms: build_custom_llm_infos(&keys),
+        custom_llms: build_custom_llm_infos(&keys.custom_endpoints),
         custom_model_routers: Vec::new(),
     };
 

@@ -2,6 +2,10 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
+use ai::api_keys::{
+    ApiKeyManager, CustomEndpoint, CustomEndpointDefinitions, CustomEndpointModel,
+    CustomEndpointSchema,
+};
 use channel_versions::{Changelog, MarkdownSection, Section};
 use chrono::DateTime;
 use uuid::Uuid;
@@ -21,7 +25,8 @@ use warpui_core::{App, AppContext};
 use super::{
     ANIMATION_PANEL_COLS, LEFT_COLUMN_COLS, ZeroStateSectionVisibility, autoupdate_status_label,
     build_zero_state_layout, build_zero_state_overlay, build_zero_state_stack_layout,
-    changelog_bullets_from_changelog, mcp_status_label, render_first_run_top_section,
+    changelog_bullets_from_changelog, custom_endpoint_status_label, mcp_status_label,
+    render_first_run_top_section,
 };
 use crate::autoupdate::TuiAutoupdateStatus;
 use crate::tui_builder::TuiUiBuilder;
@@ -61,6 +66,27 @@ fn changelog(tui_updates: Vec<&str>) -> Changelog {
         oz_updates: vec!["Unrelated Oz improvement".to_owned()],
         tui_updates: tui_updates.into_iter().map(ToOwned::to_owned).collect(),
     }
+}
+
+fn endpoint_definitions() -> CustomEndpointDefinitions {
+    let endpoints = ["One", "Two"]
+        .into_iter()
+        .enumerate()
+        .map(|(index, name)| CustomEndpoint {
+            name: name.to_owned(),
+            url: format!("https://endpoint-{index}.example.com/v1"),
+            api_key: String::new(),
+            schema: CustomEndpointSchema::default(),
+            models: vec![CustomEndpointModel {
+                name: format!("model-{index}"),
+                alias: None,
+                config_key: format!("config-{index}"),
+            }],
+        })
+        .collect::<Vec<_>>();
+    CustomEndpointDefinitions::from_legacy(&endpoints)
+        .expect("test endpoints should be valid")
+        .0
 }
 
 #[test]
@@ -206,6 +232,72 @@ fn mcp_summary_marks_config_errors() {
         mcp_status_label(&snapshot),
         ("2 config errors · /mcp".to_string(), true)
     );
+}
+
+#[test]
+fn custom_endpoint_summary_tracks_configuration_and_local_keys() {
+    App::test((), |mut app| async move {
+        register_tui_session_view_test_singletons(&mut app);
+        app.read(|ctx| {
+            assert_eq!(
+                custom_endpoint_status_label(ApiKeyManager::as_ref(ctx)),
+                ("Not configured · /modify-settings".to_owned(), false)
+            );
+        });
+
+        let definitions = endpoint_definitions();
+        let first = definitions.id_at(0).unwrap().clone();
+        let second = definitions.id_at(1).unwrap().clone();
+        ApiKeyManager::handle(&app).update(&mut app, |manager, ctx| {
+            manager.set_custom_endpoint_definitions(definitions, ctx);
+        });
+        app.read(|ctx| {
+            assert_eq!(
+                custom_endpoint_status_label(ApiKeyManager::as_ref(ctx)),
+                ("2 need API keys · /api-keys".to_owned(), false)
+            );
+        });
+
+        ApiKeyManager::handle(&app)
+            .update(&mut app, |manager, ctx| {
+                manager.persist_custom_endpoint_key(first, Some("first-secret".to_owned()), ctx)
+            })
+            .unwrap();
+        app.read(|ctx| {
+            assert_eq!(
+                custom_endpoint_status_label(ApiKeyManager::as_ref(ctx)),
+                (
+                    "1 connected · 1 need API keys · /api-keys".to_owned(),
+                    false
+                )
+            );
+        });
+
+        ApiKeyManager::handle(&app)
+            .update(&mut app, |manager, ctx| {
+                manager.persist_custom_endpoint_key(second, Some("second-secret".to_owned()), ctx)
+            })
+            .unwrap();
+        app.read(|ctx| {
+            assert_eq!(
+                custom_endpoint_status_label(ApiKeyManager::as_ref(ctx)),
+                ("2 connected · /api-keys".to_owned(), false)
+            );
+        });
+
+        ApiKeyManager::handle(&app).update(&mut app, |manager, ctx| {
+            manager.invalidate_custom_endpoint_definitions(ctx);
+        });
+        app.read(|ctx| {
+            assert_eq!(
+                custom_endpoint_status_label(ApiKeyManager::as_ref(ctx)),
+                (
+                    "Configuration error · fix agents.custom_endpoints".to_owned(),
+                    true
+                )
+            );
+        });
+    });
 }
 
 // ---------------------------------------------------------------------------
