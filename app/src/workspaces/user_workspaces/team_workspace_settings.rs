@@ -450,10 +450,7 @@ impl UserWorkspaces {
     }
 
     /// Did the admin enable AWS Bedrock for `scope`'s team?
-    pub(crate) fn is_aws_bedrock_available_from_workspace<S: TeamScope + ?Sized>(
-        &self,
-        scope: &S,
-    ) -> bool {
+    pub(crate) fn is_aws_bedrock_available<S: TeamScope + ?Sized>(&self, scope: &S) -> bool {
         self.llm_settings_for_scope(scope)
             .is_some_and(|llm_settings| llm_settings.enabled)
             && self
@@ -470,23 +467,13 @@ impl UserWorkspaces {
             .unwrap_or_default()
     }
 
-    pub(crate) fn is_aws_bedrock_credentials_toggleable<S: TeamScope + ?Sized>(
-        &self,
-        scope: &S,
-    ) -> bool {
-        matches!(
-            self.aws_bedrock_host_enablement_setting(scope),
-            HostEnablementSetting::RespectUserSetting
-        )
-    }
-
     pub(crate) fn is_aws_bedrock_credentials_enabled<S: TeamScope + ?Sized>(
         &self,
         scope: &S,
         app: &AppContext,
     ) -> bool {
         // i.e. did the admin go and toggle on aws bedrock in the admin panel?
-        if !self.is_aws_bedrock_available_from_workspace(scope) {
+        if !self.is_aws_bedrock_available(scope) {
             return false;
         }
 
@@ -504,13 +491,15 @@ impl UserWorkspaces {
     /// [`Self::is_aws_bedrock_credentials_enabled`] instead -- this deliberately answers for
     /// the union of the user's teams, not for the team a window points at.
     pub(crate) fn is_aws_bedrock_credentials_enabled_for_any_team(&self, app: &AppContext) -> bool {
-        self.every_applicable_llm_settings().any(|llm_settings| {
-            Self::host_credentials_enabled(llm_settings, &LLMModelHost::AwsBedrock, || {
-                *AISettings::as_ref(app)
-                    .aws_bedrock_credentials_enabled
-                    .value()
+        self.every_applicable_team_and_llm_settings()
+            .map(|(_, settings)| settings)
+            .any(|llm_settings| {
+                Self::host_credentials_enabled(llm_settings, &LLMModelHost::AwsBedrock, || {
+                    *AISettings::as_ref(app)
+                        .aws_bedrock_credentials_enabled
+                        .value()
+                })
             })
-        })
     }
 
     /// Did the admin enable Gemini Enterprise (GEAP) for `scope`'s team?
@@ -544,10 +533,7 @@ impl UserWorkspaces {
         )
     }
 
-    /// Whether Gemini Enterprise (GEAP) credentials should be minted and attached under
-    /// `scope`. Anonymous/logged-out guard from [`Self::is_byo_api_key_enabled`]: a GEAP
-    /// credential mint is rooted in the user's Warp session, so without one there is nothing
-    /// to mint from.
+    /// Whether Gemini Enterprise (GEAP) credentials should be minted and attached to requests
     pub(crate) fn is_gemini_enterprise_credentials_enabled<S: TeamScope + ?Sized>(
         &self,
         scope: &S,
@@ -575,15 +561,6 @@ impl UserWorkspaces {
         }
     }
 
-    /// Every (team, LLM settings) pair that could apply to the user: one per team, or the
-    /// current workspace's own with no attributable team when they belong to none. The basis
-    /// of the windowless aggregates below, guarded the way
-    /// [`Self::any_team_allows_member_byo_endpoints`] guards its own fallback: several teams
-    /// is not ambiguous here (any one enabling is enough), so this never needs to fall back to
-    /// an arbitrarily-elected team the way a scoped read would. The team is carried alongside
-    /// its settings so a caller that needs to name a disagreeing team (e.g.
-    /// [`GeminiEnterpriseBackgroundHost::Conflicting`]) has one source of truth for it, rather
-    /// than re-deriving it from a separate lookup.
     fn every_applicable_team_and_llm_settings(
         &self,
     ) -> Box<dyn Iterator<Item = (Option<&Team>, &LlmSettings)> + '_> {
@@ -596,13 +573,6 @@ impl UserWorkspaces {
             );
         }
         Box::new(teams.map(|team| (Some(team), &team.settings.llm_settings)))
-    }
-
-    /// [`Self::every_applicable_team_and_llm_settings`] for callers that only need the
-    /// settings.
-    fn every_applicable_llm_settings(&self) -> impl Iterator<Item = &LlmSettings> + '_ {
-        self.every_applicable_team_and_llm_settings()
-            .map(|(_, settings)| settings)
     }
 
     /// Did the admin turn `host` on, with its credentials resolved against `user_setting_enabled`?
@@ -627,18 +597,6 @@ impl UserWorkspaces {
     }
 
     /// What background, windowless Gemini Enterprise credential minting should mint from.
-    ///
-    /// Any-team-enables-wins, the same aggregate as
-    /// [`Self::is_aws_bedrock_credentials_enabled_for_any_team`]: background GEAP work
-    /// succeeds if any one of the user's teams enables it. Windowed callers must use
-    /// [`Self::is_gemini_enterprise_credentials_enabled`] instead.
-    ///
-    /// Unlike a boolean aggregate this yields a *value* -- a Google Cloud project to federate
-    /// against -- and there is no defensible ordering over projects. Enabling teams that
-    /// disagree on one therefore report [`GeminiEnterpriseBackgroundHost::Conflicting`], named
-    /// by every disagreeing team, rather than an arbitrary pick, which the caller must surface
-    /// as a misconfiguration and not as an absence of the feature: nothing is minted either
-    /// way, but only one of those two is something an admin can act on.
     #[cfg(not(target_family = "wasm"))]
     pub(crate) fn gemini_enterprise_host_for_any_enabling_team(
         &self,

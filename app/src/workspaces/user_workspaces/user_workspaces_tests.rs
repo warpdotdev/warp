@@ -392,10 +392,6 @@ fn test_aws_bedrock_credentials_default_off_when_admin_respects_user_setting() {
                 !user_workspaces.is_aws_bedrock_credentials_enabled(&scope, ctx),
                 "respect-user-setting should default the local Bedrock credentials toggle to off"
             );
-            assert!(
-                user_workspaces.is_aws_bedrock_credentials_toggleable(&scope),
-                "respect-user-setting should leave the local Bedrock credentials toggle editable"
-            );
         });
     })
 }
@@ -447,10 +443,6 @@ fn test_aws_bedrock_credentials_respect_user_setting() {
             assert!(
                 !user_workspaces.is_aws_bedrock_credentials_enabled(&scope, ctx),
                 "respect-user-setting should honor the local Bedrock credentials toggle"
-            );
-            assert!(
-                user_workspaces.is_aws_bedrock_credentials_toggleable(&scope),
-                "respect-user-setting should leave the local Bedrock credentials toggle editable"
             );
         });
     })
@@ -504,10 +496,6 @@ fn test_aws_bedrock_credentials_enforced_by_admin() {
                 user_workspaces.is_aws_bedrock_credentials_enabled(&scope, ctx),
                 "enforced Bedrock host policy should ignore the local Bedrock credentials toggle"
             );
-            assert!(
-                !user_workspaces.is_aws_bedrock_credentials_toggleable(&scope),
-                "enforced Bedrock host policy should disable the local Bedrock credentials toggle"
-            );
         });
     })
 }
@@ -553,7 +541,7 @@ fn aws_bedrock_availability_falls_back_to_the_workspace_for_a_multi_team_users_t
             let scope = user_workspaces.team_context_for_window_for_test(window_id);
             assert_eq!(scope.team_uid(), None);
             assert!(
-                user_workspaces.is_aws_bedrock_available_from_workspace(&scope),
+                user_workspaces.is_aws_bedrock_available(&scope),
                 "a multi-team user's teamless window should read the workspace's own Bedrock policy"
             );
             assert!(
@@ -917,7 +905,7 @@ fn bedrock_and_gemini_enterprise_unavailable_with_no_workspace_at_all() {
             assert_eq!(scope.team_uid(), None);
             assert!(user_workspaces.current_workspace().is_none());
             assert!(
-                !user_workspaces.is_aws_bedrock_available_from_workspace(&scope),
+                !user_workspaces.is_aws_bedrock_available(&scope),
                 "no workspace at all has no admin policy to consult, so Bedrock stays unavailable"
             );
             assert!(

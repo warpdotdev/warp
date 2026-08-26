@@ -5752,8 +5752,7 @@ impl AwsBedrockWidget {
             user_workspaces.aws_bedrock_host_enablement_setting(&scope),
             crate::workspaces::workspace::HostEnablementSetting::Enforce
         );
-        let is_toggleable =
-            is_section_enabled && user_workspaces.is_aws_bedrock_credentials_toggleable(&scope);
+        let is_toggleable = is_section_enabled && !is_admin_enforced;
         let are_credentials_enabled =
             user_workspaces.is_aws_bedrock_credentials_enabled(&scope, app);
         let is_usage_enabled = is_section_enabled && are_credentials_enabled;
@@ -5949,7 +5948,7 @@ impl SettingsWidget for AwsBedrockWidget {
     fn should_render(&self, app: &AppContext) -> bool {
         // Only show if admin has enabled AWS Bedrock for the window's team
         let scope = UserWorkspaces::as_ref(app).team_context(&self.self_handle, app);
-        UserWorkspaces::as_ref(app).is_aws_bedrock_available_from_workspace(&scope)
+        UserWorkspaces::as_ref(app).is_aws_bedrock_available(&scope)
     }
 
     fn render(
@@ -5959,8 +5958,7 @@ impl SettingsWidget for AwsBedrockWidget {
         app: &AppContext,
     ) -> Box<dyn Element> {
         let scope = UserWorkspaces::as_ref(app).team_context(&self.self_handle, app);
-        let is_bedrock_available =
-            UserWorkspaces::as_ref(app).is_aws_bedrock_available_from_workspace(&scope);
+        let is_bedrock_available = UserWorkspaces::as_ref(app).is_aws_bedrock_available(&scope);
 
         Container::new(self.render_aws_bedrock_section(appearance, app, is_bedrock_available))
             .with_margin_bottom(HEADER_PADDING)
