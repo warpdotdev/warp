@@ -556,57 +556,103 @@ fn pending_workspace_args(app: &mut App) -> Box<WorkspaceArgs> {
     })
 }
 
-/// Regression test: `RootView::join_shared_session_in_existing_window` used to silently
-/// drop a shared-session deep link unless the window had already reached `Terminal`
-/// ("Auth not complete before trying to join shared session"), and even after retargeting
-/// was added, a pre-terminal state that wrapped an *existing* workspace (e.g. onboarding
-/// shown over a normal session) still fell through that same drop, since there was no
-/// pending `workspace_setting` left to retarget. Drives the real public action for every
-/// pre-`Terminal` state, including that nested-`Terminal` case, which must join the
-/// session immediately instead of being dropped.
-#[test]
-fn join_shared_session_in_existing_window_covers_pre_terminal_and_nested_terminal_states() {
-    App::test((), |mut app| async move {
-        crate::workspace::view::tests::initialize_app(&mut app);
+/// Constructs a fresh `RootView` in a new window, for tests that exercise
+/// `join_shared_session_in_existing_window` by overwriting `auth_onboarding_state` directly.
+fn root_view_for_join_test(app: &mut App) -> ViewHandle<RootView> {
+    crate::workspace::view::tests::initialize_app(app);
+    let global_resource_handles = GlobalResourceHandles::mock(app);
+    let (_, root_view) = app.add_window(WindowStyle::NotStealFocus, |ctx| {
+        RootView::new(
+            global_resource_handles,
+            NewWorkspaceSource::Empty {
+                previous_active_window: None,
+                shell: None,
+            },
+            ctx,
+        )
+    });
+    root_view
+}
 
-        let global_resource_handles = GlobalResourceHandles::mock(&mut app);
-        let (_, root_view) = app.add_window(WindowStyle::NotStealFocus, |ctx| {
-            RootView::new(
-                global_resource_handles,
-                NewWorkspaceSource::Empty {
-                    previous_active_window: None,
-                    shell: None,
-                },
-                ctx,
-            )
-        });
+/// Regression test: `RootView::join_shared_session_in_existing_window` used to silently
+/// drop a shared-session deep link while auth had not yet completed ("Auth not complete
+/// before trying to join shared session"). `Auth` owns its pending workspace directly, so
+/// the fix retargets `workspace_setting` in place.
+#[test]
+fn join_shared_session_in_existing_window_retargets_pending_auth_workspace() {
+    App::test((), |mut app| async move {
+        let root_view = root_view_for_join_test(&mut app);
         let session_id = SessionId::new();
 
-        // Auth: the only variant that owns the pending workspace directly.
         let args = pending_workspace_args(&mut app);
         root_view.update(&mut app, |root_view, _| {
             root_view.auth_onboarding_state = AuthOnboardingState::Auth(args);
         });
-        assert!(
-            root_view.update(&mut app, |root_view, ctx| root_view
-                .join_shared_session_in_existing_window(&session_id, ctx)),
-            "Auth: expected the link to be handled"
-        );
+
+        let handled = root_view.update(&mut app, |root_view, ctx| {
+            root_view.join_shared_session_in_existing_window(&session_id, ctx)
+        });
+
+        assert!(handled, "expected the link to be handled");
         app.read(|ctx| {
             let AuthOnboardingState::Auth(args) = &root_view.as_ref(ctx).auth_onboarding_state
             else {
-                panic!("Auth: expected to remain in Auth");
+                panic!("expected to remain in Auth");
             };
             assert!(matches!(
                 args.workspace_setting,
                 NewWorkspaceSource::SharedSessionAsViewer { session_id: id } if id == session_id
             ));
         });
+    });
+}
 
-        // Onboarding/LoginSlide/PostAuthOnboarding/NeedsSsoLink wrapping a pending workspace:
-        // each retargets that pending workspace.
-        let login_slide_view = root_view.update(&mut app, |_, ctx| {
-            ctx.add_typed_action_view(|ctx| {
+/// Same defect as above, for `Onboarding` wrapping a pending (not yet created) workspace:
+/// the fix retargets that pending `workspace_setting` and stays in `Onboarding` until it
+/// completes normally.
+#[test]
+fn join_shared_session_in_existing_window_retargets_pending_onboarding_workspace() {
+    App::test((), |mut app| async move {
+        let root_view = root_view_for_join_test(&mut app);
+        let session_id = SessionId::new();
+
+        let target = AuthOnboardingTarget::Workspace(pending_workspace_args(&mut app));
+        root_view.update(&mut app, |root_view, ctx| {
+            let onboarding_view = RootView::create_agent_onboarding_view(ctx);
+            root_view.auth_onboarding_state = AuthOnboardingState::Onboarding {
+                onboarding_view,
+                target,
+            };
+        });
+
+        let handled = root_view.update(&mut app, |root_view, ctx| {
+            root_view.join_shared_session_in_existing_window(&session_id, ctx)
+        });
+
+        assert!(handled, "expected the link to be handled");
+        app.read(|ctx| {
+            let state = &root_view.as_ref(ctx).auth_onboarding_state;
+            assert!(
+                matches!(state, AuthOnboardingState::Onboarding { .. }),
+                "expected to remain in Onboarding"
+            );
+            let target =
+                pending_target(state).unwrap_or_else(|| panic!("expected a pending target"));
+            assert_pending_workspace_retargeted(target, session_id, "Onboarding");
+        });
+    });
+}
+
+/// Same defect as above, for `LoginSlide` wrapping a pending workspace.
+#[test]
+fn join_shared_session_in_existing_window_retargets_pending_login_slide_workspace() {
+    App::test((), |mut app| async move {
+        let root_view = root_view_for_join_test(&mut app);
+        let session_id = SessionId::new();
+
+        let target = AuthOnboardingTarget::Workspace(pending_workspace_args(&mut app));
+        root_view.update(&mut app, |root_view, ctx| {
+            let login_slide_view = ctx.add_typed_action_view(|ctx| {
                 LoginSlideView::new(
                     true,
                     false,
@@ -616,76 +662,114 @@ fn join_shared_session_in_existing_window_covers_pre_terminal_and_nested_termina
                     LoginSlideSource::OnboardingFlow,
                     ctx,
                 )
-            })
+            });
+            let onboarding_view = RootView::create_agent_onboarding_view(ctx);
+            root_view.auth_onboarding_state = AuthOnboardingState::LoginSlide {
+                login_slide_view,
+                onboarding_view,
+                target,
+            };
         });
-        type BuildState = Box<dyn FnOnce(AuthOnboardingTarget) -> AuthOnboardingState>;
-        let cases: Vec<(&str, BuildState)> = vec![
-            (
-                "Onboarding (pending)",
-                Box::new({
-                    let onboarding_view = root_view.update(&mut app, |_, ctx| {
-                        RootView::create_agent_onboarding_view(ctx)
-                    });
-                    move |target| AuthOnboardingState::Onboarding {
-                        onboarding_view,
-                        target,
-                    }
-                }),
-            ),
-            (
-                "LoginSlide (pending)",
-                Box::new({
-                    let onboarding_view = root_view.update(&mut app, |_, ctx| {
-                        RootView::create_agent_onboarding_view(ctx)
-                    });
-                    move |target| AuthOnboardingState::LoginSlide {
-                        login_slide_view,
-                        onboarding_view,
-                        target,
-                    }
-                }),
-            ),
-            (
-                "PostAuthOnboarding (pending)",
-                Box::new({
-                    let onboarding_view = root_view.update(&mut app, |_, ctx| {
-                        RootView::create_agent_onboarding_view(ctx)
-                    });
-                    move |target| AuthOnboardingState::PostAuthOnboarding {
-                        onboarding_view,
-                        target,
-                        account_class: FtueAccountClass::FreeStandard,
-                        upgrade_started: false,
-                    }
-                }),
-            ),
-            (
-                "NeedsSsoLink (pending)",
-                Box::new(AuthOnboardingState::NeedsSsoLink),
-            ),
-        ];
-        for (case, build_state) in cases {
-            let args = pending_workspace_args(&mut app);
-            let target = AuthOnboardingTarget::Workspace(args);
-            root_view.update(&mut app, |root_view, _| {
-                root_view.auth_onboarding_state = build_state(target);
-            });
-            assert!(
-                root_view.update(&mut app, |root_view, ctx| root_view
-                    .join_shared_session_in_existing_window(&session_id, ctx)),
-                "{case}: expected the link to be handled"
-            );
-            app.read(|ctx| {
-                let state = &root_view.as_ref(ctx).auth_onboarding_state;
-                let target = pending_target(state)
-                    .unwrap_or_else(|| panic!("{case}: expected to remain pre-terminal"));
-                assert_pending_workspace_retargeted(target, session_id, case);
-            });
-        }
 
-        // Onboarding wrapping an *existing* (nested) Terminal workspace: this is the case
-        // finding #1 fixed. It must join the session in that workspace directly, since
-        // there is no pending `workspace_setting` to retarget.
+        let handled = root_view.update(&mut app, |root_view, ctx| {
+            root_view.join_shared_session_in_existing_window(&session_id, ctx)
+        });
+
+        assert!(handled, "expected the link to be handled");
+        app.read(|ctx| {
+            let state = &root_view.as_ref(ctx).auth_onboarding_state;
+            assert!(
+                matches!(state, AuthOnboardingState::LoginSlide { .. }),
+                "expected to remain in LoginSlide"
+            );
+            let target =
+                pending_target(state).unwrap_or_else(|| panic!("expected a pending target"));
+            assert_pending_workspace_retargeted(target, session_id, "LoginSlide");
+        });
+    });
+}
+
+/// Same defect as above, for `PostAuthOnboarding` wrapping a pending workspace.
+#[test]
+fn join_shared_session_in_existing_window_retargets_pending_post_auth_onboarding_workspace() {
+    App::test((), |mut app| async move {
+        let root_view = root_view_for_join_test(&mut app);
+        let session_id = SessionId::new();
+
+        let target = AuthOnboardingTarget::Workspace(pending_workspace_args(&mut app));
+        root_view.update(&mut app, |root_view, ctx| {
+            let onboarding_view = RootView::create_agent_onboarding_view(ctx);
+            root_view.auth_onboarding_state = AuthOnboardingState::PostAuthOnboarding {
+                onboarding_view,
+                target,
+                account_class: FtueAccountClass::FreeStandard,
+                upgrade_started: false,
+            };
+        });
+
+        let handled = root_view.update(&mut app, |root_view, ctx| {
+            root_view.join_shared_session_in_existing_window(&session_id, ctx)
+        });
+
+        assert!(handled, "expected the link to be handled");
+        app.read(|ctx| {
+            let state = &root_view.as_ref(ctx).auth_onboarding_state;
+            assert!(
+                matches!(state, AuthOnboardingState::PostAuthOnboarding { .. }),
+                "expected to remain in PostAuthOnboarding"
+            );
+            let target =
+                pending_target(state).unwrap_or_else(|| panic!("expected a pending target"));
+            assert_pending_workspace_retargeted(target, session_id, "PostAuthOnboarding");
+        });
+    });
+}
+
+/// Same defect as above, for `NeedsSsoLink` wrapping a pending workspace.
+#[test]
+fn join_shared_session_in_existing_window_retargets_pending_needs_sso_link_workspace() {
+    App::test((), |mut app| async move {
+        let root_view = root_view_for_join_test(&mut app);
+        let session_id = SessionId::new();
+
+        let target = AuthOnboardingTarget::Workspace(pending_workspace_args(&mut app));
+        root_view.update(&mut app, |root_view, _| {
+            root_view.auth_onboarding_state = AuthOnboardingState::NeedsSsoLink(target);
+        });
+
+        let handled = root_view.update(&mut app, |root_view, ctx| {
+            root_view.join_shared_session_in_existing_window(&session_id, ctx)
+        });
+
+        assert!(handled, "expected the link to be handled");
+        app.read(|ctx| {
+            let state = &root_view.as_ref(ctx).auth_onboarding_state;
+            assert!(
+                matches!(state, AuthOnboardingState::NeedsSsoLink(_)),
+                "expected to remain in NeedsSsoLink"
+            );
+            let target =
+                pending_target(state).unwrap_or_else(|| panic!("expected a pending target"));
+            assert_pending_workspace_retargeted(target, session_id, "NeedsSsoLink");
+        });
+    });
+}
+
+/// Regression test for finding #1 of the second review round: a pre-`Terminal` state that
+/// wraps an *existing* workspace (e.g. onboarding shown over an already-live session, with
+/// no pending `workspace_setting` left to retarget) used to join the new session into that
+/// workspace but leave the enclosing `Onboarding` state in place. `RootView::render` renders
+/// `Onboarding`'s own view rather than the workspace it wraps, so the session joined
+/// invisibly, behind the onboarding screen this issue exists to get out of the way. Joining
+/// a nested `Terminal` target must promote the root state to `Terminal` so the workspace -
+/// and the newly joined session - actually becomes visible.
+#[test]
+fn join_shared_session_in_existing_window_promotes_nested_terminal_onboarding_to_visible_terminal()
+{
+    App::test((), |mut app| async move {
+        let root_view = root_view_for_join_test(&mut app);
+        let session_id = SessionId::new();
+
         let nested_workspace = crate::workspace::view::tests::mock_workspace(&mut app);
         let tab_count_before = nested_workspace.read(&app, |workspace, _| workspace.tab_count());
         root_view.update(&mut app, |root_view, ctx| {
@@ -695,31 +779,56 @@ fn join_shared_session_in_existing_window_covers_pre_terminal_and_nested_termina
                 target: AuthOnboardingTarget::Terminal(nested_workspace.clone()),
             };
         });
-        assert!(
-            root_view.update(&mut app, |root_view, ctx| root_view
-                .join_shared_session_in_existing_window(&session_id, ctx)),
-            "Onboarding (nested Terminal): expected the link to be handled"
-        );
+
+        let handled = root_view.update(&mut app, |root_view, ctx| {
+            root_view.join_shared_session_in_existing_window(&session_id, ctx)
+        });
+
+        assert!(handled, "expected the link to be handled");
+        app.read(|ctx| {
+            let AuthOnboardingState::Terminal(workspace) =
+                &root_view.as_ref(ctx).auth_onboarding_state
+            else {
+                panic!(
+                    "expected the onboarding overlay to be dismissed in favor of the joined \
+                     workspace, so the session is actually visible instead of hidden behind it"
+                );
+            };
+            assert_eq!(
+                *workspace, nested_workspace,
+                "the promoted Terminal state must expose the same workspace the session was joined in"
+            );
+        });
         nested_workspace.read(&app, |workspace, _| {
             assert_eq!(
                 workspace.tab_count(),
                 tab_count_before + 1,
-                "Onboarding (nested Terminal): the session should be joined in the existing workspace"
+                "the session should be joined in the existing workspace"
             );
         });
+    });
+}
 
-        // Terminal: joins directly, exercised through the same public entry point.
+/// A bare `Terminal` state already has a live, visible workspace: joining the session adds a
+/// tab directly, exercised through the same public entry point as the other states above.
+#[test]
+fn join_shared_session_in_existing_window_joins_directly_when_already_terminal() {
+    App::test((), |mut app| async move {
+        let root_view = root_view_for_join_test(&mut app);
+        let session_id = SessionId::new();
+
         let terminal_workspace = crate::workspace::view::tests::mock_workspace(&mut app);
         let tab_count_before = terminal_workspace.read(&app, |workspace, _| workspace.tab_count());
         root_view.update(&mut app, |root_view, _| {
             root_view.auth_onboarding_state =
                 AuthOnboardingState::Terminal(terminal_workspace.clone());
         });
-        assert!(
-            root_view.update(&mut app, |root_view, ctx| root_view
-                .join_shared_session_in_existing_window(&session_id, ctx)),
-            "Terminal: expected the link to be handled"
-        );
+
+        let handled = root_view.update(&mut app, |root_view, ctx| {
+            root_view.join_shared_session_in_existing_window(&session_id, ctx)
+        });
+
+        assert!(handled, "expected the link to be handled");
         terminal_workspace.read(&app, |workspace, _| {
             assert_eq!(workspace.tab_count(), tab_count_before + 1);
         });
