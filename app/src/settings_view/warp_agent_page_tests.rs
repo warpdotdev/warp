@@ -97,30 +97,36 @@ fn team_force_takes_precedence_over_global_ai_disabled() {
 
 #[test]
 fn grok_connect_flow_transitions_through_cancel_back_to_connect() {
-    // Idle: no tokens, no in-flight attempt.
     assert_eq!(
-        grok_subscription_button_action(false, false),
+        grok_subscription_button_action(false, None),
         GrokSubscriptionButtonAction::Connect
     );
-    // Connect was clicked: an attempt is now in flight, offering Cancel
-    // instead of the disabled "Connecting" indicator this replaces.
     assert_eq!(
-        grok_subscription_button_action(false, true),
+        grok_subscription_button_action(false, Some(false)),
         GrokSubscriptionButtonAction::Cancel
     );
-    // Cancel was clicked: the attempt is cleared without ever storing
-    // tokens, so the row is connectable again.
     assert_eq!(
-        grok_subscription_button_action(false, false),
+        grok_subscription_button_action(false, Some(true)),
+        GrokSubscriptionButtonAction::Cancelling
+    );
+    assert_eq!(
+        grok_subscription_button_action(false, None),
         GrokSubscriptionButtonAction::Connect
     );
 }
 
 #[test]
-fn grok_stored_tokens_show_disconnect_even_mid_attempt() {
-    // Stored tokens take precedence over a lingering in-flight attempt.
+fn grok_stored_tokens_show_disconnect_regardless_of_attempt_phase() {
     assert_eq!(
-        grok_subscription_button_action(true, true),
+        grok_subscription_button_action(true, None),
+        GrokSubscriptionButtonAction::Disconnect
+    );
+    assert_eq!(
+        grok_subscription_button_action(true, Some(false)),
+        GrokSubscriptionButtonAction::Disconnect
+    );
+    assert_eq!(
+        grok_subscription_button_action(true, Some(true)),
         GrokSubscriptionButtonAction::Disconnect
     );
 }

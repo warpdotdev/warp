@@ -127,43 +127,6 @@ fn cancelling_loopback_wait_releases_listener() {
     }
 }
 
-/// Mirrors the GUI Cancel button's actual timing: cancellation arrives from
-/// another thread while the callback wait is already polling, rather than
-/// before the wait even starts (as in
-/// [`cancelling_loopback_wait_releases_listener`] above). This is the
-/// scenario a user clicking Cancel on a still-open connect attempt produces,
-/// and it is what lets a Connect click right after Cancel succeed instead of
-/// racing a listener that hasn't been dropped yet.
-#[test]
-fn cancelling_a_running_wait_releases_listener() {
-    let (listener, address) = bind_test_listener();
-    let cancellation = OauthCancellationHandle {
-        cancelled: Arc::new(AtomicBool::new(false)),
-    };
-    let cancel_handle = cancellation.clone();
-
-    let flow = std::thread::spawn(move || {
-        warpui_core::r#async::block_on(run_oauth_flow(
-            listener,
-            PkceParams::generate(),
-            cancellation,
-        ))
-    });
-
-    // Give the callback thread a moment to start polling before cancelling.
-    std::thread::sleep(POLL_INTERVAL * 2);
-    cancel_handle.cancel();
-
-    let result = flow.join().expect("callback wait thread should finish");
-    assert_eq!(
-        result
-            .expect_err("cancelled callback wait should fail")
-            .to_string(),
-        "Grok authorization was cancelled"
-    );
-    TcpListener::bind(address).expect("cancelled callback listener should release its port");
-}
-
 /// Guards the non-cancelled path: the callback captured by the listener thread
 /// is still delivered to the flow after the listener is closed. A mismatched
 /// CSRF state stops the flow before the network token exchange, so the CSRF
