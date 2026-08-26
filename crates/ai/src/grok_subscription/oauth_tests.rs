@@ -111,10 +111,12 @@ fn cancelling_loopback_wait_releases_listener() {
         };
         cancellation.cancel();
 
+        let (release_tx, _release_rx) = async_channel::bounded(1);
         let result = warpui_core::r#async::block_on(run_oauth_flow(
             listener,
             PkceParams::generate(),
             cancellation,
+            release_tx,
         ));
 
         assert_eq!(
@@ -125,6 +127,59 @@ fn cancelling_loopback_wait_releases_listener() {
         );
         TcpListener::bind(address).expect("cancelled callback listener should release its port");
     }
+}
+
+/// [`OauthAttempt::finish`]'s release signal must fire before its result
+/// future does any work beyond receiving the callback -- in particular,
+/// before the token exchange a real (matching-state) callback would trigger.
+/// The CSRF check and any exchange both happen strictly after the callback
+/// thread's `tx.send`, which itself happens strictly after `release_tx.send`,
+/// so this holds regardless of whether the state matches; a mismatched state
+/// keeps the test deterministic and network-free by failing fast instead of
+/// attempting a real token exchange.
+#[test]
+fn release_signal_resolves_before_the_result_future_progresses() {
+    let (listener, address) = bind_test_listener();
+    let cancellation = OauthCancellationHandle {
+        cancelled: Arc::new(AtomicBool::new(false)),
+    };
+    let (release_tx, release_rx) = async_channel::bounded(1);
+
+    let browser = std::thread::spawn(move || {
+        let mut stream = TcpStream::connect(address).expect("test browser should connect");
+        stream
+            .write_all(
+                b"GET /callback?code=test-code&state=unexpected-state HTTP/1.1\r\n\
+                  Host: 127.0.0.1\r\n\r\n",
+            )
+            .expect("test browser should send the callback request");
+        let mut response = String::new();
+        stream
+            .read_to_string(&mut response)
+            .expect("test browser should read the callback response");
+    });
+
+    let result_thread = std::thread::spawn(move || {
+        warpui_core::r#async::block_on(run_oauth_flow(
+            listener,
+            PkceParams::generate(),
+            cancellation,
+            release_tx,
+        ))
+    });
+
+    warpui_core::r#async::block_on(release_rx.recv())
+        .expect("release signal should fire once the listener is dropped");
+    TcpListener::bind(address).expect("released listener should free its port immediately");
+
+    let result = result_thread.join().expect("result future should finish");
+    browser.join().expect("test browser thread should finish");
+    assert!(
+        result
+            .expect_err("a mismatched callback state should fail")
+            .to_string()
+            .contains("state did not match")
+    );
 }
 
 /// Guards the non-cancelled path: the callback captured by the listener thread
@@ -153,10 +208,12 @@ fn loopback_callback_is_delivered_after_the_listener_closes() {
             .expect("test browser should read the callback response");
     });
 
+    let (release_tx, _release_rx) = async_channel::bounded(1);
     let result = warpui_core::r#async::block_on(run_oauth_flow(
         listener,
         PkceParams::generate(),
         cancellation,
+        release_tx,
     ));
     browser.join().expect("test browser thread should finish");
 
