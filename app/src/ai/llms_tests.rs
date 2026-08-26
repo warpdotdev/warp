@@ -389,8 +389,7 @@ fn custom_endpoint_usage_display_label_resolves_alias_name_and_generic_fallback(
         )],
         ..Default::default()
     };
-    let preferences =
-        LLMPreferences::for_test(ModelsByFeature::default(), build_custom_llm_infos(&keys));
+    let preferences = LLMPreferences::for_test(build_custom_llm_infos(&keys));
 
     assert_eq!(
         preferences.custom_endpoint_usage_display_label("uuid-alias"),
@@ -526,8 +525,7 @@ fn is_cloud_runnable_oz_model_id_classifies_ids() {
         )],
         ..Default::default()
     };
-    let preferences =
-        LLMPreferences::for_test(ModelsByFeature::default(), build_custom_llm_infos(&keys));
+    let preferences = LLMPreferences::for_test(build_custom_llm_infos(&keys));
 
     // Custom-endpoint (BYOK) UUID id — not cloud-runnable.
     assert!(
@@ -697,32 +695,36 @@ fn active_models_fall_back_to_usable_choice_or_custom_endpoint_when_default_disa
 
 /// Runs picker-query assertions with searchable, selectable, and disabled model fixtures plus
 /// the app singletons consulted by model eligibility logic. The scope is teamless: these
-/// fixtures exercise ordering and filtering, not team credential policy.
+/// fixtures exercise ordering and filtering, not team credential policy. The catalog is seeded
+/// on `UserWorkspaces` (the resolved-teamless, no-workspace fallback -- see
+/// `UserWorkspaces::pre_login_models_by_feature`) since `LLMPreferences` no longer holds it.
 fn with_model_picker_query_test_context(
     f: impl FnOnce(&LLMPreferences, &dyn TeamScope, &AppContext) + 'static,
 ) {
-    App::test((), |app| async move {
+    App::test((), |mut app| async move {
         app.add_singleton_model(|_| AuthStateProvider::new_for_test());
         app.add_singleton_model(UserWorkspaces::default_mock);
         let scope = UserWorkspaces::teamless_context_resolver_for_test();
+
+        let agent_mode = AvailableLLMs::new(
+            "auto".into(),
+            vec![
+                agent_llm("auto", "auto (cost-efficient)"),
+                agent_llm("gpt-5", "GPT 5"),
+                disabled_agent_llm("disabled-gpt", "GPT Disabled"),
+            ],
+            None,
+        )
+        .expect("choices are non-empty");
+        UserWorkspaces::handle(&app).update(&mut app, |workspaces, _| {
+            workspaces.set_pre_login_models_by_feature(ModelsByFeature {
+                agent_mode,
+                ..Default::default()
+            });
+        });
+
+        let preferences = LLMPreferences::for_test(Vec::new());
         app.read(|app_ctx| {
-            let agent_mode = AvailableLLMs::new(
-                "auto".into(),
-                vec![
-                    agent_llm("auto", "auto (cost-efficient)"),
-                    agent_llm("gpt-5", "GPT 5"),
-                    disabled_agent_llm("disabled-gpt", "GPT Disabled"),
-                ],
-                None,
-            )
-            .expect("choices are non-empty");
-            let preferences = LLMPreferences::for_test(
-                ModelsByFeature {
-                    agent_mode,
-                    ..Default::default()
-                },
-                Vec::new(),
-            );
             f(&preferences, &scope(app_ctx), app_ctx);
         });
     });
@@ -1035,8 +1037,10 @@ fn agent_llm(id: &str, display_name: &str) -> LLMInfo {
 }
 
 /// Preferences whose agent-mode models are a server-style list with an
-/// `"auto"` default plus one concrete model.
-fn preferences_for_profile_model_tests() -> LLMPreferences {
+/// `"auto"` default plus one concrete model. Seeds the catalog on the already-registered
+/// `UserWorkspaces` singleton (see `with_model_picker_query_test_context`'s doc) rather than on
+/// the returned `LLMPreferences`, so `ctx` must resolve `UserWorkspaces::default_mock`.
+fn preferences_for_profile_model_tests(ctx: &mut ModelContext<LLMPreferences>) -> LLMPreferences {
     let agent_mode = AvailableLLMs::new(
         "auto".into(),
         vec![
@@ -1046,13 +1050,13 @@ fn preferences_for_profile_model_tests() -> LLMPreferences {
         None,
     )
     .expect("choices are non-empty");
-    LLMPreferences::for_test(
-        ModelsByFeature {
+    UserWorkspaces::handle(ctx).update(ctx, |workspaces, _| {
+        workspaces.set_pre_login_models_by_feature(ModelsByFeature {
             agent_mode,
             ..Default::default()
-        },
-        Vec::new(),
-    )
+        });
+    });
+    LLMPreferences::for_test(Vec::new())
 }
 
 #[test]
@@ -1114,7 +1118,7 @@ fn updating_active_profile_base_model_persists_and_updates_resolution() {
                 ctx,
             )
         });
-        let preferences = app.add_singleton_model(|_| preferences_for_profile_model_tests());
+        let preferences = app.add_singleton_model(preferences_for_profile_model_tests);
         let surface_id = EntityId::new();
         let profile_id = profiles.read(&app, |profiles, ctx| {
             profiles.active_profile(Some(surface_id), ctx).id().clone()
@@ -1172,8 +1176,8 @@ fn selecting_a_custom_profile_default_clears_the_session_override() {
             AIExecutionProfilesModel::new(&LaunchMode::new_for_unit_test(), ctx)
         });
         let custom_model_id = LLMId::from("custom-endpoint");
-        let preferences = app.add_singleton_model(|_| {
-            let mut preferences = preferences_for_profile_model_tests();
+        let preferences = app.add_singleton_model(|ctx| {
+            let mut preferences = preferences_for_profile_model_tests(ctx);
             preferences
                 .custom_llms
                 .push(agent_llm(custom_model_id.as_str(), "Custom Endpoint"));
@@ -1239,7 +1243,7 @@ fn explicit_child_model_pin_preserves_gui_behavior_and_only_emits_for_effective_
         let profiles = app.add_singleton_model(|ctx| {
             AIExecutionProfilesModel::new(&LaunchMode::new_for_unit_test(), ctx)
         });
-        let preferences = app.add_singleton_model(|_| preferences_for_profile_model_tests());
+        let preferences = app.add_singleton_model(preferences_for_profile_model_tests);
         let active_model_events = Rc::new(Cell::new(0));
         let captured_events = active_model_events.clone();
         app.update(|ctx| {

@@ -796,7 +796,9 @@ impl ExecutionProfileEditorView {
                     Self::refresh_filterable_model_dropdown(
                         &me.computer_use_model_dropdown,
                         current_permissions.computer_use_model.clone(),
-                        |prefs, scope, _| prefs.get_computer_use_llm_choices(scope).collect_vec(),
+                        |prefs, scope, app| {
+                            prefs.get_computer_use_llm_choices(scope, app).collect_vec()
+                        },
                         |id| ExecutionProfileEditorViewAction::SetComputerUseModel { id },
                         |prefs, scope, app| {
                             prefs.get_default_computer_use_model(scope, app).id.clone()
@@ -998,7 +1000,7 @@ impl ExecutionProfileEditorView {
         Self::refresh_filterable_model_dropdown(
             &self.computer_use_model_dropdown,
             current_permissions.computer_use_model.clone(),
-            |prefs, scope, _| prefs.get_computer_use_llm_choices(scope).collect_vec(),
+            |prefs, scope, app| prefs.get_computer_use_llm_choices(scope, app).collect_vec(),
             |id| ExecutionProfileEditorViewAction::SetComputerUseModel { id },
             |prefs, scope, app| prefs.get_default_computer_use_model(scope, app).id.clone(),
             &self.upgrade_footer_mouse_state,
@@ -1207,7 +1209,7 @@ impl ExecutionProfileEditorView {
         upgrade_mouse_state: &MouseStateHandle,
         ctx: &mut ViewContext<Self>,
     ) where
-        G: for<'a> FnOnce(&'a LLMPreferences, &dyn TeamScope, &AppContext) -> Vec<&'a LLMInfo>,
+        G: for<'a> FnOnce(&'a LLMPreferences, &dyn TeamScope, &'a AppContext) -> Vec<&'a LLMInfo>,
         A: Fn(LLMId) -> ExecutionProfileEditorViewAction,
         D: FnOnce(&LLMPreferences, &dyn TeamScope, &AppContext) -> LLMId,
     {

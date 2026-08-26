@@ -145,7 +145,8 @@ fn test_server_managed_availability_maps_to_no_alert() {
 fn test_out_of_credits_with_local_key_maps_to_no_alert() {
     App::test((), |mut app| async move {
         let uid = WorkspaceUid::from(crate::server::ids::ServerId::from(1_i64));
-        let mut workspace = Workspace::from_local_cache(uid, "Test Workspace".to_string(), None);
+        let mut workspace =
+            Workspace::from_local_cache(uid, "Test Workspace".to_string(), None, None);
         workspace.billing_metadata.tier.byo_api_key_policy =
             Some(ByoApiKeyPolicy { enabled: true });
         initialize_app_with_workspaces(&mut app, vec![workspace]);

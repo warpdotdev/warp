@@ -52,7 +52,7 @@ fn effective_base_model<'a>(
     profile
         .base_model
         .as_ref()
-        .and_then(|id| prefs.get_llm_info_for_scope(scope, id))
+        .and_then(|id| prefs.get_llm_info_for_scope(scope, id, app))
         .unwrap_or_else(|| prefs.get_default_base_model(scope, app))
 }
 

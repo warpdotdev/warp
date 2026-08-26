@@ -188,6 +188,7 @@ fn test_loading_all_spaces_after_switching_from_offline() {
         billing_metadata: Default::default(),
         stripe_customer_id: None,
         settings: Default::default(),
+        feature_model_choice: Default::default(),
         is_eligible_for_discovery: false,
         has_billing_history: false,
         visibility: TeamVisibility::Open,
@@ -203,6 +204,7 @@ fn test_loading_all_spaces_after_switching_from_offline() {
         billing_cycle_usage: None,
         has_billing_history: false,
         settings: Default::default(),
+        feature_model_choice: Default::default(),
         invite_link_domain_restrictions: vec![],
         pending_email_invites: vec![],
         is_eligible_for_discovery: false,
@@ -229,8 +231,6 @@ fn test_loading_all_spaces_after_switching_from_offline() {
                         workspaces: vec![],
                         joinable_teams: vec![],
                         experiments: None,
-                        feature_model_choices: None,
-                        team_feature_model_choices: HashMap::new(),
                         ai_credit_availability: None,
                         user_purchase_policy: None,
                     },
@@ -249,8 +249,6 @@ fn test_loading_all_spaces_after_switching_from_offline() {
                         workspaces: vec![workspace.clone()],
                         joinable_teams: vec![],
                         experiments: None,
-                        feature_model_choices: None,
-                        team_feature_model_choices: HashMap::new(),
                         ai_credit_availability: None,
                         user_purchase_policy: None,
                     },
@@ -326,6 +324,7 @@ fn team_for_test() -> Team {
         billing_metadata: Default::default(),
         stripe_customer_id: None,
         settings: Default::default(),
+        feature_model_choice: Default::default(),
         is_eligible_for_discovery: false,
         has_billing_history: false,
         visibility: TeamVisibility::Open,
@@ -390,8 +389,6 @@ fn test_aws_bedrock_credentials_respect_user_setting() {
                 workspaces: vec![workspace_for_poll.clone()],
                 joinable_teams: vec![],
                 experiments: None,
-                feature_model_choices: None,
-                team_feature_model_choices: HashMap::new(),
                 ai_credit_availability: None,
                 user_purchase_policy: None,
             },
@@ -449,8 +446,6 @@ fn test_aws_bedrock_credentials_enforced_by_admin() {
                 workspaces: vec![workspace_for_poll.clone()],
                 joinable_teams: vec![],
                 experiments: None,
-                feature_model_choices: None,
-                team_feature_model_choices: HashMap::new(),
                 ai_credit_availability: None,
                 user_purchase_policy: None,
             },
@@ -752,6 +747,7 @@ fn workspace_for_test(team: &Team) -> Workspace {
         billing_cycle_usage: None,
         has_billing_history: false,
         settings: Default::default(),
+        feature_model_choice: Default::default(),
         invite_link_domain_restrictions: vec![],
         pending_email_invites: vec![],
         is_eligible_for_discovery: false,
@@ -2609,6 +2605,7 @@ fn test_joining_team_moves_objects() {
         billing_metadata: Default::default(),
         stripe_customer_id: None,
         settings: Default::default(),
+        feature_model_choice: Default::default(),
         is_eligible_for_discovery: false,
         has_billing_history: false,
         visibility: TeamVisibility::Open,
@@ -2624,6 +2621,7 @@ fn test_joining_team_moves_objects() {
         billing_cycle_usage: None,
         has_billing_history: false,
         settings: Default::default(),
+        feature_model_choice: Default::default(),
         invite_link_domain_restrictions: vec![],
         pending_email_invites: vec![],
         is_eligible_for_discovery: false,
@@ -2978,6 +2976,7 @@ fn test_leaving_team_moves_objects() {
         billing_metadata: Default::default(),
         stripe_customer_id: None,
         settings: Default::default(),
+        feature_model_choice: Default::default(),
         is_eligible_for_discovery: false,
         has_billing_history: false,
         visibility: TeamVisibility::Open,
@@ -2993,6 +2992,7 @@ fn test_leaving_team_moves_objects() {
         billing_cycle_usage: None,
         has_billing_history: false,
         settings: Default::default(),
+        feature_model_choice: Default::default(),
         invite_link_domain_restrictions: vec![],
         pending_email_invites: vec![],
         is_eligible_for_discovery: false,
@@ -3303,8 +3303,6 @@ fn test_remove_user_from_team_success_emits_success_event_and_refreshes_members(
                         workspaces: vec![updated_workspace.clone()],
                         joinable_teams: vec![],
                         experiments: None,
-                        feature_model_choices: None,
-                        team_feature_model_choices: HashMap::new(),
                         ai_credit_availability: None,
                         user_purchase_policy: None,
                     },
@@ -3937,7 +3935,10 @@ fn gql_feature_model_choice(model_id: &str) -> GqlFeatureModelChoice {
 
 #[test]
 fn team_feature_model_choices_conversion_keeps_each_teams_choice_distinct() {
-    // Each team's uid must map to its own model choice, never a shared or swapped one.
+    // Each team's uid must map to its own model choice, never a shared or swapped one. The
+    // catalog now lives directly on `Team.feature_model_choice` (folded in as part of the
+    // ordinary `Team` conversion) rather than a separate per-team map, so this reads that
+    // field instead of the old `WorkspacesMetadataResponse.team_feature_model_choices`.
     let mut team_a = gql_team("team-a", "Team A", &["test-user"]);
     team_a.feature_model_choice = gql_feature_model_choice("team-a-only");
     let mut team_b = gql_team("team-b", "Team B", &["test-user"]);
@@ -3947,8 +3948,10 @@ fn team_feature_model_choices_conversion_keeps_each_teams_choice_distinct() {
 
     let response: WorkspacesMetadataResponse = gql_user(None, vec![workspace]).into();
 
+    assert_eq!(response.workspaces.len(), 1);
+    let teams = &response.workspaces[0].teams;
     assert_eq!(
-        response.team_feature_model_choices.len(),
+        teams.len(),
         2,
         "both teams' choices should survive the fold"
     );
@@ -3956,21 +3959,31 @@ fn team_feature_model_choices_conversion_keeps_each_teams_choice_distinct() {
     let team_a_uid = ServerId::from_string_lossy(format!("{:0>22}", "team-a"));
     let team_b_uid = ServerId::from_string_lossy(format!("{:0>22}", "team-b"));
 
-    let choice_a = response
-        .team_feature_model_choices
-        .get(&team_a_uid)
-        .expect("team A's choice should be keyed by team A's own uid");
-    let choice_b = response
-        .team_feature_model_choices
-        .get(&team_b_uid)
-        .expect("team B's choice should be keyed by team B's own uid");
+    let choice_a = &teams
+        .iter()
+        .find(|team| team.uid == team_a_uid)
+        .expect("team A's choice should be keyed by team A's own uid")
+        .feature_model_choice;
+    let choice_b = &teams
+        .iter()
+        .find(|team| team.uid == team_b_uid)
+        .expect("team B's choice should be keyed by team B's own uid")
+        .feature_model_choice;
 
-    assert_eq!(
-        choice_a.agent_mode.choices[0].id, "team-a-only",
+    assert!(
+        choice_a.info_for_id(&"team-a-only".into()).is_some(),
         "team A's uid must map to team A's own choice, not a shared or swapped payload"
     );
-    assert_eq!(
-        choice_b.agent_mode.choices[0].id, "team-b-only",
+    assert!(
+        choice_a.info_for_id(&"team-b-only".into()).is_none(),
+        "team A's uid must not resolve team B's choice"
+    );
+    assert!(
+        choice_b.info_for_id(&"team-b-only".into()).is_some(),
         "team B's uid must map to team B's own choice, not a shared or swapped payload"
+    );
+    assert!(
+        choice_b.info_for_id(&"team-a-only".into()).is_none(),
+        "team B's uid must not resolve team A's choice"
     );
 }

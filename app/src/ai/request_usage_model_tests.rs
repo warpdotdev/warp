@@ -26,7 +26,7 @@ use crate::workspaces::workspace::{
 fn create_test_workspace() -> (WorkspaceUid, Workspace) {
     let server_id: crate::server::ids::ServerId = 1_i64.into();
     let uid = WorkspaceUid::from(server_id);
-    let workspace = Workspace::from_local_cache(uid, "Test Workspace".to_string(), None);
+    let workspace = Workspace::from_local_cache(uid, "Test Workspace".to_string(), None, None);
     (uid, workspace)
 }
 

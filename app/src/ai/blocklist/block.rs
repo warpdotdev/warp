@@ -5705,7 +5705,7 @@ impl AIBlock {
 
         // Get the model name from the input metadata.
         let mut model_name = LLMPreferences::as_ref(app)
-            .get_llm_info(base_model_id)
+            .get_llm_info(base_model_id, app)
             .map(|info| info.display_name.clone())
             .unwrap_or_default();
 
@@ -5714,7 +5714,7 @@ impl AIBlock {
             let model_id = self.model.model_id(app);
             if let Some(model_id) = model_id
                 && let Some(output_model_name) = LLMPreferences::as_ref(app)
-                    .get_llm_info(&model_id)
+                    .get_llm_info(&model_id, app)
                     .map(|info| info.display_name.clone())
             {
                 model_name = output_model_name;

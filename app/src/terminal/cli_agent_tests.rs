@@ -454,7 +454,9 @@ fn workspace_with_team_uid(uid: &str) -> Workspace {
             None,
             None,
             None,
+            None,
         )]),
+        None,
     )
 }
 

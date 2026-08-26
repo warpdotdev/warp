@@ -10807,7 +10807,7 @@ impl TerminalView {
         let scope =
             ResolvedTeamScope::from_scope(&UserWorkspaces::as_ref(ctx).team_context_for_view(ctx));
         let llm_prefs = LLMPreferences::as_ref(ctx);
-        let Some(llm_info) = llm_prefs.get_llm_info_for_scope(&scope, model_id) else {
+        let Some(llm_info) = llm_prefs.get_llm_info_for_scope(&scope, model_id, ctx) else {
             return;
         };
 

@@ -13,12 +13,15 @@
 //! plan's own BYO entitlement.
 
 use std::rc::Rc;
+use std::sync::OnceLock;
 
 use regex::Regex;
 use warpui::{AppContext, Entity, SingletonEntity, ViewContext, WeakViewHandle, WindowId};
 
 use super::UserWorkspaces;
-use crate::ai::llms::{LLMId, LLMProvider};
+#[cfg(any(test, feature = "test-util"))]
+use crate::ai::llms::LLMInfo;
+use crate::ai::llms::{LLMId, LLMProvider, ModelsByFeature};
 use crate::server::ids::ServerId;
 use crate::settings::AgentModeCommandExecutionPredicate;
 use crate::workspaces::gql_convert::ToAgentModeCommandExecutionPredicates;
@@ -400,6 +403,103 @@ impl UserWorkspaces {
             |workspace| workspace.settings.ai_autonomy_settings.clone(),
             AiAutonomySettings::default(),
         )
+    }
+
+    /// The model catalog effective for `scope`: the scope's own team's when it names one,
+    /// otherwise `current_workspace()`'s (the resolved-teamless catalog). See
+    /// [`Self::scoped_or_workspace_setting`] for the no-team fallback, except that here the
+    /// `absent` case (no workspace at all -- pre-login, or before the first metadata response)
+    /// falls back further to [`UserWorkspaces::pre_login_models_by_feature`] rather than
+    /// straight to the bare default, so a pre-login catalog fetch or a login-response seed
+    /// still has somewhere to land.
+    pub(crate) fn feature_model_choice_for_scope<S: TeamScope + ?Sized>(
+        &self,
+        scope: &S,
+    ) -> &ModelsByFeature {
+        static DEFAULT: OnceLock<ModelsByFeature> = OnceLock::new();
+        self.scoped_or_workspace_setting(
+            scope,
+            |team| &team.feature_model_choice,
+            |workspace| &workspace.feature_model_choice,
+            self.pre_login_models_by_feature
+                .as_ref()
+                .unwrap_or_else(|| DEFAULT.get_or_init(ModelsByFeature::default)),
+        )
+    }
+
+    /// [`Self::feature_model_choice_for_scope`] for a caller with a raw team uid already in
+    /// hand rather than a live [`TeamScope`].
+    pub(crate) fn feature_model_choice_for_team_uid(
+        &self,
+        team_uid: Option<ServerId>,
+    ) -> &ModelsByFeature {
+        self.feature_model_choice_for_scope(&TeamContextForOperation { team_uid })
+    }
+
+    /// Overwrites the model catalog for `team_uid`'s scope (or the resolved-teamless workspace
+    /// when `team_uid` is `None`), for [`crate::ai::llms::LLMPreferences`]'s narrow one-off
+    /// authed refresh. Every other update instead flows in through the ordinary `Team`/
+    /// `Workspace` conversion the polled workspaces-metadata query already performs (see
+    /// [`Self::feature_model_choice_for_scope`]'s doc), so this exists only for that one
+    /// caller, which cannot wait for the next poll.
+    ///
+    /// A `team_uid` naming a team not in the current workspace has nowhere durable to write and
+    /// is silently dropped: the account's team membership resolves through the polled query, not
+    /// this one-off fetch, so there is nothing more useful to do with a stale/unknown team here.
+    /// The no-team case still lands somewhere: `current_workspace()`'s catalog when a workspace
+    /// exists, otherwise [`Self::pre_login_models_by_feature`], mirroring the read-side fallback.
+    pub(crate) fn set_feature_model_choice_for_team_uid(
+        &mut self,
+        team_uid: Option<ServerId>,
+        models: ModelsByFeature,
+    ) {
+        match team_uid {
+            Some(team_uid) => {
+                if let Some(workspace) = self.current_workspace_mut()
+                    && let Some(team) = workspace.teams.iter_mut().find(|t| t.uid == team_uid)
+                {
+                    team.feature_model_choice = models;
+                }
+            }
+            None => match self.current_workspace_mut() {
+                Some(workspace) => workspace.feature_model_choice = models,
+                None => self.set_pre_login_models_by_feature(models),
+            },
+        }
+    }
+
+    /// Test-only: pushes an extra Agent Mode choice into `team_uid`'s scope's catalog (or the
+    /// resolved-teamless scope's when `team_uid` is `None`), mirroring
+    /// [`Self::set_feature_model_choice_for_team_uid`]'s scope resolution, so tests can exercise
+    /// a "new model available" transition without a real fetch.
+    #[cfg(any(test, feature = "test-util"))]
+    pub(crate) fn add_agent_mode_model_for_test_for_team_uid(
+        &mut self,
+        team_uid: Option<ServerId>,
+        llm: LLMInfo,
+    ) {
+        match team_uid {
+            Some(team_uid) => {
+                if let Some(workspace) = self.current_workspace_mut()
+                    && let Some(team) = workspace.teams.iter_mut().find(|t| t.uid == team_uid)
+                {
+                    team.feature_model_choice
+                        .agent_mode
+                        .push_choice_for_test(llm);
+                }
+            }
+            None => match self.current_workspace_mut() {
+                Some(workspace) => workspace
+                    .feature_model_choice
+                    .agent_mode
+                    .push_choice_for_test(llm),
+                None => self
+                    .pre_login_models_by_feature
+                    .get_or_insert_with(ModelsByFeature::default)
+                    .agent_mode
+                    .push_choice_for_test(llm),
+            },
+        }
     }
 
     /// The organization-managed command denylist a sandboxed agent must obey, for `scope`'s

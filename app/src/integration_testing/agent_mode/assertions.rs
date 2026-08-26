@@ -817,7 +817,7 @@ pub fn validate_agent_mode_llm_step(model: &'static str) -> TestStep {
                         &UserWorkspaces::as_ref(ctx).team_context_for_window(window_id),
                     );
                     (
-                        llm_preferences.is_available_agent_mode_llm(&scope, &llm_id),
+                        llm_preferences.is_available_agent_mode_llm(&scope, &llm_id, ctx),
                         llm_preferences.agent_mode_models_unavailable(&scope),
                     )
                 });

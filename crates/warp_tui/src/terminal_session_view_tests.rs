@@ -1663,7 +1663,7 @@ fn accepted_model_only_changes_the_current_session() {
             let mut alternate = preferences.get_default_base_model(&scope, ctx).clone();
             alternate.id = "tui-session-override".into();
             alternate.display_name = "TUI session override".to_owned();
-            preferences.add_agent_mode_model_for_test(&scope, alternate);
+            preferences.add_agent_mode_model_for_test(&scope, alternate, ctx);
         });
         let (first_view, _) = add_focus_test_session(&mut app, &fixture, true);
         let (second_view, _) = add_focus_test_session(&mut app, &fixture, false);

@@ -19253,7 +19253,7 @@ impl Workspace {
                         .team_context_for_window(terminal_view.window_id(ctx)),
                 );
                 let Some(codex_model_id) = LLMPreferences::as_ref(ctx)
-                    .get_preferred_codex_model(&scope)
+                    .get_preferred_codex_model(&scope, ctx)
                     .map(|info| info.id.clone())
                 else {
                     report_error!("No preferred codex model found");

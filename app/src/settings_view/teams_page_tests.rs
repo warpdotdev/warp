@@ -41,6 +41,7 @@ fn team_with_members(members: Vec<TeamMember>, multi_admin_enabled: bool) -> Tea
         },
         stripe_customer_id: None,
         settings: Default::default(),
+        feature_model_choice: Default::default(),
         is_eligible_for_discovery: false,
         has_billing_history: false,
         visibility: Default::default(),
@@ -52,8 +53,12 @@ fn workspace_with_member(
     role: MembershipRole,
     native_workspaces_enabled: bool,
 ) -> Workspace {
-    let mut workspace =
-        Workspace::from_local_cache(ServerId::from(2).into(), "Test Workspace".to_string(), None);
+    let mut workspace = Workspace::from_local_cache(
+        ServerId::from(2).into(),
+        "Test Workspace".to_string(),
+        None,
+        None,
+    );
     workspace.billing_metadata.tier.native_workspaces_policy = Some(NativeWorkspacesPolicy {
         enabled: native_workspaces_enabled,
     });

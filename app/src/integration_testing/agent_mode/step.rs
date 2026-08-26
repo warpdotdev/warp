@@ -343,7 +343,7 @@ pub fn set_preferred_agent_mode_llm(llm_id: &str) -> TestStep {
                 // failure reason instead of blaming the requested id — otherwise
                 // every id is deemed "not a valid agent mode LLM", hiding the
                 // real server-availability issue.
-                let available = llm_preferences.is_available_agent_mode_llm(&scope, &llm_id);
+                let available = llm_preferences.is_available_agent_mode_llm(&scope, &llm_id, ctx);
                 assert!(
                     available,
                     "{}",

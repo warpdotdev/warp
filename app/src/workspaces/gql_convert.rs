@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::path::PathBuf;
 
 use anyhow::{Result, anyhow, bail};
@@ -71,6 +70,7 @@ use crate::ai::blocklist::usage::conversation_usage_view::ConversationUsageInfo;
 use crate::ai::execution_profiles::{
     ActionPermission, ComputerUsePermission, WriteToPtyPermission,
 };
+use crate::ai::llms::ModelsByFeature;
 use crate::ai::{BonusGrant, BonusGrantScope};
 use crate::auth::UserUid;
 use crate::convert_to_server_experiment;
@@ -1328,6 +1328,16 @@ pub(crate) fn team_settings_from_gql(team_settings: GqlTeamSettings) -> TeamSett
     team_settings.into()
 }
 
+/// Converts the server's per-team/workspace model catalog. A malformed catalog is reported
+/// and falls back to [`ModelsByFeature::default`] (a single working `auto` choice per
+/// feature) rather than failing the whole `Team`/`Workspace` conversion over it.
+fn feature_model_choice_from_gql(choice: FeatureModelChoice) -> ModelsByFeature {
+    choice.try_into().unwrap_or_else(|e: anyhow::Error| {
+        report_error!(e.context("Failed to convert FeatureModelChoice from server"));
+        ModelsByFeature::default()
+    })
+}
+
 pub(crate) fn team_pending_email_invites_from_gql(
     workspace_pending_email_invites: &[GqlEmailInvite],
     team_uid: &cynic::Id,
@@ -1371,6 +1381,7 @@ impl Team {
             // Team-effective settings come from the team payload, not from a
             // clone of the workspace settings.
             settings: team_settings_from_gql(gql_team.settings),
+            feature_model_choice: feature_model_choice_from_gql(gql_team.feature_model_choice),
             is_eligible_for_discovery: gql_workspace.is_eligible_for_discovery,
             has_billing_history: gql_workspace.has_billing_history,
             visibility: gql_team.visibility.into(),
@@ -1407,6 +1418,9 @@ impl From<GqlWorkspace> for Workspace {
                 .map(convert_billing_cycle_usage),
             has_billing_history: gql_workspace.has_billing_history,
             settings: gql_workspace.settings.clone().into(),
+            feature_model_choice: feature_model_choice_from_gql(
+                gql_workspace.feature_model_choice.clone(),
+            ),
             invite_link_domain_restrictions: gql_workspace
                 .invite_link_domain_restrictions
                 .clone()
@@ -1435,31 +1449,6 @@ impl From<GqlWorkspace> for Workspace {
 impl From<GqlUser> for WorkspacesMetadataResponse {
     fn from(gql_user: GqlUser) -> WorkspacesMetadataResponse {
         let user_uid = UserUid::new(&gql_user.profile.uid);
-        let feature_model_choices = gql_user
-            .workspaces
-            .first()
-            .map(|gql_workspace| gql_workspace.feature_model_choice.clone());
-
-        // Every team the user belongs to, across every (in practice, the single, no-op)
-        // workspace -- the per-team half of the catalog fold; see `feature_model_choices`
-        // above for the workspace-level (resolved-teamless) half.
-        let team_feature_model_choices: HashMap<ServerId, FeatureModelChoice> = gql_user
-            .workspaces
-            .iter()
-            .flat_map(|gql_workspace| gql_workspace.teams.iter())
-            .filter(|gql_team| {
-                gql_team
-                    .members
-                    .iter()
-                    .any(|member| member.uid.inner() == gql_user.profile.uid)
-            })
-            .map(|gql_team| {
-                (
-                    ServerId::from_string_lossy(gql_team.uid.inner()),
-                    gql_team.feature_model_choice.clone(),
-                )
-            })
-            .collect();
 
         let workspaces: Vec<Workspace> = gql_user
             .workspaces
@@ -1503,8 +1492,6 @@ impl From<GqlUser> for WorkspacesMetadataResponse {
             workspaces,
             joinable_teams,
             experiments,
-            feature_model_choices,
-            team_feature_model_choices,
             ai_credit_availability: Some(gql_user.ai_credit_availability.into()),
             user_purchase_policy,
         }
