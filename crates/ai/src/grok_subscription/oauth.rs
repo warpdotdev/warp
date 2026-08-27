@@ -438,6 +438,12 @@ fn read_callback_request(
         if cancellation.cancelled.load(Ordering::Acquire) {
             bail!("Grok authorization was cancelled");
         }
+        // Checked every iteration, not just after a `WouldBlock`, so a client
+        // that drips one byte per poll interval still can't hold the
+        // connection past `CALLBACK_READ_TIMEOUT`.
+        if Instant::now() >= deadline {
+            bail!("timed out reading the Grok OAuth callback request");
+        }
         match stream.read(&mut buf[total..]) {
             Ok(0) => break,
             Ok(n) => {
@@ -448,9 +454,6 @@ fn read_callback_request(
                 }
             }
             Err(ref e) if e.kind() == ErrorKind::WouldBlock => {
-                if Instant::now() >= deadline {
-                    bail!("timed out reading the Grok OAuth callback request");
-                }
                 std::thread::sleep(POLL_INTERVAL);
             }
             Err(e) => {

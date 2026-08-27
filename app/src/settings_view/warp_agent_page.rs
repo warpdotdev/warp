@@ -1820,6 +1820,9 @@ impl WarpAgentPageView {
                         DismissibleToast::error(format!("Couldn't start Grok login: {err}"));
                     toast_stack.add_ephemeral_toast(toast, window_id, ctx);
                 });
+                // Without this, the row keeps rendering the Cancel button it
+                // showed while the bind was pending, with nothing left to cancel.
+                ctx.notify();
                 return;
             }
         };
