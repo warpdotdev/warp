@@ -26,7 +26,7 @@ use std::sync::Arc;
 use ai::agent::action::{AskUserQuestionItem, InsertReviewComment, RunAgentsRequest};
 use ai::document::DEFAULT_PLANNING_DOCUMENT_TITLE;
 use base64::Engine as _;
-use chrono::Duration;
+use chrono::{DateTime, Duration, Local};
 use cli_controller::{CLISubagentController, CLISubagentEvent};
 use find::FindState;
 use indexmap::IndexMap;
@@ -198,6 +198,7 @@ use crate::ui_components::icons::Icon;
 use crate::util::link_detection::*;
 #[cfg(feature = "local_fs")]
 use crate::util::openable_file_type::{FileTarget, is_supported_image_file};
+use crate::util::time_format::format_message_timestamp;
 use crate::view_components::DismissibleToast;
 use crate::view_components::action_button::{
     ActionButton, ActionButtonTheme, ButtonSize, KeystrokeSource, NakedTheme, PrimaryTheme,
@@ -475,6 +476,7 @@ pub(super) struct AIBlockStateHandles {
 
     /// Mouse state handle for the overflow menu button
     overflow_menu_handle: MouseStateHandle,
+    query_timestamp_tooltip_handle: MouseStateHandle,
 
     menu_accept_button_handle: MouseStateHandle,
     menu_reject_button_handle: MouseStateHandle,
@@ -4505,6 +4507,10 @@ impl AIBlock {
         self.model.status(app)
     }
 
+    pub fn query_sent_at(&self, app: &AppContext) -> Option<DateTime<Local>> {
+        self.model.query_sent_at(app)
+    }
+
     /// Returns `true` if this AI block contains user input.
     pub fn has_user_input(&self, app: &AppContext) -> bool {
         self.model
@@ -6366,6 +6372,7 @@ pub enum AIBlockAction {
     /// Copy the content from the previous user query.
     /// Note that this block may not have the user query.
     CopyQuery,
+    CopyTimestamp,
     /// Copy all AI output from the previous user query to the next user query.
     /// Note that this contains more than just this block, since from the user perspective everything after the user query appears like one block.
     CopyOutput,
@@ -6870,6 +6877,14 @@ impl TypedActionView for AIBlock {
                 let prompt_text = self.get_preceding_user_query(ctx);
                 ctx.clipboard()
                     .write(ClipboardContent::plain_text(prompt_text));
+            }
+            AIBlockAction::CopyTimestamp => {
+                if let Some(timestamp) = self.query_sent_at(ctx) {
+                    ctx.clipboard()
+                        .write(ClipboardContent::plain_text(format_message_timestamp(
+                            &timestamp,
+                        )));
+                }
             }
             AIBlockAction::CopyOutput => {
                 // Copy all AI output from preceding user query until the next user query

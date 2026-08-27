@@ -996,6 +996,10 @@ impl View for AIBlock {
                     user_display_name: &avatar_display_name,
                     profile_image_path: profile_image_path.as_ref(),
                     avatar_color,
+                    query_sent_at: self.query_sent_at(app),
+                    query_timestamp_tooltip_handle: &self
+                        .state_handles
+                        .query_timestamp_tooltip_handle,
                     query_and_index: Some((&query_for_display, input_index)),
                     query_prefix_highlight_len,
                     detected_links_state: &self.detected_links_state,
