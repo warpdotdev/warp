@@ -538,6 +538,7 @@ use crate::workspace::view::orchestration_launch_modal::{
 };
 use crate::workspace::view::right_panel::{RightPanelEvent, RightPanelView};
 use crate::workspace::{ForkFromExchange, ForkedConversationDestination};
+use crate::workspaces::update_manager::TeamUpdateManager;
 use crate::workspaces::user_workspaces::{ResolvedTeamScope, UserWorkspaces};
 use crate::workspaces::workspace::AdminEnablementSetting;
 use crate::{
@@ -26251,6 +26252,9 @@ impl TypedActionView for Workspace {
             }
             OpenNewWindowForTeam { team_uid } => {
                 let team_uid = *team_uid;
+                TeamUpdateManager::handle(ctx).update(ctx, |manager, ctx| {
+                    std::mem::drop(manager.refresh_workspace_metadata(ctx));
+                });
                 let existing_window_id = ctx
                     .windows()
                     .ordered_window_ids()
