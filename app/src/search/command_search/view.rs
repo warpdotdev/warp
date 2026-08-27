@@ -29,7 +29,6 @@ use warpui::{
 use super::ai_queries::AIQueriesDataSource;
 use super::env_var_collections::EnvVarCollectionDataSource;
 use super::history::history_data_source_for_session;
-use super::notebooks::notebooks_data_source;
 use super::warp_ai::WarpAIDataSource;
 use super::workflows::{WorkflowsDataSource, cloud_workflows_data_source};
 use super::zero_state::{CommandSearchZeroStateEvent, CommandSearchZeroStateView};
@@ -271,17 +270,6 @@ impl CommandSearchView {
                     ctx,
                 );
 
-                mixer.add_async_source(
-                    notebooks_data_source(),
-                    HashSet::from([QueryFilter::Notebooks]),
-                    AddAsyncSourceOptions {
-                        debounce_interval: Some(Duration::from_millis(50)),
-                        run_in_zero_state: true,
-                        run_when_unfiltered: true,
-                    },
-                    ctx,
-                );
-
                 // EnvVarCollectionDataSource stays synchronous because each match target is
                 // structurally short (title, variable name, description). The per-item fuzzy
                 // match cost is negligible, so offloading to an async task would add complexity
@@ -511,7 +499,6 @@ impl CommandSearchView {
 
                 AcceptHistory(_)
                 | AcceptWorkflow(_)
-                | AcceptNotebook(_)
                 | OpenWarpAI
                 | AcceptEnvVarCollection(_)
                 | TranslateUsingWarpAI
