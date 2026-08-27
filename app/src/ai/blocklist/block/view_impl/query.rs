@@ -125,7 +125,7 @@ pub(crate) fn render_query(
     }
     let avatar = avatar_container.finish();
     let avatar = if let Some(timestamp) = query_sent_at {
-        appearance.ui_builder().tool_tip_on_element(
+        appearance.ui_builder().overlay_tool_tip_on_element(
             format!("Message sent {}", format_message_timestamp(&timestamp)),
             query_timestamp_tooltip_handle,
             avatar,
