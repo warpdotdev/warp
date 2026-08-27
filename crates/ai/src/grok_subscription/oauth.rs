@@ -59,6 +59,9 @@ const POLL_INTERVAL: Duration = Duration::from_millis(100);
 /// multiple of that -- long enough to ride out that gap, short enough that a
 /// genuinely held port (another app) still fails promptly.
 const BIND_RETRY_WINDOW: Duration = Duration::from_millis(500);
+/// How long to wait for an accepted connection to send its request before
+/// giving up on it.
+const CALLBACK_READ_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// xAI's browser consent screen fetches the loopback callback from these
 /// origins. Since that request crosses origins (https://accounts.x.ai ->
@@ -321,7 +324,7 @@ fn wait_for_callback(
             bail!("timed out waiting for the Grok authorization callback");
         }
         match listener.accept() {
-            Ok((stream, _)) => match handle_callback_connection(stream)? {
+            Ok((stream, _)) => match handle_callback_connection(stream, cancellation)? {
                 Some(data) => return Ok(data),
                 // Unrelated request (e.g. /favicon.ico); keep waiting.
                 None => continue,
@@ -342,19 +345,11 @@ fn wait_for_callback(
 /// Returns `Ok(None)` for requests that aren't the OAuth callback (so the
 /// caller keeps listening), `Ok(Some(..))` on a successful callback, and `Err`
 /// when the provider reported an error or the callback was malformed.
-fn handle_callback_connection(mut stream: TcpStream) -> anyhow::Result<Option<CallbackData>> {
-    // The accepted stream may inherit the listener's non-blocking flag on some
-    // platforms; force blocking reads with a timeout so we get the full request
-    // line without spinning.
-    stream.set_nonblocking(false).ok();
-    stream.set_read_timeout(Some(Duration::from_secs(10))).ok();
-
-    let mut buf = [0u8; 8192];
-    let n = stream
-        .read(&mut buf)
-        .context("failed to read the Grok OAuth callback request")?;
-    let request = String::from_utf8_lossy(&buf[..n]);
-
+fn handle_callback_connection(
+    mut stream: TcpStream,
+    cancellation: &OauthCancellationHandle,
+) -> anyhow::Result<Option<CallbackData>> {
+    let request = read_callback_request(&mut stream, cancellation)?;
     let origin = request_header(&request, "Origin");
 
     // The request line looks like: "GET /callback?code=...&state=... HTTP/1.1".
@@ -422,6 +417,52 @@ fn handle_callback_connection(mut stream: TcpStream) -> anyhow::Result<Option<Ca
     write_response(&mut stream, "200 OK", SUCCESS_HTML, origin.as_deref());
     Ok(Some(CallbackData { code, state }))
 }
+
+/// Reads `stream` until its headers are fully received (a blank line), the
+/// buffer fills, or the connection closes, polling in short increments so a
+/// cancellation is noticed promptly rather than only once `CALLBACK_READ_TIMEOUT`
+/// elapses -- otherwise a connection that's accepted but never sends anything
+/// (e.g. a stray network probe) would hold the listener for that long after
+/// Cancel.
+fn read_callback_request(
+    stream: &mut TcpStream,
+    cancellation: &OauthCancellationHandle,
+) -> anyhow::Result<String> {
+    stream
+        .set_nonblocking(true)
+        .context("failed to set the Grok OAuth callback stream to non-blocking mode")?;
+    let deadline = Instant::now() + CALLBACK_READ_TIMEOUT;
+    let mut buf = [0u8; 8192];
+    let mut total = 0;
+    loop {
+        if cancellation.cancelled.load(Ordering::Acquire) {
+            bail!("Grok authorization was cancelled");
+        }
+        match stream.read(&mut buf[total..]) {
+            Ok(0) => break,
+            Ok(n) => {
+                total += n;
+                if total == buf.len() || buf[..total].windows(4).any(|window| window == b"\r\n\r\n")
+                {
+                    break;
+                }
+            }
+            Err(ref e) if e.kind() == ErrorKind::WouldBlock => {
+                if Instant::now() >= deadline {
+                    bail!("timed out reading the Grok OAuth callback request");
+                }
+                std::thread::sleep(POLL_INTERVAL);
+            }
+            Err(e) => {
+                return Err(
+                    anyhow::Error::new(e).context("failed to read the Grok OAuth callback request")
+                );
+            }
+        }
+    }
+    Ok(String::from_utf8_lossy(&buf[..total]).into_owned())
+}
+
 fn request_header(request: &str, header_name: &str) -> Option<String> {
     request.lines().skip(1).find_map(|line| {
         let (name, value) = line.split_once(':')?;

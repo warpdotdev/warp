@@ -3,6 +3,7 @@
 use ai::LLMProvider;
 use ai::api_keys::{ApiKeyManager, ApiKeyManagerEvent};
 use ai::grok_subscription::oauth::OauthAttempt;
+use uuid::Uuid;
 use warp::editor::{CodeEditorModel, CodeEditorModelEvent};
 use warp::settings::{AISettings, AISettingsChangedEvent};
 use warp::tui_export::{TeamContextResolver, UserWorkspaces};
@@ -74,6 +75,12 @@ enum TuiApiKeysMenuState {
         provider: LLMProvider,
         error: Option<String>,
     },
+    /// The loopback bind is still in flight (see `OauthAttempt::start`).
+    /// `attempt_id` is invalidated by leaving this state -- Esc/dismiss or
+    /// the shared menu deactivating -- so a bind result that arrives after
+    /// that is dropped instead of opening a browser tab for a login that's
+    /// no longer wanted.
+    ConnectingGrokPending { attempt_id: Uuid },
     ConnectingGrok {
         controller: ModelHandle<TuiGrokOAuthController>,
     },
@@ -123,7 +130,8 @@ impl TuiApiKeysMenuModel {
                         controller.clear_manual_error(ctx);
                     });
                 }
-                TuiApiKeysMenuState::Closed => {}
+                TuiApiKeysMenuState::ConnectingGrokPending { .. } | TuiApiKeysMenuState::Closed => {
+                }
             }
         });
         ctx.subscribe_to_model(
@@ -180,19 +188,38 @@ impl TuiApiKeysMenuModel {
             self.set_browsing_error(error.to_owned(), ctx);
             return;
         }
-        ctx.spawn(OauthAttempt::start(), |menu, result, ctx| {
-            menu.handle_grok_oauth_bound(result, ctx);
+        // Represent the pending bind immediately so Esc (or a policy change
+        // via `deactivate`) has a state to cancel out of during the bind's
+        // brief retry window, rather than leaving the menu in `Browsing` --
+        // where Esc would close the menu instead -- until it resolves.
+        let attempt_id = Uuid::new_v4();
+        self.state = TuiApiKeysMenuState::ConnectingGrokPending { attempt_id };
+        ctx.emit(TuiApiKeysMenuEvent);
+
+        ctx.spawn(OauthAttempt::start(), move |menu, result, ctx| {
+            menu.handle_grok_oauth_bound(attempt_id, result, ctx);
         });
     }
 
     fn handle_grok_oauth_bound(
         &mut self,
+        attempt_id: Uuid,
         result: anyhow::Result<OauthAttempt>,
         ctx: &mut ModelContext<Self>,
     ) {
+        if !matches!(
+            &self.state,
+            TuiApiKeysMenuState::ConnectingGrokPending { attempt_id: pending_id } if *pending_id == attempt_id
+        ) {
+            // Cancelled (Esc, or the shared menu deactivating) while the
+            // bind was still pending: drop the result.
+            return;
+        }
+
         let attempt = match result {
             Ok(attempt) => attempt,
             Err(error) => {
+                self.transition_to_browsing(ctx);
                 self.set_browsing_error(error.to_string(), ctx);
                 return;
             }
@@ -240,6 +267,7 @@ impl TuiApiKeysMenuModel {
             TuiApiKeysMenuState::Closed => {}
             TuiApiKeysMenuState::Browsing { .. } => self.close(ctx),
             TuiApiKeysMenuState::EditingProvider { .. }
+            | TuiApiKeysMenuState::ConnectingGrokPending { .. }
             | TuiApiKeysMenuState::ConnectingGrok { .. } => self.transition_to_browsing(ctx),
         }
     }
@@ -253,7 +281,9 @@ impl TuiApiKeysMenuModel {
             TuiApiKeysMenuState::EditingProvider { .. } => {
                 TuiInlineMenuInputOwnership::InlineMenuMasked
             }
-            TuiApiKeysMenuState::Browsing { .. } | TuiApiKeysMenuState::ConnectingGrok { .. } => {
+            TuiApiKeysMenuState::Browsing { .. }
+            | TuiApiKeysMenuState::ConnectingGrokPending { .. }
+            | TuiApiKeysMenuState::ConnectingGrok { .. } => {
                 TuiInlineMenuInputOwnership::InlineMenuPlainText
             }
             TuiApiKeysMenuState::Closed => TuiInlineMenuInputOwnership::Composer,
@@ -265,6 +295,7 @@ impl TuiApiKeysMenuModel {
             && matches!(
                 self.state,
                 TuiApiKeysMenuState::EditingProvider { .. }
+                    | TuiApiKeysMenuState::ConnectingGrokPending { .. }
                     | TuiApiKeysMenuState::ConnectingGrok { .. }
             )
     }
@@ -289,7 +320,8 @@ impl TuiApiKeysMenuModel {
             TuiApiKeysMenuState::EditingProvider { provider, .. } => {
                 Some(TuiApiKeysFooter::EditingProvider(*provider))
             }
-            TuiApiKeysMenuState::ConnectingGrok { .. } => Some(TuiApiKeysFooter::ConnectingGrok),
+            TuiApiKeysMenuState::ConnectingGrokPending { .. }
+            | TuiApiKeysMenuState::ConnectingGrok { .. } => Some(TuiApiKeysFooter::ConnectingGrok),
         }
     }
 
@@ -305,6 +337,7 @@ impl TuiApiKeysMenuModel {
             }
             TuiApiKeysMenuState::Closed
             | TuiApiKeysMenuState::EditingProvider { .. }
+            | TuiApiKeysMenuState::ConnectingGrokPending { .. }
             | TuiApiKeysMenuState::ConnectingGrok { .. } => false,
         }
     }
@@ -319,6 +352,7 @@ impl TuiApiKeysMenuModel {
             }
             TuiApiKeysMenuState::Closed
             | TuiApiKeysMenuState::EditingProvider { .. }
+            | TuiApiKeysMenuState::ConnectingGrokPending { .. }
             | TuiApiKeysMenuState::ConnectingGrok { .. } => return,
         };
         let result = if provider == LLMProvider::Xai {
@@ -393,6 +427,9 @@ impl TuiApiKeysMenuModel {
                 let provider = *provider;
                 self.save_provider(provider, ctx);
             }
+            // Nothing to submit yet -- there's no manual-code exchange until
+            // the bind resolves.
+            TuiApiKeysMenuState::ConnectingGrokPending { .. } => {}
             TuiApiKeysMenuState::ConnectingGrok { controller } => {
                 let controller = controller.clone();
                 let code = input_text(&self.input_editor, ctx);
@@ -442,26 +479,40 @@ impl TuiApiKeysMenuModel {
                     status: error.clone().map(TuiInlineMenuStatus::Empty),
                 })
             }
+            TuiApiKeysMenuState::ConnectingGrokPending { .. } => {
+                Some(self.connecting_grok_snapshot(ctx, None))
+            }
             TuiApiKeysMenuState::ConnectingGrok { controller } => {
                 let error = controller.as_ref(ctx).error().map(ToOwned::to_owned);
-                let rows = PROVIDER_ROWS
-                    .into_iter()
-                    .chain(std::iter::once(FALLBACK_ROW))
-                    .map(|row| self.snapshot_row(&row, ctx, true))
-                    .collect();
-                Some(TuiInlineMenuSnapshot {
-                    header: Some(TuiInlineMenuHeader {
-                        title: Some(error.unwrap_or_else(|| "API keys".to_owned())),
-                        tabs: Vec::new(),
-                    }),
-                    rows,
-                    selected_index: Some(3),
-                    scroll_offset: 0,
-                    scroll_anchor: TuiInlineMenuScrollAnchor::Selection,
-                    max_visible_rows: MAX_VISIBLE_ROWS,
-                    status: None,
-                })
+                Some(self.connecting_grok_snapshot(ctx, error))
             }
+        }
+    }
+
+    /// Shared row/header shape for both Grok-connecting states -- `error` is
+    /// `None` while the bind is still pending, since there's no controller
+    /// yet to report one.
+    fn connecting_grok_snapshot(
+        &self,
+        ctx: &AppContext,
+        error: Option<String>,
+    ) -> TuiInlineMenuSnapshot {
+        let rows = PROVIDER_ROWS
+            .into_iter()
+            .chain(std::iter::once(FALLBACK_ROW))
+            .map(|row| self.snapshot_row(&row, ctx, true))
+            .collect();
+        TuiInlineMenuSnapshot {
+            header: Some(TuiInlineMenuHeader {
+                title: Some(error.unwrap_or_else(|| "API keys".to_owned())),
+                tabs: Vec::new(),
+            }),
+            rows,
+            selected_index: Some(3),
+            scroll_offset: 0,
+            scroll_anchor: TuiInlineMenuScrollAnchor::Selection,
+            max_visible_rows: MAX_VISIBLE_ROWS,
+            status: None,
         }
     }
 
@@ -599,9 +650,12 @@ impl TuiApiKeysMenuModel {
         }
         let grok_controller = match &self.state {
             TuiApiKeysMenuState::ConnectingGrok { controller } => Some(controller.clone()),
+            // A pending bind has no controller to cancel; setting `state`
+            // below already invalidates its `attempt_id`.
             TuiApiKeysMenuState::Closed
             | TuiApiKeysMenuState::Browsing { .. }
-            | TuiApiKeysMenuState::EditingProvider { .. } => None,
+            | TuiApiKeysMenuState::EditingProvider { .. }
+            | TuiApiKeysMenuState::ConnectingGrokPending { .. } => None,
         };
         self.state = TuiApiKeysMenuState::Closed;
         if let Some(controller) = grok_controller

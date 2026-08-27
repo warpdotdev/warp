@@ -614,10 +614,18 @@ const GROK_OAUTH_CONNECT_TOAST_OBJECT_ID: &str = "grok_oauth_connect_toast";
 /// `id` distinguishes this attempt from any that came before it, so a
 /// completion that arrives after Cancel was followed by a new Connect
 /// recognizes it belongs to a superseded attempt and leaves the newer one's
-/// state alone.
+/// state alone. `started` is `None` while the loopback bind is still
+/// in-flight -- there's nothing to cancel yet, so Cancel (or a policy
+/// revocation) invalidates the attempt by clearing this field entirely; the
+/// bind result is then dropped without opening a browser tab once it arrives.
 #[cfg(not(target_family = "wasm"))]
 struct GrokOauthAttempt {
     id: Uuid,
+    started: Option<GrokOauthStarted>,
+}
+
+#[cfg(not(target_family = "wasm"))]
+struct GrokOauthStarted {
     manual_exchange: ManualCodeExchange,
     cancellation: OauthCancellationHandle,
 }
@@ -1752,16 +1760,30 @@ impl WarpAgentPageView {
         // a preceding Initiated to pair with, for funnel/drop-off analysis.
         send_telemetry_from_ctx!(TelemetryEvent::SuperGrokSubscriptionConnectInitiated, ctx);
 
-        // Binding retries for a bit off the UI thread (see
-        // `OauthAttempt::start`), so it's spawned rather than called inline.
-        ctx.spawn(oauth::OauthAttempt::start(), |me, result, ctx| {
-            me.handle_grok_oauth_bound(result, ctx);
+        // Represent the attempt immediately, before the bind resolves, so the
+        // row shows Cancel (not a second Connect) for the bind's brief retry
+        // window. `started` fills in once `OauthAttempt::start` (spawned off
+        // the UI thread since it retries) resolves; `handle_grok_oauth_bound`
+        // checks `attempt_id` still matches before acting on that result.
+        let attempt_id = Uuid::new_v4();
+        self.grok_oauth_attempt = Some(GrokOauthAttempt {
+            id: attempt_id,
+            started: None,
+        });
+        self.grok_code_editor.update(ctx, |editor, ctx| {
+            editor.clear_buffer(ctx);
+        });
+        ctx.notify();
+
+        ctx.spawn(oauth::OauthAttempt::start(), move |me, result, ctx| {
+            me.handle_grok_oauth_bound(attempt_id, result, ctx);
         });
     }
 
     #[cfg(not(target_family = "wasm"))]
     fn handle_grok_oauth_bound(
         &mut self,
+        attempt_id: Uuid,
         result: anyhow::Result<oauth::OauthAttempt>,
         ctx: &mut ViewContext<Self>,
     ) {
@@ -1771,9 +1793,17 @@ impl WarpAgentPageView {
         use crate::view_components::{DismissibleToast, ToastLink};
         use crate::workspace::WorkspaceAction;
 
+        if self.grok_oauth_attempt.as_ref().map(|attempt| attempt.id) != Some(attempt_id) {
+            // Cancelled, or superseded by a newer attempt, while the bind
+            // was still pending: drop the result without opening a browser
+            // tab for a login that's no longer wanted.
+            return;
+        }
+
         let attempt = match result {
             Ok(attempt) => attempt,
             Err(err) => {
+                self.grok_oauth_attempt = None;
                 safe_error!(
                     safe: ("Failed to start Grok OAuth callback server"),
                     full: ("Failed to start Grok OAuth callback server: {err:#}")
@@ -1794,14 +1824,12 @@ impl WarpAgentPageView {
             }
         };
 
-        let attempt_id = Uuid::new_v4();
         self.grok_oauth_attempt = Some(GrokOauthAttempt {
             id: attempt_id,
-            manual_exchange: attempt.manual_code_exchange(),
-            cancellation: attempt.cancellation_handle(),
-        });
-        self.grok_code_editor.update(ctx, |editor, ctx| {
-            editor.clear_buffer(ctx);
+            started: Some(GrokOauthStarted {
+                manual_exchange: attempt.manual_code_exchange(),
+                cancellation: attempt.cancellation_handle(),
+            }),
         });
         ctx.notify();
 
@@ -1915,7 +1943,12 @@ impl WarpAgentPageView {
         let Some(attempt) = self.grok_oauth_attempt.take() else {
             return;
         };
-        attempt.cancellation.cancel();
+        // While the bind is still pending (`started` is `None`), there's
+        // nothing to cancel yet; taking the attempt above already invalidates
+        // it, so the eventual bind result is dropped once it arrives.
+        if let Some(started) = attempt.started {
+            started.cancellation.cancel();
+        }
         self.grok_code_editor.update(ctx, |editor, ctx| {
             editor.clear_buffer(ctx);
         });
@@ -1945,14 +1978,18 @@ impl WarpAgentPageView {
         use crate::ToastStack;
         use crate::view_components::DismissibleToast;
 
-        let Some(active) = &self.grok_oauth_attempt else {
+        let Some(GrokOauthAttempt {
+            id: attempt_id,
+            started: Some(started),
+        }) = &self.grok_oauth_attempt
+        else {
             return;
         };
         if code.trim().is_empty() {
             return;
         }
-        let attempt_id = active.id;
-        let exchange = active.manual_exchange.clone();
+        let attempt_id = *attempt_id;
+        let exchange = started.manual_exchange.clone();
 
         ctx.spawn(
             async move { exchange.exchange(&code).await },
@@ -1968,7 +2005,9 @@ impl WarpAgentPageView {
                         // The loopback attempt may still be racing in the
                         // background; cancel it so it releases the port
                         // instead of holding it until `CALLBACK_TIMEOUT`.
-                        active.cancellation.cancel();
+                        if let Some(started) = &active.started {
+                            started.cancellation.cancel();
+                        }
                         me.finalize_connected_grok_attempt(tokens, ctx);
                     }
                     Err(err) => {
@@ -5555,8 +5594,15 @@ impl SettingsWidget for ApiKeysWidget {
                 .finish(),
             );
 
+            // Only once the attempt has actually started -- while the bind is
+            // still pending, there's no `ManualCodeExchange` yet to submit a
+            // code against.
             #[cfg(not(target_family = "wasm"))]
-            if grok_attempt_in_progress {
+            if view
+                .grok_oauth_attempt
+                .as_ref()
+                .is_some_and(|attempt| attempt.started.is_some())
+            {
                 column.add_child(
                     Container::new(self.render_grok_manual_code_entry(view, appearance))
                         .with_margin_top(8.)

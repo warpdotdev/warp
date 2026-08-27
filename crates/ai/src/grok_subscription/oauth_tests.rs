@@ -163,6 +163,57 @@ fn loopback_callback_is_delivered_after_the_listener_closes() {
     );
 }
 
+/// Regression coverage for the accepted-connection stall: a client that
+/// connects without ever sending a request must not hold the loopback port
+/// past a poll interval once cancelled, even though the per-connection read
+/// timeout (`CALLBACK_READ_TIMEOUT`) is far longer -- otherwise a Connect
+/// right after Cancel can still hit `AddrInUse` despite the bind retry above.
+#[test]
+#[serial_test::serial(grok_oauth_loopback_port)]
+fn cancelling_with_a_stalled_accepted_connection_still_releases_promptly() {
+    let (listener, address) = bind_test_listener();
+    let cancellation = OauthCancellationHandle {
+        cancelled: Arc::new(AtomicBool::new(false)),
+    };
+
+    // Connect without ever sending data, standing in for a stray probe or a
+    // browser tab that opened the socket but hasn't sent the request yet.
+    let stalled_client = TcpStream::connect(address).expect("stalled client should connect");
+
+    let flow_cancellation = cancellation.clone();
+    let result_thread = std::thread::spawn(move || {
+        warpui_core::r#async::block_on(run_oauth_flow(
+            listener,
+            PkceParams::generate(),
+            flow_cancellation,
+        ))
+    });
+
+    // Give the accept loop time to accept the stalled connection and block on
+    // reading it before cancelling, so this exercises the read-level check
+    // rather than the outer loop's pre-accept check.
+    std::thread::sleep(POLL_INTERVAL * 2);
+    cancellation.cancel();
+
+    let started_waiting = Instant::now();
+    let result = result_thread.join().expect("flow thread should finish");
+    let elapsed = started_waiting.elapsed();
+
+    assert_eq!(
+        result
+            .expect_err("cancelled callback wait should fail")
+            .to_string(),
+        "Grok authorization was cancelled"
+    );
+    assert!(
+        elapsed < Duration::from_secs(1),
+        "cancelling with a stalled accepted connection took {elapsed:?}; \
+         expected it to release well under CALLBACK_READ_TIMEOUT"
+    );
+    TcpListener::bind(address).expect("cancelled callback listener should release its port");
+    drop(stalled_client);
+}
+
 /// The regression this guards against: a Connect immediately after Cancel
 /// hitting `AddrInUse` because the previous attempt's accept loop hasn't yet
 /// noticed the cancellation and dropped its listener.

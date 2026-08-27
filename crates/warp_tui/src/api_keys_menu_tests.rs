@@ -187,7 +187,6 @@ fn open_and_connect_grok_matches_selecting_the_grok_row() {
             });
             menu
         });
-        wait_for_connecting_grok(&mut app, &reference).await;
 
         // Shortcut path: a single call jumps straight into the Grok connect flow.
         let shortcut = app.update(|ctx| {
@@ -204,7 +203,6 @@ fn open_and_connect_grok_matches_selecting_the_grok_row() {
             menu.update(ctx, |menu, ctx| menu.open_and_connect_grok(ctx));
             menu
         });
-        wait_for_connecting_grok(&mut app, &shortcut).await;
 
         app.read(|ctx| {
             assert!(shortcut.as_ref(ctx).is_open(ctx));
@@ -227,17 +225,45 @@ fn open_and_connect_grok_matches_selecting_the_grok_row() {
     });
 }
 
-/// Binding now retries asynchronously off the UI thread (see
-/// `OauthAttempt::start`), so the menu only reaches `ConnectingGrok` once that
-/// background hop resolves.
-async fn wait_for_connecting_grok(app: &mut App, menu: &ModelHandle<TuiApiKeysMenuModel>) {
-    for _ in 0..2000 {
-        if app.read(|ctx| menu.as_ref(ctx).footer(ctx)) == Some(TuiApiKeysFooter::ConnectingGrok) {
-            return;
+/// The bind itself (see `OauthAttempt::start`) retries off the UI thread, but
+/// the menu represents the attempt as `ConnectingGrokPending` synchronously
+/// before that resolves. A Cancel (Esc/dismiss) arriving during that window
+/// must invalidate the attempt so its eventual bind result -- which still
+/// completes against the real loopback port -- is dropped instead of
+/// reopening `ConnectingGrok` on a menu the user already backed out of.
+#[test]
+fn cancel_while_grok_bind_is_pending_discards_the_late_result() {
+    App::test((), |mut app| async move {
+        let (_, _, menu) = add_menu(&mut app);
+
+        menu.update(&mut app, |menu, ctx| {
+            assert!(menu.select_at_snapshot_index(3, ctx));
+            menu.accept_selected(ctx);
+            menu.dismiss(ctx);
+        });
+
+        app.read(|ctx| {
+            assert!(matches!(
+                menu.as_ref(ctx).footer(ctx),
+                Some(TuiApiKeysFooter::ProviderList { .. })
+            ));
+        });
+
+        // Give the real background bind time to resolve.
+        for _ in 0..200 {
+            Timer::after(Duration::from_millis(5)).await;
         }
-        Timer::after(Duration::from_millis(1)).await;
-    }
-    panic!("timed out waiting for the Grok connect attempt to bind");
+        app.read(|ctx| {
+            assert!(
+                !matches!(
+                    menu.as_ref(ctx).footer(ctx),
+                    Some(TuiApiKeysFooter::ConnectingGrok)
+                ),
+                "a late bind result must not reopen ConnectingGrok on a cancelled attempt"
+            );
+            assert!(menu.as_ref(ctx).is_open(ctx));
+        });
+    });
 }
 
 #[test]
