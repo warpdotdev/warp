@@ -284,8 +284,8 @@ fn model_menu_row(
 ) -> TuiModelMenuRow {
     let is_key_connected = should_show_key_icon_for_model(&choice.llm, scope, app);
     let uses_external_inference = is_key_connected
-        || should_show_bedrock_icon_for_model(&choice.llm, app)
-        || should_show_gemini_enterprise_agent_platform_icon_for_model(&choice.llm, app);
+        || should_show_bedrock_icon_for_model(&choice.llm, scope, app)
+        || should_show_gemini_enterprise_agent_platform_icon_for_model(&choice.llm, scope, app);
     TuiModelMenuRow {
         is_selectable: choice.is_selectable(),
         is_key_connected,

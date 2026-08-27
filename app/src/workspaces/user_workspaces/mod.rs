@@ -17,11 +17,11 @@ use super::team::{DiscoverableTeam, MembershipRole, Team};
 #[cfg(test)]
 use super::workspace::WorkspaceMemberUsageInfo;
 use super::workspace::{
-    AdminEnablementSetting, EnterpriseSecretRegex, HostEnablementSetting,
-    UgcCollectionEnablementSetting, Workspace, WorkspaceUid,
+    AdminEnablementSetting, EnterpriseSecretRegex, UgcCollectionEnablementSetting, Workspace,
+    WorkspaceUid,
 };
 use crate::ai::credit_availability::AICreditAvailability;
-use crate::ai::llms::{AvailableLLMs, LLMModelHost, MODELS_BY_FEATURE_CACHE_KEY, ModelsByFeature};
+use crate::ai::llms::{AvailableLLMs, MODELS_BY_FEATURE_CACHE_KEY, ModelsByFeature};
 use crate::ai::request_usage_model::AIRequestUsageModel;
 use crate::auth::{AuthStateProvider, UserUid};
 use crate::channel::ChannelState;
@@ -47,6 +47,8 @@ use crate::workspaces::workspace::{
 };
 pub(crate) mod billing_workspace_settings;
 pub(crate) mod team_workspace_settings;
+#[cfg(not(target_family = "wasm"))]
+pub(crate) use team_workspace_settings::GeminiEnterpriseBackgroundHost;
 pub(crate) use team_workspace_settings::TeamContextForOperation;
 #[cfg(test)]
 pub(crate) use team_workspace_settings::TeamlessScopeForTest;
@@ -642,112 +644,6 @@ impl UserWorkspaces {
         Self::emit_window_team_changed(reassigned_windows, ctx);
         if changed {
             ctx.emit(UserWorkspacesEvent::CurrentWorkspaceChanged);
-        }
-    }
-
-    pub fn aws_bedrock_host_settings(&self) -> Option<&super::workspace::LlmHostSettings> {
-        self.current_workspace().and_then(|workspace| {
-            workspace
-                .settings
-                .llm_settings
-                .host_configs
-                .get(&LLMModelHost::AwsBedrock)
-        })
-    }
-
-    /// Did the admin enable AWS Bedrock for the current workspace?
-    pub fn is_aws_bedrock_available_from_workspace(&self) -> bool {
-        self.current_workspace().is_some_and(|workspace| {
-            workspace.settings.llm_settings.enabled
-                && self
-                    .aws_bedrock_host_settings()
-                    .is_some_and(|settings| settings.enabled)
-        })
-    }
-    pub fn aws_bedrock_host_enablement_setting(&self) -> HostEnablementSetting {
-        self.aws_bedrock_host_settings()
-            .map(|settings| settings.enablement_setting.clone())
-            .unwrap_or_default()
-    }
-
-    pub fn is_aws_bedrock_credentials_toggleable(&self) -> bool {
-        matches!(
-            self.aws_bedrock_host_enablement_setting(),
-            HostEnablementSetting::RespectUserSetting
-        )
-    }
-
-    pub fn is_aws_bedrock_credentials_enabled(&self, app: &AppContext) -> bool {
-        // i.e. did the admin go and toggle on aws bedrock in the admin panel?
-        if !self.is_aws_bedrock_available_from_workspace() {
-            return false;
-        }
-
-        match self.aws_bedrock_host_enablement_setting() {
-            HostEnablementSetting::Enforce => true,
-            HostEnablementSetting::RespectUserSetting => *AISettings::as_ref(app)
-                .aws_bedrock_credentials_enabled
-                .value(),
-        }
-    }
-
-    pub fn gemini_enterprise_host_settings(&self) -> Option<&super::workspace::LlmHostSettings> {
-        self.current_workspace().and_then(|workspace| {
-            workspace
-                .settings
-                .llm_settings
-                .host_configs
-                .get(&LLMModelHost::GeminiEnterprise)
-        })
-    }
-
-    /// Did the admin enable Gemini Enterprise (GEAP) for the current workspace?
-    pub fn is_gemini_enterprise_available_from_workspace(&self) -> bool {
-        self.current_workspace().is_some_and(|workspace| {
-            workspace.settings.llm_settings.enabled
-                && self
-                    .gemini_enterprise_host_settings()
-                    .is_some_and(|settings| settings.enabled)
-        })
-    }
-
-    pub fn gemini_enterprise_host_enablement_setting(&self) -> HostEnablementSetting {
-        self.gemini_enterprise_host_settings()
-            .map(|settings| settings.enablement_setting.clone())
-            .unwrap_or_default()
-    }
-
-    pub fn is_gemini_enterprise_credentials_toggleable(&self) -> bool {
-        matches!(
-            self.gemini_enterprise_host_enablement_setting(),
-            HostEnablementSetting::RespectUserSetting
-        )
-    }
-
-    /// Whether Gemini Enterprise (GEAP) credentials should be minted and attached for the
-    /// current user. Anonymous/logged-out guard from [`Self::is_byo_api_key_enabled`]:
-    /// a GEAP credential mint is rooted in the user's Warp session, so without one
-    /// there is nothing to mint from.
-    pub fn is_gemini_enterprise_credentials_enabled(&self, app: &AppContext) -> bool {
-        if !FeatureFlag::GeminiEnterprise.is_enabled() {
-            return false;
-        }
-        if AuthStateProvider::as_ref(app)
-            .get()
-            .is_anonymous_or_logged_out()
-        {
-            return false;
-        }
-        // i.e. did the admin toggle on Gemini Enterprise in the admin panel?
-        if !self.is_gemini_enterprise_available_from_workspace() {
-            return false;
-        }
-
-        match self.gemini_enterprise_host_enablement_setting() {
-            HostEnablementSetting::Enforce => true,
-            HostEnablementSetting::RespectUserSetting => *AISettings::as_ref(app)
-                .gemini_enterprise_credentials_enabled
-                .value(),
         }
     }
 

@@ -27,7 +27,7 @@ use crate::ai::blocklist::{
     BlocklistAIHistoryEvent, BlocklistAIHistoryModel, PendingAttachment, PendingFile, RequestInput,
     ResponseStream, ResponseStreamId,
 };
-use crate::ai::geap_credentials::{GeapPolicy, current_geap_policy};
+use crate::ai::geap_credentials::{GeapPolicy, current_geap_policy_for_any_team};
 use crate::ai::llms::{LLMId, LLMModelHost, LLMProvider};
 use crate::server::ids::ServerId;
 use crate::terminal::TerminalView;
@@ -42,7 +42,7 @@ use crate::workspaces::workspace::{
 };
 
 /// A workload identity provider resource name shaped like a real one, used only to satisfy
-/// [`current_geap_policy`]'s non-empty-audience check.
+/// [`current_geap_policy_for_any_team`]'s non-empty-audience check.
 const GEAP_TEST_AUDIENCE: &str = "//iam.googleapis.com/projects/123456/locations/global/workloadIdentityPools/warp-pool/providers/warp-provider";
 const GEAP_TEST_SA_EMAIL: &str = "warp-geap@test-project.iam.gserviceaccount.com";
 
@@ -721,7 +721,31 @@ fn passive_suggestions_request_params_scope_member_byo_credentials_by_the_window
         let _geap_flag = FeatureFlag::GeminiEnterprise.override_enabled(true);
         initialize_app_for_terminal_view(&mut app);
 
-        let (team_a, team_b) = two_teams_of_opposing_byo_policy();
+        let (mut team_a, mut team_b) = two_teams_of_opposing_byo_policy();
+        // Bedrock/GEAP are team-scoped host settings, so both teams need them configured
+        // identically: this fences that org-level credentials survive either team's policy,
+        // as opposed to `team_byo`, which the two teams deliberately disagree on.
+        for team in [&mut team_a, &mut team_b] {
+            team.settings.llm_settings.enabled = true;
+            team.settings.llm_settings.host_configs.insert(
+                LLMModelHost::AwsBedrock,
+                LlmHostSettings {
+                    enabled: true,
+                    enablement_setting: HostEnablementSetting::Enforce,
+                    gcp_audience: None,
+                    gcp_sa_email: None,
+                },
+            );
+            team.settings.llm_settings.host_configs.insert(
+                LLMModelHost::GeminiEnterprise,
+                LlmHostSettings {
+                    enabled: true,
+                    enablement_setting: HostEnablementSetting::Enforce,
+                    gcp_audience: Some(GEAP_TEST_AUDIENCE.to_string()),
+                    gcp_sa_email: Some(GEAP_TEST_SA_EMAIL.to_string()),
+                },
+            );
+        }
         let mut workspace = workspace_for_test(vec![team_a.clone(), team_b.clone()]);
         // Plan-level BYO entitlement is workspace-owned (see
         // `UserWorkspaces::is_managed_byok_byoe_enabled`), so it's shared by both teams; only
@@ -732,25 +756,6 @@ fn passive_suggestions_request_params_scope_member_byo_credentials_by_the_window
             Some(ByoEndpointPolicy { enabled: true });
         workspace.billing_metadata.tier.managed_byok_byoe_policy =
             Some(ManagedByokByoePolicy { enabled: true });
-        workspace.settings.llm_settings.enabled = true;
-        workspace.settings.llm_settings.host_configs.insert(
-            LLMModelHost::AwsBedrock,
-            LlmHostSettings {
-                enabled: true,
-                enablement_setting: HostEnablementSetting::Enforce,
-                gcp_audience: None,
-                gcp_sa_email: None,
-            },
-        );
-        workspace.settings.llm_settings.host_configs.insert(
-            LLMModelHost::GeminiEnterprise,
-            LlmHostSettings {
-                enabled: true,
-                enablement_setting: HostEnablementSetting::Enforce,
-                gcp_audience: Some(GEAP_TEST_AUDIENCE.to_string()),
-                gcp_sa_email: Some(GEAP_TEST_SA_EMAIL.to_string()),
-            },
-        );
         set_current_workspace(&mut app, workspace);
 
         ApiKeyManager::handle(&app).update(&mut app, |manager, ctx| {
@@ -779,7 +784,7 @@ fn passive_suggestions_request_params_scope_member_byo_credentials_by_the_window
                 },
                 ctx,
             );
-            let binding = match current_geap_policy(ctx) {
+            let binding = match current_geap_policy_for_any_team(ctx) {
                 GeapPolicy::Mintable(binding) => binding,
                 other => panic!("expected a mintable GEAP policy, got {other:?}"),
             };

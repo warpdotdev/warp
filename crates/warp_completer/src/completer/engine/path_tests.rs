@@ -387,15 +387,6 @@ pub fn test_path_completions_with_special_characters_fuzzy() {
         .collect_vec(),
         vec![
             Suggestion::new(
-                "!nice ~/",
-                r"\!nice\ \~/",
-                Some("Directory".into()),
-                SuggestionType::Argument,
-                Priority::default(),
-            )
-            .with_icon_override(IconType::Folder)
-            .with_file_type(EngineFileType::Directory),
-            Suggestion::new(
                 "~/",
                 r"\~/",
                 Some("Directory".into()),

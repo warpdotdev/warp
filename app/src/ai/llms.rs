@@ -131,22 +131,27 @@ fn should_show_host_icon_for_model(
             .is_some_and(|config| config.enabled)
 }
 
-pub fn should_show_bedrock_icon_for_model(llm: &LLMInfo, app: &AppContext) -> bool {
+pub fn should_show_bedrock_icon_for_model(
+    llm: &LLMInfo,
+    scope: &dyn TeamScope,
+    app: &AppContext,
+) -> bool {
     should_show_host_icon_for_model(
         llm,
         &LLMModelHost::AwsBedrock,
-        UserWorkspaces::as_ref(app).is_aws_bedrock_credentials_enabled(app),
+        UserWorkspaces::as_ref(app).is_aws_bedrock_credentials_enabled(scope, app),
     )
 }
 
 pub fn should_show_gemini_enterprise_agent_platform_icon_for_model(
     llm: &LLMInfo,
+    scope: &dyn TeamScope,
     app: &AppContext,
 ) -> bool {
     should_show_host_icon_for_model(
         llm,
         &LLMModelHost::GeminiEnterprise,
-        UserWorkspaces::as_ref(app).is_gemini_enterprise_credentials_enabled(app),
+        UserWorkspaces::as_ref(app).is_gemini_enterprise_credentials_enabled(scope, app),
     )
 }
 
@@ -771,7 +776,7 @@ impl LLMPreferences {
         }
 
         let base_llm_for_terminal_view = HashMap::new();
-        let custom_llms = build_custom_llm_infos(ApiKeyManager::as_ref(ctx).keys());
+        let custom_llms = build_custom_llm_infos(ApiKeyManager::as_ref(ctx).custom_endpoints());
 
         let mut me = Self {
             agent_mode_models_unavailable: HashMap::new(),
@@ -1432,11 +1437,11 @@ impl LLMPreferences {
         }
     }
 
-    /// Reads the user's current `ApiKeyManager.custom_endpoints` and replaces `custom_llms`
+    /// Reads the user's current joined custom endpoints and replaces `custom_llms`
     /// with synthetic `LLMInfo`s. Called on every `ApiKeyManagerEvent::KeysUpdated`, so adds,
     /// edits, and removals all propagate immediately.
     fn rebuild_custom_llms(&mut self, app: &AppContext) {
-        self.custom_llms = build_custom_llm_infos(ApiKeyManager::as_ref(app).keys());
+        self.custom_llms = build_custom_llm_infos(ApiKeyManager::as_ref(app).custom_endpoints());
     }
 
     fn sanitize_disabled_custom_model_preferences(&mut self, ctx: &mut ModelContext<Self>) {
@@ -2196,8 +2201,8 @@ fn get_new_agent_mode_choices(
 ///
 /// Endpoints with empty URL or API key, and models with empty name or config_key, are
 /// skipped — they shouldn't surface in the picker until the user finishes configuring them.
-fn build_custom_llm_infos(keys: &ai::api_keys::ApiKeys) -> Vec<LLMInfo> {
-    keys.custom_endpoints
+fn build_custom_llm_infos(endpoints: &[CustomEndpoint]) -> Vec<LLMInfo> {
+    endpoints
         .iter()
         .filter(|ep| !ep.url.trim().is_empty() && !ep.api_key.is_empty())
         .flat_map(|endpoint| {

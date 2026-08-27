@@ -622,7 +622,8 @@ impl ResponseStream {
                 });
             if uses_geap
                 && let Some(binding) =
-                    crate::ai::geap_credentials::current_geap_policy(ctx).mint_binding()
+                    crate::ai::geap_credentials::current_geap_policy_for_any_team(ctx)
+                        .mint_binding()
             {
                 let refresh_binding = binding.clone();
                 let refresh_rx = ApiKeyManager::handle(ctx).update(ctx, |manager, ctx| {

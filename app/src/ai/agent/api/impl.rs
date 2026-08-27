@@ -80,6 +80,7 @@ pub async fn generate_multi_agent_output(
             use_anthropic_text_editor_tools: false,
             planning_enabled: params.planning_enabled,
             supports_create_files: true,
+            supports_create_file_overwrite: true,
             supported_tools: supported_tools.into_iter().map(Into::into).collect(),
             supports_long_running_commands: true,
             should_preserve_file_content_in_history: true,

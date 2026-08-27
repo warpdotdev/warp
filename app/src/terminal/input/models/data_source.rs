@@ -382,9 +382,9 @@ impl ModelSearchItem {
         let llm = &choice.llm;
         let is_custom_router = is_custom_router_id(llm.id.as_str());
         let is_auto = is_auto(llm);
-        let is_using_bedrock = should_show_bedrock_icon_for_model(llm, app);
+        let is_using_bedrock = should_show_bedrock_icon_for_model(llm, scope, app);
         let is_using_gemini_enterprise_agent_platform =
-            should_show_gemini_enterprise_agent_platform_icon_for_model(llm, app);
+            should_show_gemini_enterprise_agent_platform_icon_for_model(llm, scope, app);
         let byo_key_source = byo_key_source_for_model(llm, scope, app);
         let leading_icon = model_leading_icon(
             llm,

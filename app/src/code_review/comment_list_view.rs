@@ -57,6 +57,7 @@ use crate::view_components::action_button::{
     SecondaryTheme,
 };
 use crate::workspace::view::right_panel::ReviewDestination;
+use crate::workspaces::user_workspaces::UserWorkspaces;
 
 /// Header text for the outdated section when there is exactly one outdated comment.
 const OUTDATED_SECTION_HEADER_SINGULAR: &str = "1 comment will be omitted because it is outdated.";
@@ -172,6 +173,7 @@ impl CommentDisplayState {
 }
 
 pub struct CommentListView {
+    view_handle: WeakViewHandle<Self>,
     parent: WeakViewHandle<CodeReviewView>,
 
     comment_model: Option<ModelHandle<ReviewCommentBatch>>,
@@ -245,6 +247,7 @@ impl CommentListView {
         });
 
         Self {
+            view_handle: ctx.handle(),
             parent,
             comment_model: None,
             comments_by_id: IndexMap::new(),
@@ -305,7 +308,9 @@ impl CommentListView {
     }
 
     pub fn debug_state(&self, ctx: &AppContext) -> CommentListDebugState {
-        let ai_available = AIRequestUsageModel::as_ref(ctx).has_any_ai_remaining(ctx);
+        let user_workspaces = UserWorkspaces::as_ref(ctx);
+        let scope = user_workspaces.team_context(&self.view_handle, ctx);
+        let ai_available = AIRequestUsageModel::as_ref(ctx).has_any_ai_remaining(&scope, ctx);
         let ai_enabled = AISettings::as_ref(ctx).is_any_ai_enabled(ctx);
         let sendable_comments = self
             .comments_by_id
@@ -921,7 +926,10 @@ impl CommentListView {
             // CLI agents don't consume AI credits, so bypass the ai check.
             ReviewDestination::Cli(_) => has_sendable_comments,
             ReviewDestination::Warp => {
-                AIRequestUsageModel::as_ref(ctx).has_any_ai_remaining(ctx) && has_sendable_comments
+                let user_workspaces = UserWorkspaces::as_ref(ctx);
+                let scope = user_workspaces.team_context(&self.view_handle, ctx);
+                AIRequestUsageModel::as_ref(ctx).has_any_ai_remaining(&scope, ctx)
+                    && has_sendable_comments
             }
         }
     }
@@ -929,7 +937,11 @@ impl CommentListView {
     /// Keep the stored "Send to Agent" button's enabled state and tooltip in sync with the current
     /// destination / comment / AI-availability state.
     fn sync_send_button(&mut self, ctx: &mut ViewContext<Self>) {
-        let ai_available = AIRequestUsageModel::as_ref(ctx).has_any_ai_remaining(ctx);
+        let ai_available = {
+            let user_workspaces = UserWorkspaces::as_ref(ctx);
+            let scope = user_workspaces.team_context_for_view(ctx);
+            AIRequestUsageModel::as_ref(ctx).has_any_ai_remaining(&scope, ctx)
+        };
         let ai_enabled = AISettings::as_ref(ctx).is_any_ai_enabled(ctx);
         let enabled = self.can_send(ctx);
         let tooltip = Self::send_button_tooltip_text(

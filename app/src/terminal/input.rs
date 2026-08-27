@@ -64,7 +64,7 @@ use warp_completer::completer::{
     ExplicitTabCompletion, MatchStrategy, MatchType, PathSeparators, PreparedSuggestion,
     SuggestionResults,
 };
-use warp_completer::meta::{HasSpan, Spanned};
+use warp_completer::meta::{HasSpan, Span, Spanned};
 use warp_completer::parsers::LiteCommand;
 use warp_completer::parsers::simple::command_at_cursor_position;
 use warp_completer::signatures::CommandRegistry;
@@ -73,7 +73,6 @@ use warp_core::r#async::debounce;
 use warp_core::context_flag::ContextFlag;
 use warp_core::ui::theme::AnsiColorIdentifier;
 use warp_core::ui::theme::color::internal_colors;
-use warp_core::user_preferences::GetUserPreferences as _;
 use warp_editor::editor::NavigationKey;
 use warp_errors::{report_error, report_if_error};
 use warp_util::path::ShellFamily;
@@ -115,6 +114,7 @@ use super::ligature_settings::LigatureSettings;
 use super::model::block::{
     AgentInteractionMetadata, BlockId, BlockMetadata, BlocklistEnvVarMetadata,
 };
+use super::model::completions::ShellCompletion;
 use super::model::session::{Session, SessionId, SessionType, Sessions};
 use super::prompt_render_helper::{
     PromptRenderHelper, SameLinePromptElements, should_render_prompt_on_same_line,
@@ -1546,6 +1546,102 @@ fn should_show_completions_in_ai_input(buffer_text: &str) -> bool {
         FILEPATH_PATTERN.is_match(last_word)
     } else {
         false
+    }
+}
+
+fn strip_control_characters(text: &str) -> Cow<'_, str> {
+    if text.chars().any(|c| c.is_control()) {
+        text.chars()
+            .filter(|c| !c.is_control())
+            .collect::<String>()
+            .into()
+    } else {
+        text.into()
+    }
+}
+
+/// Which completion sources a request draws on, once the two user toggles and native-completions
+/// eligibility have been resolved.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CompletionSources {
+    None,
+    WarpOnly,
+    NativeOnly,
+    /// Bundled specs first, asking the shell only if they come back empty.
+    WarpThenNative,
+}
+
+impl CompletionSources {
+    fn resolve(warp_completions_enabled: bool, native_shell_completions_eligible: bool) -> Self {
+        match (warp_completions_enabled, native_shell_completions_eligible) {
+            (true, true) => Self::WarpThenNative,
+            (true, false) => Self::WarpOnly,
+            (false, true) => Self::NativeOnly,
+            (false, false) => Self::None,
+        }
+    }
+
+    /// Whether the shell's native completions are consulted for this request.
+    fn uses_native(self) -> bool {
+        matches!(self, Self::NativeOnly | Self::WarpThenNative)
+    }
+}
+
+/// Resolves which [`CompletionSources`] a request draws on from the `NativeShellCompletions`
+/// feature flag, the input type, the trigger, and the two user toggles -- the outer policy that
+/// sits above [`CompletionSources::resolve`].
+fn resolve_completion_sources(
+    feature_flag_enabled: bool,
+    is_ai_input: bool,
+    buffer_text_is_multiline: bool,
+    completions_trigger: CompletionsTrigger,
+    warp_completions_enabled: bool,
+    native_shell_completions_enabled: bool,
+) -> CompletionSources {
+    let (warp_completions_enabled, native_shell_completions_enabled) = if feature_flag_enabled {
+        (warp_completions_enabled, native_shell_completions_enabled)
+    } else {
+        (true, false)
+    };
+
+    if is_ai_input {
+        return CompletionSources::WarpOnly;
+    }
+
+    let native_shell_completions_eligible = completions_trigger != CompletionsTrigger::AsYouType
+        && native_shell_completions_enabled
+        && !buffer_text_is_multiline // For now, don't use native shell completions for multi-line commands.
+        && !is_ai_input;
+
+    CompletionSources::resolve(warp_completions_enabled, native_shell_completions_eligible)
+}
+
+/// Builds [`SuggestionResults`] from a shell's native-completions reply.
+fn native_shell_suggestion_results(
+    shell_results: Vec<ShellCompletion>,
+    shell_replacement_span: Option<Span>,
+    buffer_text: &str,
+    cursor_position: usize,
+) -> SuggestionResults {
+    let suggestions = shell_results.into_iter().map(Into::into).collect_vec();
+    let buffer_text_before_cursor = &buffer_text[0..cursor_position];
+    let replacement_span = match shell_replacement_span {
+        Some(span) => span.clamped_to(buffer_text_before_cursor),
+        None => {
+            // Within the section of the buffer from the start to the end of this token, find the
+            // last whitespace char before the token end; the token starts just after it (or at the
+            // start of the buffer if there's none).
+            let token_start = buffer_text_before_cursor
+                .rfind(char::is_whitespace)
+                .map(|pos| pos + 1)
+                .unwrap_or_default();
+            (token_start, cursor_position).into()
+        }
+    };
+    SuggestionResults {
+        replacement_span,
+        suggestions,
+        match_strategy: MatchStrategy::Fuzzy,
     }
 }
 
@@ -6299,7 +6395,12 @@ impl Input {
         triggered_from: ZeroStatePromptSuggestionTriggeredFrom,
         ctx: &mut ViewContext<Self>,
     ) {
-        if !AIRequestUsageModel::as_ref(ctx).has_any_ai_remaining(ctx) {
+        let has_any_ai = {
+            let user_workspaces = UserWorkspaces::as_ref(ctx);
+            let scope = user_workspaces.team_context_for_view(ctx);
+            AIRequestUsageModel::as_ref(ctx).has_any_ai_remaining(&scope, ctx)
+        };
+        if !has_any_ai {
             return;
         }
 
@@ -12348,33 +12449,30 @@ impl Input {
         ctx: &mut ViewContext<'_, Input>,
     ) {
         let buffer_text = self.buffer_text(ctx);
+        let input_type = self.ai_input_model.as_ref(ctx).input_type();
 
-        // The 'ForceNativeShellCompletions' user pref can be used to unconditionally
-        // generate and show native shell completion results (i.e. regardless of whether or
-        // not we have completion results via completion specs).
-        let force_native_shell_completions = ctx
-            .private_user_preferences()
-            .read_value("ForceNativeShellCompletions")
-            .ok()
-            .flatten()
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(false);
+        let comp_sources = {
+            let input_settings = InputSettings::as_ref(ctx);
+            resolve_completion_sources(
+                FeatureFlag::NativeShellCompletions.is_enabled(),
+                input_type.is_ai(),
+                buffer_text.contains('\n'),
+                completions_trigger,
+                *input_settings.warp_completions_enabled,
+                *input_settings.native_shell_completions_enabled,
+            )
+        };
 
-        let use_native_shell_completions = (FeatureFlag::NativeShellCompletions.is_enabled() || force_native_shell_completions)
-            && completion_context
-                .session
-                .shell()
-                .supports_native_shell_completions()
-            // For now, don't use native shell completions for multi-line commands.
-            && !buffer_text.contains('\n');
-
-        let fallback_strategy = match completions_trigger {
-            CompletionsTrigger::Keybinding | CompletionsTrigger::SlashCommandAutoOpen
-                if !use_native_shell_completions =>
-            {
-                CompletionsFallbackStrategy::FilePaths
+        let fallback_strategy = {
+            let use_native_shell_completions = comp_sources.uses_native();
+            match completions_trigger {
+                CompletionsTrigger::Keybinding | CompletionsTrigger::SlashCommandAutoOpen
+                    if !use_native_shell_completions =>
+                {
+                    CompletionsFallbackStrategy::FilePaths
+                }
+                _ => CompletionsFallbackStrategy::None,
             }
-            _ => CompletionsFallbackStrategy::None,
         };
 
         if self.is_completions_while_typing_turned_on(ctx)
@@ -12382,8 +12480,6 @@ impl Input {
         {
             last_abort_handle.abort();
         }
-
-        let input_type = self.ai_input_model.as_ref(ctx).input_type();
 
         // Don't trigger completions if the last character typed is whitespace, in AI input mode.
         // The user is likely typing in a natural language word at this point, not a filepath.
@@ -12402,7 +12498,69 @@ impl Input {
         });
 
         let cursor_position = cursor_position.as_usize();
-        let native_results_fut = if use_native_shell_completions {
+
+        if comp_sources == CompletionSources::None {
+            if let Some(last_abort_handle) = self.completions_abort_handle.take() {
+                last_abort_handle.abort();
+            }
+            return;
+        }
+
+        if comp_sources == CompletionSources::WarpThenNative {
+            let completion_session = completion_context.session.clone();
+            let abort_handle = ctx
+                .spawn_abortable(
+                    async move {
+                        let spec_suggestions = completer::suggestions(
+                            before_cursor_text.as_str(),
+                            cursor_position,
+                            session_env_vars.as_ref(),
+                            CompleterOptions {
+                                match_strategy: matcher,
+                                fallback_strategy,
+                                suggest_file_path_completions_only: input_type.is_ai(),
+                                parse_quotes_as_literals: input_type.is_ai(),
+                            },
+                            &completion_context,
+                        )
+                        .await;
+                        (spec_suggestions, completions_trigger, editor_snapshot)
+                    },
+                    move |input, (spec_suggestions, completions_trigger, editor_snapshot), ctx| {
+                        let bundled_specs_empty = match &spec_suggestions {
+                            Some(spec_suggestions) => spec_suggestions.suggestions.is_empty(),
+                            None => true,
+                        };
+                        if bundled_specs_empty {
+                            // Phase two: the bundled specs produced nothing, so ask the shell now.
+                            input.dispatch_native_shell_completions(
+                                buffer_text,
+                                cursor_position,
+                                completions_trigger,
+                                editor_snapshot,
+                                ctx,
+                            );
+                        } else {
+                            // A bundled spec won; the shell is never asked.
+                            input.handle_completion_suggestions_results(
+                                spec_suggestions,
+                                completions_trigger,
+                                editor_snapshot,
+                                ctx,
+                            );
+                        }
+                    },
+                    move |_, _| {
+                        completion_session.cancel_active_commands();
+                    },
+                )
+                .abort_handle();
+            self.completions_abort_handle = Some(abort_handle);
+            return;
+        }
+
+        let dispatch_native_up_front = comp_sources == CompletionSources::NativeOnly;
+        let native_results_fut = if dispatch_native_up_front {
             // If we're using native shell completions, construct a future that
             // will be resolved with any completions data provided by the shell.
             let (results_tx, results_rx) = async_channel::unbounded();
@@ -12437,29 +12595,22 @@ impl Input {
                     .await;
 
                     let suggestions = match suggestions {
-                        Some(s) if !s.suggestions.is_empty() && !force_native_shell_completions => {
+                        Some(s)
+                            if !s.suggestions.is_empty()
+                                && comp_sources != CompletionSources::NativeOnly =>
+                        {
                             Some(s)
                         }
-                        _ => native_results_fut.await.map(|results| {
-                            let suggestions = results.into_iter().map(Into::into).collect_vec();
-
-                            let token_end = cursor_position;
-                            // Within the section of the buffer from the start
-                            // to the end of this token...
-                            let token_start = buffer_text[0..token_end]
-                                // Find the last whitespace char before the token end.
-                                .rfind(char::is_whitespace)
-                                // If we find one, the token start is the next char.
-                                .map(|pos| pos + 1)
-                                // Otherwise, the start is the beginning of the buffer.
-                                .unwrap_or_default();
-
-                            SuggestionResults {
-                                replacement_span: (token_start, token_end).into(),
-                                suggestions,
-                                match_strategy: MatchStrategy::Fuzzy,
-                            }
-                        }),
+                        _ => native_results_fut
+                            .await
+                            .map(|(results, shell_replacement_span)| {
+                                native_shell_suggestion_results(
+                                    results,
+                                    shell_replacement_span,
+                                    &buffer_text,
+                                    cursor_position,
+                                )
+                            }),
                     };
 
                     (suggestions, completions_trigger, editor_snapshot)
@@ -12478,6 +12629,57 @@ impl Input {
             )
             .abort_handle();
 
+        self.completions_abort_handle = Some(abort_handle);
+    }
+
+    fn dispatch_native_shell_completions(
+        &mut self,
+        buffer_text: String,
+        cursor_position: usize,
+        completions_trigger: CompletionsTrigger,
+        editor_snapshot: EditorSnapshot,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        // If the buffer moved on while the spec pass ran, this request is stale.
+        let current_editor_model = self
+            .editor
+            .read(ctx, |editor, ctx| editor.snapshot_model(ctx));
+        let buffer_text_now = self.editor.as_ref(ctx).buffer_text(ctx);
+        if buffer_text_now != editor_snapshot.text()
+            || current_editor_model.selections() != editor_snapshot.selections()
+        {
+            return;
+        }
+
+        let (results_tx, results_rx) = async_channel::unbounded();
+        ctx.dispatch_typed_action(&TerminalAction::RunNativeShellCompletions {
+            buffer_text: buffer_text[0..cursor_position].to_owned(),
+            results_tx,
+        });
+
+        let abort_handle = ctx
+            .spawn(
+                async move {
+                    let suggestions = results_rx.recv().await.ok().map(|(results, span)| {
+                        native_shell_suggestion_results(
+                            results,
+                            span,
+                            &buffer_text,
+                            cursor_position,
+                        )
+                    });
+                    (suggestions, completions_trigger, editor_snapshot)
+                },
+                |input, (suggestions, completions_trigger, editor_model), ctx| {
+                    input.handle_completion_suggestions_results(
+                        suggestions,
+                        completions_trigger,
+                        editor_model,
+                        ctx,
+                    );
+                },
+            )
+            .abort_handle();
         self.completions_abort_handle = Some(abort_handle);
     }
 
@@ -12794,10 +12996,11 @@ impl Input {
         completion_prefix: &str,
         replacement_start: usize,
     ) {
+        let completion_prefix = strip_control_characters(completion_prefix);
         self.editor.update(ctx, |input, ctx| {
             let cursor_end_offset = input.end_byte_index_of_last_selection(ctx);
             input.select_and_replace(
-                completion_prefix,
+                &completion_prefix,
                 [ByteOffset::from(replacement_start)..cursor_end_offset],
                 PlainTextEditorViewAction::AcceptCompletionSuggestion,
                 ctx,
@@ -12813,12 +13016,15 @@ impl Input {
         executing: Executing,
         ctx: &mut ViewContext<Input>,
     ) {
+        let completion_result = strip_control_characters(completion_result);
         let is_completions_as_you_type_enabled = self.is_completions_while_typing_turned_on(ctx);
         self.editor.update(ctx, |input, ctx| {
             let cursor_end_offset = input.end_byte_index_of_last_selection(ctx);
 
-            // Add a space to the end if the end of the selection/replacement
-            // is at the end of the buffer and the completion result doesn't end with a slash.
+            // Add a space to the end if the end of the selection/replacement is at the end of the
+            // buffer and the completion result doesn't end with a slash or an equals sign. A
+            // trailing slash means more of a path follows; a trailing `=` (e.g. `--color=`) means a
+            // value follows directly, as shells' own `-S '='` completions do.
             // If completions as you type is turned on and classic completions is off, then
             // _don't_ add a space.
             let is_classic_completions_enabled = self.is_classic_completions_enabled(ctx);
@@ -12826,11 +13032,12 @@ impl Input {
                 || is_classic_completions_enabled)
                 && cursor_end_offset.as_usize() == input.buffer_text(ctx).len()
                 && !completion_result.ends_with(self.path_separators(ctx).main)
+                && !completion_result.ends_with('=')
                 && executing == Executing::No
             {
                 format!("{completion_result} ").into()
             } else {
-                completion_result.into()
+                completion_result.clone()
             };
 
             input.select_and_replace(
@@ -14482,14 +14689,23 @@ impl Input {
             return;
         }
 
-        let has_any_ai = AIRequestUsageModel::as_ref(ctx).has_any_ai_remaining(ctx);
+        let has_any_ai = {
+            let user_workspaces = UserWorkspaces::as_ref(ctx);
+            let scope = user_workspaces.team_context_for_view(ctx);
+            AIRequestUsageModel::as_ref(ctx).has_any_ai_remaining(&scope, ctx)
+        };
         if !has_any_ai {
             AIRequestUsageModel::handle(ctx).update(ctx, |model, ctx| {
                 model.enable_buy_credits_banner(ctx);
             });
         }
 
-        if PromptAlertView::does_alert_block_ai_requests(ctx) {
+        let alert_blocks_ai = {
+            let user_workspaces = UserWorkspaces::as_ref(ctx);
+            let scope = user_workspaces.team_context_for_view(ctx);
+            PromptAlertView::does_alert_block_ai_requests(&scope, ctx)
+        };
+        if alert_blocks_ai {
             AIRequestUsageModel::handle(ctx).update(ctx, |usage_model, ctx| {
                 // Rate limit requests to fetch the user's AI usage if triggered by enter
                 // keypress.
