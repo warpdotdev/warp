@@ -2068,6 +2068,7 @@ impl TerminalView {
     /// Resizes the sharer's terminal to match the viewer's reported size,
     /// going through the normal view/model/PTY resize pipeline.
     #[cfg(not(target_arch = "wasm32"))]
+    #[allow(dead_code)]
     pub(crate) fn resize_from_viewer_report(
         &mut self,
         viewer_size: WindowSize,

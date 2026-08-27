@@ -9594,6 +9594,113 @@ fn cmd_k_does_not_clear_buffer_when_agent_is_driving_command() {
 }
 
 #[test]
+fn selected_ai_block_text_can_be_forked_in_new_pane() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let _agent_view = FeatureFlag::AgentView.override_enabled(true);
+        let terminal = add_window_with_terminal(&mut app, None);
+
+        terminal.update(&mut app, |view, ctx| {
+            append_exchange_and_handle_event(
+                view,
+                AIAgentInput::UserQuery {
+                    query: "explain the selected text".to_owned(),
+                    context: Default::default(),
+                    static_query_type: None,
+                    referenced_attachments: Default::default(),
+                    user_query_mode: UserQueryMode::Normal,
+                    running_command: None,
+                    intended_agent: None,
+                },
+                ctx,
+            );
+        });
+
+        let (ai_block, exchange_id, conversation_id) = terminal.read(&app, |view, _| {
+            view.rich_content_views
+                .iter()
+                .find_map(|rich_content| {
+                    let metadata = rich_content.ai_block_metadata()?;
+                    Some((
+                        metadata.ai_block_handle.clone(),
+                        metadata.exchange_id,
+                        metadata.conversation_id,
+                    ))
+                })
+                .expect("an AI block should have been inserted")
+        });
+
+        ai_block.update(&mut app, |block, ctx| {
+            block.set_block_level_selected_text_for_test(Some("selected agent text".to_owned()));
+            block.handle_action(&AIBlockAction::SelectText, ctx);
+        });
+
+        terminal.update(&mut app, |view, ctx| {
+            let params = view
+                .fork_selected_text_params(ai_block.id(), exchange_id, conversation_id, ctx)
+                .expect("selected AI block text should produce fork params");
+
+            assert_eq!(params.conversation_id, conversation_id);
+            assert_eq!(
+                params.initial_prompt,
+                Some("selected agent text".to_owned())
+            );
+            assert!(matches!(
+                params.fork_from_exchange,
+                Some(ForkFromExchange {
+                    exchange_id: actual_exchange_id,
+                    fork_from_exact_exchange: false,
+                }) if actual_exchange_id == exchange_id
+            ));
+            assert_eq!(params.destination, ForkedConversationDestination::SplitPane);
+
+            let menu_source = BlockListMenuSource::RichContentTextRightClick {
+                rich_content_view_id: ai_block.id(),
+                position_in_rich_content: Vector2F::zero(),
+            };
+            let menu_items = view.context_menu_items(&menu_source, ctx);
+            let labels = menu_items
+                .iter()
+                .filter_map(|item| item.fields().map(|fields| fields.label()))
+                .collect::<Vec<_>>();
+            assert!(
+                labels.contains(&"Fork selection in new pane"),
+                "Expected selected AI text menu to include fork action, got {labels:?}"
+            );
+        });
+    })
+}
+
+#[test]
+fn regular_selected_text_context_menu_does_not_include_fork_selection() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+
+        let terminal = add_window_with_terminal(&mut app, None);
+        terminal.update(&mut app, |view, ctx| {
+            {
+                let mut model = view.model.lock();
+                model.simulate_block("ls", "foo");
+                assert!(!model.is_block_list_empty());
+            }
+
+            let menu_source = BlockListMenuSource::RegularTextRightClick {
+                position_in_terminal_view: Vector2F::zero(),
+            };
+            let menu_items = view.context_menu_items(&menu_source, ctx);
+            let labels = menu_items
+                .iter()
+                .filter_map(|item| item.fields().map(|fields| fields.label()))
+                .collect::<Vec<_>>();
+            assert!(
+                !labels.contains(&"Fork selection in new pane"),
+                "Did not expect regular selected-text menu to include fork action, got {labels:?}"
+            );
+        });
+    })
+}
+
+#[test]
 fn cmd_k_in_agent_view_clears_active_block_not_full_buffer_when_agent_driving_command() {
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);
