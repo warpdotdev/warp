@@ -24,13 +24,16 @@ pub(super) fn parse_command(
         return (None, None);
     }
 
-    if let Some((found_signature, token_index)) = get_matching_signature_for_tokenized_input(
+    if let Some(matched_signature) = get_matching_signature_for_tokenized_input(
         tokens,
         lite_cmd.post_whitespace.is_some(),
         command_registry,
     ) {
-        let (internal_command, err) =
-            parse_internal_command(lite_cmd, found_signature, token_index);
+        let (internal_command, err) = parse_internal_command(
+            lite_cmd,
+            matched_signature.command,
+            matched_signature.token_index,
+        );
 
         error = error.or(err);
         return (Some(hir::Command::Classified(internal_command)), error);

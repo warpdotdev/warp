@@ -32,6 +32,21 @@ pub struct Command {
     pub subcommands: Vec<Command>,
     pub options: Vec<Opt>,
     pub priority: Priority,
+
+    /// When `true`, `subcommands` are treated as a set of repeatable, order-independent
+    /// keywords rather than a set of mutually exclusive subcommands.
+    ///
+    /// This is meant for grammars like `ip rule add iif eth0 from 10.0.0.0/8 table main`, where
+    /// bare keywords (`iif`, `from`, `table`, ...) can appear in any order and more than one of
+    /// them can be used in the same command. Ordinary flags (tokens starting with `-`) aren't
+    /// modeled this way because the flag engine already treats them as order-independent and
+    /// repeatable; this flag exists for grammars that use *bare* (non-dashed) keywords instead.
+    ///
+    /// Once one keyword has been resolved, its still-unused sibling keywords under the same
+    /// parent remain eligible for suggestion, instead of only the resolved keyword's own
+    /// `subcommands` (which are typically empty). Defaults to `false`, so ordinary exclusive
+    /// subcommand trees are unaffected.
+    pub repeatable_keywords: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

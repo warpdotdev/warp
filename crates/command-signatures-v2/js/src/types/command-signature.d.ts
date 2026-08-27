@@ -51,6 +51,13 @@ interface Command {
   options?: Option[];
   priority?: number;
 
+  // When true, `subcommands` are treated as a set of repeatable, order-independent keywords
+  // (e.g. `iif`, `from`, `table` under `ip rule add iif eth0 from 10.0.0.0/8 table main`)
+  // rather than a set of mutually exclusive subcommands. Once one keyword has been used, its
+  // still-unused sibling keywords remain eligible for suggestion alongside it. Defaults to
+  // false, so ordinary exclusive subcommand trees are unaffected.
+  repeatableKeywords?: boolean;
+
   // See Support dynamic subcommands below.
   runtimeOptionsAndSubcommands?: (ctx: CompletionContext) => {
   	options?: Option[];

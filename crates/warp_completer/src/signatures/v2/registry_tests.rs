@@ -11,6 +11,7 @@ fn test_signature() -> CommandSignature {
             subcommands: vec![],
             options: vec![],
             priority: Priority::default(),
+            repeatable_keywords: false,
         },
     }
 }

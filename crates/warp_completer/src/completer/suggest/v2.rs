@@ -6,7 +6,7 @@ use super::{CompleterOptions, CompletionContext, MatchedSuggestion, SuggestionTy
 use crate::completer::LocationType;
 use crate::completer::engine::{self, CompletionLocation};
 use crate::parsers::ClassifiedCommand;
-use crate::signatures::Command;
+use crate::signatures::MatchedSignature;
 
 /// Returns a map of `SuggestionType` to vectors of `MatchedSuggestion`s for `input`.
 ///
@@ -21,7 +21,7 @@ pub(super) async fn completion_results_from_locations<'a>(
     input: &str,
     classified_command: Option<ClassifiedCommand>,
     tokens_without_last_editing: &[&str],
-    found_signature: Option<&'a Command>,
+    found_signature: Option<MatchedSignature<'a>>,
     locations: Vec<CompletionLocation>,
     session_env_vars: Option<&HashMap<String, String>>,
     options: &CompleterOptions,
@@ -56,8 +56,11 @@ pub(super) async fn completion_results_from_locations<'a>(
                 }
             }
             LocationType::Flag { .. } => {
-                let results =
-                    engine::flag_suggestions(options.match_strategy, &location, found_signature);
+                let results = engine::flag_suggestions(
+                    options.match_strategy,
+                    &location,
+                    found_signature.as_ref().map(|matched| matched.command),
+                );
                 completion_results_by_type
                     .entry(SuggestionTypeName::Option)
                     .or_default()
@@ -71,7 +74,11 @@ pub(super) async fn completion_results_from_locations<'a>(
                         input,
                         tokens_without_last_editing,
                         classified_command.clone(),
-                        found_signature,
+                        found_signature.as_ref().map(|matched| matched.command),
+                        found_signature
+                            .as_ref()
+                            .map(|matched| matched.eligible_sibling_keywords.as_slice())
+                            .unwrap_or_default(),
                         &location,
                         session_env_vars,
                         parsed_token,

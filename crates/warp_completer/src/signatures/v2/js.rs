@@ -44,6 +44,9 @@ impl<'js> FromWarpJs<'js> for Command {
         let options: Vec<Opt> =
             get_one_or_more_optional(&object, "options", js_function_registry, ctx)?;
         let priority: Option<i32> = get_optional(&object, "priority", js_function_registry, ctx)?;
+        let repeatable_keywords: bool =
+            get_optional(&object, "repeatableKeywords", js_function_registry, ctx)?
+                .unwrap_or(false);
 
         Ok(Command {
             name,
@@ -53,6 +56,7 @@ impl<'js> FromWarpJs<'js> for Command {
             subcommands,
             options,
             priority: priority.map(Priority::new).unwrap_or_default(),
+            repeatable_keywords,
         })
     }
 }

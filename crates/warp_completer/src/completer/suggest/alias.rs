@@ -10,7 +10,7 @@ use crate::parsers::SignatureAtTokenIndex;
 use crate::parsers::simple::parse_for_completions;
 use crate::parsers::{ClassifiedCommand, classify_command};
 #[cfg(feature = "v2")]
-use crate::signatures::Command;
+use crate::signatures::MatchedSignature;
 
 /// This is used to limit how many times we re-run the completer once we
 /// evaluate an alias to prevent infinite recursion.
@@ -55,7 +55,7 @@ pub struct AliasExpansionResult<'a> {
     pub expanded_command_line: String,
     /// The signature we should use for completions after alias expansion.
     #[cfg(feature = "v2")]
-    pub(crate) signature_for_completions: Option<&'a Command>,
+    pub(crate) signature_for_completions: Option<MatchedSignature<'a>>,
     #[cfg(not(feature = "v2"))]
     pub(crate) signature_for_completions: Option<SignatureAtTokenIndex<'a>>,
     /// The tokens from the expanded_command_line to be used for completions, without any env vars.
@@ -165,13 +165,13 @@ async fn expand_command_aliases_internal<'a>(
                         // "git commit && cd".
                         let command_line = &line[command_name_span.start()..];
                         get_matching_signature_for_input(command_line, ctx.command_registry())
-                    }).map(|(signature, _)| signature)
+                    })
                 } else {
                     // TODO(completions-v2): Implement command-specific alias expansion.
                     get_matching_signature_for_tokenized_input(
                             &tokens_from_command,
                             command_to_complete.post_whitespace.is_some(),
-                            ctx.command_registry()).map(|(signature, _)| signature)
+                            ctx.command_registry())
                 };
         } else {
             use crate::signatures::registry::SignatureResult;

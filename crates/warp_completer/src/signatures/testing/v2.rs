@@ -373,6 +373,7 @@ pub fn cd_signature() -> CommandSignature {
             subcommands: vec![],
             options: vec![],
             priority: Priority::default(),
+            repeatable_keywords: false,
         },
     }
 }
@@ -436,6 +437,7 @@ pub fn ls_signature() -> CommandSignature {
                 },
             ],
             priority: Priority::default(),
+            repeatable_keywords: false,
         },
     }
 }
@@ -457,6 +459,7 @@ pub fn signature_with_empty_positional() -> CommandSignature {
             subcommands: vec![],
             options: vec![],
             priority: Priority::default(),
+            repeatable_keywords: false,
         },
     }
 }
