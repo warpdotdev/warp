@@ -108,9 +108,12 @@ impl RootTuiView {
             user_workspaces.switch_window_to_team(window_id, team_uid, ctx);
         });
         Self::store_last_team_uid(team_uid, ctx);
-        TeamUpdateManager::handle(ctx).update(ctx, |manager, ctx| {
-            std::mem::drop(manager.refresh_workspace_metadata(ctx));
-        });
+        // Tests drive team switches without registering the update manager.
+        if ctx.has_singleton_model::<TeamUpdateManager>() {
+            TeamUpdateManager::handle(ctx).update(ctx, |manager, ctx| {
+                std::mem::drop(manager.refresh_workspace_metadata(ctx));
+            });
+        }
     }
 
     fn restore_last_team_uid(ctx: &AppContext) -> Option<ServerId> {
