@@ -180,7 +180,17 @@ impl TuiApiKeysMenuModel {
             self.set_browsing_error(error.to_owned(), ctx);
             return;
         }
-        let attempt = match OauthAttempt::start() {
+        ctx.spawn(OauthAttempt::start(), |menu, result, ctx| {
+            menu.handle_grok_oauth_bound(result, ctx);
+        });
+    }
+
+    fn handle_grok_oauth_bound(
+        &mut self,
+        result: anyhow::Result<OauthAttempt>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let attempt = match result {
             Ok(attempt) => attempt,
             Err(error) => {
                 self.set_browsing_error(error.to_string(), ctx);

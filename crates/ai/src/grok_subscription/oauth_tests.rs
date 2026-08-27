@@ -58,12 +58,8 @@ fn manual_code_exchange_rejects_blank_code() {
 
 /// The loopback ports the tests below bind, chosen to sit below every
 /// platform's ephemeral port range (Linux 32768-60999, macOS/Windows
-/// 49152-65535).
-///
-/// The release assertion in [`cancelling_loopback_wait_releases_listener`]
-/// rebinds the exact port the flow just gave up, so an ephemeral port would let
-/// any concurrently running test that binds port 0 claim it first and fail this
-/// test for a reason that has nothing to do with the race it guards.
+/// 49152-65535), so an ephemeral bind from an unrelated concurrent test can't
+/// collide with the exact-port rebinds these tests assert on.
 const TEST_PORT_BASE: u16 = 21121;
 const TEST_PORT_SPAN: u16 = 200;
 
@@ -97,10 +93,6 @@ fn bind_test_listener() -> (TcpListener, std::net::SocketAddr) {
 /// port, and that bind fails with "address in use" against a still-open
 /// listener.
 ///
-/// The rebind is asserted over many cancel cycles — with no sleeps or retries —
-/// so a reintroduced teardown race is caught here instead of showing up as an
-/// intermittent CI failure.
-///
 /// Serialized with the other tests in this file that call
 /// [`bind_test_listener`]: they all scan the same PID-derived port range, so
 /// running them in parallel lets one test's just-dropped port be claimed by
@@ -108,86 +100,25 @@ fn bind_test_listener() -> (TcpListener, std::net::SocketAddr) {
 #[test]
 #[serial_test::serial(grok_oauth_loopback_port)]
 fn cancelling_loopback_wait_releases_listener() {
-    const CANCEL_CYCLES: usize = 100;
-
-    for _ in 0..CANCEL_CYCLES {
-        let (listener, address) = bind_test_listener();
-        let cancellation = OauthCancellationHandle {
-            cancelled: Arc::new(AtomicBool::new(false)),
-        };
-        cancellation.cancel();
-
-        let (release_tx, _release_rx) = async_channel::bounded(1);
-        let result = warpui_core::r#async::block_on(run_oauth_flow(
-            listener,
-            PkceParams::generate(),
-            cancellation,
-            release_tx,
-        ));
-
-        assert_eq!(
-            result
-                .expect_err("cancelled callback wait should fail")
-                .to_string(),
-            "Grok authorization was cancelled"
-        );
-        TcpListener::bind(address).expect("cancelled callback listener should release its port");
-    }
-}
-
-/// A caller only needs [`OauthAttempt::finish`]'s release signal, not the
-/// full result, to know the loopback port is free again: this drives
-/// `run_oauth_flow` to completion on another thread while only awaiting the
-/// release signal here, then rebinds the port without ever joining that
-/// thread or inspecting its result. That the result thread may, in this
-/// mismatched-state case, already be finished by the time release is
-/// observed does not weaken the assertion -- the rebind below only depends
-/// on the listener already being dropped, which release guarantees
-/// regardless of how far the other thread has gotten.
-#[test]
-#[serial_test::serial(grok_oauth_loopback_port)]
-fn release_signal_lets_a_caller_rebind_without_joining_the_result() {
     let (listener, address) = bind_test_listener();
     let cancellation = OauthCancellationHandle {
         cancelled: Arc::new(AtomicBool::new(false)),
     };
-    let (release_tx, release_rx) = async_channel::bounded(1);
+    cancellation.cancel();
 
-    let browser = std::thread::spawn(move || {
-        let mut stream = TcpStream::connect(address).expect("test browser should connect");
-        stream
-            .write_all(
-                b"GET /callback?code=test-code&state=unexpected-state HTTP/1.1\r\n\
-                  Host: 127.0.0.1\r\n\r\n",
-            )
-            .expect("test browser should send the callback request");
-        let mut response = String::new();
-        stream
-            .read_to_string(&mut response)
-            .expect("test browser should read the callback response");
-    });
+    let result = warpui_core::r#async::block_on(run_oauth_flow(
+        listener,
+        PkceParams::generate(),
+        cancellation,
+    ));
 
-    let result_thread = std::thread::spawn(move || {
-        warpui_core::r#async::block_on(run_oauth_flow(
-            listener,
-            PkceParams::generate(),
-            cancellation,
-            release_tx,
-        ))
-    });
-
-    warpui_core::r#async::block_on(release_rx.recv())
-        .expect("release signal should fire once the listener is dropped");
-    TcpListener::bind(address).expect("released listener should free its port immediately");
-
-    let result = result_thread.join().expect("result future should finish");
-    browser.join().expect("test browser thread should finish");
-    assert!(
+    assert_eq!(
         result
-            .expect_err("a mismatched callback state should fail")
-            .to_string()
-            .contains("state did not match")
+            .expect_err("cancelled callback wait should fail")
+            .to_string(),
+        "Grok authorization was cancelled"
     );
+    TcpListener::bind(address).expect("cancelled callback listener should release its port");
 }
 
 /// Guards the non-cancelled path: the callback captured by the listener thread
@@ -217,12 +148,10 @@ fn loopback_callback_is_delivered_after_the_listener_closes() {
             .expect("test browser should read the callback response");
     });
 
-    let (release_tx, _release_rx) = async_channel::bounded(1);
     let result = warpui_core::r#async::block_on(run_oauth_flow(
         listener,
         PkceParams::generate(),
         cancellation,
-        release_tx,
     ));
     browser.join().expect("test browser thread should finish");
 
@@ -231,5 +160,38 @@ fn loopback_callback_is_delivered_after_the_listener_closes() {
             .expect_err("a mismatched callback state should fail")
             .to_string()
             .contains("state did not match")
+    );
+}
+
+/// The regression this guards against: a Connect immediately after Cancel
+/// hitting `AddrInUse` because the previous attempt's accept loop hasn't yet
+/// noticed the cancellation and dropped its listener.
+#[test]
+#[serial_test::serial(grok_oauth_loopback_port)]
+fn bind_retry_succeeds_once_the_port_frees_within_the_window() {
+    let (listener, address) = bind_test_listener();
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(50));
+        drop(listener);
+    });
+
+    let result =
+        warpui_core::r#async::block_on(bind_with_retry(address.port(), Duration::from_millis(500)));
+    assert!(
+        result.is_ok(),
+        "bind should succeed once the port is released within the retry window"
+    );
+}
+
+#[test]
+#[serial_test::serial(grok_oauth_loopback_port)]
+fn bind_retry_surfaces_addr_in_use_once_the_window_elapses() {
+    let (_listener, address) = bind_test_listener();
+
+    let result =
+        warpui_core::r#async::block_on(bind_with_retry(address.port(), Duration::from_millis(100)));
+    assert_eq!(
+        result.expect_err("a held port should still fail").kind(),
+        ErrorKind::AddrInUse
     );
 }

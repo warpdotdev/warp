@@ -96,37 +96,21 @@ fn team_force_takes_precedence_over_global_ai_disabled() {
 }
 
 #[test]
-fn grok_connect_flow_transitions_through_cancel_back_to_connect() {
+fn grok_button_action_reflects_tokens_and_attempt_state() {
     assert_eq!(
-        grok_subscription_button_action(false, None),
+        grok_subscription_button_action(false, false),
         GrokSubscriptionButtonAction::Connect
     );
     assert_eq!(
-        grok_subscription_button_action(false, Some(false)),
+        grok_subscription_button_action(false, true),
         GrokSubscriptionButtonAction::Cancel
     );
     assert_eq!(
-        grok_subscription_button_action(false, Some(true)),
-        GrokSubscriptionButtonAction::Cancelling
-    );
-    assert_eq!(
-        grok_subscription_button_action(false, None),
-        GrokSubscriptionButtonAction::Connect
-    );
-}
-
-#[test]
-fn grok_stored_tokens_show_disconnect_regardless_of_attempt_phase() {
-    assert_eq!(
-        grok_subscription_button_action(true, None),
+        grok_subscription_button_action(true, false),
         GrokSubscriptionButtonAction::Disconnect
     );
     assert_eq!(
-        grok_subscription_button_action(true, Some(false)),
-        GrokSubscriptionButtonAction::Disconnect
-    );
-    assert_eq!(
-        grok_subscription_button_action(true, Some(true)),
+        grok_subscription_button_action(true, true),
         GrokSubscriptionButtonAction::Disconnect
     );
 }

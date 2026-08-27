@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use ai::LLMProvider;
 use ai::api_keys::ApiKeyManager;
 use warp::editor::CodeEditorModel;
@@ -5,6 +7,7 @@ use warp::settings::AISettings;
 use warp::tui_export::{UserWorkspaces, register_tui_session_view_test_singletons};
 use warp_editor::model::CoreEditorModel;
 use warpui::SingletonEntity as _;
+use warpui_core::r#async::Timer;
 use warpui_core::{App, ModelHandle};
 
 use super::{TuiApiKeysFooter, TuiApiKeysMenuModel, input_text};
@@ -184,6 +187,7 @@ fn open_and_connect_grok_matches_selecting_the_grok_row() {
             });
             menu
         });
+        wait_for_connecting_grok(&mut app, &reference).await;
 
         // Shortcut path: a single call jumps straight into the Grok connect flow.
         let shortcut = app.update(|ctx| {
@@ -200,6 +204,7 @@ fn open_and_connect_grok_matches_selecting_the_grok_row() {
             menu.update(ctx, |menu, ctx| menu.open_and_connect_grok(ctx));
             menu
         });
+        wait_for_connecting_grok(&mut app, &shortcut).await;
 
         app.read(|ctx| {
             assert!(shortcut.as_ref(ctx).is_open(ctx));
@@ -220,6 +225,19 @@ fn open_and_connect_grok_matches_selecting_the_grok_row() {
             );
         });
     });
+}
+
+/// Binding now retries asynchronously off the UI thread (see
+/// `OauthAttempt::start`), so the menu only reaches `ConnectingGrok` once that
+/// background hop resolves.
+async fn wait_for_connecting_grok(app: &mut App, menu: &ModelHandle<TuiApiKeysMenuModel>) {
+    for _ in 0..2000 {
+        if app.read(|ctx| menu.as_ref(ctx).footer(ctx)) == Some(TuiApiKeysFooter::ConnectingGrok) {
+            return;
+        }
+        Timer::after(Duration::from_millis(1)).await;
+    }
+    panic!("timed out waiting for the Grok connect attempt to bind");
 }
 
 #[test]
