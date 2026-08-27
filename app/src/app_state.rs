@@ -70,6 +70,7 @@ pub struct TabGroupSnapshot {
     pub color: SelectedTabColor,
     pub collapsed: bool,
     pub pinned: bool,
+    pub working_directory: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
