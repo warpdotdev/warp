@@ -8,7 +8,7 @@ use warpui::SingletonEntity as _;
 use warpui_core::{App, ModelHandle};
 
 use super::{TuiApiKeysFooter, TuiApiKeysMenuModel, TuiApiKeysMenuState, input_text};
-use crate::inline_menu::TuiInlineMenuInputOwnership;
+use crate::inline_menu::{TuiInlineMenuHeader, TuiInlineMenuInputOwnership};
 use crate::input_suggestions_mode::{TuiInputSuggestionsMode, TuiInputSuggestionsModeModel};
 
 fn add_menu(
@@ -257,7 +257,11 @@ fn cancel_while_grok_bind_is_pending_discards_the_late_result() {
         });
 
         // Simulate the bind that was already in flight finally resolving,
-        // after the user backed out of it.
+        // after the user backed out of it. A distinctive error message lets
+        // the assertion below tell "discarded" apart from "handled as a
+        // normal failure" -- without the id guard, this would still land in
+        // `Browsing` (via the error branch's own `transition_to_browsing`),
+        // just with this message surfaced instead of dropped.
         menu.update(&mut app, |menu, ctx| {
             menu.handle_grok_oauth_bound(attempt_id, Err(anyhow::anyhow!("late bind result")), ctx);
         });
@@ -268,6 +272,16 @@ fn cancel_while_grok_bind_is_pending_discards_the_late_result() {
                     Some(TuiApiKeysFooter::ProviderList { .. })
                 ),
                 "a late bind result must not reopen ConnectingGrok on a cancelled attempt"
+            );
+            assert_eq!(
+                menu.as_ref(ctx)
+                    .snapshot(ctx)
+                    .and_then(|snapshot| snapshot.header),
+                Some(TuiInlineMenuHeader {
+                    title: Some("API keys".to_owned()),
+                    tabs: Vec::new(),
+                }),
+                "the discarded result's error must not surface on a menu the user backed out of"
             );
             assert!(menu.as_ref(ctx).is_open(ctx));
         });
