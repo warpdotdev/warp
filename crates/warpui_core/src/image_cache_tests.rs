@@ -794,15 +794,13 @@ fn animated_image_get_current_frame_wraps_at_duration() {
         .get_current_frame(duration * 2 - 1)
         .expect("Should get frame in second cycle");
 
-    assert_eq!(
+    assert!(
         Arc::ptr_eq(&frame_start, &frame_wrapped_start),
-        true,
         "Frame at start should equal frame at wrapped start"
     );
 
-    assert_eq!(
+    assert!(
         Arc::ptr_eq(&frame_end, &frame_wrapped_end),
-        true,
         "Frame at cycle end should equal frame at next cycle end"
     );
 }
@@ -951,9 +949,8 @@ fn animated_webp_also_advances_frames() {
     let (frame_wrapped, _) = animated
         .get_current_frame(animated.duration)
         .expect("Should get frame after one cycle");
-    assert_eq!(
+    assert!(
         Arc::ptr_eq(&frame_0, &frame_wrapped),
-        true,
         "Frame should wrap back to start after duration"
     );
 }
