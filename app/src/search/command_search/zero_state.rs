@@ -279,7 +279,6 @@ impl TypedActionView for CommandSearchZeroStateView {
     }
 }
 
-/// Returns list of valid query filters that may be applied.
 fn valid_query_filters(app: &AppContext) -> Vec<QueryFilter> {
     let mut filters = vec![QueryFilter::History];
 
