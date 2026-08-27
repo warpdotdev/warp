@@ -96,21 +96,30 @@ fn team_force_takes_precedence_over_global_ai_disabled() {
 }
 
 #[test]
-fn grok_button_action_reflects_tokens_and_attempt_state() {
+fn grok_button_action_reflects_tokens_and_attempt_phase() {
     assert_eq!(
-        grok_subscription_button_action(false, false),
+        grok_subscription_button_action(false, None),
         GrokSubscriptionButtonAction::Connect
     );
     assert_eq!(
-        grok_subscription_button_action(false, true),
+        grok_subscription_button_action(false, Some(false)),
         GrokSubscriptionButtonAction::Cancel
     );
     assert_eq!(
-        grok_subscription_button_action(true, false),
+        grok_subscription_button_action(false, Some(true)),
+        GrokSubscriptionButtonAction::Cancelling
+    );
+    // Stored tokens take precedence regardless of attempt phase.
+    assert_eq!(
+        grok_subscription_button_action(true, None),
         GrokSubscriptionButtonAction::Disconnect
     );
     assert_eq!(
-        grok_subscription_button_action(true, true),
+        grok_subscription_button_action(true, Some(false)),
+        GrokSubscriptionButtonAction::Disconnect
+    );
+    assert_eq!(
+        grok_subscription_button_action(true, Some(true)),
         GrokSubscriptionButtonAction::Disconnect
     );
 }

@@ -42,7 +42,10 @@ impl TuiGrokOAuthController {
         let cancellation = attempt.cancellation_handle();
 
         ctx.open_url(&authorize_url);
-        ctx.spawn(attempt.finish(), move |controller, result, ctx| {
+        // The TUI doesn't need the release signal separately: `cancel` already
+        // clears its own state immediately rather than waiting on the port.
+        let (_release, finish) = attempt.finish();
+        ctx.spawn(finish, move |controller, result, ctx| {
             controller.handle_callback_result(attempt_id, result, ctx);
         });
 

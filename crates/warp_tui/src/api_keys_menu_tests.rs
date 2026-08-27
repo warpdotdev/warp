@@ -7,8 +7,8 @@ use warp_editor::model::CoreEditorModel;
 use warpui::SingletonEntity as _;
 use warpui_core::{App, ModelHandle};
 
-use super::{TuiApiKeysFooter, TuiApiKeysMenuModel, TuiApiKeysMenuState, input_text};
-use crate::inline_menu::{TuiInlineMenuHeader, TuiInlineMenuInputOwnership};
+use super::{TuiApiKeysFooter, TuiApiKeysMenuModel, input_text};
+use crate::inline_menu::TuiInlineMenuInputOwnership;
 use crate::input_suggestions_mode::{TuiInputSuggestionsMode, TuiInputSuggestionsModeModel};
 
 fn add_menu(
@@ -218,72 +218,6 @@ fn open_and_connect_grok_matches_selecting_the_grok_row() {
                     .snapshot(ctx)
                     .map(|snapshot| snapshot.header),
             );
-        });
-    });
-}
-
-/// The bind itself (see `OauthAttempt::start`) retries off the UI thread, but
-/// the menu represents the attempt as `ConnectingGrokPending` synchronously
-/// before that resolves. A Cancel (Esc/dismiss) arriving during that window
-/// must invalidate the attempt so its eventual bind result is dropped instead
-/// of reopening `ConnectingGrok` on a menu the user already backed out of.
-///
-/// Drives `handle_grok_oauth_bound` directly with the pending attempt's own
-/// id, rather than waiting on the real background bind to actually complete:
-/// there's no externally observable difference between "discarded" and
-/// "hasn't arrived yet", so a fixed wait before asserting could pass without
-/// the discard ever having been exercised.
-#[test]
-fn cancel_while_grok_bind_is_pending_discards_the_late_result() {
-    App::test((), |mut app| async move {
-        let (_, _, menu) = add_menu(&mut app);
-
-        let attempt_id = menu.update(&mut app, |menu, ctx| {
-            assert!(menu.select_at_snapshot_index(3, ctx));
-            menu.accept_selected(ctx);
-            let TuiApiKeysMenuState::ConnectingGrokPending { attempt_id } = &menu.state else {
-                panic!("accepting the Grok row should enter ConnectingGrokPending");
-            };
-            let attempt_id = *attempt_id;
-            menu.dismiss(ctx);
-            attempt_id
-        });
-
-        app.read(|ctx| {
-            assert!(matches!(
-                menu.as_ref(ctx).footer(ctx),
-                Some(TuiApiKeysFooter::ProviderList { .. })
-            ));
-        });
-
-        // Simulate the bind that was already in flight finally resolving,
-        // after the user backed out of it. A distinctive error message lets
-        // the assertion below tell "discarded" apart from "handled as a
-        // normal failure" -- without the id guard, this would still land in
-        // `Browsing` (via the error branch's own `transition_to_browsing`),
-        // just with this message surfaced instead of dropped.
-        menu.update(&mut app, |menu, ctx| {
-            menu.handle_grok_oauth_bound(attempt_id, Err(anyhow::anyhow!("late bind result")), ctx);
-        });
-        app.read(|ctx| {
-            assert!(
-                matches!(
-                    menu.as_ref(ctx).footer(ctx),
-                    Some(TuiApiKeysFooter::ProviderList { .. })
-                ),
-                "a late bind result must not reopen ConnectingGrok on a cancelled attempt"
-            );
-            assert_eq!(
-                menu.as_ref(ctx)
-                    .snapshot(ctx)
-                    .and_then(|snapshot| snapshot.header),
-                Some(TuiInlineMenuHeader {
-                    title: Some("API keys".to_owned()),
-                    tabs: Vec::new(),
-                }),
-                "the discarded result's error must not surface on a menu the user backed out of"
-            );
-            assert!(menu.as_ref(ctx).is_open(ctx));
         });
     });
 }

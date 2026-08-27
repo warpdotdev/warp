@@ -23,7 +23,7 @@
 //! [`crate::api_keys::ApiKeyManager`] (storage + request injection).
 
 use std::future::Future;
-use std::io::{self, ErrorKind, Read, Write};
+use std::io::{ErrorKind, Read, Write};
 use std::net::{Shutdown, TcpListener, TcpStream};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -38,7 +38,6 @@ use instant::Instant;
 use rand::RngCore as _;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
-use warpui_core::r#async::Timer;
 
 const CLIENT_ID: &str = "b1a00492-073a-47ea-816f-4c329264a828";
 const AUTHORIZE_URL: &str = "https://auth.x.ai/oauth2/authorize";
@@ -53,12 +52,6 @@ const REDIRECT_PORT: u16 = 56121;
 const CALLBACK_TIMEOUT: Duration = Duration::from_secs(300);
 /// How long to nap between non-blocking `accept()` attempts.
 const POLL_INTERVAL: Duration = Duration::from_millis(100);
-/// How long to retry binding the callback listener while the port reports
-/// `AddrInUse`. A just-cancelled attempt's accept loop can take up to
-/// `POLL_INTERVAL` to notice and drop its listener, so this window is a small
-/// multiple of that -- long enough to ride out that gap, short enough that a
-/// genuinely held port (another app) still fails promptly.
-const BIND_RETRY_WINDOW: Duration = Duration::from_millis(500);
 /// How long to wait for an accepted connection to send its request before
 /// giving up on it.
 const CALLBACK_READ_TIMEOUT: Duration = Duration::from_secs(10);
@@ -98,14 +91,28 @@ impl OauthCancellationHandle {
     }
 }
 
+/// Resolves once the loopback callback listener has been released -- either
+/// because the browser's redirect was received or the attempt was cancelled
+/// -- strictly before [`OauthAttempt::finish`]'s result future does any
+/// further work (the CSRF check and the token exchange both happen after the
+/// point this signal fires). Lets a caller learn the bound port is free
+/// without waiting on a token exchange that doesn't affect it.
+pub struct OauthReleaseSignal(async_channel::Receiver<()>);
+
+impl OauthReleaseSignal {
+    pub async fn released(self) {
+        let _ = self.0.recv().await;
+    }
+}
+
 impl OauthAttempt {
     /// Binds the loopback callback server and generates fresh per-attempt
     /// secrets. Call this before opening the browser so a bind failure (e.g.
     /// another login already in progress, or Grok-CLI holding the port)
     /// surfaces before a browser tab opens.
-    pub async fn start() -> anyhow::Result<Self> {
+    pub fn start() -> anyhow::Result<Self> {
         Ok(Self {
-            listener: bind_callback_listener().await?,
+            listener: bind_callback_listener()?,
             pkce: PkceParams::generate(),
             cancellation: OauthCancellationHandle {
                 cancelled: Arc::new(AtomicBool::new(false)),
@@ -121,8 +128,20 @@ impl OauthAttempt {
     /// Runs the rest of the browser-based PKCE flow: waits for the loopback
     /// callback, validates the CSRF state, and exchanges the authorization
     /// code for tokens. Consumes the attempt so its secrets can't be reused.
-    pub fn finish(self) -> impl Future<Output = anyhow::Result<TokenResponse>> {
-        run_oauth_flow(self.listener, self.pkce, self.cancellation)
+    ///
+    /// Returns an [`OauthReleaseSignal`] alongside the result future so a
+    /// caller that only needs to know the port is free again -- to allow a
+    /// retry -- doesn't have to wait for a token exchange that a raced-in
+    /// callback may have already started.
+    pub fn finish(
+        self,
+    ) -> (
+        OauthReleaseSignal,
+        impl Future<Output = anyhow::Result<TokenResponse>>,
+    ) {
+        let (release_tx, release_rx) = async_channel::bounded(1);
+        let result = run_oauth_flow(self.listener, self.pkce, self.cancellation, release_tx);
+        (OauthReleaseSignal(release_rx), result)
     }
 
     /// Clones the PKCE verifier for the pasted-code fallback while the
@@ -232,31 +251,14 @@ struct CallbackData {
     state: String,
 }
 
-/// Binds `(REDIRECT_HOST, port)`, retrying for [`BIND_RETRY_WINDOW`] while the
-/// port reports [`ErrorKind::AddrInUse`].
-async fn bind_with_retry(port: u16, retry_window: Duration) -> io::Result<TcpListener> {
-    let deadline = Instant::now() + retry_window;
-    loop {
-        match TcpListener::bind((REDIRECT_HOST, port)) {
-            Ok(listener) => return Ok(listener),
-            Err(e) if e.kind() == ErrorKind::AddrInUse && Instant::now() < deadline => {
-                Timer::after(POLL_INTERVAL).await;
-            }
-            Err(e) => return Err(e),
-        }
-    }
-}
-
 /// Binds the loopback callback server to the fixed redirect address.
-async fn bind_callback_listener() -> anyhow::Result<TcpListener> {
-    let listener = bind_with_retry(REDIRECT_PORT, BIND_RETRY_WINDOW)
-        .await
-        .with_context(|| {
-            format!(
-                "couldn't bind the Grok OAuth callback server to {REDIRECT_HOST}:{REDIRECT_PORT}. \
-                 Another login may be in progress, or another app (e.g. Grok CLI) is using the port."
-            )
-        })?;
+fn bind_callback_listener() -> anyhow::Result<TcpListener> {
+    let listener = TcpListener::bind((REDIRECT_HOST, REDIRECT_PORT)).with_context(|| {
+        format!(
+            "couldn't bind the Grok OAuth callback server to {REDIRECT_HOST}:{REDIRECT_PORT}. \
+             Another login may be in progress, or another app (e.g. Grok CLI) is using the port."
+        )
+    })?;
     listener
         .set_nonblocking(true)
         .context("failed to set the Grok OAuth callback listener to non-blocking mode")?;
@@ -270,6 +272,7 @@ async fn run_oauth_flow(
     listener: TcpListener,
     pkce: PkceParams,
     cancellation: OauthCancellationHandle,
+    release_tx: async_channel::Sender<()>,
 ) -> anyhow::Result<TokenResponse> {
     // The loopback accept loop is blocking, so run it on a dedicated OS thread
     // and bridge the result back through a runtime-agnostic async channel.
@@ -278,12 +281,17 @@ async fn run_oauth_flow(
         .name("grok-oauth-callback".to_owned())
         .spawn(move || {
             let callback = wait_for_callback(&listener, CALLBACK_TIMEOUT, &cancellation);
-            // Close the loopback socket before publishing the result: a
-            // retried login rebinding the port would otherwise see "address in
-            // use" while this listener is still open. `send_blocking` is
-            // disallowed (no wasm support); block this dedicated thread on
-            // the async `send` instead.
+            // Close the loopback socket *before* publishing the result. Whoever
+            // observes the result may immediately rebind the redirect port (a
+            // retried login, or Grok CLI), and that bind fails with "address in
+            // use" while this listener is still open.
             drop(listener);
+            // Signal release before publishing the callback: a real callback
+            // still has a token exchange ahead of it, which doesn't hold the
+            // port and shouldn't block a caller that only wants to retry.
+            // `send_blocking` is disallowed (no wasm support); block this
+            // dedicated thread on the async `send` instead.
+            let _ = warpui_core::r#async::block_on(release_tx.send(()));
             let _ = warpui_core::r#async::block_on(tx.send(callback));
         })
         .context("failed to spawn the Grok OAuth callback server thread")?;

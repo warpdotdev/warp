@@ -14,8 +14,6 @@ fn authorize_url_contains_required_params() {
     assert!(url.contains("referrer=warp"));
     // The redirect URI must be percent-encoded and match the registered value.
     assert!(url.contains("redirect_uri=http%3A%2F%2F127.0.0.1%3A56121%2Fcallback"));
-    // The CSRF state and PKCE challenge are echoed into the URL verbatim
-    // (both are URL-safe base64, so no percent-encoding is applied).
     assert!(url.contains(&format!("state={}", pkce.state)));
     assert!(url.contains(&format!("code_challenge={}", pkce.challenge)));
 }
@@ -28,7 +26,6 @@ fn token_response_parses_minimal_and_full() {
     assert!(minimal.refresh_token.is_none());
     assert!(minimal.expires_in.is_none());
 
-    // Unconsumed response fields (token_type, scope) are ignored by serde.
     let full: TokenResponse = serde_json::from_str(
         r#"{"access_token":"a","refresh_token":"r","token_type":"Bearer","expires_in":3600,"scope":"api:access"}"#,
     )
@@ -56,18 +53,14 @@ fn manual_code_exchange_rejects_blank_code() {
     assert!(result.is_err());
 }
 
-/// The loopback ports the tests below bind, chosen to sit below every
-/// platform's ephemeral port range (Linux 32768-60999, macOS/Windows
-/// 49152-65535), so an ephemeral bind from an unrelated concurrent test can't
-/// collide with the exact-port rebinds these tests assert on.
+/// Ports below every platform's ephemeral range, so a concurrent test's
+/// ephemeral bind can't collide with the exact-port rebinds asserted below.
 const TEST_PORT_BASE: u16 = 21121;
 const TEST_PORT_SPAN: u16 = 200;
 
-/// Binds a non-blocking callback listener on a free port from the test range,
-/// mirroring how [`bind_callback_listener`] prepares the real one.
 fn bind_test_listener() -> (TcpListener, std::net::SocketAddr) {
-    // Scanning from a process-dependent offset keeps two test binaries running
-    // side by side off each other's ports.
+    // Scanning from a process-dependent offset keeps two test binaries off
+    // each other's ports.
     let offset = (std::process::id() % u32::from(TEST_PORT_SPAN)) as u16;
     for candidate in 0..TEST_PORT_SPAN {
         let port = TEST_PORT_BASE + (offset + candidate) % TEST_PORT_SPAN;
@@ -88,52 +81,52 @@ fn bind_test_listener() -> (TcpListener, std::net::SocketAddr) {
     );
 }
 
-/// `run_oauth_flow` must not hand back a result while the callback thread still
-/// owns the loopback socket: the caller may immediately rebind the redirect
-/// port, and that bind fails with "address in use" against a still-open
-/// listener.
-///
-/// Serialized with the other tests in this file that call
-/// [`bind_test_listener`]: they all scan the same PID-derived port range, so
-/// running them in parallel lets one test's just-dropped port be claimed by
-/// another before its own exact-port rebind assertion runs.
+/// `run_oauth_flow` must not hand back a result while the callback thread
+/// still owns the loopback socket, or an immediate rebind fails with
+/// "address in use". Serialized with the other tests here that call
+/// [`bind_test_listener`]: they scan the same PID-derived port range.
 #[test]
 #[serial_test::serial(grok_oauth_loopback_port)]
 fn cancelling_loopback_wait_releases_listener() {
-    let (listener, address) = bind_test_listener();
-    let cancellation = OauthCancellationHandle {
-        cancelled: Arc::new(AtomicBool::new(false)),
-    };
-    cancellation.cancel();
+    const CANCEL_CYCLES: usize = 100;
 
-    let result = warpui_core::r#async::block_on(run_oauth_flow(
-        listener,
-        PkceParams::generate(),
-        cancellation,
-    ));
+    for _ in 0..CANCEL_CYCLES {
+        let (listener, address) = bind_test_listener();
+        let cancellation = OauthCancellationHandle {
+            cancelled: Arc::new(AtomicBool::new(false)),
+        };
+        cancellation.cancel();
 
-    assert_eq!(
-        result
-            .expect_err("cancelled callback wait should fail")
-            .to_string(),
-        "Grok authorization was cancelled"
-    );
-    TcpListener::bind(address).expect("cancelled callback listener should release its port");
+        let (release_tx, _release_rx) = async_channel::bounded(1);
+        let result = warpui_core::r#async::block_on(run_oauth_flow(
+            listener,
+            PkceParams::generate(),
+            cancellation,
+            release_tx,
+        ));
+
+        assert_eq!(
+            result
+                .expect_err("cancelled callback wait should fail")
+                .to_string(),
+            "Grok authorization was cancelled"
+        );
+        TcpListener::bind(address).expect("cancelled callback listener should release its port");
+    }
 }
 
-/// Guards the non-cancelled path: the callback captured by the listener thread
-/// is still delivered to the flow after the listener is closed. A mismatched
-/// CSRF state stops the flow before the network token exchange, so the CSRF
-/// error is proof the callback made the trip.
+/// A caller only needs the release signal, not the full result, to know the
+/// port is free again -- proven here by rebinding without ever joining the
+/// result thread.
 #[test]
 #[serial_test::serial(grok_oauth_loopback_port)]
-fn loopback_callback_is_delivered_after_the_listener_closes() {
+fn release_signal_lets_a_caller_rebind_without_joining_the_result() {
     let (listener, address) = bind_test_listener();
     let cancellation = OauthCancellationHandle {
         cancelled: Arc::new(AtomicBool::new(false)),
     };
+    let (release_tx, release_rx) = async_channel::bounded(1);
 
-    // Stand in for the browser hitting the redirect URI.
     let browser = std::thread::spawn(move || {
         let mut stream = TcpStream::connect(address).expect("test browser should connect");
         stream
@@ -148,10 +141,59 @@ fn loopback_callback_is_delivered_after_the_listener_closes() {
             .expect("test browser should read the callback response");
     });
 
+    let result_thread = std::thread::spawn(move || {
+        warpui_core::r#async::block_on(run_oauth_flow(
+            listener,
+            PkceParams::generate(),
+            cancellation,
+            release_tx,
+        ))
+    });
+
+    warpui_core::r#async::block_on(release_rx.recv())
+        .expect("release signal should fire once the listener is dropped");
+    TcpListener::bind(address).expect("released listener should free its port immediately");
+
+    let result = result_thread.join().expect("result future should finish");
+    browser.join().expect("test browser thread should finish");
+    assert!(
+        result
+            .expect_err("a mismatched callback state should fail")
+            .to_string()
+            .contains("state did not match")
+    );
+}
+
+/// Guards the non-cancelled path: the callback is still delivered after the
+/// listener closes.
+#[test]
+#[serial_test::serial(grok_oauth_loopback_port)]
+fn loopback_callback_is_delivered_after_the_listener_closes() {
+    let (listener, address) = bind_test_listener();
+    let cancellation = OauthCancellationHandle {
+        cancelled: Arc::new(AtomicBool::new(false)),
+    };
+
+    let browser = std::thread::spawn(move || {
+        let mut stream = TcpStream::connect(address).expect("test browser should connect");
+        stream
+            .write_all(
+                b"GET /callback?code=test-code&state=unexpected-state HTTP/1.1\r\n\
+                  Host: 127.0.0.1\r\n\r\n",
+            )
+            .expect("test browser should send the callback request");
+        let mut response = String::new();
+        stream
+            .read_to_string(&mut response)
+            .expect("test browser should read the callback response");
+    });
+
+    let (release_tx, _release_rx) = async_channel::bounded(1);
     let result = warpui_core::r#async::block_on(run_oauth_flow(
         listener,
         PkceParams::generate(),
         cancellation,
+        release_tx,
     ));
     browser.join().expect("test browser thread should finish");
 
@@ -164,9 +206,8 @@ fn loopback_callback_is_delivered_after_the_listener_closes() {
 }
 
 /// Waits for `listener` (non-blocking) to accept a connection that was just
-/// established, retrying briefly since the OS may not have finished
-/// enqueueing it the instant `TcpStream::connect` returns. This is about OS
-/// scheduling of the handshake, not the behavior under test below.
+/// established. Bounded retry is about OS handshake scheduling, not the
+/// behavior under test below.
 fn accept_test_connection(listener: &TcpListener) -> TcpStream {
     for _ in 0..100 {
         match listener.accept() {
@@ -180,14 +221,11 @@ fn accept_test_connection(listener: &TcpListener) -> TcpStream {
     panic!("test listener never accepted the connection");
 }
 
-/// Regression coverage for the accepted-connection stall: a connection that's
-/// accepted but never sends a request must not hold the read past a poll
-/// interval once cancelled, even though the per-connection read timeout
-/// (`CALLBACK_READ_TIMEOUT`) is far longer -- otherwise a Connect right after
-/// Cancel can still hit `AddrInUse` despite the bind retry above. Calls
-/// `read_callback_request` directly (accepting the connection itself first)
-/// so the assertion is deterministic: it doesn't depend on winning a race
-/// against the accept loop to cancel while a read happens to be in flight.
+/// A connection that's accepted but never sends a request must not hold the
+/// read past a poll interval once cancelled, even though the per-connection
+/// read timeout (`CALLBACK_READ_TIMEOUT`) is far longer -- otherwise
+/// cancelling with such a connection pending parks the row in "Cancelling…"
+/// for that long instead of finalizing.
 #[test]
 #[serial_test::serial(grok_oauth_loopback_port)]
 fn cancelling_with_a_stalled_accepted_connection_still_releases_promptly() {
@@ -202,8 +240,7 @@ fn cancelling_with_a_stalled_accepted_connection_still_releases_promptly() {
     let mut accepted = accept_test_connection(&listener);
 
     // Cancelling before the read is even attempted still has to be honored by
-    // the read itself -- proving `read_callback_request` is cancellation-aware
-    // on its own, independent of the outer accept loop that wraps it in
+    // the read itself, independent of the outer accept loop that wraps it in
     // production.
     cancellation.cancel();
 
@@ -223,37 +260,4 @@ fn cancelling_with_a_stalled_accepted_connection_still_releases_promptly() {
          immediately rather than blocking for CALLBACK_READ_TIMEOUT"
     );
     drop(stalled_client);
-}
-
-/// The regression this guards against: a Connect immediately after Cancel
-/// hitting `AddrInUse` because the previous attempt's accept loop hasn't yet
-/// noticed the cancellation and dropped its listener.
-#[test]
-#[serial_test::serial(grok_oauth_loopback_port)]
-fn bind_retry_succeeds_once_the_port_frees_within_the_window() {
-    let (listener, address) = bind_test_listener();
-    std::thread::spawn(move || {
-        std::thread::sleep(Duration::from_millis(50));
-        drop(listener);
-    });
-
-    let result =
-        warpui_core::r#async::block_on(bind_with_retry(address.port(), Duration::from_millis(500)));
-    assert!(
-        result.is_ok(),
-        "bind should succeed once the port is released within the retry window"
-    );
-}
-
-#[test]
-#[serial_test::serial(grok_oauth_loopback_port)]
-fn bind_retry_surfaces_addr_in_use_once_the_window_elapses() {
-    let (_listener, address) = bind_test_listener();
-
-    let result =
-        warpui_core::r#async::block_on(bind_with_retry(address.port(), Duration::from_millis(100)));
-    assert_eq!(
-        result.expect_err("a held port should still fail").kind(),
-        ErrorKind::AddrInUse
-    );
 }
