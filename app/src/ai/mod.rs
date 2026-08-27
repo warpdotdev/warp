@@ -20,6 +20,7 @@ pub mod aws_credentials;
 pub(crate) mod bedrock_credentials;
 pub(crate) mod block_context;
 pub(crate) mod blocklist;
+pub(crate) mod cloud_run_links;
 #[cfg(any(feature = "local_fs", not(target_family = "wasm")))]
 pub(crate) mod codebase_auto_indexing;
 pub mod control_code_parser;
@@ -35,6 +36,7 @@ pub(crate) mod custom_endpoints;
 pub(crate) mod custom_model_router_editor;
 pub(crate) mod custom_model_routers;
 pub(crate) mod document;
+pub(crate) mod factory_access;
 #[cfg(not(target_family = "wasm"))]
 pub mod geap_credentials;
 pub(crate) mod get_relevant_files;

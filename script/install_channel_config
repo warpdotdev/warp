@@ -11,7 +11,10 @@
 #   ./script/install_channel_config --force  # force reinstall
 
 REPO="ssh://git@github.com/warpdotdev/warp-channel-config.git"
-REVISION="97a199b5bba11af9c7d3bd43dfb3669316d1f0f8"
+# Pinned to warpdotdev/warp-channel-config#6 (branch app-5583-platform-root-url), which adds
+# `oz_config.platform_root_url` for APP-5583. Re-pin to that PR's merge commit on `main` once
+# it lands.
+REVISION="c3dab3f7820403fad8d96ec8d5ae451c79db37c1"
 BIN_NAME="warp-channel-config"
 
 # Check for repo access before attempting to `cargo install` the binary.

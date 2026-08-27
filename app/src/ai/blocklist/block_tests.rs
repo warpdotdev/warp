@@ -117,20 +117,33 @@ fn non_orchestration_actions_do_not_get_collapsible_state_defaults() {
 
 #[test]
 fn recording_artifact_view_url_uses_configured_oz_origin() {
-    let task_id: AmbientAgentTaskId = "00000000-0000-0000-0000-000000000123".parse().unwrap();
+    // No `FactoryAccessModel` is registered here, so the resolver falls back to `Unknown`
+    // access and the URL stays on Oz.
+    App::test((), |mut app| async move {
+        let task_id: AmbientAgentTaskId = "00000000-0000-0000-0000-000000000123".parse().unwrap();
 
-    assert_eq!(
-        recording_artifact_view_url(Some(task_id), "recording-123"),
-        Some(format!(
-            "{}/runs/{task_id}?artifact=recording-123",
-            ChannelState::oz_root_url()
-        ))
-    );
+        app.update(|ctx| {
+            assert_eq!(
+                recording_artifact_view_url(Some(task_id), "recording-123", ctx),
+                Some(format!(
+                    "{}/runs/{task_id}?artifact=recording-123",
+                    ChannelState::oz_root_url()
+                ))
+            );
+        });
+    });
 }
 
 #[test]
 fn recording_artifact_view_url_requires_task_id() {
-    assert_eq!(recording_artifact_view_url(None, "recording-123"), None);
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            assert_eq!(
+                recording_artifact_view_url(None, "recording-123", ctx),
+                None
+            );
+        });
+    });
 }
 
 #[cfg(feature = "local_fs")]

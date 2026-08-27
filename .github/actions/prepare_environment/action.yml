@@ -116,9 +116,17 @@ runs:
       run: |
         cd "${{ steps.repo-root.outputs.path }}"
         if ${{ inputs.target_os == 'macos' }}; then
-          # Try to install warp-channel-config but don't complain if it cannot
-          # be installed.
-          ./script/install_channel_config || true
+          # In warpdotdev/warp-internal, the private warp-channel-config repo must be
+          # installable, so a broken or inaccessible pin fails the job instead of silently
+          # degrading channel config at runtime (e.g. the APP-5583 Oz-only regression a missing
+          # platform_root_url would cause) with no failing check anywhere. This is conditioned on
+          # `ssh_key` because the SSH agent step above is: a caller that supplies no key never had
+          # access to require, so failing it would break every job that does not pass the secret.
+          if ${{ github.repository == 'warpdotdev/warp-internal' && inputs.ssh_key != '' }}; then
+            ./script/install_channel_config
+          else
+            ./script/install_channel_config || true
+          fi
           if ${{ inputs.install_release_deps == 'true' }}; then
             ./script/install_cargo_release_deps
           else
@@ -128,6 +136,14 @@ runs:
           # Update the apt cache before installing dependencies - it can be slow, so the install scripts
           # don't do it.
           sudo apt-get update -y
+
+          # Same rationale and the same `ssh_key` condition as the macOS branch above, so Linux
+          # is not the one platform that never attempts the install.
+          if ${{ github.repository == 'warpdotdev/warp-internal' && inputs.ssh_key != '' }}; then
+            ./script/install_channel_config
+          else
+            ./script/install_channel_config || true
+          fi
 
           if ${{ inputs.install_test_deps == 'true' }}; then
             ./script/linux/install_test_deps

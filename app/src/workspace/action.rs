@@ -458,6 +458,10 @@ pub enum WorkspaceAction {
     SignupAnonymousUser,
     SignInAnonymousWebUser,
     OpenLink(String),
+    /// Opens the cloud-run index ("View all cloud runs"), routing to Platform or Oz depending
+    /// on the viewer's current Factory access (APP-5583). Resolved at dispatch time rather
+    /// than by the click site so a startup access result affects the next click.
+    OpenCloudRunIndex,
     /// On WASM, opens a given URL in the desktop Warp app (if installed) or redirects to download page.
     #[cfg(target_family = "wasm")]
     OpenLinkOnDesktop(url::Url),
@@ -1138,6 +1142,7 @@ impl WorkspaceAction {
             | SignupAnonymousUser
             | LogOut
             | OpenLink(_)
+            | OpenCloudRunIndex
             | OpenShareSessionModal(_)
             | StopSharingSessionFromTabMenu { .. }
             | StopSharingAllSessionsInTab { .. }

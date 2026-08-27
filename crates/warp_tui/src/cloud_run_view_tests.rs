@@ -1,10 +1,16 @@
+use std::cell::RefCell;
+use std::rc::Rc;
+
 use warp::appearance::Appearance;
 use warp::tui_export::{
     AmbientAgentTaskId, BlocklistAIHistoryModel, CloudAgentStartupBlocker, ConversationStatus,
+    FactoryAccess, FactoryAccessModel,
 };
 use warpui::platform::WindowStyle;
 use warpui::{AddWindowOptions, SingletonEntity as _};
-use warpui_core::elements::tui::{Modifier, TuiBufferExt, TuiRect};
+use warpui_core::elements::tui::{Modifier, TuiBufferExt, TuiEvent, TuiPoint, TuiRect};
+use warpui_core::event::{KeyEventDetails, ModifiersState};
+use warpui_core::keymap::Keystroke;
 use warpui_core::presenter::tui::TuiPresenter;
 use warpui_core::{App, TuiView as _, TypedActionView as _};
 
@@ -14,7 +20,10 @@ use crate::terminal_session_view::CTRL_C_KILL_CHILD_HINT;
 use crate::test_fixtures::TestHostView;
 use crate::tui_builder::TuiUiBuilder;
 
-const RUN_URL: &str = "https://oz.staging.warp.dev/runs/019f71ef-6285-7480-90f6-3ad84d8e0d1e";
+// Resolved from the default (production) channel config: no `FactoryAccessModel` singleton is
+// registered in these tests, so the viewer's Factory access is `Unknown` and the link stays on
+// Oz per `cloud_run_web_url` (APP-5583).
+const RUN_URL: &str = "https://oz.warp.dev/runs/019f71ef-6285-7480-90f6-3ad84d8e0d1e";
 const TASK_ID: &str = "11111111-1111-1111-1111-111111111111";
 
 #[test]
@@ -129,7 +138,6 @@ fn spawned_cloud_view_matches_figma_in_progress_and_succeeded_states() {
                         .parse::<AmbientAgentTaskId>()
                         .expect("hardcoded task id parses"),
                     "019f71ef-6285-7480-90f6-3ad84d8e0d1e".to_string(),
-                    RUN_URL.to_string(),
                     ctx,
                 );
             });
@@ -267,7 +275,6 @@ fn cloud_child_first_interrupt_arms_kill_window_not_exit_window() {
                         .parse::<AmbientAgentTaskId>()
                         .expect("hardcoded task id parses"),
                     "019f71ef-6285-7480-90f6-3ad84d8e0d1e".to_string(),
-                    RUN_URL.to_string(),
                     ctx,
                 );
             });
@@ -315,5 +322,145 @@ fn cloud_child_first_interrupt_arms_kill_window_not_exit_window() {
             );
         });
         let _ = conversation_id; // suppress unused warning
+    });
+}
+
+fn key_event(key: &str) -> TuiEvent {
+    TuiEvent::KeyDown {
+        keystroke: Keystroke {
+            key: key.to_owned(),
+            ..Default::default()
+        },
+        chars: key.to_owned(),
+        details: KeyEventDetails::default(),
+        is_composing: false,
+    }
+}
+
+fn left_click(x: u16, y: u16) -> (TuiEvent, TuiEvent) {
+    (
+        TuiEvent::LeftMouseDown {
+            position: TuiPoint::new(x, y),
+            modifiers: ModifiersState::default(),
+            click_count: 1,
+            is_first_mouse: false,
+        },
+        TuiEvent::LeftMouseUp {
+            position: TuiPoint::new(x, y),
+            modifiers: ModifiersState::default(),
+        },
+    )
+}
+
+#[test]
+fn cloud_run_link_activation_resolves_fresh_on_a_stale_rendered_frame() {
+    // The regression this guards: the rendered frame's click/Enter handlers used to close over
+    // whatever destination `display_state` produced at render time, so a Factory access probe
+    // that resolved after the frame was drawn had no effect until something re-rendered it.
+    // Deliberately do NOT re-render after the access change below, and dispatch the actual
+    // mouse and key events against the retained (stale) frame rather than calling
+    // `primary_url`/`handle_action` directly — calling either of those would only prove the
+    // resolver works, not that the rendered element's own handlers still reach it.
+    const RUN_ID: &str = "019f71ef-6285-7480-90f6-3ad84d8e0d1e";
+
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        app.add_singleton_model(|_| BlocklistAIHistoryModel::default());
+        app.add_singleton_model(|_| FactoryAccessModel::new_for_test(FactoryAccess::Unknown));
+
+        let opened_urls = Rc::new(RefCell::new(Vec::<String>::new()));
+        let opened_urls_for_hook = opened_urls.clone();
+        app.update(|ctx| {
+            ctx.set_before_open_url(move |url, _ctx| {
+                opened_urls_for_hook.borrow_mut().push(url.to_owned());
+                url.to_owned()
+            });
+        });
+
+        let window_id = app.update(|ctx| {
+            ctx.add_tui_window(
+                AddWindowOptions {
+                    window_style: WindowStyle::NotStealFocus,
+                    ..Default::default()
+                },
+                |_| TestHostView,
+            )
+            .0
+        });
+        let state = app.add_model(|_| TuiCloudRunState::new());
+        let view = app.update(|ctx| {
+            ctx.add_typed_action_tui_view(window_id, |ctx| TuiCloudRunView::new(state.clone(), ctx))
+        });
+        app.update(|ctx| {
+            state.update(ctx, |state, ctx| {
+                state.set_spawned(
+                    TASK_ID
+                        .parse::<AmbientAgentTaskId>()
+                        .expect("hardcoded task id parses"),
+                    RUN_ID.to_string(),
+                    ctx,
+                );
+            });
+        });
+
+        // Render once, retained by `presenter`, while access is still Unknown: the frame shows
+        // an Oz link. This is the "stale frame" the fix must not depend on ever being replaced.
+        let mut presenter = TuiPresenter::new();
+        let link_position = app.update(|ctx| {
+            let frame = presenter.present_element(
+                view.as_ref(ctx).render(ctx),
+                TuiRect::new(0, 0, 112, 24),
+                ctx,
+            );
+            let lines = frame.buffer.to_lines();
+            let row = lines
+                .iter()
+                .position(|line| line.contains(&format!("oz.warp.dev/runs/{RUN_ID}")))
+                .unwrap_or_else(|| {
+                    panic!(
+                        "expected an Oz link while Factory access is still Unknown; rendered: {}",
+                        lines.join("\n")
+                    )
+                });
+            let col = lines[row]
+                .find(&format!("oz.warp.dev/runs/{RUN_ID}"))
+                .expect("column of the located line must contain the match");
+            (col as u16, row as u16)
+        });
+
+        // The probe resolves to Allowed after the run was already spawned and rendered
+        // (simulating it landing between spawn and the viewer activating the link). No render
+        // happens after this point; `presenter` still holds the stale, Oz-rendered tree.
+        app.update(|ctx| {
+            FactoryAccessModel::handle(ctx).update(ctx, |model, _| {
+                model.set_access_for_test(FactoryAccess::Allowed)
+            });
+        });
+
+        // Click the link on the stale frame: TuiHoverable's press-then-release dispatches
+        // OpenPrimaryUrl, which must resolve to Platform, not the Oz destination baked into the
+        // frame the click was dispatched against.
+        let (mouse_down, mouse_up) = left_click(link_position.0, link_position.1);
+        app.update(|ctx| {
+            presenter.dispatch_event(ctx, window_id, view.id(), &mouse_down);
+            presenter.dispatch_event(ctx, window_id, view.id(), &mouse_up);
+        });
+        assert_eq!(
+            opened_urls.borrow().as_slice(),
+            [format!("https://platform.warp.dev/runs/{RUN_ID}")],
+            "clicking the stale Oz-rendered link must open Platform once access resolved to \
+             Allowed"
+        );
+        opened_urls.borrow_mut().clear();
+
+        // Pressing Enter on the same stale frame must resolve the same way.
+        app.update(|ctx| {
+            presenter.dispatch_event(ctx, window_id, view.id(), &key_event("enter"));
+        });
+        assert_eq!(
+            opened_urls.borrow().as_slice(),
+            [format!("https://platform.warp.dev/runs/{RUN_ID}")],
+            "pressing enter on the stale Oz-rendered frame must also open Platform"
+        );
     });
 }

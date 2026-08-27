@@ -211,6 +211,7 @@ use crate::ai::blocklist::{
     SerializedBlockListItem, SlashCommandRequest,
 };
 use crate::ai::cloud_agent_settings::CloudAgentSettings;
+use crate::ai::cloud_run_links::{CloudRunLink, cloud_run_web_url_now};
 #[cfg(target_family = "wasm")]
 use crate::ai::conversation_details_panel::ConversationDetailsPanel;
 use crate::ai::conversation_utils;
@@ -24370,6 +24371,10 @@ impl TypedActionView for Workspace {
                 ctx.dispatch_typed_action_for_view(window_id, self.settings_pane.id(), action)
             }
             OpenLink(link) => ctx.open_url(link),
+            OpenCloudRunIndex => {
+                let url = cloud_run_web_url_now(&CloudRunLink::RunIndex, ctx);
+                ctx.open_url(&url);
+            }
             #[cfg(target_family = "wasm")]
             OpenLinkOnDesktop(url) => self.open_link_on_desktop(url, ctx),
             DumpDebugInfo => self.dump_debug_info(ctx),

@@ -133,6 +133,7 @@ pub use crate::ai::connected_self_hosted_workers::{
 pub use crate::ai::conversation_export::{
     ConversationFileExport, ConversationFileExportError, export_conversation_markdown,
 };
+pub use crate::ai::factory_access::{FactoryAccess, FactoryAccessModel};
 pub use crate::ai::get_relevant_files::controller::GetRelevantFilesController;
 pub use crate::ai::harness_availability::{
     AuthSecretEntry, AuthSecretFetchState, HarnessAvailability, HarnessAvailabilityEvent,
@@ -149,10 +150,10 @@ pub use crate::ai::orchestration::{
     OptionRow, OptionSnapshot, OptionSourceStatus, OrchestrationConfigState,
     OrchestrationEditState, PrepareRemoteChildLaunchError, PreparedRemoteChildLaunch,
     RemoteChildLaunchConfig, accept_disabled_reason_with_auth, api_key_snapshot,
-    auth_secret_selection_required, classify_cloud_agent_startup_error,
+    auth_secret_selection_required, classify_cloud_agent_startup_error, cloud_run_url,
     empty_env_recommendation_message, environment_snapshot, harness_is_selectable,
     harness_snapshot, host_snapshot, location_snapshot, model_snapshot, oz_model_snapshot,
-    oz_run_url, persist_environment_selection, persist_host_selection, prepare_remote_child_launch,
+    persist_environment_selection, persist_host_selection, prepare_remote_child_launch,
     resolve_auth_secret_selection_for_harness, resolve_default_environment_id,
     resolve_default_host_slug, should_show_auth_secret_picker,
 };

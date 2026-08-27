@@ -1,7 +1,7 @@
 use instant::Instant;
 use warp::tui_export::{
     BlocklistAIHistoryModel, CloudAgentStartupAuthFlow, CloudAgentStartupPresentation,
-    ConversationStatus, loaded_subtree_rollup,
+    ConversationStatus, FactoryAccessModel, cloud_run_url, loaded_subtree_rollup,
 };
 use warp_errors::report_error;
 use warpui::SingletonEntity as _;
@@ -37,7 +37,6 @@ use crate::ui::centered_in_viewport;
 #[derive(Debug, Clone)]
 pub(crate) enum TuiCloudRunAction {
     Interrupt,
-    OpenUrl(String),
     OpenPrimaryUrl,
     FocusOrchestrationTabs,
     NavigateOrchestrationTabs(TuiOrchestrationTabNavigationAction),
@@ -104,6 +103,16 @@ impl TuiCloudRunView {
         ctx.subscribe_to_model(&BlocklistAIHistoryModel::handle(ctx), |_, _, _, ctx| {
             ctx.notify();
         });
+        // Not every harness registers `FactoryAccessModel` (e.g. tests that don't need Factory
+        // access at all); guard the subscription the same way `cloud_run_web_url_now` guards
+        // reading it. When it is registered, its resolution can change which host
+        // `display_state` resolves to for the same run id, so repaint to pick that up — the
+        // click/Enter handlers re-resolve on their own regardless (see `OpenPrimaryUrl`).
+        if ctx.has_singleton_model::<FactoryAccessModel>() {
+            ctx.subscribe_to_model(&FactoryAccessModel::handle(ctx), |_, _, _, ctx| {
+                ctx.notify();
+            });
+        }
         ctx.subscribe_to_view(&orchestration_tab_bar, |view, _, event, ctx| match event {
             TuiTabBarEvent::SelectTab(conversation_id) => {
                 view.switch_to_orchestration_tab(
@@ -285,7 +294,7 @@ impl TuiCloudRunView {
                     status_label: status_label.to_string(),
                     detail: None,
                     link_instruction: Some("to view or click the link below"),
-                    link_url: state.run_url().map(str::to_string),
+                    link_url: state.run_id().map(|run_id| cloud_run_url(run_id, ctx)),
                 }
             }
         }
@@ -553,7 +562,6 @@ impl TuiView for TuiCloudRunView {
             display_state.link_instruction,
             display_state.link_url.clone(),
         ) {
-            let click_url = url.clone();
             content = content
                 .child(
                     TuiText::from_spans([
@@ -568,13 +576,16 @@ impl TuiView for TuiCloudRunView {
                     .finish(),
                 )
                 .child(
+                    // Dispatches `OpenPrimaryUrl` rather than closing over `url`: `display_state`
+                    // is computed once per render, so an access probe that resolves between this
+                    // render and the click must still be picked up. `OpenPrimaryUrl` re-resolves
+                    // through `primary_url` at click time instead of opening whatever host was
+                    // current when this frame was rendered.
                     TuiContainer::new(self.link.render(
                         url,
                         builder.muted_text_style(),
-                        move |event_ctx, _| {
-                            event_ctx.dispatch_typed_action(TuiCloudRunAction::OpenUrl(
-                                click_url.clone(),
-                            ));
+                        |event_ctx, _| {
+                            event_ctx.dispatch_typed_action(TuiCloudRunAction::OpenPrimaryUrl);
                         },
                     ))
                     .with_padding_top(1)
@@ -582,10 +593,11 @@ impl TuiView for TuiCloudRunView {
                 );
         }
         let body = centered_in_viewport(content.finish());
-        let body = if let Some(url) = display_state.link_url {
+        let body = if display_state.link_url.is_some() {
+            // Same re-resolution rationale as the click handler above.
             TuiEventHandler::new(body)
-                .on_key("enter", move |_, event_ctx, _| {
-                    event_ctx.dispatch_typed_action(TuiCloudRunAction::OpenUrl(url.clone()));
+                .on_key("enter", |_, event_ctx, _| {
+                    event_ctx.dispatch_typed_action(TuiCloudRunAction::OpenPrimaryUrl);
                 })
                 .finish()
         } else {
@@ -641,7 +653,6 @@ impl TypedActionView for TuiCloudRunView {
     fn handle_action(&mut self, action: &TuiCloudRunAction, ctx: &mut ViewContext<Self>) {
         match action {
             TuiCloudRunAction::Interrupt => self.handle_interrupt(ctx),
-            TuiCloudRunAction::OpenUrl(url) => ctx.open_url(url),
             TuiCloudRunAction::OpenPrimaryUrl => {
                 if let Some(url) = self.primary_url(ctx) {
                     ctx.open_url(&url);

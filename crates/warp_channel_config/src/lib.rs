@@ -111,3 +111,49 @@ pub fn load_config_from_embedded(json: &str) -> ChannelConfig {
     serde_json::from_str(json)
         .unwrap_or_else(|err| panic!("Failed to parse embedded channel config: {err}"))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Guards against the pinned `warp-channel-config` revision (see
+    /// `script/install_channel_config`) regressing to one that no longer emits
+    /// `oz_config.platform_root_url` (APP-5583). `platform_root_url` is
+    /// serde-defaulted to `None` for backwards compatibility with older
+    /// generator output, so a stale pin fails silently at runtime instead of at
+    /// compile time: cloud-run links would fall back to Oz for every viewer
+    /// without any test or build failure to flag it.
+    ///
+    /// Skips (rather than fails) when `warp-channel-config` is not on PATH: it is only
+    /// installed via `./script/install_channel_config`, which requires SSH access to a private
+    /// repo that is unavailable on the public mirror, fork PRs, and OSS contributor machines.
+    /// `.github/actions/prepare_environment`'s macOS and Linux install steps now fail outright
+    /// in `warpdotdev/warp-internal` when the SSH key needed for that access is supplied, so a
+    /// broken or inaccessible pin still fails a required CI job there instead of this test
+    /// silently no-op'ing.
+    #[test]
+    fn generator_emits_platform_root_url_for_dev_and_stable() {
+        if command::blocking::Command::new(CONFIG_BIN_NAME)
+            .arg("--help")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .is_err()
+        {
+            eprintln!(
+                "Skipping: '{CONFIG_BIN_NAME}' not on PATH. Run ./script/install_channel_config \
+                 to exercise this test."
+            );
+            return;
+        }
+
+        for channel in ["dev", "stable"] {
+            let config = load_config_from_generator(channel);
+            assert!(
+                config.oz_config.platform_root_url.is_some(),
+                "expected '{channel}' channel config to have a platform_root_url, got: {:?}",
+                config.oz_config.platform_root_url
+            );
+        }
+    }
+}

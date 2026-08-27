@@ -10,7 +10,6 @@ use std::hash::{Hash, Hasher};
 use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::vec2f;
 use warp_cli::agent::Harness;
-use warp_core::channel::ChannelState;
 use warp_core::send_telemetry_from_ctx;
 use warp_core::ui::appearance::Appearance;
 use warp_core::ui::color::blend::Blend;
@@ -57,6 +56,7 @@ use crate::ai::blocklist::telemetry::{
     PillBarPillKind, PillSwitchOutcome,
 };
 use crate::ai::blocklist::{BlocklistAIHistoryEvent, BlocklistAIHistoryModel};
+use crate::ai::cloud_run_links::{CloudRunLink, cloud_run_web_url_now};
 use crate::ai::harness_display;
 use crate::features::FeatureFlag;
 use crate::menu::{Event as MenuEvent, Menu, MenuItem, MenuItemFields};
@@ -511,10 +511,10 @@ impl OrchestrationPillBar {
                 ),
             ]
         };
-        if Self::oz_run_url_for_conversation(conversation_id, ctx).is_some() {
+        if Self::cloud_run_url_for_conversation(conversation_id, ctx).is_some() {
             items.push(item(
-                "View in Oz",
-                Icon::Oz,
+                "View cloud run",
+                Icon::LinkExternal,
                 OrchestrationPillBarAction::ViewInOz(conversation_id),
             ));
         }
@@ -568,15 +568,19 @@ impl OrchestrationPillBar {
         ctx.notify();
     }
 
-    fn oz_run_url_for_conversation(
+    /// Builds the cloud-run web URL for `conversation_id`'s run, if it has one. Routes to
+    /// Platform for viewers with Factory access and falls back to Oz otherwise (APP-5583).
+    fn cloud_run_url_for_conversation(
         conversation_id: AIConversationId,
         app: &AppContext,
     ) -> Option<String> {
         let run_id = BlocklistAIHistoryModel::as_ref(app)
             .conversation(&conversation_id)?
             .run_id()?;
-        let oz_root_url = ChannelState::oz_root_url();
-        Some(format!("{oz_root_url}/runs/{run_id}"))
+        Some(cloud_run_web_url_now(
+            &CloudRunLink::Run { run_id: &run_id },
+            app,
+        ))
     }
 
     fn set_hovered_pill(
@@ -1034,7 +1038,7 @@ impl TypedActionView for OrchestrationPillBar {
                     ctx,
                 );
                 self.close_menu(ctx);
-                if let Some(url) = Self::oz_run_url_for_conversation(*id, ctx) {
+                if let Some(url) = Self::cloud_run_url_for_conversation(*id, ctx) {
                     ctx.open_url(&url);
                 }
             }

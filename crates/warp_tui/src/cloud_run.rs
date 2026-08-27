@@ -22,7 +22,6 @@ pub(crate) struct TuiCloudRunState {
     startup: TuiCloudRunStartup,
     task_id: Option<AmbientAgentTaskId>,
     run_id: Option<String>,
-    run_url: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -37,7 +36,6 @@ impl TuiCloudRunState {
             startup: TuiCloudRunStartup::Dispatching,
             task_id: None,
             run_id: None,
-            run_url: None,
         }
     }
 
@@ -51,14 +49,12 @@ impl TuiCloudRunState {
         conversation_id: AIConversationId,
         task_id: AmbientAgentTaskId,
         run_id: String,
-        run_url: String,
     ) -> Self {
         Self {
             conversation_id: Some(conversation_id),
             startup: TuiCloudRunStartup::Spawned,
             task_id: Some(task_id),
             run_id: Some(run_id),
-            run_url: Some(run_url),
         }
     }
 
@@ -70,8 +66,12 @@ impl TuiCloudRunState {
         &self.startup
     }
 
-    pub(crate) fn run_url(&self) -> Option<&str> {
-        self.run_url.as_deref()
+    /// The server-assigned run ID for this cloud child, once spawned or restored. The web
+    /// destination is resolved fresh from this at render/click time (see
+    /// [`crate::cloud_run_view::TuiCloudRunView::display_state`]) rather than cached here, so a
+    /// viewer's Factory access resolving after spawn still takes effect (APP-5583).
+    pub(crate) fn run_id(&self) -> Option<&str> {
+        self.run_id.as_deref()
     }
 
     pub(crate) fn set_conversation_id(
@@ -105,12 +105,10 @@ impl TuiCloudRunState {
         &mut self,
         task_id: AmbientAgentTaskId,
         run_id: String,
-        run_url: String,
         ctx: &mut ModelContext<Self>,
     ) {
         self.task_id = Some(task_id);
         self.run_id = Some(run_id);
-        self.run_url = Some(run_url);
         self.startup = TuiCloudRunStartup::Spawned;
         ctx.emit(TuiCloudRunStateEvent::Updated);
     }

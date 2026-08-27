@@ -74,6 +74,13 @@ pub struct OzConfig {
     /// to [`WarpServerConfig::server_root_url`]. This exists so the audience is not overridden
     /// when a custom server root URL is provided (e.g. an ngrok URL for local development).
     pub workload_audience_url: Option<Cow<'static, str>>,
+
+    /// Root URL for the Platform web app, for viewers with Factory access (APP-5583). [`None`]
+    /// when this channel has no configured Platform origin yet, in which case cloud-run links
+    /// stay on [`Self::oz_root_url`] regardless of viewer access. Defaulted via serde so a
+    /// channel-config generator that predates this field still deserializes.
+    #[serde(default)]
+    pub platform_root_url: Option<Cow<'static, str>>,
 }
 
 impl OzConfig {
@@ -81,6 +88,7 @@ impl OzConfig {
         Self {
             oz_root_url: "https://oz.warp.dev".into(),
             workload_audience_url: None,
+            platform_root_url: Some("https://platform.warp.dev".into()),
         }
     }
 }

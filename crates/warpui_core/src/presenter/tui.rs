@@ -42,11 +42,13 @@ use std::rc::Rc;
 use instant::Instant;
 
 use crate::elements::tui::{
-    TuiBuffer, TuiConstraint, TuiElement, TuiLayoutContext, TuiPaintContext, TuiPaintSurface,
-    TuiPresentationContext, TuiRect, TuiScene, TuiScreenPosition, TuiSize,
+    TuiBuffer, TuiConstraint, TuiElement, TuiEvent, TuiEventContext, TuiLayoutContext,
+    TuiPaintContext, TuiPaintSurface, TuiPresentationContext, TuiRect, TuiScene, TuiScreenPosition,
+    TuiSize,
 };
 use crate::{
-    AppContext, EntityIdMap, EntityIdSet, TuiView, ViewHandle, WindowId, WindowInvalidation,
+    AppContext, EntityId, EntityIdMap, EntityIdSet, TuiView, ViewHandle, WindowId,
+    WindowInvalidation,
 };
 
 /// A painted frame: the composited cell [`TuiBuffer`] plus the absolute cursor
@@ -235,6 +237,46 @@ impl TuiPresenter {
         self.last_element = Some(root);
         self.last_scene = Some(Rc::new(scene));
         frame
+    }
+
+    /// Dispatches `event` into the tree from the last [`present`](Self::present) or
+    /// [`present_element`](Self::present_element) call, mirroring the runtime's own
+    /// element-tree dispatch pass: element handlers (e.g. [`TuiHoverable`](crate::elements::tui::TuiHoverable)'s
+    /// click, or [`TuiEventHandler`](crate::elements::tui::TuiEventHandler)'s key handling) run
+    /// during [`TuiElement::dispatch_event`], and any typed action one of them queues via
+    /// [`TuiEventContext::dispatch_typed_action`] is then routed through the responder chain
+    /// rooted at `origin_view_id`, exactly as the runtime would.
+    ///
+    /// For tests (and other callers) that need to exercise a view's own rendered click/key
+    /// handlers end to end, rather than calling `TypedActionView::handle_action` directly —
+    /// which proves the handler exists but not that the rendered element still dispatches to
+    /// it. Returns whether the event was handled.
+    pub fn dispatch_event(
+        &mut self,
+        ctx: &mut AppContext,
+        window_id: WindowId,
+        origin_view_id: EntityId,
+        event: &TuiEvent,
+    ) -> bool {
+        let (Some(element), Some(scene)) = (self.last_element.as_mut(), self.last_scene.clone())
+        else {
+            return false;
+        };
+        let mut event_ctx = TuiEventContext::new(scene, &mut self.rendered_views);
+        event_ctx.set_origin_view(Some(origin_view_id));
+        let handled = element.dispatch_event(event, &mut event_ctx, ctx);
+
+        for view_id in event_ctx.take_notified() {
+            ctx.notify_view_observers(window_id, view_id);
+        }
+        for action in event_ctx.take_typed_actions() {
+            ctx.dispatch_typed_action_for_view(
+                window_id,
+                action.origin_view_id,
+                action.action.as_ref(),
+            );
+        }
+        handled
     }
 }
 

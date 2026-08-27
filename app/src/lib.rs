@@ -2470,6 +2470,7 @@ pub(crate) fn initialize_app(
     ctx.add_singleton_model(LLMPreferences::new);
     ctx.add_singleton_model(HarnessAvailabilityModel::new);
     ctx.add_singleton_model(ConnectedSelfHostedWorkersModel::new);
+    ctx.add_singleton_model(ai::factory_access::FactoryAccessModel::new);
 
     let tip_model_handle = ctx.add_singleton_model(|ctx| {
         ai::agent_tips::AITipModel::<ai::AgentTip>::new_for_agent_tips(ctx)

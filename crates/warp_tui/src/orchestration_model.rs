@@ -26,8 +26,8 @@ use warp::tui_export::{
     child_conversations_in_pill_order, classify_cloud_agent_startup_error,
     descendant_conversation_ids_in_spawn_order, descendant_conversations_in_pill_order,
     inherit_child_agent_settings, loaded_subtree_rollup, orchestration_root_conversation_id,
-    oz_run_url, prepare_local_oz_child_launch, prepare_remote_child_launch,
-    register_agent_event_consumer, unregister_agent_event_consumer,
+    prepare_local_oz_child_launch, prepare_remote_child_launch, register_agent_event_consumer,
+    unregister_agent_event_consumer,
 };
 use warp_core::features::FeatureFlag;
 use warpui::SingletonEntity;
@@ -664,9 +664,8 @@ impl TuiOrchestrationModel {
     ) {
         match result {
             Ok(response) => {
-                let run_url = oz_run_url(&response.run_id);
                 cloud_run_state.update(ctx, |state, ctx| {
-                    state.set_spawned(response.task_id, response.run_id.clone(), run_url, ctx);
+                    state.set_spawned(response.task_id, response.run_id.clone(), ctx);
                 });
                 BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
                     history.assign_run_id_for_conversation(

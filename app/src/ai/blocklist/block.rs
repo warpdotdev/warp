@@ -42,7 +42,6 @@ use rustc_hash::FxHashSet;
 use secret_redaction::*;
 use serde::Serialize;
 use settings::Setting as _;
-use warp_core::channel::ChannelState;
 use warp_core::features::FeatureFlag;
 use warp_core::ui::theme::Fill;
 use warp_core::ui::theme::color::internal_colors;
@@ -144,6 +143,7 @@ use crate::ai::blocklist::suggestion_chip_view::{SuggestedChipViewEvent, Suggest
 use crate::ai::blocklist::{
     BlocklistAIContextEvent, BlocklistAIContextModel, SuggestionDismissButtonTheme,
 };
+use crate::ai::cloud_run_links::{CloudRunLink, cloud_run_web_url_now};
 use crate::ai::document::ai_document_model::{AIDocumentId, AIDocumentModel, AIDocumentVersion};
 use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
 use crate::ai::facts::{AIFact, AIMemory, CloudAIFactModel};
@@ -1114,7 +1114,8 @@ struct EmbeddedCodeEditorView {
     language: Option<ProgrammingLanguage>,
     length: usize,
 }
-/// Builds the authenticated Oz run-page URL for a recording artifact.
+/// Builds the authenticated cloud-run web URL for a recording artifact, routing to Platform
+/// for viewers with Factory access and falling back to Oz otherwise (APP-5583).
 ///
 /// The task ID is assigned to the conversation by the server when the run
 /// starts, while the artifact UID comes directly from the StopRecording action.
@@ -1123,12 +1124,16 @@ struct EmbeddedCodeEditorView {
 fn recording_artifact_view_url(
     task_id: Option<AmbientAgentTaskId>,
     artifact_uid: &str,
+    app: &AppContext,
 ) -> Option<String> {
     let task_id = task_id?;
-    Some(format!(
-        "{}/runs/{task_id}?artifact={}",
-        ChannelState::oz_root_url(),
-        urlencoding::encode(artifact_uid),
+    let run_id = task_id.to_string();
+    Some(cloud_run_web_url_now(
+        &CloudRunLink::Artifact {
+            run_id: &run_id,
+            artifact_uid,
+        },
+        app,
     ))
 }
 
@@ -7036,7 +7041,7 @@ impl TypedActionView for AIBlock {
                 let task_id = BlocklistAIHistoryModel::as_ref(ctx)
                     .conversation(&conversation_id)
                     .and_then(|conversation| conversation.task_id());
-                if let Some(url) = recording_artifact_view_url(task_id, artifact_uid) {
+                if let Some(url) = recording_artifact_view_url(task_id, artifact_uid, ctx) {
                     ctx.open_url(&url);
                     return;
                 }

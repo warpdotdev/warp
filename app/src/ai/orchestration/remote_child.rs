@@ -26,6 +26,7 @@ use crate::ai::ambient_agents::{
     OUT_OF_CREDITS_TASK_FAILURE_MESSAGE, SERVER_OVERLOADED_TASK_FAILURE_MESSAGE, github_auth_url,
 };
 use crate::ai::blocklist::StartAgentRequest;
+use crate::ai::cloud_run_links::{CloudRunLink, cloud_run_web_url_now};
 #[cfg(not(target_family = "wasm"))]
 use crate::ai::skills::resolve_skill_spec;
 use crate::ai::skills::{SkillManager, SkillReference};
@@ -372,8 +373,18 @@ pub(crate) fn should_disable_snapshot(ctx: &AppContext) -> bool {
     )
 }
 
-/// Builds the Oz web URL for a server-assigned agent run ID.
+/// Builds the cloud-run web URL for a server-assigned agent run ID, routing to Platform for
+/// viewers with Factory access and falling back to Oz otherwise (APP-5583).
 #[cfg_attr(not(feature = "tui"), allow(dead_code))]
+pub fn cloud_run_url(run_id: &str, ctx: &AppContext) -> String {
+    cloud_run_web_url_now(&CloudRunLink::Run { run_id }, ctx)
+}
+
+/// Builds the Oz web URL for a server-assigned agent run ID, unconditionally.
+///
+/// Used only by callers that cannot supply an [`AppContext`] to resolve viewer access at the
+/// point of use (e.g. the local-to-cloud handoff pipeline, which holds no app or view context
+/// across awaits). Prefer [`cloud_run_url`] wherever a context is available.
 pub fn oz_run_url(run_id: &str) -> String {
     format!("{}/runs/{run_id}", ChannelState::oz_root_url())
 }

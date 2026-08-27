@@ -33,6 +33,7 @@ use crate::ai::agent_conversations_model::AgentConversationsModel;
 use crate::ai::blocklist::BlocklistAIHistoryModel;
 use crate::ai::blocklist::agent_view::orchestration_pill_bar_model::OrchestrationPillBarModel;
 use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
+use crate::ai::factory_access::FactoryAccessModel;
 #[cfg(not(target_family = "wasm"))]
 use crate::ai::mcp::TemplatableMCPServerManager;
 use crate::ai::request_usage_model::AIRequestUsageModel;
@@ -297,6 +298,9 @@ pub fn log_out(app: &mut AppContext) {
     });
     OrchestrationPillBarModel::handle(app).update(app, |pill_bar_model, _| {
         pill_bar_model.reset();
+    });
+    FactoryAccessModel::handle(app).update(app, |factory_access_model, _| {
+        factory_access_model.reset();
     });
     AgentConversationsModel::handle(app).update(app, |agent_conversations_model, _| {
         agent_conversations_model.reset();

@@ -271,6 +271,17 @@ impl ChannelState {
         CHANNEL_STATE.lock().config.oz_config.oz_root_url.clone()
     }
 
+    /// Returns the Platform web app's root URL for this channel, or [`None`] if Platform is not
+    /// yet configured for it (see [`super::config::OzConfig::platform_root_url`]).
+    pub fn platform_root_url() -> Option<Cow<'static, str>> {
+        CHANNEL_STATE
+            .lock()
+            .config
+            .oz_config
+            .platform_root_url
+            .clone()
+    }
+
     pub fn server_root_url() -> Cow<'static, str> {
         cfg_if::cfg_if! {
             if #[cfg(feature = "test-util")] {

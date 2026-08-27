@@ -51,6 +51,7 @@ use crate::ai::artifacts::{Artifact, ArtifactButtonsRow, ArtifactButtonsRowEvent
 use crate::ai::blocklist::BlocklistAIHistoryModel;
 use crate::ai::blocklist::view_util::format_usage_parenthetical;
 use crate::ai::cloud_environments::{AmbientAgentEnvironment, CloudAmbientAgentEnvironment};
+use crate::ai::cloud_run_links::{CloudRunLink, cloud_run_web_url_now};
 use crate::ai::harness_availability::HarnessAvailabilityModel;
 use crate::ai::harness_display;
 use crate::ai::runner_display::{self, RunnerPlatform};
@@ -762,8 +763,8 @@ impl ConversationDetailsPanel {
                 })
         });
         let open_in_oz_button = ctx.add_typed_action_view(|_| {
-            ActionButton::new("View in Oz", SecondaryTheme)
-                .with_tooltip("View this run in the Oz web app")
+            ActionButton::new("View cloud run", SecondaryTheme)
+                .with_tooltip("View this cloud run in the web app")
                 .with_size(ButtonSize::Small)
                 .on_click(|ctx| {
                     ctx.dispatch_typed_action(ConversationDetailsPanelAction::OpenInOz);
@@ -983,15 +984,19 @@ impl ConversationDetailsPanel {
         }
     }
 
-    /// Builds the Oz web UI URL for a task, if a task_id is available.
-    fn oz_run_url(data: &ConversationDetailsData) -> Option<String> {
+    /// Builds the cloud-run web URL for a task, if a task_id is available. Routes to Platform
+    /// for viewers with Factory access and falls back to Oz otherwise (APP-5583).
+    fn cloud_run_url(data: &ConversationDetailsData, app: &AppContext) -> Option<String> {
         if let PanelMode::Task {
             task_id: Some(task_id),
             ..
         } = &data.mode
         {
-            let oz_root_url = ChannelState::oz_root_url();
-            Some(format!("{oz_root_url}/runs/{task_id}"))
+            let run_id = task_id.to_string();
+            Some(cloud_run_web_url_now(
+                &CloudRunLink::Run { run_id: &run_id },
+                app,
+            ))
         } else {
             None
         }
@@ -1413,7 +1418,11 @@ impl ConversationDetailsPanel {
             .finish()
     }
 
-    fn render_status_section(&self, appearance: &Appearance) -> Option<Box<dyn Element>> {
+    fn render_status_section(
+        &self,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Option<Box<dyn Element>> {
         let theme = appearance.theme();
         let ui_font_size = appearance.ui_font_size();
 
@@ -1445,11 +1454,11 @@ impl ConversationDetailsPanel {
             .with_height(STATUS_ICON_SIZE)
             .finish();
 
-        // When we have an Oz run URL, the whole chip becomes a clickable
-        // target that opens the run in the Oz web app. In that case the label
+        // When we have a cloud-run URL, the whole chip becomes a clickable
+        // target that opens the run in the web app. In that case the label
         // is not selectable so a click navigates rather than starting a text
         // selection.
-        let is_clickable = Self::oz_run_url(&self.data).is_some();
+        let is_clickable = Self::cloud_run_url(&self.data, app).is_some();
 
         let status_text = Text::new(display_text, appearance.ui_font_family(), ui_font_size)
             .with_color(color)
@@ -1476,7 +1485,7 @@ impl ConversationDetailsPanel {
                 let mut stack = Stack::new().with_child(status_badge);
                 if state.is_hovered() {
                     let tooltip = ui_builder
-                        .tool_tip("View run in Oz web".to_string())
+                        .tool_tip("View cloud run in the web app".to_string())
                         .build()
                         .finish();
                     stack.add_positioned_overlay_child(
@@ -1607,10 +1616,12 @@ impl ConversationDetailsPanel {
         let encoded_skill_name = urlencoding::encode(&skill_name);
         let skill_url = format!("{oz_root_url}/skills/{encoded_skill_name}");
 
+        // Platform has no global skill route (only run pages move to it), so this link's
+        // destination stays on Oz; only its copy changes to the neutral "web app" phrasing.
         let oz_link = appearance
             .ui_builder()
             .link(
-                "Open in Oz".to_string(),
+                "Open in web app".to_string(),
                 Some(skill_url),
                 None,
                 self.mouse_states.skill_link.clone(),
@@ -2092,16 +2103,16 @@ impl View for ConversationDetailsPanel {
         let has_local_continuation_info = self.local_continuation_info(app).is_some();
         #[cfg(target_family = "wasm")]
         let has_local_continuation_info = false;
-        let has_oz_url = Self::oz_run_url(&self.data).is_some();
+        let has_cloud_run_url = Self::cloud_run_url(&self.data, app).is_some();
 
-        if has_local_continuation_info || has_oz_url {
+        if has_local_continuation_info || has_cloud_run_url {
             let mut buttons_wrap = Wrap::row().with_spacing(8.).with_run_spacing(8.);
 
             #[cfg(not(target_family = "wasm"))]
             if has_local_continuation_info {
                 buttons_wrap.add_child(ChildView::new(&self.continue_locally_button).finish());
             }
-            if has_oz_url {
+            if has_cloud_run_url {
                 buttons_wrap.add_child(ChildView::new(&self.open_in_oz_button).finish());
             }
 
@@ -2204,7 +2215,7 @@ impl View for ConversationDetailsPanel {
         }
 
         // Status section
-        if let Some(status_section) = self.render_status_section(appearance) {
+        if let Some(status_section) = self.render_status_section(appearance, app) {
             content.add_child(
                 Container::new(status_section)
                     .with_margin_bottom(FIELD_SPACING)
@@ -2585,7 +2596,7 @@ impl TypedActionView for ConversationDetailsPanel {
                 }
             }
             ConversationDetailsPanelAction::OpenInOz => {
-                if let Some(url) = Self::oz_run_url(&self.data) {
+                if let Some(url) = Self::cloud_run_url(&self.data, ctx) {
                     ctx.open_url(&url);
                 }
             }

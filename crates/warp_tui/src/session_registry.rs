@@ -12,7 +12,7 @@ use warp::tui_export::{
     AIConversation, AIConversationAutoexecuteMode, AIConversationId, AmbientAgentTaskId,
     BannerState, BlocklistAIHistoryModel, GlobalResourceHandlesProvider, IsSharedSessionCreator,
     LocalTtyTerminalManager, PersistenceWriter, ServerConversationToken, TerminalManagerTrait,
-    TerminalSurfaceResult, oz_run_url,
+    TerminalSurfaceResult,
 };
 use warpui::SingletonEntity;
 use warpui_core::runtime::TuiDriverHandle;
@@ -298,10 +298,8 @@ impl TuiSessions {
         ctx: &mut AppContext,
     ) -> TuiSessionId {
         let conversation_id = conversation.id();
-        let run_url = oz_run_url(&run_id);
-        let cloud_run_state = ctx.add_model(|_| {
-            TuiCloudRunState::new_restored(conversation_id, task_id, run_id, run_url)
-        });
+        let cloud_run_state =
+            ctx.add_model(|_| TuiCloudRunState::new_restored(conversation_id, task_id, run_id));
         let (session_id, _surface) =
             Self::create_cloud_run_session(sessions, window_id, cloud_run_state, false, ctx);
         BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
