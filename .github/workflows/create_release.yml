@@ -2346,6 +2346,7 @@ jobs:
           # We compress the tar archive, so no need to re-compress.
           compression-level: 0
           path: build-artifacts.tar.gz
+          if-no-files-found: error
 
   # Packages the CLI binary build_windows_cli_binaries built separately (in
   # parallel), then signs it and tars it up alongside its resources dir. Unlike
@@ -2416,7 +2417,7 @@ jobs:
           CHANNEL: ${{ steps.get-config.outputs.channel }}
           GIT_RELEASE_TAG: ${{ needs.prepare_release.outputs.release_tag }}
 
-      - name: Sign the oz CLI executable with Azure Trusted Signing
+      - name: Sign the oz CLI executable and sidecar DLLs with Azure Trusted Signing
         uses: azure/artifact-signing-action@b443cf8ea4124818d2ea9f043cba29fc3ec47b16 # v1.2.0
         with:
           azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
@@ -2426,6 +2427,10 @@ jobs:
           trusted-signing-account-name: ${{ env.TRUSTED_SIGNING_ACCOUNT }}
           certificate-profile-name: ${{ env.TRUSTED_SIGNING_CERT_PROFILE }}
           files: ${{ steps.binary_paths.outputs.binary_path }}
+          files-folder: ${{ github.workspace }}\app\assets\windows\${{ matrix.arch }}
+          files-folder-filter: dll,exe
+          files-folder-recurse: true
+          files-folder-depth: 2
           file-digest: SHA256
           timestamp-rfc3161: http://timestamp.acs.microsoft.com
           timestamp-digest: SHA256
@@ -2436,7 +2441,7 @@ jobs:
 
       - name: Bundle Windows CLI resources
         id: bundle_cli
-        run: script/bundle --artifact cli --channel "$CHANNEL" --skip_build_binary --arch ${{ matrix.arch }}
+        run: script/bundle --artifact cli --channel "$CHANNEL" --skip_build_binary --require_signatures --arch ${{ matrix.arch }}
         shell: bash
         env:
           CHANNEL: ${{ steps.get-config.outputs.channel }}
@@ -2515,7 +2520,10 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: release-windows-cli-${{ matrix.arch }}-${{ steps.get-config.outputs.channel }}
-          path: ${{ steps.package_cli.outputs.package_path }}
+          path: |
+            ${{ steps.package_cli.outputs.package_path }}
+            ${{ steps.bundle_cli.outputs.pdb_file_path }}
+          if-no-files-found: error
 
       - name: Set up Sentry CLI
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
