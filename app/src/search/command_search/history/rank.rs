@@ -229,9 +229,10 @@ pub(crate) struct RankInputs<'a> {
     /// history list. Used as an age proxy for entries with no timestamp; see `age_days`.
     pub newer_candidate_count: usize,
     /// Whether the query is empty (the zero-state case, where `SearchMixer` still invokes
-    /// history so it has something to show before the user types). A blank query can never
-    /// clear `MATCH_SCORE_FLOOR` since it carries no match signal at all, so this bypasses the
-    /// floor and ranks purely on history priors instead of dropping every candidate.
+    /// history so it has something to show before the user types). Priors like frequency and cwd
+    /// are only meaningful relative to an actual query; applying them here would reorder the
+    /// zero state away from its established chronological order, so [`rank`] gives every blank
+    /// query the same score instead of computing one from priors.
     pub is_blank_query: bool,
 }
 
@@ -243,8 +244,15 @@ pub(crate) struct RankInputs<'a> {
 /// break ties *within* a match-quality tier, never let a fresher weak match outrank an older
 /// exact one. Higher is better, consistent with `SearchItem::score`.
 pub(crate) fn rank(inputs: RankInputs<'_>) -> Option<OrderedFloat<f64>> {
+    if inputs.is_blank_query {
+        // Every blank-query candidate ties at the same score, so the mixer's stable sort leaves
+        // `History::commands_shared()`'s chronological order intact, exactly as it did before
+        // this ranking existed (Skim scores every candidate 0 for an empty pattern too).
+        return Some(OrderedFloat(0.0));
+    }
+
     let match_value = inputs.match_quality.combined();
-    if !inputs.is_blank_query && match_value < MATCH_SCORE_FLOOR {
+    if match_value < MATCH_SCORE_FLOOR {
         return None;
     }
 

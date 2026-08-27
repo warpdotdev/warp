@@ -24,6 +24,7 @@ use crate::search::{QueryFilter, SyncDataSource};
 use crate::server::server_api::ServerApiProvider;
 use crate::server::telemetry::context_provider::AppTelemetryContextProvider;
 use crate::terminal::HistoryEntry;
+use crate::terminal::model::session::SessionId;
 
 #[derive(Clone, Debug)]
 enum TestItemAction {
@@ -206,16 +207,34 @@ fn test_exact_matches_rank_above_prefix_matches() {
 }
 
 #[test]
-fn test_blank_query_returns_zero_state_history() {
-    // `SearchMixer` invokes history with an empty query for the zero state
-    // (`run_in_zero_state: true`), where match quality is necessarily zero. Regression test for
-    // the match-quality floor dropping every candidate in that case.
+fn test_blank_query_preserves_chronological_order_despite_differing_priors() {
+    // `SearchMixer` invokes history with an empty query for the zero state (`run_in_zero_state:
+    // true`), where match quality is necessarily zero. Bypassing only the score floor for a
+    // blank query still lets priors reorder the zero state away from
+    // `History::commands_shared()`'s established chronological order (oldest first, newest
+    // last/closest to the input) -- e.g. an older command whose session_id happens to match
+    // would leapfrog a newer one. Priors must be ignored entirely for a blank query, not just
+    // let through the floor.
     App::test((), |mut app| async move {
         initialize_app(&mut app);
+
+        // Both entries share a timestamp so recency can't be what preserves order; only ignoring
+        // the session prior can.
+        let same_ts = Local::now();
+        let mut older_matches_session = HistoryEntry::command_only("git status".to_owned());
+        older_matches_session.start_ts = Some(same_ts);
+        // `history_data_source` fixes the data source's own session at `SessionId::from(0)`, so
+        // this entry would earn a session-prior bonus if priors weren't bypassed.
+        older_matches_session.session_id = Some(SessionId::from(0));
+
+        let mut newer_different_session = HistoryEntry::command_only("git log".to_owned());
+        newer_different_session.start_ts = Some(same_ts);
+        newer_different_session.session_id = Some(SessionId::from(1));
+
         let mixer = app.add_model(|_| CommandSearchMixer::new());
         mixer.update(&mut app, |mixer, ctx| {
             mixer.add_async_source(
-                history_data_source(vec![HistoryEntry::command_only("git status".to_owned())]),
+                history_data_source(vec![older_matches_session, newer_different_session]),
                 HashSet::from([QueryFilter::History]),
                 AddAsyncSourceOptions {
                     debounce_interval: None,
@@ -239,9 +258,20 @@ fn test_blank_query_returns_zero_state_history() {
             let results = mixer.as_ref(app).results();
             assert_eq!(
                 results.len(),
-                1,
+                2,
                 "history should still populate the zero state for a blank query"
             );
+
+            // The newer entry must stay last (closest to the input), matching insertion order,
+            // even though the older entry's session_id happens to match the data source's
+            // session and would otherwise earn a session-prior bonus.
+            assert!(matches!(
+                results.last().map(|result| result.accept_result()),
+                Some(CommandSearchItemAction::AcceptHistory(AcceptedHistoryItem {
+                    command,
+                    ..
+                })) if command == "git log"
+            ));
         });
     });
 }

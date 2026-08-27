@@ -254,32 +254,50 @@ fn match_score_floor_filters_out_low_quality_matches() {
 }
 
 #[test]
-fn blank_query_bypasses_the_score_floor() {
+fn blank_query_ignores_priors_and_yields_a_result() {
     // `SearchMixer` invokes history with an empty query for the zero state (`run_in_zero_state:
-    // true`), where match quality is necessarily zero. The floor must not drop every candidate
-    // in that case -- ranking should fall back to history priors instead.
-    let low_quality = MatchQuality {
+    // true`), where match quality is necessarily zero. Bypassing only the score floor isn't
+    // enough: priors (frequency, cwd, session, exit status, recency) must also be bypassed, or
+    // they'd reorder the zero state away from `History::commands_shared()`'s established
+    // chronological order. Two candidates with wildly different priors must therefore score
+    // identically here, not just both clear the floor.
+    let zero_quality = MatchQuality {
         exact: 0.0,
         skim: 0.0,
         consecutive: 0.0,
         tightness: 0.0,
     };
-    assert!(low_quality.combined() < MATCH_SCORE_FLOOR);
+    assert!(zero_quality.combined() < MATCH_SCORE_FLOOR);
 
-    let entry = HistoryEntry::command_only("ls -la".to_owned());
-    let result = rank(RankInputs {
-        entry: &entry,
-        frequency: 1,
-        match_quality: low_quality,
-        now: now(),
-        current_session_id: SessionId::from(1),
-        current_cwd: None,
-        newer_candidate_count: 0,
-        is_blank_query: true,
-    });
+    let mut frequent_recent = HistoryEntry::command_only("ls -la".to_owned());
+    frequent_recent.start_ts = Some(now());
+
+    let mut rare_old = HistoryEntry::command_only("ls -la".to_owned());
+    rare_old.start_ts = Some(days_ago(30));
+
+    let rank_of = |entry: &HistoryEntry, frequency: u32| {
+        rank(RankInputs {
+            entry,
+            frequency,
+            match_quality: zero_quality,
+            now: now(),
+            current_session_id: SessionId::from(1),
+            current_cwd: None,
+            newer_candidate_count: 0,
+            is_blank_query: true,
+        })
+    };
+
+    let frequent_recent_score = rank_of(&frequent_recent, 20);
+    let rare_old_score = rank_of(&rare_old, 1);
 
     assert!(
-        result.is_some(),
+        frequent_recent_score.is_some(),
         "a blank query should bypass the score floor so zero-state history isn't dropped"
+    );
+    assert_eq!(
+        frequent_recent_score, rare_old_score,
+        "a blank query must ignore priors entirely so the mixer's stable sort preserves \
+         chronological order, not just bypass the score floor"
     );
 }
