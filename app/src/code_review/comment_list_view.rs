@@ -5,6 +5,7 @@ use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::vec2f;
 use string_offset::CharOffset;
 use vec1::vec1;
+use warp_completer::completer::PathSeparators;
 use warp_core::ui::color::blend::Blend;
 use warp_core::ui::theme::Fill;
 use warp_core::ui::theme::color::internal_colors::{
@@ -989,6 +990,11 @@ impl CommentListView {
         ctx: &AppContext,
     ) -> Box<dyn Element> {
         let editor_lens_element = self.editor_lens_for_card(&comment_state.card, ctx);
+        let path_separators = self
+            .parent
+            .upgrade(ctx)
+            .map(|parent| parent.as_ref(ctx).path_separators(ctx))
+            .unwrap_or_else(PathSeparators::for_os);
 
         let overflow_menu_button = SavePosition::new(
             ChildView::new(&comment_state.icon_button).finish(),
@@ -1001,6 +1007,7 @@ impl CommentListView {
             None,
             Some(overflow_menu_button),
             None,
+            &path_separators,
             ctx,
         );
 

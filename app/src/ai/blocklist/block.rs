@@ -42,6 +42,7 @@ use rustc_hash::FxHashSet;
 use secret_redaction::*;
 use serde::Serialize;
 use settings::Setting as _;
+use warp_completer::completer::PathSeparators;
 use warp_core::channel::ChannelState;
 use warp_core::features::FeatureFlag;
 use warp_core::ui::theme::Fill;
@@ -667,6 +668,7 @@ pub(super) struct ImportedCommentGroup {
     base_branch: Option<String>,
     cards: Vec<CommentViewCard>,
     element_states: Vec<ImportedCommentElementState>,
+    path_separators: PathSeparators,
 }
 
 impl ImportedCommentGroup {
@@ -675,12 +677,14 @@ impl ImportedCommentGroup {
         base_branch: Option<String>,
         cards: Vec<CommentViewCard>,
         element_states: Vec<ImportedCommentElementState>,
+        path_separators: PathSeparators,
     ) -> Self {
         Self {
             repo_path,
             base_branch,
             cards,
             element_states,
+            path_separators,
         }
     }
 
@@ -4940,6 +4944,12 @@ impl AIBlock {
                 CommentViewCard::new(comment, true, true, None, Some(&repo_location), ctx)
             })
             .collect();
+        let path_separators = self
+            .active_session
+            .as_ref(ctx)
+            .session(ctx)
+            .map(|session| session.path_separators())
+            .unwrap_or_else(PathSeparators::for_os);
 
         let element_states = cards
             .iter()
@@ -4965,7 +4975,13 @@ impl AIBlock {
 
         self.imported_comments.insert(
             action_id,
-            ImportedCommentGroup::new(repo_location, base_branch, cards, element_states),
+            ImportedCommentGroup::new(
+                repo_location,
+                base_branch,
+                cards,
+                element_states,
+                path_separators,
+            ),
         );
 
         self.update_imported_comments_disabled_state(ctx);

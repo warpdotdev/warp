@@ -34,6 +34,7 @@ pub(crate) fn render_imported_comments(
             Some(header_trailing),
             None,
             Some(&state.header_click_handler),
+            &group.path_separators,
             app,
         ));
     }
