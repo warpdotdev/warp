@@ -226,6 +226,16 @@ fn accept_test_connection(listener: &TcpListener) -> TcpStream {
 /// read timeout (`CALLBACK_READ_TIMEOUT`) is far longer -- otherwise
 /// cancelling with such a connection pending parks the row in "Cancelling…"
 /// for that long instead of finalizing.
+///
+/// Runs the read on its own thread against the silent, accepted socket. The
+/// reader signals over a channel once it has started (ruling out cancelling
+/// before it even runs), and cancellation is then held off for a couple of
+/// poll intervals so it lands while the reader is asleep between polls
+/// rather than racing its very first, sub-microsecond entry check -- there is
+/// no externally observable signal for "the reader has completed one poll",
+/// so this margin is sized off `POLL_INTERVAL` itself rather than guessed.
+/// Confirmed by deliberately reverting the fix (see the PR discussion) and
+/// observing this test fail at the full `CALLBACK_READ_TIMEOUT`.
 #[test]
 #[serial_test::serial(grok_oauth_loopback_port)]
 fn cancelling_with_a_stalled_accepted_connection_still_releases_promptly() {
@@ -239,13 +249,21 @@ fn cancelling_with_a_stalled_accepted_connection_still_releases_promptly() {
     let stalled_client = TcpStream::connect(address).expect("stalled client should connect");
     let mut accepted = accept_test_connection(&listener);
 
-    // Cancelling before the read is even attempted still has to be honored by
-    // the read itself, independent of the outer accept loop that wraps it in
-    // production.
+    let (started_tx, started_rx) = std::sync::mpsc::channel();
+    let reader_cancellation = cancellation.clone();
+    let reader = std::thread::spawn(move || {
+        let _ = started_tx.send(());
+        read_callback_request(&mut accepted, &reader_cancellation)
+    });
+    started_rx
+        .recv()
+        .expect("reader thread should signal that it has started");
+    std::thread::sleep(POLL_INTERVAL * 2);
+
     cancellation.cancel();
 
     let started_waiting = Instant::now();
-    let result = read_callback_request(&mut accepted, &cancellation);
+    let result = reader.join().expect("reader thread should finish");
     let elapsed = started_waiting.elapsed();
 
     assert_eq!(
