@@ -70,6 +70,8 @@ use crate::network::NetworkStatus;
 use crate::send_telemetry_from_ctx;
 #[cfg(feature = "voice_input")]
 use crate::server::server_api::TranscribeError;
+#[cfg(feature = "voice_input")]
+use crate::server::team_scope::RequestTeamScope;
 #[cfg(not(target_family = "wasm"))]
 use crate::server::telemetry::PluginChipTelemetryAction;
 use crate::server::telemetry::{PluginChipTelemetryKind, TelemetryEvent};
@@ -1887,6 +1889,9 @@ impl AgentInputFooter {
                     let language = AISettings::as_ref(ctx)
                         .voice_input_language_code()
                         .map(str::to_owned);
+                    let team_scope = RequestTeamScope::from_scope(
+                        &UserWorkspaces::as_ref(ctx).team_context_for_view(ctx),
+                    );
                     if !self.cli_voice_input_lifecycle.begin_transcribing() {
                         return;
                     }
@@ -1896,7 +1901,11 @@ impl AgentInputFooter {
                     });
 
                     self.cli_transcription_handle = Some(ctx.spawn(
-                        async move { transcriber.transcribe(wav_base64, language).await },
+                        async move {
+                            transcriber
+                                .transcribe(wav_base64, language, team_scope)
+                                .await
+                        },
                         AgentInputFooter::apply_cli_transcribed_voice_input,
                     ));
                 } else {

@@ -86,8 +86,12 @@ impl BuyCreditsBanner {
                 | AIRequestUsageModelEvent::CreditAvailabilityUpdated => {
                     if me.checkout_pending
                         && matches!(
-                            AIRequestUsageModel::as_ref(ctx)
-                                .compute_buy_addon_credits_banner_display_state(ctx),
+                            {
+                                let user_workspaces = UserWorkspaces::as_ref(ctx);
+                                let scope = user_workspaces.team_context_for_view(ctx);
+                                AIRequestUsageModel::as_ref(ctx)
+                                    .compute_buy_addon_credits_banner_display_state(&scope, ctx)
+                            },
                             BuyCreditsBannerDisplayState::Hidden
                         )
                     {
@@ -978,7 +982,9 @@ impl View for BuyCreditsBanner {
         let display_state = if self.should_display_banner {
             BuyCreditsBannerDisplayState::MonthlyLimitReached
         } else {
-            ai_request_usage.compute_buy_addon_credits_banner_display_state(app)
+            let user_workspaces = UserWorkspaces::as_ref(app);
+            let scope = user_workspaces.team_context(&self.view_handle, app);
+            ai_request_usage.compute_buy_addon_credits_banner_display_state(&scope, app)
         };
 
         match display_state {

@@ -20,11 +20,14 @@ use crate::ai::agent::{
     PassiveSuggestionTrigger, UserQueryMode,
 };
 use crate::ai::ambient_agents::AmbientAgentTaskId;
+use crate::ai::blocklist::orchestration_events::{
+    OrchestrationEventService, PendingEvent, PendingEventDetail,
+};
 use crate::ai::blocklist::{
     BlocklistAIHistoryEvent, BlocklistAIHistoryModel, PendingAttachment, PendingFile, RequestInput,
     ResponseStream, ResponseStreamId,
 };
-use crate::ai::geap_credentials::{GeapPolicy, current_geap_policy};
+use crate::ai::geap_credentials::{GeapPolicy, current_geap_policy_for_any_team};
 use crate::ai::llms::{LLMId, LLMModelHost, LLMProvider};
 use crate::server::ids::ServerId;
 use crate::terminal::TerminalView;
@@ -39,7 +42,7 @@ use crate::workspaces::workspace::{
 };
 
 /// A workload identity provider resource name shaped like a real one, used only to satisfy
-/// [`current_geap_policy`]'s non-empty-audience check.
+/// [`current_geap_policy_for_any_team`]'s non-empty-audience check.
 const GEAP_TEST_AUDIENCE: &str = "//iam.googleapis.com/projects/123456/locations/global/workloadIdentityPools/warp-pool/providers/warp-provider";
 const GEAP_TEST_SA_EMAIL: &str = "warp-geap@test-project.iam.gserviceaccount.com";
 
@@ -519,6 +522,52 @@ fn optimistic_cli_subagent_completion_with_in_flight_stream_reports_success() {
     });
 }
 
+/// `drop_pending_events_for_exiting_conversation` drops any orchestration events still
+/// queued for the conversation at the moment it's called, since they arrived too late to
+/// ever be delivered once the run is exiting. Complements the controller-level guard above.
+/// The exiting flag itself is a separate mechanism
+/// ([`OrchestrationEventService::exit_commit_handle`]) this method doesn't touch.
+#[test]
+fn drop_pending_events_for_exiting_conversation_drops_pending_events() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+
+        let conversation_id = terminal.update(&mut app, |view, ctx| {
+            let conversation_id = BlocklistAIHistoryModel::handle(ctx)
+                .update(ctx, |history, ctx| {
+                    history.start_new_conversation(view.id(), false, false, false, ctx)
+                });
+            OrchestrationEventService::handle(ctx).update(ctx, |service, ctx| {
+                service.enqueue_event_batch(
+                    conversation_id,
+                    vec![PendingEvent {
+                        event_id: "event-1".to_string(),
+                        source_agent_id: "child".to_string(),
+                        attempt_count: 0,
+                        detail: PendingEventDetail::Message {
+                            message_id: "message-1".to_string(),
+                            addresses: vec!["target".to_string()],
+                            subject: "subject".to_string(),
+                            message_body: "body".to_string(),
+                        },
+                    }],
+                    ctx,
+                );
+            });
+            conversation_id
+        });
+
+        terminal.update(&mut app, |_, ctx| {
+            OrchestrationEventService::handle(ctx).update(ctx, |service, _| {
+                assert!(service.has_pending_events(conversation_id));
+                service.drop_pending_events_for_exiting_conversation(conversation_id);
+                assert!(!service.has_pending_events(conversation_id));
+            });
+        });
+    });
+}
+
 fn team_for_test(uid: i64, name: &str) -> Team {
     Team {
         uid: uid.into(),
@@ -531,6 +580,7 @@ fn team_for_test(uid: i64, name: &str) -> Team {
         billing_metadata: Default::default(),
         stripe_customer_id: None,
         settings: Default::default(),
+        feature_model_choice: Default::default(),
         is_eligible_for_discovery: false,
         has_billing_history: false,
         visibility: TeamVisibility::Open,
@@ -548,6 +598,7 @@ fn workspace_for_test(teams: Vec<Team>) -> Workspace {
         billing_cycle_usage: None,
         has_billing_history: false,
         settings: Default::default(),
+        feature_model_choice: Default::default(),
         invite_link_domain_restrictions: vec![],
         pending_email_invites: vec![],
         is_eligible_for_discovery: false,
@@ -670,7 +721,31 @@ fn passive_suggestions_request_params_scope_member_byo_credentials_by_the_window
         let _geap_flag = FeatureFlag::GeminiEnterprise.override_enabled(true);
         initialize_app_for_terminal_view(&mut app);
 
-        let (team_a, team_b) = two_teams_of_opposing_byo_policy();
+        let (mut team_a, mut team_b) = two_teams_of_opposing_byo_policy();
+        // Bedrock/GEAP are team-scoped host settings, so both teams need them configured
+        // identically: this fences that org-level credentials survive either team's policy,
+        // as opposed to `team_byo`, which the two teams deliberately disagree on.
+        for team in [&mut team_a, &mut team_b] {
+            team.settings.llm_settings.enabled = true;
+            team.settings.llm_settings.host_configs.insert(
+                LLMModelHost::AwsBedrock,
+                LlmHostSettings {
+                    enabled: true,
+                    enablement_setting: HostEnablementSetting::Enforce,
+                    gcp_audience: None,
+                    gcp_sa_email: None,
+                },
+            );
+            team.settings.llm_settings.host_configs.insert(
+                LLMModelHost::GeminiEnterprise,
+                LlmHostSettings {
+                    enabled: true,
+                    enablement_setting: HostEnablementSetting::Enforce,
+                    gcp_audience: Some(GEAP_TEST_AUDIENCE.to_string()),
+                    gcp_sa_email: Some(GEAP_TEST_SA_EMAIL.to_string()),
+                },
+            );
+        }
         let mut workspace = workspace_for_test(vec![team_a.clone(), team_b.clone()]);
         // Plan-level BYO entitlement is workspace-owned (see
         // `UserWorkspaces::is_managed_byok_byoe_enabled`), so it's shared by both teams; only
@@ -681,25 +756,6 @@ fn passive_suggestions_request_params_scope_member_byo_credentials_by_the_window
             Some(ByoEndpointPolicy { enabled: true });
         workspace.billing_metadata.tier.managed_byok_byoe_policy =
             Some(ManagedByokByoePolicy { enabled: true });
-        workspace.settings.llm_settings.enabled = true;
-        workspace.settings.llm_settings.host_configs.insert(
-            LLMModelHost::AwsBedrock,
-            LlmHostSettings {
-                enabled: true,
-                enablement_setting: HostEnablementSetting::Enforce,
-                gcp_audience: None,
-                gcp_sa_email: None,
-            },
-        );
-        workspace.settings.llm_settings.host_configs.insert(
-            LLMModelHost::GeminiEnterprise,
-            LlmHostSettings {
-                enabled: true,
-                enablement_setting: HostEnablementSetting::Enforce,
-                gcp_audience: Some(GEAP_TEST_AUDIENCE.to_string()),
-                gcp_sa_email: Some(GEAP_TEST_SA_EMAIL.to_string()),
-            },
-        );
         set_current_workspace(&mut app, workspace);
 
         ApiKeyManager::handle(&app).update(&mut app, |manager, ctx| {
@@ -728,7 +784,7 @@ fn passive_suggestions_request_params_scope_member_byo_credentials_by_the_window
                 },
                 ctx,
             );
-            let binding = match current_geap_policy(ctx) {
+            let binding = match current_geap_policy_for_any_team(ctx) {
                 GeapPolicy::Mintable(binding) => binding,
                 other => panic!("expected a mintable GEAP policy, got {other:?}"),
             };

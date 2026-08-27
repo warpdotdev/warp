@@ -505,11 +505,11 @@ pub(super) fn maybe_add_buy_credits_banner(
     // 2. MonthlyLimitReached: Auto-reload enabled and is blocked by monthly limit
     let ai_request_usage = AIRequestUsageModel::as_ref(app);
     let should_show_banner = !matches!(
-        ai_request_usage.compute_buy_addon_credits_banner_display_state(app),
+        ai_request_usage.compute_buy_addon_credits_banner_display_state(scope, app),
         BuyCreditsBannerDisplayState::Hidden
     );
     let is_using_api_key_for_current_model = should_show_key_icon_for_model(
-        LLMPreferences::as_ref(app).get_active_base_model(app, Some(terminal_view_id)),
+        LLMPreferences::as_ref(app).get_active_base_model(scope, app, Some(terminal_view_id)),
         scope,
         app,
     );

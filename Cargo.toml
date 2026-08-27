@@ -64,8 +64,10 @@ node_runtime = { path = "crates/node_runtime" }
 onboarding = { path = "crates/onboarding" }
 persistence = { path = "crates/persistence" }
 prevent_sleep = { path = "crates/prevent_sleep" }
+regex_dfas = { path = "crates/regex_dfas" }
 remote_server = { path = "crates/remote_server" }
 repo_metadata = { path = "crates/repo_metadata" }
+secret_redaction = { path = "crates/secret_redaction" }
 settings = { path = "crates/settings" }
 settings_value = { path = "crates/settings_value", default-features = false }
 settings_value_derive = { path = "crates/settings_value_derive" }
@@ -347,7 +349,7 @@ version-compare = "0.1"
 vte = { git = "https://github.com/warpdotdev/vte.git", rev = "4b399c87b63ba88f45709edaa6383fc519f6c900", default-features = false }
 walkdir = "2"
 warp-workflows = { git = "https://github.com/warpdotdev/workflows", rev = "793a98ddda6ef19682aed66364faebd2829f0e01" }
-warp_multi_agent_api = { git = "https://github.com/warpdotdev/warp-proto-apis.git", rev = "f0028fa6d05db1ba63726eaf6f8d33ab17abe37b" }
+warp_multi_agent_api = { git = "https://github.com/warpdotdev/warp-proto-apis.git", rev = "0ca49ce589580a211e4bdf84c1b1721424fabdc8" }
 wasm-bindgen = "0.2.89"
 wasm-bindgen-futures = "0.4.42"
 web-sys = { version = "0.3.69", features = [
@@ -386,6 +388,7 @@ memo-map = "0.3.1"
 async-recursion = "1.0.0"
 getset = "0.1.1"
 regex = "1.11.1"
+regex-automata = "0.4.6"
 rquickjs = { version = "0.3.1" }
 dirs = "6.0.0"
 rayon = "1.10.0"
@@ -508,7 +511,10 @@ inherits = "release-lto-debug_assertions"
 [profile.release-cli]
 inherits = "release-lto"
 opt-level = "s"
-codegen-units = 1
+# 4 (not the default 16, and not 1) roughly halves build time versus codegen-units=1 for ~4%
+# larger stripped/gzipped binaries. This profile already uses thin LTO, which does most of the
+# cross-crate size optimization, so 1 was paying a lot of compile time for little extra size.
+codegen-units = 4
 
 # A custom CLI release-like profile that forces debug assertions on, used for
 # dev/local channel CLI bundles.

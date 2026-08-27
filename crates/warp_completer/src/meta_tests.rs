@@ -61,6 +61,16 @@ fn slice_clamps_out_of_bounds_offsets_to_the_end_of_the_string() {
 }
 
 #[test]
+fn clamped_to_pulls_offsets_inside_the_source_and_onto_char_boundaries() {
+    assert_eq!(Span::new(0, 4).clamped_to("warp terminal"), Span::new(0, 4));
+    assert_eq!(Span::new(1000, 2000).clamped_to("warp"), Span::new(4, 4));
+    assert_eq!(Span::new(2, usize::MAX).clamped_to("warp"), Span::new(2, 4));
+
+    let source = "echo \u{4e2d} Get-Ch";
+    assert_eq!(Span::new(7, 13).clamped_to(source), Span::new(5, 13));
+}
+
+#[test]
 fn slice_clamps_an_end_before_start_to_start_rather_than_underflowing() {
     // Not reachable through `Span::new` (which asserts end >= start), but `slice` itself
     // should not assume that invariant given how it's exercised here: defensively clamping

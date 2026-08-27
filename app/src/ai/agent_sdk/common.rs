@@ -38,16 +38,17 @@ pub fn validate_agent_mode_base_model_id(
     model_id: &str,
     ctx: &AppContext,
 ) -> anyhow::Result<LLMId> {
+    let team_uid = UserWorkspaces::as_ref(ctx).inherited_or_default_team_uid(None);
     let llm_prefs = LLMPreferences::as_ref(ctx);
     let valid_ids = llm_prefs
-        .get_base_llm_choices_for_agent_mode(ctx)
+        .get_base_llm_choices_for_agent_mode_for_team_uid(team_uid, ctx)
         .map(|info| info.id.clone())
         .collect::<Vec<_>>();
 
     classify_agent_mode_base_model_id(
         model_id,
         &valid_ids,
-        llm_prefs.agent_mode_models_unavailable(),
+        llm_prefs.agent_mode_models_unavailable_for_team_uid(team_uid),
     )
 }
 

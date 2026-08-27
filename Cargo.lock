@@ -333,8 +333,10 @@ dependencies = [
  "filetime",
  "futures",
  "generic-array",
+ "hex",
  "http_client",
  "ignore",
+ "indexmap 2.12.0",
  "instant",
  "itertools 0.14.0",
  "languages",
@@ -351,12 +353,14 @@ dependencies = [
  "regex",
  "repo_metadata",
  "rmcp",
+ "schemars 1.0.4",
  "sentry",
  "serde",
  "serde_json",
  "serde_urlencoded",
  "serde_yaml 0.8.26",
  "serial_test",
+ "settings_value",
  "sha2 0.10.9",
  "shellexpand",
  "streaming-iterator",
@@ -370,6 +374,7 @@ dependencies = [
  "tokio",
  "typed-path 0.10.0",
  "unicode-width 0.1.14",
+ "url",
  "uuid",
  "virtual-fs",
  "warp_core",
@@ -3519,7 +3524,7 @@ dependencies = [
 [[package]]
 name = "cosmic-text"
 version = "0.12.0"
-source = "git+https://github.com/warpdotdev/cosmic-text.git?rev=15198beba692162201c0ea8b15222cf5643ea068#15198beba692162201c0ea8b15222cf5643ea068"
+source = "git+https://github.com/warpdotdev/cosmic-text.git?rev=a7c7b71497542758e08f77390b8efce543b3181f#a7c7b71497542758e08f77390b8efce543b3181f"
 dependencies = [
  "bitflags 2.13.0",
  "fontdb",
@@ -11388,6 +11393,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2b15c43186be67a4fd63bee50d0303afffcef381492ebe2c5d87f324e1b8815c"
 
 [[package]]
+name = "regex_dfas"
+version = "0.0.0"
+dependencies = [
+ "regex",
+ "regex-automata",
+]
+
+[[package]]
 name = "remote_server"
 version = "0.1.0"
 dependencies = [
@@ -12155,6 +12168,22 @@ dependencies = [
  "serde",
  "sha2 0.10.9",
  "zbus",
+]
+
+[[package]]
+name = "secret_redaction"
+version = "0.0.0"
+dependencies = [
+ "itertools 0.14.0",
+ "lazy_static",
+ "log",
+ "parking_lot",
+ "regex",
+ "regex-automata",
+ "regex_dfas",
+ "string-offset",
+ "warp_core",
+ "warp_errors",
 ]
 
 [[package]]
@@ -15319,6 +15348,7 @@ dependencies = [
  "rustc-hash 2.1.1",
  "rustls",
  "schemars 1.0.4",
+ "secret_redaction",
  "security-framework-sys",
  "sentry",
  "sentry-log",
@@ -15829,7 +15859,7 @@ dependencies = [
 [[package]]
 name = "warp_multi_agent_api"
 version = "0.0.0"
-source = "git+https://github.com/warpdotdev/warp-proto-apis.git?rev=f0028fa6d05db1ba63726eaf6f8d33ab17abe37b#f0028fa6d05db1ba63726eaf6f8d33ab17abe37b"
+source = "git+https://github.com/warpdotdev/warp-proto-apis.git?rev=0ca49ce589580a211e4bdf84c1b1721424fabdc8#0ca49ce589580a211e4bdf84c1b1721424fabdc8"
 dependencies = [
  "prost",
  "prost-reflect",
@@ -16027,6 +16057,8 @@ dependencies = [
  "rangemap",
  "regex",
  "regex-automata",
+ "regex_dfas",
+ "secret_redaction",
  "sentry",
  "serde",
  "serde_json",

@@ -124,6 +124,13 @@ pub enum GeapCredentialsState {
     Missing,
     Disabled,
     Unconfigured,
+    /// Two or more of the user's teams enable Gemini Enterprise against different Google
+    /// Cloud projects. There is one credential store and no window to choose between them,
+    /// so nothing is minted -- but unlike [`Self::Unconfigured`] this is a specific
+    /// misconfiguration the admin can act on, named here by the disagreeing teams.
+    ConflictingAcrossTeams {
+        team_names: Vec<String>,
+    },
     Refreshing {
         previous: Option<(GeapCredentials, GeapMintBinding)>,
     },
@@ -217,6 +224,20 @@ fn refresh_scheduled_at(expires_at: SystemTime) -> SystemTime {
         .unwrap_or(expires_at)
 }
 
+/// Joins conflicting team names into readable prose, capping the named teams at two so a
+/// large org doesn't spill a wall of names into a settings card. `names` is always at least
+/// two long in practice -- a conflict requires at least two disagreeing teams -- the shorter
+/// arms exist only so this never panics if that invariant is ever violated.
+fn join_team_names(names: &[String]) -> String {
+    match names {
+        [] => "Your teams".to_string(),
+        [a] => a.clone(),
+        [a, b] => format!("{a} and {b}"),
+        [a, b, c] => format!("{a}, {b}, and {c}"),
+        [a, b, rest @ ..] => format!("{a}, {b}, and {} other teams", rest.len()),
+    }
+}
+
 impl GeapCredentialsState {
     pub fn user_facing_components(&self) -> (String, String, Icon) {
         match self {
@@ -237,6 +258,15 @@ impl GeapCredentialsState {
                 "Your team admin needs to configure the Workload Identity Federation audience \
                 before Warp can load credentials."
                     .to_string(),
+                Icon::AlertTriangle,
+            ),
+            Self::ConflictingAcrossTeams { team_names } => (
+                "Gemini Enterprise setup conflicts across teams".to_string(),
+                format!(
+                    "{} have Gemini Enterprise set up with different Google Cloud projects, so \
+                     Warp can't tell which one to use. Ask an admin to align the configuration.",
+                    join_team_names(team_names)
+                ),
                 Icon::AlertTriangle,
             ),
             Self::Refreshing { .. } => (
@@ -270,9 +300,12 @@ impl GeapCredentialsState {
     pub fn recovery_action(&self) -> Option<GeapRecoveryAction> {
         match self {
             Self::Failed { error } => Some(error.recovery_action()),
-            // An incomplete admin setup can't be retried from the client, so it
-            // routes to the same admin-guidance affordance as a config failure.
-            Self::Unconfigured => Some(GeapRecoveryAction::ContactAdmin),
+            // An incomplete admin setup, or teams disagreeing on the project, can't be
+            // retried from the client, so both route to the same admin-guidance affordance
+            // as a config failure.
+            Self::Unconfigured | Self::ConflictingAcrossTeams { .. } => {
+                Some(GeapRecoveryAction::ContactAdmin)
+            }
             Self::Missing | Self::Disabled | Self::Refreshing { .. } | Self::Loaded { .. } => None,
         }
     }

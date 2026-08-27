@@ -21,13 +21,13 @@ use warp::tui_export::{
     BlocklistAIHistoryEvent, BlocklistAIHistoryModel, CloudAgentStartupIssue,
     CloudConversationData, ConversationStatus, Harness, LoadedSubtreeRollup,
     OrchestrationEventStreamer, OrchestrationEventStreamerEvent, PreparedRemoteChildLaunch,
-    RemoteChildLaunchConfig, RenderableAIError, ServerApiProvider, StartAgentExecutionMode,
-    StartAgentRequest, aggregated_orchestrator_status, apply_child_agent_model_override,
-    child_conversations_in_pill_order, classify_cloud_agent_startup_error,
-    descendant_conversation_ids_in_spawn_order, descendant_conversations_in_pill_order,
-    inherit_child_agent_settings, loaded_subtree_rollup, orchestration_root_conversation_id,
-    oz_run_url, prepare_local_oz_child_launch, prepare_remote_child_launch,
-    register_agent_event_consumer, unregister_agent_event_consumer,
+    RemoteChildLaunchConfig, RenderableAIError, ResolvedTeamScope, ServerApiProvider,
+    StartAgentExecutionMode, StartAgentRequest, UserWorkspaces, aggregated_orchestrator_status,
+    apply_child_agent_model_override, child_conversations_in_pill_order,
+    classify_cloud_agent_startup_error, descendant_conversation_ids_in_spawn_order,
+    descendant_conversations_in_pill_order, inherit_child_agent_settings, loaded_subtree_rollup,
+    orchestration_root_conversation_id, oz_run_url, prepare_local_oz_child_launch,
+    prepare_remote_child_launch, register_agent_event_consumer, unregister_agent_event_consumer,
 };
 use warp_core::features::FeatureFlag;
 use warpui::SingletonEntity;
@@ -808,8 +808,11 @@ impl TuiOrchestrationModel {
         let child_surface_id = session_id.surface_id();
 
         let parent_surface_id = parent_session_id.surface_id();
-        inherit_child_agent_settings(parent_surface_id, child_surface_id, ctx);
-        apply_child_agent_model_override(child_surface_id, model_id.as_deref(), ctx);
+        let scope = ResolvedTeamScope::from_scope(
+            &UserWorkspaces::as_ref(ctx).team_context_for_window(session_view.window_id(ctx)),
+        );
+        inherit_child_agent_settings(&scope, parent_surface_id, child_surface_id, ctx);
+        apply_child_agent_model_override(&scope, child_surface_id, model_id.as_deref(), ctx);
 
         let conversation_id = BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
             let conversation_id = history.start_new_child_conversation(

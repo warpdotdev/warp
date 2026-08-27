@@ -23,6 +23,7 @@ use crate::ai::get_relevant_files::controller::{
     GetRelevantFilesError, GetRelevantFilesRequestTarget,
 };
 use crate::features::FeatureFlag;
+use crate::server::team_scope::RequestTeamScope;
 use crate::terminal::model::session::active_session::ActiveSession;
 use crate::workspaces::user_workspaces::TeamContext;
 use crate::{TelemetryEvent, send_telemetry_from_ctx};
@@ -183,6 +184,7 @@ impl SearchCodebaseExecutor {
     pub(super) fn execute(
         &mut self,
         input: ExecuteActionInput,
+        team_scope: RequestTeamScope,
         ctx: &mut ModelContext<Self>,
     ) -> impl Into<AnyActionExecution> + use<> {
         let ExecuteActionInput {
@@ -261,6 +263,7 @@ impl SearchCodebaseExecutor {
                         query.clone(),
                         partial_paths.as_ref(),
                         id.clone(),
+                        team_scope,
                         ctx,
                     )
                 }) {
@@ -373,6 +376,7 @@ impl SearchCodebaseExecutor {
                         query.clone(),
                         partial_paths.as_ref(),
                         id.clone(),
+                        team_scope,
                         ctx,
                     )
                 }) {

@@ -515,6 +515,53 @@ impl LayOutArgs {
     }
 }
 
+/// Cap on the number of [`LayoutTask`]s run through a single `into_par_iter()` fan-out.
+///
+/// Rayon fans a chunk's tasks out across every CPU core, and each task can allocate a CoreText
+/// frame plus derived `Line`/`Glyph` vectors that stay live until the whole chunk's parallel
+/// collection completes. Bounding the chunk size caps how many of those allocations can be live
+/// at once (APP-5392), rather than growing with the size of the input. Inputs at or under this
+/// size (the overwhelming majority) still produce exactly one chunk, so they keep taking a
+/// single full-width parallel pass.
+const MAX_LAYOUT_TASKS_PER_PARALLEL_CHUNK: usize = 64;
+
+/// Cap on the cumulative buffer content (in `char`s) laid out through a single `into_par_iter()`
+/// fan-out.
+///
+/// A chunk of [`MAX_LAYOUT_TASKS_PER_PARALLEL_CHUNK`] short lines and a chunk of that many
+/// multi-KB lines are not equally expensive to lay out in parallel, so bound content length too:
+/// this stops a handful of unusually long lines from slipping past the task-count cap. A single
+/// task longer than this cap still gets its own chunk rather than stalling chunking.
+const MAX_LAYOUT_CONTENT_CHARS_PER_PARALLEL_CHUNK: usize = 64 * 1024;
+
+/// Split `tasks` into ordered chunks bounded by both [`MAX_LAYOUT_TASKS_PER_PARALLEL_CHUNK`] and
+/// [`MAX_LAYOUT_CONTENT_CHARS_PER_PARALLEL_CHUNK`], preserving task order within and across
+/// chunks. `T` carries per-task metadata that chunking doesn't need to inspect (e.g. hidden-range
+/// membership, or a temporary block's destination line).
+fn chunk_layout_tasks<T>(tasks: Vec<(LayoutTask, T, usize)>) -> Vec<Vec<(LayoutTask, T)>> {
+    let mut chunks = Vec::new();
+    let mut current_chunk = Vec::new();
+    let mut current_chars = 0usize;
+
+    for (task, metadata, content_chars) in tasks {
+        if !current_chunk.is_empty()
+            && (current_chunk.len() >= MAX_LAYOUT_TASKS_PER_PARALLEL_CHUNK
+                || current_chars + content_chars > MAX_LAYOUT_CONTENT_CHARS_PER_PARALLEL_CHUNK)
+        {
+            chunks.push(mem::take(&mut current_chunk));
+            current_chars = 0;
+        }
+        current_chars += content_chars;
+        current_chunk.push((task, metadata));
+    }
+
+    if !current_chunk.is_empty() {
+        chunks.push(current_chunk);
+    }
+
+    chunks
+}
+
 impl EditDelta {
     /// Lay out the given EditDelta into TextFrames.
     /// If hidden_lines is provided, lines within hidden ranges will be laid out as BlockItem::Hidden.
@@ -537,9 +584,10 @@ impl EditDelta {
         // old_offset is in the same 1-indexed coordinate system as hidden ranges.
         let mut current_offset = (self.old_offset.start).max(CharOffset::from(1));
 
-        // First, build a Vec of layout tasks with information about whether they're hidden.
-        // Each task borrows its source block from `self.new_lines` rather than taking
-        // ownership, so this never clones the (potentially file-sized) block list.
+        // First, build a Vec of layout tasks with information about whether they're hidden, and
+        // how much buffer content they carry (used below to bound parallel fan-out). Each task
+        // borrows its source block from `self.new_lines` rather than taking ownership, so this
+        // never clones the (potentially file-sized) block list.
         let layout_tasks: Vec<_> = self
             .new_lines
             .iter()
@@ -559,39 +607,54 @@ impl EditDelta {
                     );
                     let is_hidden = hidden_ranges.contains(&current_offset);
                     current_offset += content_length;
-                    Some((task, is_hidden))
+                    Some((task, is_hidden, content_length.as_usize()))
                 }
             })
             .collect();
 
         let last_task = layout_tasks.len().saturating_sub(1);
 
-        // Then, run each task in parallel, collecting (a) the laid out BlockItems and (b) whether
-        // or not the last item ends with a newline.
-        let (block_items, has_trailing_newline): (Vec<_>, Last<_>) = layout_tasks
-            .into_par_iter()
-            .enumerate()
-            .filter_map(|(idx, (task, is_hidden))| {
-                let location = if idx == 0 {
-                    BlockLocation::Start
-                } else if idx >= last_task {
-                    BlockLocation::End
-                } else {
-                    BlockLocation::Middle
-                };
+        // Then, run the tasks in bounded chunks (each chunk in parallel, chunks in sequence),
+        // collecting (a) the laid out BlockItems in order and (b) whether or not the last item
+        // ends with a newline.
+        let mut block_items = Vec::with_capacity(layout_tasks.len());
+        let mut has_trailing_newline = None;
+        let mut chunk_start = 0;
 
-                match task.run(layout, location, is_hidden) {
-                    Ok(result) => Some(result),
-                    Err(e) => {
-                        report_error!(
-                            e.context("Failed to lay out BlockItem"),
-                            extra: { "offset" => ?self.old_offset }
-                        );
-                        None
+        for chunk in chunk_layout_tasks(layout_tasks) {
+            let chunk_len = chunk.len();
+            let (chunk_items, chunk_trailing_newline): (Vec<_>, Last<_>) = chunk
+                .into_par_iter()
+                .enumerate()
+                .filter_map(|(local_idx, (task, is_hidden))| {
+                    let idx = chunk_start + local_idx;
+                    let location = if idx == 0 {
+                        BlockLocation::Start
+                    } else if idx >= last_task {
+                        BlockLocation::End
+                    } else {
+                        BlockLocation::Middle
+                    };
+
+                    match task.run(layout, location, is_hidden) {
+                        Ok(result) => Some(result),
+                        Err(e) => {
+                            report_error!(
+                                e.context("Failed to lay out BlockItem"),
+                                extra: { "offset" => ?self.old_offset }
+                            );
+                            None
+                        }
                     }
-                }
-            })
-            .unzip();
+                })
+                .unzip();
+
+            block_items.extend(chunk_items);
+            if let Some(trailing_newline) = chunk_trailing_newline.into_inner() {
+                has_trailing_newline = Some(trailing_newline);
+            }
+            chunk_start += chunk_len;
+        }
 
         // Iterate through block_items, and collapse adjacent Hidden items.
         let block_items = block_items.into_iter().fold(Vec::new(), |mut acc, item| {
@@ -612,7 +675,7 @@ impl EditDelta {
         // Trailing newline is default to true. This default value is used when
         // edit delta has no new line, which means one or multiple entire lines have
         // been deleted. We should still leave a trailing newline in this case.
-        let has_trailing_newline = has_trailing_newline.into_inner().unwrap_or(true);
+        let has_trailing_newline = has_trailing_newline.unwrap_or(true);
         let rich_text_styles = layout.rich_text_styles();
 
         LaidOutRenderDelta {
@@ -632,14 +695,19 @@ impl EditDelta {
     }
 }
 
-/// Lay out a list of temporary blocks in parallel.
+/// Lay out a list of temporary blocks, in bounded chunks (see [`chunk_layout_tasks`]).
+///
+/// Diff navigation aggregates every hunk's removed lines into a single vector with no cap
+/// (`CodeEditorModel::refresh_diff_state`), so a single large diff can drive as much unbounded
+/// fan-out here as a large paste does in [`EditDelta::layout_delta`].
 pub fn layout_temporary_blocks(
     blocks: Vec<TemporaryBlock>,
     layout: &TextLayout,
 ) -> HashMap<LineCount, Vec<BlockItem>> {
-    let layout_tasks = blocks
+    let layout_tasks: Vec<_> = blocks
         .into_iter()
         .map(|block| {
+            let content_chars = block.content.chars().count();
             (
                 LayoutTask::temporary_block(
                     block.content,
@@ -647,33 +715,43 @@ pub fn layout_temporary_blocks(
                     block.inline_text_decorations,
                 ),
                 block.insert_before,
+                content_chars,
             )
         })
-        .collect_vec();
+        .collect();
 
     let last_task = layout_tasks.len().saturating_sub(1);
+    let mut results = Vec::with_capacity(layout_tasks.len());
+    let mut chunk_start = 0;
 
-    let results: Vec<_> = layout_tasks
-        .into_par_iter()
-        .enumerate()
-        .filter_map(|(idx, (task, line_count))| {
-            let location = if idx == 0 {
-                BlockLocation::Start
-            } else if idx >= last_task {
-                BlockLocation::End
-            } else {
-                BlockLocation::Middle
-            };
+    for chunk in chunk_layout_tasks(layout_tasks) {
+        let chunk_len = chunk.len();
+        let chunk_results: Vec<_> = chunk
+            .into_par_iter()
+            .enumerate()
+            .filter_map(|(local_idx, (task, line_count))| {
+                let idx = chunk_start + local_idx;
+                let location = if idx == 0 {
+                    BlockLocation::Start
+                } else if idx >= last_task {
+                    BlockLocation::End
+                } else {
+                    BlockLocation::Middle
+                };
 
-            match task.run(layout, location, false) {
-                Ok(result) => Some((line_count, result.0)),
-                Err(e) => {
-                    report_error!(e.context("Failed to lay out temporary blocks"));
-                    None
+                match task.run(layout, location, false) {
+                    Ok(result) => Some((line_count, result.0)),
+                    Err(e) => {
+                        report_error!(e.context("Failed to lay out temporary blocks"));
+                        None
+                    }
                 }
-            }
-        })
-        .collect();
+            })
+            .collect();
+
+        results.extend(chunk_results);
+        chunk_start += chunk_len;
+    }
 
     results.into_iter().into_group_map()
 }

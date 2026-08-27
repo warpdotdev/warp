@@ -65,7 +65,7 @@ use crate::ai::blocklist::{BlocklistAIHistoryModel, InputConfig, SerializedBlock
 use crate::ai::document::ai_document_model::{AIDocumentId, AIDocumentModel, AIDocumentVersion};
 use crate::ai::execution_profiles::ExecutionProfileId;
 use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
-use crate::ai::llms::LLMId;
+use crate::ai::llms::{LLMId, LLMPreferences};
 use crate::ai::restored_conversations::RestoredAgentConversations;
 use crate::ai_assistant::AskAIType;
 #[cfg(feature = "local_fs")]
@@ -171,6 +171,7 @@ use crate::workspace::tab_group::TabGroupId;
 use crate::workspace::{
     self, CommandSearchOptions, PaneViewLocator, TabBarLocation, WorkspaceAction,
 };
+use crate::workspaces::user_workspaces::{ResolvedTeamScope, UserWorkspaces};
 use crate::{cmd_or_ctrl_shift, send_telemetry_from_ctx};
 
 mod ambient_pane_restoration;
@@ -1752,8 +1753,16 @@ impl PaneGroup {
                     && let Ok(llm_id) = serde_json::from_str::<LLMId>(llm_override)
                 {
                     log::info!("Selecting base agent model {llm_id} (from terminal snapshot)");
-                    crate::ai::llms::LLMPreferences::handle(ctx).update(ctx, |llm_prefs, ctx| {
-                        llm_prefs.update_preferred_agent_mode_llm(&llm_id, terminal_view_id, ctx);
+                    let scope = ResolvedTeamScope::from_scope(
+                        &UserWorkspaces::as_ref(ctx).team_context_for_view(ctx),
+                    );
+                    LLMPreferences::handle(ctx).update(ctx, |llm_prefs, ctx| {
+                        llm_prefs.update_preferred_agent_mode_llm(
+                            &scope,
+                            &llm_id,
+                            terminal_view_id,
+                            ctx,
+                        );
                     });
                 }
 

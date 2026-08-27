@@ -6,6 +6,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
+use chrono::Local;
 use cloud_object_models::CodeForge;
 use futures::channel::oneshot;
 use futures::executor::block_on;
@@ -26,11 +27,13 @@ use warp_graphql::mutations::create_managed_mcp_client_config::{
 };
 use warp_graphql::response_context::ResponseContext;
 use warp_managed_secrets::ManagedSecretValue;
+use warp_multi_agent_api::response_event;
 use warp_util::standardized_path::StandardizedPath;
+use warpui::r#async::Timer;
 use warpui::{App, SingletonEntity as _};
 
 use super::{
-    AgentDriver, AgentDriverError, CLIAgentSessionStatus, IdleTimeoutSender,
+    AgentDriver, AgentDriverError, AgentRunPrompt, CLIAgentSessionStatus, IdleTimeoutSender,
     LEGACY_OZ_PARENT_LISTENER_MANAGED_EXTERNALLY_ENV, LEGACY_OZ_PARENT_STATE_ROOT_ENV,
     MANAGED_MCP_RESOLVE_MAX_ATTEMPTS, OZ_MESSAGE_LISTENER_MANAGED_EXTERNALLY_ENV,
     OZ_MESSAGE_LISTENER_STATE_ROOT_ENV, PlatformErrorCode, SDKConversationOutputStatus,
@@ -38,6 +41,7 @@ use super::{
     idle_window_for_cli_session_status, idle_window_for_terminal_status,
     setup_failure_status_update, terminal_status_log_outcome,
 };
+use crate::ai::agent::conversation::ConversationStatus;
 use crate::ai::agent::task::TaskId;
 use crate::ai::agent::{
     AIAgentActionResult, AIAgentActionResultType, AIAgentInput, AIAgentOutput,
@@ -46,7 +50,14 @@ use crate::ai::agent::{
 };
 use crate::ai::agent_sdk::task_env_vars;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
+use crate::ai::blocklist::orchestration_events::{
+    OrchestrationEventService, PendingEvent, PendingEventDetail,
+};
+use crate::ai::blocklist::{
+    BlocklistAIHistoryModel, RequestInput, ResponseStream, ResponseStreamId,
+};
 use crate::ai::cloud_environments::{GithubRepo, SourceRepo};
+use crate::ai::llms::LLMId;
 use crate::ai::mcp::JSONTransportType;
 use crate::ai::mcp::builtin::{FACTORY_MCP_INSTALLATION_UUID, FACTORY_MCP_SERVER_NAME};
 use crate::ai::mcp::parsing::normalize_mcp_json;
@@ -897,6 +908,43 @@ fn idle_timeout_sender_complete_with_optional_idle_some_then_cancel_invalidates_
     // Sender was never consumed by the cancelled timer, so the channel is
     // still open but empty.
     assert_eq!(rx.try_recv().unwrap(), None);
+}
+
+#[test]
+fn idle_timeout_sender_on_commit_runs_before_value_is_delivered() {
+    // `on_commit` must run synchronously, on whichever thread performs the completion send,
+    // strictly before the value is observable via the receiver — for both the immediate
+    // (`end_run_now`) and deferred (`end_run_after`) paths. `AgentDriver` relies on this
+    // ordering to commit a conversation's "exiting" state before anything can observe the
+    // run's completion signal (QUALITY-1801).
+    let commit_ran = Arc::new(std::sync::atomic::AtomicBool::new(false));
+
+    let commit_ran_for_hook = Arc::clone(&commit_ran);
+    let (tx, rx) = oneshot::channel::<i32>();
+    let idle_timeout = IdleTimeoutSender::new(tx).with_on_commit(move || {
+        commit_ran_for_hook.store(true, Ordering::SeqCst);
+    });
+    idle_timeout.end_run_now(1);
+    assert!(
+        commit_ran.load(Ordering::SeqCst),
+        "on_commit must have run by the time end_run_now returns"
+    );
+    assert_eq!(block_on(rx).unwrap(), 1);
+
+    let commit_ran = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let commit_ran_for_hook = Arc::clone(&commit_ran);
+    let (tx, rx) = oneshot::channel::<i32>();
+    let idle_timeout = IdleTimeoutSender::new(tx).with_on_commit(move || {
+        commit_ran_for_hook.store(true, Ordering::SeqCst);
+    });
+    idle_timeout.end_run_after(Duration::from_millis(20), 2);
+    // Awaited rather than polled: resolution only happens after `on_commit` has already run
+    // on the same background thread, so there is nothing to race here.
+    assert_eq!(block_on(rx).unwrap(), 2);
+    assert!(
+        commit_ran.load(Ordering::SeqCst),
+        "on_commit must have run before the deferred completion was delivered"
+    );
 }
 
 // ── Terminal-status idle window routing ──────────────────────────────────────────
@@ -1975,6 +2023,676 @@ fn warp_skill_dirs_env_relative_entries_resolve_against_working_dir() {
             skill_names.contains(&"env-skill-rel".to_string()),
             "'env-skill-rel' should load via a relative WARP_SKILL_DIRS entry resolved against the driver's working dir; got: {skill_names:?}"
         );
+    });
+}
+
+// ── QUALITY-1801: buffered child event vs. ambient-run teardown ─────────────
+
+/// Polls `condition` on a short interval until it returns true, or panics with an
+/// actionable message after `timeout` elapses. Used to deterministically await
+/// scheduled async work (e.g. a `ctx.spawn`ed eligibility check) without guessing a
+/// fixed sleep duration that a loaded test runner could exceed.
+async fn poll_until(
+    app: &App,
+    timeout: Duration,
+    description: &str,
+    mut condition: impl FnMut(&App) -> bool,
+) {
+    let deadline = instant::Instant::now() + timeout;
+    loop {
+        if condition(app) {
+            return;
+        }
+        assert!(
+            instant::Instant::now() < deadline,
+            "timed out after {timeout:?} waiting for: {description}"
+        );
+        Timer::after(Duration::from_millis(5)).await;
+    }
+}
+
+/// Creates a conversation on `terminal_id` and attaches an in-flight mock response
+/// stream to it (mirroring an in-progress parent turn), registered through
+/// `ai_controller`. Returns the conversation and stream so the caller can drive the
+/// stream to completion.
+fn conversation_with_in_progress_mock_stream(
+    app: &mut App,
+    terminal_id: warpui::EntityId,
+    ai_controller: &warpui::ModelHandle<crate::ai::blocklist::BlocklistAIController>,
+) -> (
+    crate::ai::agent::conversation::AIConversationId,
+    warpui::ModelHandle<ResponseStream>,
+) {
+    let stream_id = ResponseStreamId::new_for_test();
+    let conversation_id = BlocklistAIHistoryModel::handle(app).update(app, |history, ctx| {
+        let conversation_id = history.start_new_conversation(terminal_id, false, false, false, ctx);
+        let task_id = history
+            .conversation(&conversation_id)
+            .unwrap()
+            .get_root_task_id()
+            .clone();
+        history
+            .update_conversation_for_new_request_input_for_test(
+                RequestInput {
+                    conversation_id,
+                    input_messages: HashMap::from([(task_id, vec![])]),
+                    working_directory: None,
+                    model_id: LLMId::from("test-model"),
+                    coding_model_id: LLMId::from("test-coding-model"),
+                    cli_agent_model_id: LLMId::from("test-cli-agent-model"),
+                    computer_use_model_id: LLMId::from("test-computer-use-model"),
+                    shared_session_response_initiator: None,
+                    request_start_ts: Local::now(),
+                    supported_tools_override: None,
+                },
+                stream_id.clone(),
+                terminal_id,
+                ctx,
+            )
+            .unwrap();
+        conversation_id
+    });
+    let stream = app.add_model(|_| ResponseStream::new_for_test(stream_id.clone()));
+    ai_controller.update(app, |controller, ctx| {
+        controller.register_mock_stream_for_test(stream_id, conversation_id, stream.clone(), ctx);
+    });
+    (conversation_id, stream)
+}
+
+/// Drives `stream` through a successful `Init` + `Finished(Done)` completion via the
+/// real controller subscription, matching a parent turn finishing normally.
+fn complete_mock_stream_successfully(app: &mut App, stream: &warpui::ModelHandle<ResponseStream>) {
+    stream.update(app, |stream, ctx| {
+        stream.emit_response_event_for_test(
+            warp_multi_agent_api::ResponseEvent {
+                r#type: Some(response_event::Type::Init(response_event::StreamInit {
+                    request_id: "test-request".to_string(),
+                    conversation_id: "test-server-conversation".to_string(),
+                    run_id: String::new(),
+                })),
+            },
+            ctx,
+        );
+        stream.emit_response_event_for_test(
+            warp_multi_agent_api::ResponseEvent {
+                r#type: Some(response_event::Type::Finished(
+                    response_event::StreamFinished {
+                        reason: Some(response_event::stream_finished::Reason::Done(
+                            response_event::stream_finished::Done {},
+                        )),
+                        conversation_usage_metadata: None,
+                        token_usage: vec![],
+                        should_refresh_model_config: false,
+                        #[allow(deprecated)]
+                        request_cost: None,
+                        request_charges: None,
+                    },
+                )),
+            },
+            ctx,
+        );
+    });
+}
+
+/// Enqueues a single buffered child message for `conversation_id`, as if a child
+/// agent's report had just arrived over the orchestration SSE stream.
+fn enqueue_buffered_child_message(
+    app: &mut App,
+    conversation_id: crate::ai::agent::conversation::AIConversationId,
+) {
+    OrchestrationEventService::handle(app).update(app, |service, ctx| {
+        service.enqueue_event_batch(
+            conversation_id,
+            vec![PendingEvent {
+                event_id: "child-message-1".to_string(),
+                source_agent_id: "child".to_string(),
+                attempt_count: 0,
+                detail: PendingEventDetail::Message {
+                    message_id: "message-1".to_string(),
+                    addresses: vec!["parent".to_string()],
+                    subject: "subject".to_string(),
+                    message_body: "child finished".to_string(),
+                },
+            }],
+            ctx,
+        );
+    });
+}
+
+/// Builds a driver wired up (via the real `execute_run`) to observe the given
+/// terminal's history but that never submits any query itself, so the caller can
+/// drive the conversation manually. `idle_on_complete` controls whether the driver
+/// commits to an immediate exit on `Success` (`None`) or defers it (`Some`).
+fn driver_wired_for_terminal(
+    app: &mut App,
+    terminal_view: warpui::ViewHandle<crate::terminal::TerminalView>,
+    idle_on_complete: Option<Duration>,
+) -> warpui::ModelHandle<AgentDriver> {
+    let temp = TempDir::new().unwrap();
+    let driver_handle = app.add_model(|ctx| {
+        let terminal_driver =
+            super::terminal::TerminalDriver::create_from_existing_view(terminal_view, ctx);
+        let mut driver = AgentDriver::new_for_test(temp.path().to_path_buf(), terminal_driver, ctx);
+        // No initial query is submitted; the conversation is driven manually.
+        driver.skip_initial_turn = true;
+        driver.idle_on_complete = idle_on_complete;
+        driver
+    });
+    // Installs the real history-model subscription under test (including
+    // `drop_pending_events_for_exiting_conversation`), without submitting a query.
+    let _run_exit_rx = driver_handle.update(app, |driver, ctx| {
+        driver.execute_run(AgentRunPrompt::Local(String::new()), ctx)
+    });
+    driver_handle
+}
+
+/// QUALITY-1801 regression: a child agent's message, queued in
+/// `OrchestrationEventService` while the parent's own turn is still streaming, must
+/// not start a new MAA request once the parent's ambient run has committed to an
+/// immediate terminal exit (no `--idle-on-complete` window). This drives the real
+/// `AgentDriver` history-model subscription installed by `execute_run` (not just the
+/// `OrchestrationEventService` helper directly), so a regression that drops or
+/// mis-scopes that wiring is caught here.
+#[test]
+fn ambient_driver_immediate_exit_blocks_buffered_child_event_from_restarting_maa() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal_view = add_window_with_terminal(&mut app, None);
+        let (terminal_id, ai_controller) = terminal_view.update(&mut app, |view, _| {
+            (view.id(), view.ai_controller().clone())
+        });
+
+        // No idle window: `Success` commits the run to an immediate exit.
+        let _driver = driver_wired_for_terminal(&mut app, terminal_view, None);
+
+        let (conversation_id, stream) =
+            conversation_with_in_progress_mock_stream(&mut app, terminal_id, &ai_controller);
+
+        // A child agent's message arrives while the parent's own turn is still
+        // streaming: it is queued, not injected (the pre-existing active-stream guard).
+        enqueue_buffered_child_message(&mut app, conversation_id);
+        ai_controller.read(&app, |controller, ctx| {
+            assert!(
+                controller.has_active_stream_for_conversation(conversation_id, ctx),
+                "the parent's own stream must still be active while its event is buffered"
+            );
+        });
+
+        // The parent's own turn finishes successfully.
+        complete_mock_stream_successfully(&mut app, &stream);
+        BlocklistAIHistoryModel::handle(&app).read(&app, |history, _| {
+            assert_eq!(
+                history.conversation(&conversation_id).map(|c| c.status()),
+                Some(&ConversationStatus::Success)
+            );
+        });
+        // With no idle window, the driver committed to an immediate exit the instant
+        // it observed `Success` above, marking the conversation exiting before the
+        // controller's post-stream-cleanup re-check below runs.
+        OrchestrationEventService::handle(&app).read(&app, |service, _| {
+            assert!(
+                service.is_conversation_exiting(conversation_id),
+                "the driver should have marked the conversation exiting on immediate Success"
+            );
+        });
+
+        // The stream's natural completion propagates `AfterStreamFinished`, which is
+        // where the controller re-checks pending orchestration events. Since
+        // `conversation_ready_for_pending_events` already sees the conversation as
+        // exiting, this returns synchronously without going through the async
+        // dormant-Claude-wake eligibility check below.
+        stream.update(&mut app, |stream, ctx| {
+            stream.emit_after_stream_finished_for_test(ctx);
+        });
+
+        // The buffered child event must not have started a new request: the run
+        // already committed to exiting when the driver observed `Success` above.
+        BlocklistAIHistoryModel::handle(&app).read(&app, |history, _| {
+            assert_eq!(
+                history.conversation(&conversation_id).map(|c| c.status()),
+                Some(&ConversationStatus::Success),
+                "conversation must stay terminal, not flip back to InProgress"
+            );
+        });
+        ai_controller.read(&app, |controller, ctx| {
+            assert!(
+                !controller.has_active_stream_for_conversation(conversation_id, ctx),
+                "no follow-up request should have started"
+            );
+        });
+        // The flag that blocks injection (checked above via `is_conversation_exiting`) is set
+        // synchronously by `on_commit`, but the full model-side cleanup that drops queued
+        // events lives in `execute_run`'s forwarder, which only runs once the async round trip
+        // back from `run_exit`'s internal signal completes — so this is polled rather than
+        // checked immediately.
+        poll_until(
+            &app,
+            Duration::from_secs(2),
+            "the buffered event to be dropped by the forwarder's model-side cleanup",
+            |app| {
+                OrchestrationEventService::handle(app).read(app, |service, _| {
+                    !service.has_pending_events(conversation_id)
+                })
+            },
+        )
+        .await;
+    });
+}
+
+/// Counterpart to the immediate-exit test above: when the driver has an
+/// `--idle-on-complete` window (so it does *not* commit to an immediate exit on
+/// `Success`), the buffered child event must still be injected as a normal
+/// follow-up once the parent's stream completes — this is the `wait_for_events` /
+/// follow-up-turn path the fix must not break.
+#[test]
+fn ambient_driver_with_idle_window_still_injects_buffered_child_event() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal_view = add_window_with_terminal(&mut app, None);
+        let (terminal_id, ai_controller) = terminal_view.update(&mut app, |view, _| {
+            (view.id(), view.ai_controller().clone())
+        });
+
+        // A generous idle window: `Success` must not commit the run to an immediate
+        // exit, since it is deliberately staying alive for a follow-up.
+        let _driver =
+            driver_wired_for_terminal(&mut app, terminal_view, Some(Duration::from_secs(300)));
+
+        let (conversation_id, stream) =
+            conversation_with_in_progress_mock_stream(&mut app, terminal_id, &ai_controller);
+
+        enqueue_buffered_child_message(&mut app, conversation_id);
+        complete_mock_stream_successfully(&mut app, &stream);
+
+        OrchestrationEventService::handle(&app).read(&app, |service, _| {
+            assert!(
+                !service.is_conversation_exiting(conversation_id),
+                "an idle window means the driver must not have committed to exiting"
+            );
+        });
+
+        stream.update(&mut app, |stream, ctx| {
+            stream.emit_after_stream_finished_for_test(ctx);
+        });
+        // The re-check first goes through an async dormant-Claude-wake eligibility
+        // check (`maybe_prepare_local_claude_wake`) that resolves `Ok(None)` for a
+        // non-child conversation like this one and falls back to direct injection.
+        // Poll for that scheduled work to land instead of guessing a fixed sleep
+        // duration a loaded test runner could exceed.
+        poll_until(
+            &app,
+            Duration::from_secs(2),
+            "the buffered event to be injected as an InProgress follow-up",
+            |app| {
+                BlocklistAIHistoryModel::handle(app).read(app, |history, _| {
+                    matches!(
+                        history.conversation(&conversation_id).map(|c| c.status()),
+                        Some(ConversationStatus::InProgress)
+                    )
+                })
+            },
+        )
+        .await;
+
+        // The buffered event should have been injected as a real follow-up: the
+        // conversation is back `InProgress` and the queue has been drained.
+        BlocklistAIHistoryModel::handle(&app).read(&app, |history, _| {
+            assert_eq!(
+                history.conversation(&conversation_id).map(|c| c.status()),
+                Some(&ConversationStatus::InProgress),
+                "the buffered event should have started a follow-up request"
+            );
+        });
+        OrchestrationEventService::handle(&app).read(&app, |service, _| {
+            assert!(!service.has_pending_events(conversation_id));
+        });
+    });
+}
+
+// Lets a test substitute the `IdleWait` used by the next `execute_run` call on this thread, so
+// a deferred idle window's deadline can be reached deterministically instead of via a real
+// `thread::sleep`. `execute_run` runs synchronously on the same thread as the test that calls
+// it, so this thread-local is read exactly once, synchronously, at construction time. Exposed
+// to `driver.rs` as `pub(super)`, since `execute_run` (defined there) is the sole reader.
+thread_local! {
+    static TEST_IDLE_WAIT: std::cell::RefCell<Option<Arc<dyn super::IdleWait>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+pub(super) fn test_idle_wait_override() -> Option<Arc<dyn super::IdleWait>> {
+    TEST_IDLE_WAIT.with(|cell| cell.borrow().clone())
+}
+
+pub(super) fn set_test_idle_wait_override(wait: Option<Arc<dyn super::IdleWait>>) {
+    TEST_IDLE_WAIT.with(|cell| *cell.borrow_mut() = wait);
+}
+
+// A second, independent gate consulted from inside `execute_run`'s `on_commit` closure,
+// immediately after it commits exiting state and before returning (i.e. strictly before
+// `end_run_now`/`end_run_after` send the completion value). Lets a test pause deterministically
+// in the window where the commit has already happened but the completion signal — and
+// everything downstream of it, including the async forwarder that runs model-side cleanup — has
+// provably not yet been observed by anything.
+thread_local! {
+    static TEST_POST_COMMIT_GATE: std::cell::RefCell<Option<Arc<dyn super::IdleWait>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+// Read synchronously at `execute_run` construction time (main thread) and captured by value
+// into the `on_commit` closure, rather than re-read via this thread-local at commit time: a
+// deferred window's commit runs on a background `thread::spawn`, which does not see a
+// same-named thread-local set by the test on the main thread.
+pub(super) fn test_post_commit_gate() -> Option<Arc<dyn super::IdleWait>> {
+    TEST_POST_COMMIT_GATE.with(|cell| cell.borrow().clone())
+}
+
+pub(super) fn set_test_post_commit_gate(gate: Option<Arc<dyn super::IdleWait>>) {
+    TEST_POST_COMMIT_GATE.with(|cell| *cell.borrow_mut() = gate);
+}
+
+impl<T: Send + 'static> super::IdleTimeoutSender<T> {
+    /// Overrides the wait mechanism `end_run_after` uses, so a test can control exactly when a
+    /// deferred deadline is considered reached instead of depending on a real `thread::sleep`.
+    pub(super) fn with_wait(mut self, wait: Arc<dyn super::IdleWait>) -> Self {
+        self.wait = wait;
+        self
+    }
+}
+
+/// Test-only [`super::IdleWait`] that blocks until the test releases it, so a deferred idle
+/// window's deadline can be reached at a moment of the test's choosing instead of depending on
+/// a real, wall-clock-dependent `thread::sleep`. Needed both to make the elapsed-window test
+/// below deterministic (a fixed short duration can fire, or fail to have fired yet, before an
+/// assertion runs on a loaded test runner) and to construct the specific interleaving it
+/// exercises: releasing the timer while a child event's async injection eligibility check is
+/// already in flight.
+struct ManualIdleWait {
+    release_rx: std::sync::Mutex<std::sync::mpsc::Receiver<()>>,
+}
+
+impl super::IdleWait for ManualIdleWait {
+    fn wait(&self, _duration: Duration) {
+        let _ = self.release_rx.lock().unwrap().recv();
+    }
+}
+
+fn manual_idle_wait() -> (Arc<ManualIdleWait>, std::sync::mpsc::Sender<()>) {
+    let (tx, rx) = std::sync::mpsc::channel();
+    (
+        Arc::new(ManualIdleWait {
+            release_rx: std::sync::Mutex::new(rx),
+        }),
+        tx,
+    )
+}
+
+/// QUALITY-1801 regression, second gap: an `--idle-on-complete` window that elapses on its
+/// own (no follow-up query arrives before the deadline) must also mark the conversation
+/// exiting — and that commitment must be visible even to a child event whose async injection
+/// eligibility check was already in flight when the window elapsed, not only to one that
+/// arrives after everything has settled.
+///
+/// This exercises the exact race a plain async-forwarder-only design cannot close: the
+/// deferred timer fires on a background thread and only marks exiting once its completion
+/// signal reaches the model thread through further async plumbing (`ctx.spawn`'s
+/// background-executor round trip). An eligibility check that is already mid-flight when the
+/// timer fires can find the guard not yet set. `IdleTimeoutSender`'s `on_commit` hook closes
+/// this by committing the exiting state synchronously, on the timer's own thread, before it
+/// ever touches the completion channel — so the check re-validates against an
+/// already-committed state by the time it actually runs.
+///
+/// Uses `ManualIdleWait` (via `set_test_idle_wait_override`) instead of a real
+/// `thread::sleep`-based duration, so exactly when the deadline is considered reached is
+/// under the test's control rather than tied to wall-clock timing.
+#[test]
+fn ambient_driver_elapsed_idle_window_blocks_buffered_child_event_from_restarting_maa() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal_view = add_window_with_terminal(&mut app, None);
+        let (terminal_id, ai_controller) = terminal_view.update(&mut app, |view, _| {
+            (view.id(), view.ai_controller().clone())
+        });
+
+        let (elapse_wait, elapse_release_tx) = manual_idle_wait();
+        let (post_commit_wait, post_commit_release_tx) = manual_idle_wait();
+        set_test_idle_wait_override(Some(elapse_wait));
+        set_test_post_commit_gate(Some(post_commit_wait));
+        let _driver =
+            driver_wired_for_terminal(&mut app, terminal_view, Some(Duration::from_secs(300)));
+        set_test_idle_wait_override(None);
+        set_test_post_commit_gate(None);
+
+        let (conversation_id, stream) =
+            conversation_with_in_progress_mock_stream(&mut app, terminal_id, &ai_controller);
+
+        complete_mock_stream_successfully(&mut app, &stream);
+        stream.update(&mut app, |stream, ctx| {
+            stream.emit_after_stream_finished_for_test(ctx);
+        });
+
+        // The deferred window's background timer is blocked on the manual wait, so nothing
+        // has committed to exiting yet — deterministically, not because the test happened to
+        // check quickly enough.
+        OrchestrationEventService::handle(&app).read(&app, |service, _| {
+            assert!(
+                !service.is_conversation_exiting(conversation_id),
+                "the timer is blocked on the manual wait, so nothing has committed yet"
+            );
+        });
+
+        // A child agent's message arrives while the window is still (deterministically)
+        // open: a legitimate follow-up eligibility check starts, which goes through an async
+        // dormant-Claude-wake step before it actually injects.
+        enqueue_buffered_child_message(&mut app, conversation_id);
+
+        // Release the timer now, while that async eligibility check may still be in flight.
+        // The background thread commits exiting and then blocks again on the second
+        // (post-commit) gate, strictly *before* sending the completion value — so at this
+        // point the commit has provably landed, but the async forwarder that performs
+        // model-side cleanup has provably not run (the value it awaits hasn't been sent).
+        elapse_release_tx
+            .send(())
+            .expect("background timer thread should still be waiting on the manual release");
+
+        poll_until(
+            &app,
+            Duration::from_secs(2),
+            "the conversation to be marked exiting once the idle window elapses",
+            |app| {
+                OrchestrationEventService::handle(app).read(app, |service, _| {
+                    service.is_conversation_exiting(conversation_id)
+                })
+            },
+        )
+        .await;
+
+        // Deterministically inside the interleaving window now: exiting is committed, and
+        // the forwarder cannot have run yet. Give the in-flight eligibility check
+        // opportunity to resolve and (incorrectly) inject, continuously asserting the guard
+        // holds throughout rather than only at the end.
+        let settle_deadline = instant::Instant::now() + Duration::from_millis(300);
+        while instant::Instant::now() < settle_deadline {
+            BlocklistAIHistoryModel::handle(&app).read(&app, |history, _| {
+                assert_eq!(
+                    history.conversation(&conversation_id).map(|c| c.status()),
+                    Some(&ConversationStatus::Success),
+                    "conversation must stay terminal, not flip back to InProgress"
+                );
+            });
+            Timer::after(Duration::from_millis(5)).await;
+        }
+
+        // Release the post-commit gate so the run can finish tearing down normally.
+        post_commit_release_tx
+            .send(())
+            .expect("background timer thread should still be waiting at the post-commit gate");
+
+        ai_controller.read(&app, |controller, ctx| {
+            assert!(
+                !controller.has_active_stream_for_conversation(conversation_id, ctx),
+                "no follow-up request should have started"
+            );
+        });
+    });
+}
+
+/// QUALITY-1801 regression, direct proof of the interleaving window: once
+/// [`OrchestrationEventService::exit_commit_handle`]'s `commit` has run — exactly what
+/// `IdleTimeoutSender`'s `on_commit` hook does, synchronously, on the timer's own thread,
+/// before it ever touches the completion channel — the guard must block injection
+/// immediately, even before any model-side cleanup
+/// (`drop_pending_events_for_exiting_conversation`) has had a chance to run. This isolates,
+/// deterministically and without any timer at all, the property the async-forwarder-only
+/// design could not guarantee: a check that runs in the gap between the timer deciding to
+/// fire and the model callback actually running must still see the commitment.
+#[test]
+fn exit_commit_handle_blocks_injection_before_model_side_cleanup_runs() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal_view = add_window_with_terminal(&mut app, None);
+        let (terminal_id, ai_controller) = terminal_view.update(&mut app, |view, _| {
+            (view.id(), view.ai_controller().clone())
+        });
+
+        let (conversation_id, stream) =
+            conversation_with_in_progress_mock_stream(&mut app, terminal_id, &ai_controller);
+        complete_mock_stream_successfully(&mut app, &stream);
+        stream.update(&mut app, |stream, ctx| {
+            stream.emit_after_stream_finished_for_test(ctx);
+        });
+
+        // Commit directly via the handle, exactly as `on_commit` does on a background timer
+        // thread — with no accompanying model-side cleanup call, simulating the moment right
+        // after the timer fires but before the async forwarder callback has run.
+        let commit_handle = OrchestrationEventService::handle(&app)
+            .read(&app, |service, _| service.exit_commit_handle());
+        commit_handle.commit(conversation_id);
+
+        // The guard must already block, even though nothing has cleaned up pending events
+        // for this conversation (`drop_pending_events_for_exiting_conversation` never ran).
+        enqueue_buffered_child_message(&mut app, conversation_id);
+
+        BlocklistAIHistoryModel::handle(&app).read(&app, |history, _| {
+            assert_eq!(
+                history.conversation(&conversation_id).map(|c| c.status()),
+                Some(&ConversationStatus::Success),
+                "a directly-committed exit must block injection even without model-side cleanup"
+            );
+        });
+        ai_controller.read(&app, |controller, ctx| {
+            assert!(
+                !controller.has_active_stream_for_conversation(conversation_id, ctx),
+                "no follow-up request should have started"
+            );
+        });
+    });
+}
+
+/// Like `driver_wired_for_terminal`, but simulates a *resumed* conversation: the caller
+/// already knows `resumed_conversation_id` before `execute_run` is called, mirroring
+/// `AgentDriver::new` setting `run_conversation_id` up front for a restored conversation.
+/// Such a run never observes `ConversationServerTokenAssigned` (it already has a server
+/// token), so it takes a different path than a fresh run to learning its own conversation
+/// id.
+fn driver_wired_for_resumed_conversation(
+    app: &mut App,
+    terminal_view: warpui::ViewHandle<crate::terminal::TerminalView>,
+    idle_on_complete: Option<Duration>,
+    resumed_conversation_id: crate::ai::agent::conversation::AIConversationId,
+) -> warpui::ModelHandle<AgentDriver> {
+    let temp = TempDir::new().unwrap();
+    let driver_handle = app.add_model(|ctx| {
+        let terminal_driver =
+            super::terminal::TerminalDriver::create_from_existing_view(terminal_view, ctx);
+        let mut driver = AgentDriver::new_for_test(temp.path().to_path_buf(), terminal_driver, ctx);
+        driver.skip_initial_turn = true;
+        driver.idle_on_complete = idle_on_complete;
+        driver.run_conversation_id = Some(resumed_conversation_id);
+        driver
+    });
+    let _run_exit_rx = driver_handle.update(app, |driver, ctx| {
+        driver.execute_run(AgentRunPrompt::Local(String::new()), ctx)
+    });
+    driver_handle
+}
+
+/// QUALITY-1801 regression: a *resumed* conversation's deferred `--idle-on-complete`
+/// window must also commit exiting once it elapses. `execute_run` seeds the thread-safe
+/// commit's tracked conversation id from `self.run_conversation_id` precisely because a
+/// resumed run already has it at construction time and never takes the
+/// `ConversationServerTokenAssigned` branch that a fresh run relies on to learn it.
+#[test]
+fn ambient_driver_resumed_conversation_elapsed_idle_window_commits_exiting() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal_view = add_window_with_terminal(&mut app, None);
+        let (terminal_id, ai_controller) = terminal_view.update(&mut app, |view, _| {
+            (view.id(), view.ai_controller().clone())
+        });
+
+        // The conversation exists (and its id is known) *before* the driver is
+        // constructed, mirroring a resume: the id comes from restoration, not from a
+        // `ConversationServerTokenAssigned` event observed during this run.
+        let (conversation_id, stream) =
+            conversation_with_in_progress_mock_stream(&mut app, terminal_id, &ai_controller);
+
+        // Two gates, as in the interleaving test above: `elapse_wait` controls when the
+        // deferred deadline is reached, and `post_commit_wait` pauses `on_commit` strictly
+        // *before* the completion value is sent. `on_commit` is the only thing that can set
+        // the exiting flag — the forwarder only drops pending events — so a broken
+        // (never-populated) thread-safe seed would leave the flag unset forever; these gates
+        // just keep the check deterministic rather than racing the background timer.
+        let (elapse_wait, elapse_release_tx) = manual_idle_wait();
+        let (post_commit_wait, post_commit_release_tx) = manual_idle_wait();
+        set_test_idle_wait_override(Some(elapse_wait));
+        set_test_post_commit_gate(Some(post_commit_wait));
+        let _driver = driver_wired_for_resumed_conversation(
+            &mut app,
+            terminal_view,
+            Some(Duration::from_secs(300)),
+            conversation_id,
+        );
+        set_test_idle_wait_override(None);
+        set_test_post_commit_gate(None);
+
+        complete_mock_stream_successfully(&mut app, &stream);
+        stream.update(&mut app, |stream, ctx| {
+            stream.emit_after_stream_finished_for_test(ctx);
+        });
+
+        OrchestrationEventService::handle(&app).read(&app, |service, _| {
+            assert!(
+                !service.is_conversation_exiting(conversation_id),
+                "the timer is blocked on the manual wait, so nothing has committed yet"
+            );
+        });
+
+        elapse_release_tx
+            .send(())
+            .expect("background timer thread should still be waiting on the manual release");
+
+        // The background thread runs `on_commit` (which must populate the thread-safe
+        // commit using the seed from `self.run_conversation_id`) and then blocks on the
+        // post-commit gate, strictly before sending the completion value. The async
+        // forwarder therefore cannot have run yet, so this check is a direct, uncontaminated
+        // proof of `on_commit`'s own write, not of the forwarder's fallback.
+        poll_until(
+            &app,
+            Duration::from_secs(2),
+            "the resumed conversation to be marked exiting once its idle window elapses, \
+             via on_commit's seeded conversation id (not the async forwarder)",
+            |app| {
+                OrchestrationEventService::handle(app).read(app, |service, _| {
+                    service.is_conversation_exiting(conversation_id)
+                })
+            },
+        )
+        .await;
+
+        // Release the post-commit gate so the run can finish tearing down normally.
+        post_commit_release_tx
+            .send(())
+            .expect("background timer thread should still be waiting at the post-commit gate");
     });
 }
 
