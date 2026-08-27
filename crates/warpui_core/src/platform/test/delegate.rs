@@ -30,6 +30,7 @@ use crate::{
 pub struct AppDelegate {
     clipboard: InMemoryClipboard,
     cursor_shape: Mutex<Cursor>,
+    dock_badge_count: Mutex<usize>,
 }
 
 // Dummy IntegrationTestDelegate implementation so the integration test code
@@ -49,6 +50,7 @@ impl AppDelegate {
         Ok(Self {
             clipboard: InMemoryClipboard::default(),
             cursor_shape: Mutex::new(Cursor::Arrow),
+            dock_badge_count: Mutex::new(0),
         })
     }
 }
@@ -186,6 +188,15 @@ impl platform::Delegate for AppDelegate {
 
     fn set_cursor_shape(&self, cursor: Cursor) {
         *self.cursor_shape.lock() = cursor;
+    }
+
+    fn set_dock_badge_count(&self, count: usize) {
+        *self.dock_badge_count.lock() = count;
+    }
+
+    #[cfg(feature = "test-util")]
+    fn dock_badge_count(&self) -> usize {
+        *self.dock_badge_count.lock()
     }
 
     fn open_url(&self, _: &str) -> bool {

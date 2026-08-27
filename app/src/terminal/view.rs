@@ -174,6 +174,7 @@ use warpui::text::SelectionType;
 use warpui::ui_components::components::UiComponent;
 use warpui::units::{IntoLines, IntoPixels, Lines, Pixels};
 use warpui::windowing::WindowManager;
+use warpui::windowing::state::ApplicationStage;
 use warpui::{
     AccessibilityData, AppContext, BlurContext, CursorInfo, Element, Entity, EntityId,
     EventContext, FocusContext, ModelAsRef, ModelHandle, SingletonEntity, Tracked, TypedActionView,
@@ -218,6 +219,7 @@ use crate::ai::agent::{
 #[cfg(feature = "local_fs")]
 use crate::ai::agent::{CurrentHead, DiffBase};
 use crate::ai::agent_conversations_model::{AgentConversationsModel, AgentConversationsModelEvent};
+use crate::ai::agent_management::AgentNotificationsModel;
 use crate::ai::ambient_agents::{
     AmbientAgentTask, AmbientAgentTaskId, AmbientConversationStatus,
     conversation_output_status_from_conversation,
@@ -543,6 +545,7 @@ use crate::workspace::view::cloud_agent_capacity_modal::CloudAgentCapacityModalV
 use crate::workspace::{
     CommandSearchOptions, ForkAIConversationParams, ForkFromExchange,
     ForkedConversationDestination, OneTimeModalModel, ToastStack, WorkspaceAction,
+    WorkspaceRegistry,
 };
 use crate::workspaces::user_workspaces::{UserWorkspaces, UserWorkspacesEvent};
 use crate::workspaces::workspace::CustomerType;
@@ -11824,8 +11827,40 @@ impl TerminalView {
                 // TODO(vorporeal): Remove this once we have a visual bell
                 // indicator in terminal tabs.
                 ctx.request_user_attention();
+
+                // Count this terminal in the Dock badge when it bells while not
+                // visible in the active window; cleared when it's viewed, its shell
+                // exits, or its pane closes (GH-11095).
+                let (application_stage, active_window) = {
+                    let state = ctx.windows().state();
+                    (state.stage, state.active_window)
+                };
+                let is_visible = WorkspaceRegistry::as_ref(ctx)
+                    .get(ctx.window_id(), ctx)
+                    .map_or_else(
+                        || ctx.is_self_or_child_focused(),
+                        |workspace| {
+                            workspace
+                                .as_ref(ctx)
+                                .visible_terminal_views(ctx)
+                                .iter()
+                                .any(|view| view.id() == self.view_id)
+                        },
+                    );
+                let is_viewed = is_visible
+                    && application_stage == ApplicationStage::Active
+                    && active_window == Some(ctx.window_id());
+                if !is_viewed {
+                    AgentNotificationsModel::handle(ctx).update(ctx, |model, ctx| {
+                        model.record_terminal_bell(self.view_id, ctx);
+                    });
+                }
             }
             ModelEvent::Exit { reason } => {
+                // A dead shell no longer needs bell attention in the Dock badge.
+                AgentNotificationsModel::handle(ctx).update(ctx, |model, ctx| {
+                    model.clear_terminal_bell(self.view_id, ctx);
+                });
                 if !self.manual_pty_shutdown_requested
                     && let Some((conversation_id, command)) =
                         self.maybe_send_agent_exited_shell_telemetry(ctx)
