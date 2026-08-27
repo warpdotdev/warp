@@ -595,6 +595,14 @@ pub struct ScreenshotArtifactResponseData {
     pub description: Option<String>,
 }
 
+/// Response from the stored computer-use screenshot download endpoint.
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
+pub struct ScreenshotDownloadResponse {
+    /// Short-lived signed URL from which the screenshot bytes can be fetched.
+    pub download_url: String,
+    pub expires_at: DateTime<Utc>,
+}
+
 /// File-specific data from the artifact endpoint.
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
 pub struct FileArtifactResponseData {
@@ -1520,6 +1528,14 @@ pub trait AIClient: 'static + Send + Sync {
         &self,
         artifact_uid: &str,
     ) -> anyhow::Result<ArtifactDownloadResponse, anyhow::Error>;
+
+    /// Fetches a signed download URL for a computer-use screenshot stored in
+    /// Warp-managed object storage. Requires view access to the conversation.
+    async fn get_screenshot_download(
+        &self,
+        conversation_id: &str,
+        screenshot_uid: &str,
+    ) -> anyhow::Result<ScreenshotDownloadResponse, anyhow::Error>;
 
     async fn prepare_attachments_for_upload(
         &self,
@@ -2998,6 +3014,21 @@ impl AIClient for ServerApi {
     ) -> anyhow::Result<ArtifactDownloadResponse, anyhow::Error> {
         let response: ArtifactDownloadResponse = self
             .get_public_api(&format!("agent/artifacts/{artifact_uid}"))
+            .await?;
+        Ok(response)
+    }
+
+    async fn get_screenshot_download(
+        &self,
+        conversation_id: &str,
+        screenshot_uid: &str,
+    ) -> anyhow::Result<ScreenshotDownloadResponse, anyhow::Error> {
+        let response: ScreenshotDownloadResponse = self
+            .get_public_api(&format!(
+                "agent/conversations/{}/screenshots/{}",
+                urlencoding::encode(conversation_id),
+                urlencoding::encode(screenshot_uid)
+            ))
             .await?;
         Ok(response)
     }

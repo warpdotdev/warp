@@ -529,6 +529,8 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::ShellWidgetHandoff,
         #[cfg(feature = "history_search_ranking_v2")]
         FeatureFlag::HistorySearchRankingV2,
+        #[cfg(feature = "stored_screenshots")]
+        FeatureFlag::StoredScreenshots,
     ]);
 
     flags

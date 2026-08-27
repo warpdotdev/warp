@@ -1088,7 +1088,7 @@ impl TryFrom<RequestComputerUseResult> for api::request::input::tool_call_result
                                     height_px: screenshot.original_height as i32,
                                 }),
                                 initial_screenshot: Some(api::RawImage {
-                                    data: screenshot.data,
+                                    source: Some(api::raw_image::Source::Data(screenshot.data)),
                                     mime_type: screenshot.mime_type.to_string(),
                                     width: screenshot.width as i32,
                                     height: screenshot.height as i32,
@@ -1127,7 +1127,7 @@ impl TryFrom<UseComputerResult> for api::request::input::tool_call_result::Resul
 
     fn try_from(result: UseComputerResult) -> Result<Self, Self::Error> {
         match result {
-            UseComputerResult::Success(result) => {
+            UseComputerResult::Success { result, .. } => {
                 // Copy out the captured-window metadata (if any) before the owned fields of
                 // `result` are moved into the message below.
                 let captured = result.captured_window;
@@ -1135,8 +1135,11 @@ impl TryFrom<UseComputerResult> for api::request::input::tool_call_result::Resul
                     api::UseComputerResult {
                         result: Some(api::use_computer_result::Result::Success(
                             api::use_computer_result::Success {
+                                // Results sent as request inputs always come from a local
+                                // capture, so the screenshot bytes are inline and no stored
+                                // ref exists yet; the server performs the offload.
                                 screenshot: result.screenshot.map(|s| api::RawImage {
-                                    data: s.data,
+                                    source: Some(api::raw_image::Source::Data(s.data)),
                                     mime_type: s.mime_type.to_string(),
                                     width: s.width as i32,
                                     height: s.height as i32,

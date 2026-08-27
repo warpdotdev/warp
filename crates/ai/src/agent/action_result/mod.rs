@@ -8,6 +8,7 @@ use chrono::{DateTime, Local};
 use itertools::Itertools as _;
 use serde::{Deserialize, Serialize};
 use warp_core::command::ExitCode;
+use warp_multi_agent_api::StoredScreenshotRef;
 use warp_multi_agent_api::apply_file_diffs_result::success::UpdatedFileContent;
 use warp_terminal::model::BlockId;
 
@@ -879,7 +880,7 @@ impl AIAgentActionResultType {
                 ReadShellCommandOutputResult::CommandFinished { .. }
                 | ReadShellCommandOutputResult::LongRunningCommandSnapshot { .. },
             )
-            | Self::UseComputer(UseComputerResult::Success(_))
+            | Self::UseComputer(UseComputerResult::Success { .. })
             | Self::InsertReviewComments(InsertReviewCommentsResult::Success { .. })
             | Self::RequestComputerUse(RequestComputerUseResult::Approved { .. })
             | Self::StartRecording(StartRecordingResult::Success(_))
@@ -1207,15 +1208,30 @@ impl Display for ReadSkillResult {
 #[derive(Debug, Clone, PartialEq)]
 pub enum UseComputerResult {
     /// Computer use succeeded, with one result per requested action.
-    Success(computer_use::ActionResult),
+    Success {
+        result: computer_use::ActionResult,
+        /// Present when the screenshot bytes live in Warp-managed object
+        /// storage instead of inline in `result`.
+        stored_screenshot_ref: Option<StoredScreenshotRef>,
+    },
     Error(String),
     Cancelled,
+}
+
+impl UseComputerResult {
+    /// Builds a success result whose screenshot bytes (if any) are inline.
+    pub fn success(result: computer_use::ActionResult) -> Self {
+        Self::Success {
+            result,
+            stored_screenshot_ref: None,
+        }
+    }
 }
 
 impl Display for UseComputerResult {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            UseComputerResult::Success(_) => write!(f, "Use computer completed"),
+            UseComputerResult::Success { .. } => write!(f, "Use computer completed"),
             UseComputerResult::Error(error) => write!(f, "Use computer error: {error}"),
             UseComputerResult::Cancelled => write!(f, "Use computer cancelled"),
         }

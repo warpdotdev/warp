@@ -3200,7 +3200,8 @@ fn render_use_computer(
             renderable_action.with_footer(render_recording_footer(recording_span.status, app));
     }
 
-    // Add a "View screenshot" button if the action result contains a screenshot.
+    // Add a "View screenshot" button if the action result contains a screenshot,
+    // either inline or offloaded to object storage.
     let has_screenshot = props
         .action_model
         .as_ref(app)
@@ -3209,8 +3210,11 @@ fn render_use_computer(
             matches!(
                 &result.result,
                 AIAgentActionResultType::UseComputer(
-                    crate::ai::agent::UseComputerResult::Success(action_result)
-                ) if action_result.screenshot.is_some()
+                    crate::ai::agent::UseComputerResult::Success {
+                        result: action_result,
+                        stored_screenshot_ref,
+                    }
+                ) if action_result.screenshot.is_some() || stored_screenshot_ref.is_some()
             )
         });
 

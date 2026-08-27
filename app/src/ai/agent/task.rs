@@ -647,14 +647,21 @@ impl Task {
         Ok(())
     }
 
+    /// Upserts `message` into the task, returning the exchange whose rendered output was
+    /// updated along with the resulting task message.
+    ///
+    /// An update for an existing message is applied to the exchange that added that message,
+    /// which may predate the current response stream (e.g. the server swapping an earlier
+    /// screenshot's inline bytes for a stored ref). Only a genuinely new message requires
+    /// `current_stream_exchange_id`, the exchange the current stream added for this task.
     pub(super) fn upsert_message(
         &mut self,
         message: api::Message,
-        exchange_id: AIAgentExchangeId,
+        current_stream_exchange_id: Option<AIAgentExchangeId>,
         message_context: TaskMessageContext<'_>,
         mask: FieldMask,
         should_convert_input_messages: bool,
-    ) -> Result<&api::Message, UpdateTaskError> {
+    ) -> Result<(AIAgentExchangeId, &api::Message), UpdateTaskError> {
         let Some((idx, existing_message)) = self
             .try_get_source()?
             .messages
@@ -662,6 +669,8 @@ impl Task {
             .enumerate()
             .find(|(_, m)| message.id == m.id)
         else {
+            let exchange_id =
+                current_stream_exchange_id.ok_or(UpdateTaskError::ExchangeNotFound)?;
             self.add_messages(
                 vec![message.clone()],
                 exchange_id,
@@ -672,6 +681,7 @@ impl Task {
                 .try_get_source()?
                 .messages
                 .last()
+                .map(|message| (exchange_id, message))
                 .ok_or(UpdateTaskError::MessageNotFound);
         };
         let updated_message =
@@ -680,6 +690,14 @@ impl Task {
                 .map_err(UpdateTaskError::from)?;
 
         let id = self.id.clone();
+        let message_id = MessageId::new(message.id.clone());
+        let exchange_id = self
+            .exchanges
+            .iter()
+            .find(|exchange| exchange.added_message_ids.contains(&message_id))
+            .map(|exchange| exchange.id)
+            .or(current_stream_exchange_id)
+            .ok_or(UpdateTaskError::ExchangeNotFound)?;
         let exchange_to_update = self
             .exchange_mut(exchange_id)
             .ok_or(UpdateTaskError::ExchangeNotFound)?;
@@ -726,7 +744,7 @@ impl Task {
 
         let source = self.try_get_source_mut()?;
         source.messages[idx] = updated_message;
-        Ok(&source.messages[idx])
+        Ok((exchange_id, &source.messages[idx]))
     }
 
     pub(super) fn append_to_message_content(
@@ -968,10 +986,10 @@ impl AIAgentExchange {
         task_message: &api::Message,
         conversion_params: super::api::ConversionParams<'_>,
     ) -> Result<(), UpdateTaskError> {
-        if let AIAgentOutputStatus::Streaming {
-            output: Some(output),
-        } = &self.output_status
-        {
+        // Applies to finished outputs as well as streaming ones: updates can target
+        // messages owned by exchanges whose output already completed (e.g. a stored-ref
+        // swap for a screenshot from an earlier exchange).
+        if let Some(output) = self.output_status.output() {
             let mut output = output.get_mut();
             let message_idx = output
                 .messages
