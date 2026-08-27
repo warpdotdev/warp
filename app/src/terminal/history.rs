@@ -891,6 +891,18 @@ impl History {
         self.collect_visible_commands_for_session(session_id, Arc::clone)
     }
 
+    /// Returns the number of times `command` has been executed on the shell host associated with
+    /// `session_id`, per the persisted "commands" table. Defaults to 1 when there's no persisted
+    /// record, since the command has been seen at least once via the history file entry itself.
+    pub fn command_execution_count(&self, session_id: SessionId, command: &str) -> u32 {
+        self.session_id_to_shell_host
+            .get(&session_id)
+            .and_then(|host| self.persisted_commands_summary.get(host))
+            .and_then(|summaries| summaries.get(command))
+            .map(|summary| summary.count)
+            .unwrap_or(1)
+    }
+
     #[allow(clippy::len_without_is_empty)]
     pub fn len(&self, session_id: SessionId) -> usize {
         self.commands(session_id)

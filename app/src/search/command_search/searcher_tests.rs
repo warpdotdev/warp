@@ -187,10 +187,10 @@ fn test_exact_matches_rank_above_prefix_matches() {
         app.read(|app| {
             let results = mixer.as_ref(app).results();
 
-            // Note that ranking "higher" means the result should have a lower index, because the view
-            // renders highest ranked items at the bottom of the scrollable panel.
-            // While the two commands have the same "score", the `long_command` comes first
-            // because the data source it derives from was registered first.
+            // The view renders highest-ranked items at the bottom (last index) of the scrollable
+            // panel. `short_command` is a whole-line exact match for the query while
+            // `long_command` is only a substring match, so it outranks `long_command` and ends up
+            // last, independent of which data source was registered first.
             assert_eq!(results.len(), 2);
 
             assert!(matches!(
@@ -240,12 +240,14 @@ fn test_no_query_filter_runs_all_data_sources() {
         app.read(|app| {
             let results = mixer.as_ref(app).results();
 
+            // "git" ranks above "git checkout" because it's a whole-line exact match for the
+            // query, not merely a substring match, so it appears last (closest to the input).
             assert_eq!(
                 results
                     .iter()
                     .map(|result| result.accessibility_label())
                     .collect_vec(),
-                vec!["History item: git", "History item: git checkout"]
+                vec!["History item: git checkout", "History item: git"]
             );
         });
     });
@@ -316,12 +318,14 @@ fn test_query_filter_limits_data_sources() {
 
         app.read(|app| {
             let results = mixer.as_ref(app).results();
+            // "git" ranks above "git checkout" because it's a whole-line exact match for the
+            // query, not merely a substring match, so it appears last (closest to the input).
             assert_eq!(
                 results
                     .iter()
                     .map(|result| result.accessibility_label())
                     .collect_vec(),
-                vec!["History item: git", "History item: git checkout"]
+                vec!["History item: git checkout", "History item: git"]
             );
         });
     });
