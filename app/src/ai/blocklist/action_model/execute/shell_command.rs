@@ -97,7 +97,7 @@ impl ShellCommandExecutor {
             Some(SessionType::Local)
         );
         self.activity_monitor
-            .set_monitoring_enabled(is_local && FeatureFlag::LrcActivitySignal.is_enabled());
+            .set_monitoring_enabled(is_local && lrc_activity_signals_supported());
 
         let guard = LrcMonitoringGuard {
             monitor: self.activity_monitor.clone(),
@@ -1055,6 +1055,11 @@ enum ActionResult {
     },
     Cancelled,
     BlockNotFound,
+}
+
+/// Whether liveness signals are trustworthy enough to collect on this platform.
+fn lrc_activity_signals_supported() -> bool {
+    !cfg!(target_os = "windows") && FeatureFlag::LrcActivitySignal.is_enabled()
 }
 
 /// Keeps liveness sampling armed for as long as an action that might report a
