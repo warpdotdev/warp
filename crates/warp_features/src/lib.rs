@@ -405,9 +405,6 @@ pub enum FeatureFlag {
     /// Allows opening file links using the $EDITOR environment variable.
     AllowOpeningFileLinksUsingEditorEnv,
 
-    /// Enables the ability to undo closed panes.
-    UndoClosedPanes,
-
     /// Enables revert button for diff hunks in the gutter.
     RevertDiffHunk,
 
