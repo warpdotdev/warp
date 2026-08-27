@@ -28,6 +28,8 @@ pub struct TaskGitCredentialsVariables {
 pub struct TaskGitCredentialsInput {
     pub task_id: cynic::Id,
     pub workload_token: String,
+    #[cynic(skip_serializing_if = "Option::is_none")]
+    pub accepts_partial_refresh: Option<bool>,
 }
 
 #[derive(cynic::InlineFragments, Debug)]
@@ -41,6 +43,7 @@ pub enum TaskGitCredentialsResult {
 #[derive(cynic::QueryFragment, Debug)]
 pub struct TaskGitCredentialsOutput {
     pub credentials: Vec<TaskGitCredential>,
+    pub failed_hosts: Vec<String>,
 }
 
 #[derive(cynic::QueryFragment, Debug)]

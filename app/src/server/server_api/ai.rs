@@ -725,6 +725,13 @@ pub struct GitCredential {
     pub host: String,
 }
 
+/// One credential-retrieval cycle's outcome.
+#[derive(Clone, Default)]
+pub struct TaskGitCredentialsResponse {
+    pub credentials: Vec<GitCredential>,
+    pub failed_hosts: Vec<String>,
+}
+
 /// Filter parameters for listing ambient agent tasks.
 #[derive(Clone, Debug, Default)]
 pub struct TaskListFilter {
@@ -1442,7 +1449,7 @@ pub trait AIClient: 'static + Send + Sync {
         &self,
         task_id: String,
         workload_token: String,
-    ) -> anyhow::Result<Vec<GitCredential>, anyhow::Error>;
+    ) -> anyhow::Result<TaskGitCredentialsResponse, anyhow::Error>;
 
     async fn get_task_attachments(
         &self,
@@ -2668,11 +2675,12 @@ impl AIClient for ServerApi {
         &self,
         task_id: String,
         workload_token: String,
-    ) -> anyhow::Result<Vec<GitCredential>, anyhow::Error> {
+    ) -> anyhow::Result<TaskGitCredentialsResponse, anyhow::Error> {
         let variables = TaskGitCredentialsVariables {
             input: TaskGitCredentialsInput {
                 task_id: cynic::Id::new(task_id),
                 workload_token,
+                accepts_partial_refresh: Some(true),
             },
             request_context: get_request_context(),
         };
@@ -2691,7 +2699,10 @@ impl AIClient for ServerApi {
                         host: c.host,
                     })
                     .collect();
-                Ok(credentials)
+                Ok(TaskGitCredentialsResponse {
+                    credentials,
+                    failed_hosts: output.failed_hosts,
+                })
             }
             TaskGitCredentialsResult::UserFacingError(error) => {
                 Err(anyhow!(get_user_facing_error_message(error)))

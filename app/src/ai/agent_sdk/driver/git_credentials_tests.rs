@@ -82,22 +82,28 @@ fn write_gh_hosts_yml_skips_gitlab_only_credentials() -> Result<()> {
     Ok(())
 }
 
+fn github_credential() -> GitCredential {
+    GitCredential {
+        token: "github-token".to_string(),
+        username: None,
+        email: None,
+        host: "github.com".to_string(),
+    }
+}
+
+fn gitlab_credential() -> GitCredential {
+    GitCredential {
+        token: "gitlab-token".to_string(),
+        username: Some("oauth2".to_string()),
+        email: None,
+        host: "gitlab.com".to_string(),
+    }
+}
+
 #[test]
-fn git_credentials_file_content_includes_each_provider_host() {
-    let content = git_credentials_file_content(&[
-        GitCredential {
-            token: "github-token".to_string(),
-            username: None,
-            email: None,
-            host: "github.com".to_string(),
-        },
-        GitCredential {
-            token: "gitlab-token".to_string(),
-            username: Some("oauth2".to_string()),
-            email: None,
-            host: "gitlab.com".to_string(),
-        },
-    ]);
+fn merged_credentials_include_each_provider_host() {
+    let content =
+        merge_git_credentials_file_content("", &[github_credential(), gitlab_credential()]);
 
     assert_eq!(
         content,
@@ -107,21 +113,91 @@ fn git_credentials_file_content_includes_each_provider_host() {
 }
 
 #[test]
+fn merged_credentials_replace_only_the_refreshed_host() {
+    let existing = "https://x-access-token:stale-github@github.com\n\
+                    https://oauth2:stale-gitlab@gitlab.com\n";
+
+    let content = merge_git_credentials_file_content(existing, &[github_credential()]);
+
+    assert!(content.contains("https://x-access-token:github-token@github.com"));
+    assert!(!content.contains("stale-github"));
+    assert!(content.contains("https://oauth2:stale-gitlab@gitlab.com"));
+}
+
+#[test]
+fn merged_credentials_preserve_an_unrelated_host() {
+    let existing = "https://user:token@git.example.com\n";
+
+    let content = merge_git_credentials_file_content(existing, &[github_credential()]);
+
+    assert_eq!(
+        content,
+        "https://user:token@git.example.com\n\
+         https://x-access-token:github-token@github.com\n"
+    );
+}
+
+#[test]
 fn credential_diagnostics_reports_presence_without_values() {
-    let diagnostics = credential_diagnostics(&[GitCredential {
-        token: "secret-token".to_string(),
-        username: Some("oauth2".to_string()),
-        email: Some("user@example.com".to_string()),
-        host: "gitlab.com".to_string(),
-    }]);
+    let diagnostics = credential_diagnostics(
+        &[GitCredential {
+            token: "secret-token".to_string(),
+            username: Some("oauth2".to_string()),
+            email: Some("user@example.com".to_string()),
+            host: "gitlab.com".to_string(),
+        }],
+        &[],
+    );
 
     assert_eq!(
         diagnostics,
-        "gitlab.com(token_present=true, username_present=true)"
+        "gitlab.com(refreshed, token_present=true, username_present=true)"
     );
     assert!(!diagnostics.contains("secret-token"));
     assert!(!diagnostics.contains("oauth2"));
     assert!(!diagnostics.contains("user@example.com"));
+}
+
+#[test]
+fn credential_diagnostics_names_the_stale_host() {
+    let diagnostics = credential_diagnostics(&[github_credential()], &["gitlab.com".to_string()]);
+
+    assert!(diagnostics.contains("github.com(refreshed"));
+    assert!(diagnostics.contains("gitlab.com(stale"));
+}
+
+#[test]
+fn repository_identity_selects_the_matching_host() {
+    let identities = [
+        HostIdentity {
+            host: "github.com".to_string(),
+            name: "warp-agent[bot]".to_string(),
+            email: "bot@users.noreply.github.com".to_string(),
+        },
+        HostIdentity {
+            host: "gitlab.com".to_string(),
+            name: "warp-factory-1".to_string(),
+            email: "1-warp-factory-1@users.noreply.gitlab.com".to_string(),
+        },
+    ];
+
+    let matched = select_host_identity(&identities, "gitlab.com").expect("an identity");
+    assert_eq!(matched.name, "warp-factory-1");
+    assert_eq!(matched.email, "1-warp-factory-1@users.noreply.gitlab.com");
+}
+
+#[test]
+fn repository_identity_falls_back_to_the_primary_forge() {
+    let identities = [HostIdentity {
+        host: "github.com".to_string(),
+        name: "warp-agent[bot]".to_string(),
+        email: "bot@users.noreply.github.com".to_string(),
+    }];
+
+    let matched = select_host_identity(&identities, "gitlab.com").expect("an identity");
+    assert_eq!(matched.name, "warp-agent[bot]");
+
+    assert!(select_host_identity(&[], "github.com").is_none());
 }
 
 #[test]

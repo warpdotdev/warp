@@ -855,9 +855,16 @@ impl AgentDriverRunner {
         ))
         .await?
         .token;
-        ai_client
+        let response = ai_client
             .get_task_git_credentials(task_id_str, workload_token)
-            .await
+            .await?;
+        for host in &response.failed_hosts {
+            log::warn!(
+                "No {host} credential could be issued at startup; \
+                 operations against that forge will fail until a refresh succeeds"
+            );
+        }
+        Ok(response.credentials)
     }
 
     async fn bootstrap_git_credentials_for_task(
