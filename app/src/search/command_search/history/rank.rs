@@ -228,6 +228,11 @@ pub(crate) struct RankInputs<'a> {
     /// Number of other candidates newer than this one in the full (chronologically-ordered)
     /// history list. Used as an age proxy for entries with no timestamp; see `age_days`.
     pub newer_candidate_count: usize,
+    /// Whether the query is empty (the zero-state case, where `SearchMixer` still invokes
+    /// history so it has something to show before the user types). A blank query can never
+    /// clear `MATCH_SCORE_FLOOR` since it carries no match signal at all, so this bypasses the
+    /// floor and ranks purely on history priors instead of dropping every candidate.
+    pub is_blank_query: bool,
 }
 
 /// Combines a candidate's match quality with its history priors into a single sortable score, or
@@ -239,7 +244,7 @@ pub(crate) struct RankInputs<'a> {
 /// exact one. Higher is better, consistent with `SearchItem::score`.
 pub(crate) fn rank(inputs: RankInputs<'_>) -> Option<OrderedFloat<f64>> {
     let match_value = inputs.match_quality.combined();
-    if match_value < MATCH_SCORE_FLOOR {
+    if !inputs.is_blank_query && match_value < MATCH_SCORE_FLOOR {
         return None;
     }
 

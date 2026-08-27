@@ -7905,6 +7905,17 @@ impl TerminalView {
             .and_then(BlockMetadata::session_id)
     }
 
+    /// Returns the session's live-tracked working directory, updated as commands start and as
+    /// the shell reports directory changes -- unlike `HistoryEntry::pwd`, which is captured only
+    /// when a command *starts* and so goes stale immediately after a `cd` until the next command
+    /// runs.
+    pub fn current_working_directory<C: ModelAsRef>(&self, ctx: &C) -> Option<String> {
+        self.active_session
+            .as_ref(ctx)
+            .current_working_directory()
+            .cloned()
+    }
+
     pub fn active_session_shell_type<C: ModelAsRef>(&self, ctx: &C) -> Option<ShellType> {
         self.active_block_session_id()
             .and_then(|id| self.sessions.as_ref(ctx).get(id))

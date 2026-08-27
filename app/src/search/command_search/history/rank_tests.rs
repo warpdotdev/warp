@@ -90,6 +90,7 @@ impl Scenario {
             current_session_id,
             current_cwd,
             newer_candidate_count: self.newer_candidate_count,
+            is_blank_query: false,
         })
         .expect("scenario match quality should clear the score floor")
     }
@@ -243,10 +244,42 @@ fn match_score_floor_filters_out_low_quality_matches() {
         current_session_id: SessionId::from(1),
         current_cwd: None,
         newer_candidate_count: 0,
+        is_blank_query: false,
     });
 
     assert!(
         result.is_none(),
         "a match below the score floor should be filtered out entirely"
+    );
+}
+
+#[test]
+fn blank_query_bypasses_the_score_floor() {
+    // `SearchMixer` invokes history with an empty query for the zero state (`run_in_zero_state:
+    // true`), where match quality is necessarily zero. The floor must not drop every candidate
+    // in that case -- ranking should fall back to history priors instead.
+    let low_quality = MatchQuality {
+        exact: 0.0,
+        skim: 0.0,
+        consecutive: 0.0,
+        tightness: 0.0,
+    };
+    assert!(low_quality.combined() < MATCH_SCORE_FLOOR);
+
+    let entry = HistoryEntry::command_only("ls -la".to_owned());
+    let result = rank(RankInputs {
+        entry: &entry,
+        frequency: 1,
+        match_quality: low_quality,
+        now: now(),
+        current_session_id: SessionId::from(1),
+        current_cwd: None,
+        newer_candidate_count: 0,
+        is_blank_query: true,
+    });
+
+    assert!(
+        result.is_some(),
+        "a blank query should bypass the score floor so zero-state history isn't dropped"
     );
 }

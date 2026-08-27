@@ -28,12 +28,25 @@ pub(crate) struct HistorySnapshot {
     candidates: Arc<[HistoryCandidate]>,
     query_text: String,
     current_session_id: SessionId,
+    /// The session's live working directory at the moment history search was opened. This is
+    /// *not* derivable from the history entries themselves: `HistoryEntry::pwd` is captured when
+    /// a command *starts* (`terminal/history.rs`'s `for_session_command`), so the most recent
+    /// entry's `pwd` is stale immediately after a `cd` until the next command runs.
+    current_cwd: Option<String>,
 }
 
 /// Creates an async data source for shell history commands.
 #[cfg(test)]
 pub fn history_data_source(
     commands: Vec<HistoryEntry>,
+) -> AsyncSnapshotDataSource<HistorySnapshot, CommandSearchItemAction> {
+    history_data_source_with_cwd(commands, None)
+}
+
+#[cfg(test)]
+pub fn history_data_source_with_cwd(
+    commands: Vec<HistoryEntry>,
+    current_cwd: Option<String>,
 ) -> AsyncSnapshotDataSource<HistorySnapshot, CommandSearchItemAction> {
     let candidates: Arc<[HistoryCandidate]> = commands
         .into_iter()
@@ -42,12 +55,13 @@ pub fn history_data_source(
             frequency: 1,
         })
         .collect();
-    history_data_source_from_shared(candidates, SessionId::from(0))
+    history_data_source_from_shared(candidates, SessionId::from(0), current_cwd)
 }
 
 fn history_data_source_from_shared(
     candidates: Arc<[HistoryCandidate]>,
     current_session_id: SessionId,
+    current_cwd: Option<String>,
 ) -> AsyncSnapshotDataSource<HistorySnapshot, CommandSearchItemAction> {
     AsyncSnapshotDataSource::new(
         move |query: &Query, _app: &AppContext| HistorySnapshot {
@@ -56,6 +70,7 @@ fn history_data_source_from_shared(
             candidates: candidates.clone(),
             query_text: query.text.clone(),
             current_session_id,
+            current_cwd: current_cwd.clone(),
         },
         fuzzy_match_history,
     )
@@ -63,6 +78,7 @@ fn history_data_source_from_shared(
 
 pub(crate) fn history_data_source_for_session(
     session_id: SessionId,
+    current_cwd: Option<String>,
     history_model: &terminal::History,
     app: &AppContext,
 ) -> AsyncSnapshotDataSource<HistorySnapshot, CommandSearchItemAction> {
@@ -77,7 +93,7 @@ pub(crate) fn history_data_source_for_session(
             HistoryCandidate { entry, frequency }
         })
         .collect();
-    history_data_source_from_shared(candidates, session_id)
+    history_data_source_from_shared(candidates, session_id, current_cwd)
 }
 
 pub(crate) fn fuzzy_match_history(
@@ -87,16 +103,10 @@ pub(crate) fn fuzzy_match_history(
     Box::pin(async move {
         let mut results = Vec::new();
         let now = Local::now();
+        let is_blank_query = snapshot.query_text.trim().is_empty();
         let tokens = rank::tokenize_query(&snapshot.query_text);
         let total_candidates = snapshot.candidates.len();
-        // Candidates are chronologically ordered (oldest first), so the last one with a `pwd` is
-        // the best available proxy for "the user's current directory" without plumbing live
-        // session state through this data source.
-        let current_cwd = snapshot
-            .candidates
-            .iter()
-            .rev()
-            .find_map(|candidate| candidate.entry.pwd.as_deref());
+        let current_cwd = snapshot.current_cwd.as_deref();
 
         // History entries are cheap to match (single short string), so we use a large chunk
         // size to reduce yield overhead while still allowing cancellation of stale queries.
@@ -119,6 +129,7 @@ pub(crate) fn fuzzy_match_history(
                     current_session_id: snapshot.current_session_id,
                     current_cwd,
                     newer_candidate_count: total_candidates - 1 - index,
+                    is_blank_query,
                 }) else {
                     continue;
                 };

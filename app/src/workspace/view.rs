@@ -8118,6 +8118,21 @@ impl Workspace {
             })
     }
 
+    /// Gets the live working directory of the active terminal session, if any.
+    fn active_session_cwd(&self, ctx: &ViewContext<Self>) -> Option<String> {
+        self.get_pane_group_view(self.active_tab_index)
+            .and_then(|view| {
+                view.read(ctx, |pane_group, ctx| {
+                    pane_group
+                        .active_session_view(ctx)
+                        .and_then(|terminal_view_handle| {
+                            terminal_view_handle
+                                .read(ctx, |terminal, ctx| terminal.current_working_directory(ctx))
+                        })
+                })
+            })
+    }
+
     /// Triggers the drive sharing onboarding block.
     fn check_and_trigger_drive_sharing_onboarding_block(
         &mut self,
@@ -17327,6 +17342,8 @@ impl Workspace {
                     input_handle.read(ctx, |input, ctx| input.menu_positioning(ctx))
                 });
 
+            let current_cwd = self.active_session_cwd(ctx);
+
             if !self.current_workspace_state.is_command_search_open {
                 send_telemetry_from_ctx!(
                     TelemetryEvent::CommandSearchOpened {
@@ -17348,6 +17365,7 @@ impl Workspace {
                 view.reset_state(
                     session_id,
                     session_context,
+                    current_cwd,
                     initial_query,
                     query_filter,
                     menu_positioning,
