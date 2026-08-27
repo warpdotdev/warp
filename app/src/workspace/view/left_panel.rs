@@ -919,13 +919,14 @@ impl LeftPanelView {
                             resolved
                         }
                     }
-                    // Local-fs-based target resolution can't inspect remote
-                    // files; mirror the file tree's remote handling (code
-                    // editor, or markdown viewer by extension + preference).
+                    // Local-fs-based target resolution can't inspect remote files, so the
+                    // target is chosen directly here rather than via
+                    // `resolve_file_target_with_editor_choice`.
                     //
-                    // Unlike the file tree, matches always carry a specific line, and the
-                    // Markdown Viewer doesn't support jumping to it, so always use the code
-                    // editor here rather than respecting `prefer_markdown_viewer`.
+                    // Search matches always carry a specific line and the Markdown Viewer
+                    // can't jump to one, so this deliberately always opens the code editor
+                    // and ignores `prefer_markdown_viewer` -- unlike the file tree, which
+                    // has no line to honor and so may open the Markdown Viewer.
                     LocalOrRemotePath::Remote(_) => FileTarget::CodeEditor(EditorLayout::SplitPane),
                 };
 
