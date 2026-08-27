@@ -183,6 +183,22 @@ impl LocalAgentTaskSyncModel {
         );
     }
 
+    /// Returns the ambient task this terminal pane's CLI-harness session, if
+    /// any, is registered under. Callers use this to identify which local
+    /// `AIConversation` (if any) represents the same run as CLI agent
+    /// lifecycle events observed in this pane — comparing against
+    /// `AIConversation::task_id()` rather than relying on pane-active-
+    /// conversation heuristics alone, since a pane can host conversations
+    /// unrelated to its CLI-harness session (e.g. an earlier native Agent
+    /// Mode conversation). Returns `None` for a purely interactive CLI agent
+    /// session with no ambient task behind it.
+    pub fn task_id_for_terminal_view(
+        &self,
+        terminal_view_id: EntityId,
+    ) -> Option<AmbientAgentTaskId> {
+        self.cli_session_task_ids.get(&terminal_view_id).copied()
+    }
+
     /// Stops reporting CLI agent status changes for a completed driver run.
     /// Task updates accepted before unregistration remain queued until delivery
     /// finishes.

@@ -244,6 +244,7 @@ use crate::ai::blocklist::codebase_index_speedbump_banner::{
 use crate::ai::blocklist::diff_storage::DiffStorageHelper;
 use crate::ai::blocklist::diff_types::FileDiff;
 use crate::ai::blocklist::inline_action::code_diff_view::CodeDiffView;
+use crate::ai::blocklist::local_agent_task_sync_model::LocalAgentTaskSyncModel;
 use crate::ai::blocklist::model::{
     AIBlockModel, AIBlockModelHelper, AIBlockModelImpl, AIBlockOutputStatus,
 };
@@ -13392,30 +13393,52 @@ impl TerminalView {
         }
     }
 
-    fn child_conversation_id_for_cli_status_updates(
+    /// Resolves the conversation this pane's CLI agent status updates should
+    /// be written to: the conversation whose `task_id` matches the ambient
+    /// task this pane's CLI-harness session is registered under (see
+    /// `LocalAgentTaskSyncModel::register_cli_session`). Prefers the pane's
+    /// active conversation; otherwise falls back to this terminal surface's
+    /// sole live conversation with a matching task_id, if unambiguous.
+    ///
+    /// Returns `None` when this pane has no registered ambient task — e.g. a
+    /// purely interactive CLI agent session with no orchestration/ambient
+    /// run behind it — since there is no `AIConversation` to bridge status
+    /// into in that case. The task_id match also guards against writing
+    /// into an unrelated conversation that happens to be live in the same
+    /// pane (e.g. an earlier native Agent Mode conversation).
+    ///
+    /// Not scoped to child (orchestration) conversations: nothing else in
+    /// the codebase keeps a CLI-harness conversation's `ConversationStatus`
+    /// in sync with the harness's own lifecycle hooks, so a root/standalone
+    /// CLI-harness conversation needs this bridge just as much as a child
+    /// one does (e.g. for orchestration event delivery, which reads
+    /// `ConversationStatus` directly).
+    fn conversation_id_for_cli_status_updates(
         &self,
         ctx: &AppContext,
     ) -> Option<AIConversationId> {
-        if let Some(conversation_id) = BlocklistAIHistoryModel::as_ref(ctx)
+        let task_id =
+            LocalAgentTaskSyncModel::as_ref(ctx).task_id_for_terminal_view(self.view_id)?;
+        let matches_task = |conversation: &&AIConversation| conversation.task_id() == Some(task_id);
+
+        let history_model = BlocklistAIHistoryModel::as_ref(ctx);
+        if let Some(conversation_id) = history_model
             .active_conversation(self.view_id)
-            .and_then(|conversation| {
-                conversation
-                    .is_child_agent_conversation()
-                    .then_some(conversation.id())
-            })
+            .filter(matches_task)
+            .map(|conversation| conversation.id())
         {
             return Some(conversation_id);
         }
 
-        let mut child_conversation_ids = BlocklistAIHistoryModel::as_ref(ctx)
+        let mut conversation_ids = history_model
             .all_live_conversations_for_terminal_surface(self.view_id)
-            .filter(|conversation| conversation.is_child_agent_conversation())
+            .filter(matches_task)
             .map(|conversation| conversation.id());
-        let child_conversation_id = child_conversation_ids.next()?;
-        child_conversation_ids
+        let conversation_id = conversation_ids.next()?;
+        conversation_ids
             .next()
             .is_none()
-            .then_some(child_conversation_id)
+            .then_some(conversation_id)
     }
 
     /// If the startup auto-open setting is enabled, auto-opens rich input for a
@@ -13507,7 +13530,7 @@ impl TerminalView {
             return;
         }
 
-        if let Some(conversation_id) = self.child_conversation_id_for_cli_status_updates(ctx) {
+        if let Some(conversation_id) = self.conversation_id_for_cli_status_updates(ctx) {
             BlocklistAIHistoryModel::handle(ctx).update(ctx, |history_model, ctx| {
                 history_model.update_conversation_status(
                     self.view_id,
