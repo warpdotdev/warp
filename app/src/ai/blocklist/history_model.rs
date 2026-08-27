@@ -1557,13 +1557,15 @@ impl BlocklistAIHistoryModel {
         };
 
         if let Some(key) = agent_key {
-            // The SSE family drain can race this registration: it may have
-            // already fetched task metadata and materialized an
-            // `is_remote_child` placeholder for this run_id
-            // (`ensure_remote_child_placeholder`) before this conversation
-            // claimed it. Discard that stale placeholder so exactly one
-            // conversation ever represents this run_id, regardless of which
-            // side wins the race.
+            // The server emits `child_agent_started` on the parent for every
+            // child, local ones included, so the SSE family drain cannot
+            // tell this conversation's own child apart from one spawned
+            // out-of-band (CLI/API) and may have already fetched task
+            // metadata and materialized an `is_remote_child` placeholder for
+            // this run_id (`ensure_remote_child_placeholder`) before this
+            // conversation claimed it. Discard that stale placeholder so
+            // exactly one conversation ever represents this run_id,
+            // regardless of which side wins the race.
             if let Some(existing) = self.agent_id_to_conversation_id.get(&key).copied()
                 && existing != conversation_id
             {
