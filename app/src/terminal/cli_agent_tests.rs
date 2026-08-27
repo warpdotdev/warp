@@ -266,6 +266,7 @@ fn test_detect_known_agents() {
                 ("agent", CLIAgent::CursorCli),
                 ("goose", CLIAgent::Goose),
                 ("vibe", CLIAgent::Vibe),
+                ("openclaw", CLIAgent::OpenClaw),
                 ("agy", CLIAgent::Antigravity),
                 ("omp", CLIAgent::OhMyPi),
                 ("warp", CLIAgent::WarpTui),
@@ -314,6 +315,39 @@ fn test_detect_vibe_acp_binary() {
             );
             // Distinct binary names should not bleed into Vibe.
             assert_eq!(CLIAgent::detect("vibe-other", None, None, ctx), None);
+        });
+    });
+}
+
+#[test]
+fn test_detect_ollama_launch_openclaw() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            assert_eq!(
+                CLIAgent::detect("ollama launch openclaw", None, None, ctx),
+                Some(CLIAgent::OpenClaw),
+            );
+            assert_eq!(
+                CLIAgent::detect("ollama launch openclaw --verbose", None, None, ctx),
+                Some(CLIAgent::OpenClaw),
+            );
+            assert_eq!(
+                CLIAgent::detect(
+                    "OLLAMA_HOST=http://localhost:11434 ollama launch openclaw",
+                    Some(EscapeChar::Backslash),
+                    None,
+                    ctx,
+                ),
+                Some(CLIAgent::OpenClaw),
+            );
+            assert_eq!(
+                CLIAgent::detect("/usr/bin/ollama launch openclaw", None, None, ctx),
+                Some(CLIAgent::OpenClaw),
+            );
+            assert_eq!(
+                CLIAgent::detect("ollama launch openclaw-wrapper", None, None, ctx),
+                None,
+            );
         });
     });
 }
