@@ -6602,7 +6602,7 @@ dependencies = [
  "js-sys",
  "log",
  "wasm-bindgen",
- "windows-core 0.62.2",
+ "windows-core 0.61.2",
 ]
 
 [[package]]
@@ -12644,7 +12644,7 @@ dependencies = [
 [[package]]
 name = "session-sharing-protocol"
 version = "0.0.0"
-source = "git+https://github.com/warpdotdev/session-sharing-protocol.git?rev=b30fdd06379a3d073b398eabd106abed5b443aae#b30fdd06379a3d073b398eabd106abed5b443aae"
+source = "git+https://github.com/warpdotdev/session-sharing-protocol.git?rev=c2438d25d6514427d103204b6f374afa3128cd66#c2438d25d6514427d103204b6f374afa3128cd66"
 dependencies = [
  "byte-unit",
  "serde",

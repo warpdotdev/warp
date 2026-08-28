@@ -167,6 +167,7 @@ struct StartupConfig {
     universal_developer_input_context: UniversalDeveloperInputContext,
     lifetime: Lifetime,
     selected_model_id: String,
+    team_uid: Option<String>,
 }
 
 #[derive(Debug)]
@@ -418,6 +419,7 @@ impl Network {
             universal_developer_input_context: universal_developer_input_context.clone(),
             lifetime,
             selected_model_id,
+            team_uid: team_uid.map(|id| id.to_string()),
         };
 
         let mut network = Network {
@@ -858,6 +860,7 @@ impl Network {
                         lifetime: config.lifetime,
                         source_type: network.source.source_type.clone(),
                         source_task_id: network.source.source_task_id.clone(),
+                        team_uid: config.team_uid,
                         feature_support: FeatureSupport {
                             supports_agent_view: FeatureFlag::AgentView.is_enabled(),
                             supports_full_role: true,
