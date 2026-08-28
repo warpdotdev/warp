@@ -855,16 +855,13 @@ impl AgentDriverRunner {
         ))
         .await?
         .token;
+        // Bootstrap has no prior credential store, so a one-host success would
+        // leave the other host unauthenticated for the first clone. Partial
+        // refresh is reserved for later cycles after stores exist.
         let response = ai_client
-            .get_task_git_credentials(task_id_str, workload_token)
+            .get_task_git_credentials(task_id_str, workload_token, false)
             .await?;
-        for host in &response.failed_hosts {
-            log::warn!(
-                "No {host} credential could be issued at startup; \
-                 operations against that forge will fail until a refresh succeeds"
-            );
-        }
-        Ok(response.credentials)
+        driver::git_credentials::credentials_for_bootstrap(response)
     }
 
     async fn bootstrap_git_credentials_for_task(

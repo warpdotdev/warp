@@ -1,4 +1,5 @@
 use super::*;
+use crate::server::server_api::ai::TaskGitCredentialsResponse;
 
 #[test]
 fn write_gh_hosts_yml_uses_gh_cli_filename() -> Result<()> {
@@ -198,6 +199,47 @@ fn repository_identity_falls_back_to_the_primary_forge() {
     assert_eq!(matched.name, "warp-agent[bot]");
 
     assert!(select_host_identity(&[], "github.com").is_none());
+}
+
+#[test]
+fn unique_credentials_drop_identical_duplicate_hosts() {
+    let unique = unique_credentials_by_host(&[github_credential(), github_credential()]).unwrap();
+
+    assert_eq!(unique.len(), 1);
+    assert_eq!(unique[0].host, "github.com");
+    assert_eq!(unique[0].token, "github-token");
+}
+
+#[test]
+fn unique_credentials_reject_conflicting_duplicate_hosts() {
+    let mut conflicting = github_credential();
+    conflicting.token = "other-github-token".to_string();
+
+    let error = unique_credentials_by_host(&[github_credential(), conflicting]).unwrap_err();
+    assert!(error.to_string().contains("github.com"));
+}
+
+#[test]
+fn bootstrap_rejects_a_one_host_failure() {
+    let error = credentials_for_bootstrap(TaskGitCredentialsResponse {
+        credentials: vec![github_credential()],
+        failed_hosts: vec!["gitlab.com".to_string()],
+    })
+    .unwrap_err();
+
+    assert!(error.to_string().contains("gitlab.com"));
+    assert!(error.to_string().contains("all-or-nothing"));
+}
+
+#[test]
+fn bootstrap_accepts_complete_multi_host_credentials() {
+    let credentials = credentials_for_bootstrap(TaskGitCredentialsResponse {
+        credentials: vec![github_credential(), gitlab_credential()],
+        failed_hosts: vec![],
+    })
+    .unwrap();
+
+    assert_eq!(credentials.len(), 2);
 }
 
 #[test]

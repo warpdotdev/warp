@@ -11,17 +11,18 @@
 ///   server and overwrites the credential files, keeping long-running agents
 ///   authenticated for their entire duration.
 use std::{
+    collections::HashMap,
     path::PathBuf,
     sync::{Arc, RwLock},
     time::Duration,
 };
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 // Use the project's allowed Command wrapper (not std::process::Command, which is
 // disallowed by clippy rules because it flashes a terminal window on Windows).
 use command::blocking::Command as BlockingCommand;
 
-use crate::server::server_api::ai::{AIClient, GitCredential};
+use crate::server::server_api::ai::{AIClient, GitCredential, TaskGitCredentialsResponse};
 
 /// How long to wait between credential refresh attempts (~50 minutes, staying
 /// well ahead of the shortest-lived one-hour token expiry).
@@ -78,6 +79,47 @@ fn git_credentials_line(cred: &GitCredential) -> String {
 
 fn host_of_credentials_line(line: &str) -> Option<&str> {
     line.rsplit_once('@').map(|(_, host)| host)
+}
+
+/// Keep one credential per host. Identical duplicates are dropped; conflicting
+/// token or identity fields for the same host are rejected so `gh`/`glab` YAML
+/// cannot grow duplicate mapping keys.
+fn unique_credentials_by_host(credentials: &[GitCredential]) -> Result<Vec<GitCredential>> {
+    let mut index_by_host = HashMap::new();
+    let mut unique = Vec::new();
+    for cred in credentials {
+        if let Some(&index) = index_by_host.get(&cred.host) {
+            let existing: &GitCredential = &unique[index];
+            if existing.token != cred.token
+                || existing.username != cred.username
+                || existing.email != cred.email
+            {
+                bail!(
+                    "Conflicting git credentials for host {}; refusing to write duplicate mapping keys",
+                    cred.host
+                );
+            }
+            continue;
+        }
+        index_by_host.insert(cred.host.clone(), unique.len());
+        unique.push(cred.clone());
+    }
+    Ok(unique)
+}
+
+/// Bootstrap has no prior credential store, so a one-host success would leave
+/// the other host unauthenticated for the first clone.
+pub(crate) fn credentials_for_bootstrap(
+    response: TaskGitCredentialsResponse,
+) -> Result<Vec<GitCredential>> {
+    if !response.failed_hosts.is_empty() {
+        bail!(
+            "Git credential bootstrap cannot proceed with failed hosts ({}); \
+             an all-or-nothing fetch is required before the first clone",
+            response.failed_hosts.join(", ")
+        );
+    }
+    unique_credentials_by_host(&response.credentials)
 }
 
 /// Merge fresh credentials into the existing `~/.git-credentials` content,
@@ -267,6 +309,8 @@ pub(crate) fn write_git_credentials_with_failures(
     credentials: &[GitCredential],
     failed_hosts: &[String],
 ) -> Result<()> {
+    let credentials = unique_credentials_by_host(credentials)?;
+    let credentials = credentials.as_slice();
     if credentials.is_empty() {
         if !failed_hosts.is_empty() {
             log::info!(
@@ -301,13 +345,14 @@ pub(crate) fn write_git_credentials_with_failures(
 }
 
 pub(crate) fn configure_git_credentials(credentials: &[GitCredential]) -> Result<()> {
+    let credentials = unique_credentials_by_host(credentials)?;
     if credentials.is_empty() {
         return Ok(());
     }
-    setup_git_config(credentials);
-    configure_git_identity(credentials);
-    record_host_identities(credentials);
-    write_git_credentials(credentials)
+    setup_git_config(&credentials);
+    configure_git_identity(&credentials);
+    record_host_identities(&credentials);
+    write_git_credentials(&credentials)
 }
 
 /// Run a git config command, logging a warning on failure rather than
@@ -490,7 +535,7 @@ async fn try_refresh(task_id: &str, ai_client: &Arc<dyn AIClient>) -> Result<boo
             .token;
 
     let response = ai_client
-        .get_task_git_credentials(task_id.to_string(), workload_token)
+        .get_task_git_credentials(task_id.to_string(), workload_token, true)
         .await
         .context("Failed to fetch git credentials from server")?;
 
