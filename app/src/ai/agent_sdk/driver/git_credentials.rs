@@ -518,11 +518,28 @@ fn run_repository_git_config(repository_dir: &std::path::Path, key: &str, value:
     }
 }
 
+/// Write refreshed credentials and report whether every host succeeded.
+///
+/// Returns `Ok(true)` when every applicable forge refreshed, and `Ok(false)`
+/// when some refreshed and others failed. Returns `Err` when the local write
+/// fails.
+fn apply_refreshed_credentials(response: TaskGitCredentialsResponse) -> Result<bool> {
+    if response.credentials.is_empty() && response.failed_hosts.is_empty() {
+        log::debug!("No git credentials returned during refresh; skipping file write");
+        return Ok(true);
+    }
+
+    write_git_credentials_with_failures(&response.credentials, &response.failed_hosts)
+        .context("Failed to write refreshed git credentials")?;
+    log::info!("Git credentials refreshed successfully");
+    Ok(response.failed_hosts.is_empty())
+}
+
 /// Perform one git credentials refresh attempt.
 ///
 /// Returns `Ok(true)` when every applicable forge refreshed, and `Ok(false)`
 /// when some refreshed and others failed. Returns `Err` when the workload-token
-/// issuance or the whole server call fails.
+/// issuance, the server call, or the local credential write fails.
 #[tracing::instrument(name = "git_credentials::try_refresh", skip_all, err, fields(
     tags.cloud_agent = true,
     task_id,
@@ -539,20 +556,7 @@ async fn try_refresh(task_id: &str, ai_client: &Arc<dyn AIClient>) -> Result<boo
         .await
         .context("Failed to fetch git credentials from server")?;
 
-    if response.credentials.is_empty() && response.failed_hosts.is_empty() {
-        log::debug!("No git credentials returned during refresh; skipping file write");
-        return Ok(true);
-    }
-
-    match write_git_credentials_with_failures(&response.credentials, &response.failed_hosts) {
-        Err(e) => {
-            log::warn!("Failed to write refreshed git credentials: {e:#}");
-        }
-        _ => {
-            log::info!("Git credentials refreshed successfully");
-        }
-    }
-    Ok(response.failed_hosts.is_empty())
+    apply_refreshed_credentials(response)
 }
 
 /// Infinite async loop that refreshes git credentials every

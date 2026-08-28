@@ -564,6 +564,45 @@ fn clone_requests_reject_a_mixed_repository_missing_forge() {
 }
 
 #[test]
+fn clone_requests_reject_an_omitted_forge_when_github_is_paired_with_an_unknown_forge() {
+    let repos = AmbientAgentEnvironment {
+        name: "github-plus-future".into(),
+        description: None,
+        code_forge: Some(CodeForge::GitHub),
+        code_forges: Some(vec![CodeForge::GitHub, CodeForge::Unknown]),
+        github_repos: vec![],
+        source_repos: Some(vec![
+            SourceRepo::new(
+                CodeForge::GitHub,
+                "warpdotdev".to_string(),
+                "warp".to_string(),
+            ),
+            SourceRepo {
+                code_forge: None,
+                owner: "acme".to_string(),
+                repo: "widgets".to_string(),
+                checkout_ref: None,
+            },
+        ]),
+        base_image: None,
+        setup_commands: vec![],
+        providers: Default::default(),
+        secrets: None,
+        default_runner_uid: None,
+    }
+    .effective_repos();
+
+    assert_eq!(repos[1].code_forge, None);
+    let error = repository_clone_requests(&repos, &[]).unwrap_err();
+
+    assert!(matches!(
+        error,
+        PrepareEnvironmentError::UnsupportedRepositoryForge { repo_name }
+            if repo_name == "acme/widgets"
+    ));
+}
+
+#[test]
 fn clone_requests_reject_a_repository_with_an_unrecognized_forge() {
     // An environment forge value newer than this client build (see
     // CodeForge::Unknown) can still be assigned to a real repository by a

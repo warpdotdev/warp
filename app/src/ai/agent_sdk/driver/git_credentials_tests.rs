@@ -324,3 +324,19 @@ fn write_glab_config_skips_github_only_credentials() -> Result<()> {
 
     Ok(())
 }
+
+#[test]
+fn refreshed_credentials_return_err_when_the_local_write_fails() {
+    let mut conflicting = github_credential();
+    conflicting.token = "other-github-token".to_string();
+
+    let error = apply_refreshed_credentials(TaskGitCredentialsResponse {
+        credentials: vec![github_credential(), conflicting],
+        failed_hosts: vec![],
+    })
+    .unwrap_err();
+
+    let message = format!("{error:#}");
+    assert!(message.contains("Failed to write refreshed git credentials"));
+    assert!(message.contains("github.com"));
+}

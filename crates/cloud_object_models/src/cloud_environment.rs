@@ -274,9 +274,12 @@ impl AmbientAgentEnvironment {
     }
 
     /// Returns the concrete forges enabled on this environment.
+    ///
+    /// Declared `code_forges` keep `Unknown` members so a future forge next to
+    /// GitHub is not treated as a single-forge environment.
     pub fn effective_code_forges(&self) -> Vec<CodeForge> {
         if let Some(code_forges) = &self.code_forges {
-            return unique_clonable_forges(code_forges.iter().copied());
+            return unique_declared_forges(code_forges.iter().copied());
         }
         let mut forges = unique_clonable_forges(
             self.declared_repos()
@@ -301,7 +304,8 @@ impl AmbientAgentEnvironment {
     }
 
     fn is_mixed_environment(&self) -> bool {
-        self.effective_code_forges().len() > 1
+        let forges = self.effective_code_forges();
+        forges.len() > 1 || forges.contains(&CodeForge::Unknown)
     }
 
     fn fill_forge_for_repo(&self, repo: &SourceRepo) -> Option<CodeForge> {
@@ -346,6 +350,20 @@ impl AmbientAgentEnvironment {
             })
             .collect()
     }
+}
+
+fn unique_declared_forges(forges: impl IntoIterator<Item = CodeForge>) -> Vec<CodeForge> {
+    let mut seen = HashSet::new();
+    let mut unique = Vec::new();
+    for forge in forges {
+        if matches!(forge, CodeForge::None) {
+            continue;
+        }
+        if seen.insert(forge) {
+            unique.push(forge);
+        }
+    }
+    unique
 }
 
 fn unique_clonable_forges(forges: impl IntoIterator<Item = CodeForge>) -> Vec<CodeForge> {

@@ -278,6 +278,30 @@ fn mixed_environment_does_not_fill_omitted_repo_forge() {
 }
 
 #[test]
+fn github_plus_unknown_forge_does_not_fill_omitted_repo_forge() {
+    let json = serde_json::json!({
+        "name": "github-plus-future-env",
+        "code_forge": "GITHUB",
+        "code_forges": ["GITHUB", "BITBUCKET"],
+        "source_repos": [
+            {"code_forge": "GITHUB", "owner": "warpdotdev", "repo": "warp"},
+            {"owner": "acme", "repo": "widgets"}
+        ],
+        "docker_image": "ubuntu:latest"
+    });
+
+    let env: AmbientAgentEnvironment = serde_json::from_value(json).unwrap();
+
+    assert_eq!(
+        env.effective_code_forges(),
+        vec![CodeForge::GitHub, CodeForge::Unknown]
+    );
+    let repos = env.effective_repos();
+    assert_eq!(repos[0].code_forge, Some(CodeForge::GitHub));
+    assert_eq!(repos[1].code_forge, None);
+}
+
+#[test]
 fn singular_code_forge_payload_remains_backward_compatible() {
     let json = serde_json::json!({
         "name": "legacy-gitlab-env",
