@@ -2453,10 +2453,15 @@ jobs:
       # conpty_api.rs - is compiled in for every non-wasm target regardless of the
       # `gui` feature, since running shell commands is core agent functionality,
       # not a GUI-only concern. The MSVC redistributable DLLs are bundled
-      # alongside it rather than assumed present, since whether the Namespace
-      # Windows base image ships the VC++ runtime is an open question (see the
-      # PR description). dxcompiler.dll/dxil.dll are wgpu/rendering-only and are
-      # deliberately left out of this headless archive.
+      # alongside it rather than assumed present, since it's unconfirmed whether
+      # the Namespace Windows base image ships the VC++ runtime. All five files
+      # copied below live under app/assets/windows/${WIN_ARCH}, so they're already
+      # covered by the recursive `files-folder` signing in the "Sign the oz CLI
+      # executable and sidecar DLLs" step above and don't need a separate signing
+      # pass here. dxcompiler.dll/dxil.dll are wgpu/rendering-only and are
+      # deliberately left out of this headless archive, mirroring the TUI
+      # installer (tui-installer.iss), which likewise omits them from its own
+      # standalone (non-`gui`) bundle.
       - name: Package Windows CLI binary
         id: package_cli
         run: |
